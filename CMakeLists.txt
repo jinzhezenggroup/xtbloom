@@ -46,6 +46,7 @@ add_library(gpuxtb_gfn2_cpu OBJECT
   src/model/gfn2/h0.cpp
   src/model/gfn2/integrals.cpp
   src/model/gfn2/mulliken.cpp
+  src/model/gfn2/periodic_embedding.cpp
   src/model/gfn2/repulsion.cpp
   src/model/gfn2/scc_mixer.cpp
   src/model/gfn2/wavefunction.cpp
@@ -306,6 +307,11 @@ if(GPUXTB_BUILD_TESTS)
   target_link_libraries(gpuxtb_external_point_charges_test PRIVATE gpuxtb_gfn2_cpu)
   target_compile_features(gpuxtb_external_point_charges_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.external_point_charges COMMAND gpuxtb_external_point_charges_test)
+
+  add_executable(gpuxtb_periodic_embedding_test tests/periodic_embedding_test.cpp)
+  target_link_libraries(gpuxtb_periodic_embedding_test PRIVATE gpuxtb_gfn2_cpu Threads::Threads)
+  target_compile_features(gpuxtb_periodic_embedding_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.gfn2.periodic_embedding COMMAND gpuxtb_periodic_embedding_test)
 
   add_executable(gpuxtb_es3_test tests/es3_test.cpp)
   target_link_libraries(gpuxtb_es3_test PRIVATE gpuxtb_gfn2_cpu)
