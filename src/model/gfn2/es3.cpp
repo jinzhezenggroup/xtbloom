@@ -145,12 +145,18 @@ gpuxtb_status_t validate_view(ES3View view, std::string& error) {
 
 /*
  * Evaluate in double for ordinary inputs, matching the operation order of the
- * reference formula. If an intermediate overflows while the mathematically
- * final double remains representable, retry in the wider host reference type.
+ * reference formula. If an intermediate overflows, underflows, or loses range
+ * while the mathematically final double remains representable, retry in the
+ * wider host reference type.
  */
 bool shell_potential(double gamma3, double charge, double& result) {
-  result = charge * charge * gamma3;
-  if (std::isfinite(result)) {
+  if (charge == 0.0 || gamma3 == 0.0) {
+    result = 0.0;
+    return true;
+  }
+  const double square = charge * charge;
+  result = square * gamma3;
+  if (std::isnormal(square) && std::isnormal(gamma3) && std::isnormal(result)) {
     return true;
   }
   const long double wide = static_cast<long double>(charge) * static_cast<long double>(charge) *
@@ -164,8 +170,16 @@ bool shell_potential(double gamma3, double charge, double& result) {
 }
 
 bool shell_energy(double gamma3, double charge, double& result) {
-  result = charge * charge * charge * gamma3 / 3.0;
-  if (std::isfinite(result)) {
+  if (charge == 0.0 || gamma3 == 0.0) {
+    result = 0.0;
+    return true;
+  }
+  const double square = charge * charge;
+  const double cube = square * charge;
+  const double scaled = cube * gamma3;
+  result = scaled / 3.0;
+  if (std::isnormal(square) && std::isnormal(cube) && std::isnormal(gamma3) &&
+      std::isnormal(scaled) && std::isnormal(result)) {
     return true;
   }
   const long double wide = static_cast<long double>(charge) * static_cast<long double>(charge) *

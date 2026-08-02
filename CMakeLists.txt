@@ -90,6 +90,7 @@ endif()
 if(GPUXTB_HAS_CUDA)
   add_library(gpuxtb_cuda_backend OBJECT
     src/backends/cuda/cuda_runtime.cu
+    src/backends/cuda/gfn2_es3.cu
     src/backends/cuda/gfn2_external_point_charges.cu
     src/backends/cuda/gfn2_parameters.cu
     src/backends/cuda/gfn2_repulsion.cu
@@ -216,6 +217,24 @@ if(GPUXTB_BUILD_TESTS)
     add_test(NAME gpuxtb.cuda.external_point_charges
       COMMAND gpuxtb_cuda_external_point_charges_test
     )
+
+    add_executable(gpuxtb_cuda_es3_test tests/cuda_es3_test.cu)
+    target_link_libraries(gpuxtb_cuda_es3_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_es3_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_es3_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_es3_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.es3 COMMAND gpuxtb_cuda_es3_test)
   endif()
 
   add_executable(gpuxtb_repulsion_test tests/repulsion_test.cpp)

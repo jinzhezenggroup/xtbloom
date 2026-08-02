@@ -277,6 +277,43 @@ int test_extreme_arithmetic() {
         GPUXTB_STATUS_SUCCESS);
   CHECK(potentials[0] == 0.0);
   CHECK(energies[0] == -2.0);
+
+  /* Recover when q^2/q^3 underflows before a huge finite Gamma3 restores range. */
+  std::array<double, 1> huge_gamma3{std::numeric_limits<double>::max()};
+  ES3View restored_view = view;
+  restored_view.shell_gamma3 = huge_gamma3.data();
+  charges[0] = 1.0e-200;
+  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_cpu(
+            restored_view, charges.data(), potentials.data(), error) == GPUXTB_STATUS_SUCCESS);
+  const double restored_potential = static_cast<double>(static_cast<long double>(charges[0]) *
+                                                        static_cast<long double>(charges[0]) *
+                                                        static_cast<long double>(huge_gamma3[0]));
+  CHECK(potentials[0] == restored_potential);
+  CHECK(potentials[0] > 0.0);
+
+  charges[0] = 1.0e-110;
+  energies[0] = 0.0;
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_cpu(restored_view, charges.data(), energies.data(),
+                                                 error) == GPUXTB_STATUS_SUCCESS);
+  const double restored_energy = static_cast<double>(
+      static_cast<long double>(charges[0]) * static_cast<long double>(charges[0]) *
+      static_cast<long double>(charges[0]) * static_cast<long double>(huge_gamma3[0]) / 3.0L);
+  CHECK(energies[0] == restored_energy);
+  CHECK(energies[0] > 0.0);
+
+  /* A zero Gamma3 is exactly zero even when q^2 or q^3 would overflow first. */
+  std::array<double, 1> zero_gamma3{};
+  ES3View zero_view = view;
+  zero_view.shell_gamma3 = zero_gamma3.data();
+  charges[0] = std::numeric_limits<double>::max();
+  potentials[0] = -1.0;
+  energies[0] = 0.75;
+  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_cpu(
+            zero_view, charges.data(), potentials.data(), error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_cpu(zero_view, charges.data(), energies.data(),
+                                                 error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(potentials[0] == 0.0);
+  CHECK(energies[0] == 0.75);
   return 0;
 }
 
