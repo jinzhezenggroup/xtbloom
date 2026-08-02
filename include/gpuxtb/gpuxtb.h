@@ -29,7 +29,15 @@ extern "C" {
 
 typedef struct gpuxtb_context gpuxtb_context_t;
 
-typedef enum gpuxtb_status {
+/*
+ * ABI tags are explicitly int32_t rather than enum-typed fields. This keeps
+ * their object representation and function calling convention identical in C
+ * and C++, including C99 builds compiled with options such as -fshort-enums.
+ * The named enums below only provide debugger-friendly symbolic constants;
+ * callers may pass any int32_t bit pattern and the library validates it.
+ */
+typedef int32_t gpuxtb_status_t;
+enum gpuxtb_status_value {
   GPUXTB_STATUS_SUCCESS = 0,
   GPUXTB_STATUS_INVALID_ARGUMENT = 1,
   GPUXTB_STATUS_BACKEND_UNAVAILABLE = 2,
@@ -37,44 +45,47 @@ typedef enum gpuxtb_status {
   GPUXTB_STATUS_ALLOCATION_FAILED = 4,
   GPUXTB_STATUS_NOT_IMPLEMENTED = 5,
   GPUXTB_STATUS_INTERNAL_ERROR = 6
-} gpuxtb_status_t;
+};
 
-typedef enum gpuxtb_backend {
+typedef int32_t gpuxtb_backend_t;
+enum gpuxtb_backend_value {
   /* Prefer CUDA when it is compiled in and a compatible device is present. */
   GPUXTB_BACKEND_AUTO = 0,
   GPUXTB_BACKEND_CPU = 1,
   GPUXTB_BACKEND_CUDA = 2,
   /* Reserved now so adding HIP kernels does not require redesigning the ABI. */
   GPUXTB_BACKEND_ROCM = 3
-} gpuxtb_backend_t;
+};
 
-typedef enum gpuxtb_memory_space {
+typedef int32_t gpuxtb_memory_space_t;
+enum gpuxtb_memory_space_value {
   GPUXTB_MEMORY_HOST = 0,
   GPUXTB_MEMORY_CUDA_DEVICE = 1,
   GPUXTB_MEMORY_ROCM_DEVICE = 2
-} gpuxtb_memory_space_t;
+};
 
-typedef enum gpuxtb_model { GPUXTB_MODEL_GFN1_XTB = 1, GPUXTB_MODEL_GFN2_XTB = 2 } gpuxtb_model_t;
+typedef int32_t gpuxtb_model_t;
+enum gpuxtb_model_value { GPUXTB_MODEL_GFN1_XTB = 1, GPUXTB_MODEL_GFN2_XTB = 2 };
 
-typedef enum gpuxtb_compute_flag {
-  GPUXTB_COMPUTE_ENERGY = 1u << 0,
-  GPUXTB_COMPUTE_FORCES = 1u << 1,
-  GPUXTB_COMPUTE_ATOMIC_CHARGES = 1u << 2,
-  GPUXTB_COMPUTE_POINT_CHARGE_FORCES = 1u << 3
-} gpuxtb_compute_flag_t;
+typedef int32_t gpuxtb_compute_flag_t;
+enum gpuxtb_compute_flag_value {
+  GPUXTB_COMPUTE_ENERGY = 1 << 0,
+  GPUXTB_COMPUTE_FORCES = 1 << 1,
+  GPUXTB_COMPUTE_ATOMIC_CHARGES = 1 << 2,
+  GPUXTB_COMPUTE_POINT_CHARGE_FORCES = 1 << 3
+};
 
-typedef enum gpuxtb_result_flag {
+typedef int32_t gpuxtb_result_flag_t;
+enum gpuxtb_result_flag_value {
   /*
    * Set when atomic_potential_shifts or charge_response_matrix was supplied.
    * Forces then exclude coordinate derivatives of those caller-owned fields.
    */
-  GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES = 1u << 0
-} gpuxtb_result_flag_t;
+  GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES = 1 << 0
+};
 
 /*
- * ABI-v1 stores enum-typed fields as 32-bit values. Fail at compile time on
- * toolchains configured with nonstandard short-enum options instead of silently
- * changing structure layouts or function return conventions.
+ * Keep all public ABI tag and flag aliases at their specified width.
  */
 #if defined(__cplusplus)
 static_assert(sizeof(gpuxtb_status_t) == sizeof(int32_t), "gpuxtb_status_t must be 32-bit");
@@ -82,12 +93,20 @@ static_assert(sizeof(gpuxtb_backend_t) == sizeof(int32_t), "gpuxtb_backend_t mus
 static_assert(sizeof(gpuxtb_memory_space_t) == sizeof(int32_t),
               "gpuxtb_memory_space_t must be 32-bit");
 static_assert(sizeof(gpuxtb_model_t) == sizeof(int32_t), "gpuxtb_model_t must be 32-bit");
+static_assert(sizeof(gpuxtb_compute_flag_t) == sizeof(int32_t),
+              "gpuxtb_compute_flag_t must be 32-bit");
+static_assert(sizeof(gpuxtb_result_flag_t) == sizeof(int32_t),
+              "gpuxtb_result_flag_t must be 32-bit");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(sizeof(gpuxtb_status_t) == sizeof(int32_t), "gpuxtb_status_t must be 32-bit");
 _Static_assert(sizeof(gpuxtb_backend_t) == sizeof(int32_t), "gpuxtb_backend_t must be 32-bit");
 _Static_assert(sizeof(gpuxtb_memory_space_t) == sizeof(int32_t),
                "gpuxtb_memory_space_t must be 32-bit");
 _Static_assert(sizeof(gpuxtb_model_t) == sizeof(int32_t), "gpuxtb_model_t must be 32-bit");
+_Static_assert(sizeof(gpuxtb_compute_flag_t) == sizeof(int32_t),
+               "gpuxtb_compute_flag_t must be 32-bit");
+_Static_assert(sizeof(gpuxtb_result_flag_t) == sizeof(int32_t),
+               "gpuxtb_result_flag_t must be 32-bit");
 #endif
 
 /*
