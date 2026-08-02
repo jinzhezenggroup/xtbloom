@@ -16,7 +16,8 @@ Coulomb form is unambiguous. Optional per-atom potential shifts `b` and symmetri
 matrices `A` support periodic QM/MM embeddings through `b + A*q` in every SCC iteration and the
 variational energy `q^T*b + 0.5*q^T*A*q`. The caller remains responsible for coordinate derivatives
 of `b` and `A`, classical MM-MM interactions, periodic electrostatics, and virtual-site force
-redistribution.
+redistribution. The exact xTB-compatible equations and initial external-charge golden are documented
+in [qmmm.md](qmmm.md).
 
 All public real-valued quantities use binary64 and atomic units. Conversion belongs at language or
 simulation-package bindings, not inside numerical kernels. Keeping one unit system is particularly

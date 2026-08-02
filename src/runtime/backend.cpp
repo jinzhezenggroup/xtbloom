@@ -50,6 +50,11 @@ gpuxtb_status_t create_context(const gpuxtb_context_options_t& options, Context*
   if (selected == GPUXTB_BACKEND_CUDA && !resolve_cuda(options.device_id, resolved_device, error)) {
     return GPUXTB_STATUS_BACKEND_UNAVAILABLE;
   }
+#if defined(GPUXTB_HAS_CUDA)
+  if (selected == GPUXTB_BACKEND_CUDA && !ensure_cuda_gfn2_parameters(resolved_device, error)) {
+    return GPUXTB_STATUS_BACKEND_UNAVAILABLE;
+  }
+#endif
   if (selected == GPUXTB_BACKEND_ROCM) {
     error = "the ROCm backend is reserved but not implemented";
     return GPUXTB_STATUS_NOT_SUPPORTED;
