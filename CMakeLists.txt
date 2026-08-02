@@ -36,6 +36,7 @@ if(NOT GPUXTB_ENABLE_CUDA_NORMALIZED STREQUAL "OFF")
 endif()
 
 add_library(gpuxtb_gfn2_cpu OBJECT
+  src/model/gfn2/aes2.cpp
   src/model/gfn2/basis.cpp
   src/model/gfn2/coordination.cpp
   src/model/gfn2/eigensolver.cpp
@@ -46,6 +47,7 @@ add_library(gpuxtb_gfn2_cpu OBJECT
   src/model/gfn2/integrals.cpp
   src/model/gfn2/mulliken.cpp
   src/model/gfn2/repulsion.cpp
+  src/model/gfn2/scc_mixer.cpp
   src/model/gfn2/wavefunction.cpp
 )
 target_compile_features(gpuxtb_gfn2_cpu PUBLIC cxx_std_17)
@@ -138,6 +140,7 @@ endif()
 
 if(GPUXTB_BUILD_TESTS)
   enable_testing()
+  find_package(Threads REQUIRED)
   find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
   add_executable(gpuxtb_c_api_test tests/c_api_test.c)
@@ -314,6 +317,11 @@ if(GPUXTB_BUILD_TESTS)
   target_compile_features(gpuxtb_es2_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.es2 COMMAND gpuxtb_es2_test)
 
+  add_executable(gpuxtb_aes2_test tests/aes2_test.cpp)
+  target_link_libraries(gpuxtb_aes2_test PRIVATE gpuxtb_gfn2_cpu)
+  target_compile_features(gpuxtb_aes2_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.gfn2.aes2 COMMAND gpuxtb_aes2_test)
+
   add_executable(gpuxtb_wavefunction_test tests/wavefunction_test.cpp)
   target_link_libraries(gpuxtb_wavefunction_test PRIVATE gpuxtb_gfn2_cpu)
   target_compile_features(gpuxtb_wavefunction_test PRIVATE cxx_std_17)
@@ -324,8 +332,12 @@ if(GPUXTB_BUILD_TESTS)
   target_compile_features(gpuxtb_mulliken_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.mulliken COMMAND gpuxtb_mulliken_test)
 
+  add_executable(gpuxtb_scc_mixer_test tests/scc_mixer_test.cpp)
+  target_link_libraries(gpuxtb_scc_mixer_test PRIVATE gpuxtb_gfn2_cpu Threads::Threads)
+  target_compile_features(gpuxtb_scc_mixer_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.gfn2.scc_mixer COMMAND gpuxtb_scc_mixer_test)
+
   if(GPUXTB_MKL_RT_LIBRARY)
-    find_package(Threads REQUIRED)
     add_executable(gpuxtb_eigensolver_test tests/eigensolver_test.cpp)
     target_link_libraries(gpuxtb_eigensolver_test PRIVATE
       gpuxtb_gfn2_cpu
