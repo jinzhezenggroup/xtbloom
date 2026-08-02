@@ -1,0 +1,42 @@
+{
+  "schema": "gpuxtb-tblite-scc-observer-patch-v1",
+  "upstream": {
+    "repository": "https://github.com/tblite/tblite.git",
+    "revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb",
+    "license": "LGPL-3.0-or-later"
+  },
+  "license_files": [
+    {
+      "file": "LICENSES/GPL-3.0.txt",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "file": "LICENSES/LGPL-3.0.txt",
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+    }
+  ],
+  "patch": {
+    "file": "tblite-e9abc395-scc-observer.patch",
+    "sha256": "d6a51afc4b3c56d6589a2b5b115ea8b4891600c1161c525939ca3cc16e2b4954",
+    "modified_paths": [
+      "src/tblite/scf.f90",
+      "src/tblite/scf/CMakeLists.txt",
+      "src/tblite/scf/iterator.f90",
+      "src/tblite/scf/meson.build",
+      "src/tblite/scf/observer.f90",
+      "src/tblite/xtb/singlepoint.f90"
+    ]
+  },
+  "observer": {
+    "callbacks": [
+      "before_solve",
+      "after_iteration",
+      "finished"
+    ],
+    "status_values": {
+      "converged": 1,
+      "max_iterations": 2,
+      "failed": 3
+    }
+  }
+}

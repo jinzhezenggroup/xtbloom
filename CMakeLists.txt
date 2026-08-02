@@ -396,11 +396,17 @@ if(GPUXTB_BUILD_TESTS)
     COMMAND ${Python3_EXECUTABLE} -m unittest discover
             -s tests/conformance -p "test_*.py" -v
   )
+  add_test(
+    NAME gpuxtb.oracle.tblite_observer_patch
+    COMMAND ${Python3_EXECUTABLE} -m unittest discover
+            -s tests/oracle -p "test_*.py" -v
+  )
   set_tests_properties(
     gpuxtb.parameters.generated
     gpuxtb.parameters.python
     gpuxtb.conformance.manifest
     gpuxtb.conformance.python
+    gpuxtb.oracle.tblite_observer_patch
     PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
 endif()
