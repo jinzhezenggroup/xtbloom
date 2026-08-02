@@ -51,7 +51,11 @@ enum gpuxtb_status_value {
   GPUXTB_STATUS_NOT_SUPPORTED = 3,
   GPUXTB_STATUS_ALLOCATION_FAILED = 4,
   GPUXTB_STATUS_NOT_IMPLEMENTED = 5,
-  GPUXTB_STATUS_INTERNAL_ERROR = 6
+  GPUXTB_STATUS_INTERNAL_ERROR = 6,
+  /* Per-system SCC reached max_scc_iterations without satisfying both tolerances. */
+  GPUXTB_STATUS_SCC_NOT_CONVERGED = 7,
+  /* Per-system generalized eigensolver failed or produced an unusable eigensystem. */
+  GPUXTB_STATUS_EIGENSOLVER_FAILED = 8
 };
 
 typedef int32_t gpuxtb_backend_t;
@@ -220,13 +224,23 @@ typedef struct gpuxtb_compute_options {
   (offsetof(gpuxtb_compute_options_t, electronic_temperature) + sizeof(double))
 
 /*
- * Caller-allocated result buffers. Energies are Hartree and forces are
- * -dE/dR in Hartree/bohr. A NULL data pointer is valid for an output not
- * requested by the compute flags. The three SCC diagnostic buffers are always
- * required for a nonempty batch, independent of the requested property flags:
- * scc_iterations and per_system_status store batch_size int32_t values, while
- * scc_converged stores batch_size uint8_t values. This lets a successful API
- * call report convergence independently for every ragged batch item.
+ * Caller-allocated result buffers. At finite electronic temperature, energies
+ * are the total electronic Helmholtz free energy E_internal - T*S_electronic
+ * in Hartree, matching the variational xTB/tblite quantity. Forces are its
+ * negative coordinate derivative in Hartree/bohr. At zero temperature this
+ * quantity equals the internal energy.
+ *
+ * A NULL data pointer is valid for an output not requested by the compute
+ * flags. The three SCC diagnostic buffers are always required for a nonempty
+ * batch, independent of the requested property flags. scc_iterations and
+ * per_system_status store batch_size int32_t values, while scc_converged stores
+ * batch_size uint8_t values.
+ *
+ * A GPUXTB_STATUS_SUCCESS return means every diagnostic entry was committed,
+ * not necessarily that every system converged. per_system_status is SUCCESS,
+ * SCC_NOT_CONVERGED, or EIGENSOLVER_FAILED; scc_converged is exactly one only
+ * for SUCCESS. A failed system's requested floating-point property slices are
+ * filled with quiet NaNs and never contain a partially evaluated result.
  */
 typedef struct gpuxtb_batch_result {
   uint32_t struct_size;
@@ -268,6 +282,12 @@ GPUXTB_API int32_t gpuxtb_context_get_device_id(const gpuxtb_context_t* context)
 /*
  * Performs a synchronous batched inference. Host buffers are accepted by both
  * CPU and CUDA backends; CUDA device buffers avoid staging copies on CUDA.
+ *
+ * The complete request is validated before execution. If this function returns
+ * a status other than GPUXTB_STATUS_SUCCESS, result flags and all result buffers
+ * are unchanged. Per-system SCC or eigensolver failures are data-level results:
+ * the function returns SUCCESS and records them in per_system_status so one bad
+ * batch item does not discard successful peers.
  */
 GPUXTB_API gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* batch,
                                           const gpuxtb_compute_options_t* options,

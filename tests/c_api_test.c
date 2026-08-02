@@ -42,6 +42,11 @@ int main(void) {
     fprintf(stderr, "unexpected version string\n");
     return 6;
   }
+  if (strcmp(gpuxtb_status_string(GPUXTB_STATUS_SCC_NOT_CONVERGED), "SCC not converged") != 0 ||
+      strcmp(gpuxtb_status_string(GPUXTB_STATUS_EIGENSOLVER_FAILED), "eigensolver failed") != 0) {
+    fprintf(stderr, "per-system failure status strings are not stable\n");
+    return 7;
+  }
 
   gpuxtb_context_destroy(context);
   return 0;

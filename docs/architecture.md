@@ -25,6 +25,27 @@ important for external-charge forces and finite-difference conformance tests.
 Accordingly, `electronic_temperature` is the energy scale `k_B T` in Hartree; the default is
 `300 K * 3.166808578545117e-6 Eh/K`, not the dimensionful value `300.0`.
 
+## Compute semantics
+
+At finite electronic temperature, the reported energy is the total electronic Helmholtz free
+energy `F = E_internal - T*S_electronic`, including the Fermi-occupation entropy term used by
+tblite. Forces are `-dF/dR`, which preserves the stationary finite-temperature SCC derivative. At
+zero electronic temperature, `F` reduces to the internal energy.
+
+The public batch call has two failure levels. Descriptor, staging, backend, allocation, and runtime
+failures return a non-success call status and leave every result buffer and result flag unchanged.
+Once the call returns success, all per-system diagnostics are valid even when individual systems
+failed. `per_system_status` is then one of `SUCCESS`, `SCC_NOT_CONVERGED`, or
+`EIGENSOLVER_FAILED`, and `scc_converged` is one exactly for `SUCCESS`. Requested floating-point
+outputs for a failed system are quiet NaNs, committed for the complete system slice rather than as
+partial energy, force, or charge results. Other systems in the ragged batch remain independent.
+
+`scc_iterations` counts the SCC iteration whose eigensolve was last attempted. It is therefore the
+converged iteration for a successful system, `max_scc_iterations` for ordinary nonconvergence, and
+the failing iteration for an eigensolver error. Input-dependent electron-count and spin-parity
+errors are validated for the complete batch before execution and are call-level invalid arguments,
+not per-system SCC failures.
+
 ## Layering
 
 1. The C API validates ABI versions, pointer locations, shapes, and requested outputs.

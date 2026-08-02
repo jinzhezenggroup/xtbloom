@@ -79,6 +79,10 @@ const char* gpuxtb_status_string(gpuxtb_status_t status) {
       return "not implemented";
     case GPUXTB_STATUS_INTERNAL_ERROR:
       return "internal error";
+    case GPUXTB_STATUS_SCC_NOT_CONVERGED:
+      return "SCC not converged";
+    case GPUXTB_STATUS_EIGENSOLVER_FAILED:
+      return "eigensolver failed";
   }
   return "unknown status";
 }

@@ -11,6 +11,11 @@
   } while (false)
 
 int main() {
+  CHECK(std::strcmp(gpuxtb_status_string(GPUXTB_STATUS_SCC_NOT_CONVERGED), "SCC not converged") ==
+        0);
+  CHECK(std::strcmp(gpuxtb_status_string(GPUXTB_STATUS_EIGENSOLVER_FAILED), "eigensolver failed") ==
+        0);
+
   gpuxtb_context_options_t options;
   CHECK(gpuxtb_context_options_init(&options, sizeof(options)) == GPUXTB_STATUS_SUCCESS);
   options.backend = GPUXTB_BACKEND_CPU;
