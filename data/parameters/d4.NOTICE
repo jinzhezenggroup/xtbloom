@@ -1,0 +1,18 @@
+The generated GFN2-D4 reference data in d4.hpp is derived from dftd4:
+
+  https://github.com/dftd4/dftd4
+  revision 6e1f59c3f39d919a2dbef0601d2576727c8b30e8
+  SPDX-License-Identifier: LGPL-3.0-or-later
+
+The underlying charge-dependent D4 model is described in:
+
+  E. Caldeweyher et al., J. Chem. Phys. 150, 154122 (2019)
+  https://doi.org/10.1063/1.5090222
+
+The D4-specific electronegativity-weighted coordination-number implementation
+also follows mctc-lib revision e9de066d89f250d1cfb6de3a33f0c27c0e2f855d,
+which is licensed under Apache-2.0.
+
+The corresponding license texts are redistributed beside this notice in
+data/parameters/licenses. gpuxtb keeps the exact source revisions and a digest
+of every parsed source blob in d4_manifest.json.

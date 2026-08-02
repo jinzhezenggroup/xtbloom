@@ -43,3 +43,23 @@ python3 -m unittest discover -s tests/parameters -p 'test_*.py'
 The validator intentionally rejects unknown fields. When tblite extends its
 parameter schema, update the normalized schema and runtime tables explicitly
 instead of silently losing the new values.
+
+## GFN2 D4 reference data
+
+`generate_d4.py` extracts the GFN2 charge-model reference systems from a
+pinned dftd4 Git object database. It evaluates the reference polarizabilities
+and Casimir--Polder quadrature once, then writes a packed 262-reference C6
+matrix for direct C++/CUDA use. No Fortran or dftd4 library is needed at
+runtime.
+
+```sh
+python3 tools/parameters/generate_d4.py \
+  --source-git-dir /path/to/dftd4.git \
+  --revision 6e1f59c3f39d919a2dbef0601d2576727c8b30e8 \
+  --output-dir data/parameters
+```
+
+The generated `d4_manifest.json` records the commit, tree, every parsed Git
+blob and SHA-256 digest. `d4.NOTICE` and `data/parameters/licenses/` carry the
+dftd4 LGPL-3.0-or-later and mctc-lib Apache-2.0 attribution used by the D4 data
+and electronegativity-weighted coordination-number implementation.

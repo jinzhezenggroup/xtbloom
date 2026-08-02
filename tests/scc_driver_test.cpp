@@ -269,6 +269,7 @@ struct Fixture {
   MullikenPlan mulliken_plan;
   EigensolverPlan eigensolver_plan;
   SccMixerPlan mixer_plan;
+  D4Plan d4_plan;
   PeriodicEmbeddingPlan periodic_plan;
   SccDriverPlan driver_plan;
 
@@ -289,6 +290,9 @@ struct Fixture {
   std::unique_ptr<AlignedBuffer> aes2_scratch_storage;
   AES2GeometryCache aes2_cache;
   AES2Workspace aes2_scratch;
+  std::vector<double> d4_pair_data;
+  std::vector<double> d4_coordination;
+  D4GeometryCache d4_cache;
 
   std::unique_ptr<AlignedBuffer> wavefunction_storage;
   WavefunctionView wavefunction;
@@ -432,7 +436,7 @@ bool make_component_plans(std::vector<std::int32_t> atomic_numbers, double molec
 bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
                   std::uint64_t maximum_iterations = 5u, double mixer_tolerance = 1.0e-10,
                   bool enable_periodic_embedding = false, const FixtureTopology* topology = nullptr,
-                  bool use_nullable_driver_overload = false) {
+                  bool use_nullable_driver_overload = false, bool enable_d4 = false) {
   fixture.batch_size = batch_size;
   if (topology == nullptr) {
     fixture.atom_offsets.resize(static_cast<std::size_t>(batch_size) + 1u);
@@ -485,19 +489,37 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
                           fixture.mixer_plan, error) != GPUXTB_STATUS_SUCCESS) {
     return false;
   }
-  if (enable_periodic_embedding) {
-    if (make_periodic_embedding_plan(batch_size, total_atoms, fixture.atom_offsets.data(),
-                                     fixture.periodic_plan, error) != GPUXTB_STATUS_SUCCESS ||
-        make_scc_driver_plan(fixture.wavefunction_layout, fixture.mulliken_plan, fixture.es2_plan,
+  if (enable_periodic_embedding &&
+      make_periodic_embedding_plan(batch_size, total_atoms, fixture.atom_offsets.data(),
+                                   fixture.periodic_plan, error) != GPUXTB_STATUS_SUCCESS) {
+    return false;
+  }
+  if (enable_d4 && make_d4_plan(batch_size, total_atoms, fixture.atom_offsets.data(),
+                                fixture.atomic_numbers.data(), fixture.d4_plan,
+                                error) != GPUXTB_STATUS_SUCCESS) {
+    return false;
+  }
+  if (enable_d4) {
+    if (make_scc_driver_plan(
+            fixture.wavefunction_layout, fixture.mulliken_plan, fixture.es2_plan, fixture.es3_plan,
+            fixture.aes2_plan, fixture.eigensolver_plan, fixture.mixer_plan, &fixture.d4_plan,
+            enable_periodic_embedding ? &fixture.periodic_plan : nullptr, maximum_iterations, 0.0,
+            fixture.driver_plan, error) != GPUXTB_STATUS_SUCCESS) {
+      return false;
+    }
+  } else if (enable_periodic_embedding) {
+    if (make_scc_driver_plan(fixture.wavefunction_layout, fixture.mulliken_plan, fixture.es2_plan,
                              fixture.es3_plan, fixture.aes2_plan, fixture.eigensolver_plan,
                              fixture.mixer_plan, &fixture.periodic_plan, maximum_iterations, 0.0,
                              fixture.driver_plan, error) != GPUXTB_STATUS_SUCCESS) {
       return false;
     }
+  }
+  if (enable_periodic_embedding) {
     fixture.periodic_shifts.assign(static_cast<std::size_t>(total_atoms), 0.0);
     fixture.periodic_response.assign(
         static_cast<std::size_t>(fixture.periodic_plan.total_matrix_elements()), 0.0);
-  } else {
+  } else if (!enable_d4) {
     const gpuxtb_status_t driver_status =
         use_nullable_driver_overload
             ? make_scc_driver_plan(fixture.wavefunction_layout, fixture.mulliken_plan,
@@ -612,6 +634,21 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
   fixture.geometry.es2_cache = fixture.es2_cache;
   fixture.geometry.aes2_cache = fixture.aes2_cache;
   fixture.geometry.geometry_generation = 1u;
+  if (enable_d4) {
+    const std::size_t pair_elements =
+        static_cast<std::size_t>(fixture.d4_plan.total_pairs()) * kD4PairDataElements;
+    fixture.d4_pair_data.assign(std::max<std::size_t>(pair_elements, 1u), 0.0);
+    fixture.d4_coordination.assign(static_cast<std::size_t>(total_atoms), 0.0);
+    if (update_d4_geometry_cache_cpu(fixture.d4_plan, fixture.positions.data(),
+                                     fixture.geometry.geometry_generation,
+                                     fixture.d4_pair_data.data(), fixture.d4_pair_data.size(),
+                                     fixture.d4_coordination.data(), fixture.d4_coordination.size(),
+                                     fixture.driver_scratch.d4_workspace, fixture.d4_cache,
+                                     error) != GPUXTB_STATUS_SUCCESS) {
+      return false;
+    }
+    fixture.geometry.d4_cache = fixture.d4_cache;
+  }
   if (enable_periodic_embedding) {
     fixture.geometry.periodic_shifts = fixture.periodic_shifts.data();
     fixture.geometry.periodic_shift_elements = total_atoms;
@@ -862,6 +899,11 @@ int test_disabled_layout_and_bitwise_compatibility() {
   CHECK(enabled.driver_scratch.periodic_embedding_workspace.potential_scratch != nullptr);
 
   for (Fixture* fixture : {&legacy_overload, &nullable_overload}) {
+    CHECK(!fixture->driver_plan.d4_enabled());
+    CHECK(fixture->driver_state.d4_two_body_energies == nullptr);
+    CHECK(fixture->driver_scratch.d4_atomic_potentials == nullptr);
+    CHECK(fixture->driver_scratch.d4_two_body_energies == nullptr);
+    CHECK(fixture->driver_scratch.d4_workspace.workspace_base == nullptr);
     CHECK(fixture->driver_state.periodic_embedding_energies == nullptr);
     CHECK(fixture->driver_scratch.periodic_atomic_potentials == nullptr);
     CHECK(fixture->driver_scratch.periodic_embedding_energies == nullptr);
@@ -902,6 +944,215 @@ int test_disabled_layout_and_bitwise_compatibility() {
    * addition order instead of only comparing two overloads of today's code. */
   CHECK(legacy_overload.driver_scratch.shell_potentials[0] == 0x1.b8b6f9fcb0c02p-1);
   CHECK(legacy_overload.wavefunction.eigenvalues[0] == -0x1.4116c650fd6a8p+0);
+  return 0;
+}
+
+int test_optional_d4_potential_energy_restart_and_zero_allocation() {
+  const FixtureTopology topology{{0, 2}, {6, 8}, {-1.1, 0.0, 0.0, 1.1, 0.0, 0.0}, {0.0}};
+  Fixture reference;
+  Fixture enabled;
+  Fixture combined;
+  std::string error;
+  error.reserve(256u);
+  CHECK(make_fixture(1, reference, error, 5u, 1.0e-10, false, &topology));
+  CHECK(make_fixture(1, enabled, error, 5u, 1.0e-10, false, &topology, false, true));
+  CHECK(make_fixture(1, combined, error, 5u, 1.0e-10, true, &topology, false, true));
+  CHECK(!reference.driver_plan.d4_enabled());
+  CHECK(enabled.driver_plan.d4_enabled());
+  CHECK(combined.driver_plan.d4_enabled());
+  CHECK(combined.driver_plan.periodic_embedding_enabled());
+  CHECK(combined.driver_state.d4_two_body_energies != nullptr);
+  CHECK(combined.driver_state.periodic_embedding_energies != nullptr);
+  CHECK(enabled.driver_state.d4_two_body_energies != nullptr);
+  CHECK(enabled.driver_scratch.d4_atomic_potentials != nullptr);
+  CHECK(enabled.driver_scratch.d4_two_body_energies != nullptr);
+  CHECK(enabled.driver_scratch.d4_workspace.plan_identity == enabled.d4_plan.identity());
+
+  /* D4 must consume the charge channel reconstructed from the current mixed
+   * shell charges. Public qat is a derived field and can legitimately be
+   * stale between caller-side edits and the next driver iteration. */
+  std::array<double, 2> mixed_atomic_charges{};
+  const std::int64_t shell_begin = enabled.wavefunction_layout.batch_shell_offsets[0];
+  const std::int64_t shell_end = enabled.wavefunction_layout.batch_shell_offsets[1];
+  const std::int64_t qsh_base = enabled.wavefunction_layout.qsh.system_offsets[0];
+  for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
+    const std::int64_t atom =
+        enabled.mulliken_plan.shell_to_atom()[static_cast<std::size_t>(shell)];
+    mixed_atomic_charges[static_cast<std::size_t>(atom)] +=
+        enabled.wavefunction.qsh[static_cast<std::size_t>(qsh_base + shell - shell_begin)];
+  }
+  enabled.wavefunction.qat[0] = 91.0;
+  enabled.wavefunction.qat[1] = -73.0;
+
+  std::array<double, 1> expected_energy{};
+  std::array<double, 2> expected_potential{};
+  CHECK(evaluate_d4_two_body_cpu(enabled.d4_plan, enabled.d4_cache, mixed_atomic_charges.data(),
+                                 expected_energy.data(), expected_potential.data(),
+                                 enabled.driver_scratch.d4_workspace,
+                                 error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(std::abs(expected_potential[0]) + std::abs(expected_potential[1]) > 1.0e-12);
+
+  CHECK(iterate_scc_driver_batch_cpu(reference.driver_plan, reference.geometry, backend(),
+                                     reference.overlap_cache, reference.wavefunction,
+                                     reference.mixer_state, reference.driver_state,
+                                     reference.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+  allocation_test::count.store(0u, std::memory_order_relaxed);
+  allocation_test::enabled.store(true, std::memory_order_relaxed);
+  const gpuxtb_status_t enabled_status = iterate_scc_driver_batch_cpu(
+      enabled.driver_plan, enabled.geometry, backend(), enabled.overlap_cache, enabled.wavefunction,
+      enabled.mixer_state, enabled.driver_state, enabled.driver_scratch, error);
+  allocation_test::enabled.store(false, std::memory_order_relaxed);
+  CHECK(enabled_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
+  CHECK(std::abs(enabled.driver_state.d4_two_body_energies[0] - expected_energy[0]) < 1.0e-14);
+  for (std::size_t atom = 0u; atom < expected_potential.size(); ++atom) {
+    CHECK(std::abs(enabled.driver_scratch.d4_atomic_potentials[atom] - expected_potential[atom]) <
+          1.0e-14);
+    CHECK(std::abs((enabled.driver_scratch.atomic_potentials[atom] -
+                    reference.driver_scratch.atomic_potentials[atom]) -
+                   expected_potential[atom]) < 1.0e-14);
+  }
+  const std::int64_t orbitals = enabled.wavefunction_layout.total_orbitals;
+  for (std::int64_t row = 0; row < orbitals; ++row) {
+    const auto row_upper = std::upper_bound(enabled.basis.atom_orbital_offsets.begin(),
+                                            enabled.basis.atom_orbital_offsets.end(), row);
+    const std::size_t row_atom =
+        static_cast<std::size_t>(row_upper - enabled.basis.atom_orbital_offsets.begin() - 1);
+    for (std::int64_t column = 0; column < orbitals; ++column) {
+      const auto column_upper = std::upper_bound(enabled.basis.atom_orbital_offsets.begin(),
+                                                 enabled.basis.atom_orbital_offsets.end(), column);
+      const std::size_t column_atom =
+          static_cast<std::size_t>(column_upper - enabled.basis.atom_orbital_offsets.begin() - 1);
+      const std::size_t matrix = static_cast<std::size_t>(row * orbitals + column);
+      const double expected_shift =
+          -0.5 * enabled.overlap[matrix] *
+          (expected_potential[row_atom] + expected_potential[column_atom]);
+      CHECK(std::abs((enabled.driver_scratch.hamiltonian[matrix] -
+                      reference.driver_scratch.hamiltonian[matrix]) -
+                     expected_shift) < 1.0e-13);
+    }
+  }
+
+  CHECK(restart_scc_driver_system_cpu(enabled.driver_plan, 0, enabled.wavefunction,
+                                      enabled.mixer_state, enabled.driver_state,
+                                      error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(std::isnan(enabled.driver_state.d4_two_body_energies[0]));
+  const double restarted_qsh = enabled.wavefunction.qsh[0];
+  SccDriverGeometryView stale = enabled.geometry;
+  ++stale.d4_cache.geometry_generation;
+  CHECK(iterate_scc_driver_batch_cpu(enabled.driver_plan, stale, backend(), enabled.overlap_cache,
+                                     enabled.wavefunction, enabled.mixer_state,
+                                     enabled.driver_state, enabled.driver_scratch,
+                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(enabled.driver_state.iterations[0] == 0u);
+  CHECK(std::isnan(enabled.driver_state.d4_two_body_energies[0]));
+  CHECK(enabled.wavefunction.qsh[0] == restarted_qsh);
+
+  D4Plan same_topology_other_d4;
+  CHECK(make_d4_plan(1, 2, enabled.atom_offsets.data(), enabled.atomic_numbers.data(),
+                     same_topology_other_d4, error) == GPUXTB_STATUS_SUCCESS);
+  SccDriverGeometryView wrong_identity = enabled.geometry;
+  wrong_identity.d4_cache.plan_identity = same_topology_other_d4.identity();
+  CHECK(iterate_scc_driver_batch_cpu(
+            enabled.driver_plan, wrong_identity, backend(), enabled.overlap_cache,
+            enabled.wavefunction, enabled.mixer_state, enabled.driver_state, enabled.driver_scratch,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(enabled.driver_state.iterations[0] == 0u);
+  CHECK(std::isnan(enabled.driver_state.d4_two_body_energies[0]));
+
+  SccDriverGeometryView aliased_plan_storage = enabled.geometry;
+  aliased_plan_storage.d4_cache.coordination_numbers =
+      reinterpret_cast<double*>(const_cast<std::int64_t*>(enabled.d4_plan.atom_offsets().data()));
+  CHECK(iterate_scc_driver_batch_cpu(
+            enabled.driver_plan, aliased_plan_storage, backend(), enabled.overlap_cache,
+            enabled.wavefunction, enabled.mixer_state, enabled.driver_state, enabled.driver_scratch,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(enabled.driver_state.iterations[0] == 0u);
+  CHECK(std::isnan(enabled.driver_state.d4_two_body_energies[0]));
+
+  SccDriverWorkspace malformed_workspace = enabled.driver_scratch;
+  ++malformed_workspace.d4_atomic_potentials;
+  CHECK(iterate_scc_driver_batch_cpu(enabled.driver_plan, enabled.geometry, backend(),
+                                     enabled.overlap_cache, enabled.wavefunction,
+                                     enabled.mixer_state, enabled.driver_state, malformed_workspace,
+                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(enabled.driver_state.iterations[0] == 0u);
+  malformed_workspace = enabled.driver_scratch;
+  ++malformed_workspace.d4_workspace.weights;
+  CHECK(iterate_scc_driver_batch_cpu(enabled.driver_plan, enabled.geometry, backend(),
+                                     enabled.overlap_cache, enabled.wavefunction,
+                                     enabled.mixer_state, enabled.driver_state, malformed_workspace,
+                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(enabled.driver_state.iterations[0] == 0u);
+
+  SccDriverGeometryView unexpected_d4 = reference.geometry;
+  unexpected_d4.d4_cache = enabled.d4_cache;
+  CHECK(iterate_scc_driver_batch_cpu(
+            reference.driver_plan, unexpected_d4, backend(), reference.overlap_cache,
+            reference.wavefunction, reference.mixer_state, reference.driver_state,
+            reference.driver_scratch, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+
+  Fixture skipped;
+  CHECK(make_fixture(1, skipped, error, 5u, 1.0e-10, false, nullptr, false, true));
+  CHECK(iterate_scc_driver_batch_cpu(skipped.driver_plan, skipped.geometry, backend(),
+                                     skipped.overlap_cache, skipped.wavefunction,
+                                     skipped.mixer_state, skipped.driver_state,
+                                     skipped.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(skipped.driver_state.converged[0] == 1u);
+  const double converged_d4_energy = skipped.driver_state.d4_two_body_energies[0];
+  skipped.driver_scratch.d4_two_body_energies[0] = 123.0;
+  skipped.driver_scratch.d4_atomic_potentials[0] = 456.0;
+  const int calls_before_skip = diagonalizations.load(std::memory_order_relaxed);
+  CHECK(iterate_scc_driver_batch_cpu(skipped.driver_plan, skipped.geometry, backend(),
+                                     skipped.overlap_cache, skipped.wavefunction,
+                                     skipped.mixer_state, skipped.driver_state,
+                                     skipped.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(diagonalizations.load(std::memory_order_relaxed) == calls_before_skip);
+  CHECK(skipped.driver_state.d4_two_body_energies[0] == converged_d4_energy);
+  CHECK(skipped.driver_scratch.d4_two_body_energies[0] == 123.0);
+  CHECK(skipped.driver_scratch.d4_atomic_potentials[0] == 456.0);
+
+  Fixture isolated_failure;
+  CHECK(make_fixture(2, isolated_failure, error, 5u, 1.0e-10, false, nullptr, false, true));
+  isolated_failure.overlap_cache.system_statuses[1] = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+  CHECK(iterate_scc_driver_batch_cpu(isolated_failure.driver_plan, isolated_failure.geometry,
+                                     backend(), isolated_failure.overlap_cache,
+                                     isolated_failure.wavefunction, isolated_failure.mixer_state,
+                                     isolated_failure.driver_state, isolated_failure.driver_scratch,
+                                     error) == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+  CHECK(isolated_failure.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(isolated_failure.driver_state.iterations[0] == 1u);
+  CHECK(isolated_failure.driver_state.d4_two_body_energies[0] == 0.0);
+  CHECK(isolated_failure.driver_state.system_statuses[1] == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+  CHECK(isolated_failure.driver_state.iterations[1] == 1u);
+  CHECK(std::isnan(isolated_failure.driver_state.d4_two_body_energies[1]));
+  return 0;
+}
+
+int test_d4_atm_is_not_part_of_scc() {
+  const FixtureTopology topology{
+      {0, 3}, {6, 6, 6}, {0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 1.5, 2.598076211353316, 0.0}, {0.0}};
+  Fixture fixture;
+  std::string error;
+  CHECK(make_fixture(1, fixture, error, 5u, 1.0e-10, false, &topology, false, true));
+
+  std::array<double, 1> two_body{};
+  std::array<double, 3> potential{};
+  std::array<double, 1> atm{};
+  CHECK(evaluate_d4_two_body_cpu(
+            fixture.d4_plan, fixture.d4_cache, fixture.wavefunction.qat, two_body.data(),
+            potential.data(), fixture.driver_scratch.d4_workspace, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(evaluate_d4_atm_cpu(fixture.d4_plan, fixture.d4_cache, atm.data(),
+                            fixture.driver_scratch.d4_workspace, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(std::abs(atm[0]) > 1.0e-18);
+
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+  const double stored = fixture.driver_state.d4_two_body_energies[0];
+  CHECK(std::abs(stored - two_body[0]) < 1.0e-6 * std::abs(atm[0]));
+  CHECK(std::abs(stored - (two_body[0] + atm[0])) > 0.5 * std::abs(atm[0]));
   return 0;
 }
 
@@ -1130,6 +1381,14 @@ int test_component_chemistry_and_layout_mismatches_are_rejected() {
                              ch.mixer, 5u, 0.0, output, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
   CHECK(output.identity() == sentinel_identity);
 
+  D4Plan wrong_d4_chemistry;
+  CHECK(make_d4_plan(1, static_cast<std::int64_t>(hc.atomic_numbers.size()), hc.atom_offsets.data(),
+                     hc.atomic_numbers.data(), wrong_d4_chemistry, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(make_scc_driver_plan(ch.wavefunction, ch.mulliken, ch.es2, ch.es3, ch.aes2, ch.eigensolver,
+                             ch.mixer, &wrong_d4_chemistry, nullptr, 5u, 0.0, output,
+                             error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(output.identity() == sentinel_identity);
+
   ES3Plan modified_es3 = ch.es3;
   modified_es3.shell_gamma3[0] += 1.0;
   CHECK(make_scc_driver_plan(ch.wavefunction, ch.mulliken, ch.es2, modified_es3, ch.aes2,
@@ -1252,6 +1511,13 @@ int main() {
     return status;
   }
   if (const int status = test_disabled_layout_and_bitwise_compatibility(); status != 0) {
+    return status;
+  }
+  if (const int status = test_optional_d4_potential_energy_restart_and_zero_allocation();
+      status != 0) {
+    return status;
+  }
+  if (const int status = test_d4_atm_is_not_part_of_scc(); status != 0) {
     return status;
   }
   if (const int status = test_optional_periodic_embedding_and_explicit_point_charge_composition();

@@ -1,0 +1,67 @@
+{
+  "generator": "tools/parameters/generate_d4.py",
+  "license": "LGPL-3.0-or-later",
+  "mctc_revision": "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d",
+  "mctc_tree": "ff26e808ccd00be0ca221656c8de9ce0da4c9265",
+  "reference_count": 262,
+  "repository": "https://github.com/dftd4/dftd4",
+  "revision": "6e1f59c3f39d919a2dbef0601d2576727c8b30e8",
+  "source_digest": "9201fd82434f37dc0d8466326ebfc5038f2df174176a31e998c84e3accd06db6",
+  "sources": [
+    {
+      "git_blob": "0fc16333ffe50ec340f682e765d0b0e6a7584a73",
+      "path": "src/dftd4/reference.inc",
+      "sha256": "0cc90b5f5d8b81dcd5f7a87acb44f575ee3d9e75df6e903f7f1a3ecc728e162f",
+      "size": 598179
+    },
+    {
+      "git_blob": "a525ae49fe58e13fea0ee0b35902e87213152220",
+      "path": "src/dftd4/reference.f90",
+      "sha256": "b70b2f2a7145739afdc4b6a1c4feab8d588629f3d1b6318f9f0e352c0be67c6c",
+      "size": 12510
+    },
+    {
+      "git_blob": "33ed0ea918a81bc88a22110cc856d7988b18f956",
+      "path": "src/dftd4/model/d4.f90",
+      "sha256": "dc421a2ccf76227ae028f45ad84efd1683505b803f926dfda24be1b5d223b220",
+      "size": 17241
+    },
+    {
+      "git_blob": "b18a4ce29ea4553cc6bbd477ef4b488fc18f23d7",
+      "path": "src/dftd4/model/utils.f90",
+      "sha256": "e95fa94d7a575b584a5304946f9fd2505c5970b0f1d6e131c5c80e85db06c3ab",
+      "size": 4330
+    },
+    {
+      "git_blob": "6dcd15338c8f02087fab8f3306a461ee79eb7680",
+      "path": "src/dftd4/data/covrad.f90",
+      "sha256": "66e6888236f46de4c72b075e736d30aa71e8dabafe95f8e5a65eb9c18b98cd7b",
+      "size": 3895
+    },
+    {
+      "git_blob": "d8e720fabb94900fbc8fb522074e03144853d09f",
+      "path": "src/dftd4/data/en.f90",
+      "sha256": "87ccc06465ab37c3ed45d37178977d0f473c2b00035b978c899d126921fad5fe",
+      "size": 3677
+    },
+    {
+      "git_blob": "9845e0552e42ba71f381ba68b79c2c00e6b08aea",
+      "path": "src/dftd4/data/zeff.f90",
+      "sha256": "b261a5c7e565f765676a119c31b447f7c0c543cc47c6bdc9b19631ec20c7ad73",
+      "size": 2701
+    },
+    {
+      "git_blob": "c6cc7549a986194c7b488eb56b1c6d401f439bc8",
+      "path": "src/dftd4/data/hardness.f90",
+      "sha256": "670f52160cfcbbf6df3c0a85b4586e782b0444432432e25f31d26db2ec9b5556",
+      "size": 3948
+    },
+    {
+      "git_blob": "f33475ef22ab4631a8aab6faf56b506600a0880e",
+      "path": "src/dftd4/data/r4r2.f90",
+      "sha256": "57b3c084ac806e37bf95b50207f61e40ff0a7da9483cb98bdcde1e734e2d9fb9",
+      "size": 4465
+    }
+  ],
+  "tree": "caf7bff6f2c842b7ee57ff63322f1d46f74e1c64"
+}

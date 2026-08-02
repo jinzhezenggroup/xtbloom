@@ -8,6 +8,7 @@
 
 #include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/aes2.hpp"
+#include "model/gfn2/d4.hpp"
 #include "model/gfn2/eigensolver.hpp"
 #include "model/gfn2/es2.hpp"
 #include "model/gfn2/es3.hpp"
@@ -24,7 +25,7 @@ struct SccDriverPlanData;
 
 /*
  * Immutable orchestration metadata for a restricted, electrostatic-only GFN2
- * SCC scaffold with optional periodic charge embedding.
+ * SCC scaffold with optional self-consistent D4 and periodic charge embedding.
  *
  * The current CPU implementation deliberately prepares the classical
  * potentials and Mulliken populations as full-batch operations because those
@@ -33,9 +34,9 @@ struct SccDriverPlanData;
  * This preserves skip-converged behavior without duplicating the physical
  * kernels. A future per-system Mulliken primitive can reuse this plan and
  * split the prepare/finalize barriers without changing the state model.
- * Self-consistent D4 charge potentials are not yet included; therefore this
- * scaffold is not a complete GFN2-xTB inference path and must not be used as a
- * tblite-equivalent molecular oracle until issue #27 is integrated.
+ * D4 contributes its charge-dependent two-body atom potential on every active
+ * iteration. The charge-independent ATM contribution remains outside SCC and
+ * is evaluated as part of the eventual total-energy/gradient path.
  */
 class SccDriverPlan {
  public:
@@ -50,6 +51,7 @@ class SccDriverPlan {
   [[nodiscard]] std::int64_t batch_size() const noexcept;
   [[nodiscard]] std::uint64_t maximum_iterations() const noexcept;
   [[nodiscard]] double electronic_temperature() const noexcept;
+  [[nodiscard]] bool d4_enabled() const noexcept;
   [[nodiscard]] bool periodic_embedding_enabled() const noexcept;
   [[nodiscard]] std::size_t state_size_bytes() const noexcept;
   [[nodiscard]] std::size_t workspace_size_bytes() const noexcept;
@@ -67,7 +69,7 @@ class SccDriverPlan {
   friend gpuxtb_status_t make_scc_driver_plan(
       const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
       const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
-      const SccMixerPlan& mixer, const PeriodicEmbeddingPlan* periodic_embedding,
+      const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
       std::uint64_t maximum_iterations, double electronic_temperature, SccDriverPlan& plan,
       std::string& error);
 };
@@ -80,6 +82,9 @@ class SccDriverPlan {
  * SCC shifts. explicit_point_charge_shell_potential is the already-cached
  * shell potential V^PC used in every iteration; a null pointer with zero
  * elements disables explicit point charges.
+ * If the plan enables D4, d4_cache must be current for geometry_generation and
+ * belong to the exact D4Plan sealed into the driver. All D4 cache fields must
+ * remain null/zero when D4 is disabled.
  * If the plan enables periodic embedding, periodic_shifts and
  * periodic_response_matrices contain b and the packed dense symmetric A from
  * PeriodicEmbeddingPlan. periodic_embedding_generation is an independent,
@@ -94,6 +99,7 @@ struct SccDriverGeometryView {
   MullikenIntegralView integrals;
   ES2GeometryCache es2_cache;
   AES2GeometryCache aes2_cache;
+  D4GeometryCache d4_cache;
   std::uint64_t geometry_generation = 0u;
 
   const double* explicit_point_charge_shell_potential = nullptr;
@@ -110,11 +116,11 @@ struct SccDriverGeometryView {
 /*
  * Persistent, caller-owned driver status and scalar trace.
  *
- * periodic_embedding_energies stores q^T b + 1/2 q^T A q for the mixed
- * charges that formed the most recently successful SCC Hamiltonian. It is a
- * component diagnostic only, not a complete SCC total energy and not part of
- * the current convergence criterion. The pointer is null when periodic
- * embedding is disabled.
+ * d4_two_body_energies and periodic_embedding_energies store their component
+ * energies for the mixed charges that formed the most recently successful SCC
+ * Hamiltonian. They are diagnostics only, not a complete SCC total energy and
+ * not part of the current convergence criterion. Each pointer is null when its
+ * optional component is disabled.
  */
 struct SccDriverState {
   void* workspace_base = nullptr;
@@ -125,6 +131,7 @@ struct SccDriverState {
   double* free_energy_changes = nullptr;
   double* entropies = nullptr;
   double* band_energies = nullptr;
+  double* d4_two_body_energies = nullptr;
   double* periodic_embedding_energies = nullptr;
   std::uint64_t* iterations = nullptr;
   gpuxtb_status_t* system_statuses = nullptr;
@@ -167,11 +174,14 @@ struct SccDriverWorkspace {
   double* periodic_atomic_potentials = nullptr;
   double* periodic_embedding_energies = nullptr;
   gpuxtb_status_t* periodic_system_statuses = nullptr;
+  double* d4_atomic_potentials = nullptr;
+  double* d4_two_body_energies = nullptr;
   std::uint8_t* active_systems = nullptr;
 
   ES2Workspace es2_workspace;
   AES2Workspace aes2_workspace;
   MullikenWorkspace mulliken_workspace;
+  D4Workspace d4_workspace;
   PeriodicEmbeddingWorkspace periodic_embedding_workspace;
   EigensolverWorkspace eigensolver_workspace;
   EigensolverThermodynamicsView thermodynamics;
@@ -184,11 +194,10 @@ struct SccDriverWorkspace {
 /*
  * Seal exact component compatibility and precompute all state/scratch offsets.
  * Unrestricted layouts are rejected until a spin-polarization potential is
- * available. Self-consistent D4 is also not composed yet. Stored free-energy
- * values are only a provisional eigensolver electronic
- * trace (band Helmholtz free energy), not the complete SCC total energy, and
- * do not enter convergence. Complete-energy convergence will be added once all
- * interaction energies provide per-system failure isolation.
+ * available. Stored free-energy values are only a provisional eigensolver
+ * electronic trace (band Helmholtz free energy), not the complete SCC total
+ * energy, and do not enter convergence. Complete-energy convergence will be
+ * added once all interaction energies provide per-system failure isolation.
  */
 gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
                                      const MullikenPlan& mulliken, const ES2Plan& es2,
@@ -197,6 +206,19 @@ gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
                                      std::uint64_t maximum_iterations,
                                      double electronic_temperature, SccDriverPlan& plan,
                                      std::string& error);
+
+/*
+ * Enable self-consistent D4, periodic embedding, or both. A non-null optional
+ * plan must be sealed and describe exactly the driver's ragged atom topology.
+ * Passing nullptr for both components is equivalent to the compatibility
+ * overload above.
+ */
+gpuxtb_status_t make_scc_driver_plan(
+    const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
+    const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
+    const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
+    std::uint64_t maximum_iterations, double electronic_temperature, SccDriverPlan& plan,
+    std::string& error);
 
 /*
  * Enable the validated CPU periodic charge response. A non-null pointer must

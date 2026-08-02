@@ -39,6 +39,7 @@ add_library(gpuxtb_gfn2_cpu OBJECT
   src/model/gfn2/aes2.cpp
   src/model/gfn2/basis.cpp
   src/model/gfn2/coordination.cpp
+  src/model/gfn2/d4.cpp
   src/model/gfn2/eigensolver.cpp
   src/model/gfn2/es2.cpp
   src/model/gfn2/es3.cpp
@@ -107,6 +108,7 @@ endif()
 if(GPUXTB_HAS_CUDA)
   add_library(gpuxtb_cuda_backend OBJECT
     src/backends/cuda/cuda_runtime.cu
+    src/backends/cuda/gfn2_d4.cu
     src/backends/cuda/gfn2_es2.cu
     src/backends/cuda/gfn2_es3.cu
     src/backends/cuda/gfn2_external_point_charges.cu
@@ -272,6 +274,24 @@ if(GPUXTB_BUILD_TESTS)
       CUDA_SEPARABLE_COMPILATION ON
     )
     add_test(NAME gpuxtb.cuda.es2 COMMAND gpuxtb_cuda_es2_test)
+
+    add_executable(gpuxtb_cuda_d4_test tests/cuda_d4_test.cu)
+    target_link_libraries(gpuxtb_cuda_d4_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_d4_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_d4_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_d4_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.d4 COMMAND gpuxtb_cuda_d4_test)
   endif()
 
   add_executable(gpuxtb_repulsion_test tests/repulsion_test.cpp)
@@ -283,6 +303,11 @@ if(GPUXTB_BUILD_TESTS)
   target_link_libraries(gpuxtb_coordination_test PRIVATE gpuxtb_gfn2_cpu)
   target_compile_features(gpuxtb_coordination_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.coordination COMMAND gpuxtb_coordination_test)
+
+  add_executable(gpuxtb_d4_test tests/d4_test.cpp)
+  target_link_libraries(gpuxtb_d4_test PRIVATE gpuxtb_gfn2_cpu)
+  target_compile_features(gpuxtb_d4_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.gfn2.d4 COMMAND gpuxtb_d4_test)
 
   add_executable(gpuxtb_basis_test tests/basis_test.cpp)
   target_link_libraries(gpuxtb_basis_test PRIVATE gpuxtb_gfn2_cpu)
@@ -413,6 +438,12 @@ endif()
 
 install(TARGETS gpuxtb EXPORT gpuxtbTargets)
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES data/parameters/d4.NOTICE
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/gpuxtb/third-party/d4
+)
+install(DIRECTORY data/parameters/licenses/
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/gpuxtb/third-party/d4
+)
 install(EXPORT gpuxtbTargets
   FILE gpuxtbTargets.cmake
   NAMESPACE gpuxtb::
