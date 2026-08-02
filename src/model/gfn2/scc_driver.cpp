@@ -23,6 +23,7 @@ struct SccDriverPlanData {
   AES2Plan aes2;
   EigensolverPlan eigensolver;
   SccMixerPlan mixer;
+  PeriodicEmbeddingPlan periodic_embedding;
 
   std::uint64_t maximum_iterations = 0u;
   double electronic_temperature = 0.0;
@@ -33,6 +34,7 @@ struct SccDriverPlanData {
   std::size_t state_free_energy_change_offset = 0u;
   std::size_t state_entropy_offset = 0u;
   std::size_t state_band_energy_offset = 0u;
+  std::size_t state_periodic_energy_offset = 0u;
   std::size_t state_iteration_offset = 0u;
   std::size_t state_status_offset = 0u;
   std::size_t state_initialized_offset = 0u;
@@ -57,6 +59,10 @@ struct SccDriverPlanData {
   std::size_t raw_qat_offset = 0u;
   std::size_t raw_dipole_offset = 0u;
   std::size_t raw_quadrupole_offset = 0u;
+  std::size_t periodic_potential_offset = 0u;
+  std::size_t periodic_energy_offset = 0u;
+  std::size_t periodic_status_offset = 0u;
+  std::size_t periodic_scratch_offset = 0u;
   std::size_t es2_shell_scratch_offset = 0u;
   std::size_t aes2_potential_scratch_offset = 0u;
   std::size_t mulliken_scratch_offset = 0u;
@@ -208,7 +214,9 @@ bool overlaps_plan_storage(const SccDriverPlanData& data, const AddressRange& ra
   return data.mulliken.overlaps_storage(pointer, bytes) ||
          data.es2.overlaps_storage(pointer, bytes) || data.aes2.overlaps_storage(pointer, bytes) ||
          data.eigensolver.overlaps_storage(pointer, bytes) ||
-         data.mixer.overlaps_storage(pointer, bytes);
+         data.mixer.overlaps_storage(pointer, bytes) ||
+         (data.periodic_embedding.sealed() &&
+          data.periodic_embedding.overlaps_storage(pointer, bytes));
 }
 
 template <std::size_t N>
@@ -398,6 +406,10 @@ bool exact_state_binding(const SccDriverPlanData& data, const SccDriverState& st
              offset_pointer<double>(state.workspace_base, data.state_entropy_offset) &&
          state.band_energies ==
              offset_pointer<double>(state.workspace_base, data.state_band_energy_offset) &&
+         ((!data.periodic_embedding.sealed() && state.periodic_embedding_energies == nullptr) ||
+          (data.periodic_embedding.sealed() &&
+           state.periodic_embedding_energies ==
+               offset_pointer<double>(state.workspace_base, data.state_periodic_energy_offset))) &&
          state.iterations ==
              offset_pointer<std::uint64_t>(state.workspace_base, data.state_iteration_offset) &&
          state.system_statuses ==
@@ -461,6 +473,26 @@ bool exact_workspace_binding(const SccDriverPlanData& data, const SccDriverWorks
          workspace.mulliken_workspace.elements ==
              std::max(data.mulliken.population_scratch_elements(),
                       data.mulliken.hamiltonian_scratch_elements()) &&
+         ((!data.periodic_embedding.sealed() && workspace.periodic_atomic_potentials == nullptr &&
+           workspace.periodic_embedding_energies == nullptr &&
+           workspace.periodic_system_statuses == nullptr &&
+           workspace.periodic_embedding_workspace.potential_scratch == nullptr &&
+           workspace.periodic_embedding_workspace.potential_elements == 0 &&
+           workspace.periodic_embedding_workspace.plan_identity == nullptr) ||
+          (data.periodic_embedding.sealed() &&
+           workspace.periodic_atomic_potentials ==
+               offset_pointer<double>(workspace.workspace_base, data.periodic_potential_offset) &&
+           workspace.periodic_embedding_energies ==
+               offset_pointer<double>(workspace.workspace_base, data.periodic_energy_offset) &&
+           workspace.periodic_system_statuses ==
+               offset_pointer<gpuxtb_status_t>(workspace.workspace_base,
+                                               data.periodic_status_offset) &&
+           workspace.periodic_embedding_workspace.potential_scratch ==
+               offset_pointer<double>(workspace.workspace_base, data.periodic_scratch_offset) &&
+           workspace.periodic_embedding_workspace.potential_elements ==
+               data.periodic_embedding.maximum_atoms() &&
+           workspace.periodic_embedding_workspace.plan_identity ==
+               data.periodic_embedding.identity())) &&
          workspace.eigensolver_workspace.workspace_base ==
              offset_pointer<void>(workspace.workspace_base, data.eigensolver_scratch_offset) &&
          workspace.staged_mixer_state.workspace_base ==
@@ -694,20 +726,31 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
               data.mixer.state_size_bytes());
 
   gpuxtb_status_t first_failure = GPUXTB_STATUS_SUCCESS;
+  bool first_failure_was_periodic = false;
   for (std::size_t system = 0u; system < batch; ++system) {
-    if (workspace.active_systems[system] == 2u || workspace.active_systems[system] == 3u) {
-      const gpuxtb_status_t failure = workspace.active_systems[system] == 2u
-                                          ? GPUXTB_STATUS_EIGENSOLVER_FAILED
-                                          : workspace.staged_mixer_state.system_statuses[system];
+    if (workspace.active_systems[system] == 2u || workspace.active_systems[system] == 3u ||
+        workspace.active_systems[system] == 5u) {
+      const gpuxtb_status_t failure =
+          workspace.active_systems[system] == 2u
+              ? GPUXTB_STATUS_EIGENSOLVER_FAILED
+              : (workspace.active_systems[system] == 5u
+                     ? GPUXTB_STATUS_INTERNAL_ERROR
+                     : workspace.staged_mixer_state.system_statuses[system]);
       state.system_statuses[system] = failure;
       state.free_energies[system] = nan;
       state.previous_free_energies[system] = nan;
       state.free_energy_changes[system] = nan;
       state.entropies[system] = nan;
       state.band_energies[system] = nan;
-      ++state.iterations[system];
+      if (state.periodic_embedding_energies != nullptr) {
+        state.periodic_embedding_energies[system] = nan;
+      }
+      if (workspace.active_systems[system] != 5u) {
+        ++state.iterations[system];
+      }
       if (first_failure == GPUXTB_STATUS_SUCCESS) {
         first_failure = failure;
+        first_failure_was_periodic = workspace.active_systems[system] == 5u;
       }
       continue;
     }
@@ -728,6 +771,9 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
     state.free_energy_changes[system] = change;
     state.entropies[system] = workspace.thermodynamics.entropies[system];
     state.band_energies[system] = workspace.thermodynamics.band_energies[system];
+    if (state.periodic_embedding_energies != nullptr) {
+      state.periodic_embedding_energies[system] = workspace.periodic_embedding_energies[system];
+    }
     state.iterations[system] = old_iteration + 1u;
     state.converged[system] = converged ? 1u : 0u;
     if (!converged && state.iterations[system] >= data.maximum_iterations) {
@@ -745,6 +791,8 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
       error = "one or more SCC systems failed during generalized eigensolve";
     } else if (first_failure == GPUXTB_STATUS_SCC_NOT_CONVERGED) {
       error = "one or more SCC systems reached the maximum iteration count";
+    } else if (first_failure_was_periodic) {
+      error = "one or more SCC systems failed during periodic charge embedding";
     } else {
       error = "one or more SCC systems failed during Broyden mixing";
     }
@@ -767,6 +815,9 @@ std::uint64_t SccDriverPlan::maximum_iterations() const noexcept {
 double SccDriverPlan::electronic_temperature() const noexcept {
   return data_ == nullptr ? 0.0 : data_->electronic_temperature;
 }
+bool SccDriverPlan::periodic_embedding_enabled() const noexcept {
+  return data_ != nullptr && data_->periodic_embedding.sealed();
+}
 std::size_t SccDriverPlan::state_size_bytes() const noexcept {
   return data_ == nullptr ? 0u : data_->state_size_bytes;
 }
@@ -782,6 +833,18 @@ gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
                                      std::uint64_t maximum_iterations,
                                      double electronic_temperature, SccDriverPlan& plan,
                                      std::string& error) {
+  return make_scc_driver_plan(wavefunction, mulliken, es2, es3, aes2, eigensolver, mixer, nullptr,
+                              maximum_iterations, electronic_temperature, plan, error);
+}
+
+gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
+                                     const MullikenPlan& mulliken, const ES2Plan& es2,
+                                     const ES3Plan& es3, const AES2Plan& aes2,
+                                     const EigensolverPlan& eigensolver, const SccMixerPlan& mixer,
+                                     const PeriodicEmbeddingPlan* periodic_embedding,
+                                     std::uint64_t maximum_iterations,
+                                     double electronic_temperature, SccDriverPlan& plan,
+                                     std::string& error) {
   WavefunctionWarmStartIdentity validated_wavefunction;
   gpuxtb_status_t status =
       make_wavefunction_warm_start_identity(wavefunction, 0u, validated_wavefunction, error);
@@ -790,7 +853,8 @@ gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
   }
   if (!mulliken.sealed() || !es2.sealed() || !aes2.sealed() || !eigensolver.sealed() ||
       !mixer.sealed() || maximum_iterations == 0u || !std::isfinite(electronic_temperature) ||
-      electronic_temperature < 0.0) {
+      electronic_temperature < 0.0 ||
+      (periodic_embedding != nullptr && !periodic_embedding->sealed())) {
     error = "SCC driver components or numerical policy are invalid";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
@@ -895,6 +959,13 @@ gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
     error = "SCC driver component plans describe different ragged topology";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
+  if (periodic_embedding != nullptr &&
+      (periodic_embedding->batch_size() != wavefunction.batch_size ||
+       periodic_embedding->total_atoms() != wavefunction.total_atoms ||
+       periodic_embedding->atom_offsets() != wavefunction.atom_offsets)) {
+    error = "SCC driver periodic embedding describes a different ragged atom topology";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
   if (mixer.vector_offsets().size() != batch + 1u) {
     error = "SCC driver mixer vector partition is malformed";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
@@ -947,6 +1018,7 @@ gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
       std::max(mulliken.population_scratch_elements(), mulliken.hamiltonian_scratch_elements());
   std::size_t mulliken_scratch_bytes = 0u;
   std::size_t aes2_scratch_bytes = 0u;
+  std::size_t periodic_scratch_bytes = 0u;
   if (!bytes_for(wavefunction.batch_size, sizeof(double), batch_double_bytes) ||
       !bytes_for(wavefunction.batch_size, sizeof(std::uint64_t), batch_u64_bytes) ||
       !bytes_for(wavefunction.batch_size, sizeof(gpuxtb_status_t), batch_status_bytes) ||
@@ -961,12 +1033,18 @@ gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
                  quadrupole_population_bytes) ||
       !bytes_for(mulliken_scratch_elements, sizeof(double), mulliken_scratch_bytes) ||
       !bytes_for(aes2.potential_scratch_elements(), sizeof(double), aes2_scratch_bytes) ||
+      !bytes_for(periodic_embedding == nullptr ? 0 : periodic_embedding->maximum_atoms(),
+                 sizeof(double), periodic_scratch_bytes) ||
       !checked_multiply_size(batch_double_bytes, 2u, chemical_potential_bytes) ||
       !checked_multiply_size(atom_bytes, 3u, atomic_dipole_bytes) ||
       !checked_multiply_size(atom_bytes, 6u, atomic_quadrupole_bytes)) {
     error = "SCC driver caller-owned storage exceeds addressable memory";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
+  const std::size_t periodic_state_bytes = periodic_embedding == nullptr ? 0u : batch_double_bytes;
+  const std::size_t periodic_potential_bytes = periodic_embedding == nullptr ? 0u : atom_bytes;
+  const std::size_t periodic_energy_bytes = periodic_embedding == nullptr ? 0u : batch_double_bytes;
+  const std::size_t periodic_status_bytes = periodic_embedding == nullptr ? 0u : batch_status_bytes;
 
   try {
     SccDriverPlanData created;
@@ -977,6 +1055,9 @@ gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
     created.aes2 = aes2;
     created.eigensolver = eigensolver;
     created.mixer = mixer;
+    if (periodic_embedding != nullptr) {
+      created.periodic_embedding = *periodic_embedding;
+    }
     created.maximum_iterations = maximum_iterations;
     created.electronic_temperature = electronic_temperature;
 
@@ -991,6 +1072,8 @@ gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
                         created.state_entropy_offset) ||
         !append_segment(batch_double_bytes, alignof(double), cursor,
                         created.state_band_energy_offset) ||
+        !append_segment(periodic_state_bytes, alignof(double), cursor,
+                        created.state_periodic_energy_offset) ||
         !append_segment(batch_u64_bytes, alignof(std::uint64_t), cursor,
                         created.state_iteration_offset) ||
         !append_segment(batch_status_bytes, alignof(gpuxtb_status_t), cursor,
@@ -1034,6 +1117,14 @@ gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
                         created.raw_dipole_offset) ||
         !append_segment(quadrupole_population_bytes, alignof(double), cursor,
                         created.raw_quadrupole_offset) ||
+        !append_segment(periodic_potential_bytes, alignof(double), cursor,
+                        created.periodic_potential_offset) ||
+        !append_segment(periodic_energy_bytes, alignof(double), cursor,
+                        created.periodic_energy_offset) ||
+        !append_segment(periodic_status_bytes, alignof(gpuxtb_status_t), cursor,
+                        created.periodic_status_offset) ||
+        !append_segment(periodic_scratch_bytes, alignof(double), cursor,
+                        created.periodic_scratch_offset) ||
         !append_segment(shell_bytes, alignof(double), cursor, created.es2_shell_scratch_offset) ||
         !append_segment(aes2_scratch_bytes, alignof(double), cursor,
                         created.aes2_potential_scratch_offset) ||
@@ -1104,6 +1195,10 @@ gpuxtb_status_t bind_scc_driver_state(const SccDriverPlan& plan, void* workspace
       offset_pointer<double>(workspace, data.state_free_energy_change_offset);
   created.entropies = offset_pointer<double>(workspace, data.state_entropy_offset);
   created.band_energies = offset_pointer<double>(workspace, data.state_band_energy_offset);
+  if (data.periodic_embedding.sealed()) {
+    created.periodic_embedding_energies =
+        offset_pointer<double>(workspace, data.state_periodic_energy_offset);
+  }
   created.iterations = offset_pointer<std::uint64_t>(workspace, data.state_iteration_offset);
   created.system_statuses = offset_pointer<gpuxtb_status_t>(workspace, data.state_status_offset);
   created.initialized = offset_pointer<std::uint8_t>(workspace, data.state_initialized_offset);
@@ -1118,6 +1213,9 @@ gpuxtb_status_t bind_scc_driver_state(const SccDriverPlan& plan, void* workspace
   std::fill_n(created.free_energy_changes, batch, nan);
   std::fill_n(created.entropies, batch, nan);
   std::fill_n(created.band_energies, batch, nan);
+  if (created.periodic_embedding_energies != nullptr) {
+    std::fill_n(created.periodic_embedding_energies, batch, nan);
+  }
   std::fill_n(created.system_statuses, batch, GPUXTB_STATUS_INVALID_ARGUMENT);
   state = created;
   error.clear();
@@ -1192,6 +1290,17 @@ gpuxtb_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* works
       offset_pointer<double>(workspace, data.mulliken_scratch_offset);
   created.mulliken_workspace.elements = std::max(data.mulliken.population_scratch_elements(),
                                                  data.mulliken.hamiltonian_scratch_elements());
+  if (data.periodic_embedding.sealed()) {
+    created.periodic_atomic_potentials =
+        offset_pointer<double>(workspace, data.periodic_potential_offset);
+    created.periodic_embedding_energies =
+        offset_pointer<double>(workspace, data.periodic_energy_offset);
+    created.periodic_system_statuses =
+        offset_pointer<gpuxtb_status_t>(workspace, data.periodic_status_offset);
+    created.periodic_embedding_workspace = {
+        offset_pointer<double>(workspace, data.periodic_scratch_offset),
+        data.periodic_embedding.maximum_atoms(), data.periodic_embedding.identity()};
+  }
 
   void* eigensolver_base = offset_pointer<void>(workspace, data.eigensolver_scratch_offset);
   status = bind_eigensolver_worker_workspace(data.eigensolver, eigensolver_base,
@@ -1279,6 +1388,9 @@ gpuxtb_status_t initialize_scc_driver_state_cpu(const SccDriverPlan& plan,
   std::fill_n(state.free_energy_changes, batch, nan);
   std::fill_n(state.entropies, batch, nan);
   std::fill_n(state.band_energies, batch, nan);
+  if (state.periodic_embedding_energies != nullptr) {
+    std::fill_n(state.periodic_embedding_energies, batch, nan);
+  }
   std::fill_n(state.system_statuses, batch, GPUXTB_STATUS_SUCCESS);
   std::fill_n(state.initialized, batch, static_cast<std::uint8_t>(1u));
   error.clear();
@@ -1333,6 +1445,9 @@ gpuxtb_status_t restart_scc_driver_system_cpu(const SccDriverPlan& plan, std::in
   state.free_energy_changes[index] = nan;
   state.entropies[index] = nan;
   state.band_energies[index] = nan;
+  if (state.periodic_embedding_energies != nullptr) {
+    state.periodic_embedding_energies[index] = nan;
+  }
   state.iterations[index] = 0u;
   state.system_statuses[index] = GPUXTB_STATUS_SUCCESS;
   state.converged[index] = 0u;
@@ -1388,6 +1503,26 @@ gpuxtb_status_t validate_iteration_bindings(
     error = "SCC driver explicit point-charge potential has invalid extent";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
+  if (data.periodic_embedding.sealed()) {
+    if (geometry.periodic_shift_elements != data.periodic_embedding.total_atoms() ||
+        geometry.periodic_response_elements != data.periodic_embedding.total_matrix_elements() ||
+        (geometry.periodic_shift_elements != 0 &&
+         !aligned(geometry.periodic_shifts, alignof(double))) ||
+        (geometry.periodic_response_elements != 0 &&
+         !aligned(geometry.periodic_response_matrices, alignof(double))) ||
+        geometry.periodic_embedding_generation == 0u ||
+        geometry.periodic_plan_identity != data.periodic_embedding.identity()) {
+      error = "SCC driver periodic embedding is stale, malformed, or belongs to another plan";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+  } else if (geometry.periodic_shifts != nullptr || geometry.periodic_shift_elements != 0 ||
+             geometry.periodic_response_matrices != nullptr ||
+             geometry.periodic_response_elements != 0 ||
+             geometry.periodic_embedding_generation != 0u ||
+             geometry.periodic_plan_identity != nullptr) {
+    error = "SCC driver geometry supplies periodic data to a plan without periodic embedding";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
 
   const std::size_t batch = static_cast<std::size_t>(data.wavefunction.batch_size);
   std::array<AddressRange, 5> principal{};
@@ -1438,17 +1573,21 @@ gpuxtb_status_t validate_iteration_bindings(
   std::size_t es2_cache_bytes = 0u;
   std::size_t aes2_cache_bytes = 0u;
   std::size_t point_potential_bytes = 0u;
+  std::size_t periodic_shift_bytes = 0u;
+  std::size_t periodic_response_bytes = 0u;
   if (!bytes_for(data.mulliken.matrix_elements(), sizeof(double), matrix_bytes) ||
       !checked_multiply_size(matrix_bytes, 3u, dipole_integral_bytes) ||
       !checked_multiply_size(matrix_bytes, 6u, quadrupole_integral_bytes) ||
       !bytes_for(data.es2.total_matrix_elements(), sizeof(double), es2_cache_bytes) ||
       !bytes_for(data.aes2.pair_data_elements(), sizeof(double), aes2_cache_bytes) ||
       !bytes_for(geometry.explicit_point_charge_shell_elements, sizeof(double),
-                 point_potential_bytes)) {
+                 point_potential_bytes) ||
+      !bytes_for(geometry.periodic_shift_elements, sizeof(double), periodic_shift_bytes) ||
+      !bytes_for(geometry.periodic_response_elements, sizeof(double), periodic_response_bytes)) {
     error = "SCC driver geometry storage extents are not representable";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
-  std::array<AddressRange, 7> geometry_ranges{};
+  std::array<AddressRange, 9> geometry_ranges{};
   if (!make_range(geometry.h0, matrix_bytes, geometry_ranges[0]) ||
       !make_range(geometry.integrals.overlap, matrix_bytes, geometry_ranges[1]) ||
       !make_range(geometry.integrals.dipole, dipole_integral_bytes, geometry_ranges[2]) ||
@@ -1456,7 +1595,10 @@ gpuxtb_status_t validate_iteration_bindings(
       !make_range(geometry.es2_cache.coulomb_matrix, es2_cache_bytes, geometry_ranges[4]) ||
       !make_range(geometry.aes2_cache.pair_data, aes2_cache_bytes, geometry_ranges[5]) ||
       !make_range(geometry.explicit_point_charge_shell_potential, point_potential_bytes,
-                  geometry_ranges[6])) {
+                  geometry_ranges[6]) ||
+      !make_range(geometry.periodic_shifts, periodic_shift_bytes, geometry_ranges[7]) ||
+      !make_range(geometry.periodic_response_matrices, periodic_response_bytes,
+                  geometry_ranges[8])) {
     error = "SCC driver geometry buffers have invalid address ranges";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
@@ -1582,7 +1724,14 @@ gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data
               0.0);
   std::fill_n(workspace.quadrupole_potentials,
               static_cast<std::size_t>(layout.quadrupole.element_count), 0.0);
-
+  const std::size_t batch = static_cast<std::size_t>(layout.batch_size);
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  if (data.periodic_embedding.sealed()) {
+    std::fill_n(workspace.periodic_atomic_potentials, static_cast<std::size_t>(layout.total_atoms),
+                0.0);
+    std::fill_n(workspace.periodic_embedding_energies, batch, nan);
+    std::fill_n(workspace.periodic_system_statuses, batch, GPUXTB_STATUS_INVALID_ARGUMENT);
+  }
   status = evaluate_es2_potential_cpu(data.es2, geometry.es2_cache, workspace.shell_charges,
                                       workspace.component_shell_potential, workspace.es2_workspace,
                                       error);
@@ -1590,7 +1739,6 @@ gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data
     return status;
   }
   const ES3View es3_view = make_es3_view(data.es3);
-  const std::size_t batch = static_cast<std::size_t>(layout.batch_size);
   for (std::size_t system = 0u; system < batch; ++system) {
     const std::int64_t shell_begin = layout.batch_shell_offsets[system];
     const std::int64_t shell_end = layout.batch_shell_offsets[system + 1u];
@@ -1639,6 +1787,43 @@ gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
   }
+  if (data.periodic_embedding.sealed()) {
+    const PeriodicEmbeddingView periodic_view{geometry.periodic_shifts,
+                                              geometry.periodic_shift_elements,
+                                              geometry.periodic_response_matrices,
+                                              geometry.periodic_response_elements,
+                                              workspace.atomic_charges,
+                                              layout.total_atoms,
+                                              workspace.periodic_atomic_potentials,
+                                              layout.total_atoms,
+                                              workspace.periodic_embedding_energies,
+                                              layout.batch_size,
+                                              workspace.periodic_system_statuses,
+                                              layout.batch_size,
+                                              data.periodic_embedding.identity()};
+    for (std::size_t system = 0u; system < batch; ++system) {
+      if (workspace.active_systems[system] != 1u) {
+        continue;
+      }
+      status = evaluate_periodic_embedding_system_cpu(
+          data.periodic_embedding, static_cast<std::int64_t>(system), periodic_view,
+          workspace.periodic_embedding_workspace, error);
+      if (status == GPUXTB_STATUS_INVALID_ARGUMENT) {
+        return status;
+      }
+      if (status != GPUXTB_STATUS_SUCCESS) {
+        /* The component guarantees unchanged numerical outputs on failure.
+         * Keep an explicit zero potential so the later whole-batch Mulliken
+         * assembly remains safe while successful peers continue. */
+        const std::int64_t atom_begin = layout.atom_offsets[system];
+        const std::int64_t atom_end = layout.atom_offsets[system + 1u];
+        std::fill_n(workspace.periodic_atomic_potentials + atom_begin,
+                    static_cast<std::size_t>(atom_end - atom_begin), 0.0);
+        workspace.periodic_embedding_energies[system] = nan;
+        workspace.active_systems[system] = 5u;
+      }
+    }
+  }
   for (std::size_t system = 0u; system < batch; ++system) {
     const std::int64_t atom_begin = layout.atom_offsets[system];
     const std::int64_t atom_end = layout.atom_offsets[system + 1u];
@@ -1659,6 +1844,32 @@ gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data
         workspace.quadrupole_potentials[static_cast<std::size_t>(
             quadrupole_base + local_atom * 6 + static_cast<std::int64_t>(component))] =
             workspace.component_quadrupole_potential[atom * 6u + component];
+      }
+    }
+    if (data.periodic_embedding.sealed() && workspace.active_systems[system] == 1u) {
+      bool finite = true;
+      for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
+        const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
+        double& target =
+            workspace.atomic_potentials[static_cast<std::size_t>(qat_base + local_atom)];
+        if (!add_finite(workspace.periodic_atomic_potentials[atom], target)) {
+          finite = false;
+          break;
+        }
+      }
+      if (!finite) {
+        /* Restore the complete AES2 atomic potential for this failed system;
+         * Mulliken Hamiltonian construction is still a whole-batch primitive. */
+        for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
+          const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
+          workspace.atomic_potentials[static_cast<std::size_t>(qat_base + local_atom)] =
+              workspace.component_atomic_potential[atom];
+        }
+        std::fill_n(workspace.periodic_atomic_potentials + atom_begin,
+                    static_cast<std::size_t>(atoms), 0.0);
+        workspace.periodic_embedding_energies[system] = nan;
+        workspace.periodic_system_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
+        workspace.active_systems[system] = 5u;
       }
     }
   }

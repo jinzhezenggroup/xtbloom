@@ -12,6 +12,7 @@
 #include "model/gfn2/es2.hpp"
 #include "model/gfn2/es3.hpp"
 #include "model/gfn2/mulliken.hpp"
+#include "model/gfn2/periodic_embedding.hpp"
 #include "model/gfn2/scc_mixer.hpp"
 #include "model/gfn2/wavefunction.hpp"
 
@@ -22,8 +23,8 @@ inline constexpr std::size_t kSccDriverWorkspaceAlignment = 64u;
 struct SccDriverPlanData;
 
 /*
- * Immutable orchestration metadata for a restricted, nonperiodic,
- * electrostatic-only GFN2 SCC scaffold.
+ * Immutable orchestration metadata for a restricted, electrostatic-only GFN2
+ * SCC scaffold with optional periodic charge embedding.
  *
  * The current CPU implementation deliberately prepares the classical
  * potentials and Mulliken populations as full-batch operations because those
@@ -49,6 +50,7 @@ class SccDriverPlan {
   [[nodiscard]] std::int64_t batch_size() const noexcept;
   [[nodiscard]] std::uint64_t maximum_iterations() const noexcept;
   [[nodiscard]] double electronic_temperature() const noexcept;
+  [[nodiscard]] bool periodic_embedding_enabled() const noexcept;
   [[nodiscard]] std::size_t state_size_bytes() const noexcept;
   [[nodiscard]] std::size_t workspace_size_bytes() const noexcept;
   [[nodiscard]] const SccDriverPlanData* identity() const noexcept;
@@ -62,6 +64,12 @@ class SccDriverPlan {
       const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
       const SccMixerPlan& mixer, std::uint64_t maximum_iterations, double electronic_temperature,
       SccDriverPlan& plan, std::string& error);
+  friend gpuxtb_status_t make_scc_driver_plan(
+      const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
+      const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
+      const SccMixerPlan& mixer, const PeriodicEmbeddingPlan* periodic_embedding,
+      std::uint64_t maximum_iterations, double electronic_temperature, SccDriverPlan& plan,
+      std::string& error);
 };
 
 /*
@@ -72,9 +80,13 @@ class SccDriverPlan {
  * SCC shifts. explicit_point_charge_shell_potential is the already-cached
  * shell potential V^PC used in every iteration; a null pointer with zero
  * elements disables explicit point charges.
- * Periodic b+Aq embedding is intentionally not duplicated here. The driver
- * will consume #35's validated PeriodicEmbedding potential view when that
- * component is available.
+ * If the plan enables periodic embedding, periodic_shifts and
+ * periodic_response_matrices contain b and the packed dense symmetric A from
+ * PeriodicEmbeddingPlan. periodic_embedding_generation is an independent,
+ * nonzero host epoch because the environment may change while the QM geometry
+ * and its ES2/AES2 caches remain fixed. The plan identity prevents same-sized
+ * data from another topology being accepted. All periodic fields must remain
+ * null/zero when the component is disabled.
  */
 struct SccDriverGeometryView {
   const double* h0 = nullptr;
@@ -86,9 +98,24 @@ struct SccDriverGeometryView {
 
   const double* explicit_point_charge_shell_potential = nullptr;
   std::int64_t explicit_point_charge_shell_elements = 0;
+
+  const double* periodic_shifts = nullptr;
+  std::int64_t periodic_shift_elements = 0;
+  const double* periodic_response_matrices = nullptr;
+  std::int64_t periodic_response_elements = 0;
+  std::uint64_t periodic_embedding_generation = 0u;
+  const PeriodicEmbeddingPlanData* periodic_plan_identity = nullptr;
 };
 
-/* Persistent, caller-owned driver status and scalar trace. */
+/*
+ * Persistent, caller-owned driver status and scalar trace.
+ *
+ * periodic_embedding_energies stores q^T b + 1/2 q^T A q for the mixed
+ * charges that formed the most recently successful SCC Hamiltonian. It is a
+ * component diagnostic only, not a complete SCC total energy and not part of
+ * the current convergence criterion. The pointer is null when periodic
+ * embedding is disabled.
+ */
 struct SccDriverState {
   void* workspace_base = nullptr;
   std::size_t workspace_size_bytes = 0u;
@@ -98,6 +125,7 @@ struct SccDriverState {
   double* free_energy_changes = nullptr;
   double* entropies = nullptr;
   double* band_energies = nullptr;
+  double* periodic_embedding_energies = nullptr;
   std::uint64_t* iterations = nullptr;
   gpuxtb_status_t* system_statuses = nullptr;
   std::uint8_t* initialized = nullptr;
@@ -136,11 +164,15 @@ struct SccDriverWorkspace {
   double* raw_qat = nullptr;
   double* raw_dipoles = nullptr;
   double* raw_quadrupoles = nullptr;
+  double* periodic_atomic_potentials = nullptr;
+  double* periodic_embedding_energies = nullptr;
+  gpuxtb_status_t* periodic_system_statuses = nullptr;
   std::uint8_t* active_systems = nullptr;
 
   ES2Workspace es2_workspace;
   AES2Workspace aes2_workspace;
   MullikenWorkspace mulliken_workspace;
+  PeriodicEmbeddingWorkspace periodic_embedding_workspace;
   EigensolverWorkspace eigensolver_workspace;
   EigensolverThermodynamicsView thermodynamics;
   SccMixerState staged_mixer_state;
@@ -152,8 +184,8 @@ struct SccDriverWorkspace {
 /*
  * Seal exact component compatibility and precompute all state/scratch offsets.
  * Unrestricted layouts are rejected until a spin-polarization potential is
- * available. Periodic embedding and self-consistent D4 are also not composed
- * yet. Stored free-energy values are only a provisional eigensolver electronic
+ * available. Self-consistent D4 is also not composed yet. Stored free-energy
+ * values are only a provisional eigensolver electronic
  * trace (band Helmholtz free energy), not the complete SCC total energy, and
  * do not enter convergence. Complete-energy convergence will be added once all
  * interaction energies provide per-system failure isolation.
@@ -162,6 +194,20 @@ gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
                                      const MullikenPlan& mulliken, const ES2Plan& es2,
                                      const ES3Plan& es3, const AES2Plan& aes2,
                                      const EigensolverPlan& eigensolver, const SccMixerPlan& mixer,
+                                     std::uint64_t maximum_iterations,
+                                     double electronic_temperature, SccDriverPlan& plan,
+                                     std::string& error);
+
+/*
+ * Enable the validated CPU periodic charge response. A non-null pointer must
+ * name a sealed plan with exactly the driver's ragged atom partition. Passing
+ * nullptr is equivalent to the compatibility overload above.
+ */
+gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
+                                     const MullikenPlan& mulliken, const ES2Plan& es2,
+                                     const ES3Plan& es3, const AES2Plan& aes2,
+                                     const EigensolverPlan& eigensolver, const SccMixerPlan& mixer,
+                                     const PeriodicEmbeddingPlan* periodic_embedding,
                                      std::uint64_t maximum_iterations,
                                      double electronic_temperature, SccDriverPlan& plan,
                                      std::string& error);
@@ -190,9 +236,11 @@ gpuxtb_status_t restart_scc_driver_system_cpu(const SccDriverPlan& plan, std::in
  * Advance every active system by one SCC iteration.
  *
  * Structural/binding/backend contract failures publish nothing. Per-system
- * eigensolver, mixer, and max-iteration failures are different: peers keep
- * running and their successful results are committed, then the call returns
- * the first non-success per-system status. Callers therefore must not
+ * periodic-embedding numerical, eigensolver, mixer, and max-iteration
+ * failures are different: peers keep running and their successful results
+ * are committed, then the call returns the first non-success per-system
+ * status. A periodic failure occurs before an eigensolve attempt and therefore
+ * does not increment that system's driver iteration. Callers therefore must not
  * interpret such a return as an uncommitted batch. Converged and terminal
  * systems are skipped. A converged system publishes density-derived raw
  * Mulliken multipoles for subsequent total-energy/force evaluation; the

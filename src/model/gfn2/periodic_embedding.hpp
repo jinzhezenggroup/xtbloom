@@ -35,6 +35,7 @@ class PeriodicEmbeddingPlan {
   [[nodiscard]] std::int64_t maximum_atoms() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& atom_offsets() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& matrix_offsets() const noexcept;
+  [[nodiscard]] bool overlaps_storage(const void* data, std::size_t size_bytes) const noexcept;
   [[nodiscard]] const PeriodicEmbeddingPlanData* identity() const noexcept;
 
  private:

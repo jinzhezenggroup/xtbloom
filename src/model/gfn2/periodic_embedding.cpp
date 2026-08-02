@@ -137,8 +137,11 @@ std::array<AddressRange, 4> plan_ranges(const PeriodicEmbeddingPlan& plan) {
   AddressRange data;
   AddressRange atom_offsets;
   AddressRange matrix_offsets;
-  const auto atom_bytes = plan.atom_offsets().size() * sizeof(std::int64_t);
-  const auto matrix_bytes = plan.matrix_offsets().size() * sizeof(std::int64_t);
+  /* Capacity, rather than logical size, is the complete allocation owned by
+   * the immutable plan. Callers must not hide numerical buffers in spare
+   * vector backing storage outside the active metadata prefix. */
+  const auto atom_bytes = plan.atom_offsets().capacity() * sizeof(std::int64_t);
+  const auto matrix_bytes = plan.matrix_offsets().capacity() * sizeof(std::int64_t);
   if (!make_range(&plan, sizeof(plan), descriptor) ||
       !make_range(plan.identity(), sizeof(PeriodicEmbeddingPlanData), data) ||
       !make_range(plan.atom_offsets().data(), atom_bytes, atom_offsets) ||
@@ -467,6 +470,13 @@ const std::vector<std::int64_t>& PeriodicEmbeddingPlan::atom_offsets() const noe
 
 const std::vector<std::int64_t>& PeriodicEmbeddingPlan::matrix_offsets() const noexcept {
   return data_ == nullptr ? kEmptyInt64Vector : data_->matrix_offsets;
+}
+
+bool PeriodicEmbeddingPlan::overlaps_storage(const void* data,
+                                             std::size_t size_bytes) const noexcept {
+  AddressRange range;
+  return size_bytes != 0u && (data_ == nullptr || !make_range(data, size_bytes, range) ||
+                              overlaps_plan_storage(*this, range));
 }
 
 const PeriodicEmbeddingPlanData* PeriodicEmbeddingPlan::identity() const noexcept {
