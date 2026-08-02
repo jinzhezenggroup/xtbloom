@@ -690,6 +690,44 @@ int test_ragged_matches_sequential() {
             quadrupoles, batch_gradient, batch_cn, error));
   CHECK(batch_energy[1] == 0.0);
 
+  /* The system primitive must reproduce the batch result, including an empty
+   * ragged member, while preserving accumulation semantics. */
+  for (std::int64_t system = 0; system < batch.plan.batch_size(); ++system) {
+    double system_energy = 0.375;
+    CHECK(gpuxtb::detail::gfn2::add_aes2_energy_system_cpu(
+              batch.plan, batch.cache, system, charges.data(), dipoles.data(), quadrupoles.data(),
+              system_energy, batch.workspace, error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(system_energy == 0.375 + batch_energy[static_cast<std::size_t>(system)]);
+  }
+
+  /* Numerical poison in a peer atom and peer cache slice is intentionally
+   * invisible to the selected system. Selecting the poisoned member then
+   * reports an isolated numerical failure without publishing its energy. */
+  const std::size_t peer_atom = 2u;
+  const std::size_t peer_pair = static_cast<std::size_t>(batch.plan.pair_offsets()[2]) * 5u;
+  const double saved_charge = charges[peer_atom];
+  const double saved_dipole = dipoles[peer_atom * 3u];
+  const double saved_quadrupole = quadrupoles[peer_atom * 6u];
+  const double saved_pair = batch.pair_data[peer_pair];
+  charges[peer_atom] = std::numeric_limits<double>::quiet_NaN();
+  dipoles[peer_atom * 3u] = std::numeric_limits<double>::infinity();
+  quadrupoles[peer_atom * 6u] = std::numeric_limits<double>::quiet_NaN();
+  batch.pair_data[peer_pair] = std::numeric_limits<double>::quiet_NaN();
+  double isolated_energy = -0.25;
+  CHECK(gpuxtb::detail::gfn2::add_aes2_energy_system_cpu(
+            batch.plan, batch.cache, 0, charges.data(), dipoles.data(), quadrupoles.data(),
+            isolated_energy, batch.workspace, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(isolated_energy == -0.25 + batch_energy[0]);
+  double failed_energy = 9.5;
+  CHECK(gpuxtb::detail::gfn2::add_aes2_energy_system_cpu(
+            batch.plan, batch.cache, 2, charges.data(), dipoles.data(), quadrupoles.data(),
+            failed_energy, batch.workspace, error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(failed_energy == 9.5);
+  charges[peer_atom] = saved_charge;
+  dipoles[peer_atom * 3u] = saved_dipole;
+  quadrupoles[peer_atom * 6u] = saved_quadrupole;
+  batch.pair_data[peer_pair] = saved_pair;
+
   for (std::size_t system : {0u, 2u, 3u}) {
     const std::int64_t begin = offsets[system];
     const std::int64_t end = offsets[system + 1u];
@@ -814,6 +852,25 @@ int test_failure_atomicity_and_plan_identity() {
             energies.data(), fixture.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
   CHECK(energies == original_energies);
   fixture.pair_data.back() = saved_kernel;
+
+  double& aliased_energy = const_cast<double&>(charges[0]);
+  const double aliased_energy_before = aliased_energy;
+  CHECK(gpuxtb::detail::gfn2::add_aes2_energy_system_cpu(
+            fixture.plan, fixture.cache, 0, charges.data(), dipoles.data(), quadrupoles.data(),
+            aliased_energy, fixture.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(aliased_energy == aliased_energy_before);
+  double system_energy = 3.0;
+  AES2Workspace short_energy_workspace = fixture.workspace;
+  --short_energy_workspace.batch_elements;
+  CHECK(gpuxtb::detail::gfn2::add_aes2_energy_system_cpu(
+            fixture.plan, fixture.cache, 0, charges.data(), dipoles.data(), quadrupoles.data(),
+            system_energy, short_energy_workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(system_energy == 3.0);
+  CHECK(gpuxtb::detail::gfn2::add_aes2_energy_system_cpu(
+            fixture.plan, fixture.cache, fixture.plan.batch_size(), charges.data(), dipoles.data(),
+            quadrupoles.data(), system_energy, fixture.workspace,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(system_energy == 3.0);
 
   Fixture reverse;
   const std::vector<std::int32_t> reverse_numbers{8, 6, 3, 1};
@@ -962,6 +1019,10 @@ int test_zero_steady_state_allocations() {
   const gpuxtb_status_t energy_status = gpuxtb::detail::gfn2::add_aes2_energy_cpu(
       fixture.plan, fixture.cache, charges.data(), dipoles.data(), quadrupoles.data(),
       energies.data(), fixture.workspace, error);
+  double system_energy = 0.0;
+  const gpuxtb_status_t system_energy_status = gpuxtb::detail::gfn2::add_aes2_energy_system_cpu(
+      fixture.plan, fixture.cache, 1, charges.data(), dipoles.data(), quadrupoles.data(),
+      system_energy, fixture.workspace, error);
   const gpuxtb_status_t vjp_status = gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
       fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
       kGeneration + 2u, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
@@ -970,6 +1031,7 @@ int test_zero_steady_state_allocations() {
   CHECK(update_status == GPUXTB_STATUS_SUCCESS);
   CHECK(potential_status == GPUXTB_STATUS_SUCCESS);
   CHECK(energy_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(system_energy_status == GPUXTB_STATUS_SUCCESS);
   CHECK(vjp_status == GPUXTB_STATUS_SUCCESS);
   CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
   return 0;

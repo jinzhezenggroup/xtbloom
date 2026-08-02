@@ -217,6 +217,113 @@ int test_two_body_charge_and_coordinate_derivatives() {
   return 0;
 }
 
+int test_system_two_body_isolation_and_batch_parity() {
+  constexpr std::array<std::int64_t, 5> offsets{0, 3, 4, 4, 7};
+  constexpr std::array<std::int32_t, 7> atomic_numbers{8, 1, 1, 6, 6, 7, 8};
+  constexpr std::array<double, 21> positions{
+      0.0, 0.0, 0.0, 1.43, 0.0, 1.1, -1.43, 0.0, 1.1, 2.0, 2.0,
+      2.0, 0.0, 0.0, 0.0,  2.2, 0.0, 0.0,   4.4, 0.0, 0.0,
+  };
+  std::array<double, 7> charges{-0.55, 0.27, 0.28, 0.0, -0.3, 0.1, 0.2};
+  D4Plan plan;
+  std::string error;
+  CHECK(gpuxtb::detail::gfn2::make_d4_plan(4, 7, offsets.data(), atomic_numbers.data(), plan,
+                                           error) == GPUXTB_STATUS_SUCCESS);
+  AlignedWorkspace storage(plan.workspace_size_bytes());
+  D4Workspace workspace;
+  CHECK(gpuxtb::detail::gfn2::bind_d4_workspace(plan, storage.data, plan.workspace_size_bytes(),
+                                                workspace, error) == GPUXTB_STATUS_SUCCESS);
+  std::vector<double> pair_data(static_cast<std::size_t>(plan.total_pairs()) *
+                                gpuxtb::detail::gfn2::kD4PairDataElements);
+  std::array<double, 7> coordination{};
+  D4GeometryCache cache;
+  CHECK(gpuxtb::detail::gfn2::update_d4_geometry_cache_cpu(
+            plan, positions.data(), 1u, pair_data.data(), pair_data.size(), coordination.data(),
+            coordination.size(), workspace, cache, error) == GPUXTB_STATUS_SUCCESS);
+
+  std::array<double, 4> batch_energies{};
+  std::array<double, 7> batch_potentials{};
+  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_cpu(
+            plan, cache, charges.data(), batch_energies.data(), batch_potentials.data(), workspace,
+            error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(batch_energies[1] == 0.0);
+  CHECK(batch_energies[2] == 0.0);
+
+  for (std::int64_t system = 0; system < plan.batch_size(); ++system) {
+    double system_energy = 41.0;
+    std::array<double, 7> system_potentials{};
+    system_potentials.fill(73.0);
+    CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(
+              plan, cache, system, charges.data(), system_energy, system_potentials.data(),
+              workspace, error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(system_energy == batch_energies[static_cast<std::size_t>(system)]);
+    const std::int64_t begin = offsets[static_cast<std::size_t>(system)];
+    const std::int64_t end = offsets[static_cast<std::size_t>(system) + 1u];
+    for (std::int64_t atom = 0; atom < 7; ++atom) {
+      const double expected =
+          atom >= begin && atom < end ? batch_potentials[static_cast<std::size_t>(atom)] : 73.0;
+      CHECK(system_potentials[static_cast<std::size_t>(atom)] == expected);
+    }
+
+    double energy_only = -19.0;
+    CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(plan, cache, system, charges.data(),
+                                                                energy_only, nullptr, workspace,
+                                                                error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(energy_only == batch_energies[static_cast<std::size_t>(system)]);
+  }
+
+  /* Poison the final system. Both energy+potential and energy-only evaluation
+   * of system zero must ignore those peer slices. */
+  const std::size_t peer_atom = 4u;
+  const std::size_t peer_pair =
+      static_cast<std::size_t>(plan.pair_offsets()[3]) * gpuxtb::detail::gfn2::kD4PairDataElements;
+  const double saved_charge = charges[peer_atom];
+  const double saved_coordination = coordination[peer_atom];
+  const double saved_pair = pair_data[peer_pair];
+  charges[peer_atom] = std::numeric_limits<double>::quiet_NaN();
+  coordination[peer_atom] = std::numeric_limits<double>::quiet_NaN();
+  pair_data[peer_pair] = std::numeric_limits<double>::quiet_NaN();
+  double isolated_energy = 17.0;
+  std::array<double, 7> isolated_potentials{};
+  isolated_potentials.fill(29.0);
+  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(
+            plan, cache, 0, charges.data(), isolated_energy, isolated_potentials.data(), workspace,
+            error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(isolated_energy == batch_energies[0]);
+  for (std::size_t atom = 0; atom < isolated_potentials.size(); ++atom) {
+    CHECK(isolated_potentials[atom] == (atom < 3u ? batch_potentials[atom] : 29.0));
+  }
+  double isolated_energy_only = 31.0;
+  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(
+            plan, cache, 0, charges.data(), isolated_energy_only, nullptr, workspace, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(isolated_energy_only == batch_energies[0]);
+
+  double failed_energy = 37.0;
+  std::array<double, 7> failed_potentials{};
+  failed_potentials.fill(43.0);
+  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(
+            plan, cache, 3, charges.data(), failed_energy, failed_potentials.data(), workspace,
+            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(failed_energy == 37.0);
+  CHECK(std::all_of(failed_potentials.begin(), failed_potentials.end(),
+                    [](double value) { return value == 43.0; }));
+  charges[peer_atom] = saved_charge;
+  coordination[peer_atom] = saved_coordination;
+  pair_data[peer_pair] = saved_pair;
+
+  const double aliased_charge = charges[0];
+  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(
+            plan, cache, 0, charges.data(), charges[0], failed_potentials.data(), workspace,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(charges[0] == aliased_charge);
+  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(
+            plan, cache, plan.batch_size(), charges.data(), failed_energy, failed_potentials.data(),
+            workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(failed_energy == 37.0);
+  return 0;
+}
+
 int test_atm_gradient_and_charge_independence() {
   Fixture fixture;
   std::string error;
@@ -251,6 +358,8 @@ int test_validation_and_zero_allocation_hot_path() {
   CHECK(fixture.initialize(error));
   std::array<double, 1> energies{};
   std::array<double, 4> potentials{};
+  double system_energy = 0.0;
+  std::array<double, 4> system_potentials{};
   std::array<double, 12> gradients{};
   CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_cpu(
             fixture.plan, fixture.cache, fixture.charges.data(), energies.data(), potentials.data(),
@@ -265,6 +374,14 @@ int test_validation_and_zero_allocation_hot_path() {
   const gpuxtb_status_t energy_status = gpuxtb::detail::gfn2::evaluate_d4_two_body_cpu(
       fixture.plan, fixture.cache, fixture.charges.data(), energies.data(), potentials.data(),
       fixture.workspace, error);
+  const gpuxtb_status_t system_energy_status =
+      gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(
+          fixture.plan, fixture.cache, 0, fixture.charges.data(), system_energy,
+          system_potentials.data(), fixture.workspace, error);
+  const gpuxtb_status_t system_energy_only_status =
+      gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(fixture.plan, fixture.cache, 0,
+                                                            fixture.charges.data(), system_energy,
+                                                            nullptr, fixture.workspace, error);
   const gpuxtb_status_t gradient_status = gpuxtb::detail::gfn2::add_d4_two_body_gradient_cpu(
       fixture.plan, fixture.cache, fixture.charges.data(), gradients.data(), fixture.workspace,
       error);
@@ -275,6 +392,8 @@ int test_validation_and_zero_allocation_hot_path() {
   allocation_test::enabled.store(false, std::memory_order_relaxed);
   CHECK(update_status == GPUXTB_STATUS_SUCCESS);
   CHECK(energy_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(system_energy_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(system_energy_only_status == GPUXTB_STATUS_SUCCESS);
   CHECK(gradient_status == GPUXTB_STATUS_SUCCESS);
   CHECK(atm_energy_status == GPUXTB_STATUS_SUCCESS);
   CHECK(atm_gradient_status == GPUXTB_STATUS_SUCCESS);
@@ -355,6 +474,9 @@ int main() {
     return line;
   }
   if (const int line = test_two_body_charge_and_coordinate_derivatives(); line != 0) {
+    return line;
+  }
+  if (const int line = test_system_two_body_isolation_and_batch_parity(); line != 0) {
     return line;
   }
   if (const int line = test_atm_gradient_and_charge_independence(); line != 0) {

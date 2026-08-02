@@ -394,6 +394,15 @@ int test_ragged_matches_sequential() {
             batch_gradient.data(), batch.workspace, error) == GPUXTB_STATUS_SUCCESS);
   CHECK(batch_energy[1] == 0.0);
 
+  /* Serial one-system workers over the packed batch reproduce the batch API. */
+  for (std::int64_t system = 0; system < batch.plan.batch_size(); ++system) {
+    double system_energy = 0.0;
+    CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(batch.plan, batch.cache, system,
+                                                          charges.data(), system_energy,
+                                                          error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(system_energy == batch_energy[static_cast<std::size_t>(system)]);
+  }
+
   for (std::size_t batch_index : {0u, 2u, 3u}) {
     const std::int64_t atom_begin = offsets[batch_index];
     const std::int64_t atom_end = offsets[batch_index + 1u];
@@ -439,6 +448,126 @@ int test_ragged_matches_sequential() {
             sequential_gradient[coordinate]);
     }
   }
+  return 0;
+}
+
+int test_system_energy_failure_isolation_and_binding() {
+  const std::vector<std::int64_t> offsets{0, 1, 3, 4};
+  const std::vector<std::int32_t> atomic_numbers{1, 8, 1, 6};
+  const std::vector<double> positions{
+      -0.2, 0.1, 0.4, 1.0, -0.7, 0.3, 2.1, 0.2, -0.5, 4.0, 0.6, -0.1,
+  };
+  Evaluation evaluation;
+  std::string error;
+  CHECK(make_evaluation(offsets, atomic_numbers, positions, evaluation, error));
+  const auto alias_at = [](const void* pointer) {
+    return reinterpret_cast<double*>(reinterpret_cast<std::uintptr_t>(pointer));
+  };
+  std::vector<double> charges(static_cast<std::size_t>(evaluation.plan.total_shells()));
+  for (std::size_t shell = 0; shell < charges.size(); ++shell) {
+    charges[shell] = -0.23 + 0.09 * static_cast<double>(shell);
+  }
+
+  constexpr std::int64_t target = 1;
+  const std::size_t target_index = static_cast<std::size_t>(target);
+  const std::int64_t target_shell = evaluation.plan.batch_shell_offsets()[target_index];
+  const std::int64_t peer_shell = evaluation.plan.batch_shell_offsets()[target_index + 1u];
+  const std::int64_t target_matrix = evaluation.plan.matrix_offsets()[target_index];
+  const std::int64_t peer_matrix = evaluation.plan.matrix_offsets()[target_index + 1u];
+  double expected = 0.375;
+  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                        charges.data(), expected,
+                                                        error) == GPUXTB_STATUS_SUCCESS);
+
+  /* Numerical poison in another member is deliberately invisible. */
+  const double saved_peer_charge = charges[static_cast<std::size_t>(peer_shell)];
+  charges[static_cast<std::size_t>(peer_shell)] = std::numeric_limits<double>::quiet_NaN();
+  double isolated = 0.375;
+  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                        charges.data(), isolated,
+                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(isolated == expected);
+  charges[static_cast<std::size_t>(peer_shell)] = saved_peer_charge;
+
+  const double saved_peer_matrix = evaluation.matrix[static_cast<std::size_t>(peer_matrix)];
+  evaluation.matrix[static_cast<std::size_t>(peer_matrix)] =
+      std::numeric_limits<double>::quiet_NaN();
+  isolated = 0.375;
+  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                        charges.data(), isolated,
+                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(isolated == expected);
+  evaluation.matrix[static_cast<std::size_t>(peer_matrix)] = saved_peer_matrix;
+
+  const double saved_target_charge = charges[static_cast<std::size_t>(target_shell)];
+  charges[static_cast<std::size_t>(target_shell)] = std::numeric_limits<double>::infinity();
+  double unchanged = -2.25;
+  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                        charges.data(), unchanged,
+                                                        error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(unchanged == -2.25);
+  charges[static_cast<std::size_t>(target_shell)] = saved_target_charge;
+
+  const double saved_target_matrix = evaluation.matrix[static_cast<std::size_t>(target_matrix)];
+  evaluation.matrix[static_cast<std::size_t>(target_matrix)] =
+      std::numeric_limits<double>::quiet_NaN();
+  unchanged = -1.75;
+  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                        charges.data(), unchanged,
+                                                        error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(unchanged == -1.75);
+  evaluation.matrix[static_cast<std::size_t>(target_matrix)] = saved_target_matrix;
+
+  unchanged = 4.5;
+  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, -1,
+                                                        charges.data(), unchanged,
+                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(unchanged == 4.5);
+  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(
+            evaluation.plan, evaluation.cache, evaluation.plan.batch_size(), charges.data(),
+            unchanged, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(unchanged == 4.5);
+
+  /* A same-shape cache from another sealed plan does not establish provenance. */
+  Evaluation foreign;
+  CHECK(make_evaluation(offsets, atomic_numbers, positions, foreign, error));
+  CHECK(foreign.plan.identity() != evaluation.plan.identity());
+  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, foreign.cache, target,
+                                                        charges.data(), unchanged,
+                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(unchanged == 4.5);
+
+  const std::vector<double> saved_charges = charges;
+  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                        charges.data(), charges[0],
+                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(charges == saved_charges);
+
+  const std::vector<double> saved_matrix = evaluation.matrix;
+  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                        charges.data(), evaluation.matrix[0],
+                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(evaluation.matrix == saved_matrix);
+
+  const double saved_hardness = evaluation.plan.shell_hardness()[0];
+  double& plan_alias = const_cast<double&>(evaluation.plan.shell_hardness()[0]);
+  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                        charges.data(), plan_alias,
+                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(evaluation.plan.shell_hardness()[0] == saved_hardness);
+
+  const ES2GeometryCache saved_cache = evaluation.cache;
+  double& cache_alias = *alias_at(&evaluation.cache);
+  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                        charges.data(), cache_alias,
+                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(same_cache_descriptor(evaluation.cache, saved_cache));
+
+  unchanged = 3.25;
+  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(
+            evaluation.plan, evaluation.cache, target, evaluation.plan.shell_hardness().data(),
+            unchanged, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(unchanged == 3.25);
   return 0;
 }
 
@@ -1494,6 +1623,9 @@ int test_no_steady_state_allocations() {
   const gpuxtb_status_t energy_status =
       gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
                                                energy.data(), evaluation.workspace, error);
+  double system_energy = 0.0;
+  const gpuxtb_status_t system_energy_status = gpuxtb::detail::gfn2::add_es2_energy_system_cpu(
+      evaluation.plan, evaluation.cache, 0, charges.data(), system_energy, error);
   const gpuxtb_status_t gradient_status = gpuxtb::detail::gfn2::add_es2_gradient_cpu(
       evaluation.plan, evaluation.cache, positions.data(), kGeometryGeneration + 1u, charges.data(),
       gradient.data(), evaluation.workspace, error);
@@ -1503,6 +1635,7 @@ int test_no_steady_state_allocations() {
   CHECK(cache_status == GPUXTB_STATUS_SUCCESS);
   CHECK(potential_status == GPUXTB_STATUS_SUCCESS);
   CHECK(energy_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(system_energy_status == GPUXTB_STATUS_SUCCESS);
   CHECK(gradient_status == GPUXTB_STATUS_SUCCESS);
   CHECK(after == before);
   return 0;
@@ -1524,6 +1657,9 @@ int main() {
     return status;
   }
   if (const int status = test_ragged_matches_sequential(); status != 0) {
+    return status;
+  }
+  if (const int status = test_system_energy_failure_isolation_and_binding(); status != 0) {
     return status;
   }
   if (const int status = test_cache_plan_identity(); status != 0) {

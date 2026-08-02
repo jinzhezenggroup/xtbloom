@@ -294,22 +294,20 @@ double charge_scale_derivative(double a, double c, double qref, double qmod) {
   return -a * c * inner * charge_scale(a, c, qref, qmod) * qref / (qmod * qmod);
 }
 
-gpuxtb_status_t prepare_weights(const D4PlanData& data, const double* coordination,
-                                const double* charges, bool derivatives,
-                                const D4Workspace& workspace, std::string& error) {
-  const std::size_t atom_count = static_cast<std::size_t>(data.total_atoms);
-  if (!finite_values(coordination, atom_count) || !finite_values(charges, atom_count)) {
-    error = "D4 coordination numbers and charges must be finite";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+void prepare_weight_slice(const D4PlanData& data, const double* coordination, const double* charges,
+                          std::int64_t atom_begin, std::int64_t atom_end, bool derivatives,
+                          const D4Workspace& workspace) {
+  const std::size_t weight_begin = static_cast<std::size_t>(atom_begin) * kD4MaximumReferences;
+  const std::size_t weight_count =
+      static_cast<std::size_t>(atom_end - atom_begin) * kD4MaximumReferences;
+  std::fill_n(workspace.weights + weight_begin, weight_count, 0.0);
+  if (derivatives) {
+    std::fill_n(workspace.weight_cn_derivatives + weight_begin, weight_count, 0.0);
+    std::fill_n(workspace.weight_charge_derivatives + weight_begin, weight_count, 0.0);
   }
-  const std::size_t weight_count = atom_count * kD4MaximumReferences;
-  std::fill_n(workspace.weights, weight_count, 0.0);
-  std::fill_n(workspace.weight_cn_derivatives, weight_count, 0.0);
-  std::fill_n(workspace.weight_charge_derivatives, weight_count, 0.0);
-
   constexpr double minimum_norm =
       std::numeric_limits<double>::min() > 0.0 ? 1.4916681462400413e-154 : 0.0;
-  for (std::int64_t atom_index = 0; atom_index < data.total_atoms; ++atom_index) {
+  for (std::int64_t atom_index = atom_begin; atom_index < atom_end; ++atom_index) {
     const D4ElementData& element_data = element(data, atom_index);
     const std::size_t output_offset = static_cast<std::size_t>(atom_index) * kD4MaximumReferences;
     const double cn = coordination[atom_index];
@@ -364,6 +362,17 @@ gpuxtb_status_t prepare_weights(const D4PlanData& data, const double* coordinati
       }
     }
   }
+}
+
+gpuxtb_status_t prepare_weights(const D4PlanData& data, const double* coordination,
+                                const double* charges, bool derivatives,
+                                const D4Workspace& workspace, std::string& error) {
+  const std::size_t atom_count = static_cast<std::size_t>(data.total_atoms);
+  if (!finite_values(coordination, atom_count) || !finite_values(charges, atom_count)) {
+    error = "D4 coordination numbers and charges must be finite";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  prepare_weight_slice(data, coordination, charges, 0, data.total_atoms, derivatives, workspace);
   return GPUXTB_STATUS_SUCCESS;
 }
 
@@ -866,6 +875,144 @@ gpuxtb_status_t evaluate_d4_two_body_cpu(const D4Plan& plan, const D4GeometryCac
               static_cast<std::size_t>(data.batch_size) * sizeof(double));
   std::memcpy(atomic_potentials, workspace.atom_scratch,
               static_cast<std::size_t>(data.total_atoms) * sizeof(double));
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t evaluate_d4_two_body_system_cpu(const D4Plan& plan, const D4GeometryCache& cache,
+                                                std::int64_t system, const double* atomic_charges,
+                                                double& energy, double* atomic_potentials,
+                                                const D4Workspace& workspace, std::string& error) {
+  gpuxtb_status_t status = validate_plan(plan, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_workspace(plan, workspace, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_cache(plan, cache, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  if (system < 0 || system >= plan.batch_size()) {
+    error = "D4 two-body system index is out of range";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  if (!aligned(atomic_charges, alignof(double)) || !aligned(&energy, alignof(double)) ||
+      (atomic_potentials != nullptr && !aligned(atomic_potentials, alignof(double)))) {
+    error = "D4 system two-body inputs and outputs must not be NULL or misaligned";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  const D4PlanData& data = *plan.identity();
+  const std::size_t atom_count = static_cast<std::size_t>(data.total_atoms);
+  const std::size_t pair_element_count = static_cast<std::size_t>(cache.pair_data_elements);
+  std::size_t atom_bytes = 0u;
+  std::size_t pair_bytes = 0u;
+  std::array<AddressRange, 5> numerical{};
+  std::array<AddressRange, 4> controls{};
+  if (!checked_multiply_size(atom_count, sizeof(double), atom_bytes) ||
+      !checked_multiply_size(pair_element_count, sizeof(double), pair_bytes) ||
+      !make_range(cache.pair_data, pair_bytes, numerical[0]) ||
+      !make_range(cache.coordination_numbers, atom_bytes, numerical[1]) ||
+      !make_range(atomic_charges, atom_bytes, numerical[2]) ||
+      !make_range(&energy, sizeof(double), numerical[3]) ||
+      !make_range(atomic_potentials, atomic_potentials == nullptr ? 0u : atom_bytes,
+                  numerical[4]) ||
+      !make_range(&plan, sizeof(plan), controls[0]) ||
+      !make_range(&cache, sizeof(cache), controls[1]) ||
+      !make_range(&workspace, sizeof(workspace), controls[2]) ||
+      !make_range(&error, sizeof(error), controls[3]) ||
+      !valid_call_storage(plan, workspace, numerical, controls)) {
+    error = "D4 system two-body buffers overlap numerical, plan, workspace, or descriptor storage";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  const std::size_t system_index = static_cast<std::size_t>(system);
+  const std::int64_t atom_begin = data.atom_offsets[system_index];
+  const std::int64_t atom_end = data.atom_offsets[system_index + 1u];
+  const std::int64_t pair_begin = data.pair_offsets[system_index];
+  const std::int64_t pair_end = data.pair_offsets[system_index + 1u];
+  if (atom_begin < 0 || atom_begin > atom_end || atom_end > data.total_atoms || pair_begin < 0 ||
+      pair_begin > pair_end || pair_end > data.total_pairs) {
+    error = "D4 target system partition is structurally invalid";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const std::uint64_t target_atom_count = static_cast<std::uint64_t>(atom_end - atom_begin);
+  if (target_atom_count > 0u &&
+      target_atom_count - 1u >
+          static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) /
+              target_atom_count) {
+    error = "D4 target system pair count overflows";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const std::uint64_t expected_pairs = target_atom_count * (target_atom_count - 1u) / 2u;
+  if (expected_pairs != static_cast<std::uint64_t>(pair_end - pair_begin)) {
+    error = "D4 target atom and pair partitions disagree";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  const std::size_t target_atoms = static_cast<std::size_t>(atom_end - atom_begin);
+  if (!finite_values(cache.coordination_numbers + atom_begin, target_atoms) ||
+      !finite_values(atomic_charges + atom_begin, target_atoms)) {
+    error = "D4 target coordination numbers and charges must be finite";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+  for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+    if (cache.coordination_numbers[atom] < 0.0) {
+      error = "D4 target coordination numbers must be nonnegative";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+  }
+  for (std::int64_t pair_index = pair_begin; pair_index < pair_end; ++pair_index) {
+    const double* pair =
+        cache.pair_data + static_cast<std::size_t>(pair_index) * kD4PairDataElements;
+    if (!finite_values(pair, kD4PairDataElements) || pair[3] < 0.0) {
+      error = "D4 target geometry cache contains invalid numerical data";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+  }
+
+  const bool derivatives = atomic_potentials != nullptr;
+  prepare_weight_slice(data, cache.coordination_numbers, atomic_charges, atom_begin, atom_end,
+                       derivatives, workspace);
+  if (derivatives) {
+    std::fill_n(workspace.atom_scratch + atom_begin, target_atoms, 0.0);
+  }
+  double contribution = 0.0;
+  std::size_t packed_pair = static_cast<std::size_t>(pair_begin);
+  for (std::int64_t second = atom_begin + 1; second < atom_end; ++second) {
+    for (std::int64_t first = atom_begin; first < second; ++first, ++packed_pair) {
+      const double damping = cache.pair_data[packed_pair * kD4PairDataElements + 3u];
+      if (damping == 0.0) {
+        continue;
+      }
+      const PairCoefficient coefficient =
+          pair_coefficient(data, first, second, workspace, derivatives);
+      contribution -= coefficient.c6 * damping;
+      if (derivatives) {
+        workspace.atom_scratch[first] -= coefficient.first_charge * damping;
+        workspace.atom_scratch[second] -= coefficient.second_charge * damping;
+      }
+    }
+  }
+  if (packed_pair != static_cast<std::size_t>(pair_end)) {
+    error = "D4 target pair enumeration disagrees with the plan";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  if (!std::isfinite(contribution) ||
+      (derivatives && !finite_values(workspace.atom_scratch + atom_begin, target_atoms))) {
+    error = "D4 target two-body evaluation overflowed";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+
+  workspace.batch_scratch[system_index] = contribution;
+  if (derivatives) {
+    std::memcpy(atomic_potentials + atom_begin, workspace.atom_scratch + atom_begin,
+                target_atoms * sizeof(double));
+  }
+  energy = contribution;
   error.clear();
   return GPUXTB_STATUS_SUCCESS;
 }

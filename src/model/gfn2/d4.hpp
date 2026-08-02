@@ -135,6 +135,24 @@ gpuxtb_status_t evaluate_d4_two_body_cpu(const D4Plan& plan, const D4GeometryCac
                                          std::string& error);
 
 /*
+ * Evaluate one ragged batch member using full-layout atomic charges. Only the
+ * selected charge, coordination, and pair slices are inspected, and only the
+ * selected atomic-potential slice is published. Passing nullptr for
+ * atomic_potentials selects energy-only mode, which is used to recompute the
+ * final D4 energy from raw post-SCC charges without disturbing mixed-charge
+ * SCC potentials.
+ *
+ * Structural and aliasing failures return INVALID_ARGUMENT. Invalid target
+ * numerical data or arithmetic failure return INTERNAL_ERROR. Energy and the
+ * optional target potential slice remain unchanged on every failure. The
+ * operation uses canonical caller-owned scratch and allocates nothing.
+ */
+gpuxtb_status_t evaluate_d4_two_body_system_cpu(const D4Plan& plan, const D4GeometryCache& cache,
+                                                std::int64_t system, const double* atomic_charges,
+                                                double& energy, double* atomic_potentials,
+                                                const D4Workspace& workspace, std::string& error);
+
+/*
  * Accumulate the complete two-body coordinate derivative at fixed atomic
  * charges, including the D4-specific CN interpolation path. Gradients are
  * dE/dR in Hartree/bohr, not forces. The gradient output must not overlap the

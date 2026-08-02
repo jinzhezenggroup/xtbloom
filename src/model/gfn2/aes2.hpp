@@ -165,6 +165,25 @@ gpuxtb_status_t add_aes2_energy_cpu(const AES2Plan& plan, const AES2GeometryCach
                                     const AES2Workspace& workspace, std::string& error);
 
 /*
+ * Accumulate the AES2 energy of one ragged batch member into
+ * accumulated_energy. The multipole pointers retain the full-batch layout,
+ * but only the selected atom and pair slices are inspected. Consequently a
+ * numerical failure in another system cannot poison a successful target.
+ *
+ * Structural and aliasing failures return INVALID_ARGUMENT. Nonfinite target
+ * data or target arithmetic failure return INTERNAL_ERROR. Publication is
+ * atomic: accumulated_energy is unchanged unless the complete target
+ * contribution is finite. The canonical batch scratch remains caller-owned,
+ * and successful calls allocate nothing.
+ */
+gpuxtb_status_t add_aes2_energy_system_cpu(const AES2Plan& plan, const AES2GeometryCache& cache,
+                                           std::int64_t system, const double* atomic_charges,
+                                           const double* atomic_dipoles,
+                                           const double* atomic_quadrupoles,
+                                           double& accumulated_energy,
+                                           const AES2Workspace& workspace, std::string& error);
+
+/*
  * Accumulate the fixed-multipole reverse products dE_AES2/dR (Hartree/bohr)
  * and dE_AES2/dCN into caller-owned outputs. The Cartesian derivative is the
  * explicit pair-kernel derivative at fixed coordination numbers; callers can

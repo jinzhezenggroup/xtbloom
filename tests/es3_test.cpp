@@ -185,6 +185,14 @@ int test_ragged_sequential_and_energy_potential_derivative() {
         GPUXTB_STATUS_SUCCESS);
   CHECK(energies[1] == 0.0);
 
+  /* Serial one-system workers over the packed view reproduce the batch API. */
+  for (std::int64_t system = 0; system < view.batch_size; ++system) {
+    double system_energy = 0.0;
+    CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(
+              view, system, charges.data(), system_energy, error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(system_energy == energies[static_cast<std::size_t>(system)]);
+  }
+
   constexpr double step = 1.0e-6;
   for (std::size_t shell = 0; shell < charges.size(); ++shell) {
     charges[shell] += step;
@@ -232,6 +240,110 @@ int test_ragged_sequential_and_energy_potential_derivative() {
             potentials[static_cast<std::size_t>(shell_begin) + shell]);
     }
   }
+  return 0;
+}
+
+int test_system_energy_failure_isolation_and_binding() {
+  const std::vector<std::int64_t> offsets{0, 1, 1, 3, 4};
+  const std::vector<std::int32_t> atomic_numbers{1, 8, 1, 6};
+  BasisPlan basis;
+  ES3Plan plan;
+  std::string error;
+  CHECK(make_plan(offsets, atomic_numbers, basis, plan, error));
+  const auto alias_at = [](const void* pointer) {
+    return reinterpret_cast<double*>(reinterpret_cast<std::uintptr_t>(pointer));
+  };
+  ES3View view = gpuxtb::detail::gfn2::make_es3_view(plan);
+  std::vector<double> charges(static_cast<std::size_t>(plan.total_shells));
+  for (std::size_t shell = 0; shell < charges.size(); ++shell) {
+    charges[shell] = 0.04 * static_cast<double>(shell + 1u) - 0.17;
+  }
+
+  constexpr std::int64_t target = 0;
+  const std::int64_t target_shell = plan.batch_shell_offsets[0];
+  const std::int64_t peer_shell = plan.batch_shell_offsets[2];
+  double expected = 0.625;
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(view, target, charges.data(), expected,
+                                                        error) == GPUXTB_STATUS_SUCCESS);
+
+  const double saved_peer_charge = charges[static_cast<std::size_t>(peer_shell)];
+  charges[static_cast<std::size_t>(peer_shell)] = std::numeric_limits<double>::quiet_NaN();
+  double isolated = 0.625;
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(view, target, charges.data(), isolated,
+                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(isolated == expected);
+  charges[static_cast<std::size_t>(peer_shell)] = saved_peer_charge;
+
+  std::vector<double> gamma3 = plan.shell_gamma3;
+  gamma3[static_cast<std::size_t>(peer_shell)] = std::numeric_limits<double>::quiet_NaN();
+  ES3View poisoned_peer_view = view;
+  poisoned_peer_view.shell_gamma3 = gamma3.data();
+  isolated = 0.625;
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(poisoned_peer_view, target, charges.data(),
+                                                        isolated, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(isolated == expected);
+
+  const double saved_target_charge = charges[static_cast<std::size_t>(target_shell)];
+  charges[static_cast<std::size_t>(target_shell)] = std::numeric_limits<double>::infinity();
+  double unchanged = -3.5;
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(view, target, charges.data(), unchanged,
+                                                        error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(unchanged == -3.5);
+  charges[static_cast<std::size_t>(target_shell)] = saved_target_charge;
+
+  gamma3 = plan.shell_gamma3;
+  gamma3[static_cast<std::size_t>(target_shell)] = std::numeric_limits<double>::quiet_NaN();
+  ES3View poisoned_target_view = view;
+  poisoned_target_view.shell_gamma3 = gamma3.data();
+  unchanged = -4.25;
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(poisoned_target_view, target,
+                                                        charges.data(), unchanged,
+                                                        error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(unchanged == -4.25);
+
+  unchanged = std::numeric_limits<double>::quiet_NaN();
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(view, target, charges.data(), unchanged,
+                                                        error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(std::isnan(unchanged));
+
+  unchanged = 2.75;
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(view, -1, charges.data(), unchanged,
+                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(unchanged == 2.75);
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(view, view.batch_size, charges.data(),
+                                                        unchanged,
+                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(unchanged == 2.75);
+
+  ES3View bad_view = view;
+  --bad_view.shell_gamma3_count;
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(bad_view, target, charges.data(), unchanged,
+                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(unchanged == 2.75);
+  std::vector<std::int64_t> bad_offsets = plan.batch_shell_offsets;
+  bad_offsets[1] = plan.total_shells + 1;
+  bad_view = view;
+  bad_view.batch_shell_offsets = bad_offsets.data();
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(bad_view, target, charges.data(), unchanged,
+                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(unchanged == 2.75);
+
+  const std::vector<double> saved_charges = charges;
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(view, target, charges.data(), charges[0],
+                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(charges == saved_charges);
+
+  const std::vector<double> saved_gamma3 = plan.shell_gamma3;
+  double& gamma_alias = plan.shell_gamma3[0];
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(view, target, charges.data(), gamma_alias,
+                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(plan.shell_gamma3 == saved_gamma3);
+
+  const std::vector<std::int64_t> saved_offsets = plan.batch_shell_offsets;
+  double& offset_alias = *alias_at(plan.batch_shell_offsets.data());
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(view, target, charges.data(), offset_alias,
+                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(plan.batch_shell_offsets == saved_offsets);
   return 0;
 }
 
@@ -465,20 +577,27 @@ int test_zero_steady_state_allocations() {
                                                          error) == GPUXTB_STATUS_SUCCESS);
   CHECK(gpuxtb::detail::gfn2::add_es3_energy_cpu(view, charges.data(), energies.data(), error) ==
         GPUXTB_STATUS_SUCCESS);
+  double system_energy = 0.0;
+  CHECK(gpuxtb::detail::gfn2::add_es3_energy_system_cpu(view, 0, charges.data(), system_energy,
+                                                        error) == GPUXTB_STATUS_SUCCESS);
   energies.fill(0.0);
   allocation_test::count.store(0u, std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
   gpuxtb_status_t potential_status = GPUXTB_STATUS_INTERNAL_ERROR;
   gpuxtb_status_t energy_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  gpuxtb_status_t system_energy_status = GPUXTB_STATUS_INTERNAL_ERROR;
   for (int iteration = 0; iteration < 64; ++iteration) {
     potential_status = gpuxtb::detail::gfn2::evaluate_es3_potential_cpu(view, charges.data(),
                                                                         potentials.data(), error);
     energy_status =
         gpuxtb::detail::gfn2::add_es3_energy_cpu(view, charges.data(), energies.data(), error);
+    system_energy_status = gpuxtb::detail::gfn2::add_es3_energy_system_cpu(view, 0, charges.data(),
+                                                                           system_energy, error);
   }
   allocation_test::enabled.store(false, std::memory_order_relaxed);
   CHECK(potential_status == GPUXTB_STATUS_SUCCESS);
   CHECK(energy_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(system_energy_status == GPUXTB_STATUS_SUCCESS);
   CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
   return 0;
 }
@@ -490,6 +609,9 @@ int main() {
     return status;
   }
   if (const int status = test_ragged_sequential_and_energy_potential_derivative(); status != 0) {
+    return status;
+  }
+  if (const int status = test_system_energy_failure_isolation_and_binding(); status != 0) {
     return status;
   }
   if (const int status = test_extreme_arithmetic(); status != 0) {

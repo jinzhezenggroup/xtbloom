@@ -717,6 +717,64 @@ gpuxtb_status_t add_es2_energy_cpu(const ES2Plan& plan, const ES2GeometryCache& 
   return GPUXTB_STATUS_SUCCESS;
 }
 
+gpuxtb_status_t add_es2_energy_system_cpu(const ES2Plan& plan, const ES2GeometryCache& cache,
+                                          std::int64_t system, const double* shell_charges,
+                                          double& accumulated_energy, std::string& error) {
+  gpuxtb_status_t status = validate_plan(plan, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_cache(plan, cache, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  if (system < 0 || system >= plan.batch_size()) {
+    error = "ES2 energy system index is out of range";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  status = validate_shell_charge_pointer(shell_charges, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+
+  const std::size_t shell_bytes = static_cast<std::size_t>(plan.total_shells()) * sizeof(double);
+  const std::size_t matrix_bytes =
+      static_cast<std::size_t>(plan.total_matrix_elements()) * sizeof(double);
+  const void* energy_pointer = &accumulated_energy;
+  if (overlaps_plan_storage(plan, shell_charges, shell_bytes) ||
+      overlaps_plan_storage(plan, cache.coulomb_matrix, matrix_bytes) ||
+      overlaps_plan_storage(plan, energy_pointer, sizeof(double)) ||
+      ranges_overlap(shell_charges, shell_bytes, &cache, sizeof(cache)) ||
+      ranges_overlap(cache.coulomb_matrix, matrix_bytes, &cache, sizeof(cache)) ||
+      ranges_overlap(energy_pointer, sizeof(double), &cache, sizeof(cache)) ||
+      ranges_overlap(energy_pointer, sizeof(double), shell_charges, shell_bytes) ||
+      ranges_overlap(energy_pointer, sizeof(double), cache.coulomb_matrix, matrix_bytes) ||
+      ranges_overlap(energy_pointer, sizeof(double), &error, sizeof(error))) {
+    error = "ES2 one-system energy inputs, output, cache, error, and plan storage must not overlap";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  const std::size_t system_index = static_cast<std::size_t>(system);
+  const std::int64_t shell_begin = plan.batch_shell_offsets()[system_index];
+  const std::int64_t shell_end = plan.batch_shell_offsets()[system_index + 1u];
+  for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
+    if (!std::isfinite(shell_charges[static_cast<std::size_t>(shell)])) {
+      error = "ES2 target-system shell charges contain NaN or infinity";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+  }
+
+  double contribution = 0.0;
+  if (!calculate_batch_energy(plan, cache, shell_charges, system_index, contribution) ||
+      !std::isfinite(accumulated_energy) || !std::isfinite(accumulated_energy + contribution)) {
+    error = "ES2 target-system energy arithmetic exceeded floating-point range";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+  accumulated_energy += contribution;
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
 gpuxtb_status_t add_es2_gradient_cpu(const ES2Plan& plan, const ES2GeometryCache& cache,
                                      const double* positions, std::uint64_t geometry_generation,
                                      const double* shell_charges, double* gradients,

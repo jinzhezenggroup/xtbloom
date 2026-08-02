@@ -286,8 +286,8 @@ gpuxtb_status_t validate_plan(const AES2Plan& plan, std::string& error) {
   return GPUXTB_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_cache(const AES2Plan& plan, const AES2GeometryCache& cache,
-                               std::string& error) {
+gpuxtb_status_t validate_cache_shape(const AES2Plan& plan, const AES2GeometryCache& cache,
+                                     std::string& error) {
   if (cache.pair_data_elements != plan.pair_data_elements() ||
       cache.plan_identity != plan.identity() ||
       (cache.pair_data_elements != 0 &&
@@ -295,15 +295,32 @@ gpuxtb_status_t validate_cache(const AES2Plan& plan, const AES2GeometryCache& ca
     error = "AES2 geometry cache is missing or belongs to a different plan";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
-  for (std::int64_t pair = 0; pair < plan.total_pairs(); ++pair) {
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+bool finite_cache_pair_slice(const AES2GeometryCache& cache, std::int64_t pair_begin,
+                             std::int64_t pair_end) {
+  for (std::int64_t pair = pair_begin; pair < pair_end; ++pair) {
     const std::size_t base = static_cast<std::size_t>(pair * kPairStride);
     if (!std::isfinite(cache.pair_data[base]) || !std::isfinite(cache.pair_data[base + 1u]) ||
         !std::isfinite(cache.pair_data[base + 2u]) || !(cache.pair_data[base + 3u] >= 0.0) ||
         !std::isfinite(cache.pair_data[base + 3u]) || !(cache.pair_data[base + 4u] >= 0.0) ||
         !std::isfinite(cache.pair_data[base + 4u])) {
-      error = "AES2 geometry cache contains an invalid pair kernel";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return false;
     }
+  }
+  return true;
+}
+
+gpuxtb_status_t validate_cache(const AES2Plan& plan, const AES2GeometryCache& cache,
+                               std::string& error) {
+  gpuxtb_status_t status = validate_cache_shape(plan, cache, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  if (!finite_cache_pair_slice(cache, 0, plan.total_pairs())) {
+    error = "AES2 geometry cache contains an invalid pair kernel";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
   return GPUXTB_STATUS_SUCCESS;
 }
@@ -1208,6 +1225,143 @@ gpuxtb_status_t add_aes2_energy_cpu(const AES2Plan& plan, const AES2GeometryCach
   for (std::int64_t batch = 0; batch < plan.batch_size(); ++batch) {
     energies[batch] += workspace.batch_scratch[batch];
   }
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t add_aes2_energy_system_cpu(const AES2Plan& plan, const AES2GeometryCache& cache,
+                                           std::int64_t system, const double* atomic_charges,
+                                           const double* atomic_dipoles,
+                                           const double* atomic_quadrupoles,
+                                           double& accumulated_energy,
+                                           const AES2Workspace& workspace, std::string& error) {
+  gpuxtb_status_t status = validate_plan(plan, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_cache_shape(plan, cache, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  if (system < 0 || system >= plan.batch_size()) {
+    error = "AES2 energy system index is out of range";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  if (atomic_charges == nullptr || atomic_dipoles == nullptr || atomic_quadrupoles == nullptr ||
+      !is_aligned(atomic_charges, alignof(double)) ||
+      !is_aligned(atomic_dipoles, alignof(double)) ||
+      !is_aligned(atomic_quadrupoles, alignof(double)) ||
+      !is_aligned(&accumulated_energy, alignof(double))) {
+    error = "AES2 system energy inputs and output must not be NULL or misaligned";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  status = validate_workspace_pointer(
+      workspace.batch_scratch, workspace.batch_elements, plan.batch_size(),
+      "AES2 batch scratch is NULL, misaligned, or too small", error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+
+  std::size_t atom_bytes = 0u;
+  std::size_t dipole_bytes = 0u;
+  std::size_t quadrupole_bytes = 0u;
+  std::size_t pair_bytes = 0u;
+  std::size_t batch_bytes = 0u;
+  if (!count_bytes(plan.total_atoms(), sizeof(double), atom_bytes) ||
+      !count_bytes(plan.total_atoms() * 3, sizeof(double), dipole_bytes) ||
+      !count_bytes(plan.total_atoms() * 6, sizeof(double), quadrupole_bytes) ||
+      !count_bytes(plan.pair_data_elements(), sizeof(double), pair_bytes) ||
+      !count_bytes(plan.batch_size(), sizeof(double), batch_bytes)) {
+    error = "AES2 system energy dimensions exceed addressable host storage";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const std::array<MemoryRange, 6> active{{{atomic_charges, atom_bytes},
+                                           {atomic_dipoles, dipole_bytes},
+                                           {atomic_quadrupoles, quadrupole_bytes},
+                                           {cache.pair_data, pair_bytes},
+                                           {&accumulated_energy, sizeof(double)},
+                                           {workspace.batch_scratch, batch_bytes}}};
+  if (!ranges_are_disjoint(active.data(), active.size())) {
+    error = "AES2 system energy inputs, output, cache, and scratch must not overlap";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  for (const MemoryRange& range : active) {
+    if (overlaps_control_storage(plan, cache, workspace, range.data, range.size_bytes)) {
+      error = "AES2 system energy buffers must not overlap plan or descriptor storage";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+  }
+
+  const std::size_t system_index = static_cast<std::size_t>(system);
+  const std::int64_t atom_begin = plan.atom_offsets()[system_index];
+  const std::int64_t atom_end = plan.atom_offsets()[system_index + 1u];
+  const std::int64_t pair_begin = plan.pair_offsets()[system_index];
+  const std::int64_t pair_end = plan.pair_offsets()[system_index + 1u];
+  if (!finite_cache_pair_slice(cache, pair_begin, pair_end)) {
+    error = "AES2 target geometry cache contains invalid numerical data";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+  for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+    const std::size_t atom_index = static_cast<std::size_t>(atom);
+    if (!std::isfinite(atomic_charges[atom_index])) {
+      error = "AES2 target atomic charges contain NaN or infinity";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    for (std::size_t component = 0u; component < 3u; ++component) {
+      if (!std::isfinite(atomic_dipoles[atom_index * 3u + component])) {
+        error = "AES2 target atomic dipoles contain NaN or infinity";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+    }
+    for (std::size_t component = 0u; component < 6u; ++component) {
+      if (!std::isfinite(atomic_quadrupoles[atom_index * 6u + component])) {
+        error = "AES2 target atomic quadrupoles contain NaN or infinity";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+    }
+  }
+  if (!std::isfinite(accumulated_energy)) {
+    error = "AES2 target accumulated energy is not finite";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+
+  double contribution = 0.0;
+  for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+    const std::size_t atom_index = static_cast<std::size_t>(atom);
+    double onsite = 0.0;
+    if (!onsite_energy(plan, atom_index, atomic_dipoles + atom_index * 3u,
+                       atomic_quadrupoles + atom_index * 6u, onsite) ||
+        !add_value(onsite, contribution)) {
+      error = "AES2 target onsite energy arithmetic exceeded floating-point range";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+  }
+  std::int64_t pair = pair_begin;
+  for (std::int64_t second = atom_begin; second < atom_end; ++second) {
+    for (std::int64_t first = atom_begin; first < second; ++first, ++pair) {
+      const std::size_t pair_base = static_cast<std::size_t>(pair * kPairStride);
+      double pair_contribution = 0.0;
+      if (!pair_energy(cache.pair_data + pair_base, static_cast<std::size_t>(first),
+                       static_cast<std::size_t>(second), atomic_charges, atomic_dipoles,
+                       atomic_quadrupoles, pair_contribution) ||
+          !add_value(pair_contribution, contribution)) {
+        error = "AES2 target pair energy arithmetic exceeded floating-point range";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+    }
+  }
+  if (pair != pair_end) {
+    error = "AES2 target pair enumeration disagrees with the plan";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const double updated = accumulated_energy + contribution;
+  if (!std::isfinite(updated)) {
+    error = "AES2 target accumulated energy exceeded floating-point range";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+
+  workspace.batch_scratch[system_index] = contribution;
+  accumulated_energy = updated;
   error.clear();
   return GPUXTB_STATUS_SUCCESS;
 }

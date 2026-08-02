@@ -20,6 +20,7 @@
 namespace gpuxtb::detail::gfn2 {
 
 inline constexpr std::size_t kSccDriverWorkspaceAlignment = 64u;
+inline constexpr double kDefaultSccEnergyTolerance = 1.0e-8;
 
 struct SccDriverPlanData;
 
@@ -51,6 +52,7 @@ class SccDriverPlan {
   [[nodiscard]] std::int64_t batch_size() const noexcept;
   [[nodiscard]] std::uint64_t maximum_iterations() const noexcept;
   [[nodiscard]] double electronic_temperature() const noexcept;
+  [[nodiscard]] double energy_tolerance() const noexcept;
   [[nodiscard]] bool d4_enabled() const noexcept;
   [[nodiscard]] bool periodic_embedding_enabled() const noexcept;
   [[nodiscard]] std::size_t state_size_bytes() const noexcept;
@@ -72,6 +74,12 @@ class SccDriverPlan {
       const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
       std::uint64_t maximum_iterations, double electronic_temperature, SccDriverPlan& plan,
       std::string& error);
+  friend gpuxtb_status_t make_scc_driver_plan(
+      const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
+      const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
+      const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
+      std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
+      SccDriverPlan& plan, std::string& error);
 };
 
 /*
@@ -116,11 +124,12 @@ struct SccDriverGeometryView {
 /*
  * Persistent, caller-owned driver status and scalar trace.
  *
- * d4_two_body_energies and periodic_embedding_energies store their component
- * energies for the mixed charges that formed the most recently successful SCC
- * Hamiltonian. They are diagnostics only, not a complete SCC total energy and
- * not part of the current convergence criterion. Each pointer is null when its
- * optional component is disabled.
+ * Every component trace is evaluated from the density-derived raw multipoles
+ * of the most recently successful iteration. internal_energies is Tr(P H0)
+ * plus all SCC interaction terms; free_energies additionally includes the
+ * finite-temperature -kT*S contribution and is the energy convergence trace.
+ * D4 ATM and geometry-only repulsion remain outside SCC. Optional component
+ * pointers are null when their plan is disabled.
  */
 struct SccDriverState {
   void* workspace_base = nullptr;
@@ -131,8 +140,14 @@ struct SccDriverState {
   double* free_energy_changes = nullptr;
   double* entropies = nullptr;
   double* band_energies = nullptr;
+  double* core_energies = nullptr;
+  double* es2_energies = nullptr;
+  double* es3_energies = nullptr;
+  double* aes2_energies = nullptr;
   double* d4_two_body_energies = nullptr;
+  double* explicit_point_charge_energies = nullptr;
   double* periodic_embedding_energies = nullptr;
+  double* internal_energies = nullptr;
   std::uint64_t* iterations = nullptr;
   gpuxtb_status_t* system_statuses = nullptr;
   std::uint8_t* initialized = nullptr;
@@ -171,6 +186,13 @@ struct SccDriverWorkspace {
   double* raw_qat = nullptr;
   double* raw_dipoles = nullptr;
   double* raw_quadrupoles = nullptr;
+  double* core_energies = nullptr;
+  double* es2_energies = nullptr;
+  double* es3_energies = nullptr;
+  double* aes2_energies = nullptr;
+  double* explicit_point_charge_energies = nullptr;
+  double* internal_energies = nullptr;
+  double* free_energies = nullptr;
   double* periodic_atomic_potentials = nullptr;
   double* periodic_embedding_energies = nullptr;
   gpuxtb_status_t* periodic_system_statuses = nullptr;
@@ -194,10 +216,9 @@ struct SccDriverWorkspace {
 /*
  * Seal exact component compatibility and precompute all state/scratch offsets.
  * Unrestricted layouts are rejected until a spin-polarization potential is
- * available. Stored free-energy values are only a provisional eigensolver
- * electronic trace (band Helmholtz free energy), not the complete SCC total
- * energy, and do not enter convergence. Complete-energy convergence will be
- * added once all interaction energies provide per-system failure isolation.
+ * available. Compatibility overloads use kDefaultSccEnergyTolerance. The
+ * production convergence gate requires both the mixer RMS residual and the
+ * absolute complete SCC free-energy change to be strictly below tolerance.
  */
 gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
                                      const MullikenPlan& mulliken, const ES2Plan& es2,
@@ -219,6 +240,17 @@ gpuxtb_status_t make_scc_driver_plan(
     const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
     std::uint64_t maximum_iterations, double electronic_temperature, SccDriverPlan& plan,
     std::string& error);
+
+/*
+ * Explicit complete-free-energy convergence policy. energy_tolerance is in
+ * Hartree and must be finite and positive.
+ */
+gpuxtb_status_t make_scc_driver_plan(
+    const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
+    const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
+    const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
+    std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
+    SccDriverPlan& plan, std::string& error);
 
 /*
  * Enable the validated CPU periodic charge response. A non-null pointer must
@@ -258,14 +290,14 @@ gpuxtb_status_t restart_scc_driver_system_cpu(const SccDriverPlan& plan, std::in
  * Advance every active system by one SCC iteration.
  *
  * Structural/binding/backend contract failures publish nothing. Per-system
- * periodic-embedding numerical, eigensolver, mixer, and max-iteration
+ * energy-assembly, periodic-embedding, eigensolver, mixer, and max-iteration
  * failures are different: peers keep running and their successful results
  * are committed, then the call returns the first non-success per-system
  * status. A periodic failure occurs before an eigensolve attempt and therefore
  * does not increment that system's driver iteration. Callers therefore must not
  * interpret such a return as an uncommitted batch. Converged and terminal
  * systems are skipped. A converged system publishes density-derived raw
- * Mulliken multipoles for subsequent total-energy/force evaluation; the
+ * Mulliken multipoles and complete component/free-energy trace; the
  * mixer retains its private next-input vector until a restart reinitializes it
  * from that public raw state. Successful steady-state calls perform no dynamic
  * allocation.

@@ -148,6 +148,22 @@ gpuxtb_status_t add_es2_energy_cpu(const ES2Plan& plan, const ES2GeometryCache& 
                                    const ES2Workspace& workspace, std::string& error);
 
 /*
+ * Accumulate the ES2 energy for exactly one ragged batch member. The charge
+ * pointer still addresses the complete packed shell array, but numerical data
+ * outside system's shell slice is neither read nor validated. This permits an
+ * SCC worker to commit a healthy member even when a peer contains NaN.
+ *
+ * Structural and binding failures return GPUXTB_STATUS_INVALID_ARGUMENT.
+ * Invalid target-system numerical data or floating-point range failure returns
+ * GPUXTB_STATUS_INTERNAL_ERROR. In either case accumulated_energy is unchanged.
+ * The scalar contribution is staged locally, so this one-system primitive
+ * requires no caller scratch and performs no allocation.
+ */
+gpuxtb_status_t add_es2_energy_system_cpu(const ES2Plan& plan, const ES2GeometryCache& cache,
+                                          std::int64_t system, const double* shell_charges,
+                                          double& accumulated_energy, std::string& error);
+
+/*
  * Accumulate the fixed-q coordinate VJP dE2/dR in Hartree/bohr. This routine
  * contracts shell pairs directly into workspace.gradient_scratch and never
  * materializes an atom-pair derivative tensor. geometry_generation must equal
