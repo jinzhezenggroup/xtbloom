@@ -1,0 +1,228 @@
+#ifndef GPUXTB_GPUXTB_H
+#define GPUXTB_GPUXTB_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#if defined(_WIN32)
+#if defined(GPUXTB_BUILDING_LIBRARY)
+#define GPUXTB_API __declspec(dllexport)
+#else
+#define GPUXTB_API __declspec(dllimport)
+#endif
+#elif defined(__GNUC__) || defined(__clang__)
+#define GPUXTB_API __attribute__((visibility("default")))
+#else
+#define GPUXTB_API
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define GPUXTB_VERSION_MAJOR 0
+#define GPUXTB_VERSION_MINOR 1
+#define GPUXTB_VERSION_PATCH 0
+
+/* Increment this value only when an ABI-incompatible C API change is made. */
+#define GPUXTB_API_VERSION 1u
+
+typedef struct gpuxtb_context gpuxtb_context_t;
+
+typedef enum gpuxtb_status {
+  GPUXTB_STATUS_SUCCESS = 0,
+  GPUXTB_STATUS_INVALID_ARGUMENT = 1,
+  GPUXTB_STATUS_BACKEND_UNAVAILABLE = 2,
+  GPUXTB_STATUS_NOT_SUPPORTED = 3,
+  GPUXTB_STATUS_ALLOCATION_FAILED = 4,
+  GPUXTB_STATUS_NOT_IMPLEMENTED = 5,
+  GPUXTB_STATUS_INTERNAL_ERROR = 6
+} gpuxtb_status_t;
+
+typedef enum gpuxtb_backend {
+  /* Prefer CUDA when it is compiled in and a compatible device is present. */
+  GPUXTB_BACKEND_AUTO = 0,
+  GPUXTB_BACKEND_CPU = 1,
+  GPUXTB_BACKEND_CUDA = 2,
+  /* Reserved now so adding HIP kernels does not require redesigning the ABI. */
+  GPUXTB_BACKEND_ROCM = 3
+} gpuxtb_backend_t;
+
+typedef enum gpuxtb_memory_space {
+  GPUXTB_MEMORY_HOST = 0,
+  GPUXTB_MEMORY_CUDA_DEVICE = 1,
+  GPUXTB_MEMORY_ROCM_DEVICE = 2
+} gpuxtb_memory_space_t;
+
+typedef enum gpuxtb_model { GPUXTB_MODEL_GFN1_XTB = 1, GPUXTB_MODEL_GFN2_XTB = 2 } gpuxtb_model_t;
+
+typedef enum gpuxtb_compute_flag {
+  GPUXTB_COMPUTE_ENERGY = 1u << 0,
+  GPUXTB_COMPUTE_FORCES = 1u << 1,
+  GPUXTB_COMPUTE_ATOMIC_CHARGES = 1u << 2,
+  GPUXTB_COMPUTE_POINT_CHARGE_FORCES = 1u << 3
+} gpuxtb_compute_flag_t;
+
+typedef enum gpuxtb_result_flag {
+  /*
+   * Set when atomic_potential_shifts or charge_response_matrix was supplied.
+   * Forces then exclude coordinate derivatives of those caller-owned fields.
+   */
+  GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES = 1u << 0
+} gpuxtb_result_flag_t;
+
+/*
+ * Every extensible structure starts with struct_size and api_version. Pass the
+ * caller's sizeof(struct) to its initializer before overriding fields. This
+ * lets newer and older libraries initialize only the structure prefix known to
+ * both sides and reject accidental ABI mismatches.
+ */
+typedef struct gpuxtb_context_options {
+  uint32_t struct_size;
+  uint32_t api_version;
+  gpuxtb_backend_t backend;
+  int32_t device_id;
+  int32_t cpu_threads;
+  uint32_t reserved;
+  /* Native cudaStream_t or hipStream_t cast to void*. NULL selects the default. */
+  void* stream;
+} gpuxtb_context_options_t;
+
+#define GPUXTB_CONTEXT_OPTIONS_V1_SIZE (offsetof(gpuxtb_context_options_t, stream) + sizeof(void*))
+
+/* A byte-sized view of caller-owned input memory. gpuxtb never takes ownership. */
+typedef struct gpuxtb_const_buffer {
+  const void* data;
+  size_t size_bytes;
+  gpuxtb_memory_space_t memory_space;
+  uint32_t reserved;
+} gpuxtb_const_buffer_t;
+
+/* A byte-sized view of caller-owned output memory. gpuxtb never takes ownership. */
+typedef struct gpuxtb_buffer {
+  void* data;
+  size_t size_bytes;
+  gpuxtb_memory_space_t memory_space;
+  uint32_t reserved;
+} gpuxtb_buffer_t;
+
+/*
+ * Ragged molecular batch. All real-valued inputs use IEEE binary64 and atomic
+ * units: bohr for positions and elementary-charge units for charges.
+ *
+ * atom_offsets contains batch_size + 1 int64_t values. atomic_numbers contains
+ * total_atoms int32_t values. positions contains total_atoms * 3 doubles.
+ * molecular_charges contains batch_size doubles and unpaired_electrons contains
+ * batch_size int32_t values.
+ *
+ * External point charges participate in every SCC iteration. When
+ * total_point_charges is nonzero, point_charge_offsets has batch_size + 1
+ * int64_t values, point_charge_positions has total_point_charges * 3 doubles,
+ * point_charge_values has total_point_charges doubles, and point_charge_gammas
+ * has total_point_charges doubles. Gamma is the explicit point-site screening
+ * parameter used in the softened Coulomb interaction; it is a model parameter,
+ * not an optimizable point-charge degree of freedom.
+ *
+ * atomic_potential_shifts and the response matrix are optional advanced inputs
+ * for periodic QM/MM coupling. For molecule i they define a per-atom SCC shift
+ * b_i + A_i q_i and variational energy q_i^T b_i + 0.5 q_i^T A_i q_i.
+ * atomic_potential_shifts contains total_atoms doubles. charge_response_offsets
+ * contains batch_size + 1 int64_t values, and each row-major symmetric A_i is
+ * packed consecutively in charge_response_matrix. Derivatives of b and A with
+ * respect to coordinates are outside gpuxtb and are not included in forces.
+ */
+typedef struct gpuxtb_batch {
+  uint32_t struct_size;
+  uint32_t api_version;
+  int64_t batch_size;
+  int64_t total_atoms;
+  int64_t total_point_charges;
+  int64_t total_charge_response_elements;
+  gpuxtb_const_buffer_t atom_offsets;
+  gpuxtb_const_buffer_t atomic_numbers;
+  gpuxtb_const_buffer_t positions;
+  gpuxtb_const_buffer_t molecular_charges;
+  gpuxtb_const_buffer_t unpaired_electrons;
+  gpuxtb_const_buffer_t point_charge_offsets;
+  gpuxtb_const_buffer_t point_charge_positions;
+  gpuxtb_const_buffer_t point_charge_values;
+  gpuxtb_const_buffer_t point_charge_gammas;
+  gpuxtb_const_buffer_t atomic_potential_shifts;
+  gpuxtb_const_buffer_t charge_response_offsets;
+  gpuxtb_const_buffer_t charge_response_matrix;
+} gpuxtb_batch_t;
+
+#define GPUXTB_BATCH_V1_SIZE \
+  (offsetof(gpuxtb_batch_t, charge_response_matrix) + sizeof(gpuxtb_const_buffer_t))
+
+typedef struct gpuxtb_compute_options {
+  uint32_t struct_size;
+  uint32_t api_version;
+  gpuxtb_model_t model;
+  uint32_t flags;
+  int32_t max_scc_iterations;
+  uint32_t reserved;
+  double charge_tolerance;
+  double energy_tolerance;
+  double electronic_temperature;
+} gpuxtb_compute_options_t;
+
+#define GPUXTB_COMPUTE_OPTIONS_V1_SIZE \
+  (offsetof(gpuxtb_compute_options_t, electronic_temperature) + sizeof(double))
+
+/*
+ * Caller-allocated result buffers. Energies are Hartree and forces are
+ * -dE/dR in Hartree/bohr. A NULL data pointer is valid for an output not
+ * requested by the compute flags. scc_iterations and per_system_status store
+ * batch_size int32_t values; scc_converged stores batch_size uint8_t values.
+ */
+typedef struct gpuxtb_batch_result {
+  uint32_t struct_size;
+  uint32_t api_version;
+  uint32_t flags;
+  uint32_t reserved;
+  gpuxtb_buffer_t energies;
+  gpuxtb_buffer_t forces;
+  gpuxtb_buffer_t atomic_charges;
+  gpuxtb_buffer_t point_charge_forces;
+  gpuxtb_buffer_t scc_iterations;
+  gpuxtb_buffer_t scc_converged;
+  gpuxtb_buffer_t per_system_status;
+} gpuxtb_batch_result_t;
+
+#define GPUXTB_BATCH_RESULT_V1_SIZE \
+  (offsetof(gpuxtb_batch_result_t, per_system_status) + sizeof(gpuxtb_buffer_t))
+
+GPUXTB_API const char* gpuxtb_version_string(void);
+GPUXTB_API const char* gpuxtb_status_string(gpuxtb_status_t status);
+
+/* Returns a thread-local diagnostic for the most recent failing API call. */
+GPUXTB_API const char* gpuxtb_get_last_error(void);
+
+GPUXTB_API gpuxtb_status_t gpuxtb_context_options_init(gpuxtb_context_options_t* options,
+                                                       size_t struct_size);
+GPUXTB_API gpuxtb_status_t gpuxtb_batch_init(gpuxtb_batch_t* batch, size_t struct_size);
+GPUXTB_API gpuxtb_status_t gpuxtb_compute_options_init(gpuxtb_compute_options_t* options,
+                                                       size_t struct_size);
+GPUXTB_API gpuxtb_status_t gpuxtb_batch_result_init(gpuxtb_batch_result_t* result,
+                                                    size_t struct_size);
+
+GPUXTB_API gpuxtb_status_t gpuxtb_context_create(const gpuxtb_context_options_t* options,
+                                                 gpuxtb_context_t** context);
+GPUXTB_API void gpuxtb_context_destroy(gpuxtb_context_t* context);
+GPUXTB_API gpuxtb_backend_t gpuxtb_context_get_backend(const gpuxtb_context_t* context);
+GPUXTB_API int32_t gpuxtb_context_get_device_id(const gpuxtb_context_t* context);
+
+/*
+ * Performs a synchronous batched inference. Host buffers are accepted by both
+ * CPU and CUDA backends; CUDA device buffers avoid staging copies on CUDA.
+ */
+GPUXTB_API gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* batch,
+                                          const gpuxtb_compute_options_t* options,
+                                          gpuxtb_batch_result_t* result);
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
+
+#endif /* GPUXTB_GPUXTB_H */

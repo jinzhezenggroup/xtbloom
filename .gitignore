@@ -1,0 +1,13 @@
+/build*/
+/.cache/
+/compile_commands.json
+*.so
+*.so.*
+*.a
+*.dylib
+*.dll
+*.exe
+*.profraw
+*.profdata
+*.gcda
+*.gcno
