@@ -41,6 +41,8 @@ class AES2Plan {
   [[nodiscard]] std::int64_t total_pairs() const noexcept;
   [[nodiscard]] std::int64_t pair_data_elements() const noexcept;
   [[nodiscard]] std::int64_t potential_scratch_elements() const noexcept;
+  [[nodiscard]] std::int64_t gradient_scratch_elements() const noexcept;
+  [[nodiscard]] std::int64_t coordination_scratch_elements() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& atom_offsets() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& pair_offsets() const noexcept;
   [[nodiscard]] const std::vector<double>& dipole_kernel() const noexcept;
@@ -83,7 +85,9 @@ struct AES2GeometryCache {
  * Caller-owned unpublished storage used for whole-batch failure atomicity.
  * Counts are doubles, not bytes. Cache update requires pair_data_elements;
  * potential evaluation requires 10*total_atoms values; energy accumulation
- * requires batch_size values. Successful steady-state calls allocate nothing.
+ * requires batch_size values; the coordinate/CN VJP requires 3*total_atoms
+ * gradient values and total_atoms coordination values. Successful steady-state
+ * calls allocate nothing.
  */
 struct AES2Workspace {
   double* pair_scratch = nullptr;
@@ -92,6 +96,10 @@ struct AES2Workspace {
   std::int64_t potential_elements = 0;
   double* batch_scratch = nullptr;
   std::int64_t batch_elements = 0;
+  double* gradient_scratch = nullptr;
+  std::int64_t gradient_elements = 0;
+  double* coordination_scratch = nullptr;
+  std::int64_t coordination_elements = 0;
 };
 
 /*
@@ -152,6 +160,44 @@ gpuxtb_status_t add_aes2_energy_cpu(const AES2Plan& plan, const AES2GeometryCach
                                     const double* atomic_charges, const double* atomic_dipoles,
                                     const double* atomic_quadrupoles, double* energies,
                                     const AES2Workspace& workspace, std::string& error);
+
+/*
+ * Accumulate the fixed-multipole reverse products dE_AES2/dR (Hartree/bohr)
+ * and dE_AES2/dCN into caller-owned outputs. The Cartesian derivative is the
+ * explicit pair-kernel derivative at fixed coordination numbers; callers can
+ * subsequently contract coordination_adjoints through the coordination model
+ * with add_coordination_gradient_cpu. gradients are derivatives, not forces.
+ *
+ * The compact cache supplies every pair displacement and damped inverse-power
+ * kernel. coordination_numbers are needed only for the derivative of
+ *
+ *   mrad_A = rad_A + (rmax-rad_A) logistic(kexp*(CN_A-vCN_A-shift)).
+ *
+ * geometry_generation must match cache.geometry_generation, thereby binding
+ * the supplied CN values to the cached geometry. GFN2 dipole/quadrupole onsite
+ * kernels are element constants in tblite, xtb, and dxtb; at fixed multipoles
+ * their explicit coordinate and CN VJPs are therefore exactly zero.
+ * For each r=R_i-R_j pair, the differentiated energy is
+ *
+ *   E_ij = k3*r.(q_i*d_j-q_j*d_i)
+ *        + k5*[R^2*d_i.d_j-3(r.d_i)(r.d_j)+r^T*T*r],
+ *   T = q_i*Q_j + q_j*Q_i,
+ *
+ * where k3=R^-3*f3, k5=R^-5*f5 and rho=(mrad_i+mrad_j)/2.
+ * Thus dE/dR_i receives +dE/dr, dE/dR_j receives -dE/dr, and each
+ * per-atom radius path receives one half of dE/drho before dmrad/dCN.
+ *
+ * workspace.gradient_scratch and workspace.coordination_scratch stage both
+ * complete outputs so failure is atomic. All active inputs, outputs, cache
+ * storage, and scratch buffers must be mutually disjoint and must not overlap
+ * plan or descriptor storage. Successful calls allocate nothing.
+ */
+gpuxtb_status_t add_aes2_vjp_cpu(const AES2Plan& plan, const AES2GeometryCache& cache,
+                                 const double* positions, const double* coordination_numbers,
+                                 std::uint64_t geometry_generation, const double* atomic_charges,
+                                 const double* atomic_dipoles, const double* atomic_quadrupoles,
+                                 double* gradients, double* coordination_adjoints,
+                                 const AES2Workspace& workspace, std::string& error);
 
 }  // namespace gpuxtb::detail::gfn2
 

@@ -87,6 +87,8 @@ struct Fixture {
   std::vector<double> pair_scratch;
   std::vector<double> potential_scratch;
   std::vector<double> batch_scratch;
+  std::vector<double> gradient_scratch;
+  std::vector<double> coordination_scratch;
   AES2Workspace workspace;
   AES2GeometryCache cache;
 };
@@ -129,10 +131,16 @@ bool make_fixture(const std::vector<std::int64_t>& offsets,
   fixture.potential_scratch.resize(
       static_cast<std::size_t>(fixture.plan.potential_scratch_elements()));
   fixture.batch_scratch.resize(static_cast<std::size_t>(fixture.plan.batch_size()));
+  fixture.gradient_scratch.resize(
+      static_cast<std::size_t>(fixture.plan.gradient_scratch_elements()));
+  fixture.coordination_scratch.resize(
+      static_cast<std::size_t>(fixture.plan.coordination_scratch_elements()));
   fixture.workspace = AES2Workspace{
-      fixture.pair_scratch.data(),      fixture.plan.pair_data_elements(),
-      fixture.potential_scratch.data(), fixture.plan.potential_scratch_elements(),
-      fixture.batch_scratch.data(),     fixture.plan.batch_size(),
+      fixture.pair_scratch.data(),         fixture.plan.pair_data_elements(),
+      fixture.potential_scratch.data(),    fixture.plan.potential_scratch_elements(),
+      fixture.batch_scratch.data(),        fixture.plan.batch_size(),
+      fixture.gradient_scratch.data(),     fixture.plan.gradient_scratch_elements(),
+      fixture.coordination_scratch.data(), fixture.plan.coordination_scratch_elements(),
   };
   return gpuxtb::detail::gfn2::update_aes2_geometry_cache_cpu(
              fixture.plan, positions.data(), fixture.coordination_numbers.data(), kGeneration,
@@ -146,6 +154,27 @@ bool energy(const Fixture& fixture, const std::vector<double>& charges,
   return gpuxtb::detail::gfn2::add_aes2_energy_cpu(
              fixture.plan, fixture.cache, charges.data(), dipoles.data(), quadrupoles.data(),
              energies.data(), fixture.workspace, error) == GPUXTB_STATUS_SUCCESS;
+}
+
+bool update_geometry(Fixture& fixture, const std::vector<double>& positions,
+                     const std::vector<double>& coordination_numbers,
+                     std::uint64_t geometry_generation, std::string& error) {
+  return gpuxtb::detail::gfn2::update_aes2_geometry_cache_cpu(
+             fixture.plan, positions.data(), coordination_numbers.data(), geometry_generation,
+             fixture.pair_data.data(), fixture.pair_data.size(), fixture.workspace, fixture.cache,
+             error) == GPUXTB_STATUS_SUCCESS;
+}
+
+bool vjp(const Fixture& fixture, const std::vector<double>& positions,
+         const std::vector<double>& coordination_numbers, std::uint64_t geometry_generation,
+         const std::vector<double>& charges, const std::vector<double>& dipoles,
+         const std::vector<double>& quadrupoles, std::vector<double>& gradients,
+         std::vector<double>& coordination_adjoints, std::string& error) {
+  return gpuxtb::detail::gfn2::add_aes2_vjp_cpu(fixture.plan, fixture.cache, positions.data(),
+                                                coordination_numbers.data(), geometry_generation,
+                                                charges.data(), dipoles.data(), quadrupoles.data(),
+                                                gradients.data(), coordination_adjoints.data(),
+                                                fixture.workspace, error) == GPUXTB_STATUS_SUCCESS;
 }
 
 int test_dxtb_oracles_and_isolated_components() {
@@ -243,6 +272,177 @@ int test_dxtb_oracles_and_isolated_components() {
   }
   for (std::size_t component = 0; component < expected_quadrupole.size(); ++component) {
     CHECK(near(quadrupole_potential[component], expected_quadrupole[component], 4.0e-18));
+  }
+  return 0;
+}
+
+int test_coordinate_and_cn_vjp_finite_differences() {
+  const std::vector<std::int64_t> offsets{0, 4};
+  const std::vector<std::int32_t> numbers{6, 8, 14, 1};
+  std::vector<double> positions{
+      -0.7, 0.2, 0.8, 1.1, -0.9, 0.3, 0.4, 1.8, -0.6, 2.5, 0.7, 1.2,
+  };
+  std::vector<double> coordination_numbers{1.15, 2.2, 0.75, 1.6};
+  Fixture fixture;
+  std::string error;
+  CHECK(make_fixture(offsets, numbers, positions, fixture, error));
+
+  const std::vector<double> charges{0.21, -0.34, 0.08, 0.05};
+  const std::vector<double> dipoles{
+      0.13, -0.08, 0.04, -0.11, 0.06, 0.09, 0.03, 0.12, -0.05, -0.07, 0.02, 0.1,
+  };
+  const std::vector<double> quadrupoles{
+      0.12, 0.03,  -0.07, -0.02, 0.04, -0.05, -0.09, 0.05,  0.02,  0.07, -0.03, 0.07,
+      0.03, -0.04, -0.08, 0.01,  0.02, 0.05,  0.08,  -0.02, -0.01, 0.06, 0.03,  -0.07,
+  };
+  const std::vector<double> zero_charges(numbers.size(), 0.0);
+  const std::vector<double> zero_dipoles(numbers.size() * 3u, 0.0);
+  const std::vector<double> zero_quadrupoles(numbers.size() * 6u, 0.0);
+  std::vector<double> charge_dipole_moments(zero_dipoles);
+  std::copy_n(dipoles.begin(), 3u, charge_dipole_moments.begin());
+  std::vector<double> charge_quadrupole_moments(zero_quadrupoles);
+  std::copy_n(quadrupoles.begin() + 12, 6u, charge_quadrupole_moments.begin() + 12);
+
+  struct InteractionCase {
+    const std::vector<double>* charges;
+    const std::vector<double>* dipoles;
+    const std::vector<double>* quadrupoles;
+  };
+  const std::array<InteractionCase, 4> cases{{
+      {&charges, &charge_dipole_moments, &zero_quadrupoles},
+      {&zero_charges, &dipoles, &zero_quadrupoles},
+      {&charges, &zero_dipoles, &charge_quadrupole_moments},
+      {&charges, &dipoles, &quadrupoles},
+  }};
+
+  constexpr double coordinate_step = 2.0e-5;
+  constexpr double cn_step = 2.0e-6;
+  for (std::size_t interaction = 0; interaction < cases.size(); ++interaction) {
+    const std::uint64_t generation = 800u + static_cast<std::uint64_t>(interaction);
+    CHECK(update_geometry(fixture, positions, coordination_numbers, generation, error));
+    std::vector<double> gradient_seed(positions.size());
+    std::vector<double> cn_seed(coordination_numbers.size());
+    for (std::size_t coordinate = 0; coordinate < gradient_seed.size(); ++coordinate) {
+      gradient_seed[coordinate] = 0.003 * static_cast<double>(coordinate + 1u);
+    }
+    for (std::size_t atom = 0; atom < cn_seed.size(); ++atom) {
+      cn_seed[atom] = -0.007 * static_cast<double>(atom + 1u);
+    }
+    std::vector<double> gradients = gradient_seed;
+    std::vector<double> coordination_adjoints = cn_seed;
+    CHECK(vjp(fixture, positions, coordination_numbers, generation, *cases[interaction].charges,
+              *cases[interaction].dipoles, *cases[interaction].quadrupoles, gradients,
+              coordination_adjoints, error));
+
+    for (std::size_t coordinate = 0; coordinate < positions.size(); ++coordinate) {
+      positions[coordinate] += coordinate_step;
+      CHECK(update_geometry(fixture, positions, coordination_numbers, generation + 100u, error));
+      std::vector<double> right(1, 0.0);
+      CHECK(energy(fixture, *cases[interaction].charges, *cases[interaction].dipoles,
+                   *cases[interaction].quadrupoles, right, error));
+      positions[coordinate] -= 2.0 * coordinate_step;
+      CHECK(update_geometry(fixture, positions, coordination_numbers, generation + 101u, error));
+      std::vector<double> left(1, 0.0);
+      CHECK(energy(fixture, *cases[interaction].charges, *cases[interaction].dipoles,
+                   *cases[interaction].quadrupoles, left, error));
+      positions[coordinate] += coordinate_step;
+      CHECK(near((right[0] - left[0]) / (2.0 * coordinate_step),
+                 gradients[coordinate] - gradient_seed[coordinate], 8.0e-10));
+    }
+
+    for (std::size_t atom = 0; atom < coordination_numbers.size(); ++atom) {
+      coordination_numbers[atom] += cn_step;
+      CHECK(update_geometry(fixture, positions, coordination_numbers, generation + 200u, error));
+      std::vector<double> right(1, 0.0);
+      CHECK(energy(fixture, *cases[interaction].charges, *cases[interaction].dipoles,
+                   *cases[interaction].quadrupoles, right, error));
+      coordination_numbers[atom] -= 2.0 * cn_step;
+      CHECK(update_geometry(fixture, positions, coordination_numbers, generation + 201u, error));
+      std::vector<double> left(1, 0.0);
+      CHECK(energy(fixture, *cases[interaction].charges, *cases[interaction].dipoles,
+                   *cases[interaction].quadrupoles, left, error));
+      coordination_numbers[atom] += cn_step;
+      CHECK(near((right[0] - left[0]) / (2.0 * cn_step),
+                 coordination_adjoints[atom] - cn_seed[atom], 2.0e-10));
+    }
+
+    for (std::size_t axis = 0; axis < 3u; ++axis) {
+      double sum = 0.0;
+      for (std::size_t atom = 0; atom < numbers.size(); ++atom) {
+        sum += gradients[atom * 3u + axis] - gradient_seed[atom * 3u + axis];
+      }
+      CHECK(near(sum, 0.0, 4.0e-17));
+    }
+
+    std::vector<double> translated_positions = positions;
+    for (std::size_t atom = 0; atom < numbers.size(); ++atom) {
+      translated_positions[atom * 3u] += 4.5;
+      translated_positions[atom * 3u + 1u] -= 2.75;
+      translated_positions[atom * 3u + 2u] += 1.125;
+    }
+    CHECK(update_geometry(fixture, translated_positions, coordination_numbers, generation + 300u,
+                          error));
+    std::vector<double> translated_gradients = gradient_seed;
+    std::vector<double> translated_cn = cn_seed;
+    CHECK(vjp(fixture, translated_positions, coordination_numbers, generation + 300u,
+              *cases[interaction].charges, *cases[interaction].dipoles,
+              *cases[interaction].quadrupoles, translated_gradients, translated_cn, error));
+    for (std::size_t coordinate = 0; coordinate < gradients.size(); ++coordinate) {
+      CHECK(near(translated_gradients[coordinate], gradients[coordinate], 5.0e-16));
+    }
+    for (std::size_t atom = 0; atom < coordination_adjoints.size(); ++atom) {
+      CHECK(near(translated_cn[atom], coordination_adjoints[atom], 3.0e-16));
+    }
+  }
+
+  /* Onsite d/Q kernels are element constants, hence their explicit VJP is zero. */
+  const std::vector<std::int64_t> isolated_offsets{0, 1, 2, 3, 4};
+  Fixture isolated;
+  CHECK(make_fixture(isolated_offsets, numbers, positions, isolated, error));
+  CHECK(update_geometry(isolated, positions, coordination_numbers, 1200u, error));
+  std::vector<double> onsite_gradients(positions.size(), 0.125);
+  std::vector<double> onsite_cn(coordination_numbers.size(), -0.25);
+  CHECK(vjp(isolated, positions, coordination_numbers, 1200u, zero_charges, dipoles, quadrupoles,
+            onsite_gradients, onsite_cn, error));
+  CHECK(std::all_of(onsite_gradients.begin(), onsite_gradients.end(),
+                    [](double value) { return value == 0.125; }));
+  CHECK(
+      std::all_of(onsite_cn.begin(), onsite_cn.end(), [](double value) { return value == -0.25; }));
+  std::vector<double> onsite_energy(4, 0.0);
+  CHECK(energy(isolated, zero_charges, dipoles, quadrupoles, onsite_energy, error));
+  CHECK(std::any_of(onsite_energy.begin(), onsite_energy.end(),
+                    [](double value) { return value != 0.0; }));
+
+  /* Compose the CN adjoint with GFN2 coordination to recover the total dE/dR. */
+  Fixture composed;
+  CHECK(make_fixture(offsets, numbers, positions, composed, error));
+  std::vector<double> composed_gradient(positions.size(), 0.0);
+  std::vector<double> composed_cn(numbers.size(), 0.0);
+  CHECK(vjp(composed, positions, composed.coordination_numbers, kGeneration, charges, dipoles,
+            quadrupoles, composed_gradient, composed_cn, error));
+  CHECK(gpuxtb::detail::gfn2::add_coordination_gradient_cpu(
+            composed.coordination_plan, positions.data(), composed_cn.data(),
+            composed_gradient.data(), error) == GPUXTB_STATUS_SUCCESS);
+  for (std::size_t coordinate = 0; coordinate < positions.size(); ++coordinate) {
+    positions[coordinate] += coordinate_step;
+    std::vector<double> right_cn(numbers.size());
+    CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(composed.coordination_plan,
+                                                          positions.data(), right_cn.data(),
+                                                          error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(update_geometry(composed, positions, right_cn, 1400u, error));
+    std::vector<double> right(1, 0.0);
+    CHECK(energy(composed, charges, dipoles, quadrupoles, right, error));
+    positions[coordinate] -= 2.0 * coordinate_step;
+    std::vector<double> left_cn(numbers.size());
+    CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(composed.coordination_plan,
+                                                          positions.data(), left_cn.data(),
+                                                          error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(update_geometry(composed, positions, left_cn, 1401u, error));
+    std::vector<double> left(1, 0.0);
+    CHECK(energy(composed, charges, dipoles, quadrupoles, left, error));
+    positions[coordinate] += coordinate_step;
+    CHECK(near((right[0] - left[0]) / (2.0 * coordinate_step), composed_gradient[coordinate],
+               1.5e-9));
   }
   return 0;
 }
@@ -370,6 +570,8 @@ int test_rotation_covariance_and_tracelessness() {
   Fixture original;
   std::string error;
   CHECK(make_fixture(offsets, numbers, positions, original, error));
+  const std::vector<double> coordination_numbers{1.3, 2.1, 0.8};
+  CHECK(update_geometry(original, positions, coordination_numbers, 1300u, error));
   std::vector<double> original_charge_potential(3);
   std::vector<double> original_dipole_potential(9);
   std::vector<double> original_quadrupole_potential(18);
@@ -380,6 +582,10 @@ int test_rotation_covariance_and_tracelessness() {
             error) == GPUXTB_STATUS_SUCCESS);
   std::vector<double> original_energy(1, 0.0);
   CHECK(energy(original, charges, dipoles, quadrupoles, original_energy, error));
+  std::vector<double> original_gradient(positions.size(), 0.0);
+  std::vector<double> original_cn(numbers.size(), 0.0);
+  CHECK(vjp(original, positions, coordination_numbers, 1300u, charges, dipoles, quadrupoles,
+            original_gradient, original_cn, error));
 
   constexpr double cosine = 0.36;
   constexpr double sine = 0.9329523031752481;
@@ -401,6 +607,7 @@ int test_rotation_covariance_and_tracelessness() {
 
   Fixture rotated;
   CHECK(make_fixture(offsets, numbers, rotated_positions, rotated, error));
+  CHECK(update_geometry(rotated, rotated_positions, coordination_numbers, 1301u, error));
   std::vector<double> rotated_charge_potential(3);
   std::vector<double> rotated_dipole_potential(9);
   std::vector<double> rotated_quadrupole_potential(18);
@@ -412,6 +619,10 @@ int test_rotation_covariance_and_tracelessness() {
   std::vector<double> rotated_energy(1, 0.0);
   CHECK(energy(rotated, charges, rotated_dipoles, rotated_quadrupoles, rotated_energy, error));
   CHECK(near(rotated_energy[0], original_energy[0], 2.0e-16));
+  std::vector<double> rotated_gradient(rotated_positions.size(), 0.0);
+  std::vector<double> rotated_cn(numbers.size(), 0.0);
+  CHECK(vjp(rotated, rotated_positions, coordination_numbers, 1301u, charges, rotated_dipoles,
+            rotated_quadrupoles, rotated_gradient, rotated_cn, error));
 
   for (std::size_t atom = 0; atom < numbers.size(); ++atom) {
     CHECK(near(rotated_charge_potential[atom], original_charge_potential[atom], 2.0e-16));
@@ -427,6 +638,12 @@ int test_rotation_covariance_and_tracelessness() {
       CHECK(near(rotated_quadrupole_potential[atom * 6u + component],
                  expected_quadrupole[component], 3.0e-16));
     }
+    const std::array<double, 3> expected_gradient =
+        rotate_vector(rotation, original_gradient.data() + atom * 3u);
+    for (std::size_t component = 0; component < 3u; ++component) {
+      CHECK(near(rotated_gradient[atom * 3u + component], expected_gradient[component], 4.0e-16));
+    }
+    CHECK(near(rotated_cn[atom], original_cn[atom], 3.0e-16));
   }
   return 0;
 }
@@ -462,11 +679,15 @@ int test_ragged_matches_sequential() {
   std::vector<double> batch_dipole_potential(dipoles.size());
   std::vector<double> batch_quadrupole_potential(quadrupoles.size());
   std::vector<double> batch_energy(4, 0.0);
+  std::vector<double> batch_gradient(positions.size(), 0.0);
+  std::vector<double> batch_cn(numbers.size(), 0.0);
   CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
             batch.plan, batch.cache, charges.data(), dipoles.data(), quadrupoles.data(),
             batch_charge_potential.data(), batch_dipole_potential.data(),
             batch_quadrupole_potential.data(), batch.workspace, error) == GPUXTB_STATUS_SUCCESS);
   CHECK(energy(batch, charges, dipoles, quadrupoles, batch_energy, error));
+  CHECK(vjp(batch, positions, batch.coordination_numbers, kGeneration, charges, dipoles,
+            quadrupoles, batch_gradient, batch_cn, error));
   CHECK(batch_energy[1] == 0.0);
 
   for (std::size_t system : {0u, 2u, 3u}) {
@@ -490,6 +711,8 @@ int test_ragged_matches_sequential() {
     std::vector<double> sequential_dipole_potential(atom_count * 3u);
     std::vector<double> sequential_quadrupole_potential(atom_count * 6u);
     std::vector<double> sequential_energy(1, 0.0);
+    std::vector<double> sequential_gradient(atom_count * 3u, 0.0);
+    std::vector<double> sequential_cn(atom_count, 0.0);
     CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
               sequential.plan, sequential.cache, sequential_charges.data(),
               sequential_dipoles.data(), sequential_quadrupoles.data(),
@@ -498,6 +721,9 @@ int test_ragged_matches_sequential() {
               error) == GPUXTB_STATUS_SUCCESS);
     CHECK(energy(sequential, sequential_charges, sequential_dipoles, sequential_quadrupoles,
                  sequential_energy, error));
+    CHECK(vjp(sequential, sequential_positions, sequential.coordination_numbers, kGeneration,
+              sequential_charges, sequential_dipoles, sequential_quadrupoles, sequential_gradient,
+              sequential_cn, error));
     CHECK(batch_energy[system] == sequential_energy[0]);
     for (std::size_t atom = 0; atom < atom_count; ++atom) {
       CHECK(batch_charge_potential[static_cast<std::size_t>(begin) + atom] ==
@@ -510,6 +736,13 @@ int test_ragged_matches_sequential() {
     for (std::size_t component = 0; component < atom_count * 6u; ++component) {
       CHECK(batch_quadrupole_potential[static_cast<std::size_t>(begin) * 6u + component] ==
             sequential_quadrupole_potential[component]);
+    }
+    for (std::size_t coordinate = 0; coordinate < atom_count * 3u; ++coordinate) {
+      CHECK(batch_gradient[static_cast<std::size_t>(begin) * 3u + coordinate] ==
+            sequential_gradient[coordinate]);
+    }
+    for (std::size_t atom = 0; atom < atom_count; ++atom) {
+      CHECK(batch_cn[static_cast<std::size_t>(begin) + atom] == sequential_cn[atom]);
     }
     const std::int64_t pair_begin = batch.plan.pair_offsets()[system] * 5;
     const std::int64_t pair_end = batch.plan.pair_offsets()[system + 1u] * 5;
@@ -528,6 +761,7 @@ int test_failure_atomicity_and_plan_identity() {
   CHECK(make_fixture(offsets, numbers, positions, fixture, error));
   const std::vector<double> original_pairs = fixture.pair_data;
   const AES2GeometryCache original_cache = fixture.cache;
+  const std::vector<double> original_coordination_numbers = fixture.coordination_numbers;
 
   fixture.coordination_numbers.back() = std::numeric_limits<double>::quiet_NaN();
   CHECK(gpuxtb::detail::gfn2::update_aes2_geometry_cache_cpu(
@@ -536,7 +770,7 @@ int test_failure_atomicity_and_plan_identity() {
             error) == GPUXTB_STATUS_INVALID_ARGUMENT);
   CHECK(fixture.pair_data == original_pairs);
   CHECK(same_cache(fixture.cache, original_cache));
-  fixture.coordination_numbers.back() = 0.5;
+  fixture.coordination_numbers.back() = original_coordination_numbers.back();
 
   positions[9] = positions[6];
   positions[10] = positions[7];
@@ -607,6 +841,77 @@ int test_failure_atomicity_and_plan_identity() {
             const_cast<double*>(charges.data()), dipole_potential.data(),
             quadrupole_potential.data(), fixture.workspace,
             error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+
+  positions = {0.0, 0.0, -1.3, 0.2, 0.1, 1.4, -0.8, 0.5, 0.2, 1.1, -0.7, 0.9};
+  fixture.coordination_numbers = original_coordination_numbers;
+  std::vector<double> gradients(positions.size(), 11.0);
+  std::vector<double> coordination_adjoints(numbers.size(), 12.0);
+  const std::vector<double> original_gradients = gradients;
+  const std::vector<double> original_coordination_adjoints = coordination_adjoints;
+  CHECK(gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+            fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
+            kGeneration + 1u, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
+            coordination_adjoints.data(), fixture.workspace,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gradients == original_gradients);
+  CHECK(coordination_adjoints == original_coordination_adjoints);
+
+  positions[0] += 0.01;
+  CHECK(gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+            fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
+            kGeneration, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
+            coordination_adjoints.data(), fixture.workspace,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gradients == original_gradients);
+  CHECK(coordination_adjoints == original_coordination_adjoints);
+  positions[0] -= 0.01;
+
+  fixture.coordination_numbers[1] += 10.0;
+  CHECK(gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+            fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
+            kGeneration, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
+            coordination_adjoints.data(), fixture.workspace,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gradients == original_gradients);
+  CHECK(coordination_adjoints == original_coordination_adjoints);
+  fixture.coordination_numbers[1] = original_coordination_numbers[1];
+
+  quadrupoles.back() = std::numeric_limits<double>::infinity();
+  CHECK(gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+            fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
+            kGeneration, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
+            coordination_adjoints.data(), fixture.workspace,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gradients == original_gradients);
+  CHECK(coordination_adjoints == original_coordination_adjoints);
+  quadrupoles.back() = 0.05;
+
+  AES2Workspace short_vjp_workspace = fixture.workspace;
+  short_vjp_workspace.coordination_elements -= 1;
+  CHECK(gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+            fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
+            kGeneration, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
+            coordination_adjoints.data(), short_vjp_workspace,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gradients == original_gradients);
+  CHECK(coordination_adjoints == original_coordination_adjoints);
+
+  CHECK(gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+            fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
+            kGeneration, charges.data(), dipoles.data(), quadrupoles.data(),
+            const_cast<double*>(dipoles.data()), coordination_adjoints.data(), fixture.workspace,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(coordination_adjoints == original_coordination_adjoints);
+
+  AES2Workspace aliased_vjp_workspace = fixture.workspace;
+  aliased_vjp_workspace.coordination_scratch = coordination_adjoints.data();
+  CHECK(gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+            fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
+            kGeneration, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
+            coordination_adjoints.data(), aliased_vjp_workspace,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gradients == original_gradients);
+  CHECK(coordination_adjoints == original_coordination_adjoints);
   return 0;
 }
 
@@ -630,6 +935,8 @@ int test_zero_steady_state_allocations() {
   std::vector<double> dipole_potential(dipoles.size());
   std::vector<double> quadrupole_potential(quadrupoles.size());
   std::vector<double> energies(2, 0.0);
+  std::vector<double> gradients(positions.size(), 0.0);
+  std::vector<double> coordination_adjoints(numbers.size(), 0.0);
 
   CHECK(gpuxtb::detail::gfn2::update_aes2_geometry_cache_cpu(
             fixture.plan, positions.data(), fixture.coordination_numbers.data(), kGeneration + 1u,
@@ -640,6 +947,8 @@ int test_zero_steady_state_allocations() {
             charge_potential.data(), dipole_potential.data(), quadrupole_potential.data(),
             fixture.workspace, error) == GPUXTB_STATUS_SUCCESS);
   CHECK(energy(fixture, charges, dipoles, quadrupoles, energies, error));
+  CHECK(vjp(fixture, positions, fixture.coordination_numbers, kGeneration + 1u, charges, dipoles,
+            quadrupoles, gradients, coordination_adjoints, error));
 
   allocation_test::count.store(0u, std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
@@ -653,10 +962,15 @@ int test_zero_steady_state_allocations() {
   const gpuxtb_status_t energy_status = gpuxtb::detail::gfn2::add_aes2_energy_cpu(
       fixture.plan, fixture.cache, charges.data(), dipoles.data(), quadrupoles.data(),
       energies.data(), fixture.workspace, error);
+  const gpuxtb_status_t vjp_status = gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+      fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
+      kGeneration + 2u, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
+      coordination_adjoints.data(), fixture.workspace, error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
   CHECK(update_status == GPUXTB_STATUS_SUCCESS);
   CHECK(potential_status == GPUXTB_STATUS_SUCCESS);
   CHECK(energy_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(vjp_status == GPUXTB_STATUS_SUCCESS);
   CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
   return 0;
 }
@@ -665,6 +979,9 @@ int test_zero_steady_state_allocations() {
 
 int main() {
   if (const int line = test_dxtb_oracles_and_isolated_components(); line != 0) {
+    return line;
+  }
+  if (const int line = test_coordinate_and_cn_vjp_finite_differences(); line != 0) {
     return line;
   }
   if (const int line = test_energy_potential_consistency(); line != 0) {

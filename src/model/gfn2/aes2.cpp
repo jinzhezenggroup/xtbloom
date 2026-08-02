@@ -354,6 +354,16 @@ double multipole_radius(const AES2Plan& plan, std::size_t atom, double coordinat
              logistic(argument);
 }
 
+double multipole_radius_cn_derivative(const AES2Plan& plan, std::size_t atom,
+                                      double coordination_number) {
+  const double argument = parameters::gfn2::kGlobal.multipole_kexp *
+                          (coordination_number - plan.multipole_valence_cn()[atom] -
+                           parameters::gfn2::kGlobal.multipole_shift);
+  const double fraction = logistic(argument);
+  return (parameters::gfn2::kGlobal.multipole_rmax - plan.multipole_radius()[atom]) *
+         parameters::gfn2::kGlobal.multipole_kexp * fraction * (1.0 - fraction);
+}
+
 bool pair_kernels(double distance, double radius, double& kernel3, double& kernel5) {
   const double inverse = 1.0 / distance;
   const double inverse2 = inverse * inverse;
@@ -565,6 +575,116 @@ bool pair_energy(const double* pair_data, std::size_t first, std::size_t second,
          std::isfinite(charge_quadrupole) && std::isfinite(energy);
 }
 
+bool pair_vjp(const double* pair_data, double average_radius, double first_radius_cn_derivative,
+              double second_radius_cn_derivative, std::size_t first, std::size_t second,
+              const double* charges, const double* dipoles, const double* quadrupoles,
+              double* gradient_scratch, double* coordination_scratch) {
+  const std::array<double, 3> displacement{{pair_data[0], pair_data[1], pair_data[2]}};
+  const double kernel3 = pair_data[3];
+  const double kernel5 = pair_data[4];
+  const double distance = std::hypot(std::hypot(displacement[0], displacement[1]), displacement[2]);
+  if (!(distance > 0.0) || !std::isfinite(distance) || !(average_radius > 0.0) ||
+      !std::isfinite(average_radius) || !std::isfinite(first_radius_cn_derivative) ||
+      !std::isfinite(second_radius_cn_derivative)) {
+    return false;
+  }
+
+  /* Reconstruct f3/f5 without storing two more pair scalars. */
+  const double scaled = average_radius / distance;
+  const double scaled2 = scaled * scaled;
+  const double scaled3 = scaled2 * scaled;
+  const double scaled4 = scaled2 * scaled2;
+  const double damping3 = 1.0 / (1.0 + 6.0 * scaled3);
+  const double damping5 = 1.0 / (1.0 + 6.0 * scaled4);
+  if (!(damping3 >= 0.0) || !std::isfinite(damping3) || !(damping5 >= 0.0) ||
+      !std::isfinite(damping5)) {
+    return false;
+  }
+
+  const double* const first_dipole = dipoles + first * 3u;
+  const double* const second_dipole = dipoles + second * 3u;
+  const double* const first_quadrupole = quadrupoles + first * 6u;
+  const double* const second_quadrupole = quadrupoles + second * 6u;
+  std::array<double, 3> charge_dipole_vector{};
+  std::array<double, 3> tensor_vector{};
+  double first_projection = 0.0;
+  double second_projection = 0.0;
+  double dipole_dot = 0.0;
+  for (std::size_t axis = 0; axis < 3u; ++axis) {
+    charge_dipole_vector[axis] =
+        charges[first] * second_dipole[axis] - charges[second] * first_dipole[axis];
+    first_projection += displacement[axis] * first_dipole[axis];
+    second_projection += displacement[axis] * second_dipole[axis];
+    dipole_dot += first_dipole[axis] * second_dipole[axis];
+  }
+  const double charge_dipole_numerator = displacement[0] * charge_dipole_vector[0] +
+                                         displacement[1] * charge_dipole_vector[1] +
+                                         displacement[2] * charge_dipole_vector[2];
+  const double distance2 = displacement[0] * displacement[0] + displacement[1] * displacement[1] +
+                           displacement[2] * displacement[2];
+  const double dipole_dipole_numerator =
+      distance2 * dipole_dot - 3.0 * first_projection * second_projection;
+
+  /* T = q_first Q_second + q_second Q_first in symmetric packed form. */
+  const std::array<double, 6> tensor{{
+      charges[first] * second_quadrupole[0] + charges[second] * first_quadrupole[0],
+      charges[first] * second_quadrupole[1] + charges[second] * first_quadrupole[1],
+      charges[first] * second_quadrupole[2] + charges[second] * first_quadrupole[2],
+      charges[first] * second_quadrupole[3] + charges[second] * first_quadrupole[3],
+      charges[first] * second_quadrupole[4] + charges[second] * first_quadrupole[4],
+      charges[first] * second_quadrupole[5] + charges[second] * first_quadrupole[5],
+  }};
+  tensor_vector[0] =
+      tensor[0] * displacement[0] + tensor[1] * displacement[1] + tensor[3] * displacement[2];
+  tensor_vector[1] =
+      tensor[1] * displacement[0] + tensor[2] * displacement[1] + tensor[4] * displacement[2];
+  tensor_vector[2] =
+      tensor[3] * displacement[0] + tensor[4] * displacement[1] + tensor[5] * displacement[2];
+  const double charge_quadrupole_numerator = displacement[0] * tensor_vector[0] +
+                                             displacement[1] * tensor_vector[1] +
+                                             displacement[2] * tensor_vector[2];
+  const double inverse_distance = 1.0 / distance;
+  const double kernel3_distance_derivative = -3.0 * damping3 * kernel3 * inverse_distance;
+  const double kernel5_distance_derivative = -(1.0 + 4.0 * damping5) * kernel5 * inverse_distance;
+  const double inverse_radius = 1.0 / average_radius;
+  const double kernel3_radius_derivative = -3.0 * (1.0 - damping3) * kernel3 * inverse_radius;
+  const double kernel5_radius_derivative = -4.0 * (1.0 - damping5) * kernel5 * inverse_radius;
+  const double kernel5_numerator = dipole_dipole_numerator + charge_quadrupole_numerator;
+  const double energy_radius_derivative = kernel3_radius_derivative * charge_dipole_numerator +
+                                          kernel5_radius_derivative * kernel5_numerator;
+  if (!std::isfinite(charge_dipole_numerator) || !std::isfinite(distance2) ||
+      !std::isfinite(dipole_dipole_numerator) || !std::isfinite(charge_quadrupole_numerator) ||
+      !std::isfinite(kernel3_distance_derivative) || !std::isfinite(kernel5_distance_derivative) ||
+      !std::isfinite(kernel3_radius_derivative) || !std::isfinite(kernel5_radius_derivative) ||
+      !std::isfinite(kernel5_numerator) || !std::isfinite(energy_radius_derivative)) {
+    return false;
+  }
+
+  for (std::size_t axis = 0; axis < 3u; ++axis) {
+    const double dipole_dipole_derivative =
+        2.0 * dipole_dot * displacement[axis] -
+        3.0 * (first_projection * second_dipole[axis] + second_projection * first_dipole[axis]);
+    const double pair_gradient =
+        kernel3 * charge_dipole_vector[axis] +
+        kernel3_distance_derivative * charge_dipole_numerator * displacement[axis] *
+            inverse_distance +
+        kernel5 * (dipole_dipole_derivative + 2.0 * tensor_vector[axis]) +
+        kernel5_distance_derivative * kernel5_numerator * displacement[axis] * inverse_distance;
+    const std::size_t first_coordinate = first * 3u + axis;
+    const std::size_t second_coordinate = second * 3u + axis;
+    if (!add_value(pair_gradient, gradient_scratch[first_coordinate]) ||
+        !add_value(-pair_gradient, gradient_scratch[second_coordinate])) {
+      return false;
+    }
+  }
+
+  /* average_radius = (mrad_first + mrad_second)/2. */
+  return add_value(0.5 * energy_radius_derivative * first_radius_cn_derivative,
+                   coordination_scratch[first]) &&
+         add_value(0.5 * energy_radius_derivative * second_radius_cn_derivative,
+                   coordination_scratch[second]);
+}
+
 }  // namespace
 
 namespace {
@@ -596,6 +716,14 @@ std::int64_t AES2Plan::pair_data_elements() const noexcept {
 
 std::int64_t AES2Plan::potential_scratch_elements() const noexcept {
   return data_ == nullptr ? 0 : data_->potential_scratch_elements;
+}
+
+std::int64_t AES2Plan::gradient_scratch_elements() const noexcept {
+  return data_ == nullptr ? 0 : data_->total_atoms * 3;
+}
+
+std::int64_t AES2Plan::coordination_scratch_elements() const noexcept {
+  return data_ == nullptr ? 0 : data_->total_atoms;
 }
 
 const std::vector<std::int64_t>& AES2Plan::atom_offsets() const noexcept {
@@ -1075,6 +1203,202 @@ gpuxtb_status_t add_aes2_energy_cpu(const AES2Plan& plan, const AES2GeometryCach
 
   for (std::int64_t batch = 0; batch < plan.batch_size(); ++batch) {
     energies[batch] += workspace.batch_scratch[batch];
+  }
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t add_aes2_vjp_cpu(const AES2Plan& plan, const AES2GeometryCache& cache,
+                                 const double* positions, const double* coordination_numbers,
+                                 std::uint64_t geometry_generation, const double* atomic_charges,
+                                 const double* atomic_dipoles, const double* atomic_quadrupoles,
+                                 double* gradients, double* coordination_adjoints,
+                                 const AES2Workspace& workspace, std::string& error) {
+  gpuxtb_status_t status = validate_plan(plan, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_cache(plan, cache, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  if (cache.geometry_generation != geometry_generation) {
+    error = "AES2 VJP inputs do not match the cached geometry generation";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  status =
+      validate_finite_array(positions, plan.total_atoms() * 3, "AES2 VJP positions are invalid",
+                            "AES2 VJP positions contain NaN or infinity", error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_finite_array(
+      coordination_numbers, plan.total_atoms(), "AES2 VJP coordination numbers are invalid",
+      "AES2 VJP coordination numbers must be finite and nonnegative", error, true);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_finite_array(atomic_charges, plan.total_atoms(), "AES2 VJP charges are invalid",
+                                 "AES2 VJP charges contain NaN or infinity", error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status =
+      validate_finite_array(atomic_dipoles, plan.total_atoms() * 3, "AES2 VJP dipoles are invalid",
+                            "AES2 VJP dipoles contain NaN or infinity", error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_finite_array(atomic_quadrupoles, plan.total_atoms() * 6,
+                                 "AES2 VJP quadrupoles are invalid",
+                                 "AES2 VJP quadrupoles contain NaN or infinity", error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_finite_array(gradients, plan.gradient_scratch_elements(),
+                                 "AES2 gradient output is invalid",
+                                 "AES2 input gradients contain NaN or infinity", error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_finite_array(coordination_adjoints, plan.coordination_scratch_elements(),
+                                 "AES2 coordination-adjoint output is invalid",
+                                 "AES2 input coordination adjoints contain NaN or infinity", error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_workspace_pointer(
+      workspace.gradient_scratch, workspace.gradient_elements, plan.gradient_scratch_elements(),
+      "AES2 gradient scratch is NULL, misaligned, or too small", error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_workspace_pointer(
+      workspace.coordination_scratch, workspace.coordination_elements,
+      plan.coordination_scratch_elements(),
+      "AES2 coordination scratch is NULL, misaligned, or too small", error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+
+  std::size_t atom_bytes = 0;
+  std::size_t position_bytes = 0;
+  std::size_t dipole_bytes = 0;
+  std::size_t quadrupole_bytes = 0;
+  std::size_t pair_bytes = 0;
+  if (!count_bytes(plan.total_atoms(), sizeof(double), atom_bytes) ||
+      !count_bytes(plan.gradient_scratch_elements(), sizeof(double), position_bytes) ||
+      !count_bytes(plan.total_atoms() * 3, sizeof(double), dipole_bytes) ||
+      !count_bytes(plan.total_atoms() * 6, sizeof(double), quadrupole_bytes) ||
+      !count_bytes(plan.pair_data_elements(), sizeof(double), pair_bytes)) {
+    error = "AES2 VJP dimensions exceed addressable host storage";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const std::array<MemoryRange, 10> active{{
+      {positions, position_bytes},
+      {coordination_numbers, atom_bytes},
+      {atomic_charges, atom_bytes},
+      {atomic_dipoles, dipole_bytes},
+      {atomic_quadrupoles, quadrupole_bytes},
+      {cache.pair_data, pair_bytes},
+      {gradients, position_bytes},
+      {coordination_adjoints, atom_bytes},
+      {workspace.gradient_scratch, position_bytes},
+      {workspace.coordination_scratch, atom_bytes},
+  }};
+  if (!ranges_are_disjoint(active.data(), active.size())) {
+    error = "AES2 VJP inputs, outputs, cache, and scratch must not overlap";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  for (const MemoryRange& range : active) {
+    if (overlaps_control_storage(plan, cache, workspace, range.data, range.size_bytes)) {
+      error = "AES2 VJP buffers must not overlap plan or descriptor storage";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+  }
+
+  std::fill_n(workspace.gradient_scratch,
+              static_cast<std::size_t>(plan.gradient_scratch_elements()), 0.0);
+  std::fill_n(workspace.coordination_scratch,
+              static_cast<std::size_t>(plan.coordination_scratch_elements()), 0.0);
+  std::int64_t pair = 0;
+  for (std::int64_t batch = 0; batch < plan.batch_size(); ++batch) {
+    const std::int64_t atom_begin = plan.atom_offsets()[static_cast<std::size_t>(batch)];
+    const std::int64_t atom_end = plan.atom_offsets()[static_cast<std::size_t>(batch + 1)];
+    for (std::int64_t second = atom_begin; second < atom_end; ++second) {
+      const std::size_t second_index = static_cast<std::size_t>(second);
+      for (std::int64_t first = atom_begin; first < second; ++first) {
+        const std::size_t first_index = static_cast<std::size_t>(first);
+        const std::size_t pair_base = static_cast<std::size_t>(pair * kPairStride);
+        const double dx = positions[first_index * 3u] - positions[second_index * 3u];
+        const double dy = positions[first_index * 3u + 1u] - positions[second_index * 3u + 1u];
+        const double dz = positions[first_index * 3u + 2u] - positions[second_index * 3u + 2u];
+        const double distance = std::hypot(std::hypot(dx, dy), dz);
+        const double distance_squared = distance * distance;
+        const double first_radius =
+            multipole_radius(plan, first_index, coordination_numbers[first_index]);
+        const double second_radius =
+            multipole_radius(plan, second_index, coordination_numbers[second_index]);
+        const double average_radius = 0.5 * (first_radius + second_radius);
+        double expected_kernel3 = 0.0;
+        double expected_kernel5 = 0.0;
+        if (!std::isfinite(dx) || !std::isfinite(dy) || !std::isfinite(dz) ||
+            !std::isfinite(distance) || distance_squared < kMinimumDistanceSquared ||
+            !(first_radius > 0.0) || !std::isfinite(first_radius) || !(second_radius > 0.0) ||
+            !std::isfinite(second_radius) || !(average_radius > 0.0) ||
+            !std::isfinite(average_radius) ||
+            !pair_kernels(distance, average_radius, expected_kernel3, expected_kernel5)) {
+          error = "AES2 VJP geometry or damping-radius arithmetic failed";
+          return GPUXTB_STATUS_INVALID_ARGUMENT;
+        }
+        if (cache.pair_data[pair_base] != dx || cache.pair_data[pair_base + 1u] != dy ||
+            cache.pair_data[pair_base + 2u] != dz ||
+            cache.pair_data[pair_base + 3u] != expected_kernel3 ||
+            cache.pair_data[pair_base + 4u] != expected_kernel5) {
+          error = "AES2 VJP positions or coordination numbers disagree with the geometry cache";
+          return GPUXTB_STATUS_INVALID_ARGUMENT;
+        }
+        const double first_cn_derivative =
+            multipole_radius_cn_derivative(plan, first_index, coordination_numbers[first_index]);
+        const double second_cn_derivative =
+            multipole_radius_cn_derivative(plan, second_index, coordination_numbers[second_index]);
+        if (!pair_vjp(cache.pair_data + pair_base, average_radius, first_cn_derivative,
+                      second_cn_derivative, first_index, second_index, atomic_charges,
+                      atomic_dipoles, atomic_quadrupoles, workspace.gradient_scratch,
+                      workspace.coordination_scratch)) {
+          error = "AES2 coordinate/CN VJP arithmetic exceeded floating-point range";
+          return GPUXTB_STATUS_INVALID_ARGUMENT;
+        }
+        ++pair;
+      }
+    }
+  }
+  if (pair != plan.total_pairs()) {
+    error = "AES2 internal pair enumeration disagrees with the geometry cache";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+
+  for (std::size_t coordinate = 0;
+       coordinate < static_cast<std::size_t>(plan.gradient_scratch_elements()); ++coordinate) {
+    if (!std::isfinite(gradients[coordinate] + workspace.gradient_scratch[coordinate])) {
+      error = "AES2 accumulated gradient exceeded floating-point range";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+  }
+  for (std::size_t atom = 0; atom < static_cast<std::size_t>(plan.coordination_scratch_elements());
+       ++atom) {
+    if (!std::isfinite(coordination_adjoints[atom] + workspace.coordination_scratch[atom])) {
+      error = "AES2 accumulated coordination adjoint exceeded floating-point range";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+  }
+  for (std::size_t coordinate = 0;
+       coordinate < static_cast<std::size_t>(plan.gradient_scratch_elements()); ++coordinate) {
+    gradients[coordinate] += workspace.gradient_scratch[coordinate];
+  }
+  for (std::size_t atom = 0; atom < static_cast<std::size_t>(plan.coordination_scratch_elements());
+       ++atom) {
+    coordination_adjoints[atom] += workspace.coordination_scratch[atom];
   }
   error.clear();
   return GPUXTB_STATUS_SUCCESS;
