@@ -35,6 +35,7 @@ endif()
 add_library(gpuxtb_gfn2_cpu OBJECT
   src/model/gfn2/basis.cpp
   src/model/gfn2/coordination.cpp
+  src/model/gfn2/es3.cpp
   src/model/gfn2/external_point_charges.cpp
   src/model/gfn2/h0.cpp
   src/model/gfn2/integrals.cpp
@@ -251,6 +252,11 @@ if(GPUXTB_BUILD_TESTS)
   target_link_libraries(gpuxtb_external_point_charges_test PRIVATE gpuxtb_gfn2_cpu)
   target_compile_features(gpuxtb_external_point_charges_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.external_point_charges COMMAND gpuxtb_external_point_charges_test)
+
+  add_executable(gpuxtb_es3_test tests/es3_test.cpp)
+  target_link_libraries(gpuxtb_es3_test PRIVATE gpuxtb_gfn2_cpu)
+  target_compile_features(gpuxtb_es3_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.gfn2.es3 COMMAND gpuxtb_es3_test)
 
   add_executable(gpuxtb_parameters_header_test tests/parameters/gfn2_header_test.cpp)
   target_include_directories(gpuxtb_parameters_header_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
