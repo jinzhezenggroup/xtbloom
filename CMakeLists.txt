@@ -40,6 +40,7 @@ add_library(gpuxtb_gfn2_cpu OBJECT
   src/model/gfn2/h0.cpp
   src/model/gfn2/integrals.cpp
   src/model/gfn2/repulsion.cpp
+  src/model/gfn2/wavefunction.cpp
 )
 target_compile_features(gpuxtb_gfn2_cpu PUBLIC cxx_std_17)
 target_include_directories(gpuxtb_gfn2_cpu PUBLIC
@@ -276,6 +277,11 @@ if(GPUXTB_BUILD_TESTS)
   target_link_libraries(gpuxtb_es3_test PRIVATE gpuxtb_gfn2_cpu)
   target_compile_features(gpuxtb_es3_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.es3 COMMAND gpuxtb_es3_test)
+
+  add_executable(gpuxtb_wavefunction_test tests/wavefunction_test.cpp)
+  target_link_libraries(gpuxtb_wavefunction_test PRIVATE gpuxtb_gfn2_cpu)
+  target_compile_features(gpuxtb_wavefunction_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.gfn2.wavefunction COMMAND gpuxtb_wavefunction_test)
 
   add_executable(gpuxtb_parameters_header_test tests/parameters/gfn2_header_test.cpp)
   target_include_directories(gpuxtb_parameters_header_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
