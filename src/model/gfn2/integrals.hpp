@@ -16,9 +16,7 @@ namespace gpuxtb::detail::gfn2 {
  *
  * Every molecule owns a row-major, dense nao-by-nao matrix in the packed
  * output buffer. matrix_offsets is a zero-based half-open partition of that
- * buffer and may be reused by overlap, dipole, and quadrupole evaluators. A
- * future multipole evaluator will store its Cartesian components as separate
- * packed matrices with this same partition.
+ * buffer and is reused by overlap, dipole, and quadrupole evaluators.
  *
  * Plan construction may allocate. Evaluation requires a caller-owned scratch
  * buffer so successful steady-state calls do not allocate and the same layout
@@ -53,6 +51,32 @@ gpuxtb_status_t make_integral_plan(const BasisPlan& basis, IntegralPlan& plan, s
 gpuxtb_status_t evaluate_overlap_cpu(const BasisPlan& basis, const IntegralPlan& plan,
                                      const double* positions, double* overlap, void* workspace,
                                      std::size_t workspace_size, std::string& error);
+
+/*
+ * Evaluate GFN2 one-electron dipole and traceless quadrupole integrals.
+ *
+ * Each Cartesian component is a separate packed dense matrix. dipole contains
+ * 3*plan.total_matrix_elements doubles in [x,y,z] component-major order;
+ * quadrupole contains 6*plan.total_matrix_elements doubles in
+ * [xx,xy,yy,xz,yz,zz] component-major order. Within every matrix, rows are
+ * bra AOs and columns are ket AOs in tblite's real-spherical ordering.
+ *
+ * Following tblite/xtb's GFN2 convention, the operator origin of matrix
+ * element (mu,nu) is the atom carrying the ket AO nu. Thus interatomic blocks
+ * are related by the documented multipole translation identities rather than
+ * by plain matrix symmetry. Quadrupoles are Q_ab = 3*r_a*r_b/2 -
+ * delta_ab*r^2/2 relative to that ket origin.
+ *
+ * Positions are atom-major xyz coordinates in bohr. Both output buffers are
+ * overwritten and must not overlap each other, positions, or workspace.
+ * workspace is caller-owned, must be aligned for double, and must contain at
+ * least plan.workspace_size_bytes bytes. Successful steady-state calls
+ * perform no dynamic allocation.
+ */
+gpuxtb_status_t evaluate_multipole_cpu(const BasisPlan& basis, const IntegralPlan& plan,
+                                       const double* positions, double* dipole, double* quadrupole,
+                                       void* workspace, std::size_t workspace_size,
+                                       std::string& error);
 
 /*
  * Apply the analytic overlap reverse-mode derivative

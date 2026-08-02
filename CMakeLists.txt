@@ -35,6 +35,8 @@ endif()
 add_library(gpuxtb_gfn2_cpu OBJECT
   src/model/gfn2/basis.cpp
   src/model/gfn2/coordination.cpp
+  src/model/gfn2/external_point_charges.cpp
+  src/model/gfn2/h0.cpp
   src/model/gfn2/integrals.cpp
   src/model/gfn2/repulsion.cpp
 )
@@ -209,6 +211,21 @@ if(GPUXTB_BUILD_TESTS)
   target_link_libraries(gpuxtb_integrals_test PRIVATE gpuxtb_gfn2_cpu)
   target_compile_features(gpuxtb_integrals_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.integrals COMMAND gpuxtb_integrals_test)
+
+  add_executable(gpuxtb_multipole_integrals_test tests/multipole_integrals_test.cpp)
+  target_link_libraries(gpuxtb_multipole_integrals_test PRIVATE gpuxtb_gfn2_cpu)
+  target_compile_features(gpuxtb_multipole_integrals_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.gfn2.multipole_integrals COMMAND gpuxtb_multipole_integrals_test)
+
+  add_executable(gpuxtb_h0_test tests/h0_test.cpp)
+  target_link_libraries(gpuxtb_h0_test PRIVATE gpuxtb_gfn2_cpu)
+  target_compile_features(gpuxtb_h0_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.gfn2.h0 COMMAND gpuxtb_h0_test)
+
+  add_executable(gpuxtb_external_point_charges_test tests/external_point_charges_test.cpp)
+  target_link_libraries(gpuxtb_external_point_charges_test PRIVATE gpuxtb_gfn2_cpu)
+  target_compile_features(gpuxtb_external_point_charges_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.gfn2.external_point_charges COMMAND gpuxtb_external_point_charges_test)
 
   add_executable(gpuxtb_parameters_header_test tests/parameters/gfn2_header_test.cpp)
   target_include_directories(gpuxtb_parameters_header_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

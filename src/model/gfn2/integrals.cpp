@@ -19,14 +19,20 @@ constexpr std::size_t kMaximumCartesianBlock =
     kMaximumCartesianFunctions * kMaximumCartesianFunctions;
 constexpr std::size_t kMaximumSphericalBlock =
     kMaximumSphericalFunctions * kMaximumSphericalFunctions;
+constexpr std::size_t kDipoleComponents = 3;
+constexpr std::size_t kQuadrupoleComponents = 6;
+constexpr std::size_t kMultipoleComponents = kDipoleComponents + kQuadrupoleComponents;
 constexpr double kSqrtThree = 1.732050807568877293527446341505872367;
 constexpr double kSqrtPiCubed = 5.5683279968317061;
 
-struct alignas(double) OverlapWorkspace {
+struct alignas(double) IntegralWorkspace {
   std::array<double, kMaximumCartesianBlock> cartesian;
   std::array<double, 3 * kMaximumCartesianBlock> cartesian_gradient;
   std::array<double, kMaximumSphericalBlock> spherical;
   std::array<double, 3 * kMaximumSphericalBlock> spherical_gradient;
+  /* Components are [x,y,z,xx,xy,yy,xz,yz,zz], each as one shell block. */
+  std::array<double, kMultipoleComponents * kMaximumCartesianBlock> cartesian_multipole;
+  std::array<double, kMultipoleComponents * kMaximumSphericalBlock> spherical_multipole;
 };
 
 struct CartesianExponent {
@@ -257,7 +263,7 @@ gpuxtb_status_t validate_plan(const BasisPlan& basis, const IntegralPlan& plan,
   }
   if (plan.batch_size != basis.batch_size || plan.total_matrix_elements < 0 ||
       !std::isfinite(plan.integral_cutoff) || !(plan.integral_cutoff > 0.0) ||
-      plan.workspace_size_bytes < sizeof(OverlapWorkspace) ||
+      plan.workspace_size_bytes < sizeof(IntegralWorkspace) ||
       plan.matrix_offsets.size() != static_cast<std::size_t>(basis.batch_size + 1) ||
       plan.matrix_offsets.front() != 0 ||
       plan.matrix_offsets.back() != plan.total_matrix_elements ||
@@ -314,6 +320,15 @@ gpuxtb_status_t validate_evaluation(const BasisPlan& basis, const IntegralPlan& 
       error = "integral positions contain NaN or infinity";
       return GPUXTB_STATUS_INVALID_ARGUMENT;
     }
+    /*
+     * Pair vectors are formed by direct subtraction in the hot loops. Bound
+     * each finite coordinate so even opposite signs cannot overflow before
+     * Gaussian screening or multipole translation is applied.
+     */
+    if (std::abs(positions[coordinate]) > std::numeric_limits<double>::max() * 0.5) {
+      error = "integral positions are too large to form finite pair displacements";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
   }
   return GPUXTB_STATUS_SUCCESS;
 }
@@ -321,11 +336,12 @@ gpuxtb_status_t validate_evaluation(const BasisPlan& basis, const IntegralPlan& 
 /*
  * One-dimensional Hermite overlap recurrence normalized by the s-s integral.
  * a is the ket angular exponent about center i and b is the bra exponent about
- * center j. GFN2 needs a<=2 for values and a<=3 for first derivatives.
+ * center j. GFN2 needs a<=2 for overlap, a<=3 for first derivatives, and
+ * a<=4 for second moments relative to the ket center.
  */
 void make_axis_overlap(double product_minus_i, double product_minus_j, double inverse_twice_sum,
-                       std::size_t maximum_a, std::size_t maximum_b, double overlap[4][3]) {
-  for (std::size_t a = 0; a < 4u; ++a) {
+                       std::size_t maximum_a, std::size_t maximum_b, double overlap[5][3]) {
+  for (std::size_t a = 0; a < 5u; ++a) {
     for (std::size_t b = 0; b < 3u; ++b) {
       overlap[a][b] = 0.0;
     }
@@ -380,7 +396,7 @@ void transform_shell_pair(const SphericalTransform& bra, const SphericalTransfor
 
 void compute_shell_pair(const BasisPlan& basis, std::size_t bra_shell, std::size_t ket_shell,
                         const double vector[3], double integral_cutoff, bool with_gradient,
-                        OverlapWorkspace& workspace) {
+                        bool with_multipoles, IntegralWorkspace& workspace) {
   const std::uint8_t bra_l = basis.angular_momenta[bra_shell];
   const std::uint8_t ket_l = basis.angular_momenta[ket_shell];
   const std::size_t bra_cartesian_count = cartesian_count(bra_l);
@@ -389,6 +405,10 @@ void compute_shell_pair(const BasisPlan& basis, std::size_t bra_shell, std::size
   std::fill_n(workspace.cartesian.data(), cartesian_block_size, 0.0);
   if (with_gradient) {
     std::fill_n(workspace.cartesian_gradient.data(), 3u * cartesian_block_size, 0.0);
+  }
+  if (with_multipoles) {
+    std::fill_n(workspace.cartesian_multipole.data(), kMultipoleComponents * cartesian_block_size,
+                0.0);
   }
 
   const CartesianExponent* bra_exponents = cartesian_exponents(bra_l);
@@ -421,13 +441,13 @@ void compute_shell_pair(const BasisPlan& basis, std::size_t bra_shell, std::size
                                          basis.primitive_coefficients[ket_primitive_index] *
                                          basis.primitive_coefficients[bra_primitive_index];
       const double inverse_twice_sum = 0.5 * inverse_sum;
-      double axis[3][4][3];
+      double axis[3][5][3];
       for (std::size_t coordinate = 0; coordinate < 3u; ++coordinate) {
         const double product_minus_i = -vector[coordinate] * bra_alpha * inverse_sum;
         const double product_minus_j = +vector[coordinate] * ket_alpha * inverse_sum;
+        const std::size_t moment_order = with_multipoles ? 2u : (with_gradient ? 1u : 0u);
         make_axis_overlap(product_minus_i, product_minus_j, inverse_twice_sum,
-                          static_cast<std::size_t>(ket_l) + (with_gradient ? 1u : 0u), bra_l,
-                          axis[coordinate]);
+                          static_cast<std::size_t>(ket_l) + moment_order, bra_l, axis[coordinate]);
       }
 
       for (std::size_t bra_cartesian = 0; bra_cartesian < bra_cartesian_count; ++bra_cartesian) {
@@ -441,6 +461,22 @@ void compute_shell_pair(const BasisPlan& basis, std::size_t bra_shell, std::size
           const double z = axis[2][ket.z][bra.z];
           const std::size_t cartesian_index = bra_cartesian * ket_cartesian_count + ket_cartesian;
           workspace.cartesian[cartesian_index] += primitive_prefactor * x * y * z;
+
+          if (with_multipoles) {
+            const double dx = axis[0][ket.x + 1u][bra.x];
+            const double dy = axis[1][ket.y + 1u][bra.y];
+            const double dz = axis[2][ket.z + 1u][bra.z];
+            const double dxx = axis[0][ket.x + 2u][bra.x];
+            const double dyy = axis[1][ket.y + 2u][bra.y];
+            const double dzz = axis[2][ket.z + 2u][bra.z];
+            const std::array<double, kMultipoleComponents> moments{
+                dx * y * z,  x * dy * z,  x * y * dz,  dxx * y * z, dx * dy * z,
+                x * dyy * z, dx * y * dz, x * dy * dz, x * y * dzz};
+            for (std::size_t component = 0; component < kMultipoleComponents; ++component) {
+              workspace.cartesian_multipole[component * cartesian_block_size + cartesian_index] +=
+                  primitive_prefactor * moments[component];
+            }
+          }
 
           if (with_gradient) {
             const std::array<double, 3> other_axis_product{y * z, x * z, x * y};
@@ -473,6 +509,31 @@ void compute_shell_pair(const BasisPlan& basis, std::size_t bra_shell, std::size
                                                                      ket_transform.spherical_count);
     }
   }
+  if (with_multipoles) {
+    const std::size_t spherical_block_size =
+        bra_transform.spherical_count * ket_transform.spherical_count;
+    for (std::size_t component = 0; component < kMultipoleComponents; ++component) {
+      transform_shell_pair(bra_transform, ket_transform,
+                           workspace.cartesian_multipole.data() + component * cartesian_block_size,
+                           workspace.spherical_multipole.data() + component * spherical_block_size);
+    }
+    /* tblite stores Q = 3*rr/2 - r^2*I/2 in [xx,xy,yy,xz,yz,zz] order. */
+    for (std::size_t element = 0; element < spherical_block_size; ++element) {
+      const double trace =
+          0.5 * (workspace.spherical_multipole[3u * spherical_block_size + element] +
+                 workspace.spherical_multipole[5u * spherical_block_size + element] +
+                 workspace.spherical_multipole[8u * spherical_block_size + element]);
+      workspace.spherical_multipole[3u * spherical_block_size + element] =
+          1.5 * workspace.spherical_multipole[3u * spherical_block_size + element] - trace;
+      workspace.spherical_multipole[4u * spherical_block_size + element] *= 1.5;
+      workspace.spherical_multipole[5u * spherical_block_size + element] =
+          1.5 * workspace.spherical_multipole[5u * spherical_block_size + element] - trace;
+      workspace.spherical_multipole[6u * spherical_block_size + element] *= 1.5;
+      workspace.spherical_multipole[7u * spherical_block_size + element] *= 1.5;
+      workspace.spherical_multipole[8u * spherical_block_size + element] =
+          1.5 * workspace.spherical_multipole[8u * spherical_block_size + element] - trace;
+    }
+  }
 }
 
 }  // namespace
@@ -492,7 +553,7 @@ gpuxtb_status_t make_integral_plan(const BasisPlan& basis, IntegralPlan& plan, s
     IntegralPlan created;
     created.batch_size = basis.batch_size;
     created.integral_cutoff = integral_cutoff;
-    created.workspace_size_bytes = sizeof(OverlapWorkspace);
+    created.workspace_size_bytes = sizeof(IntegralWorkspace);
     created.matrix_offsets.resize(static_cast<std::size_t>(basis.batch_size + 1));
     for (std::int64_t batch = 0; batch < basis.batch_size; ++batch) {
       created.matrix_offsets[static_cast<std::size_t>(batch)] = created.total_matrix_elements;
@@ -533,7 +594,7 @@ gpuxtb_status_t evaluate_overlap_cpu(const BasisPlan& basis, const IntegralPlan&
   }
 
   std::fill_n(overlap, static_cast<std::size_t>(plan.total_matrix_elements), 0.0);
-  auto& scratch = *static_cast<OverlapWorkspace*>(workspace);
+  auto& scratch = *static_cast<IntegralWorkspace*>(workspace);
   for (std::int64_t batch = 0; batch < basis.batch_size; ++batch) {
     const std::size_t batch_index = static_cast<std::size_t>(batch);
     const std::int64_t atom_begin = basis.atom_offsets[batch_index];
@@ -563,7 +624,7 @@ gpuxtb_status_t evaluate_overlap_cpu(const BasisPlan& basis, const IntegralPlan&
             const std::size_t ket_shell_index = static_cast<std::size_t>(ket_shell);
             const std::size_t bra_shell_index = static_cast<std::size_t>(bra_shell);
             compute_shell_pair(basis, bra_shell_index, ket_shell_index, vector,
-                               plan.integral_cutoff, false, scratch);
+                               plan.integral_cutoff, false, false, scratch);
 
             const std::size_t bra_spherical_count =
                 spherical_count(basis.angular_momenta[bra_shell_index]);
@@ -579,6 +640,145 @@ gpuxtb_status_t evaluate_overlap_cpu(const BasisPlan& basis, const IntegralPlan&
                 matrix[(bra_orbital + bra_ao) * orbital_count + ket_orbital + ket_ao] = value;
                 if (bra_shell != ket_shell) {
                   matrix[(ket_orbital + ket_ao) * orbital_count + bra_orbital + bra_ao] = value;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t evaluate_multipole_cpu(const BasisPlan& basis, const IntegralPlan& plan,
+                                       const double* positions, double* dipole, double* quadrupole,
+                                       void* workspace, std::size_t workspace_size,
+                                       std::string& error) {
+  gpuxtb_status_t status =
+      validate_evaluation(basis, plan, positions, workspace, workspace_size, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  if (dipole == nullptr || quadrupole == nullptr) {
+    error = "multipole output buffers must not be NULL";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  const std::size_t matrix_elements = static_cast<std::size_t>(plan.total_matrix_elements);
+  if (matrix_elements >
+      std::numeric_limits<std::size_t>::max() / kQuadrupoleComponents / sizeof(double)) {
+    error = "multipole output dimensions exceed host limits";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  std::fill_n(dipole, kDipoleComponents * matrix_elements, 0.0);
+  std::fill_n(quadrupole, kQuadrupoleComponents * matrix_elements, 0.0);
+  auto& scratch = *static_cast<IntegralWorkspace*>(workspace);
+
+  for (std::int64_t batch = 0; batch < basis.batch_size; ++batch) {
+    const std::size_t batch_index = static_cast<std::size_t>(batch);
+    const std::int64_t atom_begin = basis.atom_offsets[batch_index];
+    const std::int64_t atom_end = basis.atom_offsets[batch_index + 1u];
+    const std::int64_t orbital_begin = basis.batch_orbital_offsets[batch_index];
+    const std::size_t orbital_count =
+        static_cast<std::size_t>(basis.batch_orbital_offsets[batch_index + 1u] - orbital_begin);
+    const std::size_t matrix_offset = static_cast<std::size_t>(plan.matrix_offsets[batch_index]);
+
+    for (std::int64_t ket_atom = atom_begin; ket_atom < atom_end; ++ket_atom) {
+      const std::size_t ket_atom_index = static_cast<std::size_t>(ket_atom);
+      for (std::int64_t bra_atom = atom_begin; bra_atom <= ket_atom; ++bra_atom) {
+        const std::size_t bra_atom_index = static_cast<std::size_t>(bra_atom);
+        const double vector[3]{
+            positions[ket_atom_index * 3u] - positions[bra_atom_index * 3u],
+            positions[ket_atom_index * 3u + 1u] - positions[bra_atom_index * 3u + 1u],
+            positions[ket_atom_index * 3u + 2u] - positions[bra_atom_index * 3u + 2u]};
+        const std::int64_t ket_shell_begin = basis.atom_shell_offsets[ket_atom_index];
+        const std::int64_t ket_shell_end = basis.atom_shell_offsets[ket_atom_index + 1u];
+        const std::int64_t bra_shell_begin = basis.atom_shell_offsets[bra_atom_index];
+        const std::int64_t bra_shell_end = basis.atom_shell_offsets[bra_atom_index + 1u];
+
+        for (std::int64_t ket_shell = ket_shell_begin; ket_shell < ket_shell_end; ++ket_shell) {
+          for (std::int64_t bra_shell = bra_shell_begin; bra_shell < bra_shell_end; ++bra_shell) {
+            if (ket_atom == bra_atom && bra_shell > ket_shell) {
+              continue;
+            }
+            const std::size_t ket_shell_index = static_cast<std::size_t>(ket_shell);
+            const std::size_t bra_shell_index = static_cast<std::size_t>(bra_shell);
+            compute_shell_pair(basis, bra_shell_index, ket_shell_index, vector,
+                               plan.integral_cutoff, false, true, scratch);
+
+            const std::size_t bra_count = spherical_count(basis.angular_momenta[bra_shell_index]);
+            const std::size_t ket_count = spherical_count(basis.angular_momenta[ket_shell_index]);
+            const std::size_t block_size = bra_count * ket_count;
+            const std::size_t bra_orbital = static_cast<std::size_t>(
+                basis.shell_orbital_offsets[bra_shell_index] - orbital_begin);
+            const std::size_t ket_orbital = static_cast<std::size_t>(
+                basis.shell_orbital_offsets[ket_shell_index] - orbital_begin);
+
+            for (std::size_t bra_ao = 0; bra_ao < bra_count; ++bra_ao) {
+              for (std::size_t ket_ao = 0; ket_ao < ket_count; ++ket_ao) {
+                /*
+                 * A same-shell, same-center operator block is exactly
+                 * symmetric. Use one computed AO triangle for both sides so
+                 * different Cartesian-to-spherical accumulation orders do
+                 * not leave one-ULP antisymmetric noise in the matrix.
+                 */
+                if (bra_shell == ket_shell && bra_ao > ket_ao) {
+                  continue;
+                }
+                const std::size_t block_index = bra_ao * ket_count + ket_ao;
+                const std::size_t forward =
+                    matrix_offset + (bra_orbital + bra_ao) * orbital_count + ket_orbital + ket_ao;
+                const std::size_t reverse =
+                    matrix_offset + (ket_orbital + ket_ao) * orbital_count + bra_orbital + bra_ao;
+                const double overlap = scratch.spherical[block_index];
+                std::array<double, kDipoleComponents> local_dipole{};
+                for (std::size_t component = 0; component < kDipoleComponents; ++component) {
+                  local_dipole[component] =
+                      scratch.spherical_multipole[component * block_size + block_index];
+                  dipole[component * matrix_elements + forward] = local_dipole[component];
+                  if (bra_shell == ket_shell) {
+                    dipole[component * matrix_elements + reverse] = local_dipole[component];
+                  }
+                }
+                std::array<double, kQuadrupoleComponents> local_quadrupole{};
+                for (std::size_t component = 0; component < kQuadrupoleComponents; ++component) {
+                  local_quadrupole[component] =
+                      scratch.spherical_multipole[(component + kDipoleComponents) * block_size +
+                                                  block_index];
+                  quadrupole[component * matrix_elements + forward] = local_quadrupole[component];
+                  if (bra_shell == ket_shell) {
+                    quadrupole[component * matrix_elements + reverse] = local_quadrupole[component];
+                  }
+                }
+
+                if (bra_shell == ket_shell) {
+                  continue;
+                }
+                std::array<double, kDipoleComponents> shifted_dipole{};
+                for (std::size_t component = 0; component < kDipoleComponents; ++component) {
+                  shifted_dipole[component] = local_dipole[component] + vector[component] * overlap;
+                  dipole[component * matrix_elements + reverse] = shifted_dipole[component];
+                }
+
+                std::array<double, kQuadrupoleComponents> shift{};
+                shift[0] = 2.0 * vector[0] * local_dipole[0] + vector[0] * vector[0] * overlap;
+                shift[1] = vector[0] * local_dipole[1] + vector[1] * local_dipole[0] +
+                           vector[0] * vector[1] * overlap;
+                shift[2] = 2.0 * vector[1] * local_dipole[1] + vector[1] * vector[1] * overlap;
+                shift[3] = vector[0] * local_dipole[2] + vector[2] * local_dipole[0] +
+                           vector[0] * vector[2] * overlap;
+                shift[4] = vector[1] * local_dipole[2] + vector[2] * local_dipole[1] +
+                           vector[1] * vector[2] * overlap;
+                shift[5] = 2.0 * vector[2] * local_dipole[2] + vector[2] * vector[2] * overlap;
+                const double trace = 0.5 * (shift[0] + shift[2] + shift[5]);
+                for (std::size_t component = 0; component < kQuadrupoleComponents; ++component) {
+                  const bool diagonal = component == 0u || component == 2u || component == 5u;
+                  const double shifted = local_quadrupole[component] + 1.5 * shift[component] -
+                                         (diagonal ? trace : 0.0);
+                  quadrupole[component * matrix_elements + reverse] = shifted;
                 }
               }
             }
@@ -612,7 +812,7 @@ gpuxtb_status_t add_overlap_gradient_cpu(const BasisPlan& basis, const IntegralP
     }
   }
 
-  auto& scratch = *static_cast<OverlapWorkspace*>(workspace);
+  auto& scratch = *static_cast<IntegralWorkspace*>(workspace);
   for (std::int64_t batch = 0; batch < basis.batch_size; ++batch) {
     const std::size_t batch_index = static_cast<std::size_t>(batch);
     const std::int64_t atom_begin = basis.atom_offsets[batch_index];
@@ -641,7 +841,7 @@ gpuxtb_status_t add_overlap_gradient_cpu(const BasisPlan& basis, const IntegralP
             const std::size_t ket_shell_index = static_cast<std::size_t>(ket_shell);
             const std::size_t bra_shell_index = static_cast<std::size_t>(bra_shell);
             compute_shell_pair(basis, bra_shell_index, ket_shell_index, vector,
-                               plan.integral_cutoff, true, scratch);
+                               plan.integral_cutoff, true, false, scratch);
 
             const std::size_t bra_spherical_count =
                 spherical_count(basis.angular_momenta[bra_shell_index]);
