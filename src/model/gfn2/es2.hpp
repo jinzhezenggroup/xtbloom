@@ -1,0 +1,163 @@
+#ifndef GPUXTB_MODEL_GFN2_ES2_HPP
+#define GPUXTB_MODEL_GFN2_ES2_HPP
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "gpuxtb/gpuxtb.h"
+#include "model/gfn2/basis.hpp"
+
+namespace gpuxtb::detail::gfn2 {
+
+struct ES2PlanData;
+
+/*
+ * Geometry-independent GFN2 shell-resolved second-order electrostatics data.
+ *
+ * shell_hardness contains gamma_s = gamma_element * shell_hubbard_scale in
+ * Hartree, in BasisPlan shell order. matrix_offsets packs one dense row-major
+ * shell matrix per ragged batch member; an n-shell molecule owns n*n values.
+ * Plan construction may allocate, while all geometry/SCC operations below use
+ * caller-owned storage and allocate nothing on successful steady-state calls.
+ * The numerical data is sealed in opaque immutable shared storage: copying a
+ * plan is O(1), copies remain cache-compatible, and external code cannot mutate
+ * the topology or parameters after construction.
+ */
+class ES2Plan {
+ public:
+  ES2Plan() noexcept = default;
+  ES2Plan(const ES2Plan&) noexcept = default;
+  ES2Plan(ES2Plan&&) noexcept = default;
+  ES2Plan& operator=(const ES2Plan&) noexcept = default;
+  ES2Plan& operator=(ES2Plan&&) noexcept = default;
+  ~ES2Plan() = default;
+
+  [[nodiscard]] bool sealed() const noexcept;
+  [[nodiscard]] std::int64_t batch_size() const noexcept;
+  [[nodiscard]] std::int64_t total_atoms() const noexcept;
+  [[nodiscard]] std::int64_t total_shells() const noexcept;
+  [[nodiscard]] std::int64_t total_matrix_elements() const noexcept;
+  [[nodiscard]] const std::vector<std::int64_t>& atom_offsets() const noexcept;
+  [[nodiscard]] const std::vector<std::int64_t>& batch_shell_offsets() const noexcept;
+  [[nodiscard]] const std::vector<std::int64_t>& atom_shell_offsets() const noexcept;
+  [[nodiscard]] const std::vector<std::int64_t>& matrix_offsets() const noexcept;
+  [[nodiscard]] const std::vector<std::int64_t>& shell_to_atom() const noexcept;
+  [[nodiscard]] const std::vector<double>& shell_hardness() const noexcept;
+
+  /* Opaque stable token used only for cache compatibility and diagnostics. */
+  [[nodiscard]] const ES2PlanData* identity() const noexcept;
+
+ private:
+  explicit ES2Plan(std::shared_ptr<const ES2PlanData> data) noexcept;
+
+  std::shared_ptr<const ES2PlanData> data_;
+
+  friend gpuxtb_status_t make_es2_plan(const BasisPlan& basis, const std::int32_t* atomic_numbers,
+                                       ES2Plan& plan, std::string& error);
+};
+
+/*
+ * Non-owning geometry cache view. The exact plan_identity token prevents a
+ * same-extent matrix from another topology from being reused accidentally.
+ * At least one copy of the originating plan must remain alive while the cache
+ * is used. The descriptor remains trivial and standard-layout so a future
+ * CUDA/ROCm backend can use the same flat matrix storage.
+ */
+struct ES2GeometryCache {
+  double* coulomb_matrix = nullptr;
+  std::int64_t matrix_elements = 0;
+  std::uint64_t geometry_generation = 0;
+  const ES2PlanData* plan_identity = nullptr;
+};
+
+/*
+ * Caller-owned scratch used to preserve whole-batch failure atomicity without
+ * recomputing an ES2 quantity. Counts are numbers of doubles, not bytes.
+ * The descriptor is POD and may point to ordinary host, pinned, or backend-
+ * specific allocations as appropriate for the routine consuming it.
+ */
+struct ES2Workspace {
+  double* matrix_scratch = nullptr;
+  std::int64_t matrix_elements = 0;
+  double* shell_scratch = nullptr;
+  std::int64_t shell_elements = 0;
+  double* batch_scratch = nullptr;
+  std::int64_t batch_elements = 0;
+  double* gradient_scratch = nullptr;
+  std::int64_t gradient_elements = 0;
+};
+
+/* Build a reusable GFN2 arithmetic-hardness, gexp=2 ES2 plan. */
+gpuxtb_status_t make_es2_plan(const BasisPlan& basis, const std::int32_t* atomic_numbers,
+                              ES2Plan& plan, std::string& error);
+
+/*
+ * Overwrite caller-owned matrix_storage and bind cache to it. Positions use
+ * atom-major xyz coordinates in bohr. For shells s,t on different atoms,
+ *
+ *   Gamma_st = [ R_AB^2 + gamma_st^(-2) ]^(-1/2),
+ *   gamma_st = (gamma_s + gamma_t)/2,
+ *
+ * while every same-atom element is Gamma_st = gamma_st. Gamma is in Hartree.
+ * matrix_storage and workspace.matrix_scratch must each contain at least
+ * plan.total_matrix_elements() doubles. They must not overlap one another,
+ * positions, or immutable plan storage; an existing active cache must not
+ * alias the scratch or plan storage. geometry_generation is an opaque caller
+ * sequence number for the supplied positions. Active input/output/cache
+ * backing buffers must not alias the plan, cache, or workspace descriptor
+ * objects themselves. On failure, matrix_storage and cache are unchanged;
+ * workspace scratch contents are unspecified.
+ */
+gpuxtb_status_t update_es2_geometry_cache_cpu(const ES2Plan& plan, const double* positions,
+                                              std::uint64_t geometry_generation,
+                                              double* matrix_storage,
+                                              std::size_t matrix_storage_elements,
+                                              const ES2Workspace& workspace,
+                                              ES2GeometryCache& cache, std::string& error);
+
+/*
+ * Overwrite shell_potentials with v = Gamma*q. Charges are in elementary
+ * charge units and potentials are Hartree/e. Packed shell layout follows the
+ * plan. workspace.shell_scratch is used for atomic whole-batch publication.
+ * Input, output, cache, and active scratch buffers must not overlap. Writable
+ * output, cache, and scratch storage must not alias immutable plan storage;
+ * active buffers must not alias the plan, cache, or workspace descriptors.
+ */
+gpuxtb_status_t evaluate_es2_potential_cpu(const ES2Plan& plan, const ES2GeometryCache& cache,
+                                           const double* shell_charges, double* shell_potentials,
+                                           const ES2Workspace& workspace, std::string& error);
+
+/*
+ * Accumulate one Hartree energy per batch member,
+ *
+ *   E2 = 1/2 q^T Gamma q.
+ *
+ * The geometry cache is reused unchanged across SCC iterations.
+ * workspace.batch_scratch holds one unpublished contribution per member.
+ * Writable output, cache, and scratch storage must not alias plan storage;
+ * active buffers must not alias the plan, cache, or workspace descriptors.
+ */
+gpuxtb_status_t add_es2_energy_cpu(const ES2Plan& plan, const ES2GeometryCache& cache,
+                                   const double* shell_charges, double* energies,
+                                   const ES2Workspace& workspace, std::string& error);
+
+/*
+ * Accumulate the fixed-q coordinate VJP dE2/dR in Hartree/bohr. This routine
+ * contracts shell pairs directly into workspace.gradient_scratch and never
+ * materializes an atom-pair derivative tensor. geometry_generation must equal
+ * cache.geometry_generation: positions are required to be the same geometry
+ * generation used to build the cache. Writable output, cache, and scratch
+ * storage must not alias plan storage; active buffers must not alias the plan,
+ * cache, or workspace descriptors. gradients are derivatives, not forces.
+ */
+gpuxtb_status_t add_es2_gradient_cpu(const ES2Plan& plan, const ES2GeometryCache& cache,
+                                     const double* positions, std::uint64_t geometry_generation,
+                                     const double* shell_charges, double* gradients,
+                                     const ES2Workspace& workspace, std::string& error);
+
+}  // namespace gpuxtb::detail::gfn2
+
+#endif  // GPUXTB_MODEL_GFN2_ES2_HPP

@@ -35,6 +35,7 @@ endif()
 add_library(gpuxtb_gfn2_cpu OBJECT
   src/model/gfn2/basis.cpp
   src/model/gfn2/coordination.cpp
+  src/model/gfn2/es2.cpp
   src/model/gfn2/es3.cpp
   src/model/gfn2/external_point_charges.cpp
   src/model/gfn2/h0.cpp
@@ -277,6 +278,11 @@ if(GPUXTB_BUILD_TESTS)
   target_link_libraries(gpuxtb_es3_test PRIVATE gpuxtb_gfn2_cpu)
   target_compile_features(gpuxtb_es3_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.es3 COMMAND gpuxtb_es3_test)
+
+  add_executable(gpuxtb_es2_test tests/es2_test.cpp)
+  target_link_libraries(gpuxtb_es2_test PRIVATE gpuxtb_gfn2_cpu)
+  target_compile_features(gpuxtb_es2_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.gfn2.es2 COMMAND gpuxtb_es2_test)
 
   add_executable(gpuxtb_wavefunction_test tests/wavefunction_test.cpp)
   target_link_libraries(gpuxtb_wavefunction_test PRIVATE gpuxtb_gfn2_cpu)
