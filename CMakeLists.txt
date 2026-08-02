@@ -14,6 +14,9 @@ include(CMakePackageConfigHelpers)
 set(GPUXTB_ENABLE_CUDA "AUTO" CACHE STRING "Build the CUDA backend: AUTO, ON, or OFF")
 set_property(CACHE GPUXTB_ENABLE_CUDA PROPERTY STRINGS AUTO ON OFF)
 option(GPUXTB_BUILD_TESTS "Build gpuxtb tests" ${PROJECT_IS_TOP_LEVEL})
+set(GPUXTB_MKL_RT_LIBRARY "" CACHE FILEPATH
+  "Optional MKL runtime library used to build the CPU eigensolver test"
+)
 
 string(TOUPPER "${GPUXTB_ENABLE_CUDA}" GPUXTB_ENABLE_CUDA_NORMALIZED)
 if(NOT GPUXTB_ENABLE_CUDA_NORMALIZED MATCHES "^(AUTO|ON|OFF)$")
@@ -35,6 +38,7 @@ endif()
 add_library(gpuxtb_gfn2_cpu OBJECT
   src/model/gfn2/basis.cpp
   src/model/gfn2/coordination.cpp
+  src/model/gfn2/eigensolver.cpp
   src/model/gfn2/es2.cpp
   src/model/gfn2/es3.cpp
   src/model/gfn2/external_point_charges.cpp
@@ -55,6 +59,9 @@ set_target_properties(gpuxtb_gfn2_cpu PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   VISIBILITY_INLINES_HIDDEN YES
 )
+if(CMAKE_DL_LIBS)
+  target_link_libraries(gpuxtb_gfn2_cpu PUBLIC ${CMAKE_DL_LIBS})
+endif()
 
 add_library(gpuxtb
   src/api.cpp
@@ -74,6 +81,9 @@ target_include_directories(gpuxtb
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_compile_definitions(gpuxtb PRIVATE GPUXTB_BUILDING_LIBRARY)
+if(CMAKE_DL_LIBS)
+  target_link_libraries(gpuxtb PRIVATE ${CMAKE_DL_LIBS})
+endif()
 set_target_properties(gpuxtb PROPERTIES
   CUDA_VISIBILITY_PRESET hidden
   CXX_VISIBILITY_PRESET hidden
@@ -313,6 +323,31 @@ if(GPUXTB_BUILD_TESTS)
   target_link_libraries(gpuxtb_mulliken_test PRIVATE gpuxtb_gfn2_cpu)
   target_compile_features(gpuxtb_mulliken_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.mulliken COMMAND gpuxtb_mulliken_test)
+
+  if(GPUXTB_MKL_RT_LIBRARY)
+    find_package(Threads REQUIRED)
+    add_executable(gpuxtb_eigensolver_test tests/eigensolver_test.cpp)
+    target_link_libraries(gpuxtb_eigensolver_test PRIVATE
+      gpuxtb_gfn2_cpu
+      ${GPUXTB_MKL_RT_LIBRARY}
+      Threads::Threads
+    )
+    target_compile_features(gpuxtb_eigensolver_test PRIVATE cxx_std_17)
+    get_filename_component(GPUXTB_MKL_RT_DIRECTORY
+      "${GPUXTB_MKL_RT_LIBRARY}" DIRECTORY
+    )
+    set_target_properties(gpuxtb_eigensolver_test PROPERTIES
+      BUILD_RPATH "${GPUXTB_MKL_RT_DIRECTORY}"
+    )
+    add_test(NAME gpuxtb.gfn2.eigensolver COMMAND gpuxtb_eigensolver_test)
+    set_tests_properties(gpuxtb.gfn2.eigensolver PROPERTIES
+      ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+    )
+  else()
+    message(STATUS
+      "gpuxtb eigensolver test: disabled (set GPUXTB_MKL_RT_LIBRARY to enable)"
+    )
+  endif()
 
   add_executable(gpuxtb_parameters_header_test tests/parameters/gfn2_header_test.cpp)
   target_include_directories(gpuxtb_parameters_header_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
