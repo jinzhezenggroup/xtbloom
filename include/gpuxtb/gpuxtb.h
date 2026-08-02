@@ -72,6 +72,25 @@ typedef enum gpuxtb_result_flag {
 } gpuxtb_result_flag_t;
 
 /*
+ * ABI-v1 stores enum-typed fields as 32-bit values. Fail at compile time on
+ * toolchains configured with nonstandard short-enum options instead of silently
+ * changing structure layouts or function return conventions.
+ */
+#if defined(__cplusplus)
+static_assert(sizeof(gpuxtb_status_t) == sizeof(int32_t), "gpuxtb_status_t must be 32-bit");
+static_assert(sizeof(gpuxtb_backend_t) == sizeof(int32_t), "gpuxtb_backend_t must be 32-bit");
+static_assert(sizeof(gpuxtb_memory_space_t) == sizeof(int32_t),
+              "gpuxtb_memory_space_t must be 32-bit");
+static_assert(sizeof(gpuxtb_model_t) == sizeof(int32_t), "gpuxtb_model_t must be 32-bit");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(gpuxtb_status_t) == sizeof(int32_t), "gpuxtb_status_t must be 32-bit");
+_Static_assert(sizeof(gpuxtb_backend_t) == sizeof(int32_t), "gpuxtb_backend_t must be 32-bit");
+_Static_assert(sizeof(gpuxtb_memory_space_t) == sizeof(int32_t),
+               "gpuxtb_memory_space_t must be 32-bit");
+_Static_assert(sizeof(gpuxtb_model_t) == sizeof(int32_t), "gpuxtb_model_t must be 32-bit");
+#endif
+
+/*
  * Every extensible structure starts with struct_size and api_version. Pass the
  * caller's sizeof(struct) to its initializer before overriding fields. This
  * lets newer and older libraries initialize only the structure prefix known to
@@ -173,8 +192,11 @@ typedef struct gpuxtb_compute_options {
 /*
  * Caller-allocated result buffers. Energies are Hartree and forces are
  * -dE/dR in Hartree/bohr. A NULL data pointer is valid for an output not
- * requested by the compute flags. scc_iterations and per_system_status store
- * batch_size int32_t values; scc_converged stores batch_size uint8_t values.
+ * requested by the compute flags. The three SCC diagnostic buffers are always
+ * required for a nonempty batch, independent of the requested property flags:
+ * scc_iterations and per_system_status store batch_size int32_t values, while
+ * scc_converged stores batch_size uint8_t values. This lets a successful API
+ * call report convergence independently for every ragged batch item.
  */
 typedef struct gpuxtb_batch_result {
   uint32_t struct_size;

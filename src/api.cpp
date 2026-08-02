@@ -9,6 +9,7 @@
 
 #include "gpuxtb/gpuxtb.h"
 #include "runtime/backend.hpp"
+#include "runtime/validation.hpp"
 
 struct gpuxtb_context {
   gpuxtb::detail::Context* implementation;
@@ -27,6 +28,14 @@ template <typename T>
 bool valid_header(const T* value, std::size_t minimum_size) {
   return value != nullptr && value->struct_size >= minimum_size &&
          value->api_version == GPUXTB_API_VERSION;
+}
+
+template <typename Enum>
+std::uint32_t raw_enum(const Enum& value) {
+  static_assert(sizeof(Enum) == sizeof(std::uint32_t));
+  std::uint32_t raw = 0;
+  std::memcpy(&raw, &value, sizeof(raw));
+  return raw;
 }
 
 template <typename T>
@@ -120,6 +129,13 @@ gpuxtb_status_t gpuxtb_context_create(const gpuxtb_context_options_t* options,
     return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
                 "context options are NULL, too small, or use an unsupported API version");
   }
+  if (options->reserved != 0) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "context options reserved field must be zero");
+  }
+  const std::uint32_t backend = raw_enum(options->backend);
+  if (backend > GPUXTB_BACKEND_ROCM) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "context options contain an unknown backend");
+  }
 
   try {
     gpuxtb::detail::Context* implementation = nullptr;
@@ -176,11 +192,35 @@ gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* 
   if (context == nullptr || context->implementation == nullptr) {
     return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "context is NULL");
   }
-  if (!valid_header(batch, GPUXTB_BATCH_V1_SIZE) ||
-      !valid_header(options, GPUXTB_COMPUTE_OPTIONS_V1_SIZE) ||
-      !valid_header(result, GPUXTB_BATCH_RESULT_V1_SIZE)) {
-    return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
-                "batch, compute options, or result has an invalid ABI header");
+  try {
+    gpuxtb::detail::DescriptorValidationResult validation =
+        gpuxtb::detail::validate_compute_descriptors(context->implementation->backend, batch,
+                                                     options, result);
+    if (!validation.ok()) {
+      return fail(validation.status, std::move(validation.error));
+    }
+
+    /*
+     * A CUDA backend must stage and validate any device-resident offset arrays
+     * represented by validation.pending_offset_checks before launching kernels
+     * or modifying caller-owned output. The current placeholder performs
+     * neither action, so it can safely return NOT_IMPLEMENTED after the common
+     * descriptor checks while the staging path is developed.
+     */
+    (void)validation.pending_offset_checks;
+  } catch (const std::bad_alloc&) {
+    return fail(GPUXTB_STATUS_ALLOCATION_FAILED,
+                "failed to allocate temporary storage while validating a compute request");
+  } catch (const std::exception& exception) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR,
+                "unknown exception while validating a compute request");
+  }
+
+  if (options->model == GPUXTB_MODEL_GFN1_XTB) {
+    return fail(GPUXTB_STATUS_NOT_SUPPORTED,
+                "GFN1-xTB is reserved by the ABI but is not implemented yet");
   }
 
   /*

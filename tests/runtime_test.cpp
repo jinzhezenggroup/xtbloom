@@ -27,14 +27,59 @@ int main() {
         GPUXTB_STATUS_SUCCESS);
   CHECK(gpuxtb_batch_result_init(&result, sizeof(result)) == GPUXTB_STATUS_SUCCESS);
 
+  /* Descriptor errors take precedence over the unfinished physics backend. */
   const gpuxtb_status_t compute_status = gpuxtb_compute(context, &batch, &compute_options, &result);
-  CHECK(compute_status == GPUXTB_STATUS_NOT_IMPLEMENTED);
+  CHECK(compute_status == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(std::strstr(gpuxtb_get_last_error(), "batch_size") != nullptr);
+
+  const std::int64_t atom_offsets[] = {0, 1};
+  const std::int32_t atomic_numbers[] = {1};
+  const double positions[] = {0.0, 0.0, 0.0};
+  const double molecular_charges[] = {0.0};
+  const std::int32_t unpaired_electrons[] = {0};
+  double energies[1] = {};
+  double forces[3] = {};
+  std::int32_t scc_iterations[1] = {};
+  std::uint8_t scc_converged[1] = {};
+  std::int32_t per_system_status[1] = {};
+
+  batch.batch_size = 1;
+  batch.total_atoms = 1;
+  batch.atom_offsets = {atom_offsets, sizeof(atom_offsets), GPUXTB_MEMORY_HOST, 0};
+  batch.atomic_numbers = {atomic_numbers, sizeof(atomic_numbers), GPUXTB_MEMORY_HOST, 0};
+  batch.positions = {positions, sizeof(positions), GPUXTB_MEMORY_HOST, 0};
+  batch.molecular_charges = {molecular_charges, sizeof(molecular_charges), GPUXTB_MEMORY_HOST, 0};
+  batch.unpaired_electrons = {unpaired_electrons, sizeof(unpaired_electrons), GPUXTB_MEMORY_HOST,
+                              0};
+  result.energies = {energies, sizeof(energies), GPUXTB_MEMORY_HOST, 0};
+  result.forces = {forces, sizeof(forces), GPUXTB_MEMORY_HOST, 0};
+  result.scc_iterations = {scc_iterations, sizeof(scc_iterations), GPUXTB_MEMORY_HOST, 0};
+  result.scc_converged = {scc_converged, sizeof(scc_converged), GPUXTB_MEMORY_HOST, 0};
+  result.per_system_status = {per_system_status, sizeof(per_system_status), GPUXTB_MEMORY_HOST, 0};
+
+  const gpuxtb_status_t valid_compute_status =
+      gpuxtb_compute(context, &batch, &compute_options, &result);
+  CHECK(valid_compute_status == GPUXTB_STATUS_NOT_IMPLEMENTED);
   CHECK(std::strstr(gpuxtb_get_last_error(), "not been implemented") != nullptr);
+
+  compute_options.model = GPUXTB_MODEL_GFN1_XTB;
+  CHECK(gpuxtb_compute(context, &batch, &compute_options, &result) == GPUXTB_STATUS_NOT_SUPPORTED);
+  CHECK(std::strstr(gpuxtb_get_last_error(), "GFN1-xTB") != nullptr);
 
   gpuxtb_context_destroy(context);
 
   gpuxtb_context_t* invalid_context = nullptr;
   options.device_id = -2;
+  CHECK(gpuxtb_context_create(&options, &invalid_context) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(invalid_context == nullptr);
+
+  options.device_id = -1;
+  options.backend = static_cast<gpuxtb_backend_t>(99);
+  CHECK(gpuxtb_context_create(&options, &invalid_context) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(invalid_context == nullptr);
+
+  options.backend = GPUXTB_BACKEND_CPU;
+  options.reserved = 1;
   CHECK(gpuxtb_context_create(&options, &invalid_context) == GPUXTB_STATUS_INVALID_ARGUMENT);
   CHECK(invalid_context == nullptr);
 
