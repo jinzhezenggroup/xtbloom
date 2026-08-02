@@ -519,6 +519,16 @@ int test_validation_and_strong_failure_guarantee() {
         GPUXTB_STATUS_INVALID_ARGUMENT);
   CHECK(energy[0] == 11.0);
 
+  const double maximum = std::numeric_limits<double>::max();
+  const std::array<double, 2> overflow_shell_charges{1.0, 1.0};
+  const std::array<double, 2> overflow_potentials{0.5 * maximum, 0.0};
+  energy[0] = maximum;
+  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_energy_cpu(
+            plan, overflow_shell_charges.data(), overflow_potentials.data(), energy.data(),
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(energy[0] == maximum);
+  energy[0] = 11.0;
+
   CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), shell_charges.data(), nullptr, nullptr,
@@ -531,6 +541,26 @@ int test_validation_and_strong_failure_guarantee() {
   constexpr std::array<double, 3> expected_point_forces{4.0, 5.0, 6.0};
   CHECK(qm_forces == expected_qm_forces);
   CHECK(point_forces == expected_point_forces);
+
+  const std::array<double, 3> overflow_qm_position{1.0, 0.0, 0.0};
+  const std::array<double, 3> overflow_point_position{0.0, 0.0, 0.0};
+  const std::array<double, 1> overflow_point_charge{0.75 * maximum};
+  const std::array<double, 1> overflow_point_hardness{maximum};
+  const std::array<double, 2> overflow_force_shell_charges{1.0, 0.0};
+  qm_forces = {maximum, 0.0, 0.0};
+  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+            plan, overflow_qm_position.data(), overflow_point_position.data(),
+            overflow_point_charge.data(), overflow_point_hardness.data(),
+            overflow_force_shell_charges.data(), qm_forces.data(), nullptr,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(qm_forces[0] == maximum);
+  point_forces = {-maximum, 0.0, 0.0};
+  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+            plan, overflow_qm_position.data(), overflow_point_position.data(),
+            overflow_point_charge.data(), overflow_point_hardness.data(),
+            overflow_force_shell_charges.data(), nullptr, point_forces.data(),
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(point_forces[0] == -maximum);
 
   /* Zero-PC plans synthesize an all-zero ragged partition from NULL. */
   ExternalPointChargePlan zero_plan;

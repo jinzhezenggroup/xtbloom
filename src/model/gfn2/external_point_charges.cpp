@@ -310,11 +310,22 @@ gpuxtb_status_t evaluate_external_point_charge_potential_cpu(
             qm_positions[atom_index * 3u + 1u] - point_positions[point_index * 3u + 1u];
         const double dz =
             qm_positions[atom_index * 3u + 2u] - point_positions[point_index * 3u + 2u];
+        if (!std::isfinite(dx) || !std::isfinite(dy) || !std::isfinite(dz)) {
+          error = "external point-charge coordinate differences overflow floating-point range";
+          return GPUXTB_STATUS_INVALID_ARGUMENT;
+        }
         const double inverse_average_hardness =
             2.0 / (plan.shell_hardness[shell_index] + point_hardnesses[point_index]);
         const double softened_distance =
             std::hypot(std::hypot(dx, dy), std::hypot(dz, inverse_average_hardness));
-        potential += point_charges[point_index] / softened_distance;
+        const double contribution = point_charges[point_index] / softened_distance;
+        const double updated_potential = potential + contribution;
+        if (!(softened_distance > 0.0) || !std::isfinite(softened_distance) ||
+            !std::isfinite(contribution) || !std::isfinite(updated_potential)) {
+          error = "external point-charge potential arithmetic exceeded floating-point range";
+          return GPUXTB_STATUS_INVALID_ARGUMENT;
+        }
+        potential = updated_potential;
       }
       shell_potentials[shell_index] = potential;
     }
@@ -356,9 +367,20 @@ gpuxtb_status_t add_external_point_charge_energy_cpu(const ExternalPointChargePl
     double energy = 0.0;
     for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
       const std::size_t shell_index = static_cast<std::size_t>(shell);
-      energy += shell_charges[shell_index] * shell_potentials[shell_index];
+      const double contribution = shell_charges[shell_index] * shell_potentials[shell_index];
+      const double updated_energy = energy + contribution;
+      if (!std::isfinite(contribution) || !std::isfinite(updated_energy)) {
+        error = "external point-charge energy arithmetic exceeded floating-point range";
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
+      energy = updated_energy;
     }
-    energies[batch_index] += energy;
+    const double updated_output = energies[batch_index] + energy;
+    if (!std::isfinite(updated_output)) {
+      error = "external point-charge accumulated energy exceeded floating-point range";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    energies[batch_index] = updated_output;
   }
 
   error.clear();
@@ -405,6 +427,10 @@ gpuxtb_status_t add_external_point_charge_forces_cpu(
             qm_positions[atom_index * 3u + 1u] - point_positions[point_index * 3u + 1u];
         const double dz =
             qm_positions[atom_index * 3u + 2u] - point_positions[point_index * 3u + 2u];
+        if (!std::isfinite(dx) || !std::isfinite(dy) || !std::isfinite(dz)) {
+          error = "external point-charge coordinate differences overflow floating-point range";
+          return GPUXTB_STATUS_INVALID_ARGUMENT;
+        }
         const double inverse_average_hardness =
             2.0 / (plan.shell_hardness[shell_index] + point_hardnesses[point_index]);
         if (dx == 0.0 && dy == 0.0 && dz == 0.0) {
@@ -418,15 +444,42 @@ gpuxtb_status_t add_external_point_charge_forces_cpu(
         const double fx = force_scale * dx;
         const double fy = force_scale * dy;
         const double fz = force_scale * dz;
+        if (!(softened_distance > 0.0) || !std::isfinite(softened_distance) ||
+            !std::isfinite(inverse_distance) || !std::isfinite(force_scale) || !std::isfinite(fx) ||
+            !std::isfinite(fy) || !std::isfinite(fz)) {
+          error = "external point-charge force arithmetic exceeded floating-point range";
+          return GPUXTB_STATUS_INVALID_ARGUMENT;
+        }
         if (qm_forces != nullptr) {
-          qm_forces[atom_index * 3u] += fx;
-          qm_forces[atom_index * 3u + 1u] += fy;
-          qm_forces[atom_index * 3u + 2u] += fz;
+          const std::size_t coordinate = atom_index * 3u;
+          const double updated_x = qm_forces[coordinate] + fx;
+          const double updated_y = qm_forces[coordinate + 1u] + fy;
+          const double updated_z = qm_forces[coordinate + 2u] + fz;
+          if (!std::isfinite(qm_forces[coordinate]) || !std::isfinite(qm_forces[coordinate + 1u]) ||
+              !std::isfinite(qm_forces[coordinate + 2u]) || !std::isfinite(updated_x) ||
+              !std::isfinite(updated_y) || !std::isfinite(updated_z)) {
+            error = "external point-charge accumulated QM force exceeded floating-point range";
+            return GPUXTB_STATUS_INVALID_ARGUMENT;
+          }
+          qm_forces[coordinate] = updated_x;
+          qm_forces[coordinate + 1u] = updated_y;
+          qm_forces[coordinate + 2u] = updated_z;
         }
         if (point_forces != nullptr) {
-          point_forces[point_index * 3u] -= fx;
-          point_forces[point_index * 3u + 1u] -= fy;
-          point_forces[point_index * 3u + 2u] -= fz;
+          const std::size_t coordinate = point_index * 3u;
+          const double updated_x = point_forces[coordinate] - fx;
+          const double updated_y = point_forces[coordinate + 1u] - fy;
+          const double updated_z = point_forces[coordinate + 2u] - fz;
+          if (!std::isfinite(point_forces[coordinate]) ||
+              !std::isfinite(point_forces[coordinate + 1u]) ||
+              !std::isfinite(point_forces[coordinate + 2u]) || !std::isfinite(updated_x) ||
+              !std::isfinite(updated_y) || !std::isfinite(updated_z)) {
+            error = "external point-charge accumulated point force exceeded floating-point range";
+            return GPUXTB_STATUS_INVALID_ARGUMENT;
+          }
+          point_forces[coordinate] = updated_x;
+          point_forces[coordinate + 1u] = updated_y;
+          point_forces[coordinate + 2u] = updated_z;
         }
       }
     }
