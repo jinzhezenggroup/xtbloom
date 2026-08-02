@@ -1,0 +1,236 @@
+{
+  "case_id": "water_one_pc_gamma999",
+  "method": "GFN2-xTB",
+  "molecular_charge": 0,
+  "properties": {
+    "atomic_dipoles_e_bohr": [
+      [
+        0.06035801,
+        0.09939102,
+        0.12375078
+      ],
+      [
+        0.07506254,
+        0.01625448,
+        0.00159247
+      ],
+      [
+        -0.02686709,
+        0.03810278,
+        0.06174394
+      ]
+    ],
+    "atomic_quadrupoles_e_bohr2": [
+      [
+        0.01253514,
+        0.01433171,
+        -0.02295,
+        -0.00081318,
+        0.05045363,
+        0.01041486
+      ],
+      [
+        0.16022349,
+        0.04512532,
+        -0.08014551,
+        -0.00917499,
+        0.00916066,
+        -0.08007799
+      ],
+      [
+        -0.03335605,
+        -0.04443785,
+        -0.0356801,
+        -0.08159857,
+        0.10143467,
+        0.06903615
+      ]
+    ],
+    "energy_hartree": -5.07060789832,
+    "forces_hartree_per_bohr": [
+      0.013781140314161,
+      0.0094677665897423,
+      0.0011218941358042,
+      -0.01567198850325,
+      -0.0084287075550852,
+      -0.00058173073199724,
+      0.0012138970657292,
+      -0.0021214552042666,
+      -0.00094478040815982
+    ],
+    "gradient_hartree_per_bohr": [
+      -0.013781140314161,
+      -0.0094677665897423,
+      -0.0011218941358042,
+      0.01567198850325,
+      0.0084287075550852,
+      0.00058173073199724,
+      -0.0012138970657292,
+      0.0021214552042666,
+      0.00094478040815982
+    ],
+    "partial_charges_e": [
+      -0.56206512,
+      0.30557852,
+      0.2564866
+    ],
+    "point_charge_forces_hartree_per_bohr": [
+      0.00067695,
+      0.0010824,
+      0.00040462
+    ],
+    "point_charge_gradient_hartree_per_bohr": [
+      -0.00067695,
+      -0.0010824,
+      -0.00040462
+    ]
+  },
+  "provenance": {
+    "command": [
+      "{executable}",
+      "coord",
+      "--gfn",
+      "2",
+      "--grad",
+      "--json",
+      "--norestart",
+      "--chrg",
+      "0",
+      "--uhf",
+      "0",
+      "-P",
+      "1",
+      "--input",
+      "xcontrol"
+    ],
+    "command_template": [
+      "{executable}",
+      "coord",
+      "--gfn",
+      "2",
+      "--grad",
+      "--json",
+      "--norestart",
+      "--chrg",
+      "{charge}",
+      "--uhf",
+      "{unpaired_electrons}",
+      "-P",
+      "1",
+      "--input",
+      "xcontrol"
+    ],
+    "engine": "xtb",
+    "environment": {
+      "cleared_variable_prefixes": [
+        "XTB"
+      ],
+      "inherited_environment_boundary": "Non-XTB variables are inherited; the loaded libxtb and selected GFN2 parameter file are independently hashed.",
+      "set": {
+        "LC_ALL": "C",
+        "OMP_NUM_THREADS": "1",
+        "OMP_STACKSIZE": "4G",
+        "OPENBLAS_NUM_THREADS": "1",
+        "XTBPATH": "<directory-containing-pinned-param_gfn2-xtb.txt>"
+      }
+    },
+    "executable_sha256": "271dd6cdd5da127a8e39919e7e32d924790fb346f0057b4183769ba8b3411887",
+    "executable_version": "-----------------------------------------------------------      \n     |                   =====================                   |     \n     |                           x T B                           |     \n     |                   =====================                   |     \n     |                         S. Grimme                         |     \n     |          Mulliken Center for Theoretical Chemistry        |     \n     |                    University of Bonn                     |     \n      -----------------------------------------------------------      \n\n   * xtb version 6.7.1 (edcfbbe) compiled by 'conda@5dfe00f5fb80' on 2026-06-10\n\nnormal termination of xtb",
+    "generation_mode": "live-cli",
+    "input": "data/conformance/inputs/water_one_pc_gamma999.qmmm.json",
+    "materialized_input": {
+      "files_sha256": {
+        "coord": "632a4663b2cdfb0b6e8028091d3a43ce5fafb1218f2eee56367e5025d0f454eb",
+        "pcharge": "8c202803dd8d796e8c102f4d800cbdb5e0c72ea51302ef6c0735b1186be4d8c4",
+        "xcontrol": "d25714b8bc3918aad9df2a074786760d6d90d5432583afe7348ac87da7e2003f"
+      },
+      "schema": "gpuxtb-xtb-pcem-cli-v1"
+    },
+    "qmmm_input_sha256": "bdb99422adb70deec60dfcaccc78cd47cc468752994e0b952264c819c077407b",
+    "runtime": {
+      "gfn2_parameter": {
+        "discovery": "executable-prefix",
+        "filename": "param_gfn2-xtb.txt",
+        "selection": "XTBPATH",
+        "sha256": "f6f05c6c5264cb2f75c54f8ac6838044541c1e493b16f1a4d4ee4fa64de5f545",
+        "status": "resolved"
+      },
+      "libxtb": {
+        "discovery": "ldd",
+        "filename": "libxtb.so.6.7.1",
+        "sha256": "c405797f34ed96470f23158406e6d8a8e102681d3c3cbbaea16692f514f22853",
+        "status": "resolved"
+      }
+    },
+    "scientific_source": "Reduced one-water/one-PC case derived from the xTB 6.7.1 water-tetramer PCEM API regression geometry.",
+    "source_output_sha256": "363a783159068f13f88364c472ab452836bdcc23a0d55a9e7b819fcb15ab3f45",
+    "source_revision": "edcfbbe39d411edc225e27315fbda3a204ddb023"
+  },
+  "qmmm_input": {
+    "case_id": "water_one_pc_gamma999",
+    "external_point_charges": {
+      "charges_e": [
+        -0.69645733
+      ],
+      "gamma_mode": "explicit",
+      "gammas_hartree": [
+        999.0
+      ],
+      "positions_bohr": [
+        [
+          2.75237178376284,
+          -2.43247309226225,
+          -0.01392519847964
+        ]
+      ]
+    },
+    "method": "GFN2-xTB",
+    "qm": {
+      "atomic_numbers": [
+        8,
+        1,
+        1
+      ],
+      "molecular_charge": 0,
+      "positions_bohr": [
+        [
+          -2.75237178376284,
+          2.43247309226225,
+          -0.01392519847964
+        ],
+        [
+          -0.93157260886974,
+          2.7962140445859,
+          -0.01863384029005
+        ],
+        [
+          -3.43820531288547,
+          3.3058360842106,
+          1.42134539425148
+        ]
+      ],
+      "symbols": [
+        "O",
+        "H",
+        "H"
+      ],
+      "unpaired_electrons": 0
+    },
+    "schema_version": 1,
+    "units": {
+      "point_charge_gammas": "hartree",
+      "point_charge_positions": "bohr",
+      "point_charges": "elementary_charge",
+      "qm_positions": "bohr"
+    }
+  },
+  "schema_version": 1,
+  "units": {
+    "coordinates": "bohr",
+    "energy": "hartree",
+    "forces": "hartree/bohr",
+    "gradient": "hartree/bohr",
+    "molecular_charge": "elementary_charge"
+  },
+  "unpaired_electrons": 0
+}

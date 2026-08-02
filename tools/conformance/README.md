@@ -32,7 +32,8 @@ python3 tools/conformance/gpuxtb_conformance.py compare \
 The xtb 6.7.1 adapter is the supported live second oracle. It combines the
 high-precision energy and Cartesian gradient from xtb's `gradient` artifact
 with partial charges, atomic dipoles, and atomic quadrupoles from
-`xtbout.json`. The runner copies each input to an isolated `coord` file and
+`xtbout.json`. Gas-phase inputs are copied to an isolated `coord` file, while
+QM/MM JSON is deterministically materialized as described below. The runner
 forces OpenMP, OpenBLAS, and xtb itself to one thread, so temporary paths and
 thread scheduling do not enter the normalized scientific-output checksum. The
 runner also rejects executables whose reported version/revision does not match
@@ -43,6 +44,41 @@ python3 tools/conformance/gpuxtb_conformance.py generate-xtb \
   --executable /path/to/xtb --output-dir build/conformance/xtb
 python3 tools/conformance/gpuxtb_conformance.py compare \
   --actual-dir build/conformance/xtb
+```
+
+The corpus also contains versioned QM/MM inputs ending in `.qmmm.json`.  Each
+document records QM atomic numbers, symbols, and positions plus every external
+point charge's position, charge, and GFN2 hardness (`gamma`) in atomic units.
+Symbols must be the exact canonical symbols for the corresponding atomic
+numbers. `gamma_mode=explicit` stores standalone gamma values and forbids a
+source element, while `gamma_mode=element_hardness` requires source atomic
+numbers and verifies every gamma against the pinned GFN2 hardness table.
+
+The live xTB runner validates that document before materializing isolated
+`coord`, `pcharge`, and `xcontrol` files with schema
+`gpuxtb-xtb-pcem-cli-v1`. The exact command names those derived files rather
+than pretending that xTB consumes the JSON directly. The machine-readable
+input is copied verbatim into its golden; the manifest protects its file hash,
+and provenance records the JSON hash plus all three materialized-file hashes.
+
+For the pinned CLI environment, the runner clears all inherited `XTB*`
+variables and explicitly sets `XTBPATH` to the directory containing the hashed
+GFN2 parameter file. Provenance also records the actually resolved `libxtb`
+and parameter-file hashes. Other environment variables remain inherited; that
+boundary is stated explicitly in each golden rather than implying a fully
+hermetic operating-system environment.
+
+The initial QM/MM set contains a minimal water plus one point charge and the
+official xTB water-tetramer PCEM regression represented as 6 QM atoms plus 6
+point charges.  The latter is stored with both element-derived H/O hardnesses
+and the `gamma=999` point-charge limit.  Regenerate only these cases with:
+
+```bash
+python3 tools/conformance/gpuxtb_conformance.py generate-xtb \
+  --executable /path/to/xtb --output-dir build/conformance/xtb-qmmm \
+  --case water_one_pc_gamma999 \
+  --case water_dimer_6pc_hardness \
+  --case water_dimer_6pc_gamma999
 ```
 
 When a generated result and committed golden explicitly identify different
@@ -56,6 +92,12 @@ committed xtb golden requires the atom-resolved SCC state in addition to energy
 and forces. Atomic quadrupoles use xtb's `xx, xy, yy, xz, yz, zz` ordering.
 The property names encode their atomic units: charge in elementary charge,
 dipole in elementary-charge bohr, and quadrupole in elementary-charge bohr².
+For QM/MM cases, `forces_hartree_per_bohr` is the QM force array and
+`point_charge_forces_hartree_per_bohr` is the PC force array.  Both are stored
+as the exact negative of their corresponding xTB gradient artifacts.  The
+packaged xTB 6.7.1 CLI prints `pcgrad` less precisely than the QM `gradient`
+artifact, so the corpus validates total QM+PC force conservation at a tolerance
+consistent with that text precision.
 
 `compare` also accepts raw tblite JSON (`energy` plus `gradient`) and
 gpuxtb-style JSON (`energy_hartree` plus `forces_hartree_per_bohr`). SCC-gated

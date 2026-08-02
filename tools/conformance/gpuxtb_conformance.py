@@ -140,6 +140,288 @@ def _numeric_matrix(
     return matrix
 
 
+QMMM_INPUT_UNITS = {
+    "point_charge_gammas": "hartree",
+    "point_charge_positions": "bohr",
+    "point_charges": "elementary_charge",
+    "qm_positions": "bohr",
+}
+QMMM_MATERIALIZATION_SCHEMA = "gpuxtb-xtb-pcem-cli-v1"
+ELEMENT_SYMBOLS = (
+    "",
+    "H",
+    "He",
+    "Li",
+    "Be",
+    "B",
+    "C",
+    "N",
+    "O",
+    "F",
+    "Ne",
+    "Na",
+    "Mg",
+    "Al",
+    "Si",
+    "P",
+    "S",
+    "Cl",
+    "Ar",
+    "K",
+    "Ca",
+    "Sc",
+    "Ti",
+    "V",
+    "Cr",
+    "Mn",
+    "Fe",
+    "Co",
+    "Ni",
+    "Cu",
+    "Zn",
+    "Ga",
+    "Ge",
+    "As",
+    "Se",
+    "Br",
+    "Kr",
+    "Rb",
+    "Sr",
+    "Y",
+    "Zr",
+    "Nb",
+    "Mo",
+    "Tc",
+    "Ru",
+    "Rh",
+    "Pd",
+    "Ag",
+    "Cd",
+    "In",
+    "Sn",
+    "Sb",
+    "Te",
+    "I",
+    "Xe",
+    "Cs",
+    "Ba",
+    "La",
+    "Ce",
+    "Pr",
+    "Nd",
+    "Pm",
+    "Sm",
+    "Eu",
+    "Gd",
+    "Tb",
+    "Dy",
+    "Ho",
+    "Er",
+    "Tm",
+    "Yb",
+    "Lu",
+    "Hf",
+    "Ta",
+    "W",
+    "Re",
+    "Os",
+    "Ir",
+    "Pt",
+    "Au",
+    "Hg",
+    "Tl",
+    "Pb",
+    "Bi",
+    "Po",
+    "At",
+    "Rn",
+)
+
+
+def _atomic_numbers(
+    value: Any, count: int, property_name: str, path: Path
+) -> list[int]:
+    """Validate integral atomic numbers supported by the pinned GFN2 model."""
+    if not isinstance(value, list) or len(value) != count:
+        raise ConformanceError(f"QMMM input {path} has invalid {property_name} shape")
+    numbers: list[int] = []
+    for number in value:
+        if type(number) is not int or not 1 <= number < len(ELEMENT_SYMBOLS):
+            raise ConformanceError(
+                f"QMMM input {path} has unsupported {property_name} value {number!r}"
+            )
+        numbers.append(number)
+    return numbers
+
+
+def load_qmmm_input(
+    path: Path,
+    case: dict[str, Any],
+    hardness_by_atomic_number: dict[str, Any],
+) -> dict[str, Any]:
+    """Load and validate the versioned QM plus external-point-charge input."""
+    document = load_json(path)
+    if document.get("schema_version") != 1:
+        raise ConformanceError(f"QMMM input {path} must use schema version 1")
+    if document.get("case_id") != case["id"]:
+        raise ConformanceError(f"QMMM input {path} has the wrong case_id")
+    if document.get("method") != "GFN2-xTB":
+        raise ConformanceError(f"QMMM input {path} must use GFN2-xTB")
+    if document.get("units") != QMMM_INPUT_UNITS:
+        raise ConformanceError(f"QMMM input {path} has inconsistent units")
+
+    qm = document.get("qm")
+    point_charges = document.get("external_point_charges")
+    if not isinstance(qm, dict) or not isinstance(point_charges, dict):
+        raise ConformanceError(f"QMMM input {path} lacks QM or point-charge data")
+    atom_count = int(case["atom_count"])
+    point_charge_count = int(case["point_charge_count"])
+    _validate_nested_shape(
+        qm.get("positions_bohr"), (atom_count, 3), "qm.positions_bohr", path
+    )
+    atomic_numbers = _atomic_numbers(
+        qm.get("atomic_numbers"), atom_count, "qm.atomic_numbers", path
+    )
+    symbols = qm.get("symbols")
+    if (
+        not isinstance(symbols, list)
+        or len(symbols) != atom_count
+        or any(type(symbol) is not str for symbol in symbols)
+    ):
+        raise ConformanceError(f"QMMM input {path} has invalid QM symbols")
+    expected_symbols = [ELEMENT_SYMBOLS[number] for number in atomic_numbers]
+    if symbols != expected_symbols:
+        raise ConformanceError(
+            f"QMMM input {path} QM symbols do not match atomic_numbers: "
+            f"expected {expected_symbols}, got {symbols}"
+        )
+    if qm.get("molecular_charge") != case["molecular_charge"]:
+        raise ConformanceError(f"QMMM input {path} has the wrong molecular charge")
+    if qm.get("unpaired_electrons") != case["unpaired_electrons"]:
+        raise ConformanceError(f"QMMM input {path} has the wrong spin state")
+
+    for property_name in ("charges_e", "gammas_hartree"):
+        _validate_nested_shape(
+            point_charges.get(property_name),
+            (point_charge_count,),
+            f"external_point_charges.{property_name}",
+            path,
+        )
+    _validate_nested_shape(
+        point_charges.get("positions_bohr"),
+        (point_charge_count, 3),
+        "external_point_charges.positions_bohr",
+        path,
+    )
+    gammas = [float(gamma) for gamma in point_charges["gammas_hartree"]]
+    if any(gamma <= 0.0 for gamma in gammas):
+        raise ConformanceError(f"QMMM input {path} contains a non-positive gamma")
+    gamma_mode = point_charges.get("gamma_mode")
+    source_numbers_value = point_charges.get("source_atomic_numbers")
+    if gamma_mode == "explicit":
+        if source_numbers_value is not None:
+            raise ConformanceError(
+                f"QMMM input {path} explicit gamma mode must not provide source atomic numbers"
+            )
+    elif gamma_mode == "element_hardness":
+        source_numbers = _atomic_numbers(
+            source_numbers_value,
+            point_charge_count,
+            "external_point_charges.source_atomic_numbers",
+            path,
+        )
+        expected_gammas: list[float] = []
+        for number in source_numbers:
+            try:
+                expected_gammas.append(float(hardness_by_atomic_number[str(number)]))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ConformanceError(
+                    f"QMMM input {path} has no pinned GFN2 hardness for Z={number}"
+                ) from exc
+        if any(
+            not math.isclose(actual, expected, rel_tol=0.0, abs_tol=1.0e-12)
+            for actual, expected in zip(gammas, expected_gammas)
+        ):
+            raise ConformanceError(
+                f"QMMM input {path} element-hardness gammas do not match "
+                f"the pinned GFN2 values {expected_gammas}"
+            )
+    else:
+        raise ConformanceError(
+            f"QMMM input {path} gamma_mode must be 'explicit' or 'element_hardness'"
+        )
+    return document
+
+
+def materialize_xtb_qmmm(document: dict[str, Any]) -> dict[str, str]:
+    """Serialize a validated QMMM document into deterministic xTB CLI files."""
+    qm = document["qm"]
+    coord_lines = ["$coord"]
+    for position, symbol in zip(qm["positions_bohr"], qm["symbols"]):
+        coord_lines.append(
+            " ".join([*(f"{float(value):.17g}" for value in position), symbol.lower()])
+        )
+    coord_lines.append("$end")
+
+    point_charges = document["external_point_charges"]
+    pcharge_lines = [str(len(point_charges["charges_e"]))]
+    for charge, position, gamma in zip(
+        point_charges["charges_e"],
+        point_charges["positions_bohr"],
+        point_charges["gammas_hartree"],
+    ):
+        pcharge_lines.append(
+            " ".join(
+                [
+                    f"{float(charge):.17g}",
+                    *(f"{float(value):.17g}" for value in position),
+                    f"{float(gamma):.17g}",
+                ]
+            )
+        )
+    return {
+        "coord": "\n".join(coord_lines) + "\n",
+        "pcharge": "\n".join(pcharge_lines) + "\n",
+        "xcontrol": "$embedding\n input=pcharge\n gradient=pcgrad\n$end\n",
+    }
+
+
+def qmmm_materialization_provenance(document: dict[str, Any]) -> dict[str, Any]:
+    """Describe the exact deterministic files passed to the xTB CLI."""
+    return {
+        "files_sha256": {
+            filename: hashlib.sha256(content.encode("utf-8")).hexdigest()
+            for filename, content in materialize_xtb_qmmm(document).items()
+        },
+        "schema": QMMM_MATERIALIZATION_SCHEMA,
+    }
+
+
+def write_xtb_qmmm_files(work: Path, document: dict[str, Any]) -> dict[str, str]:
+    """Write deterministic xTB inputs and return their content SHA-256 values."""
+    record = qmmm_materialization_provenance(document)
+    for filename, content in materialize_xtb_qmmm(document).items():
+        (work / filename).write_text(content, encoding="utf-8")
+    return record["files_sha256"]
+
+
+def parse_xtb_pcgradient(text: str, point_charge_count: int) -> list[float]:
+    """Parse xTB's three-column external point-charge gradient artifact."""
+    rows = [line.split() for line in text.splitlines() if line.strip()]
+    if len(rows) != point_charge_count or any(len(row) != 3 for row in rows):
+        raise ConformanceError(
+            "xtb point-charge gradient has the wrong number of rows or columns"
+        )
+    try:
+        return [
+            float(component.replace("D", "E").replace("d", "e"))
+            for row in rows
+            for component in row
+        ]
+    except ValueError as exc:
+        raise ConformanceError("xtb point-charge gradient is not numeric") from exc
+
+
 def parse_xtb_gradient(text: str, atom_count: int) -> tuple[float, list[float]]:
     """Extract high-precision energy and Cartesian gradient from xtb's file.
 
@@ -183,7 +465,10 @@ def parse_xtb_gradient(text: str, atom_count: int) -> tuple[float, list[float]]:
 
 
 def normalize_xtb_output(
-    raw: dict[str, Any], gradient_text: str, case: dict[str, Any]
+    raw: dict[str, Any],
+    gradient_text: str,
+    case: dict[str, Any],
+    pcgradient_text: str | None = None,
 ) -> dict[str, Any]:
     """Normalize xtb energy, gradient, and atom-resolved GFN2 SCC moments."""
     atom_count = int(case["atom_count"])
@@ -216,7 +501,7 @@ def normalize_xtb_output(
             f"xtb reported {reported_unpaired} unpaired electrons for {case['id']}; "
             f"expected {case['unpaired_electrons']}"
         )
-    return {
+    properties = {
         "atomic_dipoles_e_bohr": dipoles,
         # xtb emits the symmetric tensor in xx, xy, yy, xz, yz, zz order.
         "atomic_quadrupoles_e_bohr2": quadrupoles,
@@ -225,6 +510,16 @@ def normalize_xtb_output(
         "gradient_hartree_per_bohr": gradient,
         "partial_charges_e": charges,
     }
+    point_charge_count = int(case.get("point_charge_count", 0))
+    if point_charge_count:
+        if pcgradient_text is None:
+            raise ConformanceError("xtb produced no point-charge gradient artifact")
+        pcgradient = parse_xtb_pcgradient(pcgradient_text, point_charge_count)
+        properties["point_charge_forces_hartree_per_bohr"] = [
+            -value for value in pcgradient
+        ]
+        properties["point_charge_gradient_hartree_per_bohr"] = pcgradient
+    return properties
 
 
 def sha256_json(value: Any) -> str:
@@ -259,9 +554,10 @@ def canonical_xtb_golden(
     case: dict[str, Any],
     properties: dict[str, Any],
     provenance: dict[str, Any],
+    qmmm_input: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a canonical golden containing xtb's atom-resolved SCC state."""
-    return {
+    golden = {
         "case_id": case["id"],
         "method": manifest["method"],
         "molecular_charge": case["molecular_charge"],
@@ -271,6 +567,11 @@ def canonical_xtb_golden(
         "units": manifest["units"],
         "unpaired_electrons": case["unpaired_electrons"],
     }
+    if qmmm_input is not None:
+        # Embedding data are repeated in the golden intentionally: consumers can
+        # interpret a result without reconstructing ephemeral xTB CLI files.
+        golden["qmmm_input"] = qmmm_input
+    return golden
 
 
 def check_manifest(manifest_path: Path) -> None:
@@ -296,6 +597,12 @@ def check_manifest(manifest_path: Path) -> None:
         raise ConformanceError(f"manifest units must include {expected_units}")
 
     cases = selected_cases(manifest, None)
+    xtb_reference = manifest["reference_engines"]["xtb"]
+    if xtb_reference.get("qmmm_materialization_schema") != QMMM_MATERIALIZATION_SCHEMA:
+        raise ConformanceError(
+            "manifest has an unsupported QMMM materialization schema"
+        )
+    point_hardness = xtb_reference["point_charge_hardness_hartree"]
     for case in cases:
         input_path = resolve_manifest_path(manifest_path, case["input"])
         golden_path = resolve_manifest_path(manifest_path, case["golden"])
@@ -311,6 +618,13 @@ def check_manifest(manifest_path: Path) -> None:
                     f"case {case['id']} {label} SHA-256 mismatch: "
                     f"manifest={case.get(digest_key)} actual={actual_digest}"
                 )
+        qmmm_input = None
+        if case.get("input_schema") == "qmmm-v1":
+            qmmm_input = load_qmmm_input(input_path, case, point_hardness)
+        elif "point_charge_count" in case:
+            raise ConformanceError(
+                f"case {case['id']} has point charges but no qmmm-v1 input schema"
+            )
         golden = load_json(golden_path)
         if golden.get("case_id") != case["id"]:
             raise ConformanceError(f"golden {golden_path} has the wrong case_id")
@@ -324,6 +638,10 @@ def check_manifest(manifest_path: Path) -> None:
             )
         if golden.get("unpaired_electrons") != case["unpaired_electrons"]:
             raise ConformanceError(f"golden {golden_path} has the wrong spin state")
+        if qmmm_input is not None and golden.get("qmmm_input") != qmmm_input:
+            raise ConformanceError(
+                f"golden {golden_path} does not embed its exact QMMM input"
+            )
         provenance = golden.get("provenance", {})
         reference_engine = case.get("reference_engine", "tblite")
         if provenance.get("engine") != reference_engine:
@@ -344,6 +662,54 @@ def check_manifest(manifest_path: Path) -> None:
             raise ConformanceError(
                 f"golden {golden_path} has the wrong reference output hash"
             )
+        if qmmm_input is not None:
+            if provenance.get("qmmm_input_sha256") != case["input_sha256"]:
+                raise ConformanceError(
+                    f"golden {golden_path} has the wrong QMMM input hash"
+                )
+            if provenance.get("scientific_source") != case.get("scientific_source"):
+                raise ConformanceError(
+                    f"golden {golden_path} has the wrong QM/MM scientific source"
+                )
+            expected_command = xtb_command(Path("{executable}"), case)
+            if provenance.get("command") != expected_command:
+                raise ConformanceError(
+                    f"golden {golden_path} has the wrong materialized xTB command"
+                )
+            if (
+                provenance.get("command_template")
+                != xtb_reference["qmmm_cli_command_template"]
+            ):
+                raise ConformanceError(
+                    f"golden {golden_path} has the wrong QMMM command template"
+                )
+            expected_materialization = qmmm_materialization_provenance(qmmm_input)
+            if provenance.get("materialized_input") != expected_materialization:
+                raise ConformanceError(
+                    f"golden {golden_path} has stale materialized QMMM input hashes"
+                )
+            runtime = provenance.get("runtime", {})
+            expected_runtime = xtb_reference["runtime_artifacts"]
+            for artifact_name, expected_key in (
+                ("libxtb", "libxtb_sha256"),
+                ("gfn2_parameter", "gfn2_parameter_sha256"),
+            ):
+                if (
+                    runtime.get(artifact_name, {}).get("sha256")
+                    != expected_runtime[expected_key]
+                ):
+                    raise ConformanceError(
+                        f"golden {golden_path} has the wrong {artifact_name} hash"
+                    )
+            environment_record = provenance.get("environment", {})
+            if (
+                environment_record.get("cleared_variable_prefixes") != ["XTB"]
+                or environment_record.get("set", {}).get("XTBPATH")
+                != "<directory-containing-pinned-param_gfn2-xtb.txt>"
+            ):
+                raise ConformanceError(
+                    f"golden {golden_path} does not pin the xTB parameter lookup"
+                )
         properties = golden.get("properties", {})
         forces = properties.get("forces_hartree_per_bohr")
         gradient = properties.get("gradient_hartree_per_bohr")
@@ -362,6 +728,45 @@ def check_manifest(manifest_path: Path) -> None:
             for force, grad in zip(forces, gradient)
         ):
             raise ConformanceError(f"golden {golden_path} violates force = -gradient")
+        point_charge_count = int(case.get("point_charge_count", 0))
+        if point_charge_count:
+            pc_forces = properties.get("point_charge_forces_hartree_per_bohr")
+            pc_gradient = properties.get("point_charge_gradient_hartree_per_bohr")
+            expected_pc_components = 3 * point_charge_count
+            if (
+                not isinstance(pc_forces, list)
+                or len(pc_forces) != expected_pc_components
+                or not isinstance(pc_gradient, list)
+                or len(pc_gradient) != expected_pc_components
+            ):
+                raise ConformanceError(
+                    f"golden {golden_path} has the wrong point-charge force shape"
+                )
+            if any(
+                not math.isfinite(float(value)) for value in [*pc_forces, *pc_gradient]
+            ):
+                raise ConformanceError(
+                    f"golden {golden_path} has non-finite point-charge forces"
+                )
+            if any(
+                not math.isclose(float(force), -float(grad), abs_tol=0.0)
+                for force, grad in zip(pc_forces, pc_gradient)
+            ):
+                raise ConformanceError(
+                    f"golden {golden_path} violates point-charge force = -gradient"
+                )
+            # The isolated QM+PC Hamiltonian is translation invariant.  The
+            # packaged xTB 6.7.1 pcgrad artifact retains about eight decimals,
+            # so this gate is deliberately looser than an in-memory check.
+            net_force = [
+                sum(float(value) for value in forces[axis::3])
+                + sum(float(value) for value in pc_forces[axis::3])
+                for axis in range(3)
+            ]
+            if any(abs(value) > 5.0e-8 for value in net_force):
+                raise ConformanceError(
+                    f"golden {golden_path} violates QM+PC force conservation"
+                )
         if reference_engine == "xtb":
             if provenance.get("source_output_sha256") != sha256_json(properties):
                 raise ConformanceError(
@@ -416,6 +821,111 @@ def executable_version(executable: Path) -> str:
     return text if text else f"--version exited with status {completed.returncode}"
 
 
+def discover_xtb_runtime(
+    executable: Path, expected_artifacts: dict[str, Any]
+) -> tuple[dict[str, Any], Path | None]:
+    """Discover and hash the runtime library and GFN2 parameter file when possible."""
+    runtime: dict[str, Any] = {}
+    library_path: Path | None = None
+    try:
+        completed = subprocess.run(
+            ["ldd", str(executable)],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+        ldd_output = completed.stdout
+    except OSError:
+        ldd_output = ""
+    for line in ldd_output.splitlines():
+        match = re.search(r"\blibxtb\.so\S*\s+=>\s+(\S+)", line)
+        if match is not None:
+            candidate = Path(match.group(1))
+            if candidate.is_file():
+                library_path = candidate.resolve()
+                break
+    if library_path is None:
+        runtime["libxtb"] = {"discovery": "ldd", "status": "unresolved"}
+    else:
+        runtime["libxtb"] = {
+            "discovery": "ldd",
+            "filename": library_path.name,
+            "sha256": sha256_file(library_path),
+            "status": "resolved",
+        }
+
+    parameter_candidates = [
+        executable.parent.parent / "share" / "xtb" / "param_gfn2-xtb.txt",
+        executable.parent / "param_gfn2-xtb.txt",
+    ]
+    parameter_path = next(
+        (
+            candidate.resolve()
+            for candidate in parameter_candidates
+            if candidate.is_file()
+        ),
+        None,
+    )
+    if parameter_path is None:
+        runtime["gfn2_parameter"] = {
+            "discovery": "executable-prefix",
+            "status": "unresolved",
+        }
+    else:
+        runtime["gfn2_parameter"] = {
+            "discovery": "executable-prefix",
+            "filename": parameter_path.name,
+            "selection": "XTBPATH",
+            "sha256": sha256_file(parameter_path),
+            "status": "resolved",
+        }
+
+    for artifact_name, expected_key in (
+        ("libxtb", "libxtb_sha256"),
+        ("gfn2_parameter", "gfn2_parameter_sha256"),
+    ):
+        actual_hash = runtime[artifact_name].get("sha256")
+        expected_hash = expected_artifacts.get(expected_key)
+        if actual_hash is not None and actual_hash != expected_hash:
+            raise ConformanceError(
+                f"pinned xTB {artifact_name} SHA-256 mismatch: "
+                f"expected {expected_hash}, got {actual_hash}"
+            )
+    return runtime, parameter_path
+
+
+def xtb_environment(
+    parameter_path: Path | None,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Create a deterministic xTB environment and document its lookup policy."""
+    environment = os.environ.copy()
+    for variable in list(environment):
+        if variable.startswith("XTB"):
+            del environment[variable]
+    fixed = {
+        "LC_ALL": "C",
+        "OMP_NUM_THREADS": "1",
+        "OMP_STACKSIZE": "4G",
+        "OPENBLAS_NUM_THREADS": "1",
+    }
+    environment.update(fixed)
+    recorded_fixed = dict(fixed)
+    if parameter_path is not None:
+        environment["XTBPATH"] = str(parameter_path.parent)
+        recorded_fixed["XTBPATH"] = "<directory-containing-pinned-param_gfn2-xtb.txt>"
+    provenance = {
+        "cleared_variable_prefixes": ["XTB"],
+        "inherited_environment_boundary": (
+            "Non-XTB variables are inherited; the loaded libxtb and selected GFN2 "
+            "parameter file are independently hashed."
+        ),
+        "set": recorded_fixed,
+    }
+    return environment, provenance
+
+
 def tblite_command(
     executable: Path, case: dict[str, Any], input_path: Path, output_path: Path
 ) -> list[str]:
@@ -448,6 +958,13 @@ def generate_with_tblite(
     """Run a tblite executable and emit normalized, provenance-rich golden JSON."""
     manifest = load_json(manifest_path)
     cases = selected_cases(manifest, case_names)
+    qmmm_cases = [case["id"] for case in cases if case.get("input_schema")]
+    if case_names and qmmm_cases:
+        raise ConformanceError(
+            "tblite CLI generation does not support external point charges: "
+            + ", ".join(qmmm_cases)
+        )
+    cases = [case for case in cases if not case.get("input_schema")]
     resolved_executable = Path(shutil.which(str(executable)) or executable).resolve()
     if not resolved_executable.is_file():
         raise ConformanceError(f"tblite executable does not exist: {executable}")
@@ -494,7 +1011,7 @@ def generate_with_tblite(
 
 def xtb_command(executable: Path, case: dict[str, Any]) -> list[str]:
     """Construct a deterministic single-threaded GFN2 gradient calculation."""
-    return [
+    command = [
         str(executable),
         "coord",
         "--gfn",
@@ -509,6 +1026,9 @@ def xtb_command(executable: Path, case: dict[str, Any]) -> list[str]:
         "-P",
         "1",
     ]
+    if case.get("input_schema") == "qmmm-v1":
+        command.extend(["--input", "xcontrol"])
+    return command
 
 
 def generate_with_xtb(
@@ -536,26 +1056,31 @@ def generate_with_xtb(
             "xtb executable does not match the pinned oracle: expected "
             f"version {expected_version} ({expected_revision_prefix}), got:\n{version}"
         )
+    runtime, parameter_path = discover_xtb_runtime(
+        resolved_executable, xtb_reference["runtime_artifacts"]
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Explicit one-thread settings avoid BLAS/OpenMP scheduling differences and
-    # also prevent oversubscription when this command is later used from CI.
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "LC_ALL": "C",
-            "OMP_NUM_THREADS": "1",
-            "OMP_STACKSIZE": "4G",
-            "OPENBLAS_NUM_THREADS": "1",
-        }
-    )
+    # Explicit one-thread settings avoid BLAS/OpenMP scheduling differences.
+    # XTB-prefixed variables are cleared before selecting the hashed parameter
+    # directory, preventing a caller's XTBPATH from silently changing the model.
+    environment, environment_provenance = xtb_environment(parameter_path)
     with tempfile.TemporaryDirectory(prefix="gpuxtb-conformance-xtb-") as temporary:
         root = Path(temporary)
         for case in cases:
             work = root / case["id"]
             work.mkdir()
             input_path = resolve_manifest_path(manifest_path, case["input"])
-            shutil.copyfile(input_path, work / "coord")
+            qmmm_input = None
+            if case.get("input_schema") == "qmmm-v1":
+                qmmm_input = load_qmmm_input(
+                    input_path,
+                    case,
+                    xtb_reference["point_charge_hardness_hartree"],
+                )
+                write_xtb_qmmm_files(work, qmmm_input)
+            else:
+                shutil.copyfile(input_path, work / "coord")
             command = xtb_command(resolved_executable, case)
             completed = subprocess.run(
                 command,
@@ -578,10 +1103,25 @@ def generate_with_xtb(
                 raise ConformanceError(
                     f"cannot read xtb gradient for {case['id']}: {exc}"
                 ) from exc
-            properties = normalize_xtb_output(raw, gradient_text, case)
+            pcgradient_text = None
+            if qmmm_input is not None:
+                try:
+                    pcgradient_text = (work / "pcgrad").read_text(encoding="utf-8")
+                except OSError as exc:
+                    raise ConformanceError(
+                        f"cannot read xtb point-charge gradient for {case['id']}: {exc}"
+                    ) from exc
+            properties = normalize_xtb_output(raw, gradient_text, case, pcgradient_text)
+            command_template = xtb_reference[
+                "qmmm_cli_command_template"
+                if qmmm_input is not None
+                else "cli_command_template"
+            ]
             provenance = {
-                "command": xtb_reference["cli_command_template"],
+                "command": ["{executable}", *command[1:]],
+                "command_template": command_template,
                 "engine": "xtb",
+                "environment": environment_provenance,
                 "executable_sha256": executable_digest,
                 "executable_version": version,
                 "generation_mode": "live-cli",
@@ -590,11 +1130,20 @@ def generate_with_xtb(
                 # executable path and other non-reproducible JSON metadata.
                 "source_output_sha256": sha256_json(properties),
                 "source_revision": xtb_reference["revision"],
+                "runtime": runtime,
             }
+            if qmmm_input is not None:
+                provenance["materialized_input"] = qmmm_materialization_provenance(
+                    qmmm_input
+                )
+                provenance["qmmm_input_sha256"] = sha256_file(input_path)
+                provenance["scientific_source"] = case.get("scientific_source")
             destination = output_dir / f"{case['id']}.json"
             dump_json(
                 destination,
-                canonical_xtb_golden(manifest, case, properties, provenance),
+                canonical_xtb_golden(
+                    manifest, case, properties, provenance, qmmm_input
+                ),
             )
             print(f"generated {destination}")
 
@@ -686,6 +1235,7 @@ def actual_properties(raw: dict[str, Any], case: dict[str, Any]) -> dict[str, An
         "partial_charges_e",
         "atomic_dipoles_e_bohr",
         "atomic_quadrupoles_e_bohr2",
+        "point_charge_forces_hartree_per_bohr",
     ):
         if property_name in raw:
             properties[property_name] = raw[property_name]
@@ -781,6 +1331,7 @@ def compare_directory(
                 ("partial_charges_e", "charges"),
                 ("atomic_dipoles_e_bohr", "atomic_dipoles"),
                 ("atomic_quadrupoles_e_bohr2", "atomic_quadrupoles"),
+                ("point_charge_forces_hartree_per_bohr", "point_charge_forces"),
             )
             if property_name in expected
         )

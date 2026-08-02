@@ -68,6 +68,54 @@
       "reference_engine": "xtb",
       "reference_output_sha256": "cee62bf0d8f99e0ca12035bdbc550c2795488bed852c5f6ea1093063fd670ba1",
       "unpaired_electrons": 1
+    },
+    {
+      "atom_count": 3,
+      "description": "One water plus one explicit gamma=999 point charge is the minimal external-charge SCC and force-sign case.",
+      "golden": "data/conformance/golden/water_one_pc_gamma999.json",
+      "golden_sha256": "274312fb6151c2b5096c20783caf79a9681bf3daf24fa788833015acd8e806ff",
+      "id": "water_one_pc_gamma999",
+      "input": "data/conformance/inputs/water_one_pc_gamma999.qmmm.json",
+      "input_schema": "qmmm-v1",
+      "input_sha256": "bdb99422adb70deec60dfcaccc78cd47cc468752994e0b952264c819c077407b",
+      "molecular_charge": 0,
+      "point_charge_count": 1,
+      "reference_engine": "xtb",
+      "reference_output_sha256": "363a783159068f13f88364c472ab452836bdcc23a0d55a9e7b819fcb15ab3f45",
+      "scientific_source": "Reduced one-water/one-PC case derived from the xTB 6.7.1 water-tetramer PCEM API regression geometry.",
+      "unpaired_electrons": 0
+    },
+    {
+      "atom_count": 6,
+      "description": "The official xTB water-tetramer PCEM regression represented as 6 QM atoms plus 6 external charges with element hardnesses.",
+      "golden": "data/conformance/golden/water_dimer_6pc_hardness.json",
+      "golden_sha256": "b68af10a7f16f60265dbc3daa542394b71cfd382d913d13856296efc0fce71d9",
+      "id": "water_dimer_6pc_hardness",
+      "input": "data/conformance/inputs/water_dimer_6pc_hardness.qmmm.json",
+      "input_schema": "qmmm-v1",
+      "input_sha256": "fb71b547c530aa8213da6eb024251af521dddcf973d8da120ed20be0dd17d905",
+      "molecular_charge": 0,
+      "point_charge_count": 6,
+      "reference_engine": "xtb",
+      "reference_output_sha256": "36ece6ee7736481108dcd9efed16fcc59e6084c783ff11cf08d0ff777826a0ad",
+      "scientific_source": "xTB test/api/c_api_example.c testSecond and test/unit/test_gfn2.f90 test_gfn2_pcem_api.",
+      "unpaired_electrons": 0
+    },
+    {
+      "atom_count": 6,
+      "description": "The official xTB water-tetramer PCEM regression with every external-charge gamma set to 999 hartree.",
+      "golden": "data/conformance/golden/water_dimer_6pc_gamma999.json",
+      "golden_sha256": "24212eb2d05f5b16df454831878e04c90e4a76a1ba71f5e450b51e785121ed3d",
+      "id": "water_dimer_6pc_gamma999",
+      "input": "data/conformance/inputs/water_dimer_6pc_gamma999.qmmm.json",
+      "input_schema": "qmmm-v1",
+      "input_sha256": "4b05a10e2a76c4023cc64d1b287f4c219a0ed0c06d5b220f10000df0445db906",
+      "molecular_charge": 0,
+      "point_charge_count": 6,
+      "reference_engine": "xtb",
+      "reference_output_sha256": "b7ca7a48a2b3a46d67c806cba13773b6eb06f95c0f6f295cdd3c890d505c6dd6",
+      "scientific_source": "xTB test/unit/test_gfn2.f90 test_gfn2_pcem_api gamma=999 branch.",
+      "unpaired_electrons": 0
     }
   ],
   "golden_schema_version": 1,
@@ -131,11 +179,39 @@
         "--uhf",
         "{unpaired_electrons}",
         "-P",
-        "1"
+        "1",
+        "[--input {xcontrol}]"
       ],
-      "note": "Independent oracle. Atom-resolved SCC moments come from xtbout.json; high-precision energy and gradients come from the gradient artifact. Runs are forced to one thread.",
+      "note": "Independent oracle. Atom-resolved SCC moments come from xtbout.json; high-precision QM energy and gradients come from the gradient artifact; external-charge gradients come from pcgrad. Runs are forced to one thread.",
+      "point_charge_hardness_hartree": {
+        "1": 0.405771,
+        "8": 0.451896
+      },
+      "point_charge_hardness_source": "test/unit/test_gfn2.f90 at the pinned xTB revision",
+      "qmmm_materialization_schema": "gpuxtb-xtb-pcem-cli-v1",
+      "qmmm_cli_command_template": [
+        "{executable}",
+        "coord",
+        "--gfn",
+        "2",
+        "--grad",
+        "--json",
+        "--norestart",
+        "--chrg",
+        "{charge}",
+        "--uhf",
+        "{unpaired_electrons}",
+        "-P",
+        "1",
+        "--input",
+        "xcontrol"
+      ],
       "repository": "https://github.com/grimme-lab/xtb",
       "revision": "edcfbbe39d411edc225e27315fbda3a204ddb023",
+      "runtime_artifacts": {
+        "gfn2_parameter_sha256": "f6f05c6c5264cb2f75c54f8ac6838044541c1e493b16f1a4d4ee4fa64de5f545",
+        "libxtb_sha256": "c405797f34ed96470f23158406e6d8a8e102681d3c3cbbaea16692f514f22853"
+      },
       "version": "6.7.1"
     }
   },
@@ -165,6 +241,11 @@
       "atol": 5e-07,
       "rtol": 0.0,
       "unit": "elementary_charge*bohr^2"
+    },
+    "point_charge_forces": {
+      "atol": 5e-07,
+      "rtol": 0.0,
+      "unit": "hartree/bohr"
     },
     "rationale": "The seed gate matches tblite's own validation absolute tolerance. Tighter term-level and finite-difference gates can be added without weakening this oracle check."
   },
