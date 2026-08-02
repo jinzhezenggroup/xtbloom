@@ -1,0 +1,69 @@
+{
+  "case_id": "h3_plus",
+  "method": "GFN2-xTB",
+  "molecular_charge": 1,
+  "properties": {
+    "energy_hartree": -0.8989438125591576,
+    "forces_hartree_per_bohr": [
+      -0.04009036910175755,
+      0.06943855617843334,
+      -0.0,
+      -0.04009036910175752,
+      -0.06943855617843334,
+      -0.0,
+      0.08018073820351508,
+      -1.864722188428906e-17,
+      -0.0
+    ],
+    "gradient_hartree_per_bohr": [
+      0.04009036910175755,
+      -0.06943855617843334,
+      0.0,
+      0.04009036910175752,
+      0.06943855617843334,
+      0.0,
+      -0.08018073820351508,
+      1.864722188428906e-17,
+      0.0
+    ],
+    "virial_hartree": [
+      -0.11323259808283377,
+      2.706705507205985e-17,
+      0.0,
+      2.7067054658469545e-17,
+      -0.11323259808283363,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "provenance": {
+    "command": [
+      "tblite",
+      "coord",
+      "--no-restart",
+      "--method",
+      "gfn2",
+      "--grad",
+      "result.txt",
+      "[--charge {signed_charge}]",
+      "--json",
+      "result.json"
+    ],
+    "engine": "tblite",
+    "generation_mode": "upstream-validation-snapshot",
+    "source_output_sha256": "7cfd3ce6be8082431b28b911820cfb6449b43ef8334a55756cf3728171010c08",
+    "source_path": "test/validation/01_h3+/gfn2-xtb.json",
+    "source_revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb"
+  },
+  "schema_version": 1,
+  "units": {
+    "coordinates": "bohr",
+    "energy": "hartree",
+    "forces": "hartree/bohr",
+    "gradient": "hartree/bohr",
+    "molecular_charge": "elementary_charge"
+  },
+  "unpaired_electrons": 0
+}

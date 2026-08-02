@@ -1,0 +1,69 @@
+{
+  "case_id": "nenacl",
+  "method": "GFN2-xTB",
+  "molecular_charge": 0,
+  "properties": {
+    "energy_hartree": -10.757666084895805,
+    "forces_hartree_per_bohr": [
+      4.109226170462222e-18,
+      3.131638832132508e-18,
+      0.002008122104582456,
+      1.3486938901144894e-17,
+      1.2970478030685133e-17,
+      0.007505684777941075,
+      -1.7596165071607116e-17,
+      -1.6102116862817643e-17,
+      -0.009513806882523528
+    ],
+    "gradient_hartree_per_bohr": [
+      -4.109226170462222e-18,
+      -3.131638832132508e-18,
+      -0.002008122104582456,
+      -1.3486938901144894e-17,
+      -1.2970478030685133e-17,
+      -0.007505684777941075,
+      1.7596165071607116e-17,
+      1.6102116862817643e-17,
+      0.009513806882523528
+    ],
+    "virial_hartree": [
+      0.0,
+      0.0,
+      4.942653037258744e-17,
+      0.0,
+      0.0,
+      4.3726679330741715e-17,
+      4.942653037258744e-17,
+      4.3726679330741715e-17,
+      0.05242579556844571
+    ]
+  },
+  "provenance": {
+    "command": [
+      "tblite",
+      "coord",
+      "--no-restart",
+      "--method",
+      "gfn2",
+      "--grad",
+      "result.txt",
+      "[--charge {signed_charge}]",
+      "--json",
+      "result.json"
+    ],
+    "engine": "tblite",
+    "generation_mode": "upstream-validation-snapshot",
+    "source_output_sha256": "b0de97f990af464a31b11d335fea864e54a25ab87f3d884410ca9a5a770c6f8b",
+    "source_path": "test/validation/10_nenacl/gfn2-xtb.json",
+    "source_revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb"
+  },
+  "schema_version": 1,
+  "units": {
+    "coordinates": "bohr",
+    "energy": "hartree",
+    "forces": "hartree/bohr",
+    "gradient": "hartree/bohr",
+    "molecular_charge": "elementary_charge"
+  },
+  "unpaired_electrons": 0
+}

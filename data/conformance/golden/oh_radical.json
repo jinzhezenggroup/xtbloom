@@ -1,0 +1,91 @@
+{
+  "case_id": "oh_radical",
+  "method": "GFN2-xTB",
+  "molecular_charge": 0,
+  "properties": {
+    "atomic_dipoles_e_bohr": [
+      [
+        -0.0,
+        -0.0,
+        0.11404469
+      ],
+      [
+        0.0,
+        0.0,
+        0.09618382
+      ]
+    ],
+    "atomic_quadrupoles_e_bohr2": [
+      [
+        0.14490942,
+        0.0,
+        0.14490942,
+        0.0,
+        0.0,
+        -0.28981884
+      ],
+      [
+        -0.07048694,
+        0.0,
+        -0.07048694,
+        -0.0,
+        -0.0,
+        0.14097389
+      ]
+    ],
+    "energy_hartree": -4.42833345932,
+    "forces_hartree_per_bohr": [
+      -2.2444320580404e-19,
+      -2.0356958163549e-17,
+      0.0060595839099953,
+      2.2444320580404e-19,
+      2.0356958163549e-17,
+      -0.0060595839099953
+    ],
+    "gradient_hartree_per_bohr": [
+      2.2444320580404e-19,
+      2.0356958163549e-17,
+      -0.0060595839099953,
+      -2.2444320580404e-19,
+      -2.0356958163549e-17,
+      0.0060595839099953
+    ],
+    "partial_charges_e": [
+      -0.33069504,
+      0.33069504
+    ]
+  },
+  "provenance": {
+    "command": [
+      "{executable}",
+      "{input}",
+      "--gfn",
+      "2",
+      "--grad",
+      "--json",
+      "--norestart",
+      "--chrg",
+      "{charge}",
+      "--uhf",
+      "{unpaired_electrons}",
+      "-P",
+      "1"
+    ],
+    "engine": "xtb",
+    "executable_sha256": "271dd6cdd5da127a8e39919e7e32d924790fb346f0057b4183769ba8b3411887",
+    "executable_version": "-----------------------------------------------------------      \n     |                   =====================                   |     \n     |                           x T B                           |     \n     |                   =====================                   |     \n     |                         S. Grimme                         |     \n     |          Mulliken Center for Theoretical Chemistry        |     \n     |                    University of Bonn                     |     \n      -----------------------------------------------------------      \n\n   * xtb version 6.7.1 (edcfbbe) compiled by 'conda@5dfe00f5fb80' on 2026-06-10\n\nnormal termination of xtb",
+    "generation_mode": "live-cli",
+    "input": "data/conformance/inputs/oh_radical.coord",
+    "source_output_sha256": "cee62bf0d8f99e0ca12035bdbc550c2795488bed852c5f6ea1093063fd670ba1",
+    "source_revision": "edcfbbe39d411edc225e27315fbda3a204ddb023"
+  },
+  "schema_version": 1,
+  "units": {
+    "coordinates": "bohr",
+    "energy": "hartree",
+    "forces": "hartree/bohr",
+    "gradient": "hartree/bohr",
+    "molecular_charge": "elementary_charge"
+  },
+  "unpaired_electrons": 1
+}

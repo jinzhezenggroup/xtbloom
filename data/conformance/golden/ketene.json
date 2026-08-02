@@ -1,0 +1,81 @@
+{
+  "case_id": "ketene",
+  "method": "GFN2-xTB",
+  "molecular_charge": 0,
+  "properties": {
+    "energy_hartree": -9.317430090368289,
+    "forces_hartree_per_bohr": [
+      -2.0583969809468096e-17,
+      -9.055310923583262e-17,
+      -0.021695053907688937,
+      0.007744431185786921,
+      3.617670190396233e-17,
+      -0.0012151651998900483,
+      -0.007744431185786895,
+      -2.7216391019710592e-17,
+      -0.0012151651998900577,
+      5.2215996958349935e-18,
+      4.701061698736528e-17,
+      0.020615799559021937,
+      1.1697675131151656e-17,
+      3.45821813642156e-17,
+      0.0035095847484470834
+    ],
+    "gradient_hartree_per_bohr": [
+      2.0583969809468096e-17,
+      9.055310923583262e-17,
+      0.021695053907688937,
+      -0.007744431185786921,
+      -3.617670190396233e-17,
+      0.0012151651998900483,
+      0.007744431185786895,
+      2.7216391019710592e-17,
+      0.0012151651998900577,
+      -5.2215996958349935e-18,
+      -4.701061698736528e-17,
+      -0.020615799559021937,
+      -1.1697675131151656e-17,
+      -3.45821813642156e-17,
+      -0.0035095847484470834
+    ],
+    "virial_hartree": [
+      0.02755408083108443,
+      5.638691740708675e-17,
+      2.4708778138106992e-17,
+      5.638691740708675e-17,
+      0.0,
+      1.3435035627453768e-16,
+      2.4708778138106992e-17,
+      1.3435035627453768e-16,
+      0.06979904443237869
+    ]
+  },
+  "provenance": {
+    "command": [
+      "tblite",
+      "coord",
+      "--no-restart",
+      "--method",
+      "gfn2",
+      "--grad",
+      "result.txt",
+      "[--charge {signed_charge}]",
+      "--json",
+      "result.json"
+    ],
+    "engine": "tblite",
+    "generation_mode": "upstream-validation-snapshot",
+    "source_output_sha256": "982bfc7408fb53941f2adde1f98f712445c2a1f019aaff906b8efe86136fffda",
+    "source_path": "test/validation/08_ketene/gfn2-xtb.json",
+    "source_revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb"
+  },
+  "schema_version": 1,
+  "units": {
+    "coordinates": "bohr",
+    "energy": "hartree",
+    "forces": "hartree/bohr",
+    "gradient": "hartree/bohr",
+    "molecular_charge": "elementary_charge"
+  },
+  "unpaired_electrons": 0
+}

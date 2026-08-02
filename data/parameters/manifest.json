@@ -1,0 +1,59 @@
+{
+  "exporter": {
+    "executable_sha256": "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
+    "version": "tblite version 0.7.0\nddX support: disabled\nHDF5 support: disabled\nTREXIO support: disabled"
+  },
+  "generator": {
+    "path": "tools/parameters/generate_gfn2.py",
+    "sha256": "42419d3f4aaaf68a3a52bc4762d70314624a201fc93cf247a18e3ccf37604ba4"
+  },
+  "method": "gfn2-xtb",
+  "outputs": {
+    "gfn2.hpp": {
+      "bytes": 44459,
+      "sha256": "65fdc16f948ed1b8641be877dded759b7ae34435613b6e471670bca4c9e35b3f"
+    },
+    "gfn2.json": {
+      "bytes": 117089,
+      "sha256": "de0f20e90b592b7b92f107eb672bd3dd29c1096f904d7a472b05693f9238ed1a"
+    },
+    "gfn2.toml": {
+      "bytes": 64214,
+      "sha256": "a835b0d47a3bdb78e5d2f1cc45737fd69e2301d0053b1cc7b5f799d6447df522"
+    }
+  },
+  "schema_version": 1,
+  "source": {
+    "license": {
+      "file": "COPYING.LESSER",
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+      "spdx": "LGPL-3.0-or-later"
+    },
+    "parameter_source_paths": [
+      "app/driver_param.f90",
+      "src/tblite/param.f90",
+      "src/tblite/param/CMakeLists.txt",
+      "src/tblite/param/charge.f90",
+      "src/tblite/param/dispersion.f90",
+      "src/tblite/param/element.f90",
+      "src/tblite/param/halogen.f90",
+      "src/tblite/param/hamiltonian.f90",
+      "src/tblite/param/mask.f90",
+      "src/tblite/param/meson.build",
+      "src/tblite/param/multipole.f90",
+      "src/tblite/param/post_processing.f90",
+      "src/tblite/param/post_processing/CMakeLists.txt",
+      "src/tblite/param/post_processing/meson.build",
+      "src/tblite/param/post_processing/molmom.f90",
+      "src/tblite/param/post_processing/type.f90",
+      "src/tblite/param/post_processing/xtbml.f90",
+      "src/tblite/param/repulsion.f90",
+      "src/tblite/param/serde.f90",
+      "src/tblite/param/thirdorder.f90",
+      "src/tblite/xtb/gfn2.f90"
+    ],
+    "parameter_sources_sha256": "fa0b1d13b2b76142e849470fdcc8db06fc434d35ab9d0b2fca1d76bd6d748ea1",
+    "repository": "https://github.com/tblite/tblite",
+    "revision": "fa8a4416e8fe093d0075bc10ac875494c2a449a9"
+  }
+}

@@ -1,0 +1,178 @@
+{
+  "cases": [
+    {
+      "atom_count": 3,
+      "description": "Planar H3+ exercises a positively charged, symmetry-sensitive SCC case.",
+      "golden": "data/conformance/golden/h3_plus.json",
+      "golden_sha256": "8953f7b4352dbbb9317d585c17b7e59ff47237bb6422c456b48596f7fc720e58",
+      "id": "h3_plus",
+      "input": "data/conformance/inputs/h3_plus.coord",
+      "input_sha256": "b8fd190d7713b5247e6e12803c804adca9438b52bc02d64999d1d634ae857e37",
+      "molecular_charge": 1,
+      "unpaired_electrons": 0,
+      "upstream_input_sha256": "b8fd190d7713b5247e6e12803c804adca9438b52bc02d64999d1d634ae857e37",
+      "upstream_output_sha256": "7cfd3ce6be8082431b28b911820cfb6449b43ef8334a55756cf3728171010c08",
+      "upstream_validation_case": "test/validation/01_h3+"
+    },
+    {
+      "atom_count": 5,
+      "description": "Neutral ketene covers H/C/O and a non-equilibrium molecular gradient.",
+      "golden": "data/conformance/golden/ketene.json",
+      "golden_sha256": "a2cfd2ca1023772844f1ce7d56140b2589c5f83217d3b2a684de6a34c702d83e",
+      "id": "ketene",
+      "input": "data/conformance/inputs/ketene.coord",
+      "input_sha256": "df51094bedadc80e7aac3966a6fb0656f8b907850bbdf717a9b0b5d55eb6201e",
+      "molecular_charge": 0,
+      "unpaired_electrons": 0,
+      "upstream_input_sha256": "df51094bedadc80e7aac3966a6fb0656f8b907850bbdf717a9b0b5d55eb6201e",
+      "upstream_output_sha256": "982bfc7408fb53941f2adde1f98f712445c2a1f019aaff906b8efe86136fffda",
+      "upstream_validation_case": "test/validation/08_ketene"
+    },
+    {
+      "atom_count": 3,
+      "description": "Ne-Na-Cl covers third-row parameters and a weakly interacting mixed system.",
+      "golden": "data/conformance/golden/nenacl.json",
+      "golden_sha256": "63844bccef9889bc557ffb74fde25e738de01dd354672730bbe86d25b942eecc",
+      "id": "nenacl",
+      "input": "data/conformance/inputs/nenacl.coord",
+      "input_sha256": "3415aead6aaea22db84922d46ed4f62dae86ddc8319ad3c55404949bca2b873a",
+      "molecular_charge": 0,
+      "unpaired_electrons": 0,
+      "upstream_input_sha256": "3415aead6aaea22db84922d46ed4f62dae86ddc8319ad3c55404949bca2b873a",
+      "upstream_output_sha256": "b0de97f990af464a31b11d335fea864e54a25ab87f3d884410ca9a5a770c6f8b",
+      "upstream_validation_case": "test/validation/10_nenacl"
+    },
+    {
+      "atom_count": 6,
+      "description": "Trigonal-bipyramidal SiF5- covers an anion and p-block hypercoordination.",
+      "golden": "data/conformance/golden/sif5_minus.json",
+      "golden_sha256": "6c00feb740a7d95d29460d8683c48bf062b5cca5665f1b99c75d1685c9fd705d",
+      "id": "sif5_minus",
+      "input": "data/conformance/inputs/sif5_minus.coord",
+      "input_sha256": "c959cf7302441fe18401618ef2fe04eaa0f92b192f511f9691b3212d0b157fc2",
+      "molecular_charge": -1,
+      "unpaired_electrons": 0,
+      "upstream_input_sha256": "c959cf7302441fe18401618ef2fe04eaa0f92b192f511f9691b3212d0b157fc2",
+      "upstream_output_sha256": "19d9543d8cb2d3c640b886f0cda66e8e2c487ca18e06a931337d9256c163b22c",
+      "upstream_validation_case": "test/validation/14_sif5-"
+    },
+    {
+      "atom_count": 2,
+      "description": "Neutral OH radical exercises unrestricted open-shell SCC and atom-resolved charge, dipole, and quadrupole state.",
+      "golden": "data/conformance/golden/oh_radical.json",
+      "golden_sha256": "3aa14dbb7c46f8c7844748514947a9c52b01b3b298a057b4d54059165b67f37a",
+      "id": "oh_radical",
+      "input": "data/conformance/inputs/oh_radical.coord",
+      "input_sha256": "6dd67aab2bce7e68a391b3dffbf106818235d5b09ccbcea5ed377e5684192975",
+      "molecular_charge": 0,
+      "reference_engine": "xtb",
+      "reference_output_sha256": "cee62bf0d8f99e0ca12035bdbc550c2795488bed852c5f6ea1093063fd670ba1",
+      "unpaired_electrons": 1
+    }
+  ],
+  "golden_schema_version": 1,
+  "method": "GFN2-xTB",
+  "cross_engine_tolerances": {
+    "energy": {
+      "atol": 5e-07,
+      "rtol": 0.0,
+      "unit": "hartree"
+    },
+    "forces": {
+      "atol": 5e-06,
+      "rtol": 0.0,
+      "unit": "hartree/bohr"
+    },
+    "rationale": "The independent xtb 6.7.1 and tblite snapshot agree more closely in energy than in analytic gradients. This gate is used only for explicitly identified reference-engine cross-checks; gpuxtb remains subject to the tighter primary tolerances."
+  },
+  "reference_engines": {
+    "tblite": {
+      "cli_command_template": [
+        "{executable}",
+        "{input}",
+        "--no-restart",
+        "--method",
+        "gfn2",
+        "--grad",
+        "{gradient_output}",
+        "[--charge {signed_charge}]",
+        "[--spin {unpaired_electrons}]",
+        "--json",
+        "{json_output}"
+      ],
+      "output": "JSON energy, gradient, and virial in atomic units",
+      "repository": "https://github.com/tblite/tblite",
+      "revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb",
+      "snapshot_command_template": [
+        "tblite",
+        "coord",
+        "--no-restart",
+        "--method",
+        "gfn2",
+        "--grad",
+        "result.txt",
+        "[--charge {signed_charge}]",
+        "--json",
+        "result.json"
+      ],
+      "snapshot_origin": "test/validation/<case>/gfn2-xtb.json"
+    },
+    "xtb": {
+      "cli_command_template": [
+        "{executable}",
+        "{input}",
+        "--gfn",
+        "2",
+        "--grad",
+        "--json",
+        "--norestart",
+        "--chrg",
+        "{charge}",
+        "--uhf",
+        "{unpaired_electrons}",
+        "-P",
+        "1"
+      ],
+      "note": "Independent oracle. Atom-resolved SCC moments come from xtbout.json; high-precision energy and gradients come from the gradient artifact. Runs are forced to one thread.",
+      "repository": "https://github.com/grimme-lab/xtb",
+      "revision": "edcfbbe39d411edc225e27315fbda3a204ddb023",
+      "version": "6.7.1"
+    }
+  },
+  "schema_version": 1,
+  "tolerances": {
+    "energy": {
+      "atol": 5e-07,
+      "rtol": 0.0,
+      "unit": "hartree"
+    },
+    "forces": {
+      "atol": 5e-07,
+      "rtol": 0.0,
+      "unit": "hartree/bohr"
+    },
+    "charges": {
+      "atol": 5e-07,
+      "rtol": 0.0,
+      "unit": "elementary_charge"
+    },
+    "atomic_dipoles": {
+      "atol": 5e-07,
+      "rtol": 0.0,
+      "unit": "elementary_charge*bohr"
+    },
+    "atomic_quadrupoles": {
+      "atol": 5e-07,
+      "rtol": 0.0,
+      "unit": "elementary_charge*bohr^2"
+    },
+    "rationale": "The seed gate matches tblite's own validation absolute tolerance. Tighter term-level and finite-difference gates can be added without weakening this oracle check."
+  },
+  "units": {
+    "coordinates": "bohr",
+    "energy": "hartree",
+    "forces": "hartree/bohr",
+    "gradient": "hartree/bohr",
+    "molecular_charge": "elementary_charge"
+  }
+}

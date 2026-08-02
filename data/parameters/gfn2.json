@@ -1,0 +1,4313 @@
+{
+  "charge": {
+    "average": "arithmetic",
+    "gexp": 2.0
+  },
+  "dispersion": {
+    "a1": 0.52,
+    "a2": 5.0,
+    "s6": 1.0,
+    "s8": 2.7,
+    "s9": 5.0,
+    "self_consistent": true,
+    "smooth": false
+  },
+  "elements": [
+    {
+      "arep": 2.213717,
+      "atomic_number": 1,
+      "dkernel": 0.05563889,
+      "en": 2.2,
+      "gam": 0.405771,
+      "gam3": 0.08,
+      "mprad": 1.4,
+      "mpvcn": 1.0,
+      "qkernel": 0.00027431,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.05,
+          "index": 0,
+          "level": -10.707211,
+          "ngauss": 3,
+          "principal_quantum_number": 1,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.00953618,
+          "slater": 1.23
+        }
+      ],
+      "symbol": "H",
+      "xbond": 0.0,
+      "zeff": 1.105388
+    },
+    {
+      "arep": 3.60467,
+      "atomic_number": 2,
+      "dkernel": -0.01,
+      "en": 3.0,
+      "gam": 0.642029,
+      "gam3": 0.2,
+      "mprad": 3.0,
+      "mpvcn": 1.0,
+      "qkernel": -0.00337528,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.2074275,
+          "index": 0,
+          "level": -23.716445,
+          "ngauss": 3,
+          "principal_quantum_number": 1,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.04386816,
+          "slater": 1.669667
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0,
+          "index": 1,
+          "level": -1.822307,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.00710647,
+          "slater": 1.5
+        }
+      ],
+      "symbol": "He",
+      "xbond": 0.0,
+      "zeff": 1.094283
+    },
+    {
+      "arep": 0.475307,
+      "atomic_number": 3,
+      "dkernel": -0.005,
+      "en": 0.98,
+      "gam": 0.245006,
+      "gam3": 0.1303821,
+      "mprad": 5.0,
+      "mpvcn": 1.0,
+      "qkernel": 0.0002,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1620836,
+          "index": 0,
+          "level": -4.9,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.04750398,
+          "slater": 0.75006
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0623876,
+          "index": 1,
+          "level": -2.217789,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.1972612,
+          "shell_polynomial": 0.2042492,
+          "slater": 0.557848
+        }
+      ],
+      "symbol": "Li",
+      "xbond": 0.0,
+      "zeff": 1.289367
+    },
+    {
+      "arep": 0.939696,
+      "atomic_number": 4,
+      "dkernel": -0.00613341,
+      "en": 1.57,
+      "gam": 0.684789,
+      "gam3": 0.0574239,
+      "mprad": 5.0,
+      "mpvcn": 2.0,
+      "qkernel": -0.00058586,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1187759,
+          "index": 0,
+          "level": -7.743081,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.07910394,
+          "slater": 1.03472
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0550528,
+          "index": 1,
+          "level": -3.133433,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.9658467,
+          "shell_polynomial": -0.00476438,
+          "slater": 0.949332
+        }
+      ],
+      "symbol": "Be",
+      "xbond": 0.0,
+      "zeff": 4.221216
+    },
+    {
+      "arep": 1.373856,
+      "atomic_number": 5,
+      "dkernel": -0.00481186,
+      "en": 2.04,
+      "gam": 0.513556,
+      "gam3": 0.0946104,
+      "mprad": 5.0,
+      "mpvcn": 3.0,
+      "qkernel": -0.00058228,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0120462,
+          "index": 0,
+          "level": -9.224376,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.0518315,
+          "slater": 1.479444
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0141086,
+          "index": 1,
+          "level": -7.419002000000001,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.399408,
+          "shell_polynomial": -0.02453322,
+          "slater": 1.479805
+        }
+      ],
+      "symbol": "B",
+      "xbond": 0.0,
+      "zeff": 7.192431
+    },
+    {
+      "arep": 1.247655,
+      "atomic_number": 6,
+      "dkernel": -0.00411674,
+      "en": 2.55,
+      "gam": 0.538015,
+      "gam3": 0.15,
+      "mprad": 3.0,
+      "mpvcn": 3.0,
+      "qkernel": 0.00213583,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0102144,
+          "index": 0,
+          "level": -13.970922000000002,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.02294321,
+          "slater": 2.096432
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0161657,
+          "index": 1,
+          "level": -10.063292,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 3.0,
+          "shell_hubbard_scale": 1.1056358,
+          "shell_polynomial": -0.00271102,
+          "slater": 1.8
+        }
+      ],
+      "symbol": "C",
+      "xbond": 0.0,
+      "zeff": 4.231078
+    },
+    {
+      "arep": 1.682689,
+      "atomic_number": 7,
+      "dkernel": 0.03521273,
+      "en": 3.04,
+      "gam": 0.461493,
+      "gam3": -0.063978,
+      "mprad": 1.9,
+      "mpvcn": 3.0,
+      "qkernel": 0.02026786,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.1955336,
+          "index": 0,
+          "level": -16.686243,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 1.5,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.08506003,
+          "slater": 2.339881
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0561076,
+          "index": 1,
+          "level": -12.523956,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 3.5,
+          "shell_hubbard_scale": 1.1164892,
+          "shell_polynomial": -0.02504201,
+          "slater": 2.014332
+        }
+      ],
+      "symbol": "N",
+      "xbond": 0.0,
+      "zeff": 5.242592
+    },
+    {
+      "arep": 2.165712,
+      "atomic_number": 8,
+      "dkernel": -0.0493567,
+      "en": 3.44,
+      "gam": 0.451896,
+      "gam3": -0.0517134,
+      "mprad": 1.8,
+      "mpvcn": 2.0,
+      "qkernel": -0.00310828,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0117826,
+          "index": 0,
+          "level": -20.229985,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.14955291,
+          "slater": 2.439742
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0145102,
+          "index": 1,
+          "level": -15.503116999999998,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 4.0,
+          "shell_hubbard_scale": 1.149702,
+          "shell_polynomial": -0.03350819,
+          "slater": 2.137023
+        }
+      ],
+      "symbol": "O",
+      "xbond": 0.0,
+      "zeff": 5.784415
+    },
+    {
+      "arep": 2.421394,
+      "atomic_number": 9,
+      "dkernel": -0.08339183,
+      "en": 3.98,
+      "gam": 0.531518,
+      "gam3": 0.1426212,
+      "mprad": 2.4,
+      "mpvcn": 1.0,
+      "qkernel": -0.00245955,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0394362,
+          "index": 0,
+          "level": -23.458179,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.13011924,
+          "slater": 2.416361
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0538373,
+          "index": 1,
+          "level": -15.746583000000001,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 5.0,
+          "shell_hubbard_scale": 1.1677376,
+          "shell_polynomial": -0.12300828,
+          "slater": 2.308399
+        }
+      ],
+      "symbol": "F",
+      "xbond": 0.0,
+      "zeff": 7.021486
+    },
+    {
+      "arep": 3.318479,
+      "atomic_number": 10,
+      "dkernel": 0.1,
+      "en": 4.5,
+      "gam": 0.85,
+      "gam3": 0.05,
+      "mprad": 5.0,
+      "mpvcn": 1.0,
+      "qkernel": -0.005,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0014933,
+          "index": 0,
+          "level": -24.5,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.16377759,
+          "slater": 3.084104
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0232093,
+          "index": 1,
+          "level": -18.737298,
+          "ngauss": 4,
+          "principal_quantum_number": 2,
+          "reference_occupation": 6.0,
+          "shell_hubbard_scale": 1.1190576,
+          "shell_polynomial": -0.04860545,
+          "slater": 2.312051
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.1096714,
+          "index": 2,
+          "level": -5.517827,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.6799999999999999,
+          "shell_polynomial": -0.16922333,
+          "slater": 2.815609
+        }
+      ],
+      "symbol": "Ne",
+      "xbond": 0.0,
+      "zeff": 11.041068
+    },
+    {
+      "arep": 0.572728,
+      "atomic_number": 11,
+      "dkernel": 0.0,
+      "en": 0.93,
+      "gam": 0.271056,
+      "gam3": 0.1798727,
+      "mprad": 5.0,
+      "mpvcn": 1.0,
+      "qkernel": 0.0002,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0042211,
+          "index": 0,
+          "level": -4.546934,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.04033495,
+          "slater": 0.763787
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0144323,
+          "index": 1,
+          "level": -1.332719,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.1018894,
+          "shell_polynomial": 0.20873908,
+          "slater": 0.573553
+        }
+      ],
+      "symbol": "Na",
+      "xbond": 0.0,
+      "zeff": 5.244917
+    },
+    {
+      "arep": 0.917975,
+      "atomic_number": 12,
+      "dkernel": -0.00082005,
+      "en": 1.31,
+      "gam": 0.344822,
+      "gam3": 0.2349164,
+      "mprad": 5.0,
+      "mpvcn": 2.0,
+      "qkernel": -5.516e-05,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1164444,
+          "index": 0,
+          "level": -6.339908,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.11167374,
+          "slater": 1.184203
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0079924,
+          "index": 1,
+          "level": -0.697688,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 2.4,
+          "shell_polynomial": 0.39076962,
+          "slater": 0.717769
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.1192409,
+          "index": 2,
+          "level": -1.458197,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.95,
+          "shell_polynomial": 0.12691061,
+          "slater": 1.3
+        }
+      ],
+      "symbol": "Mg",
+      "xbond": 0.0,
+      "zeff": 18.083164
+    },
+    {
+      "arep": 0.876623,
+      "atomic_number": 13,
+      "dkernel": 0.02633341,
+      "en": 1.61,
+      "gam": 0.364801,
+      "gam3": 0.14,
+      "mprad": 5.0,
+      "mpvcn": 3.0,
+      "qkernel": -0.00021887,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0715422,
+          "index": 0,
+          "level": -9.329017,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.10678141,
+          "slater": 1.352531
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0244485,
+          "index": 1,
+          "level": -5.927846,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.9396301,
+          "shell_polynomial": -0.12442837,
+          "slater": 1.391201
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0406173,
+          "index": 2,
+          "level": -3.042325,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.2,
+          "shell_polynomial": 0.16311089,
+          "slater": 1.0
+        }
+      ],
+      "symbol": "Al",
+      "xbond": 0.0,
+      "zeff": 17.867328
+    },
+    {
+      "arep": 1.187323,
+      "atomic_number": 14,
+      "dkernel": -0.0002575,
+      "en": 1.9,
+      "gam": 0.72,
+      "gam3": 0.1936289,
+      "mprad": 3.9,
+      "mpvcn": 3.0,
+      "qkernel": -0.0008,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1858479,
+          "index": 0,
+          "level": -14.360931999999998,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 1.5,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.02358522,
+          "slater": 1.773917
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.1383073,
+          "index": 1,
+          "level": -6.915130999999999,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 2.5,
+          "shell_hubbard_scale": 0.4419958,
+          "shell_polynomial": -0.07900406,
+          "slater": 1.718996
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.1935494,
+          "index": 2,
+          "level": -1.8250359999999999,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.77,
+          "shell_polynomial": 0.11366185,
+          "slater": 1.25
+        }
+      ],
+      "symbol": "Si",
+      "xbond": 0.0,
+      "zeff": 40.001111
+    },
+    {
+      "arep": 1.143343,
+      "atomic_number": 15,
+      "dkernel": 0.02110225,
+      "en": 2.19,
+      "gam": 0.297739,
+      "gam3": 0.0711291,
+      "mprad": 2.1,
+      "mpvcn": 3.0,
+      "qkernel": 0.00028679,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.054761,
+          "index": 0,
+          "level": -17.518756,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 1.5,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.19831771,
+          "slater": 1.816945
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.048993,
+          "index": 1,
+          "level": -9.842286,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 3.5,
+          "shell_hubbard_scale": 0.844194,
+          "shell_polynomial": -0.05515577,
+          "slater": 1.903247
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.2429507,
+          "index": 2,
+          "level": -0.444893,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.65,
+          "shell_polynomial": 0.26397535,
+          "slater": 1.167533
+        }
+      ],
+      "symbol": "P",
+      "xbond": 0.0,
+      "zeff": 19.683502
+    },
+    {
+      "arep": 1.214553,
+      "atomic_number": 16,
+      "dkernel": -0.00151117,
+      "en": 2.58,
+      "gam": 0.339971,
+      "gam3": -0.0501722,
+      "mprad": 3.1,
+      "mpvcn": 3.0,
+      "qkernel": 0.00442859,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0256951,
+          "index": 0,
+          "level": -20.029654,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.2585552,
+          "slater": 1.981333
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0098465,
+          "index": 1,
+          "level": -11.377694,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 4.0,
+          "shell_hubbard_scale": 0.8914134,
+          "shell_polynomial": -0.08048064,
+          "slater": 2.025643
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.200769,
+          "index": 2,
+          "level": -0.420282,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.75,
+          "shell_polynomial": 0.25993857,
+          "slater": 1.702555
+        }
+      ],
+      "symbol": "S",
+      "xbond": 0.0,
+      "zeff": 14.99509
+    },
+    {
+      "arep": 1.577144,
+      "atomic_number": 17,
+      "dkernel": -0.02536958,
+      "en": 3.16,
+      "gam": 0.248514,
+      "gam3": 0.1495483,
+      "mprad": 2.5,
+      "mpvcn": 1.0,
+      "qkernel": 0.00122783,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0617972,
+          "index": 0,
+          "level": -29.278780999999995,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.16562004,
+          "slater": 2.485265
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0181618,
+          "index": 1,
+          "level": -12.673758,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 5.0,
+          "shell_hubbard_scale": 1.49894,
+          "shell_polynomial": -0.0698643,
+          "slater": 2.19965
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.1672768,
+          "index": 2,
+          "level": -0.240338,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.5,
+          "shell_polynomial": 0.38045622,
+          "slater": 2.476089
+        }
+      ],
+      "symbol": "Cl",
+      "xbond": 0.0,
+      "zeff": 17.353134
+    },
+    {
+      "arep": 0.896198,
+      "atomic_number": 18,
+      "dkernel": -0.02077329,
+      "en": 3.5,
+      "gam": 0.502376,
+      "gam3": -0.0315455,
+      "mprad": 5.0,
+      "mpvcn": 1.0,
+      "qkernel": -0.01083404,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 5.54e-05,
+          "index": 0,
+          "level": -16.48773,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.23893924,
+          "slater": 2.329679
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0065921,
+          "index": 1,
+          "level": -13.910539,
+          "ngauss": 4,
+          "principal_quantum_number": 3,
+          "reference_occupation": 6.0,
+          "shell_hubbard_scale": 0.9538867,
+          "shell_polynomial": -0.03727322,
+          "slater": 2.149419
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.2732165,
+          "index": 2,
+          "level": -1.167213,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.99,
+          "shell_polynomial": 0.26812872,
+          "slater": 1.950531
+        }
+      ],
+      "symbol": "Ar",
+      "xbond": 0.0,
+      "zeff": 7.266606
+    },
+    {
+      "arep": 0.482206,
+      "atomic_number": 19,
+      "dkernel": -0.00103383,
+      "en": 0.82,
+      "gam": 0.247602,
+      "gam3": 0.2033085,
+      "mprad": 5.0,
+      "mpvcn": 1.0,
+      "qkernel": 0.00025,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0339245,
+          "index": 0,
+          "level": -4.510348,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.0607606,
+          "slater": 0.875961
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0174542,
+          "index": 1,
+          "level": -0.934377,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.3483654999999999,
+          "shell_polynomial": 0.21187329,
+          "slater": 0.631694
+        }
+      ],
+      "symbol": "K",
+      "xbond": 0.0,
+      "zeff": 10.439482
+    },
+    {
+      "arep": 0.683051,
+      "atomic_number": 20,
+      "dkernel": -0.00236675,
+      "en": 1.0,
+      "gam": 0.320378,
+      "gam3": 0.2006898,
+      "mprad": 5.0,
+      "mpvcn": 2.0,
+      "qkernel": 0.0001,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.057093,
+          "index": 0,
+          "level": -5.056506,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.09718719,
+          "slater": 1.26713
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0074926,
+          "index": 1,
+          "level": -1.150304,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 2.5,
+          "shell_polynomial": 0.31973372,
+          "slater": 0.786247
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.1013752,
+          "index": 2,
+          "level": -0.776883,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.75,
+          "shell_polynomial": 0.09528649,
+          "slater": 1.38
+        }
+      ],
+      "symbol": "Ca",
+      "xbond": 0.0,
+      "zeff": 14.786701
+    },
+    {
+      "arep": 0.574299,
+      "atomic_number": 21,
+      "dkernel": -0.00515177,
+      "en": 1.36,
+      "gam": 0.472633,
+      "gam3": 0.05,
+      "mprad": 5.0,
+      "mpvcn": 4.0,
+      "qkernel": -0.00042004,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.2026777,
+          "index": 0,
+          "level": -5.196187,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.7953284,
+          "shell_polynomial": -0.34502301,
+          "slater": 2.44
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0991293,
+          "index": 1,
+          "level": -8.87794,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.00686569,
+          "slater": 1.358701
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0281241,
+          "index": 2,
+          "level": -2.008206,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.92,
+          "shell_polynomial": 0.38044933,
+          "slater": 1.019252
+        }
+      ],
+      "symbol": "Sc",
+      "xbond": 0.0,
+      "zeff": 8.004267
+    },
+    {
+      "arep": 0.723104,
+      "atomic_number": 22,
+      "dkernel": -0.00434506,
+      "en": 1.54,
+      "gam": 0.513586,
+      "gam3": 0.1767268,
+      "mprad": 5.0,
+      "mpvcn": 4.0,
+      "qkernel": 0.0005966,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.1028188,
+          "index": 0,
+          "level": -7.234331,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 0.5078886,
+          "shell_polynomial": -0.27724389,
+          "slater": 1.849994
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1007021,
+          "index": 1,
+          "level": -10.9,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.04561234,
+          "slater": 1.469983
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0237074,
+          "index": 2,
+          "level": -1.9287829999999997,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.62,
+          "shell_polynomial": 0.51801626,
+          "slater": 0.95741
+        }
+      ],
+      "symbol": "Ti",
+      "xbond": 0.0,
+      "zeff": 12.036336
+    },
+    {
+      "arep": 0.928532,
+      "atomic_number": 23,
+      "dkernel": -0.0035,
+      "en": 1.63,
+      "gam": 0.589187,
+      "gam3": 0.09,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 9.764e-05,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0164476,
+          "index": 0,
+          "level": -9.015342,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 3.0,
+          "shell_hubbard_scale": 0.9620912,
+          "shell_polynomial": -0.29827563,
+          "slater": 1.673577
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0235696,
+          "index": 1,
+          "level": -9.573347,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.09702482,
+          "slater": 1.383176
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0108232,
+          "index": 2,
+          "level": -0.706647,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.55,
+          "shell_polynomial": 0.51178301,
+          "slater": 0.938025
+        }
+      ],
+      "symbol": "V",
+      "xbond": 0.0,
+      "zeff": 15.677873
+    },
+    {
+      "arep": 0.966993,
+      "atomic_number": 24,
+      "dkernel": 0.00149669,
+      "en": 1.66,
+      "gam": 0.396299,
+      "gam3": 0.03,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 0.00137744,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0289291,
+          "index": 0,
+          "level": -7.209793999999999,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 4.0,
+          "shell_hubbard_scale": 1.7405872,
+          "shell_polynomial": -0.27971622,
+          "slater": 1.568211
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0232087,
+          "index": 1,
+          "level": -9.201304,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.13376234,
+          "slater": 1.395427
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0188919,
+          "index": 2,
+          "level": -0.696957,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.53,
+          "shell_polynomial": 0.48092152,
+          "slater": 1.08027
+        }
+      ],
+      "symbol": "Cr",
+      "xbond": 0.0,
+      "zeff": 19.517914
+    },
+    {
+      "arep": 1.0711,
+      "atomic_number": 25,
+      "dkernel": -0.00759168,
+      "en": 1.55,
+      "gam": 0.346651,
+      "gam3": 0.06,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 0.00229903,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0195827,
+          "index": 0,
+          "level": -10.120933,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 5.0,
+          "shell_hubbard_scale": 1.0545811,
+          "shell_polynomial": -0.31255885,
+          "slater": 1.83925
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0275,
+          "index": 1,
+          "level": -5.617346,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.28519691,
+          "slater": 1.22219
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0015839,
+          "index": 2,
+          "level": -4.198724,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4,
+          "shell_polynomial": 0.26346555,
+          "slater": 1.240215
+        }
+      ],
+      "symbol": "Mn",
+      "xbond": 0.0,
+      "zeff": 18.760605
+    },
+    {
+      "arep": 1.113422,
+      "atomic_number": 26,
+      "dkernel": 0.00412929,
+      "en": 1.83,
+      "gam": 0.271594,
+      "gam3": -0.05,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 0.00267734,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0274654,
+          "index": 0,
+          "level": -10.035473,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 6.0,
+          "shell_hubbard_scale": 1.4046615,
+          "shell_polynomial": -0.28614961,
+          "slater": 1.911049
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.4049876,
+          "index": 1,
+          "level": -5.402911,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.11527794,
+          "slater": 1.022393
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.075648,
+          "index": 2,
+          "level": -3.308988,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.35,
+          "shell_polynomial": 0.3945989,
+          "slater": 1.294467
+        }
+      ],
+      "symbol": "Fe",
+      "xbond": 0.0,
+      "zeff": 20.360089
+    },
+    {
+      "arep": 1.241717,
+      "atomic_number": 27,
+      "dkernel": -0.00247938,
+      "en": 1.88,
+      "gam": 0.47776,
+      "gam3": 0.03,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 0.00048237,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.012198,
+          "index": 0,
+          "level": -10.58043,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 7.0,
+          "shell_hubbard_scale": 0.7581507000000001,
+          "shell_polynomial": -0.22355636,
+          "slater": 2.326507
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0227872,
+          "index": 1,
+          "level": -8.596723,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.0916846,
+          "slater": 1.464221
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0076513,
+          "index": 2,
+          "level": -2.585753,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.35,
+          "shell_polynomial": 0.25424719,
+          "slater": 1.298678
+        }
+      ],
+      "symbol": "Co",
+      "xbond": 0.0,
+      "zeff": 27.127744
+    },
+    {
+      "arep": 1.077516,
+      "atomic_number": 28,
+      "dkernel": -0.01261887,
+      "en": 1.91,
+      "gam": 0.34497,
+      "gam3": -0.02,
+      "mprad": 5.0,
+      "mpvcn": 4.0,
+      "qkernel": -0.0008,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0066417,
+          "index": 0,
+          "level": -12.712236,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 8.0,
+          "shell_hubbard_scale": 0.9388812,
+          "shell_polynomial": -0.2538564,
+          "slater": 2.430756
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0310301,
+          "index": 1,
+          "level": -8.524281,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.2083955,
+          "slater": 1.469945
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0226796,
+          "index": 2,
+          "level": -2.878873,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4,
+          "shell_polynomial": 0.30886445,
+          "slater": 1.317046
+        }
+      ],
+      "symbol": "Ni",
+      "xbond": 0.0,
+      "zeff": 10.533269
+    },
+    {
+      "arep": 0.998768,
+      "atomic_number": 29,
+      "dkernel": -0.007,
+      "en": 1.9,
+      "gam": 0.202969,
+      "gam3": 0.05,
+      "mprad": 5.0,
+      "mpvcn": 4.0,
+      "qkernel": -0.00345631,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0173684,
+          "index": 0,
+          "level": -9.506548,
+          "ngauss": 3,
+          "principal_quantum_number": 3,
+          "reference_occupation": 10.0,
+          "shell_hubbard_scale": 2.3333066000000002,
+          "shell_polynomial": -0.26508943,
+          "slater": 2.375425
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.3349047,
+          "index": 1,
+          "level": -6.922958,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.17798264,
+          "slater": 1.550837
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.2619446,
+          "index": 2,
+          "level": -2.267723,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.07,
+          "shell_polynomial": 0.14977818,
+          "slater": 1.984703
+        }
+      ],
+      "symbol": "Cu",
+      "xbond": 0.0,
+      "zeff": 9.913846
+    },
+    {
+      "arep": 1.160262,
+      "atomic_number": 30,
+      "dkernel": -0.001,
+      "en": 1.65,
+      "gam": 0.564152,
+      "gam3": 0.2312896,
+      "mprad": 5.0,
+      "mpvcn": 2.0,
+      "qkernel": 7.658e-05,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.201191,
+          "index": 0,
+          "level": -7.177294,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.09240315,
+          "slater": 1.664847
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0055135,
+          "index": 1,
+          "level": -0.991895,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.0684343,
+          "shell_polynomial": 0.22271839,
+          "slater": 1.176434
+        }
+      ],
+      "symbol": "Zn",
+      "xbond": 0.0,
+      "zeff": 22.099503
+    },
+    {
+      "arep": 1.122923,
+      "atomic_number": 31,
+      "dkernel": 0.00267219,
+      "en": 1.81,
+      "gam": 0.432236,
+      "gam3": 0.2334269,
+      "mprad": 5.0,
+      "mpvcn": 3.0,
+      "qkernel": -3.616e-05,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0234627,
+          "index": 0,
+          "level": -12.449656,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.19018211,
+          "slater": 1.720919
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.1305831,
+          "index": 1,
+          "level": -4.469873,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4583445,
+          "shell_polynomial": -0.0113779,
+          "slater": 1.59157
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0165604,
+          "index": 2,
+          "level": -0.582255,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.7,
+          "shell_polynomial": 0.35401863,
+          "slater": 1.05
+        }
+      ],
+      "symbol": "Ga",
+      "xbond": 0.0,
+      "zeff": 31.14675
+    },
+    {
+      "arep": 1.222349,
+      "atomic_number": 32,
+      "dkernel": 0.0010846,
+      "en": 2.01,
+      "gam": 0.802051,
+      "gam3": -0.0064775,
+      "mprad": 5.0,
+      "mpvcn": 3.0,
+      "qkernel": -3.589e-05,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0361068,
+          "index": 0,
+          "level": -16.369792,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.5,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.21333673,
+          "slater": 1.990429
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0014474,
+          "index": 1,
+          "level": -8.207673,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 2.5,
+          "shell_hubbard_scale": 0.6190911,
+          "shell_polynomial": -0.09749043,
+          "slater": 1.83034
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.1042559,
+          "index": 2,
+          "level": -0.9942259999999999,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.85,
+          "shell_polynomial": 0.28634699,
+          "slater": 1.1
+        }
+      ],
+      "symbol": "Ge",
+      "xbond": 0.0,
+      "zeff": 42.100144
+    },
+    {
+      "arep": 1.249372,
+      "atomic_number": 33,
+      "dkernel": -0.00201294,
+      "en": 2.18,
+      "gam": 0.571748,
+      "gam3": 0.1106041,
+      "mprad": 5.0,
+      "mpvcn": 3.0,
+      "qkernel": 0.00014149,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.012964,
+          "index": 0,
+          "level": -16.421504,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.5,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.23820664,
+          "slater": 2.026128
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.023647,
+          "index": 1,
+          "level": -9.311147,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 3.5,
+          "shell_hubbard_scale": 0.5895257,
+          "shell_polynomial": -0.10644177,
+          "slater": 1.949257
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.2330144,
+          "index": 2,
+          "level": -0.27683,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.5,
+          "shell_polynomial": 0.3071113,
+          "slater": 1.040181
+        }
+      ],
+      "symbol": "As",
+      "xbond": 0.0,
+      "zeff": 39.147587
+    },
+    {
+      "arep": 1.230284,
+      "atomic_number": 34,
+      "dkernel": -0.00288648,
+      "en": 2.55,
+      "gam": 0.235052,
+      "gam3": 0.0913725,
+      "mprad": 3.9,
+      "mpvcn": 3.0,
+      "qkernel": 0.00085728,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0061654,
+          "index": 0,
+          "level": -20.584732,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.24506414,
+          "slater": 2.230969
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0435018,
+          "index": 1,
+          "level": -10.910799,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 4.0,
+          "shell_hubbard_scale": 1.1192113,
+          "shell_polynomial": -0.1376575,
+          "slater": 2.150656
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.2768559,
+          "index": 2,
+          "level": -0.110636,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.75,
+          "shell_polynomial": 0.29611132,
+          "slater": 1.317549
+        }
+      ],
+      "symbol": "Se",
+      "xbond": 0.0,
+      "zeff": 27.426779
+    },
+    {
+      "arep": 1.296174,
+      "atomic_number": 35,
+      "dkernel": -0.01088586,
+      "en": 2.96,
+      "gam": 0.261253,
+      "gam3": 0.13,
+      "mprad": 4.0,
+      "mpvcn": 1.0,
+      "qkernel": 0.00216935,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.000615,
+          "index": 0,
+          "level": -23.583718,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.25005079,
+          "slater": 2.077587
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0058347,
+          "index": 1,
+          "level": -12.588824,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 5.0,
+          "shell_hubbard_scale": 1.5203001999999999,
+          "shell_polynomial": -0.14520078,
+          "slater": 2.26312
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.225018,
+          "index": 2,
+          "level": 0.04798,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.4,
+          "shell_polynomial": 0.36614038,
+          "slater": 1.845038
+        }
+      ],
+      "symbol": "Br",
+      "xbond": 0.0,
+      "zeff": 32.845361
+    },
+    {
+      "arep": 0.908074,
+      "atomic_number": 36,
+      "dkernel": -0.00889357,
+      "en": 3.0,
+      "gam": 0.424373,
+      "gam3": 0.0239815,
+      "mprad": 5.0,
+      "mpvcn": 1.0,
+      "qkernel": -0.00415024,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0070305,
+          "index": 0,
+          "level": -17.221422,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.32658744,
+          "slater": 2.44568
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0076023,
+          "index": 1,
+          "level": -13.633376999999998,
+          "ngauss": 4,
+          "principal_quantum_number": 4,
+          "reference_occupation": 6.0,
+          "shell_hubbard_scale": 0.7496777,
+          "shell_polynomial": -0.13600093,
+          "slater": 2.210494
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0349523,
+          "index": 2,
+          "level": -0.940657,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.9299999999999999,
+          "shell_polynomial": 0.23204749,
+          "slater": 1.884991
+        }
+      ],
+      "symbol": "Kr",
+      "xbond": 0.0,
+      "zeff": 17.363803
+    },
+    {
+      "arep": 0.574054,
+      "atomic_number": 37,
+      "dkernel": -0.00093328,
+      "en": 0.82,
+      "gam": 0.210481,
+      "gam3": 0.2916203,
+      "mprad": 5.0,
+      "mpvcn": 1.0,
+      "qkernel": 0.00015,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.1516926,
+          "index": 0,
+          "level": -4.353793,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.04325404,
+          "slater": 1.017267
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0203437,
+          "index": 1,
+          "level": -1.392938,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.9386493,
+          "shell_polynomial": 0.23255114,
+          "slater": 0.87013
+        }
+      ],
+      "symbol": "Rb",
+      "xbond": 0.0,
+      "zeff": 44.338211
+    },
+    {
+      "arep": 0.697345,
+      "atomic_number": 38,
+      "dkernel": -0.00459925,
+      "en": 0.95,
+      "gam": 0.34,
+      "gam3": 0.18,
+      "mprad": 5.0,
+      "mpvcn": 2.0,
+      "qkernel": 0.00015,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.040902,
+          "index": 0,
+          "level": -6.291692,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.14506782,
+          "slater": 1.419028
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0418725,
+          "index": 1,
+          "level": -1.872475,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 2.5,
+          "shell_polynomial": 0.20213982,
+          "slater": 0.928932
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0401255,
+          "index": 2,
+          "level": -0.890492,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.75,
+          "shell_polynomial": 0.10816244,
+          "slater": 1.5
+        }
+      ],
+      "symbol": "Sr",
+      "xbond": 0.0,
+      "zeff": 34.365525
+    },
+    {
+      "arep": 0.706172,
+      "atomic_number": 39,
+      "dkernel": -0.00637291,
+      "en": 1.22,
+      "gam": 0.711958,
+      "gam3": 0.01,
+      "mprad": 5.0,
+      "mpvcn": 4.0,
+      "qkernel": 0.0001046,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.1270337,
+          "index": 0,
+          "level": -8.015206,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.6650712,
+          "shell_polynomial": -0.39529477,
+          "slater": 2.670141
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1937516,
+          "index": 1,
+          "level": -12.194181,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.02125866,
+          "slater": 1.633876
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0641897,
+          "index": 2,
+          "level": -0.9661949999999999,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.55,
+          "shell_polynomial": 0.52161869,
+          "slater": 1.165412
+        }
+      ],
+      "symbol": "Y",
+      "xbond": 0.0,
+      "zeff": 17.326237
+    },
+    {
+      "arep": 0.681106,
+      "atomic_number": 40,
+      "dkernel": -0.00599615,
+      "en": 1.33,
+      "gam": 0.46144,
+      "gam3": 0.07,
+      "mprad": 5.0,
+      "mpvcn": 4.0,
+      "qkernel": -0.00012944,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0566943,
+          "index": 0,
+          "level": -7.409832,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 0.5577369999999999,
+          "shell_polynomial": -0.28358876,
+          "slater": 2.238668
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1266548,
+          "index": 1,
+          "level": -10.199105,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.07538902,
+          "slater": 1.70248
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0279435,
+          "index": 2,
+          "level": -1.066939,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.89,
+          "shell_polynomial": 0.58914069,
+          "slater": 1.12959
+        }
+      ],
+      "symbol": "Zr",
+      "xbond": 0.0,
+      "zeff": 24.263093
+    },
+    {
+      "arep": 0.865552,
+      "atomic_number": 41,
+      "dkernel": -0.00288729,
+      "en": 1.6,
+      "gam": 0.952957,
+      "gam3": 0.05,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 0.00041491,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.1356485,
+          "index": 0,
+          "level": -8.440821,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 3.0,
+          "shell_hubbard_scale": 0.643705,
+          "shell_polynomial": -0.27963746,
+          "slater": 1.706832
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.2555962,
+          "index": 1,
+          "level": -11.384021,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.0514108,
+          "slater": 1.666463
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0002341,
+          "index": 2,
+          "level": -0.10376,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.95,
+          "shell_polynomial": 0.55654247,
+          "slater": 1.132172
+        }
+      ],
+      "symbol": "Nb",
+      "xbond": 0.0,
+      "zeff": 30.562732
+    },
+    {
+      "arep": 1.034519,
+      "atomic_number": 42,
+      "dkernel": 0.00346327,
+      "en": 2.16,
+      "gam": 0.586134,
+      "gam3": 0.0919928,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 0.00312549,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0620172,
+          "index": 0,
+          "level": -7.995133,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 4.0,
+          "shell_hubbard_scale": 0.5698629,
+          "shell_polynomial": -0.22573688,
+          "slater": 1.777658
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.3008411,
+          "index": 1,
+          "level": -7.336244999999999,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.00583137,
+          "slater": 1.639917
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.1040348,
+          "index": 2,
+          "level": -3.6862250000000003,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.7,
+          "shell_polynomial": 0.2919958,
+          "slater": 1.159781
+        }
+      ],
+      "symbol": "Mo",
+      "xbond": 0.0,
+      "zeff": 48.312796
+    },
+    {
+      "arep": 1.019565,
+      "atomic_number": 43,
+      "dkernel": -0.00458416,
+      "en": 1.9,
+      "gam": 0.368054,
+      "gam3": 0.06,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 0.00155242,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0066526,
+          "index": 0,
+          "level": -9.587897,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 5.0,
+          "shell_hubbard_scale": 1.3956819,
+          "shell_polynomial": -0.27342552,
+          "slater": 1.918066
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0586205,
+          "index": 1,
+          "level": -6.792444,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.36096045,
+          "slater": 1.918167
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0087319,
+          "index": 2,
+          "level": -3.325525,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4,
+          "shell_polynomial": 0.25095742,
+          "slater": 1.346082
+        }
+      ],
+      "symbol": "Tc",
+      "xbond": 0.0,
+      "zeff": 44.779882
+    },
+    {
+      "arep": 1.031669,
+      "atomic_number": 44,
+      "dkernel": -0.00081922,
+      "en": 2.2,
+      "gam": 0.711205,
+      "gam3": -0.05,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 0.00359228,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0263914,
+          "index": 0,
+          "level": -10.285405,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 6.0,
+          "shell_hubbard_scale": 0.6947695,
+          "shell_polynomial": -0.27583213,
+          "slater": 2.102697
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.4471162,
+          "index": 1,
+          "level": -5.332608,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.1010627,
+          "slater": 1.749643
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0034723,
+          "index": 2,
+          "level": -3.307153,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.35,
+          "shell_polynomial": 0.34028722,
+          "slater": 1.348322
+        }
+      ],
+      "symbol": "Ru",
+      "xbond": 0.0,
+      "zeff": 28.070247
+    },
+    {
+      "arep": 1.094599,
+      "atomic_number": 45,
+      "dkernel": 7.016e-05,
+      "en": 2.28,
+      "gam": 0.509183,
+      "gam3": 0.03,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 8.57e-05,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0104368,
+          "index": 0,
+          "level": -11.756644,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 7.0,
+          "shell_hubbard_scale": 0.8118226,
+          "shell_polynomial": -0.19656064,
+          "slater": 2.458187
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0066741,
+          "index": 1,
+          "level": -7.850495,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.15413317,
+          "slater": 1.811796
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0213308,
+          "index": 2,
+          "level": -3.007906,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.35,
+          "shell_polynomial": 0.31070684,
+          "slater": 1.398452
+        }
+      ],
+      "symbol": "Rh",
+      "xbond": 0.0,
+      "zeff": 38.035941
+    },
+    {
+      "arep": 1.092745,
+      "atomic_number": 46,
+      "dkernel": -0.00310361,
+      "en": 2.2,
+      "gam": 0.27331,
+      "gam3": 0.08,
+      "mprad": 5.0,
+      "mpvcn": 4.0,
+      "qkernel": -0.00040485,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0060285,
+          "index": 0,
+          "level": -11.963518,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 8.0,
+          "shell_hubbard_scale": 1.0931707,
+          "shell_polynomial": -0.27173113,
+          "slater": 2.353691
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.026682,
+          "index": 1,
+          "level": -9.714059,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.06200145,
+          "slater": 1.828354
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0503075,
+          "index": 2,
+          "level": -2.035281,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4,
+          "shell_polynomial": 0.45341322,
+          "slater": 1.333352
+        }
+      ],
+      "symbol": "Pd",
+      "xbond": 0.0,
+      "zeff": 28.6747
+    },
+    {
+      "arep": 0.678344,
+      "atomic_number": 47,
+      "dkernel": -0.00800314,
+      "en": 1.93,
+      "gam": 0.26374,
+      "gam3": 0.02,
+      "mprad": 5.0,
+      "mpvcn": 4.0,
+      "qkernel": -0.0002081,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0062719,
+          "index": 0,
+          "level": -9.591083,
+          "ngauss": 3,
+          "principal_quantum_number": 4,
+          "reference_occupation": 10.0,
+          "shell_hubbard_scale": 1.8024848,
+          "shell_polynomial": -0.16490742,
+          "slater": 2.843549
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0065794,
+          "index": 1,
+          "level": -8.08396,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.0109149,
+          "slater": 1.798462
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.1677171,
+          "index": 2,
+          "level": -2.934333,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.97,
+          "shell_polynomial": 0.11561444,
+          "slater": 1.266649
+        }
+      ],
+      "symbol": "Ag",
+      "xbond": 0.0,
+      "zeff": 6.493286
+    },
+    {
+      "arep": 0.936236,
+      "atomic_number": 48,
+      "dkernel": -0.00105364,
+      "en": 1.69,
+      "gam": 0.392012,
+      "gam3": 0.2073217,
+      "mprad": 5.0,
+      "mpvcn": 2.0,
+      "qkernel": 0.0001225,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1418145,
+          "index": 0,
+          "level": -7.252341,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.06076865,
+          "slater": 1.846689
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0309814,
+          "index": 1,
+          "level": -0.744865,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.2388669,
+          "shell_polynomial": 0.37671924,
+          "slater": 1.141823
+        }
+      ],
+      "symbol": "Cd",
+      "xbond": 0.0,
+      "zeff": 26.226628
+    },
+    {
+      "arep": 1.024007,
+      "atomic_number": 49,
+      "dkernel": 0.00951079,
+      "en": 1.78,
+      "gam": 0.461812,
+      "gam3": 0.19,
+      "mprad": 5.0,
+      "mpvcn": 3.0,
+      "qkernel": -2.031e-05,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0098312,
+          "index": 0,
+          "level": -13.040909,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.21938535,
+          "slater": 1.963283
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0994688,
+          "index": 1,
+          "level": -4.507143,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.413254,
+          "shell_polynomial": -0.01949646,
+          "slater": 1.685138
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0168649,
+          "index": 2,
+          "level": -0.805666,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.72,
+          "shell_polynomial": 0.313545,
+          "slater": 1.05
+        }
+      ],
+      "symbol": "In",
+      "xbond": 0.0,
+      "zeff": 63.85424
+    },
+    {
+      "arep": 1.139959,
+      "atomic_number": 50,
+      "dkernel": 0.00085029,
+      "en": 1.96,
+      "gam": 0.9,
+      "gam3": -0.0178396,
+      "mprad": 5.0,
+      "mpvcn": 3.0,
+      "qkernel": -8.243e-05,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0454629,
+          "index": 0,
+          "level": -19.970428,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.17518223,
+          "slater": 2.55151
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0320651,
+          "index": 1,
+          "level": -7.367058999999999,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 0.4909254,
+          "shell_polynomial": -0.0780287,
+          "slater": 1.893784
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.1459407,
+          "index": 2,
+          "level": -2.077548,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.94,
+          "shell_polynomial": 0.12611148,
+          "slater": 1.1
+        }
+      ],
+      "symbol": "Sn",
+      "xbond": 0.0,
+      "zeff": 80.053438
+    },
+    {
+      "arep": 1.122937,
+      "atomic_number": 51,
+      "dkernel": -0.00015519,
+      "en": 2.05,
+      "gam": 0.942294,
+      "gam3": 0.11,
+      "mprad": 5.0,
+      "mpvcn": 3.0,
+      "qkernel": -0.0002063,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0147626,
+          "index": 0,
+          "level": -18.371244,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.17543533,
+          "slater": 2.307407
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0091175,
+          "index": 1,
+          "level": -7.350148,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 3.0,
+          "shell_hubbard_scale": 0.3721499,
+          "shell_polynomial": -0.12494609,
+          "slater": 2.179752
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.1602872,
+          "index": 2,
+          "level": 0.9090330000000001,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.45,
+          "shell_polynomial": 0.30872654,
+          "slater": 1.256087
+        }
+      ],
+      "symbol": "Sb",
+      "xbond": 0.0,
+      "zeff": 77.05756
+    },
+    {
+      "arep": 1.000712,
+      "atomic_number": 52,
+      "dkernel": -0.00263414,
+      "en": 2.1,
+      "gam": 0.75,
+      "gam3": 0.0953683,
+      "mprad": 5.0,
+      "mpvcn": 3.0,
+      "qkernel": -0.00026864,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0115389,
+          "index": 0,
+          "level": -21.930653,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.24893875,
+          "slater": 2.434144
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0082051,
+          "index": 1,
+          "level": -9.480374,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 4.0,
+          "shell_hubbard_scale": 0.8444666000000001,
+          "shell_polynomial": -0.11231996,
+          "slater": 2.182459
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.3013228,
+          "index": 2,
+          "level": 0.9789220000000001,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.06,
+          "shell_polynomial": 0.31843215,
+          "slater": 1.373076
+        }
+      ],
+      "symbol": "Te",
+      "xbond": 0.0,
+      "zeff": 48.614745
+    },
+    {
+      "arep": 1.017946,
+      "atomic_number": 53,
+      "dkernel": -0.00603648,
+      "en": 2.66,
+      "gam": 0.383124,
+      "gam3": 0.12,
+      "mprad": 5.0,
+      "mpvcn": 1.0,
+      "qkernel": 0.0006966,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.050615,
+          "index": 0,
+          "level": -20.949407,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.26957547,
+          "slater": 2.1595
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0084766,
+          "index": 1,
+          "level": -12.180159,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 5.0,
+          "shell_hubbard_scale": 0.9661265,
+          "shell_polynomial": -0.14183312,
+          "slater": 2.308379
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.3077127,
+          "index": 2,
+          "level": -0.266596,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.3,
+          "shell_polynomial": 0.28211905,
+          "slater": 1.691185
+        }
+      ],
+      "symbol": "I",
+      "xbond": 0.0,
+      "zeff": 63.319176
+    },
+    {
+      "arep": 1.012036,
+      "atomic_number": 54,
+      "dkernel": -0.00214447,
+      "en": 2.6,
+      "gam": 0.424164,
+      "gam3": -0.0118925,
+      "mprad": 5.0,
+      "mpvcn": 1.0,
+      "qkernel": -0.001562,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0020195,
+          "index": 0,
+          "level": -19.090498,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.31096492,
+          "slater": 2.71514
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0017246,
+          "index": 1,
+          "level": -11.249471,
+          "ngauss": 4,
+          "principal_quantum_number": 5,
+          "reference_occupation": 6.0,
+          "shell_hubbard_scale": 0.7697333,
+          "shell_polynomial": -0.16197851,
+          "slater": 2.31251
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0327039,
+          "index": 2,
+          "level": -0.497097,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.77,
+          "shell_polynomial": 0.19048983,
+          "slater": 1.855707
+        }
+      ],
+      "symbol": "Xe",
+      "xbond": 0.0,
+      "zeff": 51.188398
+    },
+    {
+      "arep": 0.585257,
+      "atomic_number": 55,
+      "dkernel": -0.0008,
+      "en": 0.79,
+      "gam": 0.236569,
+      "gam3": 0.2404185,
+      "mprad": 5.0,
+      "mpvcn": 1.0,
+      "qkernel": 8e-05,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.1312604,
+          "index": 0,
+          "level": -4.041706,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.00713637,
+          "slater": 1.225688
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.01,
+          "index": 1,
+          "level": -1.394193,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.2494304999999999,
+          "shell_polynomial": 0.20636967,
+          "slater": 0.823818
+        }
+      ],
+      "symbol": "Cs",
+      "xbond": 0.0,
+      "zeff": 67.249039
+    },
+    {
+      "arep": 0.716259,
+      "atomic_number": 56,
+      "dkernel": -0.0026,
+      "en": 0.89,
+      "gam": 0.245937,
+      "gam3": 0.2069097,
+      "mprad": 5.0,
+      "mpvcn": 2.0,
+      "qkernel": 0.00015,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0352001,
+          "index": 0,
+          "level": -5.9,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.14036589,
+          "slater": 1.528102
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0926576,
+          "index": 1,
+          "level": -2.133395,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 3.2247532,
+          "shell_polynomial": 0.18774072,
+          "slater": 0.991572
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0147995,
+          "index": 2,
+          "level": -1.5149,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.77,
+          "shell_polynomial": 0.11389672,
+          "slater": 1.5
+        }
+      ],
+      "symbol": "Ba",
+      "xbond": 0.0,
+      "zeff": 46.984607
+    },
+    {
+      "arep": 0.737643,
+      "atomic_number": 57,
+      "dkernel": -0.00395198,
+      "en": 1.1,
+      "gam": 0.597716,
+      "gam3": 0.0012793,
+      "mprad": 5.0,
+      "mpvcn": 4.0,
+      "qkernel": -0.0003,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0777542,
+          "index": 0,
+          "level": -8.958783,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.5300334,
+          "shell_polynomial": -0.37820063,
+          "slater": 2.875048
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1071684,
+          "index": 1,
+          "level": -11.87741,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.06732008,
+          "slater": 1.73139
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0239967,
+          "index": 2,
+          "level": -0.601717,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.7,
+          "shell_polynomial": 0.54136379,
+          "slater": 1.30359
+        }
+      ],
+      "symbol": "La",
+      "xbond": 0.0,
+      "zeff": 50.927529
+    },
+    {
+      "arep": 0.72995,
+      "atomic_number": 58,
+      "dkernel": -0.00723806,
+      "en": 1.12,
+      "gam": 0.662889,
+      "gam3": -0.01,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": -0.00025,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0638958,
+          "index": 0,
+          "level": -7.381991,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4460341,
+          "shell_polynomial": -0.41989203,
+          "slater": 2.87
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1335148,
+          "index": 1,
+          "level": -8.537781,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.06107742,
+          "slater": 1.725197
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.019832,
+          "index": 2,
+          "level": -3.017508,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.7,
+          "shell_polynomial": 0.3766342499999999,
+          "slater": 1.309804
+        }
+      ],
+      "symbol": "Ce",
+      "xbond": 0.0,
+      "zeff": 48.676714
+    },
+    {
+      "arep": 0.734624,
+      "atomic_number": 59,
+      "dkernel": -0.00704819,
+      "en": 1.13,
+      "gam": 0.66071,
+      "gam3": -0.0100002,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": -0.00024615,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0543909,
+          "index": 0,
+          "level": -7.280874999999999,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4537215999999999,
+          "shell_polynomial": -0.41286513,
+          "slater": 2.872308
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1349441,
+          "index": 1,
+          "level": -8.504806,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.06040165,
+          "slater": 1.729767
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0198184,
+          "index": 2,
+          "level": -2.873159,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.723077,
+          "shell_polynomial": 0.38194756,
+          "slater": 1.315495
+        }
+      ],
+      "symbol": "Pr",
+      "xbond": 0.0,
+      "zeff": 47.669448
+    },
+    {
+      "arep": 0.739299,
+      "atomic_number": 60,
+      "dkernel": -0.00685832,
+      "en": 1.14,
+      "gam": 0.658531,
+      "gam3": -0.0100004,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": -0.00024231,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0448861,
+          "index": 0,
+          "level": -7.17976,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4614091,
+          "shell_polynomial": -0.40583824,
+          "slater": 2.874615
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1363734,
+          "index": 1,
+          "level": -8.47183,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.05972588,
+          "slater": 1.734337
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0198048,
+          "index": 2,
+          "level": -2.728809,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.746154,
+          "shell_polynomial": 0.38726087,
+          "slater": 1.321186
+        }
+      ],
+      "symbol": "Nd",
+      "xbond": 0.0,
+      "zeff": 46.662183
+    },
+    {
+      "arep": 0.743973,
+      "atomic_number": 61,
+      "dkernel": -0.00666845,
+      "en": 1.15,
+      "gam": 0.656352,
+      "gam3": -0.0100006,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": -0.00023846,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0353812,
+          "index": 0,
+          "level": -7.078643999999999,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4690966,
+          "shell_polynomial": -0.39881134,
+          "slater": 2.876923
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1378028,
+          "index": 1,
+          "level": -8.438855,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.0590501,
+          "slater": 1.738907
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0197912,
+          "index": 2,
+          "level": -2.58446,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.7692308999999999,
+          "shell_polynomial": 0.39257419,
+          "slater": 1.326877
+        }
+      ],
+      "symbol": "Pm",
+      "xbond": 0.0,
+      "zeff": 45.654917
+    },
+    {
+      "arep": 0.748648,
+      "atomic_number": 62,
+      "dkernel": -0.00647858,
+      "en": 1.17,
+      "gam": 0.654173,
+      "gam3": -0.0100008,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": -0.00023462,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0258764,
+          "index": 0,
+          "level": -6.977528999999999,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4767842,
+          "shell_polynomial": -0.3917844500000001,
+          "slater": 2.879231
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1392321,
+          "index": 1,
+          "level": -8.405879,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.05837433,
+          "slater": 1.743478
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0197776,
+          "index": 2,
+          "level": -2.44011,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.7923079,
+          "shell_polynomial": 0.3978875,
+          "slater": 1.332567
+        }
+      ],
+      "symbol": "Sm",
+      "xbond": 0.0,
+      "zeff": 44.647651
+    },
+    {
+      "arep": 0.753322,
+      "atomic_number": 63,
+      "dkernel": -0.00628871,
+      "en": 1.18,
+      "gam": 0.651994,
+      "gam3": -0.010001,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": -0.00023077,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0163715,
+          "index": 0,
+          "level": -6.876413,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4844716999999999,
+          "shell_polynomial": -0.38475755,
+          "slater": 2.881538
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1406614,
+          "index": 1,
+          "level": -8.372904,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.05769856,
+          "slater": 1.748048
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.019764,
+          "index": 2,
+          "level": -2.295761,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.8153849,
+          "shell_polynomial": 0.40320081,
+          "slater": 1.338258
+        }
+      ],
+      "symbol": "Eu",
+      "xbond": 0.0,
+      "zeff": 43.640385
+    },
+    {
+      "arep": 0.757996,
+      "atomic_number": 64,
+      "dkernel": -0.00609884,
+      "en": 1.2,
+      "gam": 0.649815,
+      "gam3": -0.0100012,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": -0.00022692,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0068667,
+          "index": 0,
+          "level": -6.775298,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4921592,
+          "shell_polynomial": -0.37773066,
+          "slater": 2.883846
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1420907,
+          "index": 1,
+          "level": -8.339929,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.05702279,
+          "slater": 1.752618
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0197504,
+          "index": 2,
+          "level": -2.151411,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.8384619,
+          "shell_polynomial": 0.40851412,
+          "slater": 1.343949
+        }
+      ],
+      "symbol": "Gd",
+      "xbond": 0.0,
+      "zeff": 42.63312
+    },
+    {
+      "arep": 0.762671,
+      "atomic_number": 65,
+      "dkernel": -0.00590897,
+      "en": 1.21,
+      "gam": 0.647635,
+      "gam3": -0.0100013,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": -0.00022308,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0026382,
+          "index": 0,
+          "level": -6.674182,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4998467,
+          "shell_polynomial": -0.37070376,
+          "slater": 2.886154
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.14352,
+          "index": 1,
+          "level": -8.306953,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.05634701,
+          "slater": 1.757188
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0197369,
+          "index": 2,
+          "level": -2.007062,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.8615387999999999,
+          "shell_polynomial": 0.41382743,
+          "slater": 1.34964
+        }
+      ],
+      "symbol": "Tb",
+      "xbond": 0.0,
+      "zeff": 41.625854
+    },
+    {
+      "arep": 0.767345,
+      "atomic_number": 66,
+      "dkernel": -0.0057191,
+      "en": 1.22,
+      "gam": 0.645456,
+      "gam3": -0.0100015,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": -0.00021923,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.012143,
+          "index": 0,
+          "level": -6.573067,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.5075342,
+          "shell_polynomial": -0.36367686,
+          "slater": 2.888462
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1449494,
+          "index": 1,
+          "level": -8.273978,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.05567124,
+          "slater": 1.761758
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0197233,
+          "index": 2,
+          "level": -1.862712,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.8846158,
+          "shell_polynomial": 0.41914074,
+          "slater": 1.355331
+        }
+      ],
+      "symbol": "Dy",
+      "xbond": 0.0,
+      "zeff": 40.618588
+    },
+    {
+      "arep": 0.77202,
+      "atomic_number": 67,
+      "dkernel": -0.00552923,
+      "en": 1.23,
+      "gam": 0.643277,
+      "gam3": -0.0100017,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": -0.00021538,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0216479,
+          "index": 0,
+          "level": -6.471951,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.5152218,
+          "shell_polynomial": -0.35664997,
+          "slater": 2.890769
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1463787,
+          "index": 1,
+          "level": -8.241003,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.05499547,
+          "slater": 1.766328
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0197097,
+          "index": 2,
+          "level": -1.718363,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.9076928,
+          "shell_polynomial": 0.42445406,
+          "slater": 1.361022
+        }
+      ],
+      "symbol": "Ho",
+      "xbond": 0.0,
+      "zeff": 39.611322
+    },
+    {
+      "arep": 0.776694,
+      "atomic_number": 68,
+      "dkernel": -0.00533936,
+      "en": 1.24,
+      "gam": 0.641098,
+      "gam3": -0.0100019,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": -0.00021154,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0311527,
+          "index": 0,
+          "level": -6.370836,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.5229093,
+          "shell_polynomial": -0.34962307,
+          "slater": 2.893077
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.147808,
+          "index": 1,
+          "level": -8.208027,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.0543197,
+          "slater": 1.770899
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0196961,
+          "index": 2,
+          "level": -1.574013,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.9307698,
+          "shell_polynomial": 0.42976737,
+          "slater": 1.366713
+        }
+      ],
+      "symbol": "Er",
+      "xbond": 0.0,
+      "zeff": 38.604057
+    },
+    {
+      "arep": 0.781368,
+      "atomic_number": 69,
+      "dkernel": -0.00514949,
+      "en": 1.25,
+      "gam": 0.638919,
+      "gam3": -0.0100021,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": -0.00020769,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0406576,
+          "index": 0,
+          "level": -6.26972,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.5305968,
+          "shell_polynomial": -0.34259618,
+          "slater": 2.895385
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1492373,
+          "index": 1,
+          "level": -8.175052,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.05364392,
+          "slater": 1.775469
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0196825,
+          "index": 2,
+          "level": -1.429664,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.9538467,
+          "shell_polynomial": 0.43508068,
+          "slater": 1.372403
+        }
+      ],
+      "symbol": "Tm",
+      "xbond": 0.0,
+      "zeff": 37.596791
+    },
+    {
+      "arep": 0.786043,
+      "atomic_number": 70,
+      "dkernel": -0.00495961,
+      "en": 1.26,
+      "gam": 0.63674,
+      "gam3": -0.0100023,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": -0.00020385,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0501624,
+          "index": 0,
+          "level": -6.168604,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.5382842999999999,
+          "shell_polynomial": -0.33556928,
+          "slater": 2.897692
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1506666,
+          "index": 1,
+          "level": -8.142076,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.05296815,
+          "slater": 1.780039
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0196689,
+          "index": 2,
+          "level": -1.285314,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.9769237,
+          "shell_polynomial": 0.44039399,
+          "slater": 1.378094
+        }
+      ],
+      "symbol": "Yb",
+      "xbond": 0.0,
+      "zeff": 36.589525
+    },
+    {
+      "arep": 0.790717,
+      "atomic_number": 71,
+      "dkernel": -0.00476974,
+      "en": 1.27,
+      "gam": 0.634561,
+      "gam3": -0.0100025,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": -0.0002,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0596673,
+          "index": 0,
+          "level": -6.067489,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.5459718,
+          "shell_polynomial": -0.32854239,
+          "slater": 2.9
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1520959,
+          "index": 1,
+          "level": -8.109101,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.05229238,
+          "slater": 1.784609
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0196553,
+          "index": 2,
+          "level": -1.140965,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0000007,
+          "shell_polynomial": 0.4457073,
+          "slater": 1.383785
+        }
+      ],
+      "symbol": "Lu",
+      "xbond": 0.0,
+      "zeff": 35.582259
+    },
+    {
+      "arep": 0.852852,
+      "atomic_number": 72,
+      "dkernel": -0.00537685,
+      "en": 1.3,
+      "gam": 0.662597,
+      "gam3": -0.01,
+      "mprad": 5.0,
+      "mpvcn": 4.0,
+      "qkernel": -0.00016478,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.017655,
+          "index": 0,
+          "level": -7.181754999999999,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 0.5513835,
+          "shell_polynomial": -0.34095699,
+          "slater": 2.638729
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.2271496,
+          "index": 1,
+          "level": -10.626891,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.0273193,
+          "slater": 2.194333
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0069771,
+          "index": 2,
+          "level": -1.60343,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.1,
+          "shell_polynomial": 0.33515028,
+          "slater": 1.427467
+        }
+      ],
+      "symbol": "Hf",
+      "xbond": 0.0,
+      "zeff": 40.186772
+    },
+    {
+      "arep": 0.990234,
+      "atomic_number": 73,
+      "dkernel": -0.00200343,
+      "en": 1.5,
+      "gam": 0.449812,
+      "gam3": 0.02,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 0.00039599,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0620136,
+          "index": 0,
+          "level": -8.481353,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 3.0,
+          "shell_hubbard_scale": 0.660562,
+          "shell_polynomial": -0.30396333,
+          "slater": 2.018969
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0988501,
+          "index": 1,
+          "level": -13.073088,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.15707734,
+          "slater": 1.996498
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.047254,
+          "index": 2,
+          "level": 0.655254,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.05,
+          "shell_polynomial": 0.60186026,
+          "slater": 1.407714
+        }
+      ],
+      "symbol": "Ta",
+      "xbond": 0.0,
+      "zeff": 54.666156
+    },
+    {
+      "arep": 1.018805,
+      "atomic_number": 74,
+      "dkernel": 0.00065886,
+      "en": 2.36,
+      "gam": 0.685426,
+      "gam3": -0.02,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 0.01063309,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0192494,
+          "index": 0,
+          "level": -9.501505,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 4.0,
+          "shell_hubbard_scale": 0.6580801000000001,
+          "shell_polynomial": -0.2567708,
+          "slater": 2.155885
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.2543639,
+          "index": 1,
+          "level": -11.093016,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.06208982,
+          "slater": 1.892022
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0236479,
+          "index": 2,
+          "level": -1.420389,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.37,
+          "shell_polynomial": 0.4927377,
+          "slater": 1.458186
+        }
+      ],
+      "symbol": "W",
+      "xbond": 0.0,
+      "zeff": 55.899801
+    },
+    {
+      "arep": 1.170412,
+      "atomic_number": 75,
+      "dkernel": -0.00587636,
+      "en": 1.9,
+      "gam": 0.224623,
+      "gam3": 0.08,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 0.0030687,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0322139,
+          "index": 0,
+          "level": -11.189119,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 5.0,
+          "shell_hubbard_scale": 1.6586864000000001,
+          "shell_polynomial": -0.31723059,
+          "slater": 2.262783
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1117569,
+          "index": 1,
+          "level": -12.685198,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.13890139,
+          "slater": 2.187549
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.1335155,
+          "index": 2,
+          "level": -3.8519809999999994,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4,
+          "shell_polynomial": 0.33973283,
+          "slater": 1.636996
+        }
+      ],
+      "symbol": "Re",
+      "xbond": 0.0,
+      "zeff": 80.410086
+    },
+    {
+      "arep": 1.221937,
+      "atomic_number": 76,
+      "dkernel": -0.0051009,
+      "en": 2.2,
+      "gam": 0.364388,
+      "gam3": 0.08,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 0.00759049,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0095346,
+          "index": 0,
+          "level": -10.382841,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 6.0,
+          "shell_hubbard_scale": 1.1350223,
+          "shell_polynomial": -0.28461111,
+          "slater": 2.509631
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0346183,
+          "index": 1,
+          "level": -8.73146,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.21316847,
+          "slater": 2.173991
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0208758,
+          "index": 2,
+          "level": -3.5463789999999995,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.35,
+          "shell_polynomial": 0.28097231,
+          "slater": 1.597888
+        }
+      ],
+      "symbol": "Os",
+      "xbond": 0.0,
+      "zeff": 62.809871
+    },
+    {
+      "arep": 1.197148,
+      "atomic_number": 77,
+      "dkernel": -0.00673822,
+      "en": 2.2,
+      "gam": 0.548507,
+      "gam3": -0.01,
+      "mprad": 5.0,
+      "mpvcn": 6.0,
+      "qkernel": 0.00322935,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.0051977,
+          "index": 0,
+          "level": -11.018475,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 7.0,
+          "shell_hubbard_scale": 0.9022043,
+          "shell_polynomial": -0.24693443,
+          "slater": 2.756134
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0123672,
+          "index": 1,
+          "level": -9.349164,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.20733836,
+          "slater": 2.117548
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0079864,
+          "index": 2,
+          "level": -3.603762,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.35,
+          "shell_polynomial": 0.1830321,
+          "slater": 1.680343
+        }
+      ],
+      "symbol": "Ir",
+      "xbond": 0.0,
+      "zeff": 56.045639
+    },
+    {
+      "arep": 1.204081,
+      "atomic_number": 78,
+      "dkernel": -0.00423684,
+      "en": 2.28,
+      "gam": 0.353574,
+      "gam3": 0.06,
+      "mprad": 5.0,
+      "mpvcn": 4.0,
+      "qkernel": 0.00098019,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0204828,
+          "index": 0,
+          "level": -12.047728,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 8.0,
+          "shell_hubbard_scale": 0.9796788,
+          "shell_polynomial": -0.27243898,
+          "slater": 2.704492
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.113953,
+          "index": 1,
+          "level": -10.482306,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.06737556,
+          "slater": 2.329136
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.1408029,
+          "index": 2,
+          "level": -3.778297,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.4,
+          "shell_polynomial": 0.19259455,
+          "slater": 1.623286
+        }
+      ],
+      "symbol": "Pt",
+      "xbond": 0.0,
+      "zeff": 53.881425
+    },
+    {
+      "arep": 0.91921,
+      "atomic_number": 79,
+      "dkernel": 0.00393418,
+      "en": 2.54,
+      "gam": 0.438997,
+      "gam3": 0.085,
+      "mprad": 5.0,
+      "mpvcn": 4.0,
+      "qkernel": -0.0002032,
+      "shells": [
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.0154462,
+          "index": 0,
+          "level": -9.578599,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 10.0,
+          "shell_hubbard_scale": 1.0614126,
+          "shell_polynomial": -0.06410815,
+          "slater": 3.241287
+        },
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.1479337,
+          "index": 1,
+          "level": -7.688552,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": 0.04691539,
+          "slater": 2.183171
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.1048065,
+          "index": 2,
+          "level": 0.883399,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.4,
+          "shell_polynomial": 0.25250274,
+          "slater": 2.084484
+        }
+      ],
+      "symbol": "Au",
+      "xbond": 0.0,
+      "zeff": 14.711475
+    },
+    {
+      "arep": 1.13736,
+      "atomic_number": 80,
+      "dkernel": -0.0025,
+      "en": 2.0,
+      "gam": 0.457611,
+      "gam3": -0.0116312,
+      "mprad": 5.0,
+      "mpvcn": 2.0,
+      "qkernel": -0.00032901,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0352252,
+          "index": 0,
+          "level": -11.538066,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.09833449,
+          "slater": 2.244504
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0205401,
+          "index": 1,
+          "level": -2.532581,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.4624879,
+          "shell_polynomial": 0.15628858,
+          "slater": 1.470848
+        }
+      ],
+      "symbol": "Hg",
+      "xbond": 0.0,
+      "zeff": 51.577544
+    },
+    {
+      "arep": 1.399312,
+      "atomic_number": 81,
+      "dkernel": 0.00374018,
+      "en": 1.62,
+      "gam": 0.418841,
+      "gam3": -0.0533933,
+      "mprad": 5.0,
+      "mpvcn": 3.0,
+      "qkernel": -8.506e-05,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0255975,
+          "index": 0,
+          "level": -17.319333,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.22942207,
+          "slater": 2.294231
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0901364,
+          "index": 1,
+          "level": -4.460584,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 1.0,
+          "shell_hubbard_scale": 0.2866599,
+          "shell_polynomial": 0.13109821,
+          "slater": 1.731592
+        }
+      ],
+      "symbol": "Tl",
+      "xbond": 0.0,
+      "zeff": 58.801614
+    },
+    {
+      "arep": 1.179922,
+      "atomic_number": 82,
+      "dkernel": 0.01007016,
+      "en": 2.33,
+      "gam": 0.168152,
+      "gam3": 0.02,
+      "mprad": 5.0,
+      "mpvcn": 3.0,
+      "qkernel": -1.67e-05,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.3893459,
+          "index": 0,
+          "level": -24.055207,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.22955084,
+          "slater": 2.960592
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.3437117,
+          "index": 1,
+          "level": -5.893816,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.7838251,
+          "shell_polynomial": -0.08805272,
+          "slater": 1.95313
+        }
+      ],
+      "symbol": "Pb",
+      "xbond": 0.0,
+      "zeff": 102.368258
+    },
+    {
+      "arep": 1.13086,
+      "atomic_number": 83,
+      "dkernel": -0.00737252,
+      "en": 2.02,
+      "gam": 0.9,
+      "gam3": -0.0337508,
+      "mprad": 5.0,
+      "mpvcn": 3.0,
+      "qkernel": 0.00162529,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": 0.0160425,
+          "index": 0,
+          "level": -19.84384,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.21750059,
+          "slater": 2.788267
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": 0.0248659,
+          "index": 1,
+          "level": -7.297456000000001,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 3.0,
+          "shell_hubbard_scale": 0.4,
+          "shell_polynomial": -0.1077393,
+          "slater": 2.277039
+        }
+      ],
+      "symbol": "Bi",
+      "xbond": 0.0,
+      "zeff": 132.896832
+    },
+    {
+      "arep": 0.957939,
+      "atomic_number": 84,
+      "dkernel": -0.01344854,
+      "en": 2.0,
+      "gam": 1.023267,
+      "gam3": 0.1877978,
+      "mprad": 5.0,
+      "mpvcn": 3.0,
+      "qkernel": 0.00013818,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0046813,
+          "index": 0,
+          "level": -20.20538,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.2092329,
+          "slater": 3.31481
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0100437,
+          "index": 1,
+          "level": -8.476927,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 4.0,
+          "shell_hubbard_scale": 0.1890845,
+          "shell_polynomial": -0.18426448,
+          "slater": 2.389456
+        }
+      ],
+      "symbol": "Po",
+      "xbond": 0.0,
+      "zeff": 52.301232
+    },
+    {
+      "arep": 0.963878,
+      "atomic_number": 85,
+      "dkernel": -0.00348123,
+      "en": 2.2,
+      "gam": 0.288848,
+      "gam3": 0.1846485,
+      "mprad": 5.0,
+      "mpvcn": 1.0,
+      "qkernel": 0.00021624,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0287369,
+          "index": 0,
+          "level": -17.050229,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.30549981,
+          "slater": 2.220421
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.0007993,
+          "index": 1,
+          "level": -9.499822,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 5.0,
+          "shell_hubbard_scale": 0.7467927,
+          "shell_polynomial": -0.1710849,
+          "slater": 2.408112
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": 0.2805808,
+          "index": 2,
+          "level": -0.096063,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 1.25,
+          "shell_polynomial": 0.23824993,
+          "slater": 1.5
+        }
+      ],
+      "symbol": "At",
+      "xbond": 0.0,
+      "zeff": 81.771063
+    },
+    {
+      "arep": 0.965577,
+      "atomic_number": 86,
+      "dkernel": -0.00167597,
+      "en": 2.2,
+      "gam": 0.3034,
+      "gam3": 0.0097834,
+      "mprad": 5.0,
+      "mpvcn": 1.0,
+      "qkernel": -0.00111556,
+      "shells": [
+        {
+          "angular_momentum": 0,
+          "coordination_number_scale": -0.0001712,
+          "index": 0,
+          "level": -21.0,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 2.0,
+          "shell_hubbard_scale": 1.0,
+          "shell_polynomial": -0.35245372,
+          "slater": 3.109394
+        },
+        {
+          "angular_momentum": 1,
+          "coordination_number_scale": -0.000528,
+          "index": 1,
+          "level": -10.496406,
+          "ngauss": 6,
+          "principal_quantum_number": 6,
+          "reference_occupation": 6.0,
+          "shell_hubbard_scale": 0.9697612,
+          "shell_polynomial": -0.11989735,
+          "slater": 2.541934
+        },
+        {
+          "angular_momentum": 2,
+          "coordination_number_scale": -0.320602,
+          "index": 2,
+          "level": -1.415056,
+          "ngauss": 3,
+          "principal_quantum_number": 5,
+          "reference_occupation": 0.0,
+          "shell_hubbard_scale": 0.77,
+          "shell_polynomial": 0.21167024,
+          "slater": 1.79
+        }
+      ],
+      "symbol": "Rn",
+      "xbond": 0.0,
+      "zeff": 128.13358
+    }
+  ],
+  "hamiltonian": {
+    "coordination_number": "dexp",
+    "enscale": 0.02,
+    "kpol": 2.0,
+    "pair_scale_default": 1.0,
+    "pair_scale_overrides": [],
+    "shell_pair_scale": [
+      {
+        "angular_momenta": [
+          0,
+          0
+        ],
+        "value": 1.85
+      },
+      {
+        "angular_momenta": [
+          0,
+          1
+        ],
+        "value": 2.04
+      },
+      {
+        "angular_momenta": [
+          0,
+          2
+        ],
+        "value": 2.0
+      },
+      {
+        "angular_momenta": [
+          1,
+          1
+        ],
+        "value": 2.23
+      },
+      {
+        "angular_momenta": [
+          1,
+          2
+        ],
+        "value": 2.0
+      },
+      {
+        "angular_momenta": [
+          2,
+          2
+        ],
+        "value": 2.23
+      }
+    ],
+    "wexp": 0.5
+  },
+  "meta": {
+    "format": 1,
+    "name": "GFN2-xTB",
+    "reference": "C. Bannwarth, S. Ehlert and S. Grimme., J. Chem. Theory Comput., 2019, 15, 1652-1671. DOI: 10.1021/acs.jctc.8b01176",
+    "version": 1
+  },
+  "method": "gfn2-xtb",
+  "multipole": {
+    "dmp3": 3.0,
+    "dmp5": 4.0,
+    "kexp": 4.0,
+    "rmax": 5.0,
+    "shift": 1.2
+  },
+  "repulsion": {
+    "kexp": 1.5,
+    "klight": 1.0
+  },
+  "schema_version": 1,
+  "thirdorder": {
+    "d": 0.25,
+    "p": 0.5,
+    "s": 1.0
+  }
+}
