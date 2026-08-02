@@ -27,6 +27,13 @@ extern "C" {
 /* Increment this value only when an ABI-incompatible C API change is made. */
 #define GPUXTB_API_VERSION 1u
 
+/*
+ * Electronic temperatures are k_B*T energy scales in Hartree, not kelvin.
+ * This conversion matches the pinned xTB/tblite convention used by gpuxtb.
+ */
+#define GPUXTB_KELVIN_TO_HARTREE 3.166808578545117e-6
+#define GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE (300.0 * GPUXTB_KELVIN_TO_HARTREE)
+
 typedef struct gpuxtb_context gpuxtb_context_t;
 
 /*
@@ -193,6 +200,10 @@ typedef struct gpuxtb_batch {
 #define GPUXTB_BATCH_V1_SIZE \
   (offsetof(gpuxtb_batch_t, charge_response_matrix) + sizeof(gpuxtb_const_buffer_t))
 
+/*
+ * electronic_temperature is k_B*T in Hartree. Bindings that accept kelvin
+ * should multiply by GPUXTB_KELVIN_TO_HARTREE before populating this struct.
+ */
 typedef struct gpuxtb_compute_options {
   uint32_t struct_size;
   uint32_t api_version;

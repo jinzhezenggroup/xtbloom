@@ -22,6 +22,8 @@ in [qmmm.md](qmmm.md).
 All public real-valued quantities use binary64 and atomic units. Conversion belongs at language or
 simulation-package bindings, not inside numerical kernels. Keeping one unit system is particularly
 important for external-charge forces and finite-difference conformance tests.
+Accordingly, `electronic_temperature` is the energy scale `k_B T` in Hartree; the default is
+`300 K * 3.166808578545117e-6 Eh/K`, not the dimensionful value `300.0`.
 
 ## Layering
 

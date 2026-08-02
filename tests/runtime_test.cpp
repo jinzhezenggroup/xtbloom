@@ -25,6 +25,7 @@ int main() {
   CHECK(gpuxtb_batch_init(&batch, sizeof(batch)) == GPUXTB_STATUS_SUCCESS);
   CHECK(gpuxtb_compute_options_init(&compute_options, sizeof(compute_options)) ==
         GPUXTB_STATUS_SUCCESS);
+  CHECK(compute_options.electronic_temperature == GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE);
   CHECK(gpuxtb_batch_result_init(&result, sizeof(result)) == GPUXTB_STATUS_SUCCESS);
 
   /* Descriptor errors take precedence over the unfinished physics backend. */

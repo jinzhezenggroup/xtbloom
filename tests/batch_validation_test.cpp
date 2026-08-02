@@ -87,7 +87,7 @@ struct Fixture {
     options.max_scc_iterations = 250;
     options.charge_tolerance = 1.0e-6;
     options.energy_tolerance = 1.0e-8;
-    options.electronic_temperature = 300.0;
+    options.electronic_temperature = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
 
     result.struct_size = sizeof(result);
     result.api_version = GPUXTB_API_VERSION;

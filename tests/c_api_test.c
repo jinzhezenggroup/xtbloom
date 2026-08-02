@@ -13,10 +13,18 @@ int main(void) {
     return 1;
   }
 
+  gpuxtb_compute_options_t compute_options;
+  if (gpuxtb_compute_options_init(&compute_options, sizeof(compute_options)) !=
+          GPUXTB_STATUS_SUCCESS ||
+      compute_options.electronic_temperature != GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE) {
+    fprintf(stderr, "compute options must default to the 300 K atomic-unit energy scale\n");
+    return 2;
+  }
+
   gpuxtb_context_options_t options;
   if (gpuxtb_context_options_init(&options, sizeof(options)) != GPUXTB_STATUS_SUCCESS) {
     fprintf(stderr, "options initialization failed: %s\n", gpuxtb_get_last_error());
-    return 2;
+    return 3;
   }
   options.backend = GPUXTB_BACKEND_CPU;
 
@@ -24,15 +32,15 @@ int main(void) {
   gpuxtb_status_t status = gpuxtb_context_create(&options, &context);
   if (status != GPUXTB_STATUS_SUCCESS || context == NULL) {
     fprintf(stderr, "context creation failed: %s\n", gpuxtb_get_last_error());
-    return 3;
+    return 4;
   }
   if (gpuxtb_context_get_backend(context) != GPUXTB_BACKEND_CPU) {
     fprintf(stderr, "explicit CPU backend was not selected\n");
-    return 4;
+    return 5;
   }
   if (strcmp(gpuxtb_version_string(), "0.1.0") != 0) {
     fprintf(stderr, "unexpected version string\n");
-    return 5;
+    return 6;
   }
 
   gpuxtb_context_destroy(context);
