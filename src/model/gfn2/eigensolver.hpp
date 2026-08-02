@@ -110,6 +110,8 @@ class EigensolverPlan {
   [[nodiscard]] const std::vector<std::int32_t>& spin_channels() const noexcept;
   [[nodiscard]] const std::vector<double>& alpha_electron_counts() const noexcept;
   [[nodiscard]] const std::vector<double>& beta_electron_counts() const noexcept;
+  /* True when a byte range aliases this plan's immutable object or backing storage. */
+  [[nodiscard]] bool overlaps_storage(const void* data, std::size_t size_bytes) const noexcept;
   [[nodiscard]] const EigensolverPlanData* identity() const noexcept;
 
  private:

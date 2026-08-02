@@ -1,6 +1,7 @@
 #ifndef GPUXTB_MODEL_GFN2_MULLIKEN_HPP
 #define GPUXTB_MODEL_GFN2_MULLIKEN_HPP
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -57,6 +58,9 @@ class MullikenPlan {
   [[nodiscard]] const std::vector<std::int64_t>& orbital_to_atom() const noexcept;
   [[nodiscard]] const std::vector<std::int32_t>& spin_channels() const noexcept;
   [[nodiscard]] const std::vector<double>& reference_shell_occupations() const noexcept;
+
+  /* True when a byte range aliases this plan's immutable object or backing storage. */
+  [[nodiscard]] bool overlaps_storage(const void* data, std::size_t size_bytes) const noexcept;
 
   /* Opaque stable token for backend cache compatibility and diagnostics. */
   [[nodiscard]] const MullikenPlanData* identity() const noexcept;

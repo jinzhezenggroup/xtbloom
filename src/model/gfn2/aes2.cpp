@@ -138,15 +138,15 @@ bool is_aligned(const void* pointer, std::size_t alignment) {
 }
 
 std::array<MemoryRange, 8> plan_storage_ranges(const AES2Plan& plan) {
-  return {
-      {{&plan, sizeof(plan)},
-       {plan.identity(), sizeof(AES2PlanData)},
-       {plan.atom_offsets().data(), plan.atom_offsets().size() * sizeof(std::int64_t)},
-       {plan.pair_offsets().data(), plan.pair_offsets().size() * sizeof(std::int64_t)},
-       {plan.dipole_kernel().data(), plan.dipole_kernel().size() * sizeof(double)},
-       {plan.quadrupole_kernel().data(), plan.quadrupole_kernel().size() * sizeof(double)},
-       {plan.multipole_radius().data(), plan.multipole_radius().size() * sizeof(double)},
-       {plan.multipole_valence_cn().data(), plan.multipole_valence_cn().size() * sizeof(double)}}};
+  return {{{&plan, sizeof(plan)},
+           {plan.identity(), sizeof(AES2PlanData)},
+           {plan.atom_offsets().data(), plan.atom_offsets().capacity() * sizeof(std::int64_t)},
+           {plan.pair_offsets().data(), plan.pair_offsets().capacity() * sizeof(std::int64_t)},
+           {plan.dipole_kernel().data(), plan.dipole_kernel().capacity() * sizeof(double)},
+           {plan.quadrupole_kernel().data(), plan.quadrupole_kernel().capacity() * sizeof(double)},
+           {plan.multipole_radius().data(), plan.multipole_radius().capacity() * sizeof(double)},
+           {plan.multipole_valence_cn().data(),
+            plan.multipole_valence_cn().capacity() * sizeof(double)}}};
 }
 
 bool overlaps_plan_storage(const AES2Plan& plan, const void* data, std::size_t bytes) {
@@ -748,6 +748,10 @@ const std::vector<double>& AES2Plan::multipole_radius() const noexcept {
 
 const std::vector<double>& AES2Plan::multipole_valence_cn() const noexcept {
   return data_ == nullptr ? kEmptyDoubleVector : data_->multipole_valence_cn;
+}
+
+bool AES2Plan::overlaps_storage(const void* data, std::size_t size_bytes) const noexcept {
+  return size_bytes != 0u && (data_ == nullptr || overlaps_plan_storage(*this, data, size_bytes));
 }
 
 const AES2PlanData* AES2Plan::identity() const noexcept { return data_.get(); }

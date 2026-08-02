@@ -47,6 +47,9 @@ class ES2Plan {
   [[nodiscard]] const std::vector<std::int64_t>& shell_to_atom() const noexcept;
   [[nodiscard]] const std::vector<double>& shell_hardness() const noexcept;
 
+  /* True when a byte range aliases this plan's immutable object or backing storage. */
+  [[nodiscard]] bool overlaps_storage(const void* data, std::size_t size_bytes) const noexcept;
+
   /* Opaque stable token used only for cache compatibility and diagnostics. */
   [[nodiscard]] const ES2PlanData* identity() const noexcept;
 

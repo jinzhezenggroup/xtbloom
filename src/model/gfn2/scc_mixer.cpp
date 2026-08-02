@@ -186,7 +186,7 @@ bool overlaps_plan_storage(const SccMixerPlan& plan, const AddressRange& range) 
        &data->dipole_system_offsets, &data->quadrupole_system_offsets}};
   for (const auto* vector : vectors) {
     if (!vector->empty() &&
-        (!vector_range(vector->data(), vector->size(), sizeof(std::int64_t), candidate) ||
+        (!vector_range(vector->data(), vector->capacity(), sizeof(std::int64_t), candidate) ||
          ranges_overlap(range, candidate))) {
       return true;
     }
@@ -716,6 +716,23 @@ std::size_t SccMixerPlan::workspace_size_bytes() const noexcept {
 const std::vector<std::int64_t>& SccMixerPlan::vector_offsets() const noexcept {
   static const std::vector<std::int64_t> empty;
   return data_ == nullptr ? empty : data_->vector_offsets;
+}
+
+bool SccMixerPlan::matches_wavefunction_layout(const WavefunctionLayout& layout) const noexcept {
+  return data_ != nullptr && data_->batch_size == layout.batch_size &&
+         data_->wavefunction_workspace_size_bytes == layout.workspace_size_bytes &&
+         data_->qsh_offset_bytes == layout.qsh.offset_bytes &&
+         data_->dipole_offset_bytes == layout.dipole.offset_bytes &&
+         data_->quadrupole_offset_bytes == layout.quadrupole.offset_bytes &&
+         data_->qsh_system_offsets == layout.qsh.system_offsets &&
+         data_->dipole_system_offsets == layout.dipole.system_offsets &&
+         data_->quadrupole_system_offsets == layout.quadrupole.system_offsets;
+}
+
+bool SccMixerPlan::overlaps_storage(const void* data, std::size_t size_bytes) const noexcept {
+  AddressRange range;
+  return size_bytes != 0u && (data_ == nullptr || !make_range(data, size_bytes, range) ||
+                              overlaps_plan_storage(*this, range));
 }
 
 const SccMixerPlanData* SccMixerPlan::identity() const noexcept { return data_.get(); }

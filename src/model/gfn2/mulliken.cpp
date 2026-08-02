@@ -146,28 +146,29 @@ std::array<MemoryRange, 17> plan_storage_ranges(const MullikenPlan& plan) {
   return {
       {{&plan, sizeof(plan)},
        {data, sizeof(MullikenPlanData)},
-       {data->atom_offsets.data(), data->atom_offsets.size() * sizeof(std::int64_t)},
-       {data->batch_shell_offsets.data(), data->batch_shell_offsets.size() * sizeof(std::int64_t)},
+       {data->atom_offsets.data(), data->atom_offsets.capacity() * sizeof(std::int64_t)},
+       {data->batch_shell_offsets.data(),
+        data->batch_shell_offsets.capacity() * sizeof(std::int64_t)},
        {data->batch_orbital_offsets.data(),
-        data->batch_orbital_offsets.size() * sizeof(std::int64_t)},
-       {data->matrix_offsets.data(), data->matrix_offsets.size() * sizeof(std::int64_t)},
+        data->batch_orbital_offsets.capacity() * sizeof(std::int64_t)},
+       {data->matrix_offsets.data(), data->matrix_offsets.capacity() * sizeof(std::int64_t)},
        {data->shell_orbital_offsets.data(),
-        data->shell_orbital_offsets.size() * sizeof(std::int64_t)},
-       {data->shell_to_atom.data(), data->shell_to_atom.size() * sizeof(std::int64_t)},
-       {data->orbital_to_shell.data(), data->orbital_to_shell.size() * sizeof(std::int64_t)},
-       {data->orbital_to_atom.data(), data->orbital_to_atom.size() * sizeof(std::int64_t)},
-       {data->spin_channels.data(), data->spin_channels.size() * sizeof(std::int32_t)},
+        data->shell_orbital_offsets.capacity() * sizeof(std::int64_t)},
+       {data->shell_to_atom.data(), data->shell_to_atom.capacity() * sizeof(std::int64_t)},
+       {data->orbital_to_shell.data(), data->orbital_to_shell.capacity() * sizeof(std::int64_t)},
+       {data->orbital_to_atom.data(), data->orbital_to_atom.capacity() * sizeof(std::int64_t)},
+       {data->spin_channels.data(), data->spin_channels.capacity() * sizeof(std::int32_t)},
        {data->reference_shell_occupations.data(),
-        data->reference_shell_occupations.size() * sizeof(double)},
-       {data->density_offsets.data(), data->density_offsets.size() * sizeof(std::int64_t)},
+        data->reference_shell_occupations.capacity() * sizeof(double)},
+       {data->density_offsets.data(), data->density_offsets.capacity() * sizeof(std::int64_t)},
        {data->shell_population_offsets.data(),
-        data->shell_population_offsets.size() * sizeof(std::int64_t)},
+        data->shell_population_offsets.capacity() * sizeof(std::int64_t)},
        {data->atom_population_offsets.data(),
-        data->atom_population_offsets.size() * sizeof(std::int64_t)},
+        data->atom_population_offsets.capacity() * sizeof(std::int64_t)},
        {data->dipole_population_offsets.data(),
-        data->dipole_population_offsets.size() * sizeof(std::int64_t)},
+        data->dipole_population_offsets.capacity() * sizeof(std::int64_t)},
        {data->quadrupole_population_offsets.data(),
-        data->quadrupole_population_offsets.size() * sizeof(std::int64_t)}}};
+        data->quadrupole_population_offsets.capacity() * sizeof(std::int64_t)}}};
 }
 
 bool overlaps_plan_storage(const MullikenPlan& plan, const MemoryRange& candidate) {
@@ -361,6 +362,10 @@ const std::vector<std::int32_t>& MullikenPlan::spin_channels() const noexcept {
 
 const std::vector<double>& MullikenPlan::reference_shell_occupations() const noexcept {
   return data_ == nullptr ? kEmptyDoubleVector : data_->reference_shell_occupations;
+}
+
+bool MullikenPlan::overlaps_storage(const void* data, std::size_t size_bytes) const noexcept {
+  return size_bytes != 0u && (data_ == nullptr || overlaps_plan_storage(*this, {data, size_bytes}));
 }
 
 const MullikenPlanData* MullikenPlan::identity() const noexcept { return data_.get(); }

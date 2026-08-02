@@ -48,6 +48,7 @@ add_library(gpuxtb_gfn2_cpu OBJECT
   src/model/gfn2/mulliken.cpp
   src/model/gfn2/periodic_embedding.cpp
   src/model/gfn2/repulsion.cpp
+  src/model/gfn2/scc_driver.cpp
   src/model/gfn2/scc_mixer.cpp
   src/model/gfn2/wavefunction.cpp
 )
@@ -342,6 +343,11 @@ if(GPUXTB_BUILD_TESTS)
   target_link_libraries(gpuxtb_scc_mixer_test PRIVATE gpuxtb_gfn2_cpu Threads::Threads)
   target_compile_features(gpuxtb_scc_mixer_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.scc_mixer COMMAND gpuxtb_scc_mixer_test)
+
+  add_executable(gpuxtb_scc_driver_test tests/scc_driver_test.cpp)
+  target_link_libraries(gpuxtb_scc_driver_test PRIVATE gpuxtb_gfn2_cpu)
+  target_compile_features(gpuxtb_scc_driver_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.gfn2.scc_driver COMMAND gpuxtb_scc_driver_test)
 
   if(GPUXTB_MKL_RT_LIBRARY)
     add_executable(gpuxtb_eigensolver_test tests/eigensolver_test.cpp)

@@ -50,6 +50,9 @@ class AES2Plan {
   [[nodiscard]] const std::vector<double>& multipole_radius() const noexcept;
   [[nodiscard]] const std::vector<double>& multipole_valence_cn() const noexcept;
 
+  /* True when a byte range aliases this plan's immutable object or backing storage. */
+  [[nodiscard]] bool overlaps_storage(const void* data, std::size_t size_bytes) const noexcept;
+
   /* Stable compatibility token for backend caches and diagnostics. */
   [[nodiscard]] const AES2PlanData* identity() const noexcept;
 

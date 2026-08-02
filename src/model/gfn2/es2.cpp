@@ -162,16 +162,16 @@ struct MemoryRange {
 };
 
 std::array<MemoryRange, 8> plan_storage_ranges(const ES2Plan& plan) {
-  return {
-      {{&plan, sizeof(plan)},
-       {plan.identity(), sizeof(ES2PlanData)},
-       {plan.atom_offsets().data(), plan.atom_offsets().size() * sizeof(std::int64_t)},
-       {plan.batch_shell_offsets().data(),
-        plan.batch_shell_offsets().size() * sizeof(std::int64_t)},
-       {plan.atom_shell_offsets().data(), plan.atom_shell_offsets().size() * sizeof(std::int64_t)},
-       {plan.matrix_offsets().data(), plan.matrix_offsets().size() * sizeof(std::int64_t)},
-       {plan.shell_to_atom().data(), plan.shell_to_atom().size() * sizeof(std::int64_t)},
-       {plan.shell_hardness().data(), plan.shell_hardness().size() * sizeof(double)}}};
+  return {{{&plan, sizeof(plan)},
+           {plan.identity(), sizeof(ES2PlanData)},
+           {plan.atom_offsets().data(), plan.atom_offsets().capacity() * sizeof(std::int64_t)},
+           {plan.batch_shell_offsets().data(),
+            plan.batch_shell_offsets().capacity() * sizeof(std::int64_t)},
+           {plan.atom_shell_offsets().data(),
+            plan.atom_shell_offsets().capacity() * sizeof(std::int64_t)},
+           {plan.matrix_offsets().data(), plan.matrix_offsets().capacity() * sizeof(std::int64_t)},
+           {plan.shell_to_atom().data(), plan.shell_to_atom().capacity() * sizeof(std::int64_t)},
+           {plan.shell_hardness().data(), plan.shell_hardness().capacity() * sizeof(double)}}};
 }
 
 bool overlaps_plan_storage(const ES2Plan& plan, const void* data, std::size_t size_bytes) {
@@ -317,6 +317,10 @@ const std::vector<std::int64_t>& ES2Plan::shell_to_atom() const noexcept {
 
 const std::vector<double>& ES2Plan::shell_hardness() const noexcept {
   return data_ == nullptr ? kEmptyDoubleVector : data_->shell_hardness;
+}
+
+bool ES2Plan::overlaps_storage(const void* data, std::size_t size_bytes) const noexcept {
+  return size_bytes != 0u && (data_ == nullptr || overlaps_plan_storage(*this, data, size_bytes));
 }
 
 const ES2PlanData* ES2Plan::identity() const noexcept { return data_.get(); }

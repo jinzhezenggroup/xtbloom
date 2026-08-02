@@ -1255,6 +1255,11 @@ const std::vector<double>& EigensolverPlan::alpha_electron_counts() const noexce
 const std::vector<double>& EigensolverPlan::beta_electron_counts() const noexcept {
   return data_ == nullptr ? kEmptyDoubleVector : data_->beta_electron_counts;
 }
+bool EigensolverPlan::overlaps_storage(const void* data, std::size_t size_bytes) const noexcept {
+  AddressRange range;
+  return size_bytes != 0u && (data_ == nullptr || !make_range(data, size_bytes, range) ||
+                              overlaps_plan_storage(*this, range));
+}
 const EigensolverPlanData* EigensolverPlan::identity() const noexcept { return data_.get(); }
 
 gpuxtb_status_t make_eigensolver_plan(const WavefunctionLayout& layout, EigensolverPlan& plan,

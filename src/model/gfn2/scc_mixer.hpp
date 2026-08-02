@@ -47,6 +47,10 @@ class SccMixerPlan {
   [[nodiscard]] std::size_t state_size_bytes() const noexcept;
   [[nodiscard]] std::size_t workspace_size_bytes() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& vector_offsets() const noexcept;
+  /* Exact field binding check used by higher-level SCC composers. */
+  [[nodiscard]] bool matches_wavefunction_layout(const WavefunctionLayout& layout) const noexcept;
+  /* True when a byte range aliases this plan's immutable object or backing storage. */
+  [[nodiscard]] bool overlaps_storage(const void* data, std::size_t size_bytes) const noexcept;
   [[nodiscard]] const SccMixerPlanData* identity() const noexcept;
 
  private:
