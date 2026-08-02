@@ -32,13 +32,23 @@ void* operator new(std::size_t size) {
 
 void* operator new[](std::size_t size) { return ::operator new(size); }
 
-void operator delete(void* pointer) noexcept { std::free(pointer); }
+#if defined(__GNUC__) && !defined(__clang__)
+#define GPUXTB_TEST_NOINLINE __attribute__((noinline))
+#else
+#define GPUXTB_TEST_NOINLINE
+#endif
+
+/* GCC 11 diagnoses the intentional malloc/free implementation as a mismatched
+ * pair only after inlining this test-only allocation counter shim. */
+GPUXTB_TEST_NOINLINE void operator delete(void* pointer) noexcept { std::free(pointer); }
 
 void operator delete[](void* pointer) noexcept { ::operator delete(pointer); }
 
 void operator delete(void* pointer, std::size_t) noexcept { ::operator delete(pointer); }
 
 void operator delete[](void* pointer, std::size_t) noexcept { ::operator delete[](pointer); }
+
+#undef GPUXTB_TEST_NOINLINE
 
 #define CHECK(condition)                                                                   \
   do {                                                                                     \
