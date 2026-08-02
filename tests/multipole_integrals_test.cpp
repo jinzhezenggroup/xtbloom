@@ -1,14 +1,42 @@
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <new>
 #include <string>
 #include <vector>
 
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/integrals.hpp"
+
+namespace allocation_test {
+std::atomic<std::size_t> count{0};
+std::atomic<bool> enabled{false};
+}  // namespace allocation_test
+
+void* operator new(std::size_t size) {
+  if (allocation_test::enabled.load(std::memory_order_relaxed)) {
+    allocation_test::count.fetch_add(1u, std::memory_order_relaxed);
+  }
+  if (void* pointer = std::malloc(size == 0u ? 1u : size); pointer != nullptr) {
+    return pointer;
+  }
+  throw std::bad_alloc();
+}
+
+void* operator new[](std::size_t size) { return ::operator new(size); }
+
+void operator delete(void* pointer) noexcept { std::free(pointer); }
+
+void operator delete[](void* pointer) noexcept { ::operator delete(pointer); }
+
+void operator delete(void* pointer, std::size_t) noexcept { ::operator delete(pointer); }
+
+void operator delete[](void* pointer, std::size_t) noexcept { ::operator delete[](pointer); }
 
 #define CHECK(condition) \
   do {                   \
@@ -63,6 +91,40 @@ bool evaluate(std::int64_t batch_size, const std::vector<std::int64_t>& atom_off
   return gpuxtb::detail::gfn2::evaluate_multipole_cpu(
              evaluation.basis, evaluation.integrals, positions.data(), evaluation.dipole.data(),
              evaluation.quadrupole.data(), evaluation.workspace.data(),
+             evaluation.workspace.size() * sizeof(double), error) == GPUXTB_STATUS_SUCCESS;
+}
+
+bool weighted_multipoles(const gpuxtb::detail::gfn2::BasisPlan& basis,
+                         const gpuxtb::detail::gfn2::IntegralPlan& integrals,
+                         std::vector<double>& workspace, const std::vector<double>& positions,
+                         const std::vector<double>& dipole_adjoint,
+                         const std::vector<double>& quadrupole_adjoint, double& value,
+                         std::string& error) {
+  const std::size_t matrix_elements = static_cast<std::size_t>(integrals.total_matrix_elements);
+  std::vector<double> dipole(kDipoleComponents * matrix_elements);
+  std::vector<double> quadrupole(kQuadrupoleComponents * matrix_elements);
+  if (gpuxtb::detail::gfn2::evaluate_multipole_cpu(
+          basis, integrals, positions.data(), dipole.data(), quadrupole.data(), workspace.data(),
+          workspace.size() * sizeof(double), error) != GPUXTB_STATUS_SUCCESS) {
+    return false;
+  }
+  value = 0.0;
+  for (std::size_t element = 0; element < dipole.size(); ++element) {
+    value += dipole_adjoint[element] * dipole[element];
+  }
+  for (std::size_t element = 0; element < quadrupole.size(); ++element) {
+    value += quadrupole_adjoint[element] * quadrupole[element];
+  }
+  return true;
+}
+
+bool add_multipole_gradient(Evaluation& evaluation, const std::vector<double>& positions,
+                            const std::vector<double>& dipole_adjoint,
+                            const std::vector<double>& quadrupole_adjoint,
+                            std::vector<double>& gradients, std::string& error) {
+  return gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+             evaluation.basis, evaluation.integrals, positions.data(), dipole_adjoint.data(),
+             quadrupole_adjoint.data(), gradients.data(), evaluation.workspace.data(),
              evaluation.workspace.size() * sizeof(double), error) == GPUXTB_STATUS_SUCCESS;
 }
 
@@ -342,6 +404,147 @@ int test_translation_and_rotation_covariance() {
   return 0;
 }
 
+int test_analytic_vjp_against_full_coordinate_finite_difference() {
+  /* O-Si puts the s/p/d center on the ket side and exercises the a=5 recurrence. */
+  const std::vector<std::int64_t> atom_offsets{0, 2, 5};
+  const std::vector<std::int32_t> atomic_numbers{8, 14, 6, 7, 1};
+  std::vector<double> positions{
+      0.13,  -0.21, 0.34, 1.47, -0.76, 2.08,  -1.91, 0.63,
+      -0.42, -0.48, 1.17, 0.86, 0.79,  -1.24, 1.51,
+  };
+  Evaluation evaluation;
+  std::string error;
+  CHECK(evaluate(2, atom_offsets, atomic_numbers, positions, evaluation, error));
+
+  const std::size_t matrix_elements = evaluation.overlap.size();
+  std::vector<double> dipole_adjoint(kDipoleComponents * matrix_elements);
+  std::vector<double> quadrupole_adjoint(kQuadrupoleComponents * matrix_elements);
+  for (std::size_t component = 0; component < kDipoleComponents; ++component) {
+    for (std::size_t element = 0; element < matrix_elements; ++element) {
+      dipole_adjoint[component * matrix_elements + element] =
+          std::sin(0.071 * static_cast<double>((component + 2u) * (element + 3u))) +
+          0.17 * std::cos(0.113 * static_cast<double>(element + 5u));
+    }
+  }
+  for (std::size_t component = 0; component < kQuadrupoleComponents; ++component) {
+    for (std::size_t element = 0; element < matrix_elements; ++element) {
+      quadrupole_adjoint[component * matrix_elements + element] =
+          0.63 * std::cos(0.047 * static_cast<double>((component + 1u) * (element + 7u))) -
+          0.29 * std::sin(0.097 * static_cast<double>(element + 11u));
+    }
+  }
+  /* The generated full-matrix adjoints are deliberately not transpose symmetric. */
+  CHECK(dipole_adjoint[1] != dipole_adjoint[static_cast<std::size_t>(13)]);
+  CHECK(quadrupole_adjoint[2] != quadrupole_adjoint[static_cast<std::size_t>(26)]);
+
+  constexpr double baseline = -0.375;
+  std::vector<double> gradients(positions.size(), baseline);
+  CHECK(add_multipole_gradient(evaluation, positions, dipole_adjoint, quadrupole_adjoint, gradients,
+                               error));
+
+  constexpr double step = 2.0e-5;
+  for (std::size_t coordinate = 0; coordinate < positions.size(); ++coordinate) {
+    positions[coordinate] += step;
+    double right = 0.0;
+    CHECK(weighted_multipoles(evaluation.basis, evaluation.integrals, evaluation.workspace,
+                              positions, dipole_adjoint, quadrupole_adjoint, right, error));
+    positions[coordinate] -= 2.0 * step;
+    double left = 0.0;
+    CHECK(weighted_multipoles(evaluation.basis, evaluation.integrals, evaluation.workspace,
+                              positions, dipole_adjoint, quadrupole_adjoint, left, error));
+    positions[coordinate] += step;
+    const double numerical = (right - left) / (2.0 * step);
+    CHECK(near(gradients[coordinate] - baseline, numerical, 1.5e-7));
+  }
+
+  for (std::size_t molecule = 0; molecule < 2; ++molecule) {
+    for (std::size_t coordinate = 0; coordinate < 3u; ++coordinate) {
+      double sum = 0.0;
+      for (std::int64_t atom = atom_offsets[molecule]; atom < atom_offsets[molecule + 1u]; ++atom) {
+        sum += gradients[static_cast<std::size_t>(atom) * 3u + coordinate] - baseline;
+      }
+      CHECK(near(sum, 0.0, 2.0e-13));
+    }
+  }
+  return 0;
+}
+
+int test_vjp_translation_and_rotation_covariance() {
+  const std::vector<std::int64_t> atom_offsets{0, 2};
+  const std::vector<std::int32_t> atomic_numbers{1, 1};
+  const std::vector<double> positions{0.23, -0.41, 0.17, 1.36, 0.72, -1.08};
+  Evaluation original;
+  std::string error;
+  CHECK(evaluate(1, atom_offsets, atomic_numbers, positions, original, error));
+  const std::size_t matrix_elements = original.overlap.size();
+  std::vector<double> dipole_adjoint(kDipoleComponents * matrix_elements);
+  std::vector<double> quadrupole_adjoint(kQuadrupoleComponents * matrix_elements);
+  for (std::size_t index = 0; index < dipole_adjoint.size(); ++index) {
+    dipole_adjoint[index] = -0.31 + 0.083 * static_cast<double>((index * 7u) % 17u);
+  }
+  for (std::size_t index = 0; index < quadrupole_adjoint.size(); ++index) {
+    quadrupole_adjoint[index] = 0.27 - 0.052 * static_cast<double>((index * 11u) % 19u);
+  }
+  std::vector<double> original_gradient(positions.size(), 0.0);
+  CHECK(add_multipole_gradient(original, positions, dipole_adjoint, quadrupole_adjoint,
+                               original_gradient, error));
+
+  std::vector<double> translated = positions;
+  for (std::size_t atom = 0; atom < 2u; ++atom) {
+    translated[atom * 3u] += 3.75;
+    translated[atom * 3u + 1u] -= 2.25;
+    translated[atom * 3u + 2u] += 0.875;
+  }
+  std::vector<double> translated_gradient(positions.size(), 0.0);
+  CHECK(add_multipole_gradient(original, translated, dipole_adjoint, quadrupole_adjoint,
+                               translated_gradient, error));
+  for (std::size_t coordinate = 0; coordinate < positions.size(); ++coordinate) {
+    CHECK(near(translated_gradient[coordinate], original_gradient[coordinate], 3.0e-15));
+  }
+
+  constexpr std::array<double, 9> vector_rotation{0, -1, 0, 1, 0, 0, 0, 0, 1};
+  constexpr std::array<double, 36> tensor_rotation{
+      0, 0, 1, 0, 0,  0, 0, -1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, -1, 0, 0, 0,  0, 1, 0, 0, 0, 0, 0, 0, 0, 1,
+  };
+  std::vector<double> rotated_positions = positions;
+  for (std::size_t atom = 0; atom < 2u; ++atom) {
+    rotated_positions[atom * 3u] = -positions[atom * 3u + 1u];
+    rotated_positions[atom * 3u + 1u] = positions[atom * 3u];
+  }
+  std::vector<double> rotated_dipole_adjoint(dipole_adjoint.size(), 0.0);
+  std::vector<double> rotated_quadrupole_adjoint(quadrupole_adjoint.size(), 0.0);
+  for (std::size_t output = 0; output < kDipoleComponents; ++output) {
+    for (std::size_t input = 0; input < kDipoleComponents; ++input) {
+      for (std::size_t element = 0; element < matrix_elements; ++element) {
+        rotated_dipole_adjoint[output * matrix_elements + element] +=
+            vector_rotation[output * 3u + input] *
+            dipole_adjoint[input * matrix_elements + element];
+      }
+    }
+  }
+  for (std::size_t output = 0; output < kQuadrupoleComponents; ++output) {
+    for (std::size_t input = 0; input < kQuadrupoleComponents; ++input) {
+      for (std::size_t element = 0; element < matrix_elements; ++element) {
+        rotated_quadrupole_adjoint[output * matrix_elements + element] +=
+            tensor_rotation[output * 6u + input] *
+            quadrupole_adjoint[input * matrix_elements + element];
+      }
+    }
+  }
+  std::vector<double> rotated_gradient(positions.size(), 0.0);
+  CHECK(add_multipole_gradient(original, rotated_positions, rotated_dipole_adjoint,
+                               rotated_quadrupole_adjoint, rotated_gradient, error));
+  for (std::size_t atom = 0; atom < 2u; ++atom) {
+    const double expected_x = -original_gradient[atom * 3u + 1u];
+    const double expected_y = original_gradient[atom * 3u];
+    CHECK(near(rotated_gradient[atom * 3u], expected_x, 2.0e-14));
+    CHECK(near(rotated_gradient[atom * 3u + 1u], expected_y, 2.0e-14));
+    CHECK(near(rotated_gradient[atom * 3u + 2u], original_gradient[atom * 3u + 2u], 2.0e-14));
+  }
+  return 0;
+}
+
 int test_ragged_batch_equals_sequential() {
   const std::vector<std::int64_t> offsets{0, 2, 2, 3, 5};
   const std::vector<std::int32_t> atomic_numbers{14, 14, 14, 8, 1};
@@ -353,6 +556,19 @@ int test_ragged_batch_equals_sequential() {
   CHECK(evaluate(4, offsets, atomic_numbers, positions, batch, error));
 
   const std::size_t batch_matrix_elements = batch.overlap.size();
+  std::vector<double> batch_dipole_adjoint(kDipoleComponents * batch_matrix_elements);
+  std::vector<double> batch_quadrupole_adjoint(kQuadrupoleComponents * batch_matrix_elements);
+  for (std::size_t index = 0; index < batch_dipole_adjoint.size(); ++index) {
+    batch_dipole_adjoint[index] = 0.19 * std::sin(0.13 * static_cast<double>(index + 1u)) - 0.07;
+  }
+  for (std::size_t index = 0; index < batch_quadrupole_adjoint.size(); ++index) {
+    batch_quadrupole_adjoint[index] =
+        0.23 * std::cos(0.09 * static_cast<double>(index + 4u)) + 0.05;
+  }
+  std::vector<double> batch_gradient(positions.size(), 0.0);
+  CHECK(add_multipole_gradient(batch, positions, batch_dipole_adjoint, batch_quadrupole_adjoint,
+                               batch_gradient, error));
+
   for (std::size_t molecule = 0; molecule < 4; ++molecule) {
     const std::int64_t atom_begin = offsets[molecule];
     const std::int64_t atom_end = offsets[molecule + 1u];
@@ -381,6 +597,28 @@ int test_ragged_batch_equals_sequential() {
         CHECK(batch.quadrupole[component * batch_matrix_elements + packed_begin + element] ==
               sequential.quadrupole[component * sequential_elements + element]);
       }
+    }
+
+    std::vector<double> sequential_dipole_adjoint(kDipoleComponents * sequential_elements);
+    std::vector<double> sequential_quadrupole_adjoint(kQuadrupoleComponents * sequential_elements);
+    for (std::size_t component = 0; component < kDipoleComponents; ++component) {
+      for (std::size_t element = 0; element < sequential_elements; ++element) {
+        sequential_dipole_adjoint[component * sequential_elements + element] =
+            batch_dipole_adjoint[component * batch_matrix_elements + packed_begin + element];
+      }
+    }
+    for (std::size_t component = 0; component < kQuadrupoleComponents; ++component) {
+      for (std::size_t element = 0; element < sequential_elements; ++element) {
+        sequential_quadrupole_adjoint[component * sequential_elements + element] =
+            batch_quadrupole_adjoint[component * batch_matrix_elements + packed_begin + element];
+      }
+    }
+    std::vector<double> sequential_gradient(sequential_positions.size(), 0.0);
+    CHECK(add_multipole_gradient(sequential, sequential_positions, sequential_dipole_adjoint,
+                                 sequential_quadrupole_adjoint, sequential_gradient, error));
+    const std::size_t coordinate_begin = static_cast<std::size_t>(atom_begin) * 3u;
+    for (std::size_t coordinate = 0; coordinate < sequential_gradient.size(); ++coordinate) {
+      CHECK(batch_gradient[coordinate_begin + coordinate] == sequential_gradient[coordinate]);
     }
   }
   return 0;
@@ -427,8 +665,9 @@ int test_validation_preserves_outputs() {
                                               pair_basis, error) == GPUXTB_STATUS_SUCCESS);
   CHECK(gpuxtb::detail::gfn2::make_integral_plan(pair_basis, pair_plan, error) ==
         GPUXTB_STATUS_SUCCESS);
-  const double maximum = std::numeric_limits<double>::max();
-  const std::array<double, 6> extreme_positions{maximum, 0.0, 0.0, -maximum, 0.0, 0.0};
+  /* Individually finite coordinates whose pair displacement squared would overflow. */
+  const double extreme = 0.6 * std::sqrt(std::numeric_limits<double>::max());
+  const std::array<double, 6> extreme_positions{extreme, 0.0, 0.0, -extreme, 0.0, 0.0};
   const std::size_t pair_matrix_elements =
       static_cast<std::size_t>(pair_plan.total_matrix_elements);
   std::vector<double> pair_dipole(kDipoleComponents * pair_matrix_elements, 7.0);
@@ -443,6 +682,85 @@ int test_validation_preserves_outputs() {
                     [](double value) { return value == 7.0; }));
   CHECK(std::all_of(pair_quadrupole.begin(), pair_quadrupole.end(),
                     [](double value) { return value == 8.0; }));
+
+  const std::array<double, 6> pair_positions{0.1, -0.2, 0.3, 1.4, 0.7, -0.9};
+  std::vector<double> dipole_adjoint(kDipoleComponents * pair_matrix_elements, 0.25);
+  std::vector<double> quadrupole_adjoint(kQuadrupoleComponents * pair_matrix_elements, -0.125);
+  std::vector<double> gradients(6, 9.0);
+  const auto gradients_unchanged = [&]() {
+    return std::all_of(gradients.begin(), gradients.end(),
+                       [](double value) { return value == 9.0; });
+  };
+
+  auto corrupt_plan = pair_plan;
+  corrupt_plan.matrix_offsets.back() -= 1;
+  CHECK(gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+            pair_basis, corrupt_plan, pair_positions.data(), dipole_adjoint.data(),
+            quadrupole_adjoint.data(), gradients.data(), pair_workspace.data(),
+            pair_workspace.size() * sizeof(double), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gradients_unchanged());
+
+  quadrupole_adjoint.back() = std::numeric_limits<double>::infinity();
+  CHECK(gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+            pair_basis, pair_plan, pair_positions.data(), dipole_adjoint.data(),
+            quadrupole_adjoint.data(), gradients.data(), pair_workspace.data(),
+            pair_workspace.size() * sizeof(double), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gradients_unchanged());
+  quadrupole_adjoint.back() = -0.125;
+
+  dipole_adjoint.back() = std::numeric_limits<double>::quiet_NaN();
+  CHECK(gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+            pair_basis, pair_plan, pair_positions.data(), dipole_adjoint.data(),
+            quadrupole_adjoint.data(), gradients.data(), pair_workspace.data(),
+            pair_workspace.size() * sizeof(double), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gradients_unchanged());
+  dipole_adjoint.back() = 0.25;
+
+  auto nonfinite_positions = pair_positions;
+  nonfinite_positions[0] = std::numeric_limits<double>::infinity();
+  CHECK(gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+            pair_basis, pair_plan, nonfinite_positions.data(), dipole_adjoint.data(),
+            quadrupole_adjoint.data(), gradients.data(), pair_workspace.data(),
+            pair_workspace.size() * sizeof(double), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gradients_unchanged());
+
+  CHECK(gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+            pair_basis, pair_plan, pair_positions.data(), dipole_adjoint.data(),
+            quadrupole_adjoint.data(), gradients.data(), pair_workspace.data(),
+            pair_plan.workspace_size_bytes - 1u, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gradients_unchanged());
+  CHECK(gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+            pair_basis, pair_plan, pair_positions.data(), nullptr, quadrupole_adjoint.data(),
+            gradients.data(), pair_workspace.data(), pair_workspace.size() * sizeof(double),
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gradients_unchanged());
+  return 0;
+}
+
+int test_no_steady_state_vjp_allocations() {
+  const std::vector<std::int64_t> atom_offsets{0, 2};
+  const std::vector<std::int32_t> atomic_numbers{14, 8};
+  const std::vector<double> positions{0.11, -0.24, 0.37, 1.42, 0.68, -1.03};
+  Evaluation evaluation;
+  std::string error;
+  CHECK(evaluate(1, atom_offsets, atomic_numbers, positions, evaluation, error));
+  const std::size_t matrix_elements = evaluation.overlap.size();
+  std::vector<double> dipole_adjoint(kDipoleComponents * matrix_elements, 0.125);
+  std::vector<double> quadrupole_adjoint(kQuadrupoleComponents * matrix_elements, -0.0625);
+  std::vector<double> gradients(positions.size(), 0.0);
+
+  CHECK(add_multipole_gradient(evaluation, positions, dipole_adjoint, quadrupole_adjoint, gradients,
+                               error));
+  const std::size_t before = allocation_test::count.load(std::memory_order_relaxed);
+  allocation_test::enabled.store(true, std::memory_order_relaxed);
+  const gpuxtb_status_t status = gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+      evaluation.basis, evaluation.integrals, positions.data(), dipole_adjoint.data(),
+      quadrupole_adjoint.data(), gradients.data(), evaluation.workspace.data(),
+      evaluation.workspace.size() * sizeof(double), error);
+  allocation_test::enabled.store(false, std::memory_order_relaxed);
+  const std::size_t after = allocation_test::count.load(std::memory_order_relaxed);
+  CHECK(status == GPUXTB_STATUS_SUCCESS);
+  CHECK(after == before);
   return 0;
 }
 
@@ -458,8 +776,18 @@ int main() {
   if (const int status = test_translation_and_rotation_covariance(); status != 0) {
     return status;
   }
+  if (const int status = test_analytic_vjp_against_full_coordinate_finite_difference();
+      status != 0) {
+    return status;
+  }
+  if (const int status = test_vjp_translation_and_rotation_covariance(); status != 0) {
+    return status;
+  }
   if (const int status = test_ragged_batch_equals_sequential(); status != 0) {
     return status;
   }
-  return test_validation_preserves_outputs();
+  if (const int status = test_validation_preserves_outputs(); status != 0) {
+    return status;
+  }
+  return test_no_steady_state_vjp_allocations();
 }

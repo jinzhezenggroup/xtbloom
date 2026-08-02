@@ -79,6 +79,25 @@ gpuxtb_status_t evaluate_multipole_cpu(const BasisPlan& basis, const IntegralPla
                                        std::string& error);
 
 /*
+ * Apply the analytic reverse-mode derivative of evaluate_multipole_cpu.
+ *
+ * dE_ddipole and dE_dquadrupole use the same component-major packed layouts as
+ * the corresponding evaluator outputs. Both complete matrix directions are
+ * contracted independently, so adjoints need not be symmetric. The reverse
+ * pass includes the explicit ket-origin translation used for interatomic
+ * transpose blocks and accumulates atom-major dE/dR into gradients.
+ *
+ * Inputs and workspace must not overlap gradients. workspace has the same
+ * alignment and size requirements as evaluate_multipole_cpu. Successful
+ * steady-state calls allocate no dynamic memory.
+ */
+gpuxtb_status_t add_multipole_gradient_cpu(const BasisPlan& basis, const IntegralPlan& plan,
+                                           const double* positions, const double* dE_ddipole,
+                                           const double* dE_dquadrupole, double* gradients,
+                                           void* workspace, std::size_t workspace_size,
+                                           std::string& error);
+
+/*
  * Apply the analytic overlap reverse-mode derivative
  *
  *   gradients += (d overlap / d positions)^T * dE_doverlap.
