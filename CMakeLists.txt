@@ -133,10 +133,13 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/gfn2_scc_iteration.cu
     src/backends/cuda/gfn2_scc_iteration_arena.cu
     src/backends/cuda/gfn2_scc_iteration_control.cu
+    src/backends/cuda/gfn2_scc_iteration_initialize.cu
     src/backends/cuda/gfn2_scc_iteration_reports.cu
     src/backends/cuda/gfn2_scc_mixer.cu
     src/backends/cuda/gfn2_scc_potential.cu
     src/backends/cuda/gfn2_scc_publication.cu
+    src/backends/cuda/gfn2_scc_setup_eigensolver.cu
+    src/backends/cuda/gfn2_scc_setup_inputs.cu
     src/backends/cuda/gfn2_scc_setup_topology.cu
   )
   target_include_directories(gpuxtb_cuda_backend PUBLIC
@@ -668,6 +671,29 @@ if(GPUXTB_BUILD_TESTS)
       COMMAND gpuxtb_cuda_scc_iteration_arena_test
     )
 
+    add_executable(gpuxtb_cuda_scc_iteration_initialize_test
+      tests/cuda_scc_iteration_initialize_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_scc_iteration_initialize_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_iteration_initialize_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_iteration_initialize_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_iteration_initialize_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_iteration_initialize
+      COMMAND gpuxtb_cuda_scc_iteration_initialize_test
+    )
+
     add_executable(gpuxtb_cuda_scc_iteration_reports_test
       tests/cuda_scc_iteration_reports_test.cu
     )
@@ -712,6 +738,78 @@ if(GPUXTB_BUILD_TESTS)
     )
     add_test(NAME gpuxtb.cuda.scc_setup_topology
       COMMAND gpuxtb_cuda_scc_setup_topology_test
+    )
+
+    add_executable(gpuxtb_cuda_scc_setup_eigensolver_test
+      tests/cuda_scc_setup_eigensolver_test.cu
+      tests/support/gfn2_scc_test_case.cpp
+    )
+    target_link_libraries(gpuxtb_cuda_scc_setup_eigensolver_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_setup_eigensolver_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_setup_eigensolver_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_setup_eigensolver_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_setup_eigensolver
+      COMMAND gpuxtb_cuda_scc_setup_eigensolver_test
+    )
+
+    add_executable(gpuxtb_cuda_scc_setup_inputs_test
+      tests/cuda_scc_setup_inputs_test.cu
+      tests/support/gfn2_scc_test_case.cpp
+    )
+    target_link_libraries(gpuxtb_cuda_scc_setup_inputs_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_setup_inputs_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_setup_inputs_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_setup_inputs_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_setup_inputs
+      COMMAND gpuxtb_cuda_scc_setup_inputs_test
+    )
+
+    add_executable(gpuxtb_cuda_scc_iteration_production_test
+      tests/cuda_scc_iteration_production_test.cu
+      tests/support/gfn2_scc_test_case.cpp
+    )
+    target_link_libraries(gpuxtb_cuda_scc_iteration_production_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_iteration_production_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_iteration_production_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_iteration_production_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_iteration_production
+      COMMAND gpuxtb_cuda_scc_iteration_production_test
     )
 
     add_executable(gpuxtb_cuda_scc_electrostatic_components_test
