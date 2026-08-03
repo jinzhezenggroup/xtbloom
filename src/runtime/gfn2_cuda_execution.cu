@@ -20,13 +20,16 @@
 #include "backends/cuda/gfn2_energy_force_execution.cuh"
 #include "backends/cuda/gfn2_external_point_charges.cuh"
 #include "backends/cuda/gfn2_geometry.cuh"
+#include "backends/cuda/gfn2_inference_publication.cuh"
 #include "backends/cuda/gfn2_preprocessing.cuh"
 #include "backends/cuda/gfn2_scc_iteration_arena.cuh"
 #include "backends/cuda/gfn2_scc_iteration_initialize.cuh"
 #include "backends/cuda/gfn2_scc_iteration_reports.cuh"
+#include "backends/cuda/gfn2_scc_loop.cuh"
 #include "backends/cuda/gfn2_scc_setup_eigensolver.cuh"
 #include "backends/cuda/gfn2_scc_setup_inputs.cuh"
 #include "backends/cuda/gfn2_scc_setup_topology.hpp"
+#include "backends/cuda/gfn2_terminal_classical_energy.cuh"
 #include "data/parameters/d4.hpp"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/basis.hpp"
@@ -201,6 +204,33 @@ class PinnedArena {
   std::size_t bytes_ = 0u;
 };
 
+class CudaEvent {
+ public:
+  CudaEvent() = default;
+  ~CudaEvent() { reset(); }
+  CudaEvent(const CudaEvent&) = delete;
+  CudaEvent& operator=(const CudaEvent&) = delete;
+  CudaEvent(CudaEvent&&) = delete;
+  CudaEvent& operator=(CudaEvent&&) = delete;
+
+  cudaError_t create(unsigned int flags) noexcept {
+    reset();
+    return cudaEventCreateWithFlags(&event_, flags);
+  }
+
+  void reset() noexcept {
+    if (event_ != nullptr) {
+      (void)cudaEventDestroy(event_);
+    }
+    event_ = nullptr;
+  }
+
+  cudaEvent_t get() const noexcept { return event_; }
+
+ private:
+  cudaEvent_t event_ = nullptr;
+};
+
 bool align_up(std::size_t value, std::size_t alignment, std::size_t& aligned) noexcept {
   if (alignment == 0u || (alignment & (alignment - 1u)) != 0u) {
     return false;
@@ -301,6 +331,8 @@ struct NumericalRefreshDeviceBinding {
   const std::uint8_t* requested = nullptr;
   const std::uint8_t* preprocessing_published = nullptr;
   std::uint8_t* eligible = nullptr;
+  /* Canonical eigensolver/SCC activity leaf snapshotted by overlap refactor. */
+  std::uint8_t* factor_active = nullptr;
   std::uint64_t* committed_generations = nullptr;
 
   double* candidate_positions = nullptr;
@@ -467,7 +499,11 @@ __global__ void gate_gfn2_numerical_refresh_kernel(NumericalRefreshDeviceBinding
       (binding.d4_enabled == 0u || binding.d4_system_errors[system] == 0u) &&
       (binding.point_enabled == 0u || binding.point_system_errors[system] == 0u) &&
       (binding.periodic_enabled == 0u || binding.periodic_system_errors[system] == 0u);
-  if (threadIdx.x == 0) binding.eligible[system] = plan_healthy && peer_healthy ? 1u : 0u;
+  if (threadIdx.x == 0) {
+    const std::uint8_t eligible = plan_healthy && peer_healthy ? 1u : 0u;
+    binding.eligible[system] = eligible;
+    binding.factor_active[system] = eligible;
+  }
 }
 
 __global__ void commit_gfn2_numerical_refresh_kernel(NumericalRefreshDeviceBinding binding) {
@@ -560,6 +596,79 @@ __global__ void commit_gfn2_numerical_refresh_kernel(NumericalRefreshDeviceBindi
     }
   }
   if (threadIdx.x == 0) binding.committed_generations[system] = generation;
+}
+
+/*
+ * Warm execution reuses the device wavefunction, published multipoles, and
+ * modified-Broyden history.  The driver-visible terminal trace belongs to one
+ * inference attempt, however, and must be restarted or the bounded loop would
+ * treat the prior converged state as inactive.  Mixer counters/history are
+ * intentionally not touched: they are the warm checkpoint itself.
+ */
+struct WarmSccResetDeviceBinding {
+  std::int64_t batch_size = 0;
+  std::uint64_t plan_token = 0u;
+  Gfn2GeometryEpochDevice geometry_epoch{};
+  const std::uint8_t* eligible = nullptr;
+  const std::uint64_t* committed_generations = nullptr;
+  std::uint64_t* warm_checkpoint_generations = nullptr;
+  Gfn2SccDeviceState scc{};
+};
+
+static_assert(std::is_trivially_copyable_v<WarmSccResetDeviceBinding>);
+
+__global__ void reset_gfn2_warm_scc_trace_kernel(WarmSccResetDeviceBinding binding) {
+  const std::int64_t system =
+      static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (system >= binding.batch_size) return;
+  const std::uint64_t epoch = *binding.geometry_epoch.value;
+  const std::uint64_t checkpoint = atomicExch(
+      reinterpret_cast<unsigned long long*>(binding.warm_checkpoint_generations + system), 0ULL);
+  const bool compatible =
+      epoch != 0u && binding.eligible[system] == 1u &&
+      binding.committed_generations[system] == epoch &&
+      checkpoint == epoch;
+
+  /* iteration==0 deliberately seeds the first warm energy delta from zero,
+   * matching fresh driver accounting while retaining the expensive electronic
+   * and mixer checkpoint. */
+  binding.scc.free_energies[system] = 0.0;
+  binding.scc.previous_free_energies[system] = 0.0;
+  binding.scc.free_energy_changes[system] = 0.0;
+  binding.scc.residual_rms[system] = 0.0;
+  binding.scc.iterations[system] = 0u;
+  binding.scc.converged[system] = 0u;
+  binding.scc.system_statuses[system] =
+      compatible || binding.eligible[system] == 0u ? GPUXTB_STATUS_SUCCESS
+                                                   : GPUXTB_STATUS_INTERNAL_ERROR;
+}
+
+struct WarmCheckpointPublicationDeviceBinding {
+  std::int64_t batch_size = 0;
+  Gfn2GeometryEpochDevice geometry_epoch{};
+  const std::uint8_t* eligible = nullptr;
+  const std::uint64_t* committed_generations = nullptr;
+  const std::uint32_t* publication_plan_error = nullptr;
+  const gpuxtb_status_t* result_statuses = nullptr;
+  const std::uint8_t* result_converged = nullptr;
+  std::uint64_t* warm_checkpoint_generations = nullptr;
+};
+
+static_assert(std::is_trivially_copyable_v<WarmCheckpointPublicationDeviceBinding>);
+
+__global__ void publish_gfn2_warm_checkpoint_generation_kernel(
+    WarmCheckpointPublicationDeviceBinding binding) {
+  const std::int64_t system =
+      static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (system >= binding.batch_size) return;
+  const std::uint64_t epoch = *binding.geometry_epoch.value;
+  const bool publish = atomicAdd(const_cast<std::uint32_t*>(binding.publication_plan_error), 0u) ==
+                           0u &&
+                       epoch != 0u && binding.eligible[system] == 1u &&
+                       binding.committed_generations[system] == epoch &&
+                       binding.result_statuses[system] == GPUXTB_STATUS_SUCCESS &&
+                       binding.result_converged[system] == 1u;
+  binding.warm_checkpoint_generations[system] = publish ? epoch : 0u;
 }
 
 struct TopologyKey {
@@ -1292,7 +1401,50 @@ struct NumericalRefreshState {
   double* host_periodic_response = nullptr;
   std::uint8_t* host_requested = nullptr;
 
+  /*
+   * Host submissions first copy synchronously into this packed, pinned image.
+   * The fixed device staging leaves above are then populated asynchronously,
+   * so no queued CUDA work retains a caller-owned host pointer after return.
+   */
+  double* owned_host_positions = nullptr;
+  double* owned_host_point_positions = nullptr;
+  double* owned_host_point_values = nullptr;
+  double* owned_host_point_gammas = nullptr;
+  double* owned_host_periodic_shifts = nullptr;
+  double* owned_host_periodic_response = nullptr;
+  std::uint8_t* owned_host_requested = nullptr;
+
+  bool host_upload_pending = false;
+  bool host_staging_poisoned = false;
+
   bool ready = false;
+};
+
+/*
+ * Stable terminal descriptors and their context-owned result arena.  These
+ * views are constructed once for a fixed topology and copied by value into
+ * allocation-free stream submissions.  The result buffers are deliberately
+ * internal: #125 later bridges them to host or device C-API destinations.
+ */
+struct InferenceState {
+  Gfn2GeometryEpochConsumerDevice epoch_consumer{};
+
+  Gfn2TerminalClassicalEnergyDevicePlan terminal_plan{};
+  Gfn2TerminalClassicalEnergyDeviceActivity terminal_activity{};
+  Gfn2TerminalClassicalEnergyDeviceResults terminal_results{};
+  Gfn2TerminalClassicalEnergyDeviceWorkspace terminal_workspace{};
+  Gfn2TerminalClassicalEnergyDeviceDiagnostics terminal_diagnostics{};
+
+  Gfn2InferencePublicationDevicePlan publication_plan{};
+  Gfn2InferencePublicationDeviceInput publication_input{};
+  Gfn2InferencePublicationDeviceResults publication_results{};
+  Gfn2InferencePublicationDeviceWorkspace publication_workspace{};
+  Gfn2InferencePublicationDeviceDiagnostics publication_diagnostics{};
+
+  /* Per-peer generation of the last successfully published SCC checkpoint. */
+  std::uint64_t* warm_checkpoint_generations = nullptr;
+  bool ready = false;
+  bool warm_checkpoint_ready = false;
 };
 
 }  // namespace
@@ -1332,9 +1484,12 @@ struct Gfn2CudaExecutionCache::Impl {
     DeviceArena iteration_arena;
     DeviceArena eigensolver_setup_arena;
     PinnedArena provider_host_workspace;
+    PinnedArena numerical_host_staging_arena;
+    CudaEvent numerical_host_upload_complete;
     DeviceArena force_immutable_arena;
     DeviceArena force_execution_arena;
     DeviceArena numerical_refresh_arena;
+    DeviceArena inference_arena;
     Gfn2RaggedTopologyView device_topology{};
     Gfn2SccIterationDevicePlan plan_seed{};
     Gfn2SccIterationDeviceInput input_seed{};
@@ -1345,8 +1500,10 @@ struct Gfn2CudaExecutionCache::Impl {
     Gfn2SccSetupEigensolverBinding eigensolver_binding{};
     Gfn2SccIterationInitializationReady ready{};
     Gfn2SccIterationBinding scc_binding{};
+    const std::int32_t* atomic_numbers = nullptr;
     EnergyForceBindings energy_force{};
     NumericalRefreshState numerical{};
+    InferenceState inference{};
     bool energy_force_smoke_ready = false;
   };
 
@@ -1488,6 +1645,7 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t host_periodic_response = 0u;
       std::size_t requested = 0u;
       std::size_t host_requested = 0u;
+      std::size_t eligible = 0u;
       std::size_t committed_generations = 0u;
       std::size_t geometry_epoch = 0u;
 
@@ -1550,6 +1708,16 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t periodic_plan_error = 0u;
     } offset;
 
+    struct HostStagingOffsets {
+      std::size_t positions = 0u;
+      std::size_t point_positions = 0u;
+      std::size_t point_values = 0u;
+      std::size_t point_gammas = 0u;
+      std::size_t periodic_shifts = 0u;
+      std::size_t periodic_response = 0u;
+      std::size_t requested = 0u;
+    } host_offset;
+
     ArenaLayout layout;
     offset.shell_pair_offsets = layout.append<std::int64_t>(
         static_cast<std::int64_t>(candidate.host.h0.shell_pair_offsets.size()));
@@ -1587,6 +1755,7 @@ struct Gfn2CudaExecutionCache::Impl {
                      offset.host_periodic_response);
     offset.requested = layout.append<std::uint8_t>(batch);
     offset.host_requested = layout.append<std::uint8_t>(batch);
+    offset.eligible = layout.append<std::uint8_t>(batch);
     offset.committed_generations = layout.append<std::uint64_t>(batch);
     offset.geometry_epoch = layout.append<std::uint64_t>(1);
 
@@ -1657,9 +1826,35 @@ struct Gfn2CudaExecutionCache::Impl {
       error = "numerical refresh arena layout overflows size_t";
       return GPUXTB_STATUS_ALLOCATION_FAILED;
     }
+
+    ArenaLayout host_layout;
+    host_offset.positions = host_layout.append<double>(coordinates);
+    host_offset.point_positions = host_layout.append<double>(point_coordinates);
+    host_offset.point_values = host_layout.append<double>(points);
+    host_offset.point_gammas = host_layout.append<double>(points);
+    host_offset.periodic_shifts =
+        host_layout.append<double>(candidate.host.periodic_enabled ? atoms : 0);
+    host_offset.periodic_response =
+        host_layout.append<double>(candidate.host.periodic_enabled ? response : 0);
+    host_offset.requested = host_layout.append<std::uint8_t>(batch);
+    if (!host_layout.valid()) {
+      error = "numerical host-staging arena layout overflows size_t";
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
+
     cudaError_t cuda_status = candidate.numerical_refresh_arena.allocate(layout.bytes());
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("CUDA numerical refresh arena allocation", cuda_status);
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
+    cuda_status = candidate.numerical_host_staging_arena.allocate(host_layout.bytes());
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA numerical pinned host-staging allocation", cuda_status);
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
+    cuda_status = candidate.numerical_host_upload_complete.create(cudaEventDisableTiming);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA numerical host-staging event creation", cuda_status);
       return GPUXTB_STATUS_ALLOCATION_FAILED;
     }
     void* const arena = candidate.numerical_refresh_arena.get();
@@ -1705,6 +1900,14 @@ struct Gfn2CudaExecutionCache::Impl {
       cuda_status = cudaMemsetAsync(arena_pointer<std::uint8_t>(arena, offset.requested), 1,
                                     static_cast<std::size_t>(batch), stream);
     }
+    if (cuda_status == cudaSuccess) {
+      /* Refresh eligibility must survive SCC activity derivation.  Keeping a
+       * dedicated byte vector lets terminal publication distinguish a peer
+       * rejected by numerical refresh after the SCC ledger becomes inactive
+       * through convergence or failure. */
+      cuda_status = cudaMemsetAsync(arena_pointer<std::uint8_t>(arena, offset.eligible), 1,
+                                    static_cast<std::size_t>(batch), stream);
+    }
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("CUDA numerical refresh setup upload", cuda_status);
       return GPUXTB_STATUS_INTERNAL_ERROR;
@@ -1722,6 +1925,22 @@ struct Gfn2CudaExecutionCache::Impl {
     numerical.host_periodic_response = arena_pointer_if<double>(
         arena, offset.host_periodic_response, candidate.host.periodic_enabled ? response : 0);
     numerical.host_requested = arena_pointer<std::uint8_t>(arena, offset.host_requested);
+    void* const host_arena = candidate.numerical_host_staging_arena.get();
+    numerical.owned_host_positions =
+        arena_pointer<double>(host_arena, host_offset.positions);
+    numerical.owned_host_point_positions = arena_pointer_if<double>(
+        host_arena, host_offset.point_positions, point_coordinates);
+    numerical.owned_host_point_values =
+        arena_pointer_if<double>(host_arena, host_offset.point_values, points);
+    numerical.owned_host_point_gammas =
+        arena_pointer_if<double>(host_arena, host_offset.point_gammas, points);
+    numerical.owned_host_periodic_shifts = arena_pointer_if<double>(
+        host_arena, host_offset.periodic_shifts, candidate.host.periodic_enabled ? atoms : 0);
+    numerical.owned_host_periodic_response = arena_pointer_if<double>(
+        host_arena, host_offset.periodic_response,
+        candidate.host.periodic_enabled ? response : 0);
+    numerical.owned_host_requested =
+        arena_pointer<std::uint8_t>(host_arena, host_offset.requested);
     auto& binding = numerical.preprocessing;
     binding = {};
     binding.plan.abi_version = kGfn2PreprocessingAbiVersion;
@@ -1924,7 +2143,8 @@ struct Gfn2CudaExecutionCache::Impl {
     device.d4_pair_offsets = candidate.plan_seed.d4_batch.pair_offsets;
     device.requested = binding.activity.requested_mask;
     device.preprocessing_published = binding.activity.published_mask;
-    device.eligible = candidate.workspace_seed.ledger.active_mask;
+    device.eligible = arena_pointer<std::uint8_t>(arena, offset.eligible);
+    device.factor_active = candidate.workspace_seed.ledger.active_mask;
     device.committed_generations =
         arena_pointer<std::uint64_t>(arena, offset.committed_generations);
     device.candidate_positions = arena_pointer<double>(arena, offset.candidate_positions);
@@ -2461,6 +2681,9 @@ struct Gfn2CudaExecutionCache::Impl {
 
     void* const execution_arena = candidate.force_execution_arena.get();
     void* const immutable_arena = candidate.force_immutable_arena.get();
+    candidate.atomic_numbers =
+        force_mode ? arena_pointer<std::int32_t>(immutable_arena, immutable.atomic_numbers)
+                   : nullptr;
     auto* const repulsion = arena_pointer<double>(execution_arena, execution.repulsion);
     auto* const d4_atm =
         arena_pointer_if<double>(execution_arena, execution.d4_atm, d4_enabled ? batch : 0);
@@ -2528,8 +2751,7 @@ struct Gfn2CudaExecutionCache::Impl {
       }
       candidate.submitted = true;
 
-      const auto* const atomic_numbers =
-          arena_pointer<std::int32_t>(immutable_arena, immutable.atomic_numbers);
+      const auto* const atomic_numbers = candidate.atomic_numbers;
       /* All force descriptors consume the same runtime-owned committed
        * coordinates, including zero-point batches. This is the address updated
        * transactionally by #122 after overlap factorization succeeds. */
@@ -3135,6 +3357,282 @@ struct Gfn2CudaExecutionCache::Impl {
     return GPUXTB_STATUS_SUCCESS;
   }
 
+  gpuxtb_status_t build_inference_bindings(Prepared& candidate, std::string& error) {
+    const std::int64_t batch = candidate.host.basis.batch_size;
+    const std::int64_t atoms = candidate.host.basis.total_atoms;
+    const std::int64_t points = candidate.host.external.total_point_charges;
+    const std::uint64_t token = candidate.host.plan_token;
+    const std::uint32_t requested = candidate.host.key.flags;
+    const bool d4_enabled = candidate.host.d4_enabled;
+    const bool energy_requested =
+        (requested & static_cast<std::uint32_t>(GPUXTB_COMPUTE_ENERGY)) != 0u;
+    const bool force_requested =
+        (requested & static_cast<std::uint32_t>(GPUXTB_COMPUTE_FORCES)) != 0u;
+    const bool charges_requested =
+        (requested & static_cast<std::uint32_t>(GPUXTB_COMPUTE_ATOMIC_CHARGES)) != 0u;
+    const bool point_forces_requested =
+        (requested & static_cast<std::uint32_t>(GPUXTB_COMPUTE_POINT_CHARGE_FORCES)) != 0u;
+    std::int64_t coordinates = 0;
+    std::int64_t point_coordinates = 0;
+    std::int64_t d4_weight_elements = 0;
+    if (requested == 0u || !checked_elements(atoms, 3, coordinates) ||
+        !checked_elements(points, 3, point_coordinates) ||
+        !checked_elements(atoms, kGfn2D4MaximumReferences, d4_weight_elements)) {
+      error = "inference result extent or requested-property mask is invalid";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+
+    struct Offsets {
+      std::size_t atomic_numbers = 0u;
+      std::size_t terminal_repulsion_candidate = 0u;
+      std::size_t terminal_d4_candidate = 0u;
+      std::size_t terminal_d4_weights = 0u;
+      std::size_t terminal_d4_weight_cn = 0u;
+      std::size_t terminal_d4_weight_charge = 0u;
+      std::size_t terminal_d4_atom_scratch = 0u;
+      std::size_t terminal_d4_coordination_adjoints = 0u;
+      std::size_t terminal_d4_batch_scratch = 0u;
+      std::size_t terminal_d4_gradient_scratch = 0u;
+      std::size_t terminal_epoch_snapshot = 0u;
+      std::size_t terminal_repulsion_error = 0u;
+      std::size_t terminal_d4_system_errors = 0u;
+      std::size_t terminal_d4_device_error = 0u;
+      std::size_t terminal_system_errors = 0u;
+      std::size_t terminal_plan_error = 0u;
+
+      std::size_t result_energies = 0u;
+      std::size_t result_qm_forces = 0u;
+      std::size_t result_atomic_charges = 0u;
+      std::size_t result_point_forces = 0u;
+      std::size_t result_iterations = 0u;
+      std::size_t result_converged = 0u;
+      std::size_t result_system_statuses = 0u;
+      std::size_t publication_epoch_snapshot = 0u;
+      std::size_t publication_system_errors = 0u;
+      std::size_t publication_plan_error = 0u;
+      std::size_t warm_checkpoint_generations = 0u;
+    } offset;
+
+    ArenaLayout layout;
+    offset.atomic_numbers =
+        layout.append<std::int32_t>(candidate.atomic_numbers == nullptr ? atoms : 0);
+    offset.terminal_repulsion_candidate = layout.append<double>(batch);
+    offset.terminal_d4_candidate = layout.append<double>(d4_enabled ? batch : 0);
+    offset.terminal_d4_weights =
+        layout.append<double>(d4_enabled ? d4_weight_elements : 0);
+    offset.terminal_d4_weight_cn =
+        layout.append<double>(d4_enabled ? d4_weight_elements : 0);
+    offset.terminal_d4_weight_charge =
+        layout.append<double>(d4_enabled ? d4_weight_elements : 0);
+    offset.terminal_d4_atom_scratch = layout.append<double>(d4_enabled ? atoms : 0);
+    offset.terminal_d4_coordination_adjoints = layout.append<double>(d4_enabled ? atoms : 0);
+    offset.terminal_d4_batch_scratch = layout.append<double>(d4_enabled ? batch : 0);
+    offset.terminal_d4_gradient_scratch = layout.append<double>(d4_enabled ? coordinates : 0);
+    offset.terminal_epoch_snapshot = layout.append<std::uint64_t>(1);
+    offset.terminal_repulsion_error = layout.append<std::uint32_t>(1);
+    offset.terminal_d4_system_errors = layout.append<std::uint32_t>(d4_enabled ? batch : 0);
+    offset.terminal_d4_device_error = layout.append<std::uint32_t>(d4_enabled ? 1 : 0);
+    offset.terminal_system_errors = layout.append<std::uint32_t>(batch);
+    offset.terminal_plan_error = layout.append<std::uint32_t>(1);
+
+    offset.result_energies = layout.append<double>(energy_requested ? batch : 0);
+    offset.result_qm_forces = layout.append<double>(force_requested ? coordinates : 0);
+    offset.result_atomic_charges = layout.append<double>(charges_requested ? atoms : 0);
+    offset.result_point_forces =
+        layout.append<double>(point_forces_requested ? point_coordinates : 0);
+    offset.result_iterations = layout.append<std::int32_t>(batch);
+    offset.result_converged = layout.append<std::uint8_t>(batch);
+    offset.result_system_statuses = layout.append<gpuxtb_status_t>(batch);
+    offset.publication_epoch_snapshot = layout.append<std::uint64_t>(1);
+    offset.publication_system_errors = layout.append<std::uint32_t>(batch);
+    offset.publication_plan_error = layout.append<std::uint32_t>(1);
+    offset.warm_checkpoint_generations = layout.append<std::uint64_t>(batch);
+    if (!layout.valid()) {
+      error = "inference arena layout overflows size_t";
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
+
+    cudaError_t cuda_status = candidate.inference_arena.allocate(layout.bytes());
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA inference arena allocation", cuda_status);
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
+    void* const arena = candidate.inference_arena.get();
+    cuda_status = cudaMemsetAsync(arena, 0, candidate.inference_arena.bytes(), stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA inference arena initialization", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    const std::int32_t* terminal_atomic_numbers = candidate.atomic_numbers;
+    if (terminal_atomic_numbers == nullptr) {
+      auto* const destination = arena_pointer<std::int32_t>(arena, offset.atomic_numbers);
+      cuda_status = cudaMemcpyAsync(
+          destination, candidate.host.key.atomic_numbers.data(),
+          static_cast<std::size_t>(atoms) * sizeof(std::int32_t), cudaMemcpyHostToDevice, stream);
+      if (cuda_status != cudaSuccess) {
+        error = cuda_error_message("CUDA terminal atomic-number upload", cuda_status);
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      terminal_atomic_numbers = destination;
+    }
+    candidate.submitted = true;
+
+    auto& inference = candidate.inference;
+    inference = {};
+    inference.epoch_consumer = {
+        candidate.numerical.preprocessing.geometry_epoch,
+        candidate.numerical.device.committed_generations,
+        candidate.numerical.device.eligible,
+        batch,
+        token,
+    };
+
+    const Gfn2RepulsionDeviceBatch repulsion{
+        batch,
+        atoms,
+        candidate.device_topology.atom_offsets,
+        terminal_atomic_numbers,
+        candidate.numerical.device.committed_positions,
+    };
+    Gfn2D4DeviceBatch terminal_d4 = candidate.plan_seed.d4_batch;
+    if (d4_enabled) terminal_d4.atomic_numbers = repulsion.atomic_numbers;
+    inference.terminal_plan = {
+        kGfn2TerminalClassicalEnergyAbiVersion,
+        d4_enabled ? kGfn2TerminalClassicalEnergyAllComponents : 0u,
+        token,
+        repulsion,
+        d4_enabled ? terminal_d4 : Gfn2D4DeviceBatch{},
+        d4_enabled ? candidate.plan_seed.d4_parameters : Gfn2D4DeviceParameters{},
+        d4_enabled ? candidate.plan_seed.d4_cache : Gfn2D4DeviceCache{},
+        candidate.numerical.preprocessing.geometry_epoch,
+        candidate.numerical.device.committed_generations,
+        batch,
+    };
+    inference.terminal_activity = {candidate.numerical.device.eligible, batch, token};
+    inference.terminal_results = {
+        const_cast<double*>(candidate.energy_force.input.total_energy.repulsion),
+        batch,
+        d4_enabled ? const_cast<double*>(candidate.energy_force.input.total_energy.d4_atm)
+                   : nullptr,
+        d4_enabled ? batch : 0,
+        token,
+    };
+    inference.terminal_workspace.repulsion_candidate =
+        arena_pointer<double>(arena, offset.terminal_repulsion_candidate);
+    inference.terminal_workspace.repulsion_elements = batch;
+    inference.terminal_workspace.d4_atm_candidate = arena_pointer_if<double>(
+        arena, offset.terminal_d4_candidate, d4_enabled ? batch : 0);
+    inference.terminal_workspace.d4_atm_elements = d4_enabled ? batch : 0;
+    if (d4_enabled) {
+      inference.terminal_workspace.d4 = {
+          arena_pointer<double>(arena, offset.terminal_d4_weights),
+          arena_pointer<double>(arena, offset.terminal_d4_weight_cn),
+          arena_pointer<double>(arena, offset.terminal_d4_weight_charge),
+          d4_weight_elements,
+          arena_pointer<double>(arena, offset.terminal_d4_atom_scratch),
+          arena_pointer<double>(arena, offset.terminal_d4_coordination_adjoints),
+          atoms,
+          arena_pointer<double>(arena, offset.terminal_d4_batch_scratch),
+          batch,
+          arena_pointer<double>(arena, offset.terminal_d4_gradient_scratch),
+          coordinates,
+          arena_pointer<std::uint32_t>(arena, offset.terminal_d4_system_errors),
+          batch,
+      };
+    }
+    inference.terminal_workspace.epoch_snapshot =
+        arena_pointer<std::uint64_t>(arena, offset.terminal_epoch_snapshot);
+    inference.terminal_workspace.epoch_snapshot_elements = 1;
+    inference.terminal_workspace.plan_token = token;
+    inference.terminal_diagnostics = {
+        arena_pointer<std::uint32_t>(arena, offset.terminal_repulsion_error),
+        arena_pointer_if<std::uint32_t>(arena, offset.terminal_d4_system_errors,
+                                        d4_enabled ? batch : 0),
+        d4_enabled ? batch : 0,
+        arena_pointer_if<std::uint32_t>(arena, offset.terminal_d4_device_error,
+                                        d4_enabled ? 1 : 0),
+        arena_pointer<std::uint32_t>(arena, offset.terminal_system_errors),
+        batch,
+        arena_pointer<std::uint32_t>(arena, offset.terminal_plan_error),
+        1,
+        token,
+    };
+
+    const auto input_if_requested = [](const double* pointer, bool enabled) {
+      return enabled ? pointer : nullptr;
+    };
+    inference.publication_plan = {
+        kGfn2InferencePublicationAbiVersion,
+        requested,
+        token,
+        static_cast<std::uint64_t>(candidate.host.key.maximum_iterations),
+        batch,
+        atoms,
+        points,
+        candidate.device_topology.atom_offsets,
+        points == 0 ? nullptr
+                    : candidate.plan_seed.explicit_point_charge_batch.point_charge_offsets,
+        candidate.numerical.preprocessing.geometry_epoch,
+        candidate.numerical.device.committed_generations,
+        batch,
+    };
+    inference.publication_input = {
+        candidate.numerical.device.eligible,
+        batch,
+        candidate.state_seed.scc.iterations,
+        candidate.state_seed.scc.converged,
+        candidate.state_seed.scc.system_statuses,
+        batch,
+        input_if_requested(candidate.energy_force.results.energy.total_energy, energy_requested),
+        energy_requested ? batch : 0,
+        input_if_requested(candidate.energy_force.results.forces.qm_forces, force_requested),
+        force_requested ? coordinates : 0,
+        input_if_requested(candidate.state_seed.raw_population.qat, charges_requested),
+        charges_requested ? atoms : 0,
+        input_if_requested(candidate.energy_force.results.forces.point_forces,
+                           point_forces_requested),
+        point_forces_requested ? point_coordinates : 0,
+        inference.terminal_diagnostics.system_errors,
+        batch,
+        inference.terminal_diagnostics.plan_error,
+        candidate.energy_force.diagnostics.execution_system_errors,
+        batch,
+        candidate.energy_force.workspace.plan_failure,
+        token,
+    };
+    inference.publication_results = {
+        arena_pointer_if<double>(arena, offset.result_energies, energy_requested ? batch : 0),
+        energy_requested ? batch : 0,
+        arena_pointer_if<double>(arena, offset.result_qm_forces,
+                                 force_requested ? coordinates : 0),
+        force_requested ? coordinates : 0,
+        arena_pointer_if<double>(arena, offset.result_atomic_charges,
+                                 charges_requested ? atoms : 0),
+        charges_requested ? atoms : 0,
+        arena_pointer_if<double>(arena, offset.result_point_forces,
+                                 point_forces_requested ? point_coordinates : 0),
+        point_forces_requested ? point_coordinates : 0,
+        arena_pointer<std::int32_t>(arena, offset.result_iterations),
+        arena_pointer<std::uint8_t>(arena, offset.result_converged),
+        arena_pointer<gpuxtb_status_t>(arena, offset.result_system_statuses),
+        batch,
+        token,
+    };
+    inference.publication_workspace = {
+        arena_pointer<std::uint64_t>(arena, offset.publication_epoch_snapshot), 1, token};
+    inference.publication_diagnostics = {
+        arena_pointer<std::uint32_t>(arena, offset.publication_system_errors),
+        batch,
+        arena_pointer<std::uint32_t>(arena, offset.publication_plan_error),
+        1,
+        token,
+    };
+    inference.warm_checkpoint_generations =
+        arena_pointer<std::uint64_t>(arena, offset.warm_checkpoint_generations);
+    inference.ready = true;
+    return GPUXTB_STATUS_SUCCESS;
+  }
+
   gpuxtb_status_t validate_energy_force_smoke(Prepared& candidate, std::string& error) {
     const auto& binding = candidate.energy_force;
     const std::int64_t batch = candidate.host.basis.batch_size;
@@ -3386,6 +3884,8 @@ struct Gfn2CudaExecutionCache::Impl {
 
     status = build_energy_force_bindings(*candidate, error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = build_inference_bindings(*candidate, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
 
     cuda_status = cudaStreamSynchronize(stream);
     if (cuda_status != cudaSuccess) {
@@ -3448,8 +3948,8 @@ struct Gfn2CudaExecutionCache::Impl {
      * descriptor rejection must not leave an earlier asynchronous host read in
      * flight after the caller is told that the refresh did not start. */
     const auto validate_source = [&](const char* name, const gpuxtb_const_buffer_t& buffer,
-                                     std::int64_t elements,
-                                     const double* host_stage) -> gpuxtb_status_t {
+                                     std::int64_t elements, const double* device_stage,
+                                     const double* owned_host_stage) -> gpuxtb_status_t {
       std::size_t bytes = 0u;
       if (!checked_bytes(elements, sizeof(double), bytes)) {
         error = std::string(name) + " extent overflows size_t";
@@ -3469,58 +3969,39 @@ struct Gfn2CudaExecutionCache::Impl {
         error = std::string(name) + " is not a sufficiently large host/CUDA buffer";
         return GPUXTB_STATUS_INVALID_ARGUMENT;
       }
-      if (buffer.memory_space == GPUXTB_MEMORY_HOST && host_stage == nullptr) {
+      if (buffer.memory_space == GPUXTB_MEMORY_HOST &&
+          (device_stage == nullptr || owned_host_stage == nullptr)) {
         error = std::string(name) + " has no runtime host-staging projection";
         return GPUXTB_STATUS_INTERNAL_ERROR;
       }
       return GPUXTB_STATUS_SUCCESS;
     };
 
-    const auto resolve_validated = [&](const char* name, const gpuxtb_const_buffer_t& buffer,
-                                       std::int64_t elements, double* host_stage,
-                                       const double*& source) -> gpuxtb_status_t {
-      if (elements == 0) {
-        source = nullptr;
-        return GPUXTB_STATUS_SUCCESS;
-      }
-      std::size_t bytes = 0u;
-      if (!checked_bytes(elements, sizeof(double), bytes)) {
-        error = std::string(name) + " extent changed after validation";
-        return GPUXTB_STATUS_INTERNAL_ERROR;
-      }
-      if (buffer.memory_space == GPUXTB_MEMORY_HOST) {
-        cuda_status =
-            cudaMemcpyAsync(host_stage, buffer.data, bytes, cudaMemcpyHostToDevice, stream);
-        if (cuda_status != cudaSuccess) {
-          error = cuda_error_message(name, cuda_status);
-          return GPUXTB_STATUS_INTERNAL_ERROR;
-        }
-        source = host_stage;
-      } else {
-        source = static_cast<const double*>(buffer.data);
-      }
-      return GPUXTB_STATUS_SUCCESS;
-    };
-
     gpuxtb_status_t status = validate_source("positions", input.positions, device.total_atoms * 3,
-                                             numerical.host_positions);
+                                             numerical.host_positions,
+                                             numerical.owned_host_positions);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = validate_source("point_charge_positions", input.point_charge_positions,
-                             device.total_point_charges * 3, numerical.host_point_positions);
+                             device.total_point_charges * 3, numerical.host_point_positions,
+                             numerical.owned_host_point_positions);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = validate_source("point_charge_values", input.point_charge_values,
-                             device.total_point_charges, numerical.host_point_values);
+                             device.total_point_charges, numerical.host_point_values,
+                             numerical.owned_host_point_values);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = validate_source("point_charge_gammas", input.point_charge_gammas,
-                             device.total_point_charges, numerical.host_point_gammas);
+                             device.total_point_charges, numerical.host_point_gammas,
+                             numerical.owned_host_point_gammas);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = validate_source("atomic_potential_shifts", input.atomic_potential_shifts,
                              device.periodic_enabled != 0u ? device.total_atoms : 0,
-                             numerical.host_periodic_shifts);
+                             numerical.host_periodic_shifts,
+                             numerical.owned_host_periodic_shifts);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = validate_source("charge_response_matrix", input.charge_response_matrix,
                              device.periodic_enabled != 0u ? device.total_response_elements : 0,
-                             numerical.host_periodic_response);
+                             numerical.host_periodic_response,
+                             numerical.owned_host_periodic_response);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
 
     std::size_t mask_bytes = 0u;
@@ -3541,41 +4022,184 @@ struct Gfn2CudaExecutionCache::Impl {
       return GPUXTB_STATUS_INVALID_ARGUMENT;
     }
 
+    const auto is_host_source = [](const gpuxtb_const_buffer_t& buffer,
+                                   std::int64_t elements) noexcept {
+      return elements != 0 && buffer.memory_space == GPUXTB_MEMORY_HOST;
+    };
+    const bool uses_host_staging =
+        is_host_source(input.positions, device.total_atoms * 3) ||
+        is_host_source(input.point_charge_positions, device.total_point_charges * 3) ||
+        is_host_source(input.point_charge_values, device.total_point_charges) ||
+        is_host_source(input.point_charge_gammas, device.total_point_charges) ||
+        is_host_source(input.atomic_potential_shifts,
+                       device.periodic_enabled != 0u ? device.total_atoms : 0) ||
+        is_host_source(input.charge_response_matrix,
+                       device.periodic_enabled != 0u ? device.total_response_elements : 0) ||
+        (!absent_mask && input.requested_mask.memory_space == GPUXTB_MEMORY_HOST);
+
+    if (uses_host_staging) {
+      if (numerical.host_staging_poisoned) {
+        error = "CUDA numerical host staging is unavailable after an earlier event failure";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      if (numerical.host_upload_pending) {
+        cuda_status = cudaEventQuery(current.numerical_host_upload_complete.get());
+        if (cuda_status == cudaErrorNotReady) {
+          error = "a previous CUDA numerical host upload is still in flight";
+          return GPUXTB_STATUS_INVALID_ARGUMENT;
+        }
+        if (cuda_status != cudaSuccess) {
+          numerical.host_staging_poisoned = true;
+          error = cuda_error_message("CUDA numerical host-upload event query", cuda_status);
+          return GPUXTB_STATUS_INTERNAL_ERROR;
+        }
+        numerical.host_upload_pending = false;
+      }
+    }
+
+    const auto copy_to_owned_host = [&](const char* name, const gpuxtb_const_buffer_t& buffer,
+                                        std::int64_t elements,
+                                        double* destination) -> gpuxtb_status_t {
+      if (elements == 0 || buffer.memory_space != GPUXTB_MEMORY_HOST) {
+        return GPUXTB_STATUS_SUCCESS;
+      }
+      std::size_t bytes = 0u;
+      if (!checked_bytes(elements, sizeof(double), bytes)) {
+        error = std::string(name) + " extent changed after validation";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      std::memcpy(destination, buffer.data, bytes);
+      return GPUXTB_STATUS_SUCCESS;
+    };
+    status = copy_to_owned_host("positions", input.positions, device.total_atoms * 3,
+                                numerical.owned_host_positions);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = copy_to_owned_host("point_charge_positions", input.point_charge_positions,
+                                device.total_point_charges * 3,
+                                numerical.owned_host_point_positions);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = copy_to_owned_host("point_charge_values", input.point_charge_values,
+                                device.total_point_charges, numerical.owned_host_point_values);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = copy_to_owned_host("point_charge_gammas", input.point_charge_gammas,
+                                device.total_point_charges, numerical.owned_host_point_gammas);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = copy_to_owned_host("atomic_potential_shifts", input.atomic_potential_shifts,
+                                device.periodic_enabled != 0u ? device.total_atoms : 0,
+                                numerical.owned_host_periodic_shifts);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = copy_to_owned_host(
+        "charge_response_matrix", input.charge_response_matrix,
+        device.periodic_enabled != 0u ? device.total_response_elements : 0,
+        numerical.owned_host_periodic_response);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (!absent_mask && input.requested_mask.memory_space == GPUXTB_MEMORY_HOST) {
+      std::memcpy(numerical.owned_host_requested, input.requested_mask.data, mask_bytes);
+    }
+
+    bool host_upload_enqueued = false;
+    const auto seal_host_uploads = [&]() -> cudaError_t {
+      if (!host_upload_enqueued) return cudaSuccess;
+      const cudaError_t event_status =
+          cudaEventRecord(current.numerical_host_upload_complete.get(), stream);
+      if (event_status == cudaSuccess) {
+        numerical.host_upload_pending = true;
+        current.submitted = true;
+      } else {
+        numerical.host_staging_poisoned = true;
+      }
+      return event_status;
+    };
+
+    const auto resolve_validated = [&](const char* name, const gpuxtb_const_buffer_t& buffer,
+                                       std::int64_t elements, double* device_stage,
+                                       const double* owned_host_stage,
+                                       const double*& source) -> gpuxtb_status_t {
+      if (elements == 0) {
+        source = nullptr;
+        return GPUXTB_STATUS_SUCCESS;
+      }
+      std::size_t bytes = 0u;
+      if (!checked_bytes(elements, sizeof(double), bytes)) {
+        error = std::string(name) + " extent changed after validation";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      if (buffer.memory_space == GPUXTB_MEMORY_HOST) {
+        cuda_status = cudaMemcpyAsync(device_stage, owned_host_stage, bytes,
+                                      cudaMemcpyHostToDevice, stream);
+        if (cuda_status != cudaSuccess) {
+          const cudaError_t event_status = seal_host_uploads();
+          error = cuda_error_message(name, cuda_status);
+          if (event_status != cudaSuccess) {
+            error += "; host-upload event recording also failed";
+          }
+          return GPUXTB_STATUS_INTERNAL_ERROR;
+        }
+        host_upload_enqueued = true;
+        current.submitted = true;
+        source = device_stage;
+      } else {
+        source = static_cast<const double*>(buffer.data);
+      }
+      return GPUXTB_STATUS_SUCCESS;
+    };
+
     NumericalRefreshDeviceSources sources{};
     status = resolve_validated("positions", input.positions, device.total_atoms * 3,
-                               numerical.host_positions, sources.positions);
+                               numerical.host_positions, numerical.owned_host_positions,
+                               sources.positions);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = resolve_validated("point_charge_positions", input.point_charge_positions,
                                device.total_point_charges * 3, numerical.host_point_positions,
-                               sources.point_positions);
+                               numerical.owned_host_point_positions, sources.point_positions);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = resolve_validated("point_charge_values", input.point_charge_values,
                                device.total_point_charges, numerical.host_point_values,
-                               sources.point_values);
+                               numerical.owned_host_point_values, sources.point_values);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = resolve_validated("point_charge_gammas", input.point_charge_gammas,
                                device.total_point_charges, numerical.host_point_gammas,
-                               sources.point_gammas);
+                               numerical.owned_host_point_gammas, sources.point_gammas);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = resolve_validated("atomic_potential_shifts", input.atomic_potential_shifts,
                                device.periodic_enabled != 0u ? device.total_atoms : 0,
-                               numerical.host_periodic_shifts, sources.periodic_shifts);
+                               numerical.host_periodic_shifts,
+                               numerical.owned_host_periodic_shifts, sources.periodic_shifts);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = resolve_validated("charge_response_matrix", input.charge_response_matrix,
                                device.periodic_enabled != 0u ? device.total_response_elements : 0,
-                               numerical.host_periodic_response, sources.periodic_response);
+                               numerical.host_periodic_response,
+                               numerical.owned_host_periodic_response,
+                               sources.periodic_response);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
 
     if (absent_mask) {
       cuda_status = cudaMemsetAsync(requested, 1, mask_bytes, stream);
+    } else if (input.requested_mask.memory_space == GPUXTB_MEMORY_HOST) {
+      cuda_status = cudaMemcpyAsync(numerical.host_requested, numerical.owned_host_requested,
+                                    mask_bytes, cudaMemcpyHostToDevice, stream);
+      if (cuda_status == cudaSuccess) {
+        host_upload_enqueued = true;
+        current.submitted = true;
+        cuda_status = cudaMemcpyAsync(requested, numerical.host_requested, mask_bytes,
+                                      cudaMemcpyDeviceToDevice, stream);
+      }
     } else {
-      const cudaMemcpyKind kind = input.requested_mask.memory_space == GPUXTB_MEMORY_HOST
-                                      ? cudaMemcpyHostToDevice
-                                      : cudaMemcpyDeviceToDevice;
-      cuda_status = cudaMemcpyAsync(requested, input.requested_mask.data, mask_bytes, kind, stream);
+      cuda_status = cudaMemcpyAsync(requested, input.requested_mask.data, mask_bytes,
+                                    cudaMemcpyDeviceToDevice, stream);
     }
     if (cuda_status != cudaSuccess) {
+      const cudaError_t event_status = seal_host_uploads();
       error = cuda_error_message("CUDA numerical refresh activity staging", cuda_status);
+      if (event_status != cudaSuccess) {
+        error += "; host-upload event recording also failed";
+      }
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    current.submitted = true;
+    cuda_status = seal_host_uploads();
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA numerical host-upload event recording", cuda_status);
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
 
@@ -3586,6 +4210,7 @@ struct Gfn2CudaExecutionCache::Impl {
       error = cuda_error_message("CUDA numerical input staging", cuda_status);
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
+    current.submitted = true;
 
     const auto preprocessing_launch = compose_gfn2_preprocessing_epoch_cuda(preprocessing, stream);
     if (!preprocessing_launch.success()) {
@@ -3680,6 +4305,148 @@ struct Gfn2CudaExecutionCache::Impl {
     return GPUXTB_STATUS_SUCCESS;
   }
 
+  gpuxtb_status_t execute_inference_locked(Gfn2CudaSccStartMode mode, std::string& error) {
+    if (prepared == nullptr || !prepared->inference.ready || !prepared->numerical.ready) {
+      error = "CUDA GFN2 inference requires a prepared numerical/runtime binding";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    if (mode != Gfn2CudaSccStartMode::kFresh && mode != Gfn2CudaSccStartMode::kWarm) {
+      error = "CUDA GFN2 inference received an unknown SCC start mode";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    Prepared& current = *prepared;
+    auto& inference = current.inference;
+    if (mode == Gfn2CudaSccStartMode::kWarm && !inference.warm_checkpoint_ready) {
+      error = "CUDA GFN2 warm inference requires a previously submitted checkpoint";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+
+    cudaError_t cuda_status = cudaSetDevice(device_id);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("cudaSetDevice for CUDA GFN2 inference", cuda_status);
+      return GPUXTB_STATUS_BACKEND_UNAVAILABLE;
+    }
+
+    if (mode == Gfn2CudaSccStartMode::kFresh) {
+      /* A fresh attempt consumes every old checkpoint before any state image
+       * is restored. If a later enqueue fails, no stale warm token can survive
+       * and masquerade as the failed attempt's checkpoint. */
+      cuda_status = cudaMemsetAsync(
+          inference.warm_checkpoint_generations, 0,
+          static_cast<std::size_t>(current.host.basis.batch_size) * sizeof(std::uint64_t), stream);
+      if (cuda_status != cudaSuccess) {
+        error = cuda_error_message("CUDA fresh warm-checkpoint invalidation", cuda_status);
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      current.submitted = true;
+      inference.warm_checkpoint_ready = false;
+      const auto diagnostic = current.initializer.upload_async(
+          current.iteration_arena.get(), current.iteration_arena.bytes(), current.ready, stream);
+      if (!diagnostic.success()) {
+        error = setup_error_message("CUDA SCC fresh-state upload", diagnostic.status,
+                                    static_cast<std::uint32_t>(diagnostic.error),
+                                    static_cast<std::uint32_t>(diagnostic.field), diagnostic.index);
+        return diagnostic.status;
+      }
+      current.submitted = true;
+    } else {
+      const WarmSccResetDeviceBinding warm{
+          current.host.basis.batch_size,
+          current.host.plan_token,
+          inference.epoch_consumer.epoch,
+          inference.epoch_consumer.eligible_mask,
+          inference.epoch_consumer.committed_generations,
+          inference.warm_checkpoint_generations,
+          current.state_seed.scc,
+      };
+      constexpr int kThreads = 256;
+      const auto blocks = static_cast<unsigned int>(
+          (static_cast<std::uint64_t>(warm.batch_size) + kThreads - 1u) / kThreads);
+      reset_gfn2_warm_scc_trace_kernel<<<blocks, kThreads, 0, stream>>>(warm);
+      cuda_status = cudaPeekAtLastError();
+      if (cuda_status != cudaSuccess) {
+        error = cuda_error_message("CUDA warm SCC trace reset", cuda_status);
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      current.submitted = true;
+      inference.warm_checkpoint_ready = false;
+    }
+
+    const Gfn2SccLoopLaunchResult loop = launch_gfn2_restricted_scc_loop_cuda(
+        current.scc_binding, inference.epoch_consumer, stream);
+    if (!loop.success()) {
+      std::ostringstream message;
+      message << "CUDA bounded SCC loop submission failed: status="
+              << static_cast<std::uint32_t>(loop.iteration.status)
+              << " stage=" << static_cast<std::uint32_t>(loop.iteration.stage);
+      error = message.str();
+      if (loop.iteration.status == Gfn2SccIterationLaunchStatus::kInvalidBinding) {
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
+      if (loop.iteration.status == Gfn2SccIterationLaunchStatus::kCublasError ||
+          loop.iteration.status == Gfn2SccIterationLaunchStatus::kCusolverError) {
+        return GPUXTB_STATUS_EIGENSOLVER_FAILED;
+      }
+      if (loop.iteration.status ==
+          Gfn2SccIterationLaunchStatus::kProviderCaptureUnsupported) {
+        return GPUXTB_STATUS_NOT_SUPPORTED;
+      }
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
+    cuda_status = evaluate_gfn2_terminal_classical_energy_cuda(
+        inference.terminal_plan, inference.terminal_activity, inference.terminal_results,
+        inference.terminal_workspace, inference.terminal_diagnostics, stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA terminal classical energy", cuda_status);
+      return cuda_status == cudaErrorInvalidValue ? GPUXTB_STATUS_INVALID_ARGUMENT
+                                                 : GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
+    cuda_status = execute_gfn2_energy_force_cuda(
+        current.energy_force.plan, current.energy_force.input, current.energy_force.results,
+        current.energy_force.intermediates, current.energy_force.workspace,
+        current.energy_force.diagnostics, inference.epoch_consumer, stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA terminal energy/force execution", cuda_status);
+      return cuda_status == cudaErrorInvalidValue ? GPUXTB_STATUS_INVALID_ARGUMENT
+                                                 : GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
+    cuda_status = publish_gfn2_inference_results_cuda(
+        inference.publication_plan, inference.publication_input, inference.publication_results,
+        inference.publication_workspace, inference.publication_diagnostics, stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA internal inference publication", cuda_status);
+      return cuda_status == cudaErrorInvalidValue ? GPUXTB_STATUS_INVALID_ARGUMENT
+                                                 : GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
+    const WarmCheckpointPublicationDeviceBinding checkpoint{
+        current.host.basis.batch_size,
+        inference.epoch_consumer.epoch,
+        inference.epoch_consumer.eligible_mask,
+        inference.epoch_consumer.committed_generations,
+        inference.publication_diagnostics.plan_error,
+        inference.publication_results.system_statuses,
+        inference.publication_results.converged,
+        inference.warm_checkpoint_generations,
+    };
+    constexpr int kThreads = 256;
+    const auto blocks = static_cast<unsigned int>(
+        (static_cast<std::uint64_t>(checkpoint.batch_size) + kThreads - 1u) / kThreads);
+    publish_gfn2_warm_checkpoint_generation_kernel<<<blocks, kThreads, 0, stream>>>(checkpoint);
+    cuda_status = cudaPeekAtLastError();
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA warm-checkpoint publication", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
+    inference.warm_checkpoint_ready = true;
+    error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  }
+
   Gfn2CudaExecutionIdentity snapshot() const noexcept {
     Gfn2CudaExecutionIdentity identity{};
     if (prepared == nullptr) return identity;
@@ -3699,6 +4466,14 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.force_mode_ready = current.energy_force.plan.compute_forces == 1u;
     identity.energy_force_smoke_ready = current.energy_force_smoke_ready ? 1u : 0u;
     identity.numerical_refresh_ready = current.numerical.ready ? 1u : 0u;
+    identity.inference_ready =
+        current.inference.ready &&
+                current.inference.terminal_plan.plan_token == current.host.plan_token &&
+                current.inference.publication_plan.plan_token == current.host.plan_token &&
+                current.inference.publication_results.plan_token == current.host.plan_token
+            ? 1u
+            : 0u;
+    identity.warm_checkpoint_ready = current.inference.warm_checkpoint_ready ? 1u : 0u;
     identity.batch_size = current.host.basis.batch_size;
     identity.total_atoms = current.host.basis.total_atoms;
     identity.total_shells = current.host.basis.total_shells;
@@ -3729,6 +4504,31 @@ struct Gfn2CudaExecutionCache::Impl {
         opaque_address(current.eigensolver_binding.cache.geometry_generations);
     identity.overlap_factor_statuses =
         opaque_address(current.eigensolver_binding.cache.factor_statuses);
+    identity.inference_arena = opaque_address(current.inference_arena.get());
+    identity.inference_epoch_consumer = opaque_address(&current.inference.epoch_consumer);
+    identity.inference_results = opaque_address(&current.inference.publication_results);
+    identity.inference_energies =
+        opaque_address(current.inference.publication_results.energies);
+    identity.inference_qm_forces =
+        opaque_address(current.inference.publication_results.qm_forces);
+    identity.inference_atomic_charges =
+        opaque_address(current.inference.publication_results.atomic_charges);
+    identity.inference_point_forces =
+        opaque_address(current.inference.publication_results.point_forces);
+    identity.inference_iterations =
+        opaque_address(current.inference.publication_results.iterations);
+    identity.inference_converged =
+        opaque_address(current.inference.publication_results.converged);
+    identity.inference_system_statuses =
+        opaque_address(current.inference.publication_results.system_statuses);
+    identity.inference_publication_epoch_snapshot =
+        opaque_address(current.inference.publication_workspace.epoch_snapshot);
+    identity.inference_publication_system_errors =
+        opaque_address(current.inference.publication_diagnostics.system_errors);
+    identity.inference_publication_plan_error =
+        opaque_address(current.inference.publication_diagnostics.plan_error);
+    identity.warm_checkpoint_generations =
+        opaque_address(current.inference.warm_checkpoint_generations);
     identity.topology_arena_bytes = current.topology_arena.bytes();
     identity.input_arena_bytes = current.input_arena.bytes();
     identity.iteration_arena_bytes = current.iteration_arena.bytes();
@@ -3737,6 +4537,7 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.force_immutable_arena_bytes = current.force_immutable_arena.bytes();
     identity.force_execution_arena_bytes = current.force_execution_arena.bytes();
     identity.numerical_refresh_arena_bytes = current.numerical_refresh_arena.bytes();
+    identity.inference_arena_bytes = current.inference_arena.bytes();
     return identity;
   }
 
@@ -3833,6 +4634,17 @@ gpuxtb_status_t Gfn2CudaExecutionCache::refresh_numerical_async(
   std::lock_guard<std::mutex> lock(impl_->mutex);
   gpuxtb_status_t status = impl_->ensure_handles(error);
   return status == GPUXTB_STATUS_SUCCESS ? impl_->refresh_numerical_locked(input, error) : status;
+}
+
+gpuxtb_status_t Gfn2CudaExecutionCache::execute_inference_async(Gfn2CudaSccStartMode mode,
+                                                                std::string& error) {
+  if (impl_ == nullptr) {
+    error = "CUDA GFN2 execution cache has no implementation";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  gpuxtb_status_t status = impl_->ensure_handles(error);
+  return status == GPUXTB_STATUS_SUCCESS ? impl_->execute_inference_locked(mode, error) : status;
 }
 
 bool Gfn2CudaExecutionCache::valid() const noexcept {

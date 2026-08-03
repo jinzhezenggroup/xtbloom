@@ -33,6 +33,10 @@ struct Gfn2CudaExecutionIdentity {
   std::uint8_t energy_force_smoke_ready = 0u;
   /* One after the fixed-topology numerical refresh graph is sealed. */
   std::uint8_t numerical_refresh_ready = 0u;
+  /* One after terminal energy/publication descriptors own stable storage. */
+  std::uint8_t inference_ready = 0u;
+  /* One after an earlier inference has queued a device warm checkpoint. */
+  std::uint8_t warm_checkpoint_ready = 0u;
 
   std::int64_t batch_size = 0;
   std::int64_t total_atoms = 0;
@@ -64,6 +68,21 @@ struct Gfn2CudaExecutionIdentity {
   std::uintptr_t numerical_eligible_mask = 0u;
   std::uintptr_t overlap_factor_generations = 0u;
   std::uintptr_t overlap_factor_statuses = 0u;
+  std::uintptr_t inference_arena = 0u;
+  std::uintptr_t inference_epoch_consumer = 0u;
+  std::uintptr_t inference_results = 0u;
+  std::uintptr_t inference_energies = 0u;
+  std::uintptr_t inference_qm_forces = 0u;
+  std::uintptr_t inference_atomic_charges = 0u;
+  std::uintptr_t inference_point_forces = 0u;
+  std::uintptr_t inference_iterations = 0u;
+  std::uintptr_t inference_converged = 0u;
+  std::uintptr_t inference_system_statuses = 0u;
+  /* Device publication provenance for the most recently submitted inference. */
+  std::uintptr_t inference_publication_epoch_snapshot = 0u;
+  std::uintptr_t inference_publication_system_errors = 0u;
+  std::uintptr_t inference_publication_plan_error = 0u;
+  std::uintptr_t warm_checkpoint_generations = 0u;
 
   std::size_t topology_arena_bytes = 0u;
   std::size_t input_arena_bytes = 0u;
@@ -73,15 +92,26 @@ struct Gfn2CudaExecutionIdentity {
   std::size_t force_immutable_arena_bytes = 0u;
   std::size_t force_execution_arena_bytes = 0u;
   std::size_t numerical_refresh_arena_bytes = 0u;
+  std::size_t inference_arena_bytes = 0u;
+};
+
+/* Runtime SCC initialization policy for one complete inference submission. */
+enum class Gfn2CudaSccStartMode : std::uint32_t {
+  kFresh = 1u,
+  kWarm = 2u,
 };
 
 /*
  * CUDA-free numerical view for a previously prepared fixed topology.
  *
  * Every nonempty buffer may reside in host or CUDA-device memory. The runtime
- * stages host values and keeps device values on the caller stream; it never
- * downloads numerical data or polls asynchronous diagnostics. requested_mask
- * is an optional uint8_t[batch] view. An absent mask requests every member.
+ * synchronously snapshots host values into runtime-owned pinned storage and
+ * keeps device values on the caller stream; no queued work retains a caller
+ * host pointer after return. Only one host snapshot may be in flight per fixed
+ * topology; another host submission is rejected until its H2D event completes,
+ * while CUDA-device inputs remain direct. The runtime never downloads numerical
+ * data or polls asynchronous diagnostics. requested_mask is an optional
+ * uint8_t[batch] view. An absent mask requests every member.
  *
  * The context-owned device epoch advances once per accepted refresh (and once
  * per CUDA Graph replay). Publication is transactional per ragged member: an unrequested or failing
@@ -123,6 +153,16 @@ class Gfn2CudaExecutionCache {
 
   /* Enqueue one allocation-free fixed-topology numerical transaction. */
   [[nodiscard]] gpuxtb_status_t refresh_numerical_async(const Gfn2CudaNumericalInputView& input,
+                                                        std::string& error);
+
+  /*
+   * Enqueue SCC through internal result publication on the context stream.
+   * Fresh mode restores the immutable SAD image. Warm mode reuses the prior
+   * device wavefunction and mixer checkpoint only when its per-peer geometry
+   * generation matches the current committed numerical epoch; it still resets
+   * the driver-visible terminal trace for the new inference attempt.
+   */
+  [[nodiscard]] gpuxtb_status_t execute_inference_async(Gfn2CudaSccStartMode mode,
                                                         std::string& error);
 
   [[nodiscard]] bool valid() const noexcept;

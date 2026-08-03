@@ -1,6 +1,8 @@
 #include <cuda_runtime_api.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -10,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "backends/cuda/gfn2_inference_publication.cuh"
 #include "backends/cuda/gfn2_scc_potential.cuh"
 #include "gpuxtb/gpuxtb.h"
 #include "runtime/backend.hpp"
@@ -33,6 +36,10 @@ using gpuxtb::detail::Context;
 using gpuxtb::detail::Gfn2CudaExecutionCache;
 using gpuxtb::detail::Gfn2CudaExecutionIdentity;
 using gpuxtb::detail::Gfn2CudaNumericalInputView;
+using gpuxtb::detail::Gfn2CudaSccStartMode;
+using gpuxtb::detail::cuda::Gfn2InferencePublicationDeviceResults;
+using gpuxtb::detail::cuda::Gfn2InferencePublicationPlanError;
+using gpuxtb::detail::cuda::Gfn2InferencePublicationSystemError;
 using gpuxtb::detail::cuda::Gfn2SccPotentialComponent;
 using gpuxtb::test::gfn2::HostSccCase;
 using gpuxtb::test::gfn2::HostSccCaseOptions;
@@ -80,6 +87,52 @@ class DeviceBuffer {
   std::size_t count_ = 0u;
 };
 
+template <typename T>
+class PinnedHostBuffer {
+ public:
+  PinnedHostBuffer() = default;
+  PinnedHostBuffer(const PinnedHostBuffer&) = delete;
+  PinnedHostBuffer& operator=(const PinnedHostBuffer&) = delete;
+  ~PinnedHostBuffer() { reset(); }
+
+  cudaError_t assign(const std::vector<T>& values) {
+    reset();
+    count_ = values.size();
+    if (count_ == 0u) return cudaSuccess;
+    cudaError_t status =
+        cudaMallocHost(reinterpret_cast<void**>(&data_), count_ * sizeof(T));
+    if (status == cudaSuccess) {
+      std::memcpy(data_, values.data(), count_ * sizeof(T));
+    }
+    return status;
+  }
+
+  void reset() noexcept {
+    if (data_ != nullptr) (void)cudaFreeHost(data_);
+    data_ = nullptr;
+    count_ = 0u;
+  }
+
+  T* data() noexcept { return data_; }
+  std::size_t size() const noexcept { return count_; }
+
+  gpuxtb_const_buffer_t view() const noexcept {
+    return {data_, count_ * sizeof(T), GPUXTB_MEMORY_HOST, 0u};
+  }
+
+ private:
+  T* data_ = nullptr;
+  std::size_t count_ = 0u;
+};
+
+__global__ void hold_owner_stream_kernel(unsigned long long clock_cycles) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) return;
+  const unsigned long long start = clock64();
+  while (clock64() - start < clock_cycles) {
+    __nanosleep(1000u);
+  }
+}
+
 struct RefreshSnapshot {
   std::uint64_t epoch = 0u;
   std::vector<std::uint64_t> committed;
@@ -110,6 +163,84 @@ int download_refresh_snapshot(const Gfn2CudaExecutionIdentity& identity, cudaStr
   CUDA_CHECK(cudaMemcpyAsync(snapshot.eligible.data(),
                              reinterpret_cast<const void*>(identity.numerical_eligible_mask),
                              batch * sizeof(std::uint8_t), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  return 0;
+}
+
+struct InferenceSnapshot {
+  std::vector<double> energies;
+  std::vector<double> qm_forces;
+  std::vector<double> atomic_charges;
+  std::vector<double> point_forces;
+  std::vector<std::int32_t> iterations;
+  std::vector<std::uint8_t> converged;
+  std::vector<gpuxtb_status_t> statuses;
+  std::uint64_t publication_epoch = 0u;
+  std::vector<std::uint32_t> publication_system_errors;
+  std::uint32_t publication_plan_error = 0u;
+  std::vector<std::uint64_t> warm_generations;
+};
+
+int download_inference_snapshot(const Gfn2CudaExecutionIdentity& identity, cudaStream_t stream,
+                                bool force_mode, InferenceSnapshot& snapshot) {
+  const std::size_t batch = static_cast<std::size_t>(identity.batch_size);
+  const std::size_t coordinates = static_cast<std::size_t>(identity.total_atoms * 3);
+  const std::size_t point_coordinates =
+      static_cast<std::size_t>(identity.total_point_charges * 3);
+  snapshot.energies.resize(batch);
+  snapshot.qm_forces.resize(force_mode ? coordinates : 0u);
+  snapshot.atomic_charges.resize(force_mode ? static_cast<std::size_t>(identity.total_atoms) : 0u);
+  snapshot.point_forces.resize(force_mode ? point_coordinates : 0u);
+  snapshot.iterations.resize(batch);
+  snapshot.converged.resize(batch);
+  snapshot.statuses.resize(batch);
+  snapshot.publication_system_errors.resize(batch);
+  snapshot.warm_generations.resize(batch);
+  CUDA_CHECK(cudaMemcpyAsync(snapshot.energies.data(),
+                             reinterpret_cast<const void*>(identity.inference_energies),
+                             batch * sizeof(double), cudaMemcpyDeviceToHost, stream));
+  if (!snapshot.qm_forces.empty()) {
+    CUDA_CHECK(cudaMemcpyAsync(snapshot.qm_forces.data(),
+                               reinterpret_cast<const void*>(identity.inference_qm_forces),
+                               snapshot.qm_forces.size() * sizeof(double), cudaMemcpyDeviceToHost,
+                               stream));
+  }
+  if (!snapshot.atomic_charges.empty()) {
+    CUDA_CHECK(cudaMemcpyAsync(snapshot.atomic_charges.data(),
+                               reinterpret_cast<const void*>(identity.inference_atomic_charges),
+                               snapshot.atomic_charges.size() * sizeof(double),
+                               cudaMemcpyDeviceToHost, stream));
+  }
+  if (!snapshot.point_forces.empty()) {
+    CUDA_CHECK(cudaMemcpyAsync(snapshot.point_forces.data(),
+                               reinterpret_cast<const void*>(identity.inference_point_forces),
+                               snapshot.point_forces.size() * sizeof(double),
+                               cudaMemcpyDeviceToHost, stream));
+  }
+  CUDA_CHECK(cudaMemcpyAsync(snapshot.iterations.data(),
+                             reinterpret_cast<const void*>(identity.inference_iterations),
+                             batch * sizeof(std::int32_t), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaMemcpyAsync(snapshot.converged.data(),
+                             reinterpret_cast<const void*>(identity.inference_converged),
+                             batch * sizeof(std::uint8_t), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaMemcpyAsync(snapshot.statuses.data(),
+                             reinterpret_cast<const void*>(identity.inference_system_statuses),
+                             batch * sizeof(gpuxtb_status_t), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaMemcpyAsync(
+      &snapshot.publication_epoch,
+      reinterpret_cast<const void*>(identity.inference_publication_epoch_snapshot),
+      sizeof(snapshot.publication_epoch), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaMemcpyAsync(
+      snapshot.publication_system_errors.data(),
+      reinterpret_cast<const void*>(identity.inference_publication_system_errors),
+      batch * sizeof(std::uint32_t), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaMemcpyAsync(
+      &snapshot.publication_plan_error,
+      reinterpret_cast<const void*>(identity.inference_publication_plan_error),
+      sizeof(snapshot.publication_plan_error), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaMemcpyAsync(snapshot.warm_generations.data(),
+                             reinterpret_cast<const void*>(identity.warm_checkpoint_generations),
+                             batch * sizeof(std::uint64_t), cudaMemcpyDeviceToHost, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   return 0;
 }
@@ -237,6 +368,7 @@ bool same_identity(const Gfn2CudaExecutionIdentity& first,
          first.force_mode_ready == second.force_mode_ready &&
          first.energy_force_smoke_ready == second.energy_force_smoke_ready &&
          first.numerical_refresh_ready == second.numerical_refresh_ready &&
+         first.inference_ready == second.inference_ready &&
          first.batch_size == second.batch_size && first.total_atoms == second.total_atoms &&
          first.total_shells == second.total_shells &&
          first.total_orbitals == second.total_orbitals &&
@@ -262,6 +394,23 @@ bool same_identity(const Gfn2CudaExecutionIdentity& first,
          first.numerical_eligible_mask == second.numerical_eligible_mask &&
          first.overlap_factor_generations == second.overlap_factor_generations &&
          first.overlap_factor_statuses == second.overlap_factor_statuses &&
+         first.inference_arena == second.inference_arena &&
+         first.inference_epoch_consumer == second.inference_epoch_consumer &&
+         first.inference_results == second.inference_results &&
+         first.inference_energies == second.inference_energies &&
+         first.inference_qm_forces == second.inference_qm_forces &&
+         first.inference_atomic_charges == second.inference_atomic_charges &&
+         first.inference_point_forces == second.inference_point_forces &&
+         first.inference_iterations == second.inference_iterations &&
+         first.inference_converged == second.inference_converged &&
+         first.inference_system_statuses == second.inference_system_statuses &&
+         first.inference_publication_epoch_snapshot ==
+             second.inference_publication_epoch_snapshot &&
+         first.inference_publication_system_errors ==
+             second.inference_publication_system_errors &&
+         first.inference_publication_plan_error ==
+             second.inference_publication_plan_error &&
+         first.warm_checkpoint_generations == second.warm_checkpoint_generations &&
          first.topology_arena_bytes == second.topology_arena_bytes &&
          first.input_arena_bytes == second.input_arena_bytes &&
          first.iteration_arena_bytes == second.iteration_arena_bytes &&
@@ -269,7 +418,8 @@ bool same_identity(const Gfn2CudaExecutionIdentity& first,
          first.provider_host_workspace_bytes == second.provider_host_workspace_bytes &&
          first.force_immutable_arena_bytes == second.force_immutable_arena_bytes &&
          first.force_execution_arena_bytes == second.force_execution_arena_bytes &&
-         first.numerical_refresh_arena_bytes == second.numerical_refresh_arena_bytes;
+         first.numerical_refresh_arena_bytes == second.numerical_refresh_arena_bytes &&
+         first.inference_arena_bytes == second.inference_arena_bytes;
 }
 
 int validate_identity(const Gfn2CudaExecutionIdentity& identity, std::int64_t batch_size,
@@ -287,6 +437,8 @@ int validate_identity(const Gfn2CudaExecutionIdentity& identity, std::int64_t ba
   CHECK(identity.force_mode_ready == (force_mode ? 1u : 0u));
   CHECK(identity.energy_force_smoke_ready == 1u);
   CHECK(identity.numerical_refresh_ready == 1u);
+  CHECK(identity.inference_ready == 1u);
+  CHECK(identity.warm_checkpoint_ready == 0u);
   CHECK(identity.solver_handle != 0u);
   CHECK(identity.solver_parameters != 0u);
   CHECK(identity.blas_handle != 0u);
@@ -303,6 +455,7 @@ int validate_identity(const Gfn2CudaExecutionIdentity& identity, std::int64_t ba
   CHECK(identity.force_immutable_arena % 256u == 0u);
   CHECK(identity.force_execution_arena % 256u == 0u);
   CHECK(identity.numerical_refresh_arena % 256u == 0u);
+  CHECK(identity.inference_arena % 256u == 0u);
   CHECK(identity.topology_arena_bytes > 0u);
   CHECK(identity.input_arena_bytes > 0u);
   CHECK(identity.iteration_arena_bytes > 0u);
@@ -311,12 +464,26 @@ int validate_identity(const Gfn2CudaExecutionIdentity& identity, std::int64_t ba
   CHECK((identity.force_immutable_arena == 0u) == !force_mode);
   CHECK(identity.force_execution_arena_bytes > 0u);
   CHECK(identity.numerical_refresh_arena_bytes > 0u);
+  CHECK(identity.inference_arena_bytes > 0u);
   CHECK(identity.numerical_refresh_binding != 0u);
   CHECK(identity.numerical_epoch != 0u);
   CHECK(identity.committed_generations != 0u);
   CHECK(identity.numerical_eligible_mask != 0u);
   CHECK(identity.overlap_factor_generations != 0u);
   CHECK(identity.overlap_factor_statuses != 0u);
+  CHECK(identity.inference_epoch_consumer != 0u);
+  CHECK(identity.inference_results != 0u);
+  CHECK(identity.inference_energies != 0u);
+  CHECK((identity.inference_qm_forces != 0u) == force_mode);
+  CHECK((identity.inference_atomic_charges != 0u) == force_mode);
+  CHECK((identity.inference_point_forces != 0u) == (force_mode && expect_points));
+  CHECK(identity.inference_iterations != 0u);
+  CHECK(identity.inference_converged != 0u);
+  CHECK(identity.inference_system_statuses != 0u);
+  CHECK(identity.inference_publication_epoch_snapshot != 0u);
+  CHECK(identity.inference_publication_system_errors != 0u);
+  CHECK(identity.inference_publication_plan_error != 0u);
+  CHECK(identity.warm_checkpoint_generations != 0u);
 
   constexpr std::uint32_t required_base =
       static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
@@ -591,6 +758,46 @@ int test_device_refresh_and_peer_rollback(cudaStream_t stream, std::int32_t devi
     CHECK(third.factor_statuses[system] == 0u);
     CHECK(third.eligible[system] == (retained ? 0u : 1u));
   }
+
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kFresh, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  InferenceSnapshot mixed;
+  CHECK(download_inference_snapshot(cache.identity(), stream, true, mixed) == 0);
+  CHECK(mixed.publication_epoch == 4u);
+  CHECK(mixed.publication_plan_error ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationPlanError::kSuccess));
+  for (const std::size_t failed_system : {3u, 4u}) {
+    CHECK(mixed.statuses[failed_system] == GPUXTB_STATUS_INTERNAL_ERROR);
+    CHECK(mixed.converged[failed_system] == 0u);
+    CHECK(mixed.iterations[failed_system] == 0);
+    CHECK(std::isnan(mixed.energies[failed_system]));
+    CHECK(mixed.warm_generations[failed_system] == 0u);
+    CHECK(mixed.publication_system_errors[failed_system] ==
+          static_cast<std::uint32_t>(
+              Gfn2InferencePublicationSystemError::kIneligibleNumericalRefresh));
+    const std::int64_t atom_begin = batch.atom_offsets[failed_system];
+    const std::int64_t atom_end = batch.atom_offsets[failed_system + 1u];
+    for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+      CHECK(std::isnan(mixed.atomic_charges[static_cast<std::size_t>(atom)]));
+      for (std::int64_t component = 0; component < 3; ++component) {
+        CHECK(std::isnan(
+            mixed.qm_forces[static_cast<std::size_t>(atom * 3 + component)]));
+      }
+    }
+    const std::int64_t point_begin = batch.point_offsets[failed_system];
+    const std::int64_t point_end = batch.point_offsets[failed_system + 1u];
+    for (std::int64_t point = point_begin; point < point_end; ++point) {
+      for (std::int64_t component = 0; component < 3; ++component) {
+        CHECK(std::isnan(
+            mixed.point_forces[static_cast<std::size_t>(point * 3 + component)]));
+      }
+    }
+  }
+  for (std::size_t system = 0; system < mixed.statuses.size(); ++system) {
+    if (system == 3u || system == 4u) continue;
+    CHECK(mixed.publication_system_errors[system] ==
+          static_cast<std::uint32_t>(Gfn2InferencePublicationSystemError::kSuccess));
+  }
   Gfn2CudaNumericalInputView malformed = numerical;
   malformed.positions.size_bytes -= sizeof(double);
   CHECK(cache.refresh_numerical_async(malformed, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
@@ -599,6 +806,91 @@ int test_device_refresh_and_peer_rollback(cudaStream_t stream, std::int32_t devi
   CHECK(after_rejection.epoch == third.epoch);
   CHECK(after_rejection.committed == third.committed);
   CHECK(after_rejection.factors == third.factors);
+  return 0;
+}
+
+int test_host_refresh_snapshot_lifetime(cudaStream_t stream, std::int32_t device_id) {
+  Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
+  HostSccCase host;
+  std::string error;
+  CHECK(HostSccCase::create(
+            homogeneous_case_options(1, SmallSystemKind::kH2, false, false, false), host, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  PublicHostBatch batch = PublicHostBatch::from_host(host, false);
+  gpuxtb_compute_options_t options = compute_options(false);
+  bool reused = true;
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(!reused);
+  const Gfn2CudaExecutionIdentity initial = cache.identity();
+
+  std::vector<double> submitted_positions = batch.positions;
+  submitted_positions[3] += 0.031;
+  PinnedHostBuffer<double> caller_positions;
+  PinnedHostBuffer<std::uint8_t> caller_requested;
+  CHECK(caller_positions.assign(submitted_positions) == cudaSuccess);
+  CHECK(caller_requested.assign(std::vector<std::uint8_t>{1u}) == cudaSuccess);
+
+  Gfn2CudaNumericalInputView numerical{};
+  numerical.positions = caller_positions.view();
+  numerical.requested_mask = caller_requested.view();
+
+  /* Keep the owner's stream busy so the H2D cannot possibly consume the
+   * caller's pinned allocation before refresh_numerical_async returns. */
+  int clock_rate_khz = 0;
+  CUDA_CHECK(cudaDeviceGetAttribute(&clock_rate_khz, cudaDevAttrClockRate, device_id));
+  CHECK(clock_rate_khz > 0);
+  const unsigned long long delay_cycles =
+      static_cast<unsigned long long>(clock_rate_khz) * 250ULL;
+  hold_owner_stream_kernel<<<1, 1, 0, stream>>>(delay_cycles);
+  CUDA_CHECK(cudaPeekAtLastError());
+  CHECK(cache.refresh_numerical_async(numerical, error) == GPUXTB_STATUS_SUCCESS);
+
+  /* A second host call cannot overwrite a busy single-flight staging image.
+   * Sanitizer modes may serialize the delay and complete the first event before
+   * control returns; accepting that second snapshot is then the correct state. */
+  const gpuxtb_status_t second_submit = cache.refresh_numerical_async(numerical, error);
+  CHECK(second_submit == GPUXTB_STATUS_INVALID_ARGUMENT ||
+        second_submit == GPUXTB_STATUS_SUCCESS);
+  if (second_submit == GPUXTB_STATUS_INVALID_ARGUMENT) {
+    CHECK(error.find("still in flight") != std::string::npos);
+  }
+  const std::uint64_t first_expected_epoch =
+      second_submit == GPUXTB_STATUS_SUCCESS ? 3u : 2u;
+
+  /* Every successful call already owns its call-time bytes. Poisoning and
+   * releasing the caller allocation immediately cannot affect queued H2D. */
+  std::fill(caller_positions.data(), caller_positions.data() + caller_positions.size(),
+            std::numeric_limits<double>::quiet_NaN());
+  caller_requested.data()[0] = 0u;
+  caller_positions.reset();
+  caller_requested.reset();
+
+  RefreshSnapshot first;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, first) == 0);
+  CHECK(first.epoch == first_expected_epoch);
+  CHECK(first.committed[0] == first_expected_epoch);
+  CHECK(first.factors[0] == first_expected_epoch);
+  CHECK(first.factor_statuses[0] == 0u);
+  CHECK(first.eligible[0] == 1u);
+  CHECK(same_identity(initial, cache.identity()));
+
+  /* Once the event completes, the same fixed staging allocation is reusable. */
+  submitted_positions[3] -= 0.012;
+  CHECK(caller_positions.assign(submitted_positions) == cudaSuccess);
+  CHECK(caller_requested.assign(std::vector<std::uint8_t>{1u}) == cudaSuccess);
+  numerical.positions = caller_positions.view();
+  numerical.requested_mask = caller_requested.view();
+  CHECK(cache.refresh_numerical_async(numerical, error) == GPUXTB_STATUS_SUCCESS);
+  caller_positions.reset();
+  caller_requested.reset();
+  RefreshSnapshot second;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, second) == 0);
+  CHECK(second.epoch == first_expected_epoch + 1u);
+  CHECK(second.committed[0] == first_expected_epoch + 1u);
+  CHECK(second.factors[0] == first_expected_epoch + 1u);
+  CHECK(second.factor_statuses[0] == 0u);
+  CHECK(second.eligible[0] == 1u);
+  CHECK(same_identity(initial, cache.identity()));
   return 0;
 }
 
@@ -814,6 +1106,230 @@ int test_default_stream_refresh(std::int32_t device_id) {
   return 0;
 }
 
+int test_fresh_warm_inference_and_post_scc_refresh(cudaStream_t stream,
+                                                   std::int32_t device_id) {
+  Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
+  HostSccCase host;
+  std::string error;
+  CHECK(HostSccCase::create(
+            homogeneous_case_options(1, SmallSystemKind::kHe, false, false, false), host, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  PublicHostBatch batch = PublicHostBatch::from_host(host, false);
+  gpuxtb_compute_options_t options = compute_options(false);
+  options.max_scc_iterations = 32;
+  bool reused = true;
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(!reused);
+  const Gfn2CudaExecutionIdentity initial = cache.identity();
+  CHECK(validate_identity(initial, 1, false, false, false, false) == 0);
+
+  /* Warm is a real checkpoint mode, not an alias for the setup SAD image. */
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kWarm, error) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kFresh, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  InferenceSnapshot fresh;
+  CHECK(download_inference_snapshot(cache.identity(), stream, false, fresh) == 0);
+  CHECK(fresh.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fresh.converged[0] == 1u);
+  CHECK(fresh.iterations[0] > 0 && fresh.iterations[0] <= options.max_scc_iterations);
+  CHECK(std::isfinite(fresh.energies[0]));
+  CHECK(fresh.publication_epoch == 1u);
+  CHECK(fresh.publication_plan_error ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationPlanError::kSuccess));
+  CHECK(fresh.publication_system_errors[0] ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationSystemError::kSuccess));
+  CHECK(fresh.warm_generations[0] == 1u);
+  CHECK(cache.identity().warm_checkpoint_ready == 1u);
+  CHECK(same_identity(initial, cache.identity()));
+
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kWarm, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  InferenceSnapshot warm;
+  CHECK(download_inference_snapshot(cache.identity(), stream, false, warm) == 0);
+  CHECK(warm.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(warm.converged[0] == 1u);
+  CHECK(warm.iterations[0] > 0 && warm.iterations[0] <= options.max_scc_iterations);
+  CHECK(std::isfinite(warm.energies[0]));
+  CHECK(warm.publication_epoch == 1u);
+  CHECK(warm.publication_plan_error ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationPlanError::kSuccess));
+  CHECK(warm.publication_system_errors[0] ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationSystemError::kSuccess));
+  CHECK(warm.warm_generations[0] == 1u);
+  CHECK(same_identity(initial, cache.identity()));
+
+  /* A numerical epoch change invalidates the old warm checkpoint without a
+   * host poll. The peer publishes a terminal failure and fresh mode can then
+   * seed and converge the same committed epoch. */
+  batch.positions[0] += 0.019;
+  batch.bind();
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(reused);
+  RefreshSnapshot epoch_two;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, epoch_two) == 0);
+  CHECK(epoch_two.epoch == 2u);
+  CHECK(epoch_two.committed[0] == 2u);
+  CHECK(epoch_two.factors[0] == 2u);
+  CHECK(epoch_two.eligible[0] == 1u);
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kWarm, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  InferenceSnapshot stale_warm;
+  CHECK(download_inference_snapshot(cache.identity(), stream, false, stale_warm) == 0);
+  CHECK(stale_warm.statuses[0] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(stale_warm.converged[0] == 0u);
+  CHECK(stale_warm.iterations[0] == 0);
+  CHECK(std::isnan(stale_warm.energies[0]));
+  CHECK(stale_warm.publication_epoch == 2u);
+  CHECK(stale_warm.publication_plan_error ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationPlanError::kSuccess));
+  CHECK(stale_warm.publication_system_errors[0] ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationSystemError::kSuccess));
+  CHECK(stale_warm.warm_generations[0] == 0u);
+
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kFresh, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  InferenceSnapshot refreshed_fresh;
+  CHECK(download_inference_snapshot(cache.identity(), stream, false, refreshed_fresh) == 0);
+  CHECK(refreshed_fresh.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(refreshed_fresh.converged[0] == 1u);
+  CHECK(std::isfinite(refreshed_fresh.energies[0]));
+  CHECK(refreshed_fresh.publication_epoch == 2u);
+  CHECK(refreshed_fresh.publication_plan_error ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationPlanError::kSuccess));
+  CHECK(refreshed_fresh.publication_system_errors[0] ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationSystemError::kSuccess));
+  CHECK(refreshed_fresh.warm_generations[0] == 2u);
+
+  /* Regression: SCC convergence leaves its activity ledger terminal. A later
+   * refresh must repopulate the factorization mask from refresh eligibility. */
+  batch.positions[0] -= 0.007;
+  batch.bind();
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(reused);
+  RefreshSnapshot epoch_three;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, epoch_three) == 0);
+  CHECK(epoch_three.epoch == 3u);
+  CHECK(epoch_three.committed[0] == 3u);
+  CHECK(epoch_three.factors[0] == 3u);
+  CHECK(epoch_three.factor_statuses[0] == 0u);
+  CHECK(epoch_three.eligible[0] == 1u);
+  CHECK(same_identity(initial, cache.identity()));
+  return 0;
+}
+
+int test_failed_inference_consumes_warm_checkpoint(cudaStream_t stream,
+                                                   std::int32_t device_id) {
+  Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
+  HostSccCase host;
+  std::string error;
+  CHECK(HostSccCase::create(
+            homogeneous_case_options(1, SmallSystemKind::kHe, false, false, false), host, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  PublicHostBatch batch = PublicHostBatch::from_host(host, false);
+  gpuxtb_compute_options_t options = compute_options(false);
+  options.max_scc_iterations = 32;
+  bool reused = true;
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kFresh, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  InferenceSnapshot first;
+  CHECK(download_inference_snapshot(cache.identity(), stream, false, first) == 0);
+  CHECK(first.warm_generations[0] == 1u);
+
+  /* Inject a host-side descriptor mismatch that is discovered only after the
+   * warm reset has entered the owner stream. The consumed token must stay zero
+   * even though publication cannot be submitted and therefore cannot reissue
+   * a checkpoint. */
+  const Gfn2CudaExecutionIdentity identity = cache.identity();
+  auto* const publication_results =
+      reinterpret_cast<Gfn2InferencePublicationDeviceResults*>(identity.inference_results);
+  CHECK(publication_results != nullptr);
+  const std::uint64_t saved_token = publication_results->plan_token;
+  publication_results->plan_token = 0u;
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kWarm, error) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(cache.identity().warm_checkpoint_ready == 0u);
+  publication_results->plan_token = saved_token;
+
+  InferenceSnapshot failed;
+  CHECK(download_inference_snapshot(cache.identity(), stream, false, failed) == 0);
+  CHECK(failed.warm_generations[0] == 0u);
+  CHECK(failed.energies == first.energies);
+  CHECK(failed.iterations == first.iterations);
+  CHECK(failed.converged == first.converged);
+  CHECK(failed.statuses == first.statuses);
+
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kFresh, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  InferenceSnapshot recovered;
+  CHECK(download_inference_snapshot(cache.identity(), stream, false, recovered) == 0);
+  CHECK(recovered.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(recovered.warm_generations[0] == 1u);
+  return 0;
+}
+
+int test_publication_plan_failure_provenance(cudaStream_t stream, std::int32_t device_id) {
+  Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
+  HostSccCase host;
+  std::string error;
+  CHECK(HostSccCase::create(
+            homogeneous_case_options(1, SmallSystemKind::kH2, false, false, false), host, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  PublicHostBatch batch = PublicHostBatch::from_host(host, false);
+  gpuxtb_compute_options_t options = compute_options(false);
+  options.max_scc_iterations = 32;
+  bool reused = true;
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kFresh, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  InferenceSnapshot epoch_one;
+  CHECK(download_inference_snapshot(cache.identity(), stream, false, epoch_one) == 0);
+  CHECK(epoch_one.publication_epoch == 1u);
+  CHECK(epoch_one.publication_plan_error ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationPlanError::kSuccess));
+
+  batch.positions[3] += 0.047;
+  batch.bind();
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(reused);
+  RefreshSnapshot refreshed;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, refreshed) == 0);
+  CHECK(refreshed.epoch == 2u);
+  CHECK(refreshed.committed[0] == 2u);
+
+  /* A malformed device eligibility byte fails the upstream terminal plan and
+   * is propagated as a whole-plan publication failure. Result bytes stay at
+   * epoch one, while epoch/error provenance records that epoch two did not
+   * publish. */
+  const std::uint8_t invalid_eligibility = 2u;
+  CUDA_CHECK(cudaMemcpyAsync(
+      reinterpret_cast<void*>(cache.identity().numerical_eligible_mask), &invalid_eligibility,
+      sizeof(invalid_eligibility), cudaMemcpyHostToDevice, stream));
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kFresh, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  InferenceSnapshot failed;
+  CHECK(download_inference_snapshot(cache.identity(), stream, false, failed) == 0);
+  CHECK(failed.publication_epoch == 2u);
+  CHECK(failed.publication_plan_error == static_cast<std::uint32_t>(
+                                                   Gfn2InferencePublicationPlanError::
+                                                       kTerminalClassicalPlanFailure));
+  CHECK(failed.publication_system_errors[0] ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationSystemError::kSuccess));
+  CHECK(failed.energies == epoch_one.energies);
+  CHECK(failed.iterations == epoch_one.iterations);
+  CHECK(failed.converged == epoch_one.converged);
+  CHECK(failed.statuses == epoch_one.statuses);
+  CHECK(failed.warm_generations[0] == 0u);
+
+  const std::uint8_t valid_eligibility = 1u;
+  CUDA_CHECK(cudaMemcpyAsync(
+      reinterpret_cast<void*>(cache.identity().numerical_eligible_mask), &valid_eligibility,
+      sizeof(valid_eligibility), cudaMemcpyHostToDevice, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -828,8 +1344,12 @@ int main() {
   if (status == 0) status = test_independent_optional_configurations(stream, device_id);
   if (status == 0) status = test_reuse_and_transactions(stream, device_id);
   if (status == 0) status = test_device_refresh_and_peer_rollback(stream, device_id);
+  if (status == 0) status = test_host_refresh_snapshot_lifetime(stream, device_id);
   if (status == 0) status = test_refresh_cuda_graph_replay(stream, device_id);
   if (status == 0) status = test_ragged_runtime_shapes(stream, device_id);
+  if (status == 0) status = test_fresh_warm_inference_and_post_scc_refresh(stream, device_id);
+  if (status == 0) status = test_failed_inference_consumes_warm_checkpoint(stream, device_id);
+  if (status == 0) status = test_publication_plan_failure_provenance(stream, device_id);
   if (status == 0) status = test_default_stream_refresh(device_id);
 
   CUDA_CHECK(cudaStreamSynchronize(stream));
