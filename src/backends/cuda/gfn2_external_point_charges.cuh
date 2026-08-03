@@ -5,6 +5,7 @@
 
 #include <cstdint>
 
+#include "backends/cuda/gfn2_force_common.cuh"
 #include "backends/cuda/gfn2_scc_iteration_control.cuh"
 
 namespace gpuxtb::detail::cuda {
@@ -19,6 +20,7 @@ enum class Gfn2ExternalPointChargeDeviceError : std::uint32_t {
   kNonfiniteShellValue = 5u,
   kNonfinitePairArithmetic = 6u,
   kCacheMismatch = 7u,
+  kInvalidForceRequest = 8u,
 };
 
 /*
@@ -69,6 +71,22 @@ struct Gfn2ExternalPointChargeDeviceWorkspace {
 };
 
 /*
+ * Caller-owned scratch for transactionally reducing explicit-point-charge
+ * forces. A scratch slice is required only when the matching public output is
+ * non-NULL. The launcher overwrites eligible-system slices before use and
+ * leaves inactive or previously failed slices untouched.
+ */
+struct Gfn2ExternalPointChargeForceDeviceWorkspace {
+  double* qm_scratch = nullptr;
+  std::int64_t qm_elements = 0;
+  double* point_scratch = nullptr;
+  std::int64_t point_elements = 0;
+  std::uint32_t* sequence_active = nullptr;
+  std::int64_t sequence_elements = 0;
+  std::uint64_t plan_token = 0u;
+};
+
+/*
  * Queue Vpc_s = sum_p Q_p / sqrt(r_sp^2 + a_sp^2), where
  * a_sp = 2 / (gamma_s + gamma_p).
  *
@@ -101,6 +119,31 @@ cudaError_t add_gfn2_external_point_charge_forces_cuda(
     double* point_forces, std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
 /*
+ * Queue the same equal-and-opposite force reduction behind the common post-SCC
+ * force gate. A member is eligible only when requested_mask is one, its
+ * terminal system status is SUCCESS, and its incoming system_errors entry is
+ * zero. Unrequested members do not read their status or numerical slices.
+ *
+ * Numerical failures are peer-local and sticky in system_errors. Contributions
+ * are accumulated into caller-owned scratch first, so a failed member never
+ * partially modifies either public force slice. Successful public buffers are
+ * incremented rather than initialized. The caller may independently omit the
+ * QM or point output, together with its corresponding scratch slice.
+ *
+ * The launcher performs no allocation, transfer, host polling, or
+ * synchronization and is safe to enqueue on a caller stream or capture in a
+ * CUDA Graph. device_error is a sticky sequence-wide first-error scalar;
+ * workspace.sequence_active snapshots its incoming state so one peer failure
+ * does not suppress healthy peers in the same launch. All plan tokens must
+ * match batch.plan_token.
+ */
+cudaError_t add_gfn2_external_point_charge_gated_forces_cuda(
+    const Gfn2ExternalPointChargeDeviceBatch& batch, const Gfn2ForceDeviceActivity& activity,
+    const double* shell_charges, double* qm_forces, double* point_forces,
+    const Gfn2ExternalPointChargeForceDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
  * Asynchronously initialize a caller-owned error scalar at the beginning of
  * an external-point-charge compute sequence. The three stage launchers never
  * clear this scalar: the first semantic error remains sticky, and downstream
@@ -112,6 +155,11 @@ cudaError_t reset_gfn2_external_point_charge_device_error_cuda(
 
 cudaError_t reset_gfn2_external_point_charge_scc_errors_cuda(
     std::int64_t batch_size, std::uint32_t* system_errors, std::uint32_t* plan_error,
+    cudaStream_t stream = nullptr) noexcept;
+
+/* Clear post-SCC force peer diagnostics and the sticky first-error scalar. */
+cudaError_t reset_gfn2_external_point_charge_force_errors_cuda(
+    std::int64_t batch_size, std::uint32_t* system_errors, std::uint32_t* device_error,
     cudaStream_t stream = nullptr) noexcept;
 
 /*

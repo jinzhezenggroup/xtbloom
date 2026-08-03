@@ -458,6 +458,43 @@ __global__ void pc_scc_energy_kernel(Gfn2ExternalPointChargeDeviceBatch batch,
   component_energies[system] = energy;
 }
 
+struct PointChargePairForce {
+  double x;
+  double y;
+  double z;
+};
+
+/*
+ * Evaluate one softened shell/point pair once so the legacy and gated force
+ * paths cannot drift in sign, screening, or coincident-coordinate behavior.
+ */
+__device__ bool evaluate_point_charge_pair_force(double atom_x, double atom_y, double atom_z,
+                                                 double point_x, double point_y, double point_z,
+                                                 double shell_hardness, double point_hardness,
+                                                 double shell_charge, double point_charge,
+                                                 PointChargePairForce* force) {
+  const double dx = atom_x - point_x;
+  const double dy = atom_y - point_y;
+  const double dz = atom_z - point_z;
+  if (!isfinite(dx) || !isfinite(dy) || !isfinite(dz)) {
+    return false;
+  }
+  if (dx == 0.0 && dy == 0.0 && dz == 0.0) {
+    *force = {0.0, 0.0, 0.0};
+    return true;
+  }
+  const double inverse_average_hardness = 2.0 / (shell_hardness + point_hardness);
+  const double softened_distance = hypot(hypot(dx, dy), hypot(dz, inverse_average_hardness));
+  const double inverse_distance = 1.0 / softened_distance;
+  const double force_scale =
+      shell_charge * point_charge * inverse_distance * inverse_distance * inverse_distance;
+  force->x = force_scale * dx;
+  force->y = force_scale * dy;
+  force->z = force_scale * dz;
+  return softened_distance > 0.0 && isfinite(softened_distance) && isfinite(inverse_distance) &&
+         isfinite(force_scale) && isfinite(force->x) && isfinite(force->y) && isfinite(force->z);
+}
+
 __global__ void external_point_charge_force_kernel(Gfn2ExternalPointChargeDeviceBatch batch,
                                                    const double* shell_charges, double* qm_forces,
                                                    double* point_forces,
@@ -502,32 +539,19 @@ __global__ void external_point_charge_force_kernel(Gfn2ExternalPointChargeDevice
 
     for (std::int64_t point = ranges.point_begin; point < ranges.point_end; ++point) {
       const std::int64_t point_coordinate = point * 3;
-      const double dx = atom_x - batch.point_positions[point_coordinate];
-      const double dy = atom_y - batch.point_positions[point_coordinate + 1];
-      const double dz = atom_z - batch.point_positions[point_coordinate + 2];
-      if (!isfinite(dx) || !isfinite(dy) || !isfinite(dz)) {
+      PointChargePairForce force{};
+      if (!evaluate_point_charge_pair_force(
+              atom_x, atom_y, atom_z, batch.point_positions[point_coordinate],
+              batch.point_positions[point_coordinate + 1],
+              batch.point_positions[point_coordinate + 2], shell_hardness,
+              batch.point_hardnesses[point], shell_charge, batch.point_charges[point], &force)) {
         finite_result = false;
         break;
       }
-      if (dx == 0.0 && dy == 0.0 && dz == 0.0) {
-        continue;
-      }
-      const double inverse_average_hardness =
-          2.0 / (shell_hardness + batch.point_hardnesses[point]);
-      const double softened_distance = hypot(hypot(dx, dy), hypot(dz, inverse_average_hardness));
-      const double inverse_distance = 1.0 / softened_distance;
-      const double force_scale = shell_charge * batch.point_charges[point] * inverse_distance *
-                                 inverse_distance * inverse_distance;
-      const double fx = force_scale * dx;
-      const double fy = force_scale * dy;
-      const double fz = force_scale * dz;
-      const double updated_fx = atom_fx + fx;
-      const double updated_fy = atom_fy + fy;
-      const double updated_fz = atom_fz + fz;
-      if (!(softened_distance > 0.0) || !isfinite(softened_distance) ||
-          !isfinite(inverse_distance) || !isfinite(force_scale) || !isfinite(fx) || !isfinite(fy) ||
-          !isfinite(fz) || !isfinite(updated_fx) || !isfinite(updated_fy) ||
-          !isfinite(updated_fz)) {
+      const double updated_fx = atom_fx + force.x;
+      const double updated_fy = atom_fy + force.y;
+      const double updated_fz = atom_fz + force.z;
+      if (!isfinite(updated_fx) || !isfinite(updated_fy) || !isfinite(updated_fz)) {
         finite_result = false;
         break;
       }
@@ -535,9 +559,9 @@ __global__ void external_point_charge_force_kernel(Gfn2ExternalPointChargeDevice
       atom_fy = updated_fy;
       atom_fz = updated_fz;
       if (point_forces != nullptr) {
-        if (!checked_atomic_add(&point_forces[point_coordinate], -fx, device_error) ||
-            !checked_atomic_add(&point_forces[point_coordinate + 1], -fy, device_error) ||
-            !checked_atomic_add(&point_forces[point_coordinate + 2], -fz, device_error)) {
+        if (!checked_atomic_add(&point_forces[point_coordinate], -force.x, device_error) ||
+            !checked_atomic_add(&point_forces[point_coordinate + 1], -force.y, device_error) ||
+            !checked_atomic_add(&point_forces[point_coordinate + 2], -force.z, device_error)) {
           finite_result = false;
           break;
         }
@@ -550,6 +574,241 @@ __global__ void external_point_charge_force_kernel(Gfn2ExternalPointChargeDevice
       (void)(checked_atomic_add(&qm_forces[atom_coordinate], atom_fx, device_error) &&
              checked_atomic_add(&qm_forces[atom_coordinate + 1], atom_fy, device_error) &&
              checked_atomic_add(&qm_forces[atom_coordinate + 2], atom_fz, device_error));
+    }
+  }
+}
+
+__global__ void capture_pc_force_sequence_kernel(
+    const std::uint32_t* device_error, Gfn2ExternalPointChargeForceDeviceWorkspace workspace) {
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    *workspace.sequence_active =
+        atomicAdd(const_cast<std::uint32_t*>(device_error), 0u) ==
+                static_cast<std::uint32_t>(Gfn2ExternalPointChargeDeviceError::kSuccess)
+            ? 1u
+            : 0u;
+  }
+}
+
+__device__ bool pc_force_sequence_is_active(
+    const Gfn2ExternalPointChargeForceDeviceWorkspace& workspace) {
+  return atomicAdd(workspace.sequence_active, 0u) == 1u;
+}
+
+__device__ void record_pc_force_system_error(std::uint32_t* system_errors, std::int64_t system,
+                                             std::uint32_t* device_error,
+                                             Gfn2ExternalPointChargeDeviceError error) {
+  record_pc_scc_system_error(system_errors, system, error);
+  record_error(device_error, error);
+}
+
+/* Status is intentionally not read for an unrequested member. */
+__device__ bool load_pc_force_gate(const Gfn2ForceDeviceActivity& activity, std::int64_t system,
+                                   int* selected, std::uint32_t* system_errors,
+                                   std::uint32_t* device_error) {
+  if (threadIdx.x == 0) {
+    *selected = 0;
+    const std::uint8_t requested = activity.requested_mask[system];
+    if (requested > 1u) {
+      record_pc_force_system_error(system_errors, system, device_error,
+                                   Gfn2ExternalPointChargeDeviceError::kInvalidForceRequest);
+    } else if (requested == 1u && activity.system_statuses[system] == GPUXTB_STATUS_SUCCESS) {
+      *selected = 1;
+    }
+  }
+  __syncthreads();
+  return *selected != 0 && atomicAdd(system_errors + system, 0u) == 0u;
+}
+
+__global__ void pc_gated_force_kernel(Gfn2ExternalPointChargeDeviceBatch batch,
+                                      Gfn2ForceDeviceActivity activity, const double* shell_charges,
+                                      double* qm_forces, double* point_forces,
+                                      Gfn2ExternalPointChargeForceDeviceWorkspace workspace,
+                                      std::uint32_t* system_errors, std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  __shared__ SystemRanges ranges;
+  __shared__ int selected;
+  __shared__ int valid;
+  if (!pc_force_sequence_is_active(workspace) ||
+      !load_pc_force_gate(activity, system, &selected, system_errors, device_error)) {
+    return;
+  }
+  if (threadIdx.x == 0) {
+    ranges.atom_begin = batch.atom_offsets[system];
+    ranges.atom_end = batch.atom_offsets[system + 1];
+    ranges.shell_begin = batch.batch_shell_offsets[system];
+    ranges.shell_end = batch.batch_shell_offsets[system + 1];
+    ranges.point_begin = batch.point_charge_offsets[system];
+    ranges.point_end = batch.point_charge_offsets[system + 1];
+    valid =
+        ranges.atom_begin >= 0 && ranges.atom_begin <= ranges.atom_end &&
+                ranges.atom_end <= batch.total_atoms && ranges.shell_begin >= 0 &&
+                ranges.shell_begin <= ranges.shell_end && ranges.shell_end <= batch.total_shells &&
+                ranges.point_begin >= 0 && ranges.point_begin <= ranges.point_end &&
+                ranges.point_end <= batch.total_point_charges &&
+                (system != 0 ||
+                 (ranges.atom_begin == 0 && ranges.shell_begin == 0 && ranges.point_begin == 0)) &&
+                (system + 1 != batch.batch_size ||
+                 (ranges.atom_end == batch.total_atoms && ranges.shell_end == batch.total_shells &&
+                  ranges.point_end == batch.total_point_charges))
+            ? 1
+            : 0;
+    if (valid == 0) {
+      record_pc_force_system_error(system_errors, system, device_error,
+                                   Gfn2ExternalPointChargeDeviceError::kInvalidOffsets);
+    }
+  }
+  __syncthreads();
+  if (valid == 0) {
+    return;
+  }
+
+  if (qm_forces != nullptr) {
+    for (std::int64_t coordinate = ranges.atom_begin * 3 + threadIdx.x;
+         coordinate < ranges.atom_end * 3; coordinate += blockDim.x) {
+      workspace.qm_scratch[coordinate] = 0.0;
+    }
+  }
+  if (point_forces != nullptr) {
+    for (std::int64_t coordinate = ranges.point_begin * 3 + threadIdx.x;
+         coordinate < ranges.point_end * 3; coordinate += blockDim.x) {
+      workspace.point_scratch[coordinate] = 0.0;
+    }
+  }
+  for (std::int64_t atom = ranges.atom_begin + threadIdx.x; atom < ranges.atom_end;
+       atom += blockDim.x) {
+    const std::int64_t coordinate = atom * 3;
+    if (!isfinite(batch.qm_positions[coordinate]) ||
+        !isfinite(batch.qm_positions[coordinate + 1]) ||
+        !isfinite(batch.qm_positions[coordinate + 2])) {
+      record_pc_force_system_error(system_errors, system, device_error,
+                                   Gfn2ExternalPointChargeDeviceError::kNonfiniteQmPosition);
+      atomicExch(&valid, 0);
+    }
+  }
+  for (std::int64_t point = ranges.point_begin + threadIdx.x; point < ranges.point_end;
+       point += blockDim.x) {
+    const std::int64_t coordinate = point * 3;
+    const double hardness = batch.point_hardnesses[point];
+    if (!isfinite(batch.point_positions[coordinate]) ||
+        !isfinite(batch.point_positions[coordinate + 1]) ||
+        !isfinite(batch.point_positions[coordinate + 2]) || !isfinite(batch.point_charges[point]) ||
+        !(hardness > 0.0) || !isfinite(hardness)) {
+      record_pc_force_system_error(system_errors, system, device_error,
+                                   Gfn2ExternalPointChargeDeviceError::kInvalidPointChargeInput);
+      atomicExch(&valid, 0);
+    }
+  }
+  for (std::int64_t shell = ranges.shell_begin + threadIdx.x; shell < ranges.shell_end;
+       shell += blockDim.x) {
+    const std::int64_t atom = batch.shell_to_atom[shell];
+    const double hardness = batch.shell_hardness[shell];
+    if (atom < ranges.atom_begin || atom >= ranges.atom_end || !(hardness > 0.0) ||
+        !isfinite(hardness)) {
+      record_pc_force_system_error(system_errors, system, device_error,
+                                   Gfn2ExternalPointChargeDeviceError::kInvalidShellMetadata);
+      atomicExch(&valid, 0);
+    } else if (!isfinite(shell_charges[shell])) {
+      record_pc_force_system_error(system_errors, system, device_error,
+                                   Gfn2ExternalPointChargeDeviceError::kNonfiniteShellValue);
+      atomicExch(&valid, 0);
+    }
+  }
+  __syncthreads();
+  if (valid == 0) {
+    return;
+  }
+
+  for (std::int64_t shell = ranges.shell_begin + threadIdx.x; shell < ranges.shell_end;
+       shell += blockDim.x) {
+    const std::int64_t atom = batch.shell_to_atom[shell];
+    const std::int64_t atom_coordinate = atom * 3;
+    const double atom_x = batch.qm_positions[atom_coordinate];
+    const double atom_y = batch.qm_positions[atom_coordinate + 1];
+    const double atom_z = batch.qm_positions[atom_coordinate + 2];
+    const double shell_hardness = batch.shell_hardness[shell];
+    const double shell_charge = shell_charges[shell];
+    double atom_fx = 0.0;
+    double atom_fy = 0.0;
+    double atom_fz = 0.0;
+    bool finite_result = true;
+    for (std::int64_t point = ranges.point_begin; point < ranges.point_end; ++point) {
+      const std::int64_t point_coordinate = point * 3;
+      PointChargePairForce force{};
+      if (!evaluate_point_charge_pair_force(
+              atom_x, atom_y, atom_z, batch.point_positions[point_coordinate],
+              batch.point_positions[point_coordinate + 1],
+              batch.point_positions[point_coordinate + 2], shell_hardness,
+              batch.point_hardnesses[point], shell_charge, batch.point_charges[point], &force)) {
+        finite_result = false;
+        break;
+      }
+      atom_fx += force.x;
+      atom_fy += force.y;
+      atom_fz += force.z;
+      if (!isfinite(atom_fx) || !isfinite(atom_fy) || !isfinite(atom_fz)) {
+        finite_result = false;
+        break;
+      }
+      if (point_forces != nullptr) {
+        atomicAdd(&workspace.point_scratch[point_coordinate], -force.x);
+        atomicAdd(&workspace.point_scratch[point_coordinate + 1], -force.y);
+        atomicAdd(&workspace.point_scratch[point_coordinate + 2], -force.z);
+      }
+    }
+    if (!finite_result) {
+      record_pc_force_system_error(system_errors, system, device_error,
+                                   Gfn2ExternalPointChargeDeviceError::kNonfinitePairArithmetic);
+      atomicExch(&valid, 0);
+    } else if (qm_forces != nullptr) {
+      atomicAdd(&workspace.qm_scratch[atom_coordinate], atom_fx);
+      atomicAdd(&workspace.qm_scratch[atom_coordinate + 1], atom_fy);
+      atomicAdd(&workspace.qm_scratch[atom_coordinate + 2], atom_fz);
+    }
+  }
+  __syncthreads();
+  if (valid == 0 || atomicAdd(system_errors + system, 0u) != 0u) {
+    return;
+  }
+
+  if (qm_forces != nullptr) {
+    for (std::int64_t coordinate = ranges.atom_begin * 3 + threadIdx.x;
+         coordinate < ranges.atom_end * 3; coordinate += blockDim.x) {
+      const double current = qm_forces[coordinate];
+      const double increment = workspace.qm_scratch[coordinate];
+      if (!isfinite(current) || !isfinite(increment) || !isfinite(current + increment)) {
+        record_pc_force_system_error(system_errors, system, device_error,
+                                     Gfn2ExternalPointChargeDeviceError::kNonfinitePairArithmetic);
+        atomicExch(&valid, 0);
+      }
+    }
+  }
+  if (point_forces != nullptr) {
+    for (std::int64_t coordinate = ranges.point_begin * 3 + threadIdx.x;
+         coordinate < ranges.point_end * 3; coordinate += blockDim.x) {
+      const double current = point_forces[coordinate];
+      const double increment = workspace.point_scratch[coordinate];
+      if (!isfinite(current) || !isfinite(increment) || !isfinite(current + increment)) {
+        record_pc_force_system_error(system_errors, system, device_error,
+                                     Gfn2ExternalPointChargeDeviceError::kNonfinitePairArithmetic);
+        atomicExch(&valid, 0);
+      }
+    }
+  }
+  __syncthreads();
+  if (valid == 0 || atomicAdd(system_errors + system, 0u) != 0u) {
+    return;
+  }
+
+  if (qm_forces != nullptr) {
+    for (std::int64_t coordinate = ranges.atom_begin * 3 + threadIdx.x;
+         coordinate < ranges.atom_end * 3; coordinate += blockDim.x) {
+      qm_forces[coordinate] += workspace.qm_scratch[coordinate];
+    }
+  }
+  if (point_forces != nullptr) {
+    for (std::int64_t coordinate = ranges.point_begin * 3 + threadIdx.x;
+         coordinate < ranges.point_end * 3; coordinate += blockDim.x) {
+      point_forces[coordinate] += workspace.point_scratch[coordinate];
     }
   }
 }
@@ -675,6 +934,89 @@ cudaError_t validate_scc_launcher_arguments(const Gfn2ExternalPointChargeDeviceB
   return cudaSuccess;
 }
 
+cudaError_t validate_gated_force_launcher_arguments(
+    const Gfn2ExternalPointChargeDeviceBatch& batch, const Gfn2ForceDeviceActivity& activity,
+    const double* shell_charges, double* qm_forces, double* point_forces,
+    const Gfn2ExternalPointChargeForceDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error) noexcept {
+  cudaError_t status = validate_common_launcher_arguments(batch, device_error);
+  std::size_t offset_bytes = 0u;
+  std::size_t shell_index_bytes = 0u;
+  std::size_t shell_bytes = 0u;
+  std::size_t atom_coordinate_bytes = 0u;
+  std::size_t point_coordinate_bytes = 0u;
+  std::size_t point_bytes = 0u;
+  std::size_t system_error_bytes = 0u;
+  if (status != cudaSuccess || batch.plan_token == 0u || batch.qm_positions == nullptr ||
+      shell_charges == nullptr || (qm_forces == nullptr && point_forces == nullptr) ||
+      activity.requested_mask == nullptr || activity.system_statuses == nullptr ||
+      activity.batch_elements != batch.batch_size || activity.plan_token != batch.plan_token ||
+      workspace.plan_token != batch.plan_token || workspace.sequence_active == nullptr ||
+      workspace.sequence_elements < 1 || system_errors == nullptr ||
+      (batch.total_point_charges != 0 &&
+       (batch.point_positions == nullptr || batch.point_charges == nullptr ||
+        batch.point_hardnesses == nullptr)) ||
+      (qm_forces != nullptr &&
+       (workspace.qm_scratch == nullptr || workspace.qm_elements < batch.total_atoms * 3)) ||
+      (point_forces != nullptr && batch.total_point_charges != 0 &&
+       (workspace.point_scratch == nullptr ||
+        workspace.point_elements < batch.total_point_charges * 3)) ||
+      !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.batch_shell_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.point_charge_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.shell_to_atom, alignof(std::int64_t)) ||
+      !is_aligned(batch.shell_hardness, alignof(double)) ||
+      !is_aligned(batch.qm_positions, alignof(double)) ||
+      !is_aligned(shell_charges, alignof(double)) ||
+      !is_aligned(activity.requested_mask, alignof(std::uint8_t)) ||
+      !is_aligned(activity.system_statuses, alignof(gpuxtb_status_t)) ||
+      !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||
+      !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(device_error, alignof(std::uint32_t)) ||
+      (batch.total_point_charges != 0 && (!is_aligned(batch.point_positions, alignof(double)) ||
+                                          !is_aligned(batch.point_charges, alignof(double)) ||
+                                          !is_aligned(batch.point_hardnesses, alignof(double)))) ||
+      (qm_forces != nullptr && (!is_aligned(qm_forces, alignof(double)) ||
+                                !is_aligned(workspace.qm_scratch, alignof(double)))) ||
+      (point_forces != nullptr && (!is_aligned(point_forces, alignof(double)) ||
+                                   (batch.total_point_charges != 0 &&
+                                    !is_aligned(workspace.point_scratch, alignof(double))))) ||
+      !count_bytes(batch.batch_size + 1, sizeof(std::int64_t), &offset_bytes) ||
+      !count_bytes(batch.total_shells, sizeof(std::int64_t), &shell_index_bytes) ||
+      !count_bytes(batch.total_shells, sizeof(double), &shell_bytes) ||
+      !count_bytes(batch.total_atoms * 3, sizeof(double), &atom_coordinate_bytes) ||
+      !count_bytes(batch.total_point_charges * 3, sizeof(double), &point_coordinate_bytes) ||
+      !count_bytes(batch.total_point_charges, sizeof(double), &point_bytes) ||
+      !count_bytes(batch.batch_size, sizeof(std::uint32_t), &system_error_bytes)) {
+    return status == cudaSuccess ? cudaErrorInvalidValue : status;
+  }
+
+  const MemoryRange reads[]{{batch.atom_offsets, offset_bytes},
+                            {batch.batch_shell_offsets, offset_bytes},
+                            {batch.point_charge_offsets, offset_bytes},
+                            {batch.shell_to_atom, shell_index_bytes},
+                            {batch.shell_hardness, shell_bytes},
+                            {batch.qm_positions, atom_coordinate_bytes},
+                            {batch.point_positions, point_coordinate_bytes},
+                            {batch.point_charges, point_bytes},
+                            {batch.point_hardnesses, point_bytes},
+                            {shell_charges, shell_bytes},
+                            {activity.requested_mask, static_cast<std::size_t>(batch.batch_size)},
+                            {activity.system_statuses, system_error_bytes}};
+  const MemoryRange writes[]{
+      {qm_forces, qm_forces == nullptr ? 0u : atom_coordinate_bytes},
+      {point_forces, point_forces == nullptr ? 0u : point_coordinate_bytes},
+      {workspace.qm_scratch, qm_forces == nullptr ? 0u : atom_coordinate_bytes},
+      {workspace.point_scratch, point_forces == nullptr ? 0u : point_coordinate_bytes},
+      {workspace.sequence_active, sizeof(*workspace.sequence_active)},
+      {system_errors, system_error_bytes},
+      {device_error, sizeof(*device_error)}};
+  if (!pairwise_disjoint(writes) || !ranges_disjoint(reads, writes)) {
+    return cudaErrorInvalidValue;
+  }
+  return cudaSuccess;
+}
+
 }  // namespace
 
 cudaError_t reset_gfn2_external_point_charge_device_error_cuda(std::uint32_t* device_error,
@@ -700,6 +1042,14 @@ cudaError_t reset_gfn2_external_point_charge_scc_errors_cuda(std::int64_t batch_
   cudaError_t status = cudaMemsetAsync(system_errors, 0, system_error_bytes, stream);
   return status == cudaSuccess ? cudaMemsetAsync(plan_error, 0, sizeof(*plan_error), stream)
                                : status;
+}
+
+cudaError_t reset_gfn2_external_point_charge_force_errors_cuda(std::int64_t batch_size,
+                                                               std::uint32_t* system_errors,
+                                                               std::uint32_t* device_error,
+                                                               cudaStream_t stream) noexcept {
+  return reset_gfn2_external_point_charge_scc_errors_cuda(batch_size, system_errors, device_error,
+                                                          stream);
 }
 
 cudaError_t evaluate_gfn2_external_point_charge_potential_cuda(
@@ -748,6 +1098,28 @@ cudaError_t add_gfn2_external_point_charge_forces_cuda(
                                        kThreadsPerBlock, 0, stream>>>(
       batch, shell_charges, qm_forces, point_forces, device_error);
   return cudaGetLastError();
+}
+
+cudaError_t add_gfn2_external_point_charge_gated_forces_cuda(
+    const Gfn2ExternalPointChargeDeviceBatch& batch, const Gfn2ForceDeviceActivity& activity,
+    const double* shell_charges, double* qm_forces, double* point_forces,
+    const Gfn2ExternalPointChargeForceDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  cudaError_t status =
+      validate_gated_force_launcher_arguments(batch, activity, shell_charges, qm_forces,
+                                              point_forces, workspace, system_errors, device_error);
+  if (status != cudaSuccess) {
+    return status;
+  }
+  capture_pc_force_sequence_kernel<<<1, 1, 0, stream>>>(device_error, workspace);
+  status = cudaPeekAtLastError();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  pc_gated_force_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                          stream>>>(batch, activity, shell_charges, qm_forces, point_forces,
+                                    workspace, system_errors, device_error);
+  return cudaPeekAtLastError();
 }
 
 cudaError_t update_gfn2_external_point_charge_scc_potential_cache_cuda(
