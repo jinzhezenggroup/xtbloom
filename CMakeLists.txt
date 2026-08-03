@@ -45,7 +45,6 @@ add_library(gpuxtb_gfn2_cpu OBJECT
   src/model/gfn2/es2.cpp
   src/model/gfn2/es3.cpp
   src/model/gfn2/external_point_charges.cpp
-  src/model/gfn2/force.cpp
   src/model/gfn2/h0.cpp
   src/model/gfn2/integrals.cpp
   src/model/gfn2/mulliken.cpp
