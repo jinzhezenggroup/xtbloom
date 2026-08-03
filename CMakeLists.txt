@@ -130,6 +130,7 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/gfn2_parameters.cu
     src/backends/cuda/gfn2_plan_schema.cu
     src/backends/cuda/gfn2_periodic_embedding.cu
+    src/backends/cuda/gfn2_post_scc_potential.cu
     src/backends/cuda/gfn2_repulsion.cu
     src/backends/cuda/gfn2_scc.cu
     src/backends/cuda/gfn2_scc_bridge.cu
@@ -1062,6 +1063,27 @@ if(GPUXTB_BUILD_TESTS)
       CUDA_SEPARABLE_COMPILATION ON
     )
     add_test(NAME gpuxtb.cuda.total_energy COMMAND gpuxtb_cuda_total_energy_test)
+
+    add_executable(gpuxtb_cuda_post_scc_potential_test
+      tests/cuda_post_scc_potential_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_post_scc_potential_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_post_scc_potential_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_post_scc_potential_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_post_scc_potential_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.post_scc_potential
+      COMMAND gpuxtb_cuda_post_scc_potential_test
+    )
 
     add_executable(gpuxtb_cuda_scc_energy_test tests/cuda_scc_energy_test.cu)
     target_link_libraries(gpuxtb_cuda_scc_energy_test PRIVATE
