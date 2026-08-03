@@ -11,6 +11,14 @@ namespace gpuxtb::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
+/* Primitive candidates are unpublished and need only a valid nonzero scalar;
+ * the final composer publishes the authoritative device epoch per peer. */
+constexpr std::uint64_t kUnpublishedPrimitiveGeneration = 1u;
+
+struct GeometryGenerationSource {
+  std::uint64_t scalar = 0u;
+  const std::uint64_t* device = nullptr;
+};
 
 using BindingDiagnostic = Gfn2PreprocessingBindingDiagnostic;
 using BindingError = Gfn2PreprocessingBindingError;
@@ -110,6 +118,10 @@ bool writes_are_disjoint(const RangeList<ReadCapacity>& reads,
 
 bool all_tokens_match(const Gfn2PreprocessingDeviceBinding& binding) noexcept {
   const std::uint64_t token = binding.plan_token;
+  const bool epoch_token_matches =
+      (binding.geometry_epoch.value == nullptr && binding.geometry_epoch.value_elements == 0 &&
+       binding.geometry_epoch.plan_token == 0u) ||
+      binding.geometry_epoch.plan_token == token;
   return token != 0u && binding.plan.plan_token == token &&
          binding.plan.geometry.plan_token == token && binding.plan.integrals.plan_token == token &&
          binding.plan.h0.plan_token == token && binding.plan.es2.plan_token == token &&
@@ -122,7 +134,7 @@ bool all_tokens_match(const Gfn2PreprocessingDeviceBinding& binding) noexcept {
          binding.workspace.geometry.plan_token == token &&
          binding.workspace.integrals.plan_token == token &&
          binding.workspace.es2_candidate.plan_token == token &&
-         binding.workspace.aes2_candidate.plan_token == token;
+         binding.workspace.aes2_candidate.plan_token == token && epoch_token_matches;
 }
 
 /* Hash the byte-stable POD projection. Dynamic requested-generation metadata
@@ -157,6 +169,15 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
   }
   if (!all_tokens_match(binding)) {
     return binding_failure(BindingError::kCrossPlan, BindingField::kPlan);
+  }
+  const bool epoch_disabled = binding.geometry_epoch.value == nullptr &&
+                              binding.geometry_epoch.value_elements == 0 &&
+                              binding.geometry_epoch.plan_token == 0u;
+  const bool epoch_enabled = binding.geometry_epoch.value_elements == 1 &&
+                             binding.geometry_epoch.plan_token == binding.plan_token &&
+                             canonical_pointer(binding.geometry_epoch.value, 1);
+  if (!epoch_disabled && !epoch_enabled) {
+    return binding_failure(BindingError::kInvalidEpoch, BindingField::kEpoch);
   }
 
   const Gfn2GeometryDeviceBatch& geometry = binding.plan.geometry;
@@ -374,7 +395,7 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
   }
 
   RangeList<32> reads;
-  RangeList<40> writes;
+  RangeList<41> writes;
   const bool ranges_valid =
       reads.add(geometry.atom_offsets, batch + 1) && reads.add(geometry.pair_offsets, batch + 1) &&
       reads.add(geometry.covalent_radii, atoms) &&
@@ -434,7 +455,10 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
       writes.add(diagnostics.aes2_system_errors, batch) &&
       writes.add(diagnostics.aes2_device_error, 1) &&
       writes.add(diagnostics.system_stages, batch) && writes.add(diagnostics.plan_error, 1);
-  if (!ranges_valid) {
+  const bool epoch_range_valid =
+      epoch_disabled ||
+      writes.add(binding.geometry_epoch.value, binding.geometry_epoch.value_elements);
+  if (!ranges_valid || !epoch_range_valid) {
     return binding_failure(BindingError::kInvalidExtent, BindingField::kWorkspace);
   }
   if (!writes_are_disjoint(reads, writes)) {
@@ -459,6 +483,34 @@ __device__ std::uint32_t read_u32(const std::uint32_t* value) {
 __device__ void record_plan_error(std::uint32_t* plan_error, Gfn2PreprocessingDeviceError error) {
   atomicCAS(plan_error, static_cast<std::uint32_t>(Gfn2PreprocessingDeviceError::kSuccess),
             static_cast<std::uint32_t>(error));
+}
+
+__device__ std::uint64_t load_geometry_generation(GeometryGenerationSource source) {
+  return source.device == nullptr
+             ? source.scalar
+             : atomicAdd(
+                   reinterpret_cast<unsigned long long*>(const_cast<std::uint64_t*>(source.device)),
+                   0ULL);
+}
+
+/* The CAS loop prevents wraparound even if a caller violates the documented
+ * single-flight contract. Concurrent use still has no inference-level
+ * ordering guarantee, but it cannot publish a duplicate or zero epoch. */
+__global__ void advance_geometry_epoch_kernel(Gfn2GeometryEpochDevice epoch,
+                                              std::uint32_t* plan_error) {
+  if (threadIdx.x != 0 || blockIdx.x != 0 || read_u32(plan_error) != 0u) {
+    return;
+  }
+  auto* const value = reinterpret_cast<unsigned long long*>(epoch.value);
+  unsigned long long observed = atomicAdd(value, 0ULL);
+  while (observed != ~0ULL) {
+    const unsigned long long previous = atomicCAS(value, observed, observed + 1ULL);
+    if (previous == observed) {
+      return;
+    }
+    observed = previous;
+  }
+  record_plan_error(plan_error, Gfn2PreprocessingDeviceError::kGeometryEpochOverflow);
 }
 
 __device__ void store_safe_positions(std::int64_t atom_begin, std::int64_t atom,
@@ -631,7 +683,7 @@ __global__ void publish_preprocessing_kernel(Gfn2PreprocessingDevicePlan plan,
                                              Gfn2PreprocessingDeviceOutput output,
                                              Gfn2PreprocessingDeviceWorkspace workspace,
                                              Gfn2PreprocessingDeviceDiagnostics diagnostics,
-                                             std::uint64_t generation) {
+                                             GeometryGenerationSource generation_source) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   const bool requested = activity.requested_mask[system] == 1u;
   const std::uint32_t geometry_error = diagnostics.geometry_system_errors[system];
@@ -655,6 +707,16 @@ __global__ void publish_preprocessing_kernel(Gfn2PreprocessingDevicePlan plan,
   if (!publish) {
     if (threadIdx.x == 0) {
       activity.published_mask[system] = 0u;
+    }
+    return;
+  }
+
+  const std::uint64_t generation = load_geometry_generation(generation_source);
+  if (generation == 0u) {
+    if (threadIdx.x == 0) {
+      activity.published_mask[system] = 0u;
+      record_plan_error(diagnostics.plan_error,
+                        Gfn2PreprocessingDeviceError::kGeometryEpochOverflow);
     }
     return;
   }
@@ -734,18 +796,29 @@ Gfn2PreprocessingBindingDiagnostic seal_gfn2_preprocessing_binding_cuda(
   return {};
 }
 
-Gfn2PreprocessingLaunchDiagnostic compose_gfn2_preprocessing_cuda(
-    Gfn2PreprocessingDeviceBinding& binding, std::uint64_t geometry_generation,
-    cudaStream_t stream) noexcept {
+namespace {
+
+Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
+    Gfn2PreprocessingDeviceBinding& binding, GeometryGenerationSource generation_source,
+    bool advance_epoch, cudaStream_t stream) noexcept {
   const BindingDiagnostic descriptor = validate_structure(binding, true);
   if (!descriptor.success()) {
     return launch_failure(descriptor, cudaErrorInvalidValue);
   }
-  if (geometry_generation == 0u) {
+  const bool epoch_enabled = binding.geometry_epoch.value != nullptr &&
+                             binding.geometry_epoch.value_elements == 1 &&
+                             binding.geometry_epoch.plan_token == binding.plan_token;
+  if ((!advance_epoch && (generation_source.scalar == 0u || epoch_enabled)) ||
+      (advance_epoch &&
+       (!epoch_enabled || generation_source.device != binding.geometry_epoch.value))) {
     return launch_failure(
-        binding_failure(BindingError::kInvalidGeneration, BindingField::kGeneration),
+        binding_failure(
+            advance_epoch ? BindingError::kInvalidEpoch : BindingError::kInvalidGeneration,
+            advance_epoch ? BindingField::kEpoch : BindingField::kGeneration),
         cudaErrorInvalidValue);
   }
+  const std::uint64_t primitive_generation =
+      advance_epoch ? kUnpublishedPrimitiveGeneration : generation_source.scalar;
 
   const std::int64_t batch = binding.plan.geometry.batch_size;
   cudaError_t status =
@@ -766,6 +839,12 @@ Gfn2PreprocessingLaunchDiagnostic compose_gfn2_preprocessing_cuda(
   if (status != cudaSuccess) return launch_failure({}, status);
   status = cudaMemsetAsync(binding.diagnostics.plan_error, 0, sizeof(std::uint32_t), stream);
   if (status != cudaSuccess) return launch_failure({}, status);
+  if (advance_epoch) {
+    advance_geometry_epoch_kernel<<<1, 1, 0, stream>>>(binding.geometry_epoch,
+                                                       binding.diagnostics.plan_error);
+    status = check_launch();
+    if (status != cudaSuccess) return launch_failure({}, status);
+  }
 
   prepare_positions_kernel<<<static_cast<unsigned int>(batch), kThreadsPerBlock, 0, stream>>>(
       binding.plan.geometry, binding.input.positions, binding.activity.requested_mask,
@@ -783,7 +862,7 @@ Gfn2PreprocessingLaunchDiagnostic compose_gfn2_preprocessing_cuda(
   if (status != cudaSuccess) return launch_failure({}, status);
 
   status = update_gfn2_geometry_cache_cuda(
-      binding.plan.geometry, binding.workspace.positions_scratch, geometry_generation,
+      binding.plan.geometry, binding.workspace.positions_scratch, primitive_generation,
       binding.workspace.geometry_candidate, binding.workspace.geometry,
       binding.diagnostics.geometry_system_errors, binding.diagnostics.geometry_device_error,
       stream);
@@ -822,14 +901,14 @@ Gfn2PreprocessingLaunchDiagnostic compose_gfn2_preprocessing_cuda(
   if (status != cudaSuccess) return launch_failure({}, status);
 
   Gfn2ES2DeviceCache es2_candidate = binding.workspace.es2_candidate;
-  es2_candidate.geometry_generation = geometry_generation;
+  es2_candidate.geometry_generation = primitive_generation;
   status = update_gfn2_es2_geometry_cache_cuda(
       binding.plan.es2, binding.workspace.positions_scratch, es2_candidate, binding.workspace.es2,
       binding.diagnostics.es2_device_error, stream);
   if (status != cudaSuccess) return launch_failure({}, status);
 
   Gfn2AES2DeviceCache aes2_candidate = binding.workspace.aes2_candidate;
-  aes2_candidate.geometry_generation = geometry_generation;
+  aes2_candidate.geometry_generation = primitive_generation;
   status = update_gfn2_aes2_geometry_cache_cuda(
       binding.plan.aes2, binding.workspace.positions_scratch,
       binding.workspace.geometry_candidate.coordination_numbers, aes2_candidate,
@@ -846,20 +925,33 @@ Gfn2PreprocessingLaunchDiagnostic compose_gfn2_preprocessing_cuda(
   if (status != cudaSuccess) return launch_failure({}, status);
   publish_preprocessing_kernel<<<static_cast<unsigned int>(batch), kThreadsPerBlock, 0, stream>>>(
       binding.plan, binding.activity, binding.output, binding.workspace, binding.diagnostics,
-      geometry_generation);
+      generation_source);
   status = check_launch();
   if (status != cudaSuccess) return launch_failure({}, status);
 
-  /* These host-side scalar fields name the generation attempted by the queued
-   * cache refresh, including a refresh that later fails device preflight. They
-   * are declarative arguments for dependent launches, not commit records.
-   * Device-resident per-system generations plus published_mask are the only
+  /* Only the legacy path can update host-side descriptor scalars. In either
+   * mode, device-resident per-system generations plus published_mask are the
    * authoritative record that a peer's complete public cache was committed. */
-  binding.output.es2.geometry_generation = geometry_generation;
-  binding.output.aes2.geometry_generation = geometry_generation;
-  binding.workspace.es2_candidate.geometry_generation = geometry_generation;
-  binding.workspace.aes2_candidate.geometry_generation = geometry_generation;
+  if (!advance_epoch) {
+    binding.output.es2.geometry_generation = generation_source.scalar;
+    binding.output.aes2.geometry_generation = generation_source.scalar;
+    binding.workspace.es2_candidate.geometry_generation = generation_source.scalar;
+    binding.workspace.aes2_candidate.geometry_generation = generation_source.scalar;
+  }
   return {};
+}
+
+}  // namespace
+
+Gfn2PreprocessingLaunchDiagnostic compose_gfn2_preprocessing_cuda(
+    Gfn2PreprocessingDeviceBinding& binding, std::uint64_t geometry_generation,
+    cudaStream_t stream) noexcept {
+  return compose_preprocessing_impl(binding, {geometry_generation, nullptr}, false, stream);
+}
+
+Gfn2PreprocessingLaunchDiagnostic compose_gfn2_preprocessing_epoch_cuda(
+    Gfn2PreprocessingDeviceBinding& binding, cudaStream_t stream) noexcept {
+  return compose_preprocessing_impl(binding, {0u, binding.geometry_epoch.value}, true, stream);
 }
 
 }  // namespace gpuxtb::detail::cuda

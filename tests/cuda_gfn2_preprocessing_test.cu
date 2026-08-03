@@ -274,7 +274,8 @@ struct DeviceFixture {
 
   DeviceBuffer<double> public_geometry_pair, public_coordination, public_overlap, public_dipole,
       public_quadrupole, public_h0, public_es2, public_aes2;
-  DeviceBuffer<std::uint64_t> public_geometry_generation, public_operator_generation;
+  DeviceBuffer<std::uint64_t> public_geometry_generation, public_operator_generation,
+      geometry_epoch;
 
   DeviceBuffer<double> position_scratch, candidate_geometry_pair, candidate_coordination,
       geometry_pair_scratch, geometry_coordination_scratch, candidate_overlap, candidate_dipole,
@@ -341,6 +342,7 @@ struct DeviceFixture {
     ALLOC(public_es2, es2_matrices);
     ALLOC(public_aes2, aes2_pairs);
     ALLOC(public_operator_generation, batch);
+    ALLOC(geometry_epoch, 1u);
     ALLOC(position_scratch, 3u * atoms);
     ALLOC(candidate_geometry_pair, geometry_pairs);
     ALLOC(candidate_coordination, atoms);
@@ -663,9 +665,8 @@ bool matches_reference(const Downloaded& actual, const Reference& expected,
                      [](std::uint32_t value) { return value == 0u; });
 }
 
-bool stable_binding_except_attempted_generation(
-    const Gfn2PreprocessingDeviceBinding& first,
-    const Gfn2PreprocessingDeviceBinding& second) {
+bool stable_binding_except_attempted_generation(const Gfn2PreprocessingDeviceBinding& first,
+                                                const Gfn2PreprocessingDeviceBinding& second) {
   Gfn2PreprocessingDeviceBinding normalized_first = first;
   Gfn2PreprocessingDeviceBinding normalized_second = second;
   normalized_first.output.es2.geometry_generation = 0u;
@@ -676,8 +677,7 @@ bool stable_binding_except_attempted_generation(
   normalized_second.output.aes2.geometry_generation = 0u;
   normalized_second.workspace.es2_candidate.geometry_generation = 0u;
   normalized_second.workspace.aes2_candidate.geometry_generation = 0u;
-  return std::memcmp(&normalized_first, &normalized_second,
-                     sizeof(normalized_first)) == 0;
+  return std::memcmp(&normalized_first, &normalized_second, sizeof(normalized_first)) == 0;
 }
 
 std::vector<double> changed_positions(const HostCase& host, double scale) {
@@ -756,10 +756,17 @@ int test_peer_transaction_and_inactive_mask() {
   activity[static_cast<std::size_t>(kInactive)] = 0u;
   CUDA_CHECK(device.upload_positions(changed, stream));
   CUDA_CHECK(device.upload_activity(activity, stream));
-  CHECK(compose_gfn2_preprocessing_cuda(device.binding, 22u, stream).success());
+  const std::uint64_t initial_epoch = 21u;
+  CUDA_CHECK(device.geometry_epoch.upload(&initial_epoch, 1u, stream));
+  device.binding.geometry_epoch = {device.geometry_epoch.get(), 1, kPlanToken};
+  CHECK(seal_gfn2_preprocessing_binding_cuda(device.binding).success());
+  CHECK(compose_gfn2_preprocessing_epoch_cuda(device.binding, stream).success());
   Downloaded after;
+  std::uint64_t actual_epoch = 0u;
   CUDA_CHECK(download(host, device, after, stream));
+  CUDA_CHECK(device.geometry_epoch.download(&actual_epoch, 1u, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(actual_epoch == 22u);
 
   if (after.plan_error != 0u) {
     std::fprintf(stderr, "peer transaction plan_error=%u\n", after.plan_error);
@@ -889,6 +896,10 @@ int test_plan_failure_and_seal_fail_closed() {
   cross.plan.aes2.plan_token ^= 1u;
   CHECK(seal_gfn2_preprocessing_binding_cuda(cross).error ==
         Gfn2PreprocessingBindingError::kCrossPlan);
+  Gfn2PreprocessingDeviceBinding epoch_alias = device.binding;
+  epoch_alias.geometry_epoch = {device.public_operator_generation.get(), 1, kPlanToken};
+  CHECK(seal_gfn2_preprocessing_binding_cuda(epoch_alias).error ==
+        Gfn2PreprocessingBindingError::kInvalidAlias);
   CUDA_CHECK(cudaStreamDestroy(stream));
   return 0;
 }
@@ -903,51 +914,87 @@ struct GraphResources {
 };
 
 int test_graph_replay_changed_positions_stable_binding() {
-  HostCase host;
-  std::string error;
-  CHECK(host.create(8, error));
-  const std::vector<double> first = changed_positions(host, 0.004);
-  const std::vector<double> second = changed_positions(host, 0.019);
-  Reference first_expected;
-  Reference second_expected;
-  CHECK(host.evaluate(first, 41u, first_expected, error));
-  CHECK(host.evaluate(second, 41u, second_expected, error));
-  cudaStream_t stream = nullptr;
-  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-  DeviceFixture device;
-  CUDA_CHECK(device.initialize(host, stream));
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-  const auto positions_address = device.binding.input.positions;
-  const auto overlap_address = device.binding.output.overlap;
-  const auto candidate_address = device.binding.workspace.overlap_candidate;
-  const std::uint64_t seal = device.binding.binding_seal;
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    HostCase host;
+    std::string error;
+    CHECK(host.create(batch_size, error));
+    const std::vector<double> first = changed_positions(host, 0.004);
+    const std::vector<double> second = changed_positions(host, 0.019);
+    Reference first_expected;
+    Reference second_expected;
+    CHECK(host.evaluate(first, 41u, first_expected, error));
+    CHECK(host.evaluate(second, 42u, second_expected, error));
+    cudaStream_t stream = nullptr;
+    CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    DeviceFixture device;
+    CUDA_CHECK(device.initialize(host, stream));
+    const std::uint64_t initial_epoch = 40u;
+    CUDA_CHECK(device.geometry_epoch.upload(&initial_epoch, 1u, stream));
+    device.binding.geometry_epoch = {device.geometry_epoch.get(), 1, kPlanToken};
+    CHECK(seal_gfn2_preprocessing_binding_cuda(device.binding).success());
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    const auto positions_address = device.binding.input.positions;
+    const auto overlap_address = device.binding.output.overlap;
+    const auto candidate_address = device.binding.workspace.overlap_candidate;
+    const auto epoch_address = device.binding.geometry_epoch.value;
+    const std::uint64_t seal = device.binding.binding_seal;
 
-  GraphResources graph;
-  CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
-  const auto diagnostic = compose_gfn2_preprocessing_cuda(device.binding, 41u, stream);
-  const cudaError_t capture_status = cudaStreamEndCapture(stream, &graph.graph);
-  CHECK(diagnostic.success());
-  CUDA_CHECK(capture_status);
-  CUDA_CHECK(cudaGraphInstantiate(&graph.executable, graph.graph, 0));
-  CHECK(validate_gfn2_preprocessing_binding_cuda(device.binding).success());
+    GraphResources graph;
+    CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
+    const auto diagnostic = compose_gfn2_preprocessing_epoch_cuda(device.binding, stream);
+    const cudaError_t capture_status = cudaStreamEndCapture(stream, &graph.graph);
+    CHECK(diagnostic.success());
+    CUDA_CHECK(capture_status);
+    CUDA_CHECK(cudaGraphInstantiate(&graph.executable, graph.graph, 0));
+    CHECK(validate_gfn2_preprocessing_binding_cuda(device.binding).success());
 
-  CUDA_CHECK(device.upload_positions(first, stream));
-  CUDA_CHECK(cudaGraphLaunch(graph.executable, stream));
-  Downloaded actual;
-  CUDA_CHECK(download(host, device, actual, stream));
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-  CHECK(matches_reference(actual, first_expected, 41u));
+    CUDA_CHECK(device.upload_positions(first, stream));
+    CUDA_CHECK(cudaGraphLaunch(graph.executable, stream));
+    Downloaded actual;
+    CUDA_CHECK(download(host, device, actual, stream));
+    std::uint64_t actual_epoch = 0u;
+    CUDA_CHECK(device.geometry_epoch.download(&actual_epoch, 1u, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(actual_epoch == 41u);
+    CHECK(matches_reference(actual, first_expected, 41u));
 
-  CUDA_CHECK(device.upload_positions(second, stream));
-  CUDA_CHECK(cudaGraphLaunch(graph.executable, stream));
-  CUDA_CHECK(download(host, device, actual, stream));
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-  CHECK(matches_reference(actual, second_expected, 41u));
-  CHECK(device.binding.input.positions == positions_address);
-  CHECK(device.binding.output.overlap == overlap_address);
-  CHECK(device.binding.workspace.overlap_candidate == candidate_address);
-  CHECK(device.binding.binding_seal == seal);
-  CUDA_CHECK(cudaStreamDestroy(stream));
+    CUDA_CHECK(device.upload_positions(second, stream));
+    CUDA_CHECK(cudaGraphLaunch(graph.executable, stream));
+    CUDA_CHECK(download(host, device, actual, stream));
+    CUDA_CHECK(device.geometry_epoch.download(&actual_epoch, 1u, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(actual_epoch == 42u);
+    CHECK(matches_reference(actual, second_expected, 42u));
+
+    const Downloaded before_overflow = actual;
+    const std::uint64_t maximum_epoch = std::numeric_limits<std::uint64_t>::max();
+    CUDA_CHECK(device.geometry_epoch.upload(&maximum_epoch, 1u, stream));
+    CUDA_CHECK(cudaGraphLaunch(graph.executable, stream));
+    CUDA_CHECK(download(host, device, actual, stream));
+    CUDA_CHECK(device.geometry_epoch.download(&actual_epoch, 1u, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(actual_epoch == maximum_epoch);
+    CHECK(actual.plan_error ==
+          static_cast<std::uint32_t>(Gfn2PreprocessingDeviceError::kGeometryEpochOverflow));
+    CHECK(std::all_of(actual.published.begin(), actual.published.end(),
+                      [](std::uint8_t value) { return value == 0u; }));
+    CHECK(before_overflow.pair_data == actual.pair_data);
+    CHECK(before_overflow.coordination == actual.coordination);
+    CHECK(before_overflow.overlap == actual.overlap);
+    CHECK(before_overflow.dipole == actual.dipole);
+    CHECK(before_overflow.quadrupole == actual.quadrupole);
+    CHECK(before_overflow.h0 == actual.h0);
+    CHECK(before_overflow.es2 == actual.es2);
+    CHECK(before_overflow.aes2 == actual.aes2);
+    CHECK(before_overflow.geometry_generations == actual.geometry_generations);
+    CHECK(before_overflow.operator_generations == actual.operator_generations);
+    CHECK(device.binding.input.positions == positions_address);
+    CHECK(device.binding.output.overlap == overlap_address);
+    CHECK(device.binding.workspace.overlap_candidate == candidate_address);
+    CHECK(device.binding.geometry_epoch.value == epoch_address);
+    CHECK(device.binding.binding_seal == seal);
+    CUDA_CHECK(cudaStreamDestroy(stream));
+  }
   return 0;
 }
 

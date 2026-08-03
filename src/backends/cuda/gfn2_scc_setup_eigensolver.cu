@@ -259,6 +259,8 @@ std::uint64_t binding_provenance_seal(const Gfn2SccSetupEigensolverBinding& bind
   pointer(static_cast<const std::byte*>(binding.owner_identity));
   pointer(static_cast<const std::byte*>(binding.setup_device_arena));
   count(binding.setup_device_arena_bytes);
+  pointer(binding.geometry_epoch);
+  count(binding.geometry_epoch_elements);
   count(binding.geometry_generation);
   count(binding.iteration_layout_fingerprint);
   count(binding.plan_token);
@@ -340,6 +342,15 @@ bool cuda_accessible(const void* pointer, cudaPointerAttributes& attributes,
     return false;
   }
   return attributes.type == cudaMemoryTypeDevice || attributes.type == cudaMemoryTypeManaged;
+}
+
+__global__ void snapshot_refactor_activity_kernel(std::int64_t batch_size,
+                                                  const std::uint8_t* source,
+                                                  std::uint8_t* destination) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (system < batch_size) {
+    destination[system] = source[system];
+  }
 }
 
 const Gfn2SccSetupEigensolverRequirements& empty_requirements() noexcept {
@@ -881,17 +892,22 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::bind_and_factor_overl
   return {};
 }
 
-Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_from_device_async(
+Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl(
     void* setup_device_arena, std::size_t setup_device_arena_bytes,
     Gfn2SccSetupEigensolverBinding& binding, const double* device_overlap,
     std::int64_t device_overlap_elements, std::uint64_t geometry_generation,
-    cudaStream_t stream) const noexcept {
+    const Gfn2GeometryEpochDevice* geometry_epoch, cudaStream_t stream) const noexcept {
   if (impl_ == nullptr) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidProvider,
                    SetupField::kHandles);
   }
   const auto& own = impl_->requirements;
-  if (geometry_generation == 0u) {
+  const bool dynamic_epoch = geometry_epoch != nullptr;
+  if ((!dynamic_epoch && geometry_generation == 0u) ||
+      (dynamic_epoch &&
+       (geometry_generation != 0u || geometry_epoch->value == nullptr ||
+        geometry_epoch->value_elements != 1 || geometry_epoch->plan_token != own.plan_token ||
+        reinterpret_cast<std::uintptr_t>(geometry_epoch->value) % alignof(std::uint64_t) != 0u))) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidGeneration,
                    SetupField::kGeometryGeneration);
   }
@@ -928,12 +944,21 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_from
     diagnostic.cuda_status = cuda_status;
     return diagnostic;
   }
+  cudaPointerAttributes epoch_attributes{};
+  if (dynamic_epoch && !cuda_accessible(geometry_epoch->value, epoch_attributes, cuda_status)) {
+    SetupDiagnostic diagnostic =
+        failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidArenaMemory,
+                SetupField::kGeometryGeneration);
+    diagnostic.cuda_status = cuda_status;
+    return diagnostic;
+  }
   int current_device = -1;
   cuda_status = cudaGetDevice(&current_device);
   if (cuda_status != cudaSuccess) {
     return cuda_failure(SetupError::kCudaError, SetupField::kOverlap, cuda_status);
   }
-  if (setup_attributes.device != current_device || overlap_attributes.device != current_device) {
+  if (setup_attributes.device != current_device || overlap_attributes.device != current_device ||
+      (dynamic_epoch && epoch_attributes.device != current_device)) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidArenaMemory,
                    SetupField::kOverlap);
   }
@@ -1011,13 +1036,19 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_from
       binding.overlap_elements == impl_->total_matrices &&
       binding.setup_system_errors == expected_system_errors &&
       binding.setup_system_error_elements == impl_->batch_size &&
-      binding.setup_device_error == expected_device_error && binding.provenance_seal != 0u &&
+      binding.setup_device_error == expected_device_error &&
+      ((binding.geometry_epoch == nullptr && binding.geometry_epoch_elements == 0) ||
+       (binding.geometry_epoch != nullptr && binding.geometry_epoch_elements == 1)) &&
+      binding.provenance_seal != 0u &&
       binding.provenance_seal == binding_provenance_seal(binding, impl_->binding_salt);
   if (!valid_binding) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidIterationProvenance,
                    SetupField::kOverlapFactorization);
   }
-  if (geometry_generation <= binding.geometry_generation) {
+  if ((!dynamic_epoch && binding.geometry_epoch != nullptr) ||
+      (dynamic_epoch && binding.geometry_epoch != nullptr &&
+       (binding.geometry_epoch != geometry_epoch->value || binding.geometry_epoch_elements != 1)) ||
+      (!dynamic_epoch && geometry_generation <= binding.geometry_generation)) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidGeneration,
                    SetupField::kGeometryGeneration);
   }
@@ -1025,11 +1056,15 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_from
   AddressRange setup_range{};
   AddressRange input_range{};
   AddressRange expected_input_range{};
+  AddressRange epoch_range{};
   if (!make_range(setup_device_arena, own.setup_device_bytes, setup_range) ||
       !make_elements_range(device_overlap, device_overlap_elements, input_range) ||
       !make_elements_range(expected_overlap, impl_->total_matrices, expected_input_range) ||
+      !make_elements_range(dynamic_epoch ? geometry_epoch->value : nullptr, dynamic_epoch ? 1 : 0,
+                           epoch_range) ||
       (overlaps(setup_range, input_range) && (input_range.begin != expected_input_range.begin ||
-                                              input_range.end != expected_input_range.end))) {
+                                              input_range.end != expected_input_range.end)) ||
+      overlaps(epoch_range, setup_range) || overlaps(epoch_range, input_range)) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidOverlap,
                    SetupField::kOverlap);
   }
@@ -1077,15 +1112,27 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_from
                    SetupField::kOverlapFactorization);
   }
   for (const AddressRange& range : protected_ranges) {
-    if (overlaps(input_range, range)) {
+    if (overlaps(input_range, range) || overlaps(epoch_range, range)) {
       return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidOverlap,
                      SetupField::kOverlap);
     }
   }
 
   auto* const setup_active = reinterpret_cast<std::uint8_t*>(setup + own.active_offset);
-  cuda_status =
-      cudaMemsetAsync(setup_active, 1, static_cast<std::size_t>(impl_->batch_size), stream);
+  if (dynamic_epoch) {
+    /* Snapshot the runtime's canonical eligibility ledger before any solver
+     * kernel. This keeps peer activity coherent for the complete factorization
+     * even if a downstream SCC stage later mutates its public ledger. */
+    constexpr int kActivityThreads = 256;
+    const auto activity_blocks =
+        static_cast<unsigned int>((impl_->batch_size + kActivityThreads - 1) / kActivityThreads);
+    snapshot_refactor_activity_kernel<<<activity_blocks, kActivityThreads, 0, stream>>>(
+        impl_->batch_size, binding.batch.active, setup_active);
+    cuda_status = cudaPeekAtLastError();
+  } else {
+    cuda_status =
+        cudaMemsetAsync(setup_active, 1, static_cast<std::size_t>(impl_->batch_size), stream);
+  }
   if (cuda_status == cudaSuccess) {
     cuda_status = reset_gfn2_eigensolver_device_errors_cuda(
         impl_->batch_size, binding.setup_system_errors, binding.setup_device_error, stream);
@@ -1095,12 +1142,22 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_from
   }
 
   Gfn2EigensolverDeviceBatch refactor_batch = binding.batch;
+  /* The private snapshot is all-active for legacy scalar refreshes and a copy
+   * of the preprocessing/core eligibility ledger for dynamic execution. */
   refactor_batch.active = setup_active;
-  const Gfn2EigensolverLaunchResult launch = factor_gfn2_overlap_cuda(
-      refactor_batch, binding.provider.buckets, binding.provider.bucket_count, device_overlap,
-      geometry_generation, binding.options, binding.provider.solver, binding.provider.parameters,
-      binding.workspace, binding.cache, binding.setup_system_errors, binding.setup_device_error,
-      stream, Gfn2EigensolverFactorCachePolicy::kPreservePriorOnFailure);
+  const Gfn2EigensolverLaunchResult launch =
+      dynamic_epoch ? factor_gfn2_overlap_cuda(
+                          refactor_batch, binding.provider.buckets, binding.provider.bucket_count,
+                          device_overlap, *geometry_epoch, binding.options, binding.provider.solver,
+                          binding.provider.parameters, binding.workspace, binding.cache,
+                          binding.setup_system_errors, binding.setup_device_error, stream,
+                          Gfn2EigensolverFactorCachePolicy::kPreservePriorOnFailure)
+                    : factor_gfn2_overlap_cuda(
+                          refactor_batch, binding.provider.buckets, binding.provider.bucket_count,
+                          device_overlap, geometry_generation, binding.options,
+                          binding.provider.solver, binding.provider.parameters, binding.workspace,
+                          binding.cache, binding.setup_system_errors, binding.setup_device_error,
+                          stream, Gfn2EigensolverFactorCachePolicy::kPreservePriorOnFailure);
   if (!launch.success()) {
     SetupDiagnostic diagnostic =
         failure(GPUXTB_STATUS_EIGENSOLVER_FAILED, SetupError::kProviderLaunchFailed,
@@ -1111,9 +1168,34 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_from
     return diagnostic;
   }
 
-  binding.geometry_generation = geometry_generation;
+  if (dynamic_epoch) {
+    binding.geometry_epoch = geometry_epoch->value;
+    binding.geometry_epoch_elements = geometry_epoch->value_elements;
+  } else {
+    binding.geometry_generation = geometry_generation;
+  }
   binding.provenance_seal = binding_provenance_seal(binding, impl_->binding_salt);
   return {};
+}
+
+Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_from_device_async(
+    void* setup_device_arena, std::size_t setup_device_arena_bytes,
+    Gfn2SccSetupEigensolverBinding& binding, const double* device_overlap,
+    std::int64_t device_overlap_elements, std::uint64_t geometry_generation,
+    cudaStream_t stream) const noexcept {
+  return refactor_overlap_impl(setup_device_arena, setup_device_arena_bytes, binding,
+                               device_overlap, device_overlap_elements, geometry_generation,
+                               nullptr, stream);
+}
+
+Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_from_device_epoch_async(
+    void* setup_device_arena, std::size_t setup_device_arena_bytes,
+    Gfn2SccSetupEigensolverBinding& binding, const double* device_overlap,
+    std::int64_t device_overlap_elements, const Gfn2GeometryEpochDevice& geometry_epoch,
+    cudaStream_t stream) const noexcept {
+  return refactor_overlap_impl(setup_device_arena, setup_device_arena_bytes, binding,
+                               device_overlap, device_overlap_elements, 0u, &geometry_epoch,
+                               stream);
 }
 
 }  // namespace gpuxtb::detail::cuda

@@ -30,6 +30,7 @@ enum class Gfn2PreprocessingBindingError : std::uint32_t {
   kUnsealedBinding = 10u,
   kStaleSeal = 11u,
   kInvalidGeneration = 12u,
+  kInvalidEpoch = 13u,
 };
 
 enum class Gfn2PreprocessingBindingField : std::uint32_t {
@@ -48,6 +49,7 @@ enum class Gfn2PreprocessingBindingField : std::uint32_t {
   kWorkspace = 12u,
   kSeal = 13u,
   kGeneration = 14u,
+  kEpoch = 15u,
 };
 
 struct Gfn2PreprocessingBindingDiagnostic {
@@ -69,6 +71,7 @@ enum class Gfn2PreprocessingDeviceError : std::uint32_t {
   kIntegralPlanFailure = 4u,
   kEs2PlanFailure = 5u,
   kAes2PlanFailure = 6u,
+  kGeometryEpochOverflow = 7u,
 };
 
 /* Per-system summary; primitive-domain codes remain available in diagnostics. */
@@ -126,9 +129,11 @@ struct Gfn2PreprocessingDeviceOutput {
   std::int64_t quadrupole_elements = 0;
   double* h0 = nullptr;
   std::int64_t h0_elements = 0;
-  /* The embedded scalar generations name the latest attempted refresh. They
-   * may advance before asynchronous plan diagnostics are known. Consumers must
-   * use operator_generations and published_mask as the per-peer commit record. */
+  /* In the legacy scalar API these embedded generations name the latest
+   * attempted refresh and may advance before asynchronous diagnostics are
+   * known. The device-epoch API deliberately leaves them unchanged because a
+   * host descriptor cannot change during Graph replay. All consumers of that
+   * path must use operator_generations and published_mask as the commit record. */
   Gfn2ES2DeviceCache es2{};
   Gfn2AES2DeviceCache aes2{};
   /* Per-system generation for the complete S/D/Q/H0/ES2/AES2 transaction. */
@@ -204,6 +209,9 @@ struct Gfn2PreprocessingDeviceBinding {
   Gfn2PreprocessingDeviceOutput output{};
   Gfn2PreprocessingDeviceDiagnostics diagnostics{};
   Gfn2PreprocessingDeviceWorkspace workspace{};
+  /* Optional for the scalar API and required by the replay-safe epoch API.
+   * The descriptor is covered by binding_seal, including its stable address. */
+  Gfn2GeometryEpochDevice geometry_epoch{};
   std::uint64_t binding_seal = 0u;
   std::uint64_t plan_token = 0u;
 };
@@ -253,6 +261,16 @@ static_assert(std::is_standard_layout_v<Gfn2PreprocessingLaunchDiagnostic>);
 [[nodiscard]] Gfn2PreprocessingLaunchDiagnostic compose_gfn2_preprocessing_cuda(
     Gfn2PreprocessingDeviceBinding& binding, std::uint64_t geometry_generation,
     cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Replay-safe variant. Its first queued kernel advances binding.geometry_epoch
+ * once, and every publication kernel reads that device value. The binding,
+ * arenas, and Graph executable remain unchanged across inference calls.
+ * Healthy peers publish the new epoch; failed/inactive peers retain their
+ * prior cache generations. Epoch overflow fails the complete plan closed.
+ */
+[[nodiscard]] Gfn2PreprocessingLaunchDiagnostic compose_gfn2_preprocessing_epoch_cuda(
+    Gfn2PreprocessingDeviceBinding& binding, cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 

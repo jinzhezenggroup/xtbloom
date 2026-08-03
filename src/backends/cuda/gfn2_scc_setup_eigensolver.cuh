@@ -10,6 +10,7 @@
 #include <memory>
 #include <type_traits>
 
+#include "backends/cuda/gfn2_geometry.cuh"
 #include "backends/cuda/gfn2_scc_iteration_arena.cuh"
 #include "backends/cuda/gfn2_scc_setup_topology.hpp"
 #include "gpuxtb/gpuxtb.h"
@@ -120,6 +121,11 @@ struct Gfn2SccSetupEigensolverBinding {
   /* Owner-keyed seal over every bound pointer/count. It detects a descriptor
    * that was copied and then edited before a refresh call. */
   std::uint64_t provenance_seal = 0u;
+  /* Null for the legacy scalar refactor path. Once the replay-safe path binds
+   * an epoch address, scalar and differently-addressed epoch calls are rejected
+   * so one owner can never publish two competing generation domains. */
+  const std::uint64_t* geometry_epoch = nullptr;
+  std::int64_t geometry_epoch_elements = 0;
   std::uint64_t geometry_generation = 0u;
   std::uint64_t iteration_layout_fingerprint = 0u;
   std::uint64_t plan_token = 0u;
@@ -207,7 +213,27 @@ class Gfn2SccSetupEigensolver {
       std::int64_t device_overlap_elements, std::uint64_t geometry_generation,
       cudaStream_t stream = nullptr) const noexcept;
 
+  /*
+   * Replay-safe refactor consuming the same device epoch advanced by
+   * compose_gfn2_preprocessing_epoch_cuda. The first accepted call seals the
+   * stable epoch address into binding; CUDA Graph replay then reads its current
+   * value without mutating host descriptors or rebuilding the executable.
+   * Healthy peers publish that epoch while failed peers preserve their prior
+   * factors and generations transactionally.
+   */
+  [[nodiscard]] Gfn2SccSetupEigensolverDiagnostic refactor_overlap_from_device_epoch_async(
+      void* setup_device_arena, std::size_t setup_device_arena_bytes,
+      Gfn2SccSetupEigensolverBinding& binding, const double* device_overlap,
+      std::int64_t device_overlap_elements, const Gfn2GeometryEpochDevice& geometry_epoch,
+      cudaStream_t stream = nullptr) const noexcept;
+
  private:
+  [[nodiscard]] Gfn2SccSetupEigensolverDiagnostic refactor_overlap_impl(
+      void* setup_device_arena, std::size_t setup_device_arena_bytes,
+      Gfn2SccSetupEigensolverBinding& binding, const double* device_overlap,
+      std::int64_t device_overlap_elements, std::uint64_t geometry_generation,
+      const Gfn2GeometryEpochDevice* geometry_epoch, cudaStream_t stream) const noexcept;
+
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

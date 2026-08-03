@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/cuda/gfn2_geometry.cuh"
+
 namespace gpuxtb::detail::cuda {
 
 /* Per-system numerical and semantic diagnostics produced asynchronously. */
@@ -205,6 +207,22 @@ Gfn2EigensolverLaunchResult factor_gfn2_overlap_cuda(
     std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream = nullptr,
     Gfn2EigensolverFactorCachePolicy cache_policy =
         Gfn2EigensolverFactorCachePolicy::kPublishFailure) noexcept;
+
+/*
+ * Device-epoch overload for reusable CUDA Graph execution. The epoch pointer
+ * is captured by address and read only when each healthy peer publishes its
+ * factor, so replay observes the value advanced by the preprocessing head.
+ * The descriptor must share batch.plan_token and remain stable for all queued
+ * work. A zero device value fails peers closed instead of publishing a cache.
+ */
+Gfn2EigensolverLaunchResult factor_gfn2_overlap_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
+    std::int64_t bucket_count, const double* overlap, const Gfn2GeometryEpochDevice& geometry_epoch,
+    const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver, cusolverDnParams_t parameters,
+    const Gfn2EigensolverDeviceWorkspace& workspace, const Gfn2EigensolverOverlapCache& cache,
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream = nullptr,
+    Gfn2EigensolverFactorCachePolicy cache_policy =
+        Gfn2EigensolverFactorCachePolicy::kPreservePriorOnFailure) noexcept;
 
 /*
  * Solve H C = S C eps for every active member whose cache generation matches.

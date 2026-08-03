@@ -19,6 +19,22 @@ namespace gpuxtb::detail::cuda {
  */
 inline constexpr std::int64_t kGfn2GeometryPairDataElements = 7;
 
+/*
+ * Stable device-resident epoch shared by one fixed-topology execution DAG.
+ * The execution owner initializes value once, then the preprocessing head
+ * advances it exactly once per inference. Every downstream cache publisher
+ * reads the same value on the caller stream, including during CUDA Graph
+ * replay, so changed coordinates can never retain a capture-time generation.
+ *
+ * Concurrent inference through one descriptor is forbidden by the runtime's
+ * single-flight contract. Cross-stream reuse requires explicit event ordering.
+ */
+struct Gfn2GeometryEpochDevice {
+  std::uint64_t* value = nullptr;
+  std::int64_t value_elements = 0;
+  std::uint64_t plan_token = 0u;
+};
+
 /* First asynchronous semantic or numerical failure in a geometry sequence. */
 enum class Gfn2GeometryDeviceError : std::uint32_t {
   kSuccess = 0u,
@@ -89,6 +105,8 @@ struct Gfn2GeometryDeviceWorkspace {
 
 static_assert(std::is_trivially_copyable_v<Gfn2GeometryDeviceBatch>);
 static_assert(std::is_standard_layout_v<Gfn2GeometryDeviceBatch>);
+static_assert(std::is_trivially_copyable_v<Gfn2GeometryEpochDevice>);
+static_assert(std::is_standard_layout_v<Gfn2GeometryEpochDevice>);
 static_assert(std::is_trivially_copyable_v<Gfn2GeometryDeviceCache>);
 static_assert(std::is_standard_layout_v<Gfn2GeometryDeviceCache>);
 static_assert(std::is_trivially_copyable_v<Gfn2GeometryDeviceWorkspace>);
