@@ -658,6 +658,56 @@ if(GPUXTB_BUILD_TESTS)
       COMMAND gpuxtb_cuda_gfn2_runtime_owner_test
     )
 
+    add_executable(gpuxtb_cuda_gfn2_runtime_parity_test
+      tests/cuda_gfn2_runtime_parity_test.cu
+      tests/support/gfn2_scc_test_case.cpp
+    )
+    target_link_libraries(gpuxtb_cuda_gfn2_runtime_parity_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_gfn2_runtime_parity_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_gfn2_runtime_parity_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_gfn2_runtime_parity_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.gfn2_runtime_parity
+      COMMAND gpuxtb_cuda_gfn2_runtime_parity_test
+    )
+
+    add_executable(gpuxtb_cuda_gfn2_runtime_graph_test
+      tests/cuda_gfn2_runtime_graph_test.cu
+      tests/support/gfn2_scc_test_case.cpp
+    )
+    target_link_libraries(gpuxtb_cuda_gfn2_runtime_graph_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_gfn2_runtime_graph_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_gfn2_runtime_graph_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_gfn2_runtime_graph_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.gfn2_runtime_graph
+      COMMAND gpuxtb_cuda_gfn2_runtime_graph_test
+    )
+
     add_executable(gpuxtb_cuda_gfn2_preprocessing_test
       tests/cuda_gfn2_preprocessing_test.cu
     )
