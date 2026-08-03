@@ -790,6 +790,51 @@ int test_early_middle_and_late_peer_failures() {
   return 0;
 }
 
+int test_graph_replay_peer_failure() {
+  ProductionFixture fixture;
+  CHECK(fixture.create(false));
+  CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
+        Gfn2SccIterationProviderCaptureMode::kGraphSupported);
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t executable = nullptr;
+  CUDA_CHECK(cudaStreamBeginCapture(fixture.handles.stream(), cudaStreamCaptureModeThreadLocal));
+  CHECK(launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream())
+            .success());
+  CUDA_CHECK(cudaStreamEndCapture(fixture.handles.stream(), &graph));
+  CHECK(graph != nullptr);
+  CUDA_CHECK(cudaGraphInstantiate(&executable, graph, 0));
+
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  CHECK(upload(&nan, const_cast<double*>(fixture.binding.input.hamiltonian.h0), 1,
+               fixture.handles.stream()));
+  CUDA_CHECK(cudaGraphLaunch(executable, fixture.handles.stream()));
+
+  std::vector<std::uint64_t> iterations;
+  std::vector<gpuxtb_status_t> statuses;
+  std::vector<std::uint64_t> failures;
+  CHECK(download(fixture.binding.state.scc.iterations, 4, iterations, fixture.handles.stream()));
+  CHECK(download(fixture.binding.state.scc.system_statuses, 4, statuses, fixture.handles.stream()));
+  CHECK(download(fixture.binding.workspace.ledger.system_failure_records, 4, failures,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  CHECK(iterations[0] == 0u);
+  CHECK(statuses[0] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(failures[0] ==
+        failure_record(Gfn2SccStageId::kHamiltonian,
+                       static_cast<std::uint32_t>(Gfn2HamiltonianDeviceError::kNonfiniteH0)));
+  for (std::size_t system = 1u; system < iterations.size(); ++system) {
+    CHECK(iterations[system] == 1u);
+    CHECK(statuses[system] == GPUXTB_STATUS_SUCCESS);
+    CHECK(failures[system] == 0u);
+  }
+  CUDA_CHECK(cudaGraphExecDestroy(executable));
+  CUDA_CHECK(cudaGraphDestroy(graph));
+  return 0;
+}
+
 int test_batch_plan_failure_is_transactional() {
   ProductionFixture fixture;
   CHECK(fixture.create(false));
@@ -877,10 +922,29 @@ int test_cross_plan_and_capture_fail_closed() {
     ProductionFixture fixture;
     CHECK(fixture.create(false));
     CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    Gfn2SccIterationDevicePlan capture_disabled_plan = fixture.binding.plan;
+    capture_disabled_plan.eigensolver_provider.capture_mode =
+        Gfn2SccIterationProviderCaptureMode::kUncapturedSegmentRequired;
+    Gfn2SccIterationBinding capture_disabled{};
+    CHECK(bind_gfn2_scc_iteration_cuda(capture_disabled_plan, fixture.binding.input,
+                                       fixture.binding.state, fixture.binding.workspace,
+                                       capture_disabled)
+              .error == Gfn2SccIterationBindingError::kSuccess);
+
+    Gfn2SccIterationDevicePlan malformed_plan = fixture.binding.plan;
+    malformed_plan.eigensolver_provider.capture_mode =
+        Gfn2SccIterationProviderCaptureMode::kUnspecified;
+    Gfn2SccIterationBinding malformed{};
+    const auto malformed_diagnostic =
+        bind_gfn2_scc_iteration_cuda(malformed_plan, fixture.binding.input, fixture.binding.state,
+                                     fixture.binding.workspace, malformed);
+    CHECK(malformed_diagnostic.error == Gfn2SccIterationBindingError::kInvalidProvider);
+    CHECK(malformed_diagnostic.field == Gfn2SccIterationBindingField::kEigensolver);
+
     cudaGraph_t graph = nullptr;
     CUDA_CHECK(cudaStreamBeginCapture(fixture.handles.stream(), cudaStreamCaptureModeGlobal));
     const Gfn2SccLoopLaunchResult result =
-        launch_gfn2_restricted_scc_loop_cuda(fixture.binding, fixture.handles.stream());
+        launch_gfn2_restricted_scc_loop_cuda(capture_disabled, fixture.handles.stream());
     CHECK(result.iteration.status == Gfn2SccIterationLaunchStatus::kProviderCaptureUnsupported);
     CHECK(result.iteration.stage == Gfn2SccStageId::kEigensolver);
     CHECK(result.submitted_iterations == 0u);
@@ -924,6 +988,10 @@ int main() {
     return status;
   }
   status = test_early_middle_and_late_peer_failures();
+  if (status != 0) {
+    return status;
+  }
+  status = test_graph_replay_peer_failure();
   if (status != 0) {
     return status;
   }

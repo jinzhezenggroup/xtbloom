@@ -110,6 +110,36 @@ bool valid_options(const Gfn2EigensolverOptions& options) noexcept {
          options.symmetry_tolerance >= 0.0;
 }
 
+/* XsyevBatched, DpotrfBatched, and DtrsmBatched are all capture-capable in the
+ * CUDA 12.9 provider stack used by the production sm_120 build. Keep the
+ * decision conservative for older or mismatched runtime libraries: callers
+ * can still execute through the explicit uncaptured-segment contract instead
+ * of discovering an unsupported provider call halfway through capture. */
+Gfn2SccIterationProviderCaptureMode detect_provider_capture_mode(cublasHandle_t blas) noexcept {
+#if CUDART_VERSION >= 12090 && CUBLAS_VERSION >= 120901 && CUSOLVER_VERSION >= 11705
+  int runtime_version = 0;
+  int blas_version = 0;
+  int solver_major = 0;
+  int solver_minor = 0;
+  int solver_patch = 0;
+  if (cudaRuntimeGetVersion(&runtime_version) != cudaSuccess ||
+      cublasGetVersion(blas, &blas_version) != CUBLAS_STATUS_SUCCESS ||
+      cusolverGetProperty(MAJOR_VERSION, &solver_major) != CUSOLVER_STATUS_SUCCESS ||
+      cusolverGetProperty(MINOR_VERSION, &solver_minor) != CUSOLVER_STATUS_SUCCESS ||
+      cusolverGetProperty(PATCH_LEVEL, &solver_patch) != CUSOLVER_STATUS_SUCCESS) {
+    (void)cudaGetLastError();
+    return Gfn2SccIterationProviderCaptureMode::kUncapturedSegmentRequired;
+  }
+  const int solver_version = solver_major * 1000 + solver_minor * 100 + solver_patch;
+  if (runtime_version >= 12090 && blas_version >= 120901 && solver_version >= 11705) {
+    return Gfn2SccIterationProviderCaptureMode::kGraphSupported;
+  }
+#else
+  (void)blas;
+#endif
+  return Gfn2SccIterationProviderCaptureMode::kUncapturedSegmentRequired;
+}
+
 bool valid_buckets(const Gfn2RaggedTopologyView& topology,
                    const std::vector<Gfn2EigensolverBucket>& buckets) noexcept {
   if (topology.bucket_count <= 0 || static_cast<std::uint64_t>(topology.bucket_count) !=
@@ -339,6 +369,8 @@ struct Gfn2SccSetupEigensolver::Impl {
   cublasHandle_t blas = nullptr;
   std::vector<Gfn2EigensolverBucket> buckets;
   Gfn2EigensolverOptions options{};
+  Gfn2SccIterationProviderCaptureMode capture_mode =
+      Gfn2SccIterationProviderCaptureMode::kUncapturedSegmentRequired;
   Gfn2SccSetupEigensolverRequirements requirements{};
   std::int64_t batch_size = 0;
   std::int64_t total_atoms = 0;
@@ -405,6 +437,7 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::create(
     candidate->solver = solver;
     candidate->parameters = parameters;
     candidate->blas = blas;
+    candidate->capture_mode = detect_provider_capture_mode(blas);
     candidate->buckets = topology.eigensolver_buckets();
     candidate->options = options;
     candidate->batch_size = host_topology.batch_size;
@@ -784,7 +817,7 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::bind_and_factor_overl
   candidate.provider.host_workspace = provider_host_workspace;
   candidate.provider.host_workspace_bytes = own.provider.solver_host_workspace_bytes;
   candidate.provider.requirements = own.provider;
-  candidate.provider.capture_mode = Gfn2SccIterationProviderCaptureMode::kUncapturedSegmentRequired;
+  candidate.provider.capture_mode = impl_->capture_mode;
   candidate.provider.plan_token = own.plan_token;
   candidate.cache = {reinterpret_cast<double*>(setup + own.cache_factor_offset),
                      matrices,

@@ -40,6 +40,7 @@ using namespace gpuxtb::detail;
 using namespace gpuxtb::detail::cuda;
 using gpuxtb::test::gfn2::HostSccCase;
 using gpuxtb::test::gfn2::HostSccCaseOptions;
+using gpuxtb::test::gfn2::HostSccCheckpoint;
 using gpuxtb::test::gfn2::SmallSystemKind;
 
 constexpr std::uint64_t kPlanToken = 0x105105105ULL;
@@ -105,6 +106,31 @@ class PinnedAllocation {
  private:
   void* pointer_ = nullptr;
   std::size_t bytes_ = 0u;
+};
+
+class GraphResources {
+ public:
+  GraphResources() = default;
+  GraphResources(const GraphResources&) = delete;
+  GraphResources& operator=(const GraphResources&) = delete;
+
+  ~GraphResources() {
+    if (executable_ != nullptr) {
+      (void)cudaGraphExecDestroy(executable_);
+    }
+    if (graph_ != nullptr) {
+      (void)cudaGraphDestroy(graph_);
+    }
+  }
+
+  cudaGraph_t* graph_address() noexcept { return &graph_; }
+  cudaGraph_t graph() const noexcept { return graph_; }
+  cudaGraphExec_t* executable_address() noexcept { return &executable_; }
+  cudaGraphExec_t executable() const noexcept { return executable_; }
+
+ private:
+  cudaGraph_t graph_ = nullptr;
+  cudaGraphExec_t executable_ = nullptr;
 };
 
 class ProviderHandles {
@@ -435,8 +461,10 @@ bool compare_exact_values(const char* field, const std::vector<T>& actual, const
 int compare_energy_mixer_and_scc_trace(const HostSccCase& host,
                                        const Gfn2SccIterationDeviceInput& input,
                                        const Gfn2SccIterationDeviceState& state,
-                                       cudaStream_t stream) {
-  constexpr double kTolerance = 3.0e-9;
+                                       cudaStream_t stream, double tolerance = 3.0e-9,
+                                       double history_tolerance = -1.0) {
+  const double kTolerance = tolerance;
+  const double kHistoryTolerance = history_tolerance < 0.0 ? tolerance : history_tolerance;
   const std::int64_t batch = host.batch_size();
   const std::int64_t mixer_vector = host.mixer_plan().total_vector_elements();
   const std::int64_t mixer_history = mixer_vector * host.mixer_plan().history_size();
@@ -644,11 +672,13 @@ int compare_energy_mixer_and_scc_trace(const HostSccCase& host,
                         mixer_vector, kTolerance));
   CHECK(compare_doubles("mixer previous residuals", previous_residuals,
                         cpu_mixer.previous_residuals, mixer_vector, kTolerance));
-  CHECK(compare_doubles("mixer df history", df_history, cpu_mixer.df_history, mixer_history,
-                        kTolerance));
-  CHECK(compare_doubles("mixer u history", u_history, cpu_mixer.u_history, mixer_history,
-                        kTolerance));
-  CHECK(compare_doubles("mixer omega", omega, cpu_mixer.omega, mixer_omega, kTolerance));
+  if (kHistoryTolerance > 0.0) {
+    CHECK(compare_doubles("mixer df history", df_history, cpu_mixer.df_history, mixer_history,
+                          kHistoryTolerance));
+    CHECK(compare_doubles("mixer u history", u_history, cpu_mixer.u_history, mixer_history,
+                          kHistoryTolerance));
+    CHECK(compare_doubles("mixer omega", omega, cpu_mixer.omega, mixer_omega, kHistoryTolerance));
+  }
   CHECK(compare_doubles("mixer residual RMS", mixer_residual_rms, cpu_mixer.residual_rms, batch,
                         kTolerance));
   CHECK(compare_doubles("mixer residual maximum", mixer_residual_maximum,
@@ -1144,6 +1174,180 @@ int test_changed_device_overlap_is_consumed_by_production_scc() {
   return 0;
 }
 
+int run_host_fixed_scc_loop(HostSccCase& host) {
+  std::string error;
+  for (std::uint64_t iteration = 0u; iteration < host.options().maximum_iterations; ++iteration) {
+    const gpuxtb_status_t status = host.run_one_iteration(error);
+    if (status != GPUXTB_STATUS_SUCCESS && status != GPUXTB_STATUS_SCC_NOT_CONVERGED &&
+        status != GPUXTB_STATUS_EIGENSOLVER_FAILED) {
+      std::fprintf(stderr, "CPU Graph reference failed at %llu: status=%d error=%s\n",
+                   static_cast<unsigned long long>(iteration), status, error.c_str());
+      return __LINE__;
+    }
+  }
+  return 0;
+}
+
+int compare_graph_loop_cpu_parity(const HostSccCase& host, const Gfn2SccIterationBinding& binding,
+                                  cudaStream_t observation_stream) {
+  constexpr double kTolerance = 1.0e-8;
+  const auto& layout = host.wavefunction_layout();
+  const auto& state = binding.state;
+  std::vector<double> eigenvalues;
+  std::vector<double> occupations;
+  std::vector<double> density;
+  std::vector<double> weighted_density;
+  std::vector<double> qsh;
+  std::vector<double> qat;
+  std::vector<double> dipoles;
+  std::vector<double> quadrupoles;
+  std::vector<std::uint64_t> iterations;
+  std::vector<gpuxtb_status_t> statuses;
+  std::vector<std::uint8_t> converged;
+
+  CHECK(download(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements, eigenvalues,
+                 observation_stream));
+  CHECK(download(state.occupations.occupations, state.occupations.occupation_elements, occupations,
+                 observation_stream));
+  CHECK(
+      download(state.density.density, state.density.density_elements, density, observation_stream));
+  CHECK(download(state.density.energy_weighted_density, state.density.weighted_density_elements,
+                 weighted_density, observation_stream));
+  CHECK(download(state.raw_population.qsh, state.raw_population.qsh_elements, qsh,
+                 observation_stream));
+  CHECK(download(state.raw_population.qat, state.raw_population.qat_elements, qat,
+                 observation_stream));
+  CHECK(download(state.raw_population.dipole, state.raw_population.dipole_elements, dipoles,
+                 observation_stream));
+  CHECK(download(state.raw_population.quadrupole, state.raw_population.quadrupole_elements,
+                 quadrupoles, observation_stream));
+  CHECK(download(state.scc.iterations, state.scc.batch_elements, iterations, observation_stream));
+  CHECK(
+      download(state.scc.system_statuses, state.scc.batch_elements, statuses, observation_stream));
+  CHECK(download(state.scc.converged, state.scc.batch_elements, converged, observation_stream));
+  CUDA_CHECK(cudaStreamSynchronize(observation_stream));
+
+  CHECK(compare_doubles("Graph eigenvalues", eigenvalues, host.wavefunction().eigenvalues,
+                        layout.eigenvalues.element_count, kTolerance));
+  CHECK(compare_doubles("Graph occupations", occupations, host.wavefunction().occupations,
+                        layout.occupations.element_count, kTolerance));
+  CHECK(compare_doubles("Graph density", density, host.wavefunction().density,
+                        layout.density.element_count, kTolerance));
+  CHECK(compare_doubles("Graph weighted density", weighted_density,
+                        host.wavefunction().energy_weighted_density,
+                        layout.energy_weighted_density.element_count, kTolerance));
+  CHECK(compare_doubles("Graph qsh", qsh, host.wavefunction().qsh, layout.qsh.element_count,
+                        kTolerance));
+  CHECK(compare_doubles("Graph qat", qat, host.wavefunction().qat, layout.qat.element_count,
+                        kTolerance));
+  CHECK(compare_doubles("Graph dipoles", dipoles, host.wavefunction().dipole,
+                        layout.dipole.element_count, kTolerance));
+  CHECK(compare_doubles("Graph quadrupoles", quadrupoles, host.wavefunction().quadrupole,
+                        layout.quadrupole.element_count, kTolerance));
+  CHECK(compare_exact_values("Graph iterations", iterations, host.driver_state().iterations,
+                             host.batch_size()));
+  CHECK(compare_exact_values("Graph statuses", statuses, host.driver_state().system_statuses,
+                             host.batch_size()));
+  CHECK(compare_exact_values("Graph converged", converged, host.driver_state().converged,
+                             host.batch_size()));
+  /* One/two-step tests above gate df/u/omega directly. Across eight iterations
+   * those private Broyden vectors amplify provider association-order changes;
+   * Graph acceptance instead gates every published and convergence observable. */
+  CHECK(compare_energy_mixer_and_scc_trace(host, binding.input, binding.state, observation_stream,
+                                           kTolerance, 0.0) == 0);
+  return 0;
+}
+
+std::vector<double> changed_core_hamiltonian(const HostSccCase& host) {
+  std::vector<double> changed = host.h0();
+  const auto& layout = host.wavefunction_layout();
+  for (std::int64_t system = 0; system < layout.batch_size; ++system) {
+    const std::int64_t n =
+        layout.batch_orbital_offsets[system + 1] - layout.batch_orbital_offsets[system];
+    const std::int64_t matrix_begin = layout.coefficients.system_offsets[system];
+    for (std::int64_t row = 0; row < n; ++row) {
+      for (std::int64_t column = row; column < n; ++column) {
+        const double shift = 2.5e-4 * static_cast<double>(system + 1) +
+                             5.0e-5 * static_cast<double>(row + column + 1);
+        changed[static_cast<std::size_t>(matrix_begin + row * n + column)] += shift;
+        if (row != column) {
+          changed[static_cast<std::size_t>(matrix_begin + column * n + row)] += shift;
+        }
+      }
+    }
+  }
+  return changed;
+}
+
+int test_production_graph_changed_input_replay(std::int64_t batch_size) {
+  ProductionFixture fixture;
+  CHECK(fixture.create(false, batch_size));
+  CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
+        Gfn2SccIterationProviderCaptureMode::kGraphSupported);
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  const HostSccCheckpoint initial = fixture.host.checkpoint();
+  const void* const stable_iteration_arena = fixture.iteration_arena.get();
+  const void* const stable_input_arena = fixture.input_arena.get();
+  const void* const stable_setup_arena = fixture.eigensolver_setup_arena.get();
+
+  GraphResources graph;
+  CUDA_CHECK(cudaStreamBeginCapture(fixture.handles.stream(), cudaStreamCaptureModeThreadLocal));
+  const Gfn2SccLoopLaunchResult captured =
+      launch_gfn2_restricted_scc_loop_cuda(fixture.binding, fixture.handles.stream());
+  CHECK(captured.success());
+  CHECK(captured.submitted_iterations == fixture.host.options().maximum_iterations);
+  CUDA_CHECK(cudaStreamEndCapture(fixture.handles.stream(), graph.graph_address()));
+  CHECK(graph.graph() != nullptr);
+  CUDA_CHECK(cudaGraphInstantiate(graph.executable_address(), graph.graph(), 0));
+
+  CUDA_CHECK(cudaGraphLaunch(graph.executable(), fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(run_host_fixed_scc_loop(fixture.host) == 0);
+  CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding, fixture.handles.stream()) ==
+        0);
+
+  std::vector<double> first_free_energies;
+  CHECK(download(fixture.binding.state.scc.free_energies, fixture.binding.state.scc.batch_elements,
+                 first_free_energies, fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  std::string error;
+  CHECK(fixture.host.restore(initial, error) == GPUXTB_STATUS_SUCCESS);
+  const std::vector<double> changed_h0 = changed_core_hamiltonian(fixture.host);
+  fixture.host.h0() = changed_h0;
+  Gfn2SccIterationInitializationReady ready{};
+  CHECK(fixture.initializer
+            .upload_async(fixture.iteration_arena.get(), fixture.iteration_arena.bytes(), ready,
+                          fixture.handles.stream())
+            .success());
+  CUDA_CHECK(cudaMemcpyAsync(const_cast<double*>(fixture.binding.input.hamiltonian.h0),
+                             changed_h0.data(), changed_h0.size() * sizeof(double),
+                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+  CUDA_CHECK(cudaGraphLaunch(graph.executable(), fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(run_host_fixed_scc_loop(fixture.host) == 0);
+  CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding, fixture.handles.stream()) ==
+        0);
+
+  std::vector<double> changed_free_energies;
+  CHECK(download(fixture.binding.state.scc.free_energies, fixture.binding.state.scc.batch_elements,
+                 changed_free_energies, fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(first_free_energies.size() == changed_free_energies.size());
+  bool numerical_input_was_consumed = false;
+  for (std::size_t index = 0; index < first_free_energies.size(); ++index) {
+    numerical_input_was_consumed =
+        numerical_input_was_consumed ||
+        !near(first_free_energies[index], changed_free_energies[index], 1.0e-10);
+  }
+  CHECK(numerical_input_was_consumed);
+  CHECK(fixture.iteration_arena.get() == stable_iteration_arena);
+  CHECK(fixture.input_arena.get() == stable_input_arena);
+  CHECK(fixture.eigensolver_setup_arena.get() == stable_setup_arena);
+  return 0;
+}
+
 int test_production_loop_cpu_parity(std::int64_t batch_size, bool optional_components,
                                     bool use_default_stream, bool use_ordered_stream = false,
                                     std::uint64_t resumed_iterations = 0u) {
@@ -1469,6 +1673,12 @@ int main() {
   status = test_changed_device_overlap_is_consumed_by_production_scc();
   if (status != 0) {
     return status;
+  }
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    status = test_production_graph_changed_input_replay(batch_size);
+    if (status != 0) {
+      return status;
+    }
   }
   for (const std::int64_t batch_size : {1, 8, 32, 128}) {
     status = test_production_loop_cpu_parity(batch_size, false, false);
