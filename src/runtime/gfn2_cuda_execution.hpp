@@ -108,10 +108,15 @@ enum class Gfn2CudaSccStartMode : std::uint32_t {
  * synchronously snapshots host values into runtime-owned pinned storage and
  * keeps device values on the caller stream; no queued work retains a caller
  * host pointer after return. Only one host snapshot may be in flight per fixed
- * topology; another host submission is rejected until its H2D event completes,
- * while CUDA-device inputs remain direct. The runtime never downloads numerical
- * data or polls asynchronous diagnostics. requested_mask is an optional
+ * topology; another host submission is rejected until a stream-ordered
+ * completion releases that snapshot, while CUDA-device inputs remain direct.
+ * The runtime never downloads numerical data, queries CUDA progress, or polls
+ * asynchronous diagnostics. requested_mask is an optional
  * uint8_t[batch] view. An absent mask requests every member.
+ *
+ * CUDA Graph capture/replay requires every nonempty numerical buffer to be in
+ * CUDA-device memory. A host-backed view is rejected before the runtime copies
+ * or marks its fixed pinned staging image.
  *
  * The context-owned device epoch advances once per accepted refresh (and once
  * per CUDA Graph replay). Publication is transactional per ragged member: an unrequested or failing
@@ -138,6 +143,12 @@ struct Gfn2CudaNumericalInputView {
  * host request reuses every owner/address and enqueues the allocation-free
  * numerical refresh transaction on the context stream. Explicit host/device
  * refreshes use refresh_numerical_async and the same sealed device DAG.
+ *
+ * A Graph that captures a device-backed refresh retains fixed-topology arena
+ * addresses. Until every such graph executable is destroyed, the cache and
+ * its prepared topology must stay alive and unchanged, and replay is supported
+ * only serially on the context owner stream. A future controlled launch API
+ * can replace these caller-enforced lifetime and stream constraints.
  */
 class Gfn2CudaExecutionCache {
  public:

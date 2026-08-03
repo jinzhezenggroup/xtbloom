@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -229,6 +230,34 @@ class CudaEvent {
 
  private:
   cudaEvent_t event_ = nullptr;
+};
+
+class CudaStream {
+ public:
+  CudaStream() = default;
+  ~CudaStream() { reset(); }
+  CudaStream(const CudaStream&) = delete;
+  CudaStream& operator=(const CudaStream&) = delete;
+  CudaStream(CudaStream&&) = delete;
+  CudaStream& operator=(CudaStream&&) = delete;
+
+  cudaError_t create(unsigned int flags) noexcept {
+    reset();
+    return cudaStreamCreateWithFlags(&stream_, flags);
+  }
+
+  void reset() noexcept {
+    if (stream_ != nullptr) {
+      (void)cudaStreamDestroy(stream_);
+    }
+    stream_ = nullptr;
+  }
+
+  cudaStream_t get() const noexcept { return stream_; }
+  bool valid() const noexcept { return stream_ != nullptr; }
+
+ private:
+  cudaStream_t stream_ = nullptr;
 };
 
 bool align_up(std::size_t value, std::size_t alignment, std::size_t& aligned) noexcept {
@@ -1414,11 +1443,30 @@ struct NumericalRefreshState {
   double* owned_host_periodic_response = nullptr;
   std::uint8_t* owned_host_requested = nullptr;
 
-  bool host_upload_pending = false;
   bool host_staging_poisoned = false;
 
   bool ready = false;
 };
+
+/*
+ * The host-owned pinned snapshot is a single-flight resource.  A host function
+ * on a private completion stream releases it after that stream has waited on
+ * the owner-stream H2D event.  The submission thread therefore needs only one
+ * acquire load; it never queries CUDA progress or waits for either stream.
+ *
+ * This state is deliberately separate from NumericalRefreshState because the
+ * latter is reset as an aggregate while constructing a fixed-topology owner.
+ */
+struct NumericalHostUploadCompletion {
+  std::atomic<bool> pending{false};
+};
+static_assert(std::atomic<bool>::is_always_lock_free,
+              "CUDA host-upload completion must stay allocation-free and nonblocking");
+
+void CUDART_CB release_numerical_host_upload(void* user_data) noexcept {
+  auto* const completion = static_cast<NumericalHostUploadCompletion*>(user_data);
+  completion->pending.store(false, std::memory_order_release);
+}
 
 /*
  * Stable terminal descriptors and their context-owned result arena.  These
@@ -1463,13 +1511,21 @@ struct Gfn2CudaExecutionCache::Impl {
     explicit Prepared(cudaStream_t owner_stream) noexcept : stream(owner_stream) {}
     ~Prepared() {
       /* Setup owners retain pinned provider images and the SCC initializer
-       * retains its immutable device checkpoint. A failed candidate and a
-       * replaced cache both wait for only their own stream before releasing
-       * any source image or arena referenced by queued setup work. */
+       * retains its immutable device checkpoint. Numerical host-completion
+       * functions also retain the address of this Prepared object's atomic
+       * state. A failed candidate and a replaced cache therefore wait for the
+       * owner and private completion streams before releasing any source image,
+       * callback state, or arena referenced by queued work. CUDA does not
+       * invoke a host function after a context failure; in that case pending
+       * remains conservatively set and both failed synchronization attempts
+       * still precede destruction. */
       if (submitted) {
         /* cudaStreamSynchronize(nullptr) waits for the selected legacy default
          * stream only; setup teardown never escalates to a device-wide fence. */
         (void)cudaStreamSynchronize(stream);
+      }
+      if (numerical_host_completion_stream.valid()) {
+        (void)cudaStreamSynchronize(numerical_host_completion_stream.get());
       }
     }
 
@@ -1486,7 +1542,9 @@ struct Gfn2CudaExecutionCache::Impl {
     DeviceArena eigensolver_setup_arena;
     PinnedArena provider_host_workspace;
     PinnedArena numerical_host_staging_arena;
+    CudaStream numerical_host_completion_stream;
     CudaEvent numerical_host_upload_complete;
+    NumericalHostUploadCompletion numerical_host_upload_completion;
     DeviceArena force_immutable_arena;
     DeviceArena force_execution_arena;
     DeviceArena numerical_refresh_arena;
@@ -1853,9 +1911,14 @@ struct Gfn2CudaExecutionCache::Impl {
       error = cuda_error_message("CUDA numerical pinned host-staging allocation", cuda_status);
       return GPUXTB_STATUS_ALLOCATION_FAILED;
     }
+    cuda_status = candidate.numerical_host_completion_stream.create(cudaStreamNonBlocking);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA numerical host-completion stream creation", cuda_status);
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
     cuda_status = candidate.numerical_host_upload_complete.create(cudaEventDisableTiming);
     if (cuda_status != cudaSuccess) {
-      error = cuda_error_message("CUDA numerical host-staging event creation", cuda_status);
+      error = cuda_error_message("CUDA numerical host-upload event creation", cuda_status);
       return GPUXTB_STATUS_ALLOCATION_FAILED;
     }
     void* const arena = candidate.numerical_refresh_arena.get();
@@ -4039,22 +4102,23 @@ struct Gfn2CudaExecutionCache::Impl {
         (!absent_mask && input.requested_mask.memory_space == GPUXTB_MEMORY_HOST);
 
     if (uses_host_staging) {
-      if (numerical.host_staging_poisoned) {
-        error = "CUDA numerical host staging is unavailable after an earlier event failure";
+      cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+      cuda_status = cudaStreamIsCapturing(stream, &capture_status);
+      if (cuda_status != cudaSuccess) {
+        error = cuda_error_message("CUDA numerical host-upload capture query", cuda_status);
         return GPUXTB_STATUS_INTERNAL_ERROR;
       }
-      if (numerical.host_upload_pending) {
-        cuda_status = cudaEventQuery(current.numerical_host_upload_complete.get());
-        if (cuda_status == cudaErrorNotReady) {
-          error = "a previous CUDA numerical host upload is still in flight";
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
-        }
-        if (cuda_status != cudaSuccess) {
-          numerical.host_staging_poisoned = true;
-          error = cuda_error_message("CUDA numerical host-upload event query", cuda_status);
-          return GPUXTB_STATUS_INTERNAL_ERROR;
-        }
-        numerical.host_upload_pending = false;
+      if (capture_status != cudaStreamCaptureStatusNone) {
+        error = "CUDA Graph numerical refresh requires CUDA-device input buffers";
+        return GPUXTB_STATUS_NOT_SUPPORTED;
+      }
+      if (numerical.host_staging_poisoned) {
+        error = "CUDA numerical host staging is unavailable after an earlier completion failure";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      if (current.numerical_host_upload_completion.pending.load(std::memory_order_acquire)) {
+        error = "a previous CUDA numerical host upload is still in flight";
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
       }
     }
 
@@ -4101,15 +4165,28 @@ struct Gfn2CudaExecutionCache::Impl {
     bool host_upload_enqueued = false;
     const auto seal_host_uploads = [&]() -> cudaError_t {
       if (!host_upload_enqueued) return cudaSuccess;
-      const cudaError_t event_status =
+      auto& completion = current.numerical_host_upload_completion;
+      /* Publish busy before recording completion: sufficiently short H2Ds may
+       * let the private-stream callback run before this function returns. */
+      completion.pending.store(true, std::memory_order_release);
+      cudaError_t completion_status =
           cudaEventRecord(current.numerical_host_upload_complete.get(), stream);
-      if (event_status == cudaSuccess) {
-        numerical.host_upload_pending = true;
+      if (completion_status == cudaSuccess) {
+        completion_status = cudaStreamWaitEvent(current.numerical_host_completion_stream.get(),
+                                                current.numerical_host_upload_complete.get(), 0u);
+      }
+      if (completion_status == cudaSuccess) {
+        completion_status = cudaLaunchHostFunc(current.numerical_host_completion_stream.get(),
+                                               release_numerical_host_upload, &completion);
+      }
+      if (completion_status == cudaSuccess) {
         current.submitted = true;
       } else {
+        /* Earlier H2Ds may already reference the pinned image.  Leave pending
+         * set and poison host staging rather than making an unsafe retry. */
         numerical.host_staging_poisoned = true;
       }
-      return event_status;
+      return completion_status;
     };
 
     const auto resolve_validated = [&](const char* name, const gpuxtb_const_buffer_t& buffer,
@@ -4129,10 +4206,10 @@ struct Gfn2CudaExecutionCache::Impl {
         cuda_status = cudaMemcpyAsync(device_stage, owned_host_stage, bytes,
                                       cudaMemcpyHostToDevice, stream);
         if (cuda_status != cudaSuccess) {
-          const cudaError_t event_status = seal_host_uploads();
+          const cudaError_t completion_status = seal_host_uploads();
           error = cuda_error_message(name, cuda_status);
-          if (event_status != cudaSuccess) {
-            error += "; host-upload event recording also failed";
+          if (completion_status != cudaSuccess) {
+            error += "; host-upload completion enqueue also failed";
           }
           return GPUXTB_STATUS_INTERNAL_ERROR;
         }
@@ -4190,17 +4267,17 @@ struct Gfn2CudaExecutionCache::Impl {
                                     cudaMemcpyDeviceToDevice, stream);
     }
     if (cuda_status != cudaSuccess) {
-      const cudaError_t event_status = seal_host_uploads();
+      const cudaError_t completion_status = seal_host_uploads();
       error = cuda_error_message("CUDA numerical refresh activity staging", cuda_status);
-      if (event_status != cudaSuccess) {
-        error += "; host-upload event recording also failed";
+      if (completion_status != cudaSuccess) {
+        error += "; host-upload completion enqueue also failed";
       }
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
     current.submitted = true;
     cuda_status = seal_host_uploads();
     if (cuda_status != cudaSuccess) {
-      error = cuda_error_message("CUDA numerical host-upload event recording", cuda_status);
+      error = cuda_error_message("CUDA numerical host-upload completion enqueue", cuda_status);
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
 

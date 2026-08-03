@@ -846,8 +846,9 @@ int test_host_refresh_snapshot_lifetime(cudaStream_t stream, std::int32_t device
   CHECK(cache.refresh_numerical_async(numerical, error) == GPUXTB_STATUS_SUCCESS);
 
   /* A second host call cannot overwrite a busy single-flight staging image.
-   * Sanitizer modes may serialize the delay and complete the first event before
-   * control returns; accepting that second snapshot is then the correct state. */
+   * Sanitizer modes may serialize the delay and run the stream completion
+   * function before control returns; accepting that second snapshot is then
+   * the correct state. */
   const gpuxtb_status_t second_submit = cache.refresh_numerical_async(numerical, error);
   CHECK(second_submit == GPUXTB_STATUS_INVALID_ARGUMENT ||
         second_submit == GPUXTB_STATUS_SUCCESS);
@@ -874,7 +875,8 @@ int test_host_refresh_snapshot_lifetime(cudaStream_t stream, std::int32_t device
   CHECK(first.eligible[0] == 1u);
   CHECK(same_identity(initial, cache.identity()));
 
-  /* Once the event completes, the same fixed staging allocation is reusable. */
+  /* Once the stream completion runs, the same fixed staging allocation is
+   * reusable without querying an event or synchronizing in the submit path. */
   submitted_positions[3] -= 0.012;
   CHECK(caller_positions.assign(submitted_positions) == cudaSuccess);
   CHECK(caller_requested.assign(std::vector<std::uint8_t>{1u}) == cudaSuccess);
@@ -963,6 +965,57 @@ int test_refresh_cuda_graph_replay(cudaStream_t stream, std::int32_t device_id) 
   }
 
   CUDA_CHECK(cudaGraphExecDestroy(executable));
+  CUDA_CHECK(cudaGraphDestroy(graph));
+  return 0;
+}
+
+int test_host_refresh_rejected_during_cuda_graph_capture(cudaStream_t stream,
+                                                         std::int32_t device_id) {
+  Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
+  HostSccCase host;
+  std::string error;
+  CHECK(HostSccCase::create(case_options(8, true), host, error) == GPUXTB_STATUS_SUCCESS);
+  PublicHostBatch batch = PublicHostBatch::from_host(host, true);
+  gpuxtb_compute_options_t options = compute_options();
+  bool reused = true;
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(!reused);
+
+  Gfn2CudaNumericalInputView numerical{};
+  numerical.positions = batch.descriptor.positions;
+  numerical.point_charge_positions = batch.descriptor.point_charge_positions;
+  numerical.point_charge_values = batch.descriptor.point_charge_values;
+  numerical.point_charge_gammas = batch.descriptor.point_charge_gammas;
+  numerical.atomic_potential_shifts = batch.descriptor.atomic_potential_shifts;
+  numerical.charge_response_matrix = batch.descriptor.charge_response_matrix;
+
+  cudaGraph_t graph = nullptr;
+  CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+  CHECK(cache.refresh_numerical_async(numerical, error) == GPUXTB_STATUS_NOT_SUPPORTED);
+  CHECK(error.find("requires CUDA-device input buffers") != std::string::npos);
+  CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
+  CHECK(graph != nullptr);
+
+  /* The rejected capture must not reserve or poison the fixed host staging
+   * image.  It is immediately usable by the ordinary asynchronous path. */
+  batch.positions[0] += 0.027;
+  batch.bind();
+  numerical.positions = batch.descriptor.positions;
+  numerical.point_charge_positions = batch.descriptor.point_charge_positions;
+  numerical.point_charge_values = batch.descriptor.point_charge_values;
+  numerical.point_charge_gammas = batch.descriptor.point_charge_gammas;
+  numerical.atomic_potential_shifts = batch.descriptor.atomic_potential_shifts;
+  numerical.charge_response_matrix = batch.descriptor.charge_response_matrix;
+  CHECK(cache.refresh_numerical_async(numerical, error) == GPUXTB_STATUS_SUCCESS);
+  RefreshSnapshot refreshed;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, refreshed) == 0);
+  CHECK(refreshed.epoch == 2u);
+  for (std::size_t system = 0; system < refreshed.committed.size(); ++system) {
+    CHECK(refreshed.committed[system] == 2u);
+    CHECK(refreshed.factors[system] == 2u);
+    CHECK(refreshed.eligible[system] == 1u);
+  }
+
   CUDA_CHECK(cudaGraphDestroy(graph));
   return 0;
 }
@@ -1346,6 +1399,7 @@ int main() {
   if (status == 0) status = test_device_refresh_and_peer_rollback(stream, device_id);
   if (status == 0) status = test_host_refresh_snapshot_lifetime(stream, device_id);
   if (status == 0) status = test_refresh_cuda_graph_replay(stream, device_id);
+  if (status == 0) status = test_host_refresh_rejected_during_cuda_graph_capture(stream, device_id);
   if (status == 0) status = test_ragged_runtime_shapes(stream, device_id);
   if (status == 0) status = test_fresh_warm_inference_and_post_scc_refresh(stream, device_id);
   if (status == 0) status = test_failed_inference_consumes_warm_checkpoint(stream, device_id);
