@@ -360,6 +360,277 @@ bool compare_coefficients(const HostSccCase& host, std::vector<double> actual, d
                          tolerance);
 }
 
+template <typename T>
+bool compare_exact_values(const char* field, const std::vector<T>& actual, const T* expected,
+                          std::int64_t elements) {
+  if (expected == nullptr || elements < 0 || actual.size() != static_cast<std::size_t>(elements)) {
+    std::fprintf(stderr, "%s has an invalid parity extent\n", field);
+    return false;
+  }
+  for (std::int64_t index = 0; index < elements; ++index) {
+    if (actual[static_cast<std::size_t>(index)] != expected[index]) {
+      std::fprintf(stderr, "%s mismatch at %lld\n", field, static_cast<long long>(index));
+      return false;
+    }
+  }
+  return true;
+}
+
+/* Compare the complete persistent scalar and mixer trace after one production
+ * iteration. Keeping every transfer asynchronous until the single final
+ * synchronization also exercises the public descriptors as a coherent view,
+ * rather than accidentally relying on host synchronization between fields. */
+int compare_energy_mixer_and_scc_trace(const HostSccCase& host,
+                                       const Gfn2SccIterationDeviceInput& input,
+                                       const Gfn2SccIterationDeviceState& state,
+                                       cudaStream_t stream) {
+  constexpr double kTolerance = 3.0e-9;
+  const std::int64_t batch = host.batch_size();
+  const std::int64_t mixer_vector = host.mixer_plan().total_vector_elements();
+  const std::int64_t mixer_history = mixer_vector * host.mixer_plan().history_size();
+  const std::int64_t mixer_omega = batch * host.mixer_plan().history_size();
+  const auto& cpu_energy = host.driver_state();
+  const auto& cpu_mixer = host.mixer_state();
+
+  CHECK(state.classical_energy.es2_elements == batch);
+  CHECK(state.classical_energy.es3_elements == batch);
+  CHECK(state.classical_energy.aes2_elements == batch);
+  CHECK(state.classical_energy.d4_two_body != nullptr);
+  CHECK(state.classical_energy.d4_two_body_elements == batch);
+  CHECK(state.classical_energy.explicit_point_charge != nullptr);
+  CHECK(state.classical_energy.explicit_point_charge_elements == batch);
+  CHECK(state.classical_energy.periodic_embedding != nullptr);
+  CHECK(state.classical_energy.periodic_embedding_elements == batch);
+  CHECK(state.classical_energy.classical_total_elements == batch);
+  CHECK(state.free_energy.core_elements == batch);
+  CHECK(state.free_energy.es2 == state.classical_energy.es2);
+  CHECK(state.free_energy.es2_elements == state.classical_energy.es2_elements);
+  CHECK(state.free_energy.es3 == state.classical_energy.es3);
+  CHECK(state.free_energy.es3_elements == state.classical_energy.es3_elements);
+  CHECK(state.free_energy.aes2 == state.classical_energy.aes2);
+  CHECK(state.free_energy.aes2_elements == state.classical_energy.aes2_elements);
+  CHECK(state.free_energy.d4_two_body == state.classical_energy.d4_two_body);
+  CHECK(state.free_energy.d4_two_body_elements == state.classical_energy.d4_two_body_elements);
+  CHECK(state.free_energy.explicit_point_charge == state.classical_energy.explicit_point_charge);
+  CHECK(state.free_energy.explicit_point_charge_elements ==
+        state.classical_energy.explicit_point_charge_elements);
+  CHECK(state.free_energy.periodic_embedding == state.classical_energy.periodic_embedding);
+  CHECK(state.free_energy.periodic_embedding_elements ==
+        state.classical_energy.periodic_embedding_elements);
+  CHECK(state.free_energy.entropy_elements == batch);
+  CHECK(state.free_energy.internal_energy_elements == batch);
+  CHECK(state.free_energy.free_energy_elements == batch);
+  CHECK(state.mixer.total_vector_elements == mixer_vector);
+  CHECK(state.mixer.history_elements == mixer_history);
+  CHECK(state.mixer.omega_elements == mixer_omega);
+  CHECK(state.mixer.batch_elements == batch);
+  CHECK(state.scc.batch_elements == batch);
+
+  const bool d4_enabled = host.options().enable_d4;
+  const bool point_charges_enabled = host.options().enable_explicit_point_charges;
+  const bool periodic_enabled = host.options().enable_periodic_embedding;
+  if (d4_enabled) {
+    CHECK(input.classical_energy.d4_two_body != nullptr);
+    CHECK(input.classical_energy.d4_two_body_elements == batch);
+    CHECK(input.free_energy.d4_two_body == input.classical_energy.d4_two_body);
+    CHECK(input.free_energy.d4_two_body_elements == batch);
+    CHECK(cpu_energy.d4_two_body_energies != nullptr);
+  } else {
+    CHECK(input.classical_energy.d4_two_body == nullptr);
+    CHECK(input.classical_energy.d4_two_body_elements == 0);
+    CHECK(input.free_energy.d4_two_body == nullptr);
+    CHECK(input.free_energy.d4_two_body_elements == 0);
+    CHECK(cpu_energy.d4_two_body_energies == nullptr);
+  }
+  if (point_charges_enabled) {
+    CHECK(input.classical_energy.explicit_point_charge != nullptr);
+    CHECK(input.classical_energy.explicit_point_charge_elements == batch);
+    CHECK(input.free_energy.explicit_point_charge == input.classical_energy.explicit_point_charge);
+    CHECK(input.free_energy.explicit_point_charge_elements == batch);
+    CHECK(cpu_energy.explicit_point_charge_energies != nullptr);
+  } else {
+    CHECK(input.classical_energy.explicit_point_charge == nullptr);
+    CHECK(input.classical_energy.explicit_point_charge_elements == 0);
+    CHECK(input.free_energy.explicit_point_charge == nullptr);
+    CHECK(input.free_energy.explicit_point_charge_elements == 0);
+    /* The CPU driver reserves this base component unconditionally even when
+     * the geometry view disables point charges; its published value is zero. */
+    CHECK(cpu_energy.explicit_point_charge_energies != nullptr);
+  }
+  if (periodic_enabled) {
+    CHECK(input.classical_energy.periodic_embedding != nullptr);
+    CHECK(input.classical_energy.periodic_embedding_elements == batch);
+    CHECK(input.free_energy.periodic_embedding == input.classical_energy.periodic_embedding);
+    CHECK(input.free_energy.periodic_embedding_elements == batch);
+    CHECK(cpu_energy.periodic_embedding_energies != nullptr);
+  } else {
+    CHECK(input.classical_energy.periodic_embedding == nullptr);
+    CHECK(input.classical_energy.periodic_embedding_elements == 0);
+    CHECK(input.free_energy.periodic_embedding == nullptr);
+    CHECK(input.free_energy.periodic_embedding_elements == 0);
+    CHECK(cpu_energy.periodic_embedding_energies == nullptr);
+  }
+
+  std::vector<double> core;
+  std::vector<double> es2;
+  std::vector<double> es3;
+  std::vector<double> aes2;
+  std::vector<double> d4_two_body;
+  std::vector<double> explicit_point_charge;
+  std::vector<double> periodic_embedding;
+  std::vector<double> classical_total;
+  std::vector<double> entropy;
+  std::vector<double> internal_energy;
+  std::vector<double> free_energy;
+  std::vector<double> current_inputs;
+  std::vector<double> previous_inputs;
+  std::vector<double> previous_residuals;
+  std::vector<double> df_history;
+  std::vector<double> u_history;
+  std::vector<double> omega;
+  std::vector<double> mixer_residual_rms;
+  std::vector<double> mixer_residual_maximum;
+  std::vector<std::uint64_t> mixer_iterations;
+  std::vector<std::uint64_t> mixer_restart_counts;
+  std::vector<gpuxtb_status_t> mixer_statuses;
+  std::vector<std::uint8_t> mixer_initialized;
+  std::vector<std::uint8_t> mixer_residual_converged;
+  std::vector<double> scc_free_energies;
+  std::vector<double> scc_previous_free_energies;
+  std::vector<double> scc_free_energy_changes;
+  std::vector<double> scc_residual_rms;
+  std::vector<std::uint64_t> scc_iterations;
+  std::vector<gpuxtb_status_t> scc_statuses;
+  std::vector<std::uint8_t> scc_converged;
+
+  CHECK(download(state.free_energy.core, batch, core, stream));
+  CHECK(download(state.classical_energy.es2, batch, es2, stream));
+  CHECK(download(state.classical_energy.es3, batch, es3, stream));
+  CHECK(download(state.classical_energy.aes2, batch, aes2, stream));
+  CHECK(download(state.classical_energy.d4_two_body, batch, d4_two_body, stream));
+  CHECK(
+      download(state.classical_energy.explicit_point_charge, batch, explicit_point_charge, stream));
+  CHECK(download(state.classical_energy.periodic_embedding, batch, periodic_embedding, stream));
+  CHECK(download(state.classical_energy.classical_total, batch, classical_total, stream));
+  CHECK(download(state.free_energy.entropy, batch, entropy, stream));
+  CHECK(download(state.free_energy.internal_energy, batch, internal_energy, stream));
+  CHECK(download(state.free_energy.free_energy, batch, free_energy, stream));
+
+  CHECK(download(state.mixer.current_inputs, mixer_vector, current_inputs, stream));
+  CHECK(download(state.mixer.previous_inputs, mixer_vector, previous_inputs, stream));
+  CHECK(download(state.mixer.previous_residuals, mixer_vector, previous_residuals, stream));
+  CHECK(download(state.mixer.df_history, mixer_history, df_history, stream));
+  CHECK(download(state.mixer.u_history, mixer_history, u_history, stream));
+  CHECK(download(state.mixer.omega, mixer_omega, omega, stream));
+  CHECK(download(state.mixer.residual_rms, batch, mixer_residual_rms, stream));
+  CHECK(download(state.mixer.residual_maximum, batch, mixer_residual_maximum, stream));
+  CHECK(download(state.mixer.iterations, batch, mixer_iterations, stream));
+  CHECK(download(state.mixer.restart_counts, batch, mixer_restart_counts, stream));
+  CHECK(download(state.mixer.system_statuses, batch, mixer_statuses, stream));
+  CHECK(download(state.mixer.initialized, batch, mixer_initialized, stream));
+  CHECK(download(state.mixer.residual_converged, batch, mixer_residual_converged, stream));
+
+  CHECK(download(state.scc.free_energies, batch, scc_free_energies, stream));
+  CHECK(download(state.scc.previous_free_energies, batch, scc_previous_free_energies, stream));
+  CHECK(download(state.scc.free_energy_changes, batch, scc_free_energy_changes, stream));
+  CHECK(download(state.scc.residual_rms, batch, scc_residual_rms, stream));
+  CHECK(download(state.scc.iterations, batch, scc_iterations, stream));
+  CHECK(download(state.scc.system_statuses, batch, scc_statuses, stream));
+  CHECK(download(state.scc.converged, batch, scc_converged, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  CHECK(compare_doubles("core energy", core, cpu_energy.core_energies, batch, kTolerance));
+  CHECK(compare_doubles("ES2 energy", es2, cpu_energy.es2_energies, batch, kTolerance));
+  CHECK(compare_doubles("ES3 energy", es3, cpu_energy.es3_energies, batch, kTolerance));
+  CHECK(compare_doubles("AES2 energy", aes2, cpu_energy.aes2_energies, batch, kTolerance));
+  if (d4_enabled) {
+    CHECK(compare_doubles("D4 two-body energy", d4_two_body, cpu_energy.d4_two_body_energies, batch,
+                          kTolerance));
+  }
+  CHECK(compare_doubles("explicit point-charge energy", explicit_point_charge,
+                        cpu_energy.explicit_point_charge_energies, batch, kTolerance));
+  if (periodic_enabled) {
+    CHECK(compare_doubles("periodic embedding energy", periodic_embedding,
+                          cpu_energy.periodic_embedding_energies, batch, kTolerance));
+  }
+
+  const std::vector<double> disabled_component(static_cast<std::size_t>(batch), 0.0);
+  if (!d4_enabled) {
+    CHECK(compare_doubles("disabled D4 two-body energy", d4_two_body, disabled_component.data(),
+                          batch, kTolerance));
+  }
+  if (!periodic_enabled) {
+    CHECK(compare_doubles("disabled periodic embedding energy", periodic_embedding,
+                          disabled_component.data(), batch, kTolerance));
+  }
+
+  std::vector<double> expected_classical_total(static_cast<std::size_t>(batch));
+  for (std::int64_t system = 0; system < batch; ++system) {
+    double total = cpu_energy.es2_energies[system] + cpu_energy.es3_energies[system];
+    total += cpu_energy.aes2_energies[system];
+    if (d4_enabled) {
+      total += cpu_energy.d4_two_body_energies[system];
+    }
+    if (point_charges_enabled) {
+      total += cpu_energy.explicit_point_charge_energies[system];
+    }
+    if (periodic_enabled) {
+      total += cpu_energy.periodic_embedding_energies[system];
+    }
+    expected_classical_total[static_cast<std::size_t>(system)] = total;
+  }
+  CHECK(compare_doubles("classical total energy", classical_total, expected_classical_total.data(),
+                        batch, kTolerance));
+  CHECK(compare_doubles("entropy", entropy, cpu_energy.entropies, batch, kTolerance));
+  CHECK(compare_doubles("internal energy", internal_energy, cpu_energy.internal_energies, batch,
+                        kTolerance));
+  CHECK(compare_doubles("free energy", free_energy, cpu_energy.free_energies, batch, kTolerance));
+
+  CHECK(compare_doubles("mixer current inputs", current_inputs, cpu_mixer.current_inputs,
+                        mixer_vector, kTolerance));
+  CHECK(compare_doubles("mixer previous inputs", previous_inputs, cpu_mixer.previous_inputs,
+                        mixer_vector, kTolerance));
+  CHECK(compare_doubles("mixer previous residuals", previous_residuals,
+                        cpu_mixer.previous_residuals, mixer_vector, kTolerance));
+  CHECK(compare_doubles("mixer df history", df_history, cpu_mixer.df_history, mixer_history,
+                        kTolerance));
+  CHECK(compare_doubles("mixer u history", u_history, cpu_mixer.u_history, mixer_history,
+                        kTolerance));
+  CHECK(compare_doubles("mixer omega", omega, cpu_mixer.omega, mixer_omega, kTolerance));
+  CHECK(compare_doubles("mixer residual RMS", mixer_residual_rms, cpu_mixer.residual_rms, batch,
+                        kTolerance));
+  CHECK(compare_doubles("mixer residual maximum", mixer_residual_maximum,
+                        cpu_mixer.residual_maximum, batch, kTolerance));
+  CHECK(compare_exact_values("mixer iterations", mixer_iterations, cpu_mixer.iterations, batch));
+  CHECK(compare_exact_values("mixer restart counts", mixer_restart_counts, cpu_mixer.restart_counts,
+                             batch));
+  CHECK(compare_exact_values("mixer statuses", mixer_statuses, cpu_mixer.system_statuses, batch));
+  CHECK(compare_exact_values("mixer initialized", mixer_initialized, cpu_mixer.initialized, batch));
+  std::vector<std::uint8_t> expected_residual_converged(static_cast<std::size_t>(batch));
+  for (std::int64_t system = 0; system < batch; ++system) {
+    expected_residual_converged[static_cast<std::size_t>(system)] =
+        cpu_mixer.residual_rms[system] < host.mixer_plan().rms_tolerance() &&
+                cpu_mixer.residual_maximum[system] < host.mixer_plan().maximum_tolerance()
+            ? 1u
+            : 0u;
+  }
+  CHECK(compare_exact_values("mixer residual-converged", mixer_residual_converged,
+                             expected_residual_converged.data(), batch));
+
+  CHECK(compare_doubles("SCC free energy", scc_free_energies, cpu_energy.free_energies, batch,
+                        kTolerance));
+  CHECK(compare_doubles("SCC previous free energy", scc_previous_free_energies,
+                        cpu_energy.previous_free_energies, batch, kTolerance));
+  CHECK(compare_doubles("SCC free-energy change", scc_free_energy_changes,
+                        cpu_energy.free_energy_changes, batch, kTolerance));
+  CHECK(compare_doubles("SCC residual RMS", scc_residual_rms, cpu_mixer.residual_rms, batch,
+                        kTolerance));
+  CHECK(compare_exact_values("SCC iterations", scc_iterations, cpu_energy.iterations, batch));
+  CHECK(compare_exact_values("SCC statuses", scc_statuses, cpu_energy.system_statuses, batch));
+  CHECK(compare_exact_values("SCC converged", scc_converged, cpu_energy.converged, batch));
+  return 0;
+}
+
 struct ProductionFixture {
   HostSccCase host;
   InputBacking backing;
@@ -673,6 +944,8 @@ int test_four_system_production_iteration_cpu_parity(bool optional_components) {
     CHECK(converged[static_cast<std::size_t>(system)] ==
           fixture.host.driver_state().converged[system]);
   }
+  CHECK(compare_energy_mixer_and_scc_trace(fixture.host, fixture.binding.input, state,
+                                           fixture.handles.stream()) == 0);
 
   /* Reuse the exact same production binding for a second iteration. This is
    * the steady-state contract consumed by Graph replay and proves that no
@@ -712,6 +985,8 @@ int test_four_system_production_iteration_cpu_parity(bool optional_components) {
     CHECK(statuses[static_cast<std::size_t>(system)] ==
           fixture.host.driver_state().system_statuses[system]);
   }
+  CHECK(compare_energy_mixer_and_scc_trace(fixture.host, fixture.binding.input, state,
+                                           fixture.handles.stream()) == 0);
   return 0;
 }
 
