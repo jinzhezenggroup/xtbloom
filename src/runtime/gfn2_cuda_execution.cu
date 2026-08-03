@@ -18,7 +18,9 @@
 
 #include "backends/cuda/gfn2_d4.cuh"
 #include "backends/cuda/gfn2_energy_force_execution.cuh"
+#include "backends/cuda/gfn2_external_point_charges.cuh"
 #include "backends/cuda/gfn2_geometry.cuh"
+#include "backends/cuda/gfn2_preprocessing.cuh"
 #include "backends/cuda/gfn2_scc_iteration_arena.cuh"
 #include "backends/cuda/gfn2_scc_iteration_initialize.cuh"
 #include "backends/cuda/gfn2_scc_iteration_reports.cuh"
@@ -256,6 +258,308 @@ T* arena_pointer(void* arena, std::size_t offset) noexcept {
 template <typename T>
 T* arena_pointer_if(void* arena, std::size_t offset, std::int64_t elements) noexcept {
   return elements == 0 ? nullptr : arena_pointer<T>(arena, offset);
+}
+
+/* Stable numerical leaves and transaction metadata passed by value to the
+ * runtime-owned refresh kernels. CUDA types stay confined to this translation
+ * unit; the public internal boundary above remains usable by a future HIP
+ * implementation. */
+struct NumericalRefreshDeviceSources {
+  const double* positions = nullptr;
+  const double* point_positions = nullptr;
+  const double* point_values = nullptr;
+  const double* point_gammas = nullptr;
+  const double* periodic_shifts = nullptr;
+  const double* periodic_response = nullptr;
+};
+
+struct NumericalRefreshDeviceBinding {
+  std::int64_t batch_size = 0;
+  std::int64_t total_atoms = 0;
+  std::int64_t total_shells = 0;
+  std::int64_t total_matrices = 0;
+  std::int64_t total_point_charges = 0;
+  std::int64_t total_response_elements = 0;
+  std::int64_t geometry_pair_elements = 0;
+  std::int64_t es2_elements = 0;
+  std::int64_t aes2_elements = 0;
+  std::int64_t d4_pair_elements = 0;
+  std::uint8_t d4_enabled = 0u;
+  std::uint8_t point_enabled = 0u;
+  std::uint8_t periodic_enabled = 0u;
+  std::uint64_t plan_token = 0u;
+
+  const std::int64_t* atom_offsets = nullptr;
+  const std::int64_t* shell_offsets = nullptr;
+  const std::int64_t* matrix_offsets = nullptr;
+  const std::int64_t* geometry_pair_offsets = nullptr;
+  const std::int64_t* es2_offsets = nullptr;
+  const std::int64_t* point_offsets = nullptr;
+  const std::int64_t* response_offsets = nullptr;
+  const std::int64_t* d4_pair_offsets = nullptr;
+
+  const std::uint8_t* requested = nullptr;
+  const std::uint8_t* preprocessing_published = nullptr;
+  std::uint8_t* eligible = nullptr;
+  std::uint64_t* committed_generations = nullptr;
+
+  double* candidate_positions = nullptr;
+  double* candidate_point_positions = nullptr;
+  double* candidate_point_values = nullptr;
+  double* candidate_point_gammas = nullptr;
+  double* candidate_periodic_shifts = nullptr;
+  double* candidate_periodic_response = nullptr;
+
+  double* committed_positions = nullptr;
+  double* committed_point_positions = nullptr;
+  double* committed_point_values = nullptr;
+  double* committed_point_gammas = nullptr;
+  double* committed_periodic_shifts = nullptr;
+  double* committed_periodic_response = nullptr;
+
+  const double* candidate_geometry_pairs = nullptr;
+  const double* candidate_coordination = nullptr;
+  const double* candidate_overlap = nullptr;
+  const double* candidate_dipole = nullptr;
+  const double* candidate_quadrupole = nullptr;
+  const double* candidate_h0 = nullptr;
+  const double* candidate_es2 = nullptr;
+  const double* candidate_aes2 = nullptr;
+
+  double* public_geometry_pairs = nullptr;
+  double* public_coordination = nullptr;
+  double* public_overlap = nullptr;
+  double* public_dipole = nullptr;
+  double* public_quadrupole = nullptr;
+  double* public_h0 = nullptr;
+  double* public_es2 = nullptr;
+  double* public_aes2 = nullptr;
+
+  const double* candidate_d4_pairs = nullptr;
+  const double* candidate_d4_coordination = nullptr;
+  double* public_d4_pairs = nullptr;
+  double* public_d4_coordination = nullptr;
+  const double* candidate_point_shell = nullptr;
+  double* public_point_shell = nullptr;
+
+  const std::uint32_t* preprocessing_plan_error = nullptr;
+  const std::uint32_t* d4_system_errors = nullptr;
+  const std::uint32_t* d4_device_error = nullptr;
+  const std::uint32_t* point_system_errors = nullptr;
+  const std::uint32_t* point_plan_error = nullptr;
+  std::uint32_t* periodic_system_errors = nullptr;
+  std::uint32_t* periodic_plan_error = nullptr;
+  const std::uint64_t* factor_generations = nullptr;
+  const std::uint32_t* factor_statuses = nullptr;
+  const std::uint64_t* geometry_epoch = nullptr;
+};
+
+static_assert(std::is_trivially_copyable_v<NumericalRefreshDeviceSources>);
+static_assert(std::is_trivially_copyable_v<NumericalRefreshDeviceBinding>);
+
+__global__ void stage_gfn2_numerical_inputs_kernel(NumericalRefreshDeviceBinding binding,
+                                                   NumericalRefreshDeviceSources sources) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (system >= binding.batch_size) return;
+  const bool use_source = binding.requested[system] == 1u;
+
+  const std::int64_t atom_begin = binding.atom_offsets[system];
+  const std::int64_t atom_end = binding.atom_offsets[system + 1];
+  for (std::int64_t index = atom_begin * 3 + threadIdx.x; index < atom_end * 3;
+       index += blockDim.x) {
+    binding.candidate_positions[index] =
+        use_source ? sources.positions[index] : binding.committed_positions[index];
+  }
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    if (binding.periodic_enabled != 0u) {
+      binding.candidate_periodic_shifts[atom] =
+          use_source ? sources.periodic_shifts[atom] : binding.committed_periodic_shifts[atom];
+    }
+  }
+
+  if (binding.point_enabled != 0u) {
+    const std::int64_t point_begin = binding.point_offsets[system];
+    const std::int64_t point_end = binding.point_offsets[system + 1];
+    for (std::int64_t index = point_begin * 3 + threadIdx.x; index < point_end * 3;
+         index += blockDim.x) {
+      binding.candidate_point_positions[index] =
+          use_source ? sources.point_positions[index] : binding.committed_point_positions[index];
+    }
+    for (std::int64_t point = point_begin + threadIdx.x; point < point_end; point += blockDim.x) {
+      binding.candidate_point_values[point] =
+          use_source ? sources.point_values[point] : binding.committed_point_values[point];
+      binding.candidate_point_gammas[point] =
+          use_source ? sources.point_gammas[point] : binding.committed_point_gammas[point];
+    }
+  }
+
+  if (binding.periodic_enabled != 0u) {
+    const std::int64_t response_begin = binding.response_offsets[system];
+    const std::int64_t response_end = binding.response_offsets[system + 1];
+    for (std::int64_t index = response_begin + threadIdx.x; index < response_end;
+         index += blockDim.x) {
+      binding.candidate_periodic_response[index] = use_source
+                                                       ? sources.periodic_response[index]
+                                                       : binding.committed_periodic_response[index];
+    }
+  }
+}
+
+__global__ void validate_gfn2_periodic_refresh_kernel(NumericalRefreshDeviceBinding binding) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (system >= binding.batch_size || binding.periodic_enabled == 0u ||
+      binding.preprocessing_published[system] == 0u ||
+      atomicAdd(binding.periodic_plan_error, 0u) != 0u) {
+    return;
+  }
+  const std::int64_t atom_begin = binding.atom_offsets[system];
+  const std::int64_t atom_end = binding.atom_offsets[system + 1];
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    if (!isfinite(binding.candidate_periodic_shifts[atom])) {
+      atomicCAS(binding.periodic_system_errors + system, 0u, 1u);
+    }
+  }
+  __syncthreads();
+  if (atomicAdd(binding.periodic_system_errors + system, 0u) != 0u) return;
+
+  const std::int64_t count = atom_end - atom_begin;
+  const std::int64_t response_begin = binding.response_offsets[system];
+  const std::int64_t response_end = binding.response_offsets[system + 1];
+  if (count < 0 || count > 3037000499LL || response_begin < 0 || response_end < response_begin ||
+      response_end - response_begin != count * count) {
+    if (threadIdx.x == 0) atomicCAS(binding.periodic_plan_error, 0u, 1u);
+    return;
+  }
+  for (std::int64_t local = threadIdx.x; local < count * count; local += blockDim.x) {
+    const double value = binding.candidate_periodic_response[response_begin + local];
+    if (!isfinite(value)) {
+      atomicCAS(binding.periodic_system_errors + system, 0u, 2u);
+      continue;
+    }
+    const std::int64_t row = local / count;
+    const std::int64_t column = local - row * count;
+    const double transpose =
+        binding.candidate_periodic_response[response_begin + column * count + row];
+    if (value != transpose) {
+      atomicCAS(binding.periodic_system_errors + system, 0u, 3u);
+    }
+  }
+}
+
+__global__ void initialize_gfn2_refresh_sequence_kernel(std::uint32_t* sequence) {
+  if (threadIdx.x == 0) *sequence = 1u;
+}
+
+/* Publish the common pre-factor gate into the eigensolver owner's canonical
+ * activity mask. The overlap owner then commits factors only for these peers. */
+__global__ void gate_gfn2_numerical_refresh_kernel(NumericalRefreshDeviceBinding binding) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (system >= binding.batch_size) return;
+  const bool plan_healthy =
+      atomicAdd(const_cast<std::uint32_t*>(binding.preprocessing_plan_error), 0u) == 0u &&
+      (binding.d4_enabled == 0u ||
+       atomicAdd(const_cast<std::uint32_t*>(binding.d4_device_error), 0u) == 0u) &&
+      (binding.point_enabled == 0u ||
+       atomicAdd(const_cast<std::uint32_t*>(binding.point_plan_error), 0u) == 0u) &&
+      (binding.periodic_enabled == 0u || atomicAdd(binding.periodic_plan_error, 0u) == 0u);
+  const bool peer_healthy =
+      binding.requested[system] == 1u && binding.preprocessing_published[system] == 1u &&
+      (binding.d4_enabled == 0u || binding.d4_system_errors[system] == 0u) &&
+      (binding.point_enabled == 0u || binding.point_system_errors[system] == 0u) &&
+      (binding.periodic_enabled == 0u || binding.periodic_system_errors[system] == 0u);
+  if (threadIdx.x == 0) binding.eligible[system] = plan_healthy && peer_healthy ? 1u : 0u;
+}
+
+__global__ void commit_gfn2_numerical_refresh_kernel(NumericalRefreshDeviceBinding binding) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (system >= binding.batch_size) return;
+  const std::uint64_t generation = *binding.geometry_epoch;
+  const bool publish = binding.eligible[system] == 1u && binding.factor_statuses[system] == 0u &&
+                       binding.factor_generations[system] == generation;
+  if (threadIdx.x == 0) binding.eligible[system] = publish ? 1u : 0u;
+  if (!publish) return;
+
+  const std::int64_t atom_begin = binding.atom_offsets[system];
+  const std::int64_t atom_end = binding.atom_offsets[system + 1];
+  for (std::int64_t index = atom_begin * 3 + threadIdx.x; index < atom_end * 3;
+       index += blockDim.x) {
+    binding.committed_positions[index] = binding.candidate_positions[index];
+  }
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    binding.public_coordination[atom] = binding.candidate_coordination[atom];
+    if (binding.d4_enabled != 0u) {
+      binding.public_d4_coordination[atom] = binding.candidate_d4_coordination[atom];
+    }
+    if (binding.periodic_enabled != 0u) {
+      binding.committed_periodic_shifts[atom] = binding.candidate_periodic_shifts[atom];
+    }
+  }
+
+  const std::int64_t matrix_begin = binding.matrix_offsets[system];
+  const std::int64_t matrix_end = binding.matrix_offsets[system + 1];
+  for (std::int64_t index = matrix_begin + threadIdx.x; index < matrix_end; index += blockDim.x) {
+    binding.public_overlap[index] = binding.candidate_overlap[index];
+    binding.public_h0[index] = binding.candidate_h0[index];
+  }
+  for (std::int64_t index = matrix_begin * 3 + threadIdx.x; index < matrix_end * 3;
+       index += blockDim.x) {
+    binding.public_dipole[index] = binding.candidate_dipole[index];
+  }
+  for (std::int64_t index = matrix_begin * 6 + threadIdx.x; index < matrix_end * 6;
+       index += blockDim.x) {
+    binding.public_quadrupole[index] = binding.candidate_quadrupole[index];
+  }
+
+  const std::int64_t pair_begin = binding.geometry_pair_offsets[system];
+  const std::int64_t pair_end = binding.geometry_pair_offsets[system + 1];
+  for (std::int64_t index = pair_begin * kGfn2GeometryPairDataElements + threadIdx.x;
+       index < pair_end * kGfn2GeometryPairDataElements; index += blockDim.x) {
+    binding.public_geometry_pairs[index] = binding.candidate_geometry_pairs[index];
+  }
+  for (std::int64_t index = pair_begin * kGfn2AES2PairDataElements + threadIdx.x;
+       index < pair_end * kGfn2AES2PairDataElements; index += blockDim.x) {
+    binding.public_aes2[index] = binding.candidate_aes2[index];
+  }
+  const std::int64_t es2_begin = binding.es2_offsets[system];
+  const std::int64_t es2_end = binding.es2_offsets[system + 1];
+  for (std::int64_t index = es2_begin + threadIdx.x; index < es2_end; index += blockDim.x) {
+    binding.public_es2[index] = binding.candidate_es2[index];
+  }
+
+  if (binding.d4_enabled != 0u) {
+    const std::int64_t d4_begin = binding.d4_pair_offsets[system];
+    const std::int64_t d4_end = binding.d4_pair_offsets[system + 1];
+    for (std::int64_t index = d4_begin * kGfn2D4PairDataElements + threadIdx.x;
+         index < d4_end * kGfn2D4PairDataElements; index += blockDim.x) {
+      binding.public_d4_pairs[index] = binding.candidate_d4_pairs[index];
+    }
+  }
+  if (binding.point_enabled != 0u) {
+    const std::int64_t point_begin = binding.point_offsets[system];
+    const std::int64_t point_end = binding.point_offsets[system + 1];
+    for (std::int64_t index = point_begin * 3 + threadIdx.x; index < point_end * 3;
+         index += blockDim.x) {
+      binding.committed_point_positions[index] = binding.candidate_point_positions[index];
+    }
+    for (std::int64_t point = point_begin + threadIdx.x; point < point_end; point += blockDim.x) {
+      binding.committed_point_values[point] = binding.candidate_point_values[point];
+      binding.committed_point_gammas[point] = binding.candidate_point_gammas[point];
+    }
+    const std::int64_t shell_begin = binding.shell_offsets[system];
+    const std::int64_t shell_end = binding.shell_offsets[system + 1];
+    for (std::int64_t shell = shell_begin + threadIdx.x; shell < shell_end; shell += blockDim.x) {
+      binding.public_point_shell[shell] = binding.candidate_point_shell[shell];
+    }
+  }
+  if (binding.periodic_enabled != 0u) {
+    const std::int64_t response_begin = binding.response_offsets[system];
+    const std::int64_t response_end = binding.response_offsets[system + 1];
+    for (std::int64_t index = response_begin + threadIdx.x; index < response_end;
+         index += blockDim.x) {
+      binding.committed_periodic_response[index] = binding.candidate_periodic_response[index];
+    }
+  }
+  if (threadIdx.x == 0) binding.committed_generations[system] = generation;
 }
 
 struct TopologyKey {
@@ -970,6 +1274,27 @@ std::string setup_error_message(const char* operation, gpuxtb_status_t status,
   return message.str();
 }
 
+struct NumericalRefreshState {
+  Gfn2PreprocessingDeviceBinding preprocessing{};
+  NumericalRefreshDeviceBinding device{};
+  Gfn2D4DeviceCache d4_candidate{};
+  Gfn2D4DeviceWorkspace d4_workspace{};
+  Gfn2ExternalPointChargeDeviceBatch point_batch{};
+  Gfn2ExternalPointChargeDeviceCache point_candidate{};
+  Gfn2ExternalPointChargeDeviceWorkspace point_workspace{};
+  Gfn2SccIterationDeviceActivity point_activity{};
+
+  double* host_positions = nullptr;
+  double* host_point_positions = nullptr;
+  double* host_point_values = nullptr;
+  double* host_point_gammas = nullptr;
+  double* host_periodic_shifts = nullptr;
+  double* host_periodic_response = nullptr;
+  std::uint8_t* host_requested = nullptr;
+
+  bool ready = false;
+};
+
 }  // namespace
 
 struct Gfn2CudaExecutionCache::Impl {
@@ -1009,6 +1334,7 @@ struct Gfn2CudaExecutionCache::Impl {
     PinnedArena provider_host_workspace;
     DeviceArena force_immutable_arena;
     DeviceArena force_execution_arena;
+    DeviceArena numerical_refresh_arena;
     Gfn2RaggedTopologyView device_topology{};
     Gfn2SccIterationDevicePlan plan_seed{};
     Gfn2SccIterationDeviceInput input_seed{};
@@ -1020,6 +1346,7 @@ struct Gfn2CudaExecutionCache::Impl {
     Gfn2SccIterationInitializationReady ready{};
     Gfn2SccIterationBinding scc_binding{};
     EnergyForceBindings energy_force{};
+    NumericalRefreshState numerical{};
     bool energy_force_smoke_ready = false;
   };
 
@@ -1093,6 +1420,663 @@ struct Gfn2CudaExecutionCache::Impl {
     solver_parameters = candidate_parameters;
     blas = candidate_blas;
     handles_created = true;
+    return GPUXTB_STATUS_SUCCESS;
+  }
+
+  gpuxtb_status_t build_numerical_refresh_binding(Prepared& candidate, std::string& error) {
+    const std::int64_t batch = candidate.host.basis.batch_size;
+    const std::int64_t atoms = candidate.host.basis.total_atoms;
+    const std::int64_t shells = candidate.host.basis.total_shells;
+    const std::int64_t orbitals = candidate.host.basis.total_orbitals;
+    const std::int64_t primitives = candidate.host.basis.total_primitives;
+    const std::int64_t matrices = candidate.host.integrals.total_matrix_elements;
+    const std::int64_t points = candidate.host.external.total_point_charges;
+    const std::int64_t response =
+        static_cast<std::int64_t>(candidate.host.periodic_response.size());
+    const std::int64_t geometry_pairs = candidate.plan_seed.geometry_batch.total_pairs;
+    const std::int64_t es2_elements = candidate.plan_seed.es2_batch.total_matrix_elements;
+    const std::int64_t aes2_pairs = candidate.plan_seed.aes2_batch.total_pairs;
+    const std::int64_t d4_pairs = candidate.plan_seed.d4_batch.total_pairs;
+    const std::uint64_t token = candidate.host.plan_token;
+    std::int64_t coordinates = 0;
+    std::int64_t point_coordinates = 0;
+    std::int64_t geometry_pair_elements = 0;
+    std::int64_t aes2_elements = 0;
+    std::int64_t d4_pair_elements = 0;
+    std::int64_t dipole_elements = 0;
+    std::int64_t quadrupole_elements = 0;
+    if (!checked_elements(atoms, 3, coordinates) ||
+        !checked_elements(points, 3, point_coordinates) ||
+        !checked_elements(geometry_pairs, kGfn2GeometryPairDataElements, geometry_pair_elements) ||
+        !checked_elements(aes2_pairs, kGfn2AES2PairDataElements, aes2_elements) ||
+        !checked_elements(d4_pairs, kGfn2D4PairDataElements, d4_pair_elements) ||
+        !checked_elements(matrices, 3, dipole_elements) ||
+        !checked_elements(matrices, 6, quadrupole_elements)) {
+      error = "numerical refresh element count overflows int64_t";
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
+
+    struct Offsets {
+      std::size_t shell_pair_offsets = 0u;
+      std::size_t shell_primitive_offsets = 0u;
+      std::size_t angular_momenta = 0u;
+      std::size_t primitive_exponents = 0u;
+      std::size_t primitive_coefficients = 0u;
+      std::size_t h0_atomic_radii = 0u;
+      std::size_t h0_shell_levels = 0u;
+      std::size_t h0_coordination_scale = 0u;
+      std::size_t h0_polynomial = 0u;
+      std::size_t h0_pair_scale = 0u;
+
+      std::size_t committed_positions = 0u;
+      std::size_t committed_point_positions = 0u;
+      std::size_t committed_point_values = 0u;
+      std::size_t committed_point_gammas = 0u;
+      std::size_t committed_periodic_shifts = 0u;
+      std::size_t committed_periodic_response = 0u;
+      std::size_t candidate_positions = 0u;
+      std::size_t candidate_point_positions = 0u;
+      std::size_t candidate_point_values = 0u;
+      std::size_t candidate_point_gammas = 0u;
+      std::size_t candidate_periodic_shifts = 0u;
+      std::size_t candidate_periodic_response = 0u;
+      std::size_t host_positions = 0u;
+      std::size_t host_point_positions = 0u;
+      std::size_t host_point_values = 0u;
+      std::size_t host_point_gammas = 0u;
+      std::size_t host_periodic_shifts = 0u;
+      std::size_t host_periodic_response = 0u;
+      std::size_t requested = 0u;
+      std::size_t host_requested = 0u;
+      std::size_t committed_generations = 0u;
+      std::size_t geometry_epoch = 0u;
+
+      std::size_t output_geometry_pairs = 0u;
+      std::size_t output_coordination = 0u;
+      std::size_t output_geometry_generations = 0u;
+      std::size_t output_overlap = 0u;
+      std::size_t output_dipole = 0u;
+      std::size_t output_quadrupole = 0u;
+      std::size_t output_h0 = 0u;
+      std::size_t output_es2 = 0u;
+      std::size_t output_aes2 = 0u;
+      std::size_t output_operator_generations = 0u;
+      std::size_t output_published = 0u;
+
+      std::size_t positions_scratch = 0u;
+      std::size_t geometry_candidate_pairs = 0u;
+      std::size_t geometry_candidate_coordination = 0u;
+      std::size_t geometry_candidate_generations = 0u;
+      std::size_t geometry_pair_scratch = 0u;
+      std::size_t geometry_coordination_scratch = 0u;
+      std::size_t geometry_sequence = 0u;
+      std::size_t overlap_candidate = 0u;
+      std::size_t dipole_candidate = 0u;
+      std::size_t quadrupole_candidate = 0u;
+      std::size_t h0_candidate = 0u;
+      std::size_t overlap_scratch = 0u;
+      std::size_t dipole_scratch = 0u;
+      std::size_t quadrupole_scratch = 0u;
+      std::size_t h0_scratch = 0u;
+      std::size_t integral_sequence = 0u;
+      std::size_t es2_candidate = 0u;
+      std::size_t es2_scratch = 0u;
+      std::size_t aes2_candidate = 0u;
+      std::size_t aes2_scratch = 0u;
+      std::size_t geometry_system_errors = 0u;
+      std::size_t geometry_device_error = 0u;
+      std::size_t integral_system_errors = 0u;
+      std::size_t integral_device_error = 0u;
+      std::size_t es2_device_error = 0u;
+      std::size_t aes2_system_errors = 0u;
+      std::size_t aes2_device_error = 0u;
+      std::size_t preprocessing_stages = 0u;
+      std::size_t preprocessing_plan_error = 0u;
+
+      std::size_t d4_candidate_pairs = 0u;
+      std::size_t d4_candidate_coordination = 0u;
+      std::size_t d4_pair_scratch = 0u;
+      std::size_t d4_coordination_scratch = 0u;
+      std::size_t d4_generations = 0u;
+      std::size_t d4_sequence = 0u;
+      std::size_t d4_system_errors = 0u;
+      std::size_t d4_device_error = 0u;
+      std::size_t point_candidate_shell = 0u;
+      std::size_t point_shell_scratch = 0u;
+      std::size_t point_system_errors = 0u;
+      std::size_t point_plan_error = 0u;
+      std::size_t point_sequence = 0u;
+      std::size_t periodic_system_errors = 0u;
+      std::size_t periodic_plan_error = 0u;
+    } offset;
+
+    ArenaLayout layout;
+    offset.shell_pair_offsets = layout.append<std::int64_t>(
+        static_cast<std::int64_t>(candidate.host.h0.shell_pair_offsets.size()));
+    offset.shell_primitive_offsets = layout.append<std::int64_t>(
+        static_cast<std::int64_t>(candidate.host.basis.shell_primitive_offsets.size()));
+    offset.angular_momenta = layout.append<std::uint8_t>(
+        static_cast<std::int64_t>(candidate.host.basis.angular_momenta.size()));
+    offset.primitive_exponents = layout.append<double>(primitives);
+    offset.primitive_coefficients = layout.append<double>(primitives);
+    offset.h0_atomic_radii = layout.append<double>(atoms);
+    offset.h0_shell_levels = layout.append<double>(shells);
+    offset.h0_coordination_scale = layout.append<double>(shells);
+    offset.h0_polynomial = layout.append<double>(shells);
+    offset.h0_pair_scale = layout.append<double>(candidate.host.h0.shell_pair_offsets.back());
+
+    const auto append_numerical =
+        [&](std::size_t& positions_offset, std::size_t& point_positions_offset,
+            std::size_t& point_values_offset, std::size_t& point_gammas_offset,
+            std::size_t& shifts_offset, std::size_t& response_offset) {
+          positions_offset = layout.append<double>(coordinates);
+          point_positions_offset = layout.append<double>(point_coordinates);
+          point_values_offset = layout.append<double>(points);
+          point_gammas_offset = layout.append<double>(points);
+          shifts_offset = layout.append<double>(candidate.host.periodic_enabled ? atoms : 0);
+          response_offset = layout.append<double>(candidate.host.periodic_enabled ? response : 0);
+        };
+    append_numerical(offset.committed_positions, offset.committed_point_positions,
+                     offset.committed_point_values, offset.committed_point_gammas,
+                     offset.committed_periodic_shifts, offset.committed_periodic_response);
+    append_numerical(offset.candidate_positions, offset.candidate_point_positions,
+                     offset.candidate_point_values, offset.candidate_point_gammas,
+                     offset.candidate_periodic_shifts, offset.candidate_periodic_response);
+    append_numerical(offset.host_positions, offset.host_point_positions, offset.host_point_values,
+                     offset.host_point_gammas, offset.host_periodic_shifts,
+                     offset.host_periodic_response);
+    offset.requested = layout.append<std::uint8_t>(batch);
+    offset.host_requested = layout.append<std::uint8_t>(batch);
+    offset.committed_generations = layout.append<std::uint64_t>(batch);
+    offset.geometry_epoch = layout.append<std::uint64_t>(1);
+
+    offset.output_geometry_pairs = layout.append<double>(geometry_pair_elements);
+    offset.output_coordination = layout.append<double>(atoms);
+    offset.output_geometry_generations = layout.append<std::uint64_t>(batch);
+    offset.output_overlap = layout.append<double>(matrices);
+    offset.output_dipole = layout.append<double>(dipole_elements);
+    offset.output_quadrupole = layout.append<double>(quadrupole_elements);
+    offset.output_h0 = layout.append<double>(matrices);
+    offset.output_es2 = layout.append<double>(es2_elements);
+    offset.output_aes2 = layout.append<double>(aes2_elements);
+    offset.output_operator_generations = layout.append<std::uint64_t>(batch);
+    offset.output_published = layout.append<std::uint8_t>(batch);
+
+    offset.positions_scratch = layout.append<double>(coordinates);
+    offset.geometry_candidate_pairs = layout.append<double>(geometry_pair_elements);
+    offset.geometry_candidate_coordination = layout.append<double>(atoms);
+    offset.geometry_candidate_generations = layout.append<std::uint64_t>(batch);
+    offset.geometry_pair_scratch = layout.append<double>(geometry_pair_elements);
+    offset.geometry_coordination_scratch = layout.append<double>(atoms);
+    offset.geometry_sequence = layout.append<std::uint32_t>(1);
+    offset.overlap_candidate = layout.append<double>(matrices);
+    offset.dipole_candidate = layout.append<double>(dipole_elements);
+    offset.quadrupole_candidate = layout.append<double>(quadrupole_elements);
+    offset.h0_candidate = layout.append<double>(matrices);
+    offset.overlap_scratch = layout.append<double>(matrices);
+    offset.dipole_scratch = layout.append<double>(dipole_elements);
+    offset.quadrupole_scratch = layout.append<double>(quadrupole_elements);
+    offset.h0_scratch = layout.append<double>(matrices);
+    offset.integral_sequence = layout.append<std::uint32_t>(1);
+    offset.es2_candidate = layout.append<double>(es2_elements);
+    offset.es2_scratch = layout.append<double>(es2_elements);
+    offset.aes2_candidate = layout.append<double>(aes2_elements);
+    offset.aes2_scratch = layout.append<double>(aes2_elements);
+    offset.geometry_system_errors = layout.append<std::uint32_t>(batch);
+    offset.geometry_device_error = layout.append<std::uint32_t>(1);
+    offset.integral_system_errors = layout.append<std::uint32_t>(batch);
+    offset.integral_device_error = layout.append<std::uint32_t>(1);
+    offset.es2_device_error = layout.append<std::uint32_t>(1);
+    offset.aes2_system_errors = layout.append<std::uint32_t>(batch);
+    offset.aes2_device_error = layout.append<std::uint32_t>(1);
+    offset.preprocessing_stages = layout.append<std::uint32_t>(batch);
+    offset.preprocessing_plan_error = layout.append<std::uint32_t>(1);
+
+    if (candidate.host.d4_enabled) {
+      offset.d4_candidate_pairs = layout.append<double>(d4_pair_elements);
+      offset.d4_candidate_coordination = layout.append<double>(atoms);
+      offset.d4_pair_scratch = layout.append<double>(d4_pair_elements);
+      offset.d4_coordination_scratch = layout.append<double>(atoms);
+      offset.d4_generations = layout.append<std::uint64_t>(batch);
+      offset.d4_sequence = layout.append<std::uint32_t>(1);
+      offset.d4_system_errors = layout.append<std::uint32_t>(batch);
+      offset.d4_device_error = layout.append<std::uint32_t>(1);
+    }
+    if (points != 0) {
+      offset.point_candidate_shell = layout.append<double>(shells);
+      offset.point_shell_scratch = layout.append<double>(shells);
+      offset.point_system_errors = layout.append<std::uint32_t>(batch);
+      offset.point_plan_error = layout.append<std::uint32_t>(1);
+      offset.point_sequence = layout.append<std::uint32_t>(1);
+    }
+    if (candidate.host.periodic_enabled) {
+      offset.periodic_system_errors = layout.append<std::uint32_t>(batch);
+      offset.periodic_plan_error = layout.append<std::uint32_t>(1);
+    }
+    if (!layout.valid()) {
+      error = "numerical refresh arena layout overflows size_t";
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
+    cudaError_t cuda_status = candidate.numerical_refresh_arena.allocate(layout.bytes());
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA numerical refresh arena allocation", cuda_status);
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
+    void* const arena = candidate.numerical_refresh_arena.get();
+    cuda_status = cudaMemsetAsync(arena, 0, candidate.numerical_refresh_arena.bytes(), stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA numerical refresh arena initialization", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    candidate.submitted = true;
+
+    const auto upload = [&](std::size_t destination, const void* source, std::size_t bytes) {
+      if (cuda_status == cudaSuccess && bytes != 0u) {
+        cuda_status = cudaMemcpyAsync(static_cast<std::byte*>(arena) + destination, source, bytes,
+                                      cudaMemcpyHostToDevice, stream);
+      }
+    };
+    const auto upload_vector = [&](std::size_t destination, const auto& values) {
+      using Value = typename std::decay_t<decltype(values)>::value_type;
+      upload(destination, values.data(), values.size() * sizeof(Value));
+    };
+    upload_vector(offset.shell_pair_offsets, candidate.host.h0.shell_pair_offsets);
+    upload_vector(offset.shell_primitive_offsets, candidate.host.basis.shell_primitive_offsets);
+    upload_vector(offset.angular_momenta, candidate.host.basis.angular_momenta);
+    upload_vector(offset.primitive_exponents, candidate.host.basis.primitive_exponents);
+    upload_vector(offset.primitive_coefficients, candidate.host.basis.primitive_coefficients);
+    upload_vector(offset.h0_atomic_radii, candidate.host.h0.atomic_radii);
+    upload_vector(offset.h0_shell_levels, candidate.host.h0.shell_levels);
+    upload_vector(offset.h0_coordination_scale, candidate.host.h0.shell_coordination_scale);
+    upload_vector(offset.h0_polynomial, candidate.host.h0.shell_polynomial);
+    upload_vector(offset.h0_pair_scale, candidate.host.h0.shell_pair_scale);
+    upload_vector(offset.committed_positions, candidate.host.positions);
+    upload_vector(offset.committed_point_positions, candidate.host.point_positions);
+    upload_vector(offset.committed_point_values, candidate.host.point_values);
+    upload_vector(offset.committed_point_gammas, candidate.host.point_gammas);
+    upload_vector(offset.committed_periodic_shifts, candidate.host.periodic_shifts);
+    upload_vector(offset.committed_periodic_response, candidate.host.periodic_response);
+    std::vector<std::uint64_t> initial_generations(static_cast<std::size_t>(batch),
+                                                   candidate.host.geometry_generation);
+    upload_vector(offset.committed_generations, initial_generations);
+    upload(offset.geometry_epoch, &candidate.host.geometry_generation,
+           sizeof(candidate.host.geometry_generation));
+    if (cuda_status == cudaSuccess) {
+      cuda_status = cudaMemsetAsync(arena_pointer<std::uint8_t>(arena, offset.requested), 1,
+                                    static_cast<std::size_t>(batch), stream);
+    }
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA numerical refresh setup upload", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
+    auto& numerical = candidate.numerical;
+    numerical = {};
+    numerical.host_positions = arena_pointer<double>(arena, offset.host_positions);
+    numerical.host_point_positions =
+        arena_pointer_if<double>(arena, offset.host_point_positions, point_coordinates);
+    numerical.host_point_values = arena_pointer_if<double>(arena, offset.host_point_values, points);
+    numerical.host_point_gammas = arena_pointer_if<double>(arena, offset.host_point_gammas, points);
+    numerical.host_periodic_shifts = arena_pointer_if<double>(
+        arena, offset.host_periodic_shifts, candidate.host.periodic_enabled ? atoms : 0);
+    numerical.host_periodic_response = arena_pointer_if<double>(
+        arena, offset.host_periodic_response, candidate.host.periodic_enabled ? response : 0);
+    numerical.host_requested = arena_pointer<std::uint8_t>(arena, offset.host_requested);
+    auto& binding = numerical.preprocessing;
+    binding = {};
+    binding.plan.abi_version = kGfn2PreprocessingAbiVersion;
+    binding.plan.reserved = 0u;
+    binding.plan.plan_token = token;
+    binding.plan.geometry = candidate.plan_seed.geometry_batch;
+    std::int64_t maximum_system_shells = 0;
+    for (std::int64_t system = 0; system < batch; ++system) {
+      maximum_system_shells =
+          std::max(maximum_system_shells,
+                   candidate.host.basis.batch_shell_offsets[static_cast<std::size_t>(system + 1)] -
+                       candidate.host.basis.batch_shell_offsets[static_cast<std::size_t>(system)]);
+    }
+    binding.plan.integrals = {
+        batch,
+        atoms,
+        shells,
+        orbitals,
+        primitives,
+        matrices,
+        candidate.host.h0.shell_pair_offsets.back(),
+        maximum_system_shells,
+        candidate.host.integrals.integral_cutoff,
+        token,
+        batch + 1,
+        batch + 1,
+        batch + 1,
+        batch + 1,
+        static_cast<std::int64_t>(candidate.host.h0.shell_pair_offsets.size()),
+        atoms + 1,
+        shells + 1,
+        static_cast<std::int64_t>(candidate.host.basis.shell_primitive_offsets.size()),
+        shells,
+        static_cast<std::int64_t>(candidate.host.basis.angular_momenta.size()),
+        primitives,
+        primitives,
+        candidate.device_topology.atom_offsets,
+        candidate.device_topology.batch_shell_offsets,
+        candidate.device_topology.batch_orbital_offsets,
+        candidate.device_topology.matrix_offsets,
+        arena_pointer<std::int64_t>(arena, offset.shell_pair_offsets),
+        candidate.device_topology.atom_shell_offsets,
+        candidate.device_topology.shell_orbital_offsets,
+        arena_pointer<std::int64_t>(arena, offset.shell_primitive_offsets),
+        candidate.device_topology.shell_to_atom,
+        arena_pointer<std::uint8_t>(arena, offset.angular_momenta),
+        arena_pointer<double>(arena, offset.primitive_exponents),
+        arena_pointer<double>(arena, offset.primitive_coefficients)};
+    binding.plan.h0 = {atoms,
+                       shells,
+                       shells,
+                       shells,
+                       candidate.host.h0.shell_pair_offsets.back(),
+                       token,
+                       arena_pointer<double>(arena, offset.h0_atomic_radii),
+                       arena_pointer<double>(arena, offset.h0_shell_levels),
+                       arena_pointer<double>(arena, offset.h0_coordination_scale),
+                       arena_pointer<double>(arena, offset.h0_polynomial),
+                       arena_pointer<double>(arena, offset.h0_pair_scale)};
+    binding.plan.es2 = candidate.plan_seed.es2_batch;
+    binding.plan.aes2 = candidate.plan_seed.aes2_batch;
+    binding.input = {arena_pointer<double>(arena, offset.candidate_positions), coordinates, token};
+    binding.activity = {arena_pointer<std::uint8_t>(arena, offset.requested), batch,
+                        arena_pointer<std::uint8_t>(arena, offset.output_published), batch, token};
+    binding.output.geometry = {
+        arena_pointer_if<double>(arena, offset.output_geometry_pairs, geometry_pair_elements),
+        geometry_pair_elements,
+        arena_pointer<double>(arena, offset.output_coordination),
+        atoms,
+        arena_pointer<std::uint64_t>(arena, offset.output_geometry_generations),
+        batch,
+        token};
+    binding.output.overlap = arena_pointer<double>(arena, offset.output_overlap);
+    binding.output.overlap_elements = matrices;
+    binding.output.dipole_integrals = arena_pointer<double>(arena, offset.output_dipole);
+    binding.output.dipole_elements = dipole_elements;
+    binding.output.quadrupole_integrals = arena_pointer<double>(arena, offset.output_quadrupole);
+    binding.output.quadrupole_elements = quadrupole_elements;
+    binding.output.h0 = arena_pointer<double>(arena, offset.output_h0);
+    binding.output.h0_elements = matrices;
+    binding.output.es2 = {arena_pointer<double>(arena, offset.output_es2), es2_elements, 0u, token};
+    binding.output.aes2 = {arena_pointer_if<double>(arena, offset.output_aes2, aes2_elements),
+                           aes2_elements, 0u, token};
+    binding.output.operator_generations =
+        arena_pointer<std::uint64_t>(arena, offset.output_operator_generations);
+    binding.output.generation_elements = batch;
+    binding.output.plan_token = token;
+    binding.diagnostics = {arena_pointer<std::uint32_t>(arena, offset.geometry_system_errors),
+                           batch,
+                           arena_pointer<std::uint32_t>(arena, offset.geometry_device_error),
+                           arena_pointer<std::uint32_t>(arena, offset.integral_system_errors),
+                           batch,
+                           arena_pointer<std::uint32_t>(arena, offset.integral_device_error),
+                           arena_pointer<std::uint32_t>(arena, offset.es2_device_error),
+                           arena_pointer<std::uint32_t>(arena, offset.aes2_system_errors),
+                           batch,
+                           arena_pointer<std::uint32_t>(arena, offset.aes2_device_error),
+                           arena_pointer<std::uint32_t>(arena, offset.preprocessing_stages),
+                           batch,
+                           arena_pointer<std::uint32_t>(arena, offset.preprocessing_plan_error),
+                           token};
+    binding.workspace.positions_scratch = arena_pointer<double>(arena, offset.positions_scratch);
+    binding.workspace.position_elements = coordinates;
+    binding.workspace.geometry_candidate = {
+        arena_pointer_if<double>(arena, offset.geometry_candidate_pairs, geometry_pair_elements),
+        geometry_pair_elements,
+        arena_pointer<double>(arena, offset.geometry_candidate_coordination),
+        atoms,
+        arena_pointer<std::uint64_t>(arena, offset.geometry_candidate_generations),
+        batch,
+        token};
+    binding.workspace.geometry = {
+        arena_pointer_if<double>(arena, offset.geometry_pair_scratch, geometry_pair_elements),
+        geometry_pair_elements,
+        arena_pointer<double>(arena, offset.geometry_coordination_scratch),
+        atoms,
+        nullptr,
+        0,
+        arena_pointer<std::uint32_t>(arena, offset.geometry_sequence),
+        1,
+        token};
+    binding.workspace.overlap_candidate = arena_pointer<double>(arena, offset.overlap_candidate);
+    binding.workspace.overlap_elements = matrices;
+    binding.workspace.dipole_candidate = arena_pointer<double>(arena, offset.dipole_candidate);
+    binding.workspace.dipole_elements = dipole_elements;
+    binding.workspace.quadrupole_candidate =
+        arena_pointer<double>(arena, offset.quadrupole_candidate);
+    binding.workspace.quadrupole_elements = quadrupole_elements;
+    binding.workspace.h0_candidate = arena_pointer<double>(arena, offset.h0_candidate);
+    binding.workspace.h0_elements = matrices;
+    binding.workspace.integrals = {arena_pointer<double>(arena, offset.overlap_scratch),
+                                   matrices,
+                                   arena_pointer<double>(arena, offset.dipole_scratch),
+                                   dipole_elements,
+                                   arena_pointer<double>(arena, offset.quadrupole_scratch),
+                                   quadrupole_elements,
+                                   arena_pointer<double>(arena, offset.h0_scratch),
+                                   matrices,
+                                   arena_pointer<std::uint32_t>(arena, offset.integral_sequence),
+                                   1,
+                                   token};
+    binding.workspace.es2_candidate = {arena_pointer<double>(arena, offset.es2_candidate),
+                                       es2_elements, 0u, token};
+    binding.workspace.es2 = {arena_pointer<double>(arena, offset.es2_scratch),
+                             es2_elements,
+                             nullptr,
+                             0,
+                             nullptr,
+                             0,
+                             nullptr,
+                             0};
+    binding.workspace.aes2_candidate = {
+        arena_pointer_if<double>(arena, offset.aes2_candidate, aes2_elements), aes2_elements, 0u,
+        token};
+    binding.workspace.aes2 = {arena_pointer_if<double>(arena, offset.aes2_scratch, aes2_elements),
+                              aes2_elements,
+                              nullptr,
+                              0,
+                              nullptr,
+                              0,
+                              nullptr,
+                              0,
+                              nullptr,
+                              0,
+                              nullptr,
+                              0};
+    binding.workspace.plan_token = token;
+    binding.geometry_epoch = {arena_pointer<std::uint64_t>(arena, offset.geometry_epoch), 1, token};
+    binding.plan_token = token;
+
+    const auto seal = seal_gfn2_preprocessing_binding_cuda(binding);
+    if (!seal.success()) {
+      error = "CUDA runtime preprocessing binding rejected its fixed arena projection";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+
+    auto& device = numerical.device;
+    device = {};
+    device.batch_size = batch;
+    device.total_atoms = atoms;
+    device.total_shells = shells;
+    device.total_matrices = matrices;
+    device.total_point_charges = points;
+    device.total_response_elements = response;
+    device.geometry_pair_elements = geometry_pair_elements;
+    device.es2_elements = es2_elements;
+    device.aes2_elements = aes2_elements;
+    device.d4_pair_elements = d4_pair_elements;
+    device.d4_enabled = candidate.host.d4_enabled ? 1u : 0u;
+    device.point_enabled = points != 0 ? 1u : 0u;
+    device.periodic_enabled = candidate.host.periodic_enabled ? 1u : 0u;
+    device.plan_token = token;
+    device.atom_offsets = candidate.device_topology.atom_offsets;
+    device.shell_offsets = candidate.device_topology.batch_shell_offsets;
+    device.matrix_offsets = candidate.device_topology.matrix_offsets;
+    device.geometry_pair_offsets = candidate.plan_seed.geometry_batch.pair_offsets;
+    device.es2_offsets = candidate.plan_seed.es2_batch.matrix_offsets;
+    device.point_offsets = candidate.plan_seed.explicit_point_charge_batch.point_charge_offsets;
+    device.response_offsets = candidate.plan_seed.periodic_batch.matrix_offsets;
+    device.d4_pair_offsets = candidate.plan_seed.d4_batch.pair_offsets;
+    device.requested = binding.activity.requested_mask;
+    device.preprocessing_published = binding.activity.published_mask;
+    device.eligible = candidate.workspace_seed.ledger.active_mask;
+    device.committed_generations =
+        arena_pointer<std::uint64_t>(arena, offset.committed_generations);
+    device.candidate_positions = arena_pointer<double>(arena, offset.candidate_positions);
+    device.candidate_point_positions =
+        arena_pointer_if<double>(arena, offset.candidate_point_positions, point_coordinates);
+    device.candidate_point_values =
+        arena_pointer_if<double>(arena, offset.candidate_point_values, points);
+    device.candidate_point_gammas =
+        arena_pointer_if<double>(arena, offset.candidate_point_gammas, points);
+    device.candidate_periodic_shifts = arena_pointer_if<double>(
+        arena, offset.candidate_periodic_shifts, candidate.host.periodic_enabled ? atoms : 0);
+    device.candidate_periodic_response = arena_pointer_if<double>(
+        arena, offset.candidate_periodic_response, candidate.host.periodic_enabled ? response : 0);
+    device.committed_positions = arena_pointer<double>(arena, offset.committed_positions);
+    device.committed_point_positions =
+        arena_pointer_if<double>(arena, offset.committed_point_positions, point_coordinates);
+    device.committed_point_values =
+        arena_pointer_if<double>(arena, offset.committed_point_values, points);
+    device.committed_point_gammas =
+        arena_pointer_if<double>(arena, offset.committed_point_gammas, points);
+    device.committed_periodic_shifts = arena_pointer_if<double>(
+        arena, offset.committed_periodic_shifts, candidate.host.periodic_enabled ? atoms : 0);
+    device.committed_periodic_response = arena_pointer_if<double>(
+        arena, offset.committed_periodic_response, candidate.host.periodic_enabled ? response : 0);
+    device.candidate_geometry_pairs = binding.output.geometry.pair_data;
+    device.candidate_coordination = binding.output.geometry.coordination_numbers;
+    device.candidate_overlap = binding.output.overlap;
+    device.candidate_dipole = binding.output.dipole_integrals;
+    device.candidate_quadrupole = binding.output.quadrupole_integrals;
+    device.candidate_h0 = binding.output.h0;
+    device.candidate_es2 = binding.output.es2.coulomb_matrix;
+    device.candidate_aes2 = binding.output.aes2.pair_data;
+    device.public_geometry_pairs =
+        const_cast<double*>(candidate.plan_seed.geometry_cache.pair_data);
+    device.public_coordination =
+        const_cast<double*>(candidate.plan_seed.geometry_cache.coordination_numbers);
+    device.public_overlap = const_cast<double*>(candidate.input_seed.hamiltonian.overlap);
+    device.public_dipole = const_cast<double*>(candidate.input_seed.hamiltonian.dipole_integrals);
+    device.public_quadrupole =
+        const_cast<double*>(candidate.input_seed.hamiltonian.quadrupole_integrals);
+    device.public_h0 = const_cast<double*>(candidate.input_seed.hamiltonian.h0);
+    device.public_es2 = candidate.plan_seed.es2_cache.coulomb_matrix;
+    device.public_aes2 = candidate.plan_seed.aes2_cache.pair_data;
+    device.preprocessing_plan_error = binding.diagnostics.plan_error;
+    device.geometry_epoch = binding.geometry_epoch.value;
+
+    if (candidate.host.d4_enabled) {
+      numerical.d4_candidate = {
+          arena_pointer_if<double>(arena, offset.d4_candidate_pairs, d4_pair_elements),
+          d4_pair_elements,
+          arena_pointer<double>(arena, offset.d4_candidate_coordination),
+          atoms,
+          candidate.host.geometry_generation,
+          token};
+      numerical.d4_workspace.pair_scratch =
+          arena_pointer_if<double>(arena, offset.d4_pair_scratch, d4_pair_elements);
+      numerical.d4_workspace.pair_scratch_elements = d4_pair_elements;
+      numerical.d4_workspace.coordination_scratch =
+          arena_pointer<double>(arena, offset.d4_coordination_scratch);
+      numerical.d4_workspace.coordination_scratch_elements = atoms;
+      numerical.d4_workspace.geometry_generations =
+          arena_pointer<std::uint64_t>(arena, offset.d4_generations);
+      numerical.d4_workspace.geometry_generation_elements = batch;
+      numerical.d4_workspace.geometry_sequence_active =
+          arena_pointer<std::uint32_t>(arena, offset.d4_sequence);
+      numerical.d4_workspace.geometry_sequence_elements = 1;
+      numerical.d4_workspace.system_errors =
+          arena_pointer<std::uint32_t>(arena, offset.d4_system_errors);
+      numerical.d4_workspace.system_error_elements = batch;
+      device.candidate_d4_pairs = numerical.d4_candidate.pair_data;
+      device.candidate_d4_coordination = numerical.d4_candidate.coordination_numbers;
+      device.public_d4_pairs = const_cast<double*>(candidate.plan_seed.d4_cache.pair_data);
+      device.public_d4_coordination =
+          const_cast<double*>(candidate.plan_seed.d4_cache.coordination_numbers);
+      device.d4_system_errors = numerical.d4_workspace.system_errors;
+      device.d4_device_error = arena_pointer<std::uint32_t>(arena, offset.d4_device_error);
+    }
+    if (points != 0) {
+      numerical.point_batch = candidate.plan_seed.explicit_point_charge_batch;
+      numerical.point_batch.qm_positions = device.candidate_positions;
+      numerical.point_batch.point_positions = device.candidate_point_positions;
+      numerical.point_batch.point_charges = device.candidate_point_values;
+      numerical.point_batch.point_hardnesses = device.candidate_point_gammas;
+      numerical.point_candidate = {arena_pointer<double>(arena, offset.point_candidate_shell),
+                                   shells, candidate.host.geometry_generation, token};
+      numerical.point_workspace = {arena_pointer<double>(arena, offset.point_shell_scratch),
+                                   shells};
+      numerical.point_activity = {binding.activity.published_mask,
+                                  arena_pointer<std::uint32_t>(arena, offset.point_sequence), batch,
+                                  1, token};
+      device.candidate_point_shell = numerical.point_candidate.shell_potentials;
+      device.public_point_shell = candidate.plan_seed.explicit_point_charge_cache.shell_potentials;
+      device.point_system_errors = arena_pointer<std::uint32_t>(arena, offset.point_system_errors);
+      device.point_plan_error = arena_pointer<std::uint32_t>(arena, offset.point_plan_error);
+    }
+    if (candidate.host.periodic_enabled) {
+      device.periodic_system_errors =
+          arena_pointer<std::uint32_t>(arena, offset.periodic_system_errors);
+      device.periodic_plan_error = arena_pointer<std::uint32_t>(arena, offset.periodic_plan_error);
+    }
+
+    /* Canonical runtime numerical pointers replace setup-only copies. */
+    candidate.plan_seed.geometry_cache.geometry_generations = device.committed_generations;
+    candidate.plan_seed.geometry_cache.generation_elements = batch;
+    if (points != 0) {
+      candidate.plan_seed.explicit_point_charge_batch.qm_positions = device.committed_positions;
+      candidate.plan_seed.explicit_point_charge_batch.point_positions =
+          device.committed_point_positions;
+      candidate.plan_seed.explicit_point_charge_batch.point_charges = device.committed_point_values;
+      candidate.plan_seed.explicit_point_charge_batch.point_hardnesses =
+          device.committed_point_gammas;
+    }
+    if (candidate.host.periodic_enabled) {
+      candidate.plan_seed.periodic_batch.shifts = device.committed_periodic_shifts;
+      candidate.plan_seed.periodic_batch.response_matrices = device.committed_periodic_response;
+    }
+
+    std::vector<Gfn2SccCacheProvenanceBinding> provenance;
+    provenance.reserve(
+        static_cast<std::size_t>(candidate.plan_seed.provenance.cache_binding_count));
+    const auto append_provenance = [&](Gfn2SccStageId stage) {
+      Gfn2SccCacheProvenanceBinding record{};
+      record.provenance = {Gfn2PlanMemorySpace::kCudaDevice,
+                           Gfn2GenerationScope::kPerSystem,
+                           token,
+                           0u,
+                           batch,
+                           batch,
+                           device.committed_generations};
+      record.owner_stage = stage;
+      provenance.push_back(record);
+    };
+    append_provenance(Gfn2SccStageId::kGeometry);
+    append_provenance(Gfn2SccStageId::kES2Potential);
+    append_provenance(Gfn2SccStageId::kAES2Potential);
+    if (candidate.host.d4_enabled) append_provenance(Gfn2SccStageId::kD4Potential);
+    if (points != 0) append_provenance(Gfn2SccStageId::kExplicitPointChargePotential);
+    if (candidate.host.periodic_enabled) append_provenance(Gfn2SccStageId::kPeriodicPotential);
+    if (static_cast<std::int64_t>(provenance.size()) !=
+        candidate.plan_seed.provenance.cache_binding_count) {
+      error = "runtime refresh provenance count disagrees with the setup owner";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    cuda_status = cudaMemcpyAsync(
+        const_cast<Gfn2SccCacheProvenanceBinding*>(candidate.plan_seed.provenance.cache_bindings),
+        provenance.data(), provenance.size() * sizeof(provenance.front()), cudaMemcpyHostToDevice,
+        stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA runtime provenance publication", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    numerical.ready = true;
     return GPUXTB_STATUS_SUCCESS;
   }
 
@@ -1546,9 +2530,10 @@ struct Gfn2CudaExecutionCache::Impl {
 
       const auto* const atomic_numbers =
           arena_pointer<std::int32_t>(immutable_arena, immutable.atomic_numbers);
-      const auto* const positions =
-          explicit_points ? candidate.plan_seed.explicit_point_charge_batch.qm_positions
-                          : arena_pointer<double>(immutable_arena, immutable.positions);
+      /* All force descriptors consume the same runtime-owned committed
+       * coordinates, including zero-point batches. This is the address updated
+       * transactionally by #122 after overlap factorization succeeds. */
+      const auto* const positions = candidate.numerical.device.committed_positions;
 
       std::int64_t maximum_system_shells = 0;
       for (std::int64_t system = 0; system < batch; ++system) {
@@ -2047,8 +3032,8 @@ struct Gfn2CudaExecutionCache::Impl {
       /* The setup owner uploads host-generated geometry values, but the force
        * reverse passes compare their compact caches against CUDA arithmetic.
        * Build the geometry and CN-dependent AES2 caches once on the setup
-       * stream; #113 will refresh the same fixed addresses after geometry
-       * changes. */
+       * stream; the numerical refresh transaction reuses these fixed public
+       * addresses after geometry changes. */
       cuda_status = reset_gfn2_geometry_device_errors_cuda(
           batch, binding.diagnostics.coordination_system_errors,
           binding.diagnostics.coordination_device_error, stream);
@@ -2343,6 +3328,8 @@ struct Gfn2CudaExecutionCache::Impl {
       error = "CUDA SCC iteration arena binding rejected its own sealed requirements";
       return GPUXTB_STATUS_INVALID_ARGUMENT;
     }
+    status = build_numerical_refresh_binding(*candidate, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
     cuda_status =
         candidate->eigensolver_setup_arena.allocate(eigensolver_requirements.setup_device_bytes);
     if (cuda_status != cudaSuccess) {
@@ -2441,6 +3428,258 @@ struct Gfn2CudaExecutionCache::Impl {
     return GPUXTB_STATUS_SUCCESS;
   }
 
+  gpuxtb_status_t refresh_numerical_locked(const Gfn2CudaNumericalInputView& input,
+                                           std::string& error) {
+    if (prepared == nullptr || !prepared->numerical.ready) {
+      error = "CUDA GFN2 numerical refresh requires a prepared fixed topology";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    Prepared& current = *prepared;
+    auto& numerical = current.numerical;
+    auto& device = numerical.device;
+    auto& preprocessing = numerical.preprocessing;
+    cudaError_t cuda_status = cudaSetDevice(device_id);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("cudaSetDevice for numerical refresh", cuda_status);
+      return GPUXTB_STATUS_BACKEND_UNAVAILABLE;
+    }
+
+    /* Validate the complete view before enqueueing any transfer. A synchronous
+     * descriptor rejection must not leave an earlier asynchronous host read in
+     * flight after the caller is told that the refresh did not start. */
+    const auto validate_source = [&](const char* name, const gpuxtb_const_buffer_t& buffer,
+                                     std::int64_t elements,
+                                     const double* host_stage) -> gpuxtb_status_t {
+      std::size_t bytes = 0u;
+      if (!checked_bytes(elements, sizeof(double), bytes)) {
+        error = std::string(name) + " extent overflows size_t";
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
+      const bool supported_space = buffer.memory_space == GPUXTB_MEMORY_HOST ||
+                                   buffer.memory_space == GPUXTB_MEMORY_CUDA_DEVICE;
+      if (elements == 0) {
+        if (buffer.reserved != 0u || !supported_space) {
+          error = std::string(name) + " has malformed empty-buffer metadata";
+          return GPUXTB_STATUS_INVALID_ARGUMENT;
+        }
+        return GPUXTB_STATUS_SUCCESS;
+      }
+      if (buffer.reserved != 0u || buffer.data == nullptr || buffer.size_bytes < bytes ||
+          !supported_space) {
+        error = std::string(name) + " is not a sufficiently large host/CUDA buffer";
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
+      if (buffer.memory_space == GPUXTB_MEMORY_HOST && host_stage == nullptr) {
+        error = std::string(name) + " has no runtime host-staging projection";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      return GPUXTB_STATUS_SUCCESS;
+    };
+
+    const auto resolve_validated = [&](const char* name, const gpuxtb_const_buffer_t& buffer,
+                                       std::int64_t elements, double* host_stage,
+                                       const double*& source) -> gpuxtb_status_t {
+      if (elements == 0) {
+        source = nullptr;
+        return GPUXTB_STATUS_SUCCESS;
+      }
+      std::size_t bytes = 0u;
+      if (!checked_bytes(elements, sizeof(double), bytes)) {
+        error = std::string(name) + " extent changed after validation";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      if (buffer.memory_space == GPUXTB_MEMORY_HOST) {
+        cuda_status =
+            cudaMemcpyAsync(host_stage, buffer.data, bytes, cudaMemcpyHostToDevice, stream);
+        if (cuda_status != cudaSuccess) {
+          error = cuda_error_message(name, cuda_status);
+          return GPUXTB_STATUS_INTERNAL_ERROR;
+        }
+        source = host_stage;
+      } else {
+        source = static_cast<const double*>(buffer.data);
+      }
+      return GPUXTB_STATUS_SUCCESS;
+    };
+
+    gpuxtb_status_t status = validate_source("positions", input.positions, device.total_atoms * 3,
+                                             numerical.host_positions);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_source("point_charge_positions", input.point_charge_positions,
+                             device.total_point_charges * 3, numerical.host_point_positions);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_source("point_charge_values", input.point_charge_values,
+                             device.total_point_charges, numerical.host_point_values);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_source("point_charge_gammas", input.point_charge_gammas,
+                             device.total_point_charges, numerical.host_point_gammas);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_source("atomic_potential_shifts", input.atomic_potential_shifts,
+                             device.periodic_enabled != 0u ? device.total_atoms : 0,
+                             numerical.host_periodic_shifts);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_source("charge_response_matrix", input.charge_response_matrix,
+                             device.periodic_enabled != 0u ? device.total_response_elements : 0,
+                             numerical.host_periodic_response);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+
+    std::size_t mask_bytes = 0u;
+    if (!checked_bytes(device.batch_size, sizeof(std::uint8_t), mask_bytes)) {
+      error = "numerical refresh activity extent overflows size_t";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    auto* const requested = const_cast<std::uint8_t*>(preprocessing.activity.requested_mask);
+    const bool absent_mask =
+        input.requested_mask.data == nullptr && input.requested_mask.size_bytes == 0u;
+    const bool valid_mask_space = input.requested_mask.memory_space == GPUXTB_MEMORY_HOST ||
+                                  input.requested_mask.memory_space == GPUXTB_MEMORY_CUDA_DEVICE;
+    if ((absent_mask && (input.requested_mask.reserved != 0u || !valid_mask_space)) ||
+        (!absent_mask &&
+         (input.requested_mask.reserved != 0u || input.requested_mask.data == nullptr ||
+          input.requested_mask.size_bytes < mask_bytes || !valid_mask_space))) {
+      error = "requested_mask is not a sufficiently large host/CUDA uint8 buffer";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+
+    NumericalRefreshDeviceSources sources{};
+    status = resolve_validated("positions", input.positions, device.total_atoms * 3,
+                               numerical.host_positions, sources.positions);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = resolve_validated("point_charge_positions", input.point_charge_positions,
+                               device.total_point_charges * 3, numerical.host_point_positions,
+                               sources.point_positions);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = resolve_validated("point_charge_values", input.point_charge_values,
+                               device.total_point_charges, numerical.host_point_values,
+                               sources.point_values);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = resolve_validated("point_charge_gammas", input.point_charge_gammas,
+                               device.total_point_charges, numerical.host_point_gammas,
+                               sources.point_gammas);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = resolve_validated("atomic_potential_shifts", input.atomic_potential_shifts,
+                               device.periodic_enabled != 0u ? device.total_atoms : 0,
+                               numerical.host_periodic_shifts, sources.periodic_shifts);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = resolve_validated("charge_response_matrix", input.charge_response_matrix,
+                               device.periodic_enabled != 0u ? device.total_response_elements : 0,
+                               numerical.host_periodic_response, sources.periodic_response);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+
+    if (absent_mask) {
+      cuda_status = cudaMemsetAsync(requested, 1, mask_bytes, stream);
+    } else {
+      const cudaMemcpyKind kind = input.requested_mask.memory_space == GPUXTB_MEMORY_HOST
+                                      ? cudaMemcpyHostToDevice
+                                      : cudaMemcpyDeviceToDevice;
+      cuda_status = cudaMemcpyAsync(requested, input.requested_mask.data, mask_bytes, kind, stream);
+    }
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA numerical refresh activity staging", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
+    stage_gfn2_numerical_inputs_kernel<<<static_cast<unsigned int>(device.batch_size), 256, 0,
+                                         stream>>>(device, sources);
+    cuda_status = cudaPeekAtLastError();
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA numerical input staging", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
+    const auto preprocessing_launch = compose_gfn2_preprocessing_epoch_cuda(preprocessing, stream);
+    if (!preprocessing_launch.success()) {
+      error = "CUDA numerical preprocessing composer rejected the runtime binding";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+
+    if (device.d4_enabled != 0u) {
+      cuda_status = reset_gfn2_d4_device_errors_cuda(
+          device.batch_size, const_cast<std::uint32_t*>(device.d4_system_errors),
+          const_cast<std::uint32_t*>(device.d4_device_error), stream);
+      if (cuda_status == cudaSuccess) {
+        cuda_status = update_gfn2_d4_geometry_cache_cuda(
+            current.plan_seed.d4_batch, current.plan_seed.d4_parameters, device.candidate_positions,
+            numerical.d4_candidate, numerical.d4_workspace,
+            const_cast<std::uint32_t*>(device.d4_device_error), stream);
+      }
+      if (cuda_status != cudaSuccess) {
+        error = cuda_error_message("CUDA D4 numerical refresh", cuda_status);
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+    }
+    if (device.point_enabled != 0u) {
+      cuda_status = reset_gfn2_external_point_charge_scc_errors_cuda(
+          device.batch_size, const_cast<std::uint32_t*>(device.point_system_errors),
+          const_cast<std::uint32_t*>(device.point_plan_error), stream);
+      if (cuda_status == cudaSuccess) {
+        initialize_gfn2_refresh_sequence_kernel<<<1, 1, 0, stream>>>(
+            const_cast<std::uint32_t*>(numerical.point_activity.sequence_active));
+        cuda_status = cudaPeekAtLastError();
+      }
+      if (cuda_status == cudaSuccess) {
+        cuda_status = update_gfn2_external_point_charge_scc_potential_cache_cuda(
+            numerical.point_batch, numerical.point_activity, numerical.point_candidate,
+            kInitialGeometryGeneration, numerical.point_workspace,
+            const_cast<std::uint32_t*>(device.point_system_errors),
+            const_cast<std::uint32_t*>(device.point_plan_error), stream);
+      }
+      if (cuda_status != cudaSuccess) {
+        error = cuda_error_message("CUDA explicit-point-charge numerical refresh", cuda_status);
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+    }
+    if (device.periodic_enabled != 0u) {
+      cuda_status = cudaMemsetAsync(
+          device.periodic_system_errors, 0,
+          static_cast<std::size_t>(device.batch_size) * sizeof(std::uint32_t), stream);
+      if (cuda_status == cudaSuccess) {
+        cuda_status = cudaMemsetAsync(device.periodic_plan_error, 0, sizeof(std::uint32_t), stream);
+      }
+      if (cuda_status != cudaSuccess) {
+        error = cuda_error_message("CUDA periodic refresh diagnostic reset", cuda_status);
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      validate_gfn2_periodic_refresh_kernel<<<static_cast<unsigned int>(device.batch_size), 256, 0,
+                                              stream>>>(device);
+      cuda_status = cudaPeekAtLastError();
+      if (cuda_status != cudaSuccess) {
+        error = cuda_error_message("CUDA periodic numerical validation", cuda_status);
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+    }
+
+    gate_gfn2_numerical_refresh_kernel<<<static_cast<unsigned int>(device.batch_size), 1, 0,
+                                         stream>>>(device);
+    cuda_status = cudaPeekAtLastError();
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA numerical pre-factor publication gate", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    const auto factor = current.eigensolver_owner.refactor_overlap_from_device_epoch_async(
+        current.eigensolver_setup_arena.get(), current.eigensolver_setup_arena.bytes(),
+        current.eigensolver_binding, preprocessing.output.overlap,
+        preprocessing.output.overlap_elements, preprocessing.geometry_epoch, stream);
+    if (!factor.success()) {
+      error = setup_error_message("CUDA numerical overlap refactor", factor.status,
+                                  static_cast<std::uint32_t>(factor.error),
+                                  static_cast<std::uint32_t>(factor.field), factor.index);
+      return factor.status;
+    }
+    device.factor_generations = current.eigensolver_binding.cache.geometry_generations;
+    device.factor_statuses = current.eigensolver_binding.cache.factor_statuses;
+    commit_gfn2_numerical_refresh_kernel<<<static_cast<unsigned int>(device.batch_size), 256, 0,
+                                           stream>>>(device);
+    cuda_status = cudaPeekAtLastError();
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA numerical final publication", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    current.submitted = true;
+    error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  }
+
   Gfn2CudaExecutionIdentity snapshot() const noexcept {
     Gfn2CudaExecutionIdentity identity{};
     if (prepared == nullptr) return identity;
@@ -2459,6 +3698,7 @@ struct Gfn2CudaExecutionCache::Impl {
         current.energy_force.diagnostics.plan_token == current.host.plan_token;
     identity.force_mode_ready = current.energy_force.plan.compute_forces == 1u;
     identity.energy_force_smoke_ready = current.energy_force_smoke_ready ? 1u : 0u;
+    identity.numerical_refresh_ready = current.numerical.ready ? 1u : 0u;
     identity.batch_size = current.host.basis.batch_size;
     identity.total_atoms = current.host.basis.total_atoms;
     identity.total_shells = current.host.basis.total_shells;
@@ -2480,6 +3720,15 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.provider_host_workspace = opaque_address(current.provider_host_workspace.get());
     identity.force_immutable_arena = opaque_address(current.force_immutable_arena.get());
     identity.force_execution_arena = opaque_address(current.force_execution_arena.get());
+    identity.numerical_refresh_arena = opaque_address(current.numerical_refresh_arena.get());
+    identity.numerical_refresh_binding = opaque_address(&current.numerical.preprocessing);
+    identity.numerical_epoch = opaque_address(current.numerical.preprocessing.geometry_epoch.value);
+    identity.committed_generations = opaque_address(current.numerical.device.committed_generations);
+    identity.numerical_eligible_mask = opaque_address(current.numerical.device.eligible);
+    identity.overlap_factor_generations =
+        opaque_address(current.eigensolver_binding.cache.geometry_generations);
+    identity.overlap_factor_statuses =
+        opaque_address(current.eigensolver_binding.cache.factor_statuses);
     identity.topology_arena_bytes = current.topology_arena.bytes();
     identity.input_arena_bytes = current.input_arena.bytes();
     identity.iteration_arena_bytes = current.iteration_arena.bytes();
@@ -2487,6 +3736,7 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.provider_host_workspace_bytes = current.provider_host_workspace.bytes();
     identity.force_immutable_arena_bytes = current.force_immutable_arena.bytes();
     identity.force_execution_arena_bytes = current.force_execution_arena.bytes();
+    identity.numerical_refresh_arena_bytes = current.numerical_refresh_arena.bytes();
     return identity;
   }
 
@@ -2522,8 +3772,16 @@ gpuxtb_status_t Gfn2CudaExecutionCache::prepare_host(const gpuxtb_batch_t& batch
     const TopologyMatch match =
         match_existing_topology(batch, options, impl_->prepared->host.key, error);
     if (match == TopologyMatch::kMatch) {
-      reused = true;
-      return GPUXTB_STATUS_SUCCESS;
+      Gfn2CudaNumericalInputView numerical{};
+      numerical.positions = batch.positions;
+      numerical.point_charge_positions = batch.point_charge_positions;
+      numerical.point_charge_values = batch.point_charge_values;
+      numerical.point_charge_gammas = batch.point_charge_gammas;
+      numerical.atomic_potential_shifts = batch.atomic_potential_shifts;
+      numerical.charge_response_matrix = batch.charge_response_matrix;
+      status = impl_->refresh_numerical_locked(numerical, error);
+      reused = status == GPUXTB_STATUS_SUCCESS;
+      return status;
     }
     if (match == TopologyMatch::kInvalid) {
       return GPUXTB_STATUS_INVALID_ARGUMENT;
@@ -2564,6 +3822,17 @@ gpuxtb_status_t Gfn2CudaExecutionCache::prepare_host(const gpuxtb_batch_t& batch
   impl_->prepared = std::move(candidate);
   error.clear();
   return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t Gfn2CudaExecutionCache::refresh_numerical_async(
+    const Gfn2CudaNumericalInputView& input, std::string& error) {
+  if (impl_ == nullptr) {
+    error = "CUDA GFN2 execution cache has no implementation";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  gpuxtb_status_t status = impl_->ensure_handles(error);
+  return status == GPUXTB_STATUS_SUCCESS ? impl_->refresh_numerical_locked(input, error) : status;
 }
 
 bool Gfn2CudaExecutionCache::valid() const noexcept {

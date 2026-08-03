@@ -31,6 +31,8 @@ struct Gfn2CudaExecutionIdentity {
   std::uint8_t force_mode_ready = 0u;
   /* One only after a converged-state composed execution publishes finite output. */
   std::uint8_t energy_force_smoke_ready = 0u;
+  /* One after the fixed-topology numerical refresh graph is sealed. */
+  std::uint8_t numerical_refresh_ready = 0u;
 
   std::int64_t batch_size = 0;
   std::int64_t total_atoms = 0;
@@ -55,6 +57,13 @@ struct Gfn2CudaExecutionIdentity {
   std::uintptr_t provider_host_workspace = 0u;
   std::uintptr_t force_immutable_arena = 0u;
   std::uintptr_t force_execution_arena = 0u;
+  std::uintptr_t numerical_refresh_arena = 0u;
+  std::uintptr_t numerical_refresh_binding = 0u;
+  std::uintptr_t numerical_epoch = 0u;
+  std::uintptr_t committed_generations = 0u;
+  std::uintptr_t numerical_eligible_mask = 0u;
+  std::uintptr_t overlap_factor_generations = 0u;
+  std::uintptr_t overlap_factor_statuses = 0u;
 
   std::size_t topology_arena_bytes = 0u;
   std::size_t input_arena_bytes = 0u;
@@ -63,6 +72,30 @@ struct Gfn2CudaExecutionIdentity {
   std::size_t provider_host_workspace_bytes = 0u;
   std::size_t force_immutable_arena_bytes = 0u;
   std::size_t force_execution_arena_bytes = 0u;
+  std::size_t numerical_refresh_arena_bytes = 0u;
+};
+
+/*
+ * CUDA-free numerical view for a previously prepared fixed topology.
+ *
+ * Every nonempty buffer may reside in host or CUDA-device memory. The runtime
+ * stages host values and keeps device values on the caller stream; it never
+ * downloads numerical data or polls asynchronous diagnostics. requested_mask
+ * is an optional uint8_t[batch] view. An absent mask requests every member.
+ *
+ * The context-owned device epoch advances once per accepted refresh (and once
+ * per CUDA Graph replay). Publication is transactional per ragged member: an unrequested or failing
+ * member retains its prior numerical leaves, operators, caches, overlap
+ * factor, and committed generation.
+ */
+struct Gfn2CudaNumericalInputView {
+  gpuxtb_const_buffer_t positions{};
+  gpuxtb_const_buffer_t point_charge_positions{};
+  gpuxtb_const_buffer_t point_charge_values{};
+  gpuxtb_const_buffer_t point_charge_gammas{};
+  gpuxtb_const_buffer_t atomic_potential_shifts{};
+  gpuxtb_const_buffer_t charge_response_matrix{};
+  gpuxtb_const_buffer_t requested_mask{};
 };
 
 /*
@@ -72,8 +105,9 @@ struct Gfn2CudaExecutionIdentity {
  * candidate off to the side, waits only for candidate setup work on the
  * caller stream, validates asynchronous factorization diagnostics, and then
  * atomically replaces the previous topology-scoped object. A same-topology
- * request returns reused=true without allocation, transfer, or synchronization;
- * geometry-dependent refresh and execution are deliberately owned by #113.
+ * host request reuses every owner/address and enqueues the allocation-free
+ * numerical refresh transaction on the context stream. Explicit host/device
+ * refreshes use refresh_numerical_async and the same sealed device DAG.
  */
 class Gfn2CudaExecutionCache {
  public:
@@ -86,6 +120,10 @@ class Gfn2CudaExecutionCache {
   [[nodiscard]] gpuxtb_status_t prepare_host(const gpuxtb_batch_t& batch,
                                              const gpuxtb_compute_options_t& options, bool& reused,
                                              std::string& error);
+
+  /* Enqueue one allocation-free fixed-topology numerical transaction. */
+  [[nodiscard]] gpuxtb_status_t refresh_numerical_async(const Gfn2CudaNumericalInputView& input,
+                                                        std::string& error);
 
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] Gfn2CudaExecutionIdentity identity() const noexcept;
