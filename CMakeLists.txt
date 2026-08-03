@@ -111,6 +111,8 @@ endif()
 if(GPUXTB_HAS_CUDA)
   add_library(gpuxtb_cuda_backend OBJECT
     src/backends/cuda/cuda_runtime.cu
+    src/runtime/cuda_descriptor_validation.cu
+    src/runtime/gfn2_cuda_topology_staging.cu
     src/runtime/gfn2_cuda_execution.cu
     src/backends/cuda/gfn2_aes2.cu
     src/backends/cuda/gfn2_classical_force.cu
@@ -125,6 +127,7 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/gfn2_force_composition.cu
     src/backends/cuda/gfn2_geometry.cu
     src/backends/cuda/gfn2_preprocessing.cu
+    src/backends/cuda/gfn2_public_result_bridge.cu
     src/backends/cuda/gfn2_h0_force.cu
     src/backends/cuda/gfn2_hamiltonian.cu
     src/backends/cuda/gfn2_hamiltonian_force.cu
@@ -282,6 +285,101 @@ if(GPUXTB_BUILD_TESTS)
   add_test(NAME gpuxtb.gfn2.plan_schema COMMAND gpuxtb_plan_schema_test)
 
   if(GPUXTB_HAS_CUDA)
+    add_executable(gpuxtb_cuda_descriptor_validation_test
+      tests/cuda_descriptor_validation_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_descriptor_validation_test PRIVATE
+      gpuxtb::gpuxtb
+      CUDA::cudart
+    )
+    target_include_directories(gpuxtb_cuda_descriptor_validation_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_descriptor_validation_test PRIVATE
+      GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_descriptor_validation_test PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+    )
+    add_test(NAME gpuxtb.cuda.descriptor_validation
+      COMMAND gpuxtb_cuda_descriptor_validation_test
+    )
+
+    add_executable(gpuxtb_cuda_gfn2_topology_staging_test
+      tests/cuda_gfn2_topology_staging_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_gfn2_topology_staging_test PRIVATE
+      gpuxtb::gpuxtb
+      CUDA::cudart
+    )
+    target_include_directories(gpuxtb_cuda_gfn2_topology_staging_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_gfn2_topology_staging_test PRIVATE
+      GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_gfn2_topology_staging_test PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+    )
+    add_test(NAME gpuxtb.cuda.gfn2_topology_staging
+      COMMAND gpuxtb_cuda_gfn2_topology_staging_test
+    )
+
+    add_executable(gpuxtb_cuda_gfn2_public_result_bridge_test
+      tests/cuda_gfn2_public_result_bridge_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_gfn2_public_result_bridge_test PRIVATE
+      gpuxtb::gpuxtb
+      CUDA::cudart
+    )
+    target_include_directories(gpuxtb_cuda_gfn2_public_result_bridge_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_gfn2_public_result_bridge_test PRIVATE
+      GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_gfn2_public_result_bridge_test PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+    )
+    add_test(NAME gpuxtb.cuda.gfn2_public_result_bridge
+      COMMAND gpuxtb_cuda_gfn2_public_result_bridge_test
+    )
+
+    add_executable(gpuxtb_cuda_public_api_test
+      tests/cuda_public_api_test.cu
+      tests/support/gfn2_scc_test_case.cpp
+    )
+    target_link_libraries(gpuxtb_cuda_public_api_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_gfn2_cpu
+      CUDA::cudart
+      Threads::Threads
+    )
+    target_include_directories(gpuxtb_cuda_public_api_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_public_api_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_public_api_test PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+    )
+    add_test(NAME gpuxtb.cuda.public_api COMMAND gpuxtb_cuda_public_api_test)
+
     add_executable(gpuxtb_cuda_atomics_test tests/cuda_atomics_test.cu)
     target_link_libraries(gpuxtb_cuda_atomics_test PRIVATE CUDA::cudart)
     target_include_directories(gpuxtb_cuda_atomics_test PRIVATE

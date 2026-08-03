@@ -1020,6 +1020,59 @@ int test_host_refresh_rejected_during_cuda_graph_capture(cudaStream_t stream,
   return 0;
 }
 
+int test_periodic_refresh_uses_zero_for_absent_optional_leaf(cudaStream_t stream,
+                                                             std::int32_t device_id) {
+  Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
+  HostSccCase host;
+  std::string error;
+  CHECK(HostSccCase::create(case_options(4, true), host, error) == GPUXTB_STATUS_SUCCESS);
+  PublicHostBatch batch = PublicHostBatch::from_host(host, true);
+  gpuxtb_compute_options_t options = compute_options();
+  bool reused = true;
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(!reused);
+
+  Gfn2CudaNumericalInputView numerical{};
+  numerical.positions = batch.descriptor.positions;
+  numerical.point_charge_positions = batch.descriptor.point_charge_positions;
+  numerical.point_charge_values = batch.descriptor.point_charge_values;
+  numerical.point_charge_gammas = batch.descriptor.point_charge_gammas;
+  numerical.charge_response_matrix = batch.descriptor.charge_response_matrix;
+
+  /* A periodic response matrix without an explicit shift means b=0. The
+   * runtime must source that zero from owned device staging instead of
+   * requiring the absent public descriptor to name storage. */
+  CHECK(cache.refresh_numerical_async(numerical, error) == GPUXTB_STATUS_SUCCESS);
+  RefreshSnapshot response_only;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, response_only) == 0);
+  std::vector<double> committed_shifts(batch.periodic_shifts.size(), 1.0);
+  CUDA_CHECK(cudaMemcpyAsync(
+      committed_shifts.data(),
+      reinterpret_cast<const void*>(cache.identity().committed_periodic_shifts.address),
+      committed_shifts.size() * sizeof(double), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(std::all_of(committed_shifts.begin(), committed_shifts.end(),
+                    [](double value) { return value == 0.0; }));
+
+  numerical.atomic_potential_shifts = batch.descriptor.atomic_potential_shifts;
+  numerical.charge_response_matrix = {};
+
+  /* Conversely, a shift-only periodic request means A=0 and must not depend
+   * on caller-owned response storage. */
+  CHECK(cache.refresh_numerical_async(numerical, error) == GPUXTB_STATUS_SUCCESS);
+  RefreshSnapshot shift_only;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, shift_only) == 0);
+  std::vector<double> committed_response(batch.response_matrix.size(), 1.0);
+  CUDA_CHECK(cudaMemcpyAsync(
+      committed_response.data(),
+      reinterpret_cast<const void*>(cache.identity().committed_periodic_response.address),
+      committed_response.size() * sizeof(double), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(std::all_of(committed_response.begin(), committed_response.end(),
+                    [](double value) { return value == 0.0; }));
+  return 0;
+}
+
 int test_base_configuration(cudaStream_t stream, std::int32_t device_id) {
   Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
   HostSccCase host;
@@ -1400,6 +1453,9 @@ int main() {
   if (status == 0) status = test_host_refresh_snapshot_lifetime(stream, device_id);
   if (status == 0) status = test_refresh_cuda_graph_replay(stream, device_id);
   if (status == 0) status = test_host_refresh_rejected_during_cuda_graph_capture(stream, device_id);
+  if (status == 0) {
+    status = test_periodic_refresh_uses_zero_for_absent_optional_leaf(stream, device_id);
+  }
   if (status == 0) status = test_ragged_runtime_shapes(stream, device_id);
   if (status == 0) status = test_fresh_warm_inference_and_post_scc_refresh(stream, device_id);
   if (status == 0) status = test_failed_inference_consumes_warm_checkpoint(stream, device_id);

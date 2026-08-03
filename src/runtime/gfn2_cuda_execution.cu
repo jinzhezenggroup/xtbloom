@@ -23,6 +23,7 @@
 #include "backends/cuda/gfn2_geometry.cuh"
 #include "backends/cuda/gfn2_inference_publication.cuh"
 #include "backends/cuda/gfn2_preprocessing.cuh"
+#include "backends/cuda/gfn2_public_result_bridge.cuh"
 #include "backends/cuda/gfn2_scc_iteration_arena.cuh"
 #include "backends/cuda/gfn2_scc_iteration_initialize.cuh"
 #include "backends/cuda/gfn2_scc_iteration_reports.cuh"
@@ -49,7 +50,9 @@
 #include "model/gfn2/scc_mixer.hpp"
 #include "model/gfn2/wavefunction.hpp"
 #include "runtime/backend.hpp"
+#include "runtime/cuda_descriptor_validation.hpp"
 #include "runtime/gfn2_cuda_execution.hpp"
+#include "runtime/gfn2_cuda_topology_staging.hpp"
 
 namespace gpuxtb::detail {
 namespace {
@@ -1072,6 +1075,93 @@ gpuxtb_status_t make_topology_key(const gpuxtb_batch_t& batch,
   return GPUXTB_STATUS_SUCCESS;
 }
 
+/*
+ * Build topology-derived host plans without downloading caller numerical
+ * buffers.  The deterministic seed is used only while constructing stable
+ * owners, descriptors, arenas, and provider workspaces.  A public CUDA
+ * transaction must refresh the resulting Prepared candidate from the real
+ * caller buffers before it may replace the committed runtime.
+ */
+gpuxtb_status_t make_topology_only_seed(
+    const Gfn2CudaTopologyHostSnapshot& snapshot, const gpuxtb_compute_options_t& options,
+    TopologyKey& key, std::vector<double>& positions, std::vector<double>& point_positions,
+    std::vector<double>& point_values, std::vector<double>& point_gammas,
+    std::vector<double>& periodic_shifts, std::vector<double>& periodic_response,
+    std::string& error) {
+  if (snapshot.batch_size <= 0 || snapshot.total_atoms < snapshot.batch_size ||
+      snapshot.total_point_charges < 0 || snapshot.atom_offsets.size() !=
+                                                    static_cast<std::size_t>(snapshot.batch_size + 1) ||
+      snapshot.atomic_numbers.size() != static_cast<std::size_t>(snapshot.total_atoms) ||
+      snapshot.molecular_charges.size() != static_cast<std::size_t>(snapshot.batch_size) ||
+      snapshot.unpaired_electrons.size() != static_cast<std::size_t>(snapshot.batch_size) ||
+      snapshot.point_charge_offsets.size() !=
+          static_cast<std::size_t>(snapshot.batch_size + 1) ||
+      snapshot.charge_response_offsets.size() !=
+          static_cast<std::size_t>(snapshot.batch_size + 1)) {
+    error = "CUDA topology staging returned an inconsistent host snapshot";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+
+  key.atom_offsets = snapshot.atom_offsets;
+  key.atomic_numbers = snapshot.atomic_numbers;
+  key.molecular_charges = snapshot.molecular_charges;
+  key.unpaired_electrons = snapshot.unpaired_electrons;
+  key.point_offsets = snapshot.point_charge_offsets;
+  key.response_offsets = snapshot.charge_response_offsets;
+  key.flags = options.flags;
+  key.maximum_iterations = options.max_scc_iterations;
+  key.charge_tolerance = options.charge_tolerance;
+  key.energy_tolerance = options.energy_tolerance;
+  key.electronic_temperature = options.electronic_temperature;
+  key.periodic_enabled = snapshot.periodic_enabled;
+
+  std::int64_t coordinate_elements = 0;
+  std::int64_t point_coordinate_elements = 0;
+  if (!checked_elements(snapshot.total_atoms, 3, coordinate_elements) ||
+      !checked_elements(snapshot.total_point_charges, 3, point_coordinate_elements) ||
+      snapshot.total_charge_response_elements < 0) {
+    error = "CUDA topology-only seed extent overflows int64_t";
+    return GPUXTB_STATUS_ALLOCATION_FAILED;
+  }
+  try {
+    positions.assign(static_cast<std::size_t>(coordinate_elements), 0.0);
+    for (std::int64_t system = 0; system < snapshot.batch_size; ++system) {
+      const std::int64_t begin = snapshot.atom_offsets[static_cast<std::size_t>(system)];
+      const std::int64_t end = snapshot.atom_offsets[static_cast<std::size_t>(system + 1)];
+      for (std::int64_t atom = begin; atom < end; ++atom) {
+        const std::int64_t local = atom - begin;
+        positions[static_cast<std::size_t>(3 * atom)] = 8.0 * static_cast<double>(local);
+      }
+    }
+    point_positions.assign(static_cast<std::size_t>(point_coordinate_elements), 0.0);
+    point_values.assign(static_cast<std::size_t>(snapshot.total_point_charges), 0.0);
+    point_gammas.assign(static_cast<std::size_t>(snapshot.total_point_charges), 1.0);
+    periodic_shifts.assign(static_cast<std::size_t>(snapshot.total_atoms), 0.0);
+    periodic_response.assign(
+        static_cast<std::size_t>(snapshot.total_charge_response_elements), 0.0);
+  } catch (const std::bad_alloc&) {
+    error = "failed to allocate CUDA topology-only numerical seed";
+    return GPUXTB_STATUS_ALLOCATION_FAILED;
+  }
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+bool topology_snapshot_matches(const Gfn2CudaTopologyHostSnapshot& snapshot,
+                               const gpuxtb_compute_options_t& options,
+                               const TopologyKey& key) noexcept {
+  return snapshot.atom_offsets == key.atom_offsets &&
+         snapshot.atomic_numbers == key.atomic_numbers &&
+         snapshot.molecular_charges == key.molecular_charges &&
+         snapshot.unpaired_electrons == key.unpaired_electrons &&
+         snapshot.point_charge_offsets == key.point_offsets &&
+         snapshot.charge_response_offsets == key.response_offsets &&
+         snapshot.periodic_enabled == key.periodic_enabled && options.flags == key.flags &&
+         options.max_scc_iterations == key.maximum_iterations &&
+         options.charge_tolerance == key.charge_tolerance &&
+         options.energy_tolerance == key.energy_tolerance &&
+         options.electronic_temperature == key.electronic_temperature;
+}
+
 struct HostPlans {
   TopologyKey key;
   std::uint64_t fingerprint = 0u;
@@ -1502,6 +1592,26 @@ struct InferenceState {
   bool warm_checkpoint_ready = false;
 };
 
+/*
+ * Fixed-topology public result staging. Every possible HOST route has a stable
+ * pinned slice, while one device control record seals aggregate publication
+ * before any CUDA caller destination is touched. Per-call route descriptors
+ * borrow these addresses but never outlive the synchronous cache transaction.
+ */
+struct PublicResultState {
+  double* energies = nullptr;
+  double* qm_forces = nullptr;
+  double* atomic_charges = nullptr;
+  double* point_forces = nullptr;
+  std::int32_t* iterations = nullptr;
+  std::uint8_t* converged = nullptr;
+  gpuxtb_status_t* system_statuses = nullptr;
+  Gfn2PublicResultBridgeControl* host_control = nullptr;
+  Gfn2PublicResultBridgeDeviceDiagnostics diagnostics{};
+  std::uint32_t pending_result_flags = 0u;
+  bool ready = false;
+};
+
 }  // namespace
 
 struct Gfn2CudaExecutionCache::Impl {
@@ -1556,6 +1666,10 @@ struct Gfn2CudaExecutionCache::Impl {
     DeviceArena force_execution_arena;
     DeviceArena numerical_refresh_arena;
     DeviceArena inference_arena;
+    DeviceArena public_result_device_arena;
+    PinnedArena public_result_host_arena;
+    PinnedArena candidate_validation_arena;
+    CudaEvent public_result_completion_event;
     Gfn2RaggedTopologyView device_topology{};
     Gfn2SccIterationDevicePlan plan_seed{};
     Gfn2SccIterationDeviceInput input_seed{};
@@ -1570,18 +1684,27 @@ struct Gfn2CudaExecutionCache::Impl {
     EnergyForceBindings energy_force{};
     NumericalRefreshState numerical{};
     InferenceState inference{};
+    PublicResultState public_result{};
     bool energy_force_smoke_ready = false;
   };
 
   Impl(std::int32_t selected_device, void* selected_stream) noexcept
-      : device_id(selected_device), stream(reinterpret_cast<cudaStream_t>(selected_stream)) {}
+      : device_id(selected_device),
+        stream(reinterpret_cast<cudaStream_t>(selected_stream)),
+        topology_staging(selected_device, selected_stream) {}
 
   ~Impl() {
     std::lock_guard<std::mutex> lock(mutex);
     /* CUDA current-device state is thread-local. Context teardown can run on a
-     * different thread or after the caller selected another device, so restore
-     * the owner device before releasing device allocations and handles. */
-    (void)cudaSetDevice(device_id);
+     * different thread or after the caller selected another device. Select the
+     * owner only for teardown and restore the caller's selection afterwards;
+     * destructors cannot report a restoration failure, so both operations are
+     * necessarily best effort. */
+    int caller_device = -1;
+    const bool caller_device_known = cudaGetDevice(&caller_device) == cudaSuccess;
+    const bool restore_caller_device =
+        caller_device_known && caller_device != device_id && cudaSetDevice(device_id) == cudaSuccess;
+    if (!caller_device_known) (void)cudaSetDevice(device_id);
     if (prepared != nullptr) {
       prepared.reset();
     }
@@ -1589,6 +1712,7 @@ struct Gfn2CudaExecutionCache::Impl {
     if (blas != nullptr) (void)cublasDestroy(blas);
     if (solver_parameters != nullptr) (void)cusolverDnDestroyParams(solver_parameters);
     if (solver != nullptr) (void)cusolverDnDestroy(solver);
+    if (restore_caller_device) (void)cudaSetDevice(caller_device);
   }
 
   gpuxtb_status_t ensure_handles(std::string& error) {
@@ -3704,80 +3828,258 @@ struct Gfn2CudaExecutionCache::Impl {
     return GPUXTB_STATUS_SUCCESS;
   }
 
-  gpuxtb_status_t validate_energy_force_smoke(Prepared& candidate, std::string& error) {
-    const auto& binding = candidate.energy_force;
+  gpuxtb_status_t build_public_result_state(Prepared& candidate, std::string& error) {
     const std::int64_t batch = candidate.host.basis.batch_size;
-    std::vector<std::uint32_t> system_errors(static_cast<std::size_t>(batch));
-    std::uint32_t device_error = 0u;
-    std::uint32_t plan_failure = 0u;
-    std::vector<double> energies(static_cast<std::size_t>(batch));
-    std::vector<double> qm_forces;
-    std::vector<double> point_forces;
-    if (binding.plan.compute_forces == 1u) {
-      qm_forces.resize(static_cast<std::size_t>(binding.results.forces.qm_force_elements));
-      point_forces.resize(static_cast<std::size_t>(binding.results.forces.point_force_elements));
+    const std::int64_t atoms = candidate.host.basis.total_atoms;
+    const std::int64_t points = candidate.host.external.total_point_charges;
+    const std::uint32_t requested = candidate.host.key.flags;
+    std::int64_t coordinates = 0;
+    std::int64_t point_coordinates = 0;
+    if (!checked_elements(atoms, 3, coordinates) ||
+        !checked_elements(points, 3, point_coordinates)) {
+      error = "public CUDA result staging extent overflows int64_t";
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
     }
+    const bool energy_requested =
+        (requested & static_cast<std::uint32_t>(GPUXTB_COMPUTE_ENERGY)) != 0u;
+    const bool force_requested =
+        (requested & static_cast<std::uint32_t>(GPUXTB_COMPUTE_FORCES)) != 0u;
+    const bool charges_requested =
+        (requested & static_cast<std::uint32_t>(GPUXTB_COMPUTE_ATOMIC_CHARGES)) != 0u;
+    const bool point_forces_requested =
+        (requested & static_cast<std::uint32_t>(GPUXTB_COMPUTE_POINT_CHARGE_FORCES)) != 0u;
 
+    struct HostOffsets {
+      std::size_t energies = 0u;
+      std::size_t qm_forces = 0u;
+      std::size_t atomic_charges = 0u;
+      std::size_t point_forces = 0u;
+      std::size_t iterations = 0u;
+      std::size_t converged = 0u;
+      std::size_t system_statuses = 0u;
+      std::size_t control = 0u;
+    } offset;
+    ArenaLayout host_layout;
+    offset.energies = host_layout.append<double>(energy_requested ? batch : 0);
+    offset.qm_forces = host_layout.append<double>(force_requested ? coordinates : 0);
+    offset.atomic_charges = host_layout.append<double>(charges_requested ? atoms : 0);
+    offset.point_forces =
+        host_layout.append<double>(point_forces_requested ? point_coordinates : 0);
+    offset.iterations = host_layout.append<std::int32_t>(batch);
+    offset.converged = host_layout.append<std::uint8_t>(batch);
+    offset.system_statuses = host_layout.append<gpuxtb_status_t>(batch);
+    offset.control = host_layout.append<Gfn2PublicResultBridgeControl>(1);
+    if (!host_layout.valid()) {
+      error = "public CUDA result host-staging layout overflows size_t";
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
     cudaError_t cuda_status =
-        cudaMemcpy(system_errors.data(), binding.diagnostics.execution_system_errors,
-                   system_errors.size() * sizeof(std::uint32_t), cudaMemcpyDeviceToHost);
+        candidate.public_result_host_arena.allocate(host_layout.bytes());
     if (cuda_status == cudaSuccess) {
-      cuda_status = cudaMemcpy(&device_error, binding.diagnostics.execution_device_error,
-                               sizeof(device_error), cudaMemcpyDeviceToHost);
-    }
-    if (cuda_status == cudaSuccess) {
-      cuda_status = cudaMemcpy(&plan_failure, binding.workspace.plan_failure, sizeof(plan_failure),
-                               cudaMemcpyDeviceToHost);
+      cuda_status = candidate.public_result_device_arena.allocate(
+          sizeof(Gfn2PublicResultBridgeControl));
     }
     if (cuda_status == cudaSuccess) {
-      cuda_status = cudaMemcpy(energies.data(), binding.results.energy.total_energy,
-                               energies.size() * sizeof(double), cudaMemcpyDeviceToHost);
-    }
-    if (cuda_status == cudaSuccess && !qm_forces.empty()) {
-      cuda_status = cudaMemcpy(qm_forces.data(), binding.results.forces.qm_forces,
-                               qm_forces.size() * sizeof(double), cudaMemcpyDeviceToHost);
-    }
-    if (cuda_status == cudaSuccess && !point_forces.empty()) {
-      cuda_status = cudaMemcpy(point_forces.data(), binding.results.forces.point_forces,
-                               point_forces.size() * sizeof(double), cudaMemcpyDeviceToHost);
+      cuda_status = candidate.public_result_completion_event.create(cudaEventDisableTiming);
     }
     if (cuda_status != cudaSuccess) {
-      error = cuda_error_message("CUDA energy/force smoke download", cuda_status);
+      error = cuda_error_message("CUDA public result staging allocation", cuda_status);
+      return cuda_status == cudaErrorMemoryAllocation ? GPUXTB_STATUS_ALLOCATION_FAILED
+                                                       : GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    cuda_status = cudaMemsetAsync(candidate.public_result_device_arena.get(), 0,
+                                  candidate.public_result_device_arena.bytes(), stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA public result control initialization", cuda_status);
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
+    candidate.submitted = true;
 
-    const auto first_system_error = std::find_if(system_errors.begin(), system_errors.end(),
-                                                 [](std::uint32_t value) { return value != 0u; });
-    if (device_error != 0u || plan_failure != 0u || first_system_error != system_errors.end()) {
+    void* const host_arena = candidate.public_result_host_arena.get();
+    auto& state = candidate.public_result;
+    state = {};
+    state.energies = arena_pointer_if<double>(host_arena, offset.energies,
+                                               energy_requested ? batch : 0);
+    state.qm_forces = arena_pointer_if<double>(host_arena, offset.qm_forces,
+                                                force_requested ? coordinates : 0);
+    state.atomic_charges = arena_pointer_if<double>(host_arena, offset.atomic_charges,
+                                                     charges_requested ? atoms : 0);
+    state.point_forces = arena_pointer_if<double>(
+        host_arena, offset.point_forces, point_forces_requested ? point_coordinates : 0);
+    state.iterations = arena_pointer<std::int32_t>(host_arena, offset.iterations);
+    state.converged = arena_pointer<std::uint8_t>(host_arena, offset.converged);
+    state.system_statuses =
+        arena_pointer<gpuxtb_status_t>(host_arena, offset.system_statuses);
+    state.host_control =
+        arena_pointer<Gfn2PublicResultBridgeControl>(host_arena, offset.control);
+    state.diagnostics = {
+        static_cast<Gfn2PublicResultBridgeControl*>(candidate.public_result_device_arena.get()),
+        1,
+        candidate.host.plan_token,
+    };
+    state.ready = true;
+    return GPUXTB_STATUS_SUCCESS;
+  }
+
+  gpuxtb_status_t validate_candidate_setup(Prepared& candidate, std::string& error) {
+    const auto& binding = candidate.energy_force;
+    const std::int64_t batch = candidate.host.basis.batch_size;
+    const std::int64_t setup_systems =
+        candidate.eigensolver_binding.setup_system_error_elements;
+    const std::int64_t factor_statuses = candidate.eigensolver_binding.cache.status_elements;
+    const std::int64_t qm_force_elements =
+        binding.plan.compute_forces == 1u ? binding.results.forces.qm_force_elements : 0;
+    const std::int64_t point_force_elements =
+        binding.plan.compute_forces == 1u ? binding.results.forces.point_force_elements : 0;
+    struct Offsets {
+      std::size_t setup_device_error = 0u;
+      std::size_t setup_system_errors = 0u;
+      std::size_t factor_statuses = 0u;
+      std::size_t execution_system_errors = 0u;
+      std::size_t execution_device_error = 0u;
+      std::size_t plan_failure = 0u;
+      std::size_t energies = 0u;
+      std::size_t qm_forces = 0u;
+      std::size_t point_forces = 0u;
+      std::size_t converged = 0u;
+    } offset;
+    ArenaLayout layout;
+    offset.setup_device_error = layout.append<std::uint32_t>(1);
+    offset.setup_system_errors = layout.append<std::uint32_t>(setup_systems);
+    offset.factor_statuses = layout.append<std::uint32_t>(factor_statuses);
+    offset.execution_system_errors = layout.append<std::uint32_t>(batch);
+    offset.execution_device_error = layout.append<std::uint32_t>(1);
+    offset.plan_failure = layout.append<std::uint32_t>(1);
+    offset.energies = layout.append<double>(batch);
+    offset.qm_forces = layout.append<double>(qm_force_elements);
+    offset.point_forces = layout.append<double>(point_force_elements);
+    offset.converged = layout.append<std::uint8_t>(batch);
+    if (!layout.valid()) {
+      error = "CUDA candidate validation staging layout overflows size_t";
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
+    cudaError_t cuda_status = candidate.candidate_validation_arena.allocate(layout.bytes());
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA candidate validation staging allocation", cuda_status);
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
+    void* const arena = candidate.candidate_validation_arena.get();
+    auto* const setup_device_error =
+        arena_pointer<std::uint32_t>(arena, offset.setup_device_error);
+    auto* const setup_system_errors =
+        arena_pointer_if<std::uint32_t>(arena, offset.setup_system_errors, setup_systems);
+    auto* const factor_status_values =
+        arena_pointer_if<std::uint32_t>(arena, offset.factor_statuses, factor_statuses);
+    auto* const execution_system_errors =
+        arena_pointer<std::uint32_t>(arena, offset.execution_system_errors);
+    auto* const execution_device_error =
+        arena_pointer<std::uint32_t>(arena, offset.execution_device_error);
+    auto* const plan_failure = arena_pointer<std::uint32_t>(arena, offset.plan_failure);
+    auto* const energies = arena_pointer<double>(arena, offset.energies);
+    auto* const qm_forces =
+        arena_pointer_if<double>(arena, offset.qm_forces, qm_force_elements);
+    auto* const point_forces =
+        arena_pointer_if<double>(arena, offset.point_forces, point_force_elements);
+    auto* const converged = arena_pointer<std::uint8_t>(arena, offset.converged);
+    const auto enqueue = [&](void* destination, const void* source, std::int64_t elements,
+                             std::size_t element_size) {
+      return elements == 0
+                 ? cudaSuccess
+                 : cudaMemcpyAsync(destination, source,
+                                   static_cast<std::size_t>(elements) * element_size,
+                                   cudaMemcpyDeviceToHost, stream);
+    };
+    cuda_status = enqueue(setup_device_error, candidate.eigensolver_binding.setup_device_error, 1,
+                          sizeof(std::uint32_t));
+    if (cuda_status == cudaSuccess) {
+      cuda_status = enqueue(setup_system_errors,
+                            candidate.eigensolver_binding.setup_system_errors, setup_systems,
+                            sizeof(std::uint32_t));
+    }
+    if (cuda_status == cudaSuccess) {
+      cuda_status = enqueue(factor_status_values,
+                            candidate.eigensolver_binding.cache.factor_statuses, factor_statuses,
+                            sizeof(std::uint32_t));
+    }
+    if (cuda_status == cudaSuccess) {
+      cuda_status = enqueue(execution_system_errors,
+                            binding.diagnostics.execution_system_errors, batch,
+                            sizeof(std::uint32_t));
+    }
+    if (cuda_status == cudaSuccess) {
+      cuda_status = enqueue(execution_device_error,
+                            binding.diagnostics.execution_device_error, 1,
+                            sizeof(std::uint32_t));
+    }
+    if (cuda_status == cudaSuccess) {
+      cuda_status = enqueue(plan_failure, binding.workspace.plan_failure, 1,
+                            sizeof(std::uint32_t));
+    }
+    if (cuda_status == cudaSuccess) {
+      cuda_status = enqueue(energies, binding.results.energy.total_energy, batch, sizeof(double));
+    }
+    if (cuda_status == cudaSuccess) {
+      cuda_status = enqueue(qm_forces, binding.results.forces.qm_forces, qm_force_elements,
+                            sizeof(double));
+    }
+    if (cuda_status == cudaSuccess) {
+      cuda_status = enqueue(point_forces, binding.results.forces.point_forces,
+                            point_force_elements, sizeof(double));
+    }
+    if (cuda_status == cudaSuccess) {
+      cuda_status = enqueue(converged, candidate.state_seed.scc.converged, batch,
+                            sizeof(std::uint8_t));
+    }
+    if (cuda_status == cudaSuccess) {
+      cuda_status = cudaEventRecord(candidate.public_result_completion_event.get(), stream);
+    }
+    if (cuda_status == cudaSuccess) {
+      cuda_status = cudaEventSynchronize(candidate.public_result_completion_event.get());
+    }
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA candidate validation completion", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    candidate.submitted = false;
+
+    const auto any_nonzero = [](const std::uint32_t* values, std::int64_t elements) {
+      return elements != 0 &&
+             std::any_of(values, values + elements,
+                         [](std::uint32_t value) { return value != 0u; });
+    };
+    if (*setup_device_error != 0u || any_nonzero(setup_system_errors, setup_systems) ||
+        any_nonzero(factor_status_values, factor_statuses)) {
+      error = "CUDA eigensolver setup reported an asynchronous factorization failure";
+      return GPUXTB_STATUS_EIGENSOLVER_FAILED;
+    }
+
+    const auto first_system_error = std::find_if(
+        execution_system_errors, execution_system_errors + batch,
+        [](std::uint32_t value) { return value != 0u; });
+    if (*execution_device_error != 0u || *plan_failure != 0u ||
+        first_system_error != execution_system_errors + batch) {
       std::ostringstream message;
-      message << "CUDA energy/force smoke reported device_error=" << device_error
-              << " plan_failure=" << plan_failure;
-      if (first_system_error != system_errors.end()) {
-        message << " system=" << std::distance(system_errors.begin(), first_system_error)
+      message << "CUDA energy/force smoke reported device_error=" << *execution_device_error
+              << " plan_failure=" << *plan_failure;
+      if (first_system_error != execution_system_errors + batch) {
+        message << " system=" << std::distance(execution_system_errors, first_system_error)
                 << " system_error=" << *first_system_error;
       }
       error = message.str();
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
-    const auto all_finite = [](const std::vector<double>& values) {
-      return std::all_of(values.begin(), values.end(),
+    const auto all_finite = [](const double* values, std::int64_t elements) {
+      return elements == 0 ||
+             std::all_of(values, values + elements,
                          [](double value) { return std::isfinite(value); });
     };
-    if (!all_finite(energies) || !all_finite(qm_forces) || !all_finite(point_forces)) {
+    if (!all_finite(energies, batch) || !all_finite(qm_forces, qm_force_elements) ||
+        !all_finite(point_forces, point_force_elements)) {
       error = "CUDA energy/force smoke did not publish every requested output";
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
 
-    /* upload_async above restores the complete fresh checkpoint. Verify the
-     * public convergence byte as the minimal externally meaningful witness. */
-    std::vector<std::uint8_t> converged(static_cast<std::size_t>(batch), 1u);
-    cuda_status = cudaMemcpy(converged.data(), candidate.state_seed.scc.converged,
-                             converged.size() * sizeof(std::uint8_t), cudaMemcpyDeviceToHost);
-    if (cuda_status != cudaSuccess) {
-      error = cuda_error_message("CUDA restored SCC-state download", cuda_status);
-      return GPUXTB_STATUS_INTERNAL_ERROR;
-    }
-    if (std::any_of(converged.begin(), converged.end(),
+    if (std::any_of(converged, converged + batch,
                     [](std::uint8_t value) { return value != 0u; })) {
       error = "CUDA energy/force smoke failed to restore the fresh SCC state";
       return GPUXTB_STATUS_INTERNAL_ERROR;
@@ -3957,55 +4259,144 @@ struct Gfn2CudaExecutionCache::Impl {
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = build_inference_bindings(*candidate, error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
-
-    cuda_status = cudaStreamSynchronize(stream);
-    if (cuda_status != cudaSuccess) {
-      error = cuda_error_message("CUDA runtime candidate setup synchronization", cuda_status);
-      return GPUXTB_STATUS_INTERNAL_ERROR;
-    }
-    std::uint32_t setup_device_error = 0u;
-    std::vector<std::uint32_t> setup_system_errors(
-        static_cast<std::size_t>(candidate->eigensolver_binding.setup_system_error_elements));
-    std::vector<std::uint32_t> factor_statuses(
-        static_cast<std::size_t>(candidate->eigensolver_binding.cache.status_elements));
-    cuda_status = cudaMemcpy(&setup_device_error, candidate->eigensolver_binding.setup_device_error,
-                             sizeof(setup_device_error), cudaMemcpyDeviceToHost);
-    if (cuda_status == cudaSuccess && !setup_system_errors.empty()) {
-      cuda_status =
-          cudaMemcpy(setup_system_errors.data(), candidate->eigensolver_binding.setup_system_errors,
-                     setup_system_errors.size() * sizeof(std::uint32_t), cudaMemcpyDeviceToHost);
-    }
-    if (cuda_status == cudaSuccess && !factor_statuses.empty()) {
-      cuda_status =
-          cudaMemcpy(factor_statuses.data(), candidate->eigensolver_binding.cache.factor_statuses,
-                     factor_statuses.size() * sizeof(std::uint32_t), cudaMemcpyDeviceToHost);
-    }
-    if (cuda_status != cudaSuccess) {
-      error = cuda_error_message("CUDA eigensolver setup diagnostics download", cuda_status);
-      return GPUXTB_STATUS_INTERNAL_ERROR;
-    }
-    if (setup_device_error != 0u ||
-        std::any_of(setup_system_errors.begin(), setup_system_errors.end(),
-                    [](std::uint32_t value) { return value != 0u; }) ||
-        std::any_of(factor_statuses.begin(), factor_statuses.end(),
-                    [](std::uint32_t value) { return value != 0u; })) {
-      error = "CUDA eigensolver setup reported an asynchronous factorization failure";
-      return GPUXTB_STATUS_EIGENSOLVER_FAILED;
-    }
-    status = validate_energy_force_smoke(*candidate, error);
+    status = build_public_result_state(*candidate, error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
-    candidate->submitted = false;
+
+    status = validate_candidate_setup(*candidate, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
     output = std::move(candidate);
     return GPUXTB_STATUS_SUCCESS;
   }
 
-  gpuxtb_status_t refresh_numerical_locked(const Gfn2CudaNumericalInputView& input,
+  gpuxtb_status_t validate_public_request_pointers(const gpuxtb_batch_t& batch,
+                                                   const gpuxtb_compute_options_t& options,
+                                                   const gpuxtb_batch_result_t& result,
+                                                   std::string& error) {
+    std::int64_t coordinates = 0;
+    std::int64_t point_coordinates = 0;
+    if (!checked_elements(batch.total_atoms, 3, coordinates) ||
+        !checked_elements(batch.total_point_charges, 3, point_coordinates)) {
+      error = "CUDA public descriptor coordinate extent overflows int64_t";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    const bool point_topology_active =
+        batch.total_point_charges != 0 || batch.point_charge_offsets.data != nullptr ||
+        batch.point_charge_offsets.size_bytes != 0u;
+    const bool shift_active = batch.atomic_potential_shifts.data != nullptr ||
+                              batch.atomic_potential_shifts.size_bytes != 0u;
+    const bool response_active =
+        batch.total_charge_response_elements != 0 ||
+        batch.charge_response_offsets.data != nullptr ||
+        batch.charge_response_offsets.size_bytes != 0u ||
+        batch.charge_response_matrix.data != nullptr ||
+        batch.charge_response_matrix.size_bytes != 0u;
+    CudaValidatedConstBuffer validated_const{};
+    CudaValidatedBuffer validated_output{};
+    const auto validate_const = [&](const char* name, const gpuxtb_const_buffer_t& buffer,
+                                    std::int64_t elements, std::size_t element_size,
+                                    std::size_t alignment) -> gpuxtb_status_t {
+      std::size_t bytes = 0u;
+      if (!checked_bytes(elements, element_size, bytes)) {
+        error = std::string(name) + " extent overflows size_t";
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
+      return validate_cuda_const_buffer(device_id, name, buffer, bytes, alignment,
+                                        CudaManagedMemoryPolicy::kReject, validated_const, error);
+    };
+    const auto validate_output = [&](const char* name, const gpuxtb_buffer_t& buffer,
+                                     std::int64_t elements, std::size_t element_size,
+                                     std::size_t alignment) -> gpuxtb_status_t {
+      std::size_t bytes = 0u;
+      if (!checked_bytes(elements, element_size, bytes)) {
+        error = std::string(name) + " extent overflows size_t";
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
+      return validate_cuda_buffer(device_id, name, buffer, bytes, alignment,
+                                  CudaManagedMemoryPolicy::kReject, validated_output, error);
+    };
+
+    gpuxtb_status_t status = validate_const("atom_offsets", batch.atom_offsets,
+                                            batch.batch_size + 1, sizeof(std::int64_t),
+                                            alignof(std::int64_t));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_const("atomic_numbers", batch.atomic_numbers, batch.total_atoms,
+                            sizeof(std::int32_t), alignof(std::int32_t));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_const("positions", batch.positions, coordinates, sizeof(double),
+                            alignof(double));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_const("molecular_charges", batch.molecular_charges, batch.batch_size,
+                            sizeof(double), alignof(double));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_const("unpaired_electrons", batch.unpaired_electrons, batch.batch_size,
+                            sizeof(std::int32_t), alignof(std::int32_t));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_const("point_charge_offsets", batch.point_charge_offsets,
+                            point_topology_active ? batch.batch_size + 1 : 0,
+                            sizeof(std::int64_t), alignof(std::int64_t));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_const("point_charge_positions", batch.point_charge_positions,
+                            point_coordinates, sizeof(double), alignof(double));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_const("point_charge_values", batch.point_charge_values,
+                            batch.total_point_charges, sizeof(double), alignof(double));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_const("point_charge_gammas", batch.point_charge_gammas,
+                            batch.total_point_charges, sizeof(double), alignof(double));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_const("atomic_potential_shifts", batch.atomic_potential_shifts,
+                            shift_active ? batch.total_atoms : 0, sizeof(double), alignof(double));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_const("charge_response_offsets", batch.charge_response_offsets,
+                            response_active ? batch.batch_size + 1 : 0, sizeof(std::int64_t),
+                            alignof(std::int64_t));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_const("charge_response_matrix", batch.charge_response_matrix,
+                            response_active ? batch.total_charge_response_elements : 0,
+                            sizeof(double), alignof(double));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+
+    const bool energy_requested =
+        (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_ENERGY)) != 0u;
+    const bool force_requested =
+        (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_FORCES)) != 0u;
+    const bool charges_requested =
+        (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_ATOMIC_CHARGES)) != 0u;
+    const bool point_forces_requested =
+        (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_POINT_CHARGE_FORCES)) != 0u;
+    status = validate_output("energies", result.energies,
+                             energy_requested ? batch.batch_size : 0, sizeof(double),
+                             alignof(double));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_output("forces", result.forces,
+                             force_requested ? coordinates : 0, sizeof(double),
+                             alignof(double));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_output("atomic_charges", result.atomic_charges,
+                             charges_requested ? batch.total_atoms : 0, sizeof(double),
+                             alignof(double));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_output("point_charge_forces", result.point_charge_forces,
+                             point_forces_requested ? point_coordinates : 0,
+                             sizeof(double), alignof(double));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_output("scc_iterations", result.scc_iterations, batch.batch_size,
+                             sizeof(std::int32_t), alignof(std::int32_t));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = validate_output("scc_converged", result.scc_converged, batch.batch_size,
+                             sizeof(std::uint8_t), alignof(std::uint8_t));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    return validate_output("per_system_status", result.per_system_status, batch.batch_size,
+                           sizeof(gpuxtb_status_t), alignof(gpuxtb_status_t));
+  }
+
+  gpuxtb_status_t refresh_numerical_locked(Prepared& current,
+                                           const Gfn2CudaNumericalInputView& input,
                                            std::string& error) {
-    if (prepared == nullptr || !prepared->numerical.ready) {
+    if (!current.numerical.ready) {
       error = "CUDA GFN2 numerical refresh requires a prepared fixed topology";
       return GPUXTB_STATUS_INVALID_ARGUMENT;
     }
-    Prepared& current = *prepared;
     auto& numerical = current.numerical;
     auto& device = numerical.device;
     auto& preprocessing = numerical.preprocessing;
@@ -4020,7 +4411,8 @@ struct Gfn2CudaExecutionCache::Impl {
      * flight after the caller is told that the refresh did not start. */
     const auto validate_source = [&](const char* name, const gpuxtb_const_buffer_t& buffer,
                                      std::int64_t elements, const double* device_stage,
-                                     const double* owned_host_stage) -> gpuxtb_status_t {
+                                     const double* owned_host_stage,
+                                     bool allow_absent_zero = false) -> gpuxtb_status_t {
       std::size_t bytes = 0u;
       if (!checked_bytes(elements, sizeof(double), bytes)) {
         error = std::string(name) + " extent overflows size_t";
@@ -4028,9 +4420,17 @@ struct Gfn2CudaExecutionCache::Impl {
       }
       const bool supported_space = buffer.memory_space == GPUXTB_MEMORY_HOST ||
                                    buffer.memory_space == GPUXTB_MEMORY_CUDA_DEVICE;
+      const bool absent = buffer.data == nullptr && buffer.size_bytes == 0u;
       if (elements == 0) {
         if (buffer.reserved != 0u || !supported_space) {
           error = std::string(name) + " has malformed empty-buffer metadata";
+          return GPUXTB_STATUS_INVALID_ARGUMENT;
+        }
+        return GPUXTB_STATUS_SUCCESS;
+      }
+      if (allow_absent_zero && absent) {
+        if (buffer.reserved != 0u || !supported_space || device_stage == nullptr) {
+          error = std::string(name) + " has malformed absent-buffer metadata";
           return GPUXTB_STATUS_INVALID_ARGUMENT;
         }
         return GPUXTB_STATUS_SUCCESS;
@@ -4067,12 +4467,12 @@ struct Gfn2CudaExecutionCache::Impl {
     status = validate_source("atomic_potential_shifts", input.atomic_potential_shifts,
                              device.periodic_enabled != 0u ? device.total_atoms : 0,
                              numerical.host_periodic_shifts,
-                             numerical.owned_host_periodic_shifts);
+                             numerical.owned_host_periodic_shifts, true);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = validate_source("charge_response_matrix", input.charge_response_matrix,
                              device.periodic_enabled != 0u ? device.total_response_elements : 0,
                              numerical.host_periodic_response,
-                             numerical.owned_host_periodic_response);
+                             numerical.owned_host_periodic_response, true);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
 
     std::size_t mask_bytes = 0u;
@@ -4095,7 +4495,8 @@ struct Gfn2CudaExecutionCache::Impl {
 
     const auto is_host_source = [](const gpuxtb_const_buffer_t& buffer,
                                    std::int64_t elements) noexcept {
-      return elements != 0 && buffer.memory_space == GPUXTB_MEMORY_HOST;
+      return elements != 0 && buffer.data != nullptr &&
+             buffer.memory_space == GPUXTB_MEMORY_HOST;
     };
     const bool uses_host_staging =
         is_host_source(input.positions, device.total_atoms * 3) ||
@@ -4132,7 +4533,7 @@ struct Gfn2CudaExecutionCache::Impl {
     const auto copy_to_owned_host = [&](const char* name, const gpuxtb_const_buffer_t& buffer,
                                         std::int64_t elements,
                                         double* destination) -> gpuxtb_status_t {
-      if (elements == 0 || buffer.memory_space != GPUXTB_MEMORY_HOST) {
+      if (elements == 0 || buffer.data == nullptr || buffer.memory_space != GPUXTB_MEMORY_HOST) {
         return GPUXTB_STATUS_SUCCESS;
       }
       std::size_t bytes = 0u;
@@ -4199,7 +4600,8 @@ struct Gfn2CudaExecutionCache::Impl {
     const auto resolve_validated = [&](const char* name, const gpuxtb_const_buffer_t& buffer,
                                        std::int64_t elements, double* device_stage,
                                        const double* owned_host_stage,
-                                       const double*& source) -> gpuxtb_status_t {
+                                       const double*& source,
+                                       bool allow_absent_zero = false) -> gpuxtb_status_t {
       if (elements == 0) {
         source = nullptr;
         return GPUXTB_STATUS_SUCCESS;
@@ -4208,6 +4610,16 @@ struct Gfn2CudaExecutionCache::Impl {
       if (!checked_bytes(elements, sizeof(double), bytes)) {
         error = std::string(name) + " extent changed after validation";
         return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      if (allow_absent_zero && buffer.data == nullptr && buffer.size_bytes == 0u) {
+        cuda_status = cudaMemsetAsync(device_stage, 0, bytes, stream);
+        if (cuda_status != cudaSuccess) {
+          error = cuda_error_message(name, cuda_status);
+          return GPUXTB_STATUS_INTERNAL_ERROR;
+        }
+        current.submitted = true;
+        source = device_stage;
+        return GPUXTB_STATUS_SUCCESS;
       }
       if (buffer.memory_space == GPUXTB_MEMORY_HOST) {
         cuda_status = cudaMemcpyAsync(device_stage, owned_host_stage, bytes,
@@ -4249,13 +4661,14 @@ struct Gfn2CudaExecutionCache::Impl {
     status = resolve_validated("atomic_potential_shifts", input.atomic_potential_shifts,
                                device.periodic_enabled != 0u ? device.total_atoms : 0,
                                numerical.host_periodic_shifts,
-                               numerical.owned_host_periodic_shifts, sources.periodic_shifts);
+                               numerical.owned_host_periodic_shifts, sources.periodic_shifts,
+                               true);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = resolve_validated("charge_response_matrix", input.charge_response_matrix,
                                device.periodic_enabled != 0u ? device.total_response_elements : 0,
                                numerical.host_periodic_response,
                                numerical.owned_host_periodic_response,
-                               sources.periodic_response);
+                               sources.periodic_response, true);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
 
     if (absent_mask) {
@@ -4390,8 +4803,9 @@ struct Gfn2CudaExecutionCache::Impl {
     return GPUXTB_STATUS_SUCCESS;
   }
 
-  gpuxtb_status_t execute_inference_locked(Gfn2CudaSccStartMode mode, std::string& error) {
-    if (prepared == nullptr || !prepared->inference.ready || !prepared->numerical.ready) {
+  gpuxtb_status_t execute_inference_locked(Prepared& current, Gfn2CudaSccStartMode mode,
+                                           std::string& error) {
+    if (!current.inference.ready || !current.numerical.ready) {
       error = "CUDA GFN2 inference requires a prepared numerical/runtime binding";
       return GPUXTB_STATUS_INVALID_ARGUMENT;
     }
@@ -4399,7 +4813,6 @@ struct Gfn2CudaExecutionCache::Impl {
       error = "CUDA GFN2 inference received an unknown SCC start mode";
       return GPUXTB_STATUS_INVALID_ARGUMENT;
     }
-    Prepared& current = *prepared;
     auto& inference = current.inference;
     if (mode == Gfn2CudaSccStartMode::kWarm && !inference.warm_checkpoint_ready) {
       error = "CUDA GFN2 warm inference requires a previously submitted checkpoint";
@@ -4528,6 +4941,220 @@ struct Gfn2CudaExecutionCache::Impl {
     }
 
     inference.warm_checkpoint_ready = true;
+    error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  }
+
+  /*
+   * A synchronous public call must not return while either the owner stream
+   * can still read caller CUDA pointers or the private host-upload callback
+   * can still access Prepared-owned lease state.  Failure paths use the same
+   * disable-timing event as successful publication and fall back to an exact
+   * owner-stream fence if recording that event itself fails.
+   */
+  gpuxtb_status_t settle_public_submissions_locked(Prepared& current,
+                                                   gpuxtb_status_t primary_status,
+                                                   std::string& error) {
+    cudaError_t owner_status = cudaSuccess;
+    if (current.submitted) {
+      owner_status = cudaEventRecord(current.public_result_completion_event.get(), stream);
+      if (owner_status == cudaSuccess) {
+        owner_status = cudaEventSynchronize(current.public_result_completion_event.get());
+      }
+      if (owner_status != cudaSuccess) {
+        const cudaError_t fallback_status = cudaStreamSynchronize(stream);
+        if (fallback_status == cudaSuccess) owner_status = cudaSuccess;
+      }
+      if (owner_status == cudaSuccess) current.submitted = false;
+    }
+
+    cudaError_t host_status = cudaSuccess;
+    if (current.numerical_host_completion_stream.valid()) {
+      host_status = cudaStreamSynchronize(current.numerical_host_completion_stream.get());
+      if (host_status == cudaSuccess) {
+        /* The stream fence is after the release callback, so this store cannot
+         * race a previous lease generation or clear a future one. */
+        current.numerical_host_upload_completion.pending.store(false,
+                                                                std::memory_order_release);
+      } else {
+        current.numerical.host_staging_poisoned = true;
+      }
+    }
+    if (owner_status == cudaSuccess && host_status == cudaSuccess) return primary_status;
+
+    std::ostringstream message;
+    if (!error.empty()) message << error << "; additionally, ";
+    message << "CUDA public transaction settlement failed";
+    if (owner_status != cudaSuccess) {
+      message << " owner_stream=" << cudaGetErrorString(owner_status);
+    }
+    if (host_status != cudaSuccess) {
+      message << " host_completion_stream=" << cudaGetErrorString(host_status);
+    }
+    error = message.str();
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+
+  gpuxtb_status_t publish_public_results_locked(Prepared& current, const gpuxtb_batch_t& batch,
+                                                const gpuxtb_compute_options_t& options,
+                                                gpuxtb_batch_result_t& result,
+                                                std::string& error) {
+    if (!current.public_result.ready || !current.inference.ready ||
+        current.public_result_completion_event.get() == nullptr) {
+      error = "CUDA public result bridge requires a complete prepared runtime";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    const std::int64_t batch_size = current.host.basis.batch_size;
+    const std::int64_t atoms = current.host.basis.total_atoms;
+    const std::int64_t points = current.host.external.total_point_charges;
+    std::int64_t coordinates = 0;
+    std::int64_t point_coordinates = 0;
+    if (!checked_elements(atoms, 3, coordinates) ||
+        !checked_elements(points, 3, point_coordinates)) {
+      error = "CUDA public result extent overflows int64_t";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    const std::uint64_t token = current.host.plan_token;
+    const bool external_operator = batch.atomic_potential_shifts.data != nullptr ||
+                                   batch.atomic_potential_shifts.size_bytes != 0u ||
+                                   batch.charge_response_matrix.data != nullptr ||
+                                   batch.charge_response_matrix.size_bytes != 0u;
+    const std::uint32_t result_flags =
+        external_operator
+            ? static_cast<std::uint32_t>(
+                  GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES)
+            : 0u;
+    const Gfn2PublicResultBridgeDevicePlan plan{
+        kGfn2PublicResultBridgeAbiVersion,
+        options.flags,
+        result_flags,
+        0u,
+        token,
+        batch_size,
+        atoms,
+        points,
+    };
+    const auto& inference = current.inference;
+    const Gfn2PublicResultBridgeDeviceInput input{
+        inference.publication_results.energies,
+        inference.publication_results.energy_elements,
+        inference.publication_results.qm_forces,
+        inference.publication_results.qm_force_elements,
+        inference.publication_results.atomic_charges,
+        inference.publication_results.atomic_charge_elements,
+        inference.publication_results.point_forces,
+        inference.publication_results.point_force_elements,
+        inference.publication_results.iterations,
+        inference.publication_results.converged,
+        inference.publication_results.system_statuses,
+        inference.publication_results.batch_elements,
+        inference.publication_diagnostics.plan_error,
+        inference.publication_workspace.epoch_snapshot,
+        current.numerical.preprocessing.geometry_epoch.value,
+        token,
+    };
+
+    Gfn2PublicResultBridgeDeviceDestinations destinations{};
+    Gfn2PublicResultBridgeHostStaging staging{};
+    const auto bind = [](const gpuxtb_buffer_t& output, std::int64_t elements, void* host_stage,
+                         Gfn2PublicResultBridgeDestination& destination,
+                         Gfn2PublicResultBridgeHostBuffer& host) {
+      if (elements == 0) {
+        destination = {};
+        host = {};
+        return;
+      }
+      const bool host_route = output.memory_space == GPUXTB_MEMORY_HOST;
+      destination.route = host_route ? Gfn2PublicResultRoute::kHost
+                                     : Gfn2PublicResultRoute::kCudaDevice;
+      destination.device_data = host_route ? nullptr : output.data;
+      destination.elements = elements;
+      host.data = host_route ? host_stage : nullptr;
+      host.elements = host_route ? elements : 0;
+    };
+    const bool energy_requested =
+        (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_ENERGY)) != 0u;
+    const bool force_requested =
+        (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_FORCES)) != 0u;
+    const bool charges_requested =
+        (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_ATOMIC_CHARGES)) != 0u;
+    const bool point_forces_requested =
+        (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_POINT_CHARGE_FORCES)) != 0u;
+    auto& public_state = current.public_result;
+    bind(result.energies, energy_requested ? batch_size : 0, public_state.energies,
+         destinations.energies, staging.energies);
+    bind(result.forces, force_requested ? coordinates : 0, public_state.qm_forces,
+         destinations.qm_forces, staging.qm_forces);
+    bind(result.atomic_charges, charges_requested ? atoms : 0, public_state.atomic_charges,
+         destinations.atomic_charges, staging.atomic_charges);
+    bind(result.point_charge_forces, point_forces_requested ? point_coordinates : 0,
+         public_state.point_forces, destinations.point_forces, staging.point_forces);
+    bind(result.scc_iterations, batch_size, public_state.iterations, destinations.iterations,
+         staging.iterations);
+    bind(result.scc_converged, batch_size, public_state.converged, destinations.converged,
+         staging.converged);
+    bind(result.per_system_status, batch_size, public_state.system_statuses,
+         destinations.system_statuses, staging.system_statuses);
+    destinations.plan_token = token;
+    staging.control = public_state.host_control;
+    staging.control_elements = 1;
+    staging.pending_result_flags = &public_state.pending_result_flags;
+    staging.plan_token = token;
+
+    cudaError_t cuda_status = bridge_gfn2_public_results_cuda(
+        plan, input, destinations, staging, public_state.diagnostics, stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA public result bridge submission", cuda_status);
+      return cuda_status == cudaErrorInvalidValue ? GPUXTB_STATUS_INVALID_ARGUMENT
+                                                  : GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    cuda_status = cudaEventRecord(current.public_result_completion_event.get(), stream);
+    if (cuda_status == cudaSuccess) {
+      cuda_status = cudaEventSynchronize(current.public_result_completion_event.get());
+    }
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA public inference completion", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    current.submitted = false;
+    const auto aggregate = static_cast<Gfn2PublicResultBridgeError>(
+        public_state.host_control->aggregate_error);
+    if (aggregate != Gfn2PublicResultBridgeError::kSuccess) {
+      std::ostringstream message;
+      message << "CUDA public result bridge rejected inference: aggregate_error="
+              << static_cast<std::uint32_t>(aggregate)
+              << " publication_plan_error="
+              << public_state.host_control->internal_publication_plan_error
+              << " publication_epoch="
+              << public_state.host_control->publication_epoch_snapshot
+              << " current_epoch=" << public_state.host_control->current_geometry_epoch;
+      error = message.str();
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
+    const auto commit_host = [](const gpuxtb_buffer_t& output, const void* staging_data,
+                                std::int64_t elements, std::size_t element_size) {
+      if (elements != 0 && output.memory_space == GPUXTB_MEMORY_HOST) {
+        std::memcpy(output.data, staging_data,
+                    static_cast<std::size_t>(elements) * element_size);
+      }
+    };
+    commit_host(result.energies, public_state.energies, energy_requested ? batch_size : 0,
+                sizeof(double));
+    commit_host(result.forces, public_state.qm_forces, force_requested ? coordinates : 0,
+                sizeof(double));
+    commit_host(result.atomic_charges, public_state.atomic_charges,
+                charges_requested ? atoms : 0, sizeof(double));
+    commit_host(result.point_charge_forces, public_state.point_forces,
+                point_forces_requested ? point_coordinates : 0, sizeof(double));
+    commit_host(result.scc_iterations, public_state.iterations, batch_size,
+                sizeof(std::int32_t));
+    commit_host(result.scc_converged, public_state.converged, batch_size,
+                sizeof(std::uint8_t));
+    commit_host(result.per_system_status, public_state.system_statuses, batch_size,
+                sizeof(gpuxtb_status_t));
+    result.flags = public_state.pending_result_flags;
+    current.inference.warm_checkpoint_ready = true;
     error.clear();
     return GPUXTB_STATUS_SUCCESS;
   }
@@ -4671,6 +5298,7 @@ struct Gfn2CudaExecutionCache::Impl {
 
   std::int32_t device_id = -1;
   cudaStream_t stream = nullptr;
+  Gfn2CudaTopologyStaging topology_staging;
   cusolverDnHandle_t solver = nullptr;
   cusolverDnParams_t solver_parameters = nullptr;
   cublasHandle_t blas = nullptr;
@@ -4684,6 +5312,149 @@ Gfn2CudaExecutionCache::Gfn2CudaExecutionCache(std::int32_t device_id, void* str
     : impl_(std::make_unique<Impl>(device_id, stream)) {}
 
 Gfn2CudaExecutionCache::~Gfn2CudaExecutionCache() = default;
+
+gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
+                                             const gpuxtb_batch_t& batch,
+                                             const gpuxtb_compute_options_t& options,
+                                             gpuxtb_batch_result_t& result,
+                                             std::string& error) {
+  if (cache.impl_ == nullptr) {
+    error = "CUDA GFN2 execution cache has no implementation";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+  auto& implementation = *cache.impl_;
+  std::lock_guard<std::mutex> lock(implementation.mutex);
+  ScopedCudaDevice device(implementation.device_id, error);
+  if (!device.ok()) return device.status();
+  const auto finish = [&](gpuxtb_status_t status) -> gpuxtb_status_t {
+    std::string restore_error;
+    const gpuxtb_status_t restore_status = device.restore(restore_error);
+    if (restore_status == GPUXTB_STATUS_SUCCESS) return status;
+    if (status != GPUXTB_STATUS_SUCCESS && !error.empty()) {
+      error += "; additionally, " + restore_error;
+    } else {
+      error = std::move(restore_error);
+    }
+    return restore_status;
+  };
+
+  /* Keep every transaction-owned CUDA object inside this scope.  It ends
+   * before finish() restores the caller's current device, so failed candidate
+   * teardown and host-callback settlement always run on the context device. */
+  const gpuxtb_status_t transaction_status = [&]() -> gpuxtb_status_t {
+    gpuxtb_status_t status = validate_cuda_stream_owner(
+        implementation.device_id, implementation.stream, true, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = implementation.validate_public_request_pointers(batch, options, result, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = implementation.ensure_handles(error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+
+    const Gfn2CudaTopologyStagingDiagnostic staged =
+        implementation.topology_staging.stage_and_validate(batch, error);
+    if (!staged.success()) return staged.status;
+    bool topology_candidate_pending =
+        staged.disposition == Gfn2CudaTopologyStageDisposition::kCandidate;
+    const auto abort_topology_candidate = [&]() noexcept {
+      if (topology_candidate_pending) {
+        implementation.topology_staging.abort_candidate();
+        topology_candidate_pending = false;
+      }
+    };
+    const Gfn2CudaTopologyHostSnapshot* topology =
+        topology_candidate_pending ? implementation.topology_staging.candidate_snapshot()
+                                   : implementation.topology_staging.committed_snapshot();
+    if (topology == nullptr) {
+      abort_topology_candidate();
+      error = "CUDA topology staging did not expose the selected canonical snapshot";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
+    Gfn2CudaExecutionCache::Impl::Prepared* working = implementation.prepared.get();
+    const bool reuse_runtime =
+        working != nullptr && topology_snapshot_matches(*topology, options, working->host.key);
+    std::unique_ptr<Gfn2CudaExecutionCache::Impl::Prepared> candidate;
+    if (!reuse_runtime) {
+      TopologyKey key;
+      std::vector<double> seed_positions;
+      std::vector<double> seed_point_positions;
+      std::vector<double> seed_point_values;
+      std::vector<double> seed_point_gammas;
+      std::vector<double> seed_periodic_shifts;
+      std::vector<double> seed_periodic_response;
+      status = make_topology_only_seed(
+          *topology, options, key, seed_positions, seed_point_positions, seed_point_values,
+          seed_point_gammas, seed_periodic_shifts, seed_periodic_response, error);
+      if (status == GPUXTB_STATUS_SUCCESS) {
+        try {
+          status = implementation.build_candidate(
+              std::move(key), std::move(seed_positions), std::move(seed_point_positions),
+              std::move(seed_point_values), std::move(seed_point_gammas),
+              std::move(seed_periodic_shifts), std::move(seed_periodic_response), candidate,
+              error);
+        } catch (const std::bad_alloc&) {
+          error = "failed to allocate a CUDA GFN2 runtime candidate";
+          status = GPUXTB_STATUS_ALLOCATION_FAILED;
+        } catch (const std::exception& exception) {
+          error = exception.what();
+          status = GPUXTB_STATUS_INTERNAL_ERROR;
+        } catch (...) {
+          error = "unknown exception while constructing a CUDA GFN2 runtime candidate";
+          status = GPUXTB_STATUS_INTERNAL_ERROR;
+        }
+      }
+      if (status != GPUXTB_STATUS_SUCCESS) {
+        abort_topology_candidate();
+        return status;
+      }
+      working = candidate.get();
+    }
+
+    const auto fail_working_transaction = [&](gpuxtb_status_t failure) {
+      const gpuxtb_status_t settled =
+          implementation.settle_public_submissions_locked(*working, failure, error);
+      abort_topology_candidate();
+      return settled;
+    };
+
+    Gfn2CudaNumericalInputView numerical{};
+    numerical.positions = batch.positions;
+    numerical.point_charge_positions = batch.point_charge_positions;
+    numerical.point_charge_values = batch.point_charge_values;
+    numerical.point_charge_gammas = batch.point_charge_gammas;
+    numerical.atomic_potential_shifts = batch.atomic_potential_shifts;
+    numerical.charge_response_matrix = batch.charge_response_matrix;
+    status = implementation.refresh_numerical_locked(*working, numerical, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return fail_working_transaction(status);
+    status =
+        implementation.execute_inference_locked(*working, Gfn2CudaSccStartMode::kFresh, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return fail_working_transaction(status);
+    /* Public synchronous readiness is finalized only after the completion
+     * event and aggregate bridge diagnostics are known to have succeeded. */
+    working->inference.warm_checkpoint_ready = false;
+
+    if (topology_candidate_pending) {
+      const Gfn2CudaTopologyStagingDiagnostic prepared_commit =
+          implementation.topology_staging.prepare_candidate_commit(error);
+      if (!prepared_commit.success()) return fail_working_transaction(prepared_commit.status);
+    }
+    status = implementation.publish_public_results_locked(*working, batch, options, result, error);
+    status = implementation.settle_public_submissions_locked(*working, status, error);
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      abort_topology_candidate();
+      return status;
+    }
+
+    /* All remaining publication operations are noexcept ownership moves. */
+    if (candidate != nullptr) implementation.prepared = std::move(candidate);
+    if (topology_candidate_pending) {
+      implementation.topology_staging.publish_candidate();
+      topology_candidate_pending = false;
+    }
+    return GPUXTB_STATUS_SUCCESS;
+  }();
+  return finish(transaction_status);
+}
 
 gpuxtb_status_t Gfn2CudaExecutionCache::prepare_host(const gpuxtb_batch_t& batch,
                                                      const gpuxtb_compute_options_t& options,
@@ -4708,7 +5479,7 @@ gpuxtb_status_t Gfn2CudaExecutionCache::prepare_host(const gpuxtb_batch_t& batch
       numerical.point_charge_gammas = batch.point_charge_gammas;
       numerical.atomic_potential_shifts = batch.atomic_potential_shifts;
       numerical.charge_response_matrix = batch.charge_response_matrix;
-      status = impl_->refresh_numerical_locked(numerical, error);
+      status = impl_->refresh_numerical_locked(*impl_->prepared, numerical, error);
       reused = status == GPUXTB_STATUS_SUCCESS;
       return status;
     }
@@ -4761,7 +5532,12 @@ gpuxtb_status_t Gfn2CudaExecutionCache::refresh_numerical_async(
   }
   std::lock_guard<std::mutex> lock(impl_->mutex);
   gpuxtb_status_t status = impl_->ensure_handles(error);
-  return status == GPUXTB_STATUS_SUCCESS ? impl_->refresh_numerical_locked(input, error) : status;
+  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (impl_->prepared == nullptr) {
+    error = "CUDA GFN2 numerical refresh requires a prepared fixed topology";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  return impl_->refresh_numerical_locked(*impl_->prepared, input, error);
 }
 
 gpuxtb_status_t Gfn2CudaExecutionCache::execute_inference_async(Gfn2CudaSccStartMode mode,
@@ -4772,7 +5548,12 @@ gpuxtb_status_t Gfn2CudaExecutionCache::execute_inference_async(Gfn2CudaSccStart
   }
   std::lock_guard<std::mutex> lock(impl_->mutex);
   gpuxtb_status_t status = impl_->ensure_handles(error);
-  return status == GPUXTB_STATUS_SUCCESS ? impl_->execute_inference_locked(mode, error) : status;
+  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (impl_->prepared == nullptr) {
+    error = "CUDA GFN2 inference requires a prepared numerical/runtime binding";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  return impl_->execute_inference_locked(*impl_->prepared, mode, error);
 }
 
 bool Gfn2CudaExecutionCache::valid() const noexcept {

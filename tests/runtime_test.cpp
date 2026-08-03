@@ -151,12 +151,8 @@ int main() {
     CHECK(gpuxtb_context_get_backend(cuda_context.get()) == GPUXTB_BACKEND_CUDA);
     CHECK(gpuxtb_context_get_device_id(cuda_context.get()) >= 0);
 
-    /*
-     * A HOST tag is untrusted at the CUDA API boundary. This opaque address
-     * stands in for a mislabeled CUDA pointer and must survive descriptor-only
-     * validation without a CPU read; the not-yet-wired topology bridge then
-     * stops deterministically before any output mutation.
-     */
+    /* A host allocation mislabeled as CUDA device memory must be rejected by
+     * pointer preflight before topology staging or output publication. */
     compute_options.model = GPUXTB_MODEL_GFN2_XTB;
     energies[0] = 123.25;
     forces[0] = -4.0;
@@ -171,10 +167,10 @@ int main() {
     point_charge_forces[2] = 83.0;
     result.flags = UINT32_C(0xa5a55a5a);
     gpuxtb_batch_t opaque_batch = batch;
-    opaque_batch.atom_offsets.data = reinterpret_cast<const void*>(std::uintptr_t{0x10000u});
+    opaque_batch.atom_offsets.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
     CHECK(gpuxtb_compute(cuda_context.get(), &opaque_batch, &compute_options, &result) ==
-          GPUXTB_STATUS_NOT_IMPLEMENTED);
-    CHECK(std::strstr(gpuxtb_get_last_error(), "CUDA GFN2 public inference") != nullptr);
+          GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(std::strstr(gpuxtb_get_last_error(), "atom_offsets") != nullptr);
     CHECK(energies[0] == 123.25);
     CHECK(forces[0] == -4.0 && forces[1] == -5.0 && forces[2] == -6.0);
     CHECK(scc_iterations[0] == 91);
@@ -186,6 +182,7 @@ int main() {
     CHECK(result.flags == UINT32_C(0xa5a55a5a));
 
     /* Structural failures remain deterministic without consulting storage. */
+    opaque_batch.atom_offsets.memory_space = GPUXTB_MEMORY_HOST;
     opaque_batch.atom_offsets.size_bytes = sizeof(std::int64_t);
     CHECK(gpuxtb_compute(cuda_context.get(), &opaque_batch, &compute_options, &result) ==
           GPUXTB_STATUS_INVALID_ARGUMENT);

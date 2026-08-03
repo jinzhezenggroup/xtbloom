@@ -224,9 +224,26 @@ class Gfn2CudaExecutionCache {
   [[nodiscard]] Gfn2CudaExecutionIdentity identity() const noexcept;
 
  private:
+  friend gpuxtb_status_t execute_restricted_gfn2_cuda(
+      Gfn2CudaExecutionCache& cache, const gpuxtb_batch_t& batch,
+      const gpuxtb_compute_options_t& options, gpuxtb_batch_result_t& result,
+      std::string& error);
+
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
+
+/*
+ * Execute one synchronous public CUDA request as a single cache transaction.
+ * Validation, topology staging, candidate refresh, SCC, internal publication,
+ * public result bridging, and completion all remain serialized by the cache
+ * mutex. On a non-success return caller output bytes and result.flags remain
+ * unchanged.
+ */
+[[nodiscard]] gpuxtb_status_t execute_restricted_gfn2_cuda(
+    Gfn2CudaExecutionCache& cache, const gpuxtb_batch_t& batch,
+    const gpuxtb_compute_options_t& options, gpuxtb_batch_result_t& result,
+    std::string& error);
 
 }  // namespace gpuxtb::detail
 
