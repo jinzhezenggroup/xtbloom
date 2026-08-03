@@ -131,6 +131,7 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/gfn2_scc_energy.cu
     src/backends/cuda/gfn2_scc_free_energy.cu
     src/backends/cuda/gfn2_scc_iteration.cu
+    src/backends/cuda/gfn2_scc_loop.cu
     src/backends/cuda/gfn2_scc_iteration_arena.cu
     src/backends/cuda/gfn2_scc_iteration_control.cu
     src/backends/cuda/gfn2_scc_iteration_initialize.cu
@@ -810,6 +811,30 @@ if(GPUXTB_BUILD_TESTS)
     )
     add_test(NAME gpuxtb.cuda.scc_iteration_production
       COMMAND gpuxtb_cuda_scc_iteration_production_test
+    )
+
+    add_executable(gpuxtb_cuda_scc_iteration_failure_matrix_test
+      tests/cuda_scc_iteration_failure_matrix_test.cu
+      tests/support/gfn2_scc_test_case.cpp
+    )
+    target_link_libraries(gpuxtb_cuda_scc_iteration_failure_matrix_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_iteration_failure_matrix_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_iteration_failure_matrix_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_iteration_failure_matrix_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_iteration_failure_matrix
+      COMMAND gpuxtb_cuda_scc_iteration_failure_matrix_test
     )
 
     add_executable(gpuxtb_cuda_scc_electrostatic_components_test

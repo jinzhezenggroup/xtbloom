@@ -3,6 +3,7 @@
 #include <cusolverDn.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -15,6 +16,7 @@
 #include "backends/cuda/gfn2_scc_iteration_arena.cuh"
 #include "backends/cuda/gfn2_scc_iteration_initialize.cuh"
 #include "backends/cuda/gfn2_scc_iteration_reports.cuh"
+#include "backends/cuda/gfn2_scc_loop.cuh"
 #include "backends/cuda/gfn2_scc_setup_eigensolver.cuh"
 #include "backends/cuda/gfn2_scc_setup_inputs.cuh"
 #include "backends/cuda/gfn2_scc_setup_topology.hpp"
@@ -144,6 +146,41 @@ class ProviderHandles {
   cusolverDnHandle_t solver_ = nullptr;
   cusolverDnParams_t parameters_ = nullptr;
   cublasHandle_t blas_ = nullptr;
+};
+
+/* Establish setup-stream ordering for a distinct nonblocking execution
+ * stream without synchronizing the host. The provider handles and mutable SCC
+ * arena remain single-flight for the complete lifetime of this object. */
+class OrderedExecutionStream {
+ public:
+  OrderedExecutionStream() = default;
+  OrderedExecutionStream(const OrderedExecutionStream&) = delete;
+  OrderedExecutionStream& operator=(const OrderedExecutionStream&) = delete;
+
+  ~OrderedExecutionStream() {
+    if (stream_ != nullptr) {
+      (void)cudaStreamSynchronize(stream_);
+    }
+    if (event_ != nullptr) {
+      (void)cudaEventDestroy(event_);
+    }
+    if (stream_ != nullptr) {
+      (void)cudaStreamDestroy(stream_);
+    }
+  }
+
+  bool create_after(cudaStream_t setup_stream) noexcept {
+    return cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking) == cudaSuccess &&
+           cudaEventCreateWithFlags(&event_, cudaEventDisableTiming) == cudaSuccess &&
+           cudaEventRecord(event_, setup_stream) == cudaSuccess &&
+           cudaStreamWaitEvent(stream_, event_, 0u) == cudaSuccess;
+  }
+
+  cudaStream_t stream() const noexcept { return stream_; }
+
+ private:
+  cudaStream_t stream_ = nullptr;
+  cudaEvent_t event_ = nullptr;
 };
 
 /* HostSccCase exposes the production component caches but not the common
@@ -347,10 +384,18 @@ struct ProductionFixture {
   Gfn2SccIterationInitializationReady ready{};
   Gfn2SccIterationBinding binding{};
 
-  bool create(bool optional_components) {
+  bool create(bool optional_components, std::int64_t batch_size = 4) {
+    if (batch_size <= 0) {
+      return false;
+    }
     HostSccCaseOptions options{};
-    options.systems = {SmallSystemKind::kH2, SmallSystemKind::kHe, SmallSystemKind::kLiH,
-                       SmallSystemKind::kCH2};
+    constexpr std::array<SmallSystemKind, 4> kSystems{SmallSystemKind::kH2, SmallSystemKind::kHe,
+                                                      SmallSystemKind::kLiH, SmallSystemKind::kCH2};
+    options.systems.clear();
+    options.systems.reserve(static_cast<std::size_t>(batch_size));
+    for (std::int64_t system = 0; system < batch_size; ++system) {
+      options.systems.push_back(kSystems[static_cast<std::size_t>(system) % kSystems.size()]);
+    }
     options.geometry_generation = kGeometryGeneration;
     options.maximum_iterations = 8u;
     options.mixer_history = 3;
@@ -670,6 +715,304 @@ int test_four_system_production_iteration_cpu_parity(bool optional_components) {
   return 0;
 }
 
+int test_production_loop_cpu_parity(std::int64_t batch_size, bool optional_components,
+                                    bool use_default_stream, bool use_ordered_stream = false,
+                                    std::uint64_t resumed_iterations = 0u) {
+  ProductionFixture fixture;
+  CHECK(fixture.create(optional_components, batch_size));
+  CHECK(fixture.host.batch_size() == batch_size);
+  CHECK(!(use_default_stream && use_ordered_stream));
+
+  OrderedExecutionStream ordered_stream;
+  cudaStream_t execution_stream = fixture.handles.stream();
+  if (use_ordered_stream) {
+    CHECK(ordered_stream.create_after(fixture.handles.stream()));
+    execution_stream = ordered_stream.stream();
+  } else if (use_default_stream) {
+    /* Setup uploads are ordered on the owner's nonblocking stream. A public
+     * caller using another stream must establish the same one-time dependency
+     * before entering the allocation-free hot loop. */
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    execution_stream = nullptr;
+  }
+
+  std::string error;
+  for (std::uint64_t iteration = 0u; iteration < resumed_iterations; ++iteration) {
+    const Gfn2SccIterationLaunchResult resumed_launch =
+        launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, execution_stream);
+    CHECK(resumed_launch.success());
+    const gpuxtb_status_t cpu_status = fixture.host.run_one_iteration(error);
+    CHECK(cpu_status == GPUXTB_STATUS_SUCCESS || cpu_status == GPUXTB_STATUS_SCC_NOT_CONVERGED ||
+          cpu_status == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+  }
+
+  const Gfn2SccLoopLaunchResult launch =
+      launch_gfn2_restricted_scc_loop_cuda(fixture.binding, execution_stream);
+  if (!launch.success()) {
+    std::fprintf(stderr,
+                 "production SCC loop launch failed: submitted=%llu status=%u stage=%u "
+                 "binding_error=%u binding_field=%u cuda=%d cublas=%d cusolver=%d\n",
+                 static_cast<unsigned long long>(launch.submitted_iterations),
+                 static_cast<unsigned>(launch.iteration.status),
+                 static_cast<unsigned>(launch.iteration.stage),
+                 static_cast<unsigned>(launch.iteration.binding.error),
+                 static_cast<unsigned>(launch.iteration.binding.field),
+                 static_cast<int>(launch.iteration.cuda_status),
+                 static_cast<int>(launch.iteration.cublas_status),
+                 static_cast<int>(launch.iteration.cusolver_status));
+  }
+  CHECK(launch.success());
+  CHECK(launch.submitted_iterations == fixture.host.options().maximum_iterations);
+
+  /* Observe the first completed loop before submitting a second one. This
+   * distinguishes a genuinely terminal public-state replay from an
+   * implementation where the second loop merely finishes work omitted by the
+   * first submission. */
+  CUDA_CHECK(cudaStreamSynchronize(execution_stream));
+  std::vector<double> first_coefficients;
+  std::vector<double> first_density;
+  std::vector<double> first_qsh;
+  std::vector<double> first_free_energies;
+  std::vector<double> first_previous_free_energies;
+  std::vector<double> first_free_energy_changes;
+  std::vector<double> first_mixer_inputs;
+  std::vector<std::uint64_t> first_iterations;
+  std::vector<gpuxtb_status_t> first_statuses;
+  std::vector<std::uint8_t> first_converged;
+  const auto& first_state = fixture.binding.state;
+  CHECK(download(first_state.eigenpairs.coefficients, first_state.eigenpairs.coefficient_elements,
+                 first_coefficients, fixture.handles.stream()));
+  CHECK(download(first_state.density.density, first_state.density.density_elements, first_density,
+                 fixture.handles.stream()));
+  CHECK(download(first_state.raw_population.qsh, first_state.raw_population.qsh_elements, first_qsh,
+                 fixture.handles.stream()));
+  CHECK(download(first_state.scc.free_energies, first_state.scc.batch_elements, first_free_energies,
+                 fixture.handles.stream()));
+  CHECK(download(first_state.scc.previous_free_energies, first_state.scc.batch_elements,
+                 first_previous_free_energies, fixture.handles.stream()));
+  CHECK(download(first_state.scc.free_energy_changes, first_state.scc.batch_elements,
+                 first_free_energy_changes, fixture.handles.stream()));
+  CHECK(download(first_state.mixer.current_inputs, first_state.mixer.total_vector_elements,
+                 first_mixer_inputs, fixture.handles.stream()));
+  CHECK(download(first_state.scc.iterations, first_state.scc.batch_elements, first_iterations,
+                 fixture.handles.stream()));
+  CHECK(download(first_state.scc.system_statuses, first_state.scc.batch_elements, first_statuses,
+                 fixture.handles.stream()));
+  CHECK(download(first_state.scc.converged, first_state.scc.batch_elements, first_converged,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  const Gfn2SccLoopLaunchResult repeat_launch =
+      launch_gfn2_restricted_scc_loop_cuda(fixture.binding, execution_stream);
+  CHECK(repeat_launch.success());
+  CHECK(repeat_launch.submitted_iterations == fixture.host.options().maximum_iterations);
+  if (execution_stream != fixture.handles.stream()) {
+    /* Downloads below use the fixture stream, so complete the independent
+     * execution-stream replay first. This synchronization is test observation,
+     * not part of the production loop launcher. */
+    CUDA_CHECK(cudaStreamSynchronize(execution_stream));
+  }
+
+  /* The CPU reference is advanced through the same fixed iteration bound.
+   * Once all peers are terminal its active predicate makes later calls public-
+   * state no-ops, matching the CUDA publication gate. The CUDA provider keeps
+   * a fixed bucket schedule until #80 compacts inactive members. */
+  for (std::uint64_t iteration = 0u; iteration < fixture.host.options().maximum_iterations;
+       ++iteration) {
+    const gpuxtb_status_t status = fixture.host.run_one_iteration(error);
+    if (status != GPUXTB_STATUS_SUCCESS && status != GPUXTB_STATUS_SCC_NOT_CONVERGED &&
+        status != GPUXTB_STATUS_EIGENSOLVER_FAILED) {
+      std::fprintf(stderr, "CPU production SCC loop failed at %llu: status=%d error=%s\n",
+                   static_cast<unsigned long long>(iteration), status, error.c_str());
+      return __LINE__;
+    }
+  }
+  const auto& layout = fixture.host.wavefunction_layout();
+  const auto& state = fixture.binding.state;
+  std::vector<double> eigenvalues;
+  std::vector<double> coefficients;
+  std::vector<double> occupations;
+  std::vector<double> density;
+  std::vector<double> weighted_density;
+  std::vector<double> qsh;
+  std::vector<double> qat;
+  std::vector<double> dipoles;
+  std::vector<double> quadrupoles;
+  std::vector<double> free_energies;
+  std::vector<double> previous_free_energies;
+  std::vector<double> free_energy_changes;
+  std::vector<double> residual_rms;
+  std::vector<double> internal_energies;
+  std::vector<double> entropies;
+  std::vector<double> current_inputs;
+  std::vector<std::uint64_t> iterations;
+  std::vector<gpuxtb_status_t> statuses;
+  std::vector<std::uint8_t> converged;
+
+  CHECK(download(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements, eigenvalues,
+                 fixture.handles.stream()));
+  CHECK(download(state.eigenpairs.coefficients, state.eigenpairs.coefficient_elements, coefficients,
+                 fixture.handles.stream()));
+  CHECK(download(state.occupations.occupations, state.occupations.occupation_elements, occupations,
+                 fixture.handles.stream()));
+  CHECK(download(state.density.density, state.density.density_elements, density,
+                 fixture.handles.stream()));
+  CHECK(download(state.density.energy_weighted_density, state.density.weighted_density_elements,
+                 weighted_density, fixture.handles.stream()));
+  CHECK(download(state.raw_population.qsh, state.raw_population.qsh_elements, qsh,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.qat, state.raw_population.qat_elements, qat,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.dipole, state.raw_population.dipole_elements, dipoles,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.quadrupole, state.raw_population.quadrupole_elements,
+                 quadrupoles, fixture.handles.stream()));
+  CHECK(download(state.scc.free_energies, state.scc.batch_elements, free_energies,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.previous_free_energies, state.scc.batch_elements, previous_free_energies,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.free_energy_changes, state.scc.batch_elements, free_energy_changes,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.residual_rms, state.scc.batch_elements, residual_rms,
+                 fixture.handles.stream()));
+  CHECK(download(state.free_energy.internal_energy, state.free_energy.internal_energy_elements,
+                 internal_energies, fixture.handles.stream()));
+  CHECK(download(state.free_energy.entropy, state.free_energy.entropy_elements, entropies,
+                 fixture.handles.stream()));
+  CHECK(download(state.mixer.current_inputs, state.mixer.total_vector_elements, current_inputs,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.iterations, state.scc.batch_elements, iterations,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.system_statuses, state.scc.batch_elements, statuses,
+                 fixture.handles.stream()));
+  CHECK(
+      download(state.scc.converged, state.scc.batch_elements, converged, fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  CHECK(coefficients == first_coefficients);
+  CHECK(density == first_density);
+  CHECK(qsh == first_qsh);
+  CHECK(free_energies == first_free_energies);
+  CHECK(previous_free_energies == first_previous_free_energies);
+  CHECK(free_energy_changes == first_free_energy_changes);
+  CHECK(current_inputs == first_mixer_inputs);
+  CHECK(iterations == first_iterations);
+  CHECK(statuses == first_statuses);
+  CHECK(converged == first_converged);
+
+  constexpr double kLoopTolerance = 1.0e-8;
+  for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
+    if (iterations[static_cast<std::size_t>(system)] !=
+            fixture.host.driver_state().iterations[system] ||
+        statuses[static_cast<std::size_t>(system)] !=
+            fixture.host.driver_state().system_statuses[system] ||
+        converged[static_cast<std::size_t>(system)] !=
+            fixture.host.driver_state().converged[system]) {
+      std::fprintf(stderr,
+                   "loop terminal mismatch system=%lld CUDA(iter=%llu status=%d conv=%u "
+                   "free=%.17g residual=%.17g) CPU(iter=%llu status=%d conv=%u free=%.17g "
+                   "residual=%.17g)\n",
+                   static_cast<long long>(system),
+                   static_cast<unsigned long long>(iterations[static_cast<std::size_t>(system)]),
+                   statuses[static_cast<std::size_t>(system)],
+                   static_cast<unsigned>(converged[static_cast<std::size_t>(system)]),
+                   free_energies[static_cast<std::size_t>(system)],
+                   residual_rms[static_cast<std::size_t>(system)],
+                   static_cast<unsigned long long>(fixture.host.driver_state().iterations[system]),
+                   fixture.host.driver_state().system_statuses[system],
+                   static_cast<unsigned>(fixture.host.driver_state().converged[system]),
+                   fixture.host.driver_state().free_energies[system],
+                   fixture.host.mixer_state().residual_rms[system]);
+    }
+  }
+  CHECK(compare_doubles("loop eigenvalues", eigenvalues, fixture.host.wavefunction().eigenvalues,
+                        layout.eigenvalues.element_count, kLoopTolerance));
+  /* The existing one-step gate compares individual coefficient columns after
+   * sign alignment. Across a full trajectory, exactly or numerically
+   * degenerate orbitals may undergo a valid provider-dependent subspace
+   * rotation. Density and energy-weighted density below are the invariant
+   * full-loop correctness observables. */
+  CHECK(compare_doubles("loop occupations", occupations, fixture.host.wavefunction().occupations,
+                        layout.occupations.element_count, kLoopTolerance));
+  CHECK(compare_doubles("loop density", density, fixture.host.wavefunction().density,
+                        layout.density.element_count, kLoopTolerance));
+  CHECK(compare_doubles("loop weighted density", weighted_density,
+                        fixture.host.wavefunction().energy_weighted_density,
+                        layout.energy_weighted_density.element_count, kLoopTolerance));
+  CHECK(compare_doubles("loop qsh", qsh, fixture.host.wavefunction().qsh, layout.qsh.element_count,
+                        kLoopTolerance));
+  CHECK(compare_doubles("loop qat", qat, fixture.host.wavefunction().qat, layout.qat.element_count,
+                        kLoopTolerance));
+  CHECK(compare_doubles("loop dipoles", dipoles, fixture.host.wavefunction().dipole,
+                        layout.dipole.element_count, kLoopTolerance));
+  CHECK(compare_doubles("loop quadrupoles", quadrupoles, fixture.host.wavefunction().quadrupole,
+                        layout.quadrupole.element_count, kLoopTolerance));
+  CHECK(compare_doubles("loop free energies", free_energies,
+                        fixture.host.driver_state().free_energies, fixture.host.batch_size(),
+                        kLoopTolerance));
+  CHECK(compare_doubles("loop previous free energies", previous_free_energies,
+                        fixture.host.driver_state().previous_free_energies,
+                        fixture.host.batch_size(), kLoopTolerance));
+  CHECK(compare_doubles("loop free-energy changes", free_energy_changes,
+                        fixture.host.driver_state().free_energy_changes, fixture.host.batch_size(),
+                        kLoopTolerance));
+  CHECK(compare_doubles("loop residual RMS", residual_rms, fixture.host.mixer_state().residual_rms,
+                        fixture.host.batch_size(), kLoopTolerance));
+  CHECK(compare_doubles("loop internal energies", internal_energies,
+                        fixture.host.driver_state().internal_energies, fixture.host.batch_size(),
+                        kLoopTolerance));
+  CHECK(compare_doubles("loop entropies", entropies, fixture.host.driver_state().entropies,
+                        fixture.host.batch_size(), kLoopTolerance));
+  CHECK(compare_doubles("loop mixer current inputs", current_inputs,
+                        fixture.host.mixer_state().current_inputs,
+                        fixture.host.mixer_plan().total_vector_elements(), kLoopTolerance));
+  for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
+    CHECK(iterations[static_cast<std::size_t>(system)] ==
+          fixture.host.driver_state().iterations[system]);
+    CHECK(statuses[static_cast<std::size_t>(system)] ==
+          fixture.host.driver_state().system_statuses[system]);
+    CHECK(converged[static_cast<std::size_t>(system)] ==
+          fixture.host.driver_state().converged[system]);
+  }
+  if (batch_size == 128 && !optional_components && !use_default_stream) {
+    const auto converged_count =
+        std::count(converged.begin(), converged.end(), static_cast<std::uint8_t>(1u));
+    const auto nonconverged_count =
+        std::count(statuses.begin(), statuses.end(), GPUXTB_STATUS_SCC_NOT_CONVERGED);
+    CHECK(converged_count > 0);
+    CHECK(nonconverged_count > 0);
+    CHECK(converged_count + nonconverged_count == batch_size);
+  }
+  return 0;
+}
+
+int test_loop_rejects_inconsistent_plan() {
+  Gfn2SccIterationBinding binding{};
+  binding.plan.plan_token = 7u;
+  binding.plan.activity_policy.maximum_iterations = 1u;
+  binding.plan.state_policy.maximum_iterations = 1u;
+  binding.plan.publication_plan.maximum_iterations = 1u;
+
+  binding.plan.abi_version = 0u;
+  Gfn2SccLoopLaunchResult result = launch_gfn2_restricted_scc_loop_cuda(binding);
+  CHECK(result.iteration.status == Gfn2SccIterationLaunchStatus::kInvalidBinding);
+  CHECK(result.iteration.binding.error == Gfn2SccIterationBindingError::kInvalidAbiVersion);
+  CHECK(result.submitted_iterations == 0u);
+
+  binding.plan.abi_version = kGfn2SccIterationAbiVersion;
+  binding.plan.plan_token = 0u;
+  result = launch_gfn2_restricted_scc_loop_cuda(binding);
+  CHECK(result.iteration.binding.error == Gfn2SccIterationBindingError::kInvalidPlanToken);
+  CHECK(result.submitted_iterations == 0u);
+
+  binding.plan.plan_token = 7u;
+  binding.plan.state_policy.maximum_iterations = 2u;
+  result = launch_gfn2_restricted_scc_loop_cuda(binding);
+  CHECK(result.iteration.binding.error == Gfn2SccIterationBindingError::kInvalidCount);
+  CHECK(result.submitted_iterations == 0u);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -682,9 +1025,41 @@ int main() {
   }
   CUDA_CHECK(count_status);
   CUDA_CHECK(cudaSetDevice(0));
-  int status = test_four_system_production_iteration_cpu_parity(false);
+  int status = test_loop_rejects_inconsistent_plan();
   if (status != 0) {
     return status;
   }
-  return test_four_system_production_iteration_cpu_parity(true);
+  status = test_four_system_production_iteration_cpu_parity(false);
+  if (status != 0) {
+    return status;
+  }
+  status = test_four_system_production_iteration_cpu_parity(true);
+  if (status != 0) {
+    return status;
+  }
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    status = test_production_loop_cpu_parity(batch_size, false, false);
+    if (status != 0) {
+      return status;
+    }
+  }
+  for (bool use_default_stream : {false, true}) {
+    status = test_production_loop_cpu_parity(8, true, use_default_stream);
+    if (status != 0) {
+      return status;
+    }
+  }
+  status = test_production_loop_cpu_parity(8, false, true);
+  if (status != 0) {
+    return status;
+  }
+  status = test_production_loop_cpu_parity(8, true, false, false, 2u);
+  if (status != 0) {
+    return status;
+  }
+  status = test_production_loop_cpu_parity(8, true, false, true);
+  if (status != 0) {
+    return status;
+  }
+  return 0;
 }
