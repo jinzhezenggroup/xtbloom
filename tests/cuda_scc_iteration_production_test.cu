@@ -360,6 +360,58 @@ bool compare_coefficients(const HostSccCase& host, std::vector<double> actual, d
                          tolerance);
 }
 
+bool generalized_eigensystems_match_overlap(const HostSccCase& host,
+                                            const std::vector<double>& overlap,
+                                            const std::vector<double>& hamiltonian,
+                                            const std::vector<double>& eigenvalues,
+                                            const std::vector<double>& coefficients) {
+  constexpr double kTolerance = 2.0e-8;
+  const auto& layout = host.wavefunction_layout();
+  if (overlap.size() != static_cast<std::size_t>(layout.coefficients.element_count) ||
+      hamiltonian.size() != overlap.size() ||
+      eigenvalues.size() != static_cast<std::size_t>(layout.eigenvalues.element_count) ||
+      coefficients.size() != overlap.size()) {
+    return false;
+  }
+  for (std::int64_t system = 0; system < layout.batch_size; ++system) {
+    const std::int64_t orbital_begin = layout.batch_orbital_offsets[system];
+    const std::int64_t n =
+        layout.batch_orbital_offsets[system + 1] - layout.batch_orbital_offsets[system];
+    const std::int64_t matrix_begin = layout.coefficients.system_offsets[system];
+    for (std::int64_t orbital = 0; orbital < n; ++orbital) {
+      for (std::int64_t row = 0; row < n; ++row) {
+        double hc = 0.0;
+        double sc = 0.0;
+        for (std::int64_t column = 0; column < n; ++column) {
+          const double coefficient =
+              coefficients[static_cast<std::size_t>(matrix_begin + column * n + orbital)];
+          hc +=
+              hamiltonian[static_cast<std::size_t>(matrix_begin + row * n + column)] * coefficient;
+          sc += overlap[static_cast<std::size_t>(matrix_begin + row * n + column)] * coefficient;
+        }
+        if (!near(hc, sc * eigenvalues[static_cast<std::size_t>(orbital_begin + orbital)],
+                  kTolerance)) {
+          return false;
+        }
+      }
+      for (std::int64_t other = 0; other < n; ++other) {
+        double metric = 0.0;
+        for (std::int64_t row = 0; row < n; ++row) {
+          for (std::int64_t column = 0; column < n; ++column) {
+            metric += coefficients[static_cast<std::size_t>(matrix_begin + row * n + orbital)] *
+                      overlap[static_cast<std::size_t>(matrix_begin + row * n + column)] *
+                      coefficients[static_cast<std::size_t>(matrix_begin + column * n + other)];
+          }
+        }
+        if (!near(metric, orbital == other ? 1.0 : 0.0, kTolerance)) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
 template <typename T>
 bool compare_exact_values(const char* field, const std::vector<T>& actual, const T* expected,
                           std::int64_t elements) {
@@ -990,6 +1042,108 @@ int test_four_system_production_iteration_cpu_parity(bool optional_components) {
   return 0;
 }
 
+int test_changed_device_overlap_is_consumed_by_production_scc() {
+  constexpr std::uint64_t kChangedGeneration = kGeometryGeneration + 1u;
+  ProductionFixture fixture;
+  CHECK(fixture.create(false));
+
+  std::vector<Gfn2SccCacheProvenanceBinding> provenance;
+  CHECK(download(fixture.binding.plan.provenance.cache_bindings,
+                 fixture.binding.plan.provenance.cache_binding_count, provenance,
+                 fixture.handles.stream()));
+  std::vector<double> before_factors;
+  CHECK(download(fixture.eigensolver_binding.cache.cholesky_factors,
+                 fixture.eigensolver_binding.cache.factor_elements, before_factors,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  std::vector<double> changed_overlap = fixture.host.overlap();
+  const auto& layout = fixture.host.wavefunction_layout();
+  for (std::int64_t system = 0; system < layout.batch_size; ++system) {
+    const std::int64_t n =
+        layout.batch_orbital_offsets[system + 1] - layout.batch_orbital_offsets[system];
+    const std::int64_t matrix_begin = layout.coefficients.system_offsets[system];
+    const double shift = 0.0075 * static_cast<double>(system + 1);
+    for (std::int64_t orbital = 0; orbital < n; ++orbital) {
+      changed_overlap[static_cast<std::size_t>(matrix_begin + orbital * n + orbital)] += shift;
+    }
+  }
+
+  DeviceAllocation device_overlap;
+  CHECK(device_overlap.allocate(changed_overlap.size() * sizeof(double)));
+  CUDA_CHECK(cudaMemcpyAsync(device_overlap.get(), changed_overlap.data(),
+                             changed_overlap.size() * sizeof(double), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(const_cast<double*>(fixture.binding.input.hamiltonian.overlap),
+                             changed_overlap.data(), changed_overlap.size() * sizeof(double),
+                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+
+  std::vector<std::uint64_t> generations(static_cast<std::size_t>(fixture.host.batch_size()),
+                                         kChangedGeneration);
+  CUDA_CHECK(cudaMemcpyAsync(fixture.binding.plan.geometry_cache.geometry_generations,
+                             generations.data(), generations.size() * sizeof(std::uint64_t),
+                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+  for (auto& record : provenance) {
+    if (record.provenance.generation_scope == Gfn2GenerationScope::kBatch) {
+      record.provenance.geometry_generation = kChangedGeneration;
+    }
+  }
+  CUDA_CHECK(cudaMemcpyAsync(
+      const_cast<Gfn2SccCacheProvenanceBinding*>(fixture.binding.plan.provenance.cache_bindings),
+      provenance.data(), provenance.size() * sizeof(Gfn2SccCacheProvenanceBinding),
+      cudaMemcpyHostToDevice, fixture.handles.stream()));
+
+  const auto refactor = fixture.eigensolver_owner.refactor_overlap_from_device_async(
+      fixture.eigensolver_setup_arena.get(), fixture.eigensolver_setup_arena.bytes(),
+      fixture.eigensolver_binding, static_cast<const double*>(device_overlap.get()),
+      static_cast<std::int64_t>(changed_overlap.size()), kChangedGeneration,
+      fixture.handles.stream());
+  CHECK(refactor.success());
+
+  Gfn2SccIterationDevicePlan changed_plan = fixture.binding.plan;
+  changed_plan.geometry_generation = kChangedGeneration;
+  changed_plan.provenance.expected_geometry_generation = kChangedGeneration;
+  changed_plan.es2_cache.geometry_generation = kChangedGeneration;
+  changed_plan.aes2_cache.geometry_generation = kChangedGeneration;
+  Gfn2SccIterationBinding changed_binding{};
+  CHECK(bind_gfn2_scc_iteration_cuda(changed_plan, fixture.binding.input, fixture.binding.state,
+                                     fixture.binding.workspace, changed_binding)
+            .error == Gfn2SccIterationBindingError::kSuccess);
+
+  const Gfn2SccIterationLaunchResult launch =
+      launch_gfn2_restricted_scc_iteration_cuda(changed_binding, fixture.handles.stream());
+  CHECK(launch.success());
+
+  std::vector<double> after_factors;
+  std::vector<std::uint64_t> factor_generations;
+  std::vector<double> hamiltonian;
+  std::vector<double> eigenvalues;
+  std::vector<double> coefficients;
+  CHECK(download(fixture.eigensolver_binding.cache.cholesky_factors,
+                 fixture.eigensolver_binding.cache.factor_elements, after_factors,
+                 fixture.handles.stream()));
+  CHECK(download(fixture.eigensolver_binding.cache.geometry_generations,
+                 fixture.eigensolver_binding.cache.generation_elements, factor_generations,
+                 fixture.handles.stream()));
+  CHECK(download(changed_binding.workspace.hamiltonian.matrix,
+                 changed_binding.workspace.hamiltonian.elements, hamiltonian,
+                 fixture.handles.stream()));
+  CHECK(download(changed_binding.state.eigenpairs.eigenvalues,
+                 changed_binding.state.eigenpairs.eigenvalue_elements, eigenvalues,
+                 fixture.handles.stream()));
+  CHECK(download(changed_binding.state.eigenpairs.coefficients,
+                 changed_binding.state.eigenpairs.coefficient_elements, coefficients,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  CHECK(after_factors != before_factors);
+  CHECK(std::all_of(factor_generations.begin(), factor_generations.end(),
+                    [](std::uint64_t value) { return value == kChangedGeneration; }));
+  CHECK(generalized_eigensystems_match_overlap(fixture.host, changed_overlap, hamiltonian,
+                                               eigenvalues, coefficients));
+  return 0;
+}
+
 int test_production_loop_cpu_parity(std::int64_t batch_size, bool optional_components,
                                     bool use_default_stream, bool use_ordered_stream = false,
                                     std::uint64_t resumed_iterations = 0u) {
@@ -1309,6 +1463,10 @@ int main() {
     return status;
   }
   status = test_four_system_production_iteration_cpu_parity(true);
+  if (status != 0) {
+    return status;
+  }
+  status = test_changed_device_overlap_is_consumed_by_production_scc();
   if (status != 0) {
     return status;
   }

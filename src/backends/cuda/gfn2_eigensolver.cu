@@ -511,7 +511,8 @@ __global__ void finalize_overlap_bucket_kernel(
     Gfn2EigensolverDeviceBatch batch, Gfn2EigensolverBucket bucket,
     std::uint64_t geometry_generation, double minimum_overlap_rcond,
     Gfn2EigensolverDeviceWorkspace workspace, Gfn2EigensolverOverlapCache cache,
-    std::uint32_t* system_errors, std::uint32_t* device_error) {
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    Gfn2EigensolverFactorCachePolicy cache_policy) {
   const std::int64_t slot = static_cast<std::int64_t>(blockIdx.x);
   const std::int64_t bucket_slot = bucket.system_index_offset + slot;
   const std::int64_t system = batch.bucket_systems[bucket_slot];
@@ -547,10 +548,14 @@ __global__ void finalize_overlap_bucket_kernel(
       record_system_error(system_errors, system, device_error, failure);
       publish = 0;
     }
-    cache.geometry_generations[system] = geometry_generation;
-    cache.factor_statuses[system] =
-        publish != 0 ? static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kSuccess)
-                     : atomicAdd(system_errors + system, 0u);
+    if (publish != 0) {
+      cache.geometry_generations[system] = geometry_generation;
+      cache.factor_statuses[system] =
+          static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kSuccess);
+    } else if (cache_policy == Gfn2EigensolverFactorCachePolicy::kPublishFailure) {
+      cache.geometry_generations[system] = geometry_generation;
+      cache.factor_statuses[system] = atomicAdd(system_errors + system, 0u);
+    }
   }
   __syncthreads();
   if (publish == 0) {
@@ -909,11 +914,14 @@ Gfn2EigensolverLaunchResult factor_gfn2_overlap_cuda(
     std::int64_t bucket_count, const double* overlap, std::uint64_t geometry_generation,
     const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver, cusolverDnParams_t parameters,
     const Gfn2EigensolverDeviceWorkspace& workspace, const Gfn2EigensolverOverlapCache& cache,
-    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream,
+    Gfn2EigensolverFactorCachePolicy cache_policy) noexcept {
   if (!valid_bucket_plan(batch, buckets, bucket_count) || !valid_options(options) ||
       !valid_workspace(batch, workspace) || !valid_cache(batch, cache) ||
       !valid_factor_ranges(batch, overlap, workspace, cache, system_errors, device_error) ||
       geometry_generation == 0u || solver == nullptr || parameters == nullptr ||
+      (cache_policy != Gfn2EigensolverFactorCachePolicy::kPublishFailure &&
+       cache_policy != Gfn2EigensolverFactorCachePolicy::kPreservePriorOnFailure) ||
       !is_aligned(overlap, alignof(double)) || !is_aligned(system_errors, alignof(std::uint32_t)) ||
       !is_aligned(device_error, alignof(std::uint32_t))) {
     return invalid_argument();
@@ -956,7 +964,7 @@ Gfn2EigensolverLaunchResult factor_gfn2_overlap_cuda(
     finalize_overlap_bucket_kernel<<<static_cast<unsigned int>(bucket.system_count),
                                      kThreadsPerSystem, 0, stream>>>(
         batch, bucket, geometry_generation, options.minimum_overlap_rcond, workspace, cache,
-        system_errors, device_error);
+        system_errors, device_error, cache_policy);
     result = check_kernel_launch();
     if (!result.success()) {
       return result;

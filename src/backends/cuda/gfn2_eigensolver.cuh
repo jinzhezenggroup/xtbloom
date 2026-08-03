@@ -149,6 +149,15 @@ struct Gfn2EigensolverOptions {
   bool deterministic_debug = false;
 };
 
+/* Controls whether a failed factorization invalidates cache metadata. Initial
+ * setup records the failure so an uninitialized cache cannot be consumed;
+ * geometry refresh keeps the last valid generation/status while still
+ * reporting the new failure through system_errors. */
+enum class Gfn2EigensolverFactorCachePolicy : std::uint32_t {
+  kPublishFailure = 0u,
+  kPreservePriorOnFailure = 1u,
+};
+
 struct Gfn2EigensolverWorkspaceRequirements {
   std::size_t solver_device_workspace_bytes = 0u;
   std::size_t solver_host_workspace_bytes = 0u;
@@ -184,15 +193,18 @@ cudaError_t reset_gfn2_eigensolver_device_errors_cuda(std::int64_t batch_size,
  * Update reusable overlap factors for geometry_generation. The overlap is
  * checked for finiteness, symmetry, positive definiteness, and the configured
  * exact 2-norm reciprocal condition threshold. Healthy members commit their
- * lower factor and generation independently; failed/inactive peers do not.
+ * lower factor and generation independently. kPublishFailure records the
+ * attempted generation/error for failed members, while
+ * kPreservePriorOnFailure retains their previous valid cache metadata.
  */
 Gfn2EigensolverLaunchResult factor_gfn2_overlap_cuda(
     const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
     std::int64_t bucket_count, const double* overlap, std::uint64_t geometry_generation,
     const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver, cusolverDnParams_t parameters,
     const Gfn2EigensolverDeviceWorkspace& workspace, const Gfn2EigensolverOverlapCache& cache,
-    std::uint32_t* system_errors, std::uint32_t* device_error,
-    cudaStream_t stream = nullptr) noexcept;
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream = nullptr,
+    Gfn2EigensolverFactorCachePolicy cache_policy =
+        Gfn2EigensolverFactorCachePolicy::kPublishFailure) noexcept;
 
 /*
  * Solve H C = S C eps for every active member whose cache generation matches.

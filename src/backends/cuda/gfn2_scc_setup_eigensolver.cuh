@@ -112,6 +112,14 @@ struct Gfn2SccSetupEigensolverBinding {
   std::uint32_t* setup_system_errors = nullptr;
   std::int64_t setup_system_error_elements = 0;
   std::uint32_t* setup_device_error = nullptr;
+  /* Host-only provenance. These values are never dereferenced by device code
+   * and let owner methods reject a binding copied from another owner/arena. */
+  const void* owner_identity = nullptr;
+  void* setup_device_arena = nullptr;
+  std::size_t setup_device_arena_bytes = 0u;
+  /* Owner-keyed seal over every bound pointer/count. It detects a descriptor
+   * that was copied and then edited before a refresh call. */
+  std::uint64_t provenance_seal = 0u;
   std::uint64_t geometry_generation = 0u;
   std::uint64_t iteration_layout_fingerprint = 0u;
   std::uint64_t plan_token = 0u;
@@ -174,6 +182,30 @@ class Gfn2SccSetupEigensolver {
       void* provider_host_workspace, std::size_t provider_host_workspace_bytes,
       void* setup_device_arena, std::size_t setup_device_arena_bytes,
       Gfn2SccSetupEigensolverBinding& binding, cudaStream_t stream = nullptr) const noexcept;
+
+  /*
+   * Re-factor the bound overlap cache from the matrix evaluated for the
+   * current device geometry. The binding and setup arena must be the exact
+   * objects previously published by this owner; validating that provenance
+   * before enqueueing work prevents a forged descriptor from mutating an
+   * unrelated arena.
+   *
+   * device_overlap may exact-alias the owner's setup-time overlap slot or may
+   * reside in another CUDA/managed allocation on the selected device. It may
+   * not alias cache, diagnostic, activity, topology, or eigensolver workspace
+   * storage. Healthy systems publish their new factors and generation
+   * independently, while a numerical failure retains that member's previous
+   * factor bytes and publishes its failure metadata for geometry_generation.
+   *
+   * The call allocates, transfers, polls, and synchronizes nowhere. It is
+   * suitable for CUDA Graph capture when the linked provider supports the
+   * low-level factorization sequence.
+   */
+  [[nodiscard]] Gfn2SccSetupEigensolverDiagnostic refactor_overlap_from_device_async(
+      void* setup_device_arena, std::size_t setup_device_arena_bytes,
+      Gfn2SccSetupEigensolverBinding& binding, const double* device_overlap,
+      std::int64_t device_overlap_elements, std::uint64_t geometry_generation,
+      cudaStream_t stream = nullptr) const noexcept;
 
  private:
   struct Impl;

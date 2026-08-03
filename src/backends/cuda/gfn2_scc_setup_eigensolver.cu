@@ -150,6 +150,91 @@ void hash_append(std::uint64_t value, std::uint64_t& hash) noexcept {
   }
 }
 
+template <typename T>
+void hash_pointer(const T* pointer, std::uint64_t& hash) noexcept {
+  hash_append(static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(pointer)), hash);
+}
+
+std::uint64_t binding_provenance_seal(const Gfn2SccSetupEigensolverBinding& binding,
+                                      std::uint64_t salt) noexcept {
+  std::uint64_t hash = salt;
+  const auto count = [&](auto value) { hash_append(static_cast<std::uint64_t>(value), hash); };
+  const auto pointer = [&](const auto* value) { hash_pointer(value, hash); };
+
+  count(binding.batch.batch_size);
+  count(binding.batch.total_orbitals);
+  count(binding.batch.total_matrix_elements);
+  count(binding.batch.orbital_offset_count);
+  count(binding.batch.matrix_offset_count);
+  count(binding.batch.bucket_system_count);
+  count(binding.batch.active_elements);
+  count(binding.batch.plan_token);
+  pointer(binding.batch.orbital_offsets);
+  pointer(binding.batch.matrix_offsets);
+  pointer(binding.batch.bucket_systems);
+  pointer(binding.batch.active);
+
+  pointer(binding.provider.buckets);
+  count(binding.provider.bucket_count);
+  pointer(binding.provider.solver);
+  pointer(binding.provider.parameters);
+  pointer(binding.provider.blas);
+  pointer(binding.provider.device_workspace);
+  count(binding.provider.device_workspace_bytes);
+  pointer(binding.provider.host_workspace);
+  count(binding.provider.host_workspace_bytes);
+  count(binding.provider.requirements.solver_device_workspace_bytes);
+  count(binding.provider.requirements.solver_host_workspace_bytes);
+  count(binding.provider.capture_mode);
+  count(binding.provider.reserved);
+  count(binding.provider.plan_token);
+
+  pointer(binding.cache.cholesky_factors);
+  count(binding.cache.factor_elements);
+  pointer(binding.cache.geometry_generations);
+  count(binding.cache.generation_elements);
+  pointer(binding.cache.factor_statuses);
+  count(binding.cache.status_elements);
+  count(binding.cache.plan_token);
+
+  pointer(binding.workspace.matrix_scratch_a);
+  count(binding.workspace.matrix_a_elements);
+  pointer(binding.workspace.matrix_scratch_b);
+  count(binding.workspace.matrix_b_elements);
+  pointer(binding.workspace.eigenvalue_scratch);
+  count(binding.workspace.eigenvalue_elements);
+  pointer(binding.workspace.factor_pointers);
+  count(binding.workspace.factor_pointer_elements);
+  pointer(binding.workspace.matrix_pointers);
+  count(binding.workspace.matrix_pointer_elements);
+  pointer(binding.workspace.info_a);
+  count(binding.workspace.info_a_elements);
+  pointer(binding.workspace.info_b);
+  count(binding.workspace.info_b_elements);
+  pointer(binding.workspace.eligible);
+  count(binding.workspace.eligible_elements);
+  pointer(binding.workspace.sequence_active);
+  count(binding.workspace.sequence_active_elements);
+  pointer(static_cast<const std::byte*>(binding.workspace.solver_device_workspace));
+  count(binding.workspace.solver_device_workspace_bytes);
+  pointer(static_cast<const std::byte*>(binding.workspace.solver_host_workspace));
+  count(binding.workspace.solver_host_workspace_bytes);
+  count(binding.workspace.plan_token);
+
+  pointer(binding.overlap_input);
+  count(binding.overlap_elements);
+  pointer(binding.setup_system_errors);
+  count(binding.setup_system_error_elements);
+  pointer(binding.setup_device_error);
+  pointer(static_cast<const std::byte*>(binding.owner_identity));
+  pointer(static_cast<const std::byte*>(binding.setup_device_arena));
+  count(binding.setup_device_arena_bytes);
+  count(binding.geometry_generation);
+  count(binding.iteration_layout_fingerprint);
+  count(binding.plan_token);
+  return hash == 0u ? 1u : hash;
+}
+
 std::uint64_t layout_fingerprint(const Gfn2SccSetupEigensolverRequirements& requirements,
                                  std::int64_t batch, std::int64_t orbitals,
                                  std::int64_t matrices) noexcept {
@@ -260,6 +345,7 @@ struct Gfn2SccSetupEigensolver::Impl {
   std::int64_t total_shells = 0;
   std::int64_t total_orbitals = 0;
   std::int64_t total_matrices = 0;
+  std::uint64_t binding_salt = 0u;
   void* pinned_overlap = nullptr;
 
   ~Impl() {
@@ -398,6 +484,12 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::create(
     candidate->requirements.layout_fingerprint =
         layout_fingerprint(candidate->requirements, candidate->batch_size,
                            candidate->total_orbitals, candidate->total_matrices);
+    candidate->binding_salt = candidate->requirements.layout_fingerprint;
+    hash_append(static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(candidate.get())),
+                candidate->binding_salt);
+    if (candidate->binding_salt == 0u) {
+      candidate->binding_salt = 1u;
+    }
 
     cuda_status = cudaMallocHost(&candidate->pinned_overlap, matrix_bytes);
     if (cuda_status != cudaSuccess) {
@@ -708,9 +800,13 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::bind_and_factor_overl
   candidate.setup_system_errors = reinterpret_cast<std::uint32_t*>(setup + own.system_error_offset);
   candidate.setup_system_error_elements = batch;
   candidate.setup_device_error = reinterpret_cast<std::uint32_t*>(setup + own.device_error_offset);
+  candidate.owner_identity = impl_.get();
+  candidate.setup_device_arena = setup_device_arena;
+  candidate.setup_device_arena_bytes = own.setup_device_bytes;
   candidate.geometry_generation = own.geometry_generation;
   candidate.iteration_layout_fingerprint = iteration_requirements.layout_fingerprint;
   candidate.plan_token = own.plan_token;
+  candidate.provenance_seal = binding_provenance_seal(candidate, impl_->binding_salt);
 
   std::size_t overlap_bytes = 0u;
   if (!checked_multiply(static_cast<std::size_t>(matrices), sizeof(double), overlap_bytes)) {
@@ -749,6 +845,241 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::bind_and_factor_overl
   }
 
   binding = candidate;
+  return {};
+}
+
+Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_from_device_async(
+    void* setup_device_arena, std::size_t setup_device_arena_bytes,
+    Gfn2SccSetupEigensolverBinding& binding, const double* device_overlap,
+    std::int64_t device_overlap_elements, std::uint64_t geometry_generation,
+    cudaStream_t stream) const noexcept {
+  if (impl_ == nullptr) {
+    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidProvider,
+                   SetupField::kHandles);
+  }
+  const auto& own = impl_->requirements;
+  if (geometry_generation == 0u) {
+    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidGeneration,
+                   SetupField::kGeometryGeneration);
+  }
+  if (setup_device_arena == nullptr) {
+    return capacity_failure(SetupError::kNullArena, SetupField::kSetupArena, own.setup_device_bytes,
+                            setup_device_arena_bytes);
+  }
+  if (reinterpret_cast<std::uintptr_t>(setup_device_arena) % own.alignment != 0u) {
+    return capacity_failure(SetupError::kMisalignedArena, SetupField::kSetupArena,
+                            own.setup_device_bytes, setup_device_arena_bytes);
+  }
+  if (setup_device_arena_bytes < own.setup_device_bytes) {
+    return capacity_failure(SetupError::kInsufficientArena, SetupField::kSetupArena,
+                            own.setup_device_bytes, setup_device_arena_bytes);
+  }
+
+  cudaPointerAttributes setup_attributes{};
+  cudaError_t cuda_status = cudaSuccess;
+  if (!cuda_accessible(setup_device_arena, setup_attributes, cuda_status)) {
+    SetupDiagnostic diagnostic = failure(GPUXTB_STATUS_INVALID_ARGUMENT,
+                                         SetupError::kInvalidArenaMemory, SetupField::kSetupArena);
+    diagnostic.cuda_status = cuda_status;
+    return diagnostic;
+  }
+  if (device_overlap == nullptr || device_overlap_elements != impl_->total_matrices ||
+      reinterpret_cast<std::uintptr_t>(device_overlap) % alignof(double) != 0u) {
+    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidOverlap,
+                   SetupField::kOverlap);
+  }
+  cudaPointerAttributes overlap_attributes{};
+  if (!cuda_accessible(device_overlap, overlap_attributes, cuda_status)) {
+    SetupDiagnostic diagnostic = failure(GPUXTB_STATUS_INVALID_ARGUMENT,
+                                         SetupError::kInvalidArenaMemory, SetupField::kOverlap);
+    diagnostic.cuda_status = cuda_status;
+    return diagnostic;
+  }
+  int current_device = -1;
+  cuda_status = cudaGetDevice(&current_device);
+  if (cuda_status != cudaSuccess) {
+    return cuda_failure(SetupError::kCudaError, SetupField::kOverlap, cuda_status);
+  }
+  if (setup_attributes.device != current_device || overlap_attributes.device != current_device) {
+    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidArenaMemory,
+                   SetupField::kOverlap);
+  }
+
+  auto* const setup = static_cast<std::byte*>(setup_device_arena);
+  const double* const expected_overlap =
+      reinterpret_cast<const double*>(setup + own.overlap_input_offset);
+  const Gfn2EigensolverOverlapCache expected_cache{
+      reinterpret_cast<double*>(setup + own.cache_factor_offset),
+      impl_->total_matrices,
+      reinterpret_cast<std::uint64_t*>(setup + own.cache_generation_offset),
+      impl_->batch_size,
+      reinterpret_cast<std::uint32_t*>(setup + own.cache_status_offset),
+      impl_->batch_size,
+      own.plan_token,
+  };
+  std::uint32_t* const expected_system_errors =
+      reinterpret_cast<std::uint32_t*>(setup + own.system_error_offset);
+  std::uint32_t* const expected_device_error =
+      reinterpret_cast<std::uint32_t*>(setup + own.device_error_offset);
+
+  const auto same_provider_requirements =
+      [](const Gfn2EigensolverWorkspaceRequirements& first,
+         const Gfn2EigensolverWorkspaceRequirements& second) noexcept {
+        return first.solver_device_workspace_bytes == second.solver_device_workspace_bytes &&
+               first.solver_host_workspace_bytes == second.solver_host_workspace_bytes;
+      };
+  const bool valid_binding =
+      binding.owner_identity == impl_.get() && binding.setup_device_arena == setup_device_arena &&
+      binding.setup_device_arena_bytes == own.setup_device_bytes &&
+      binding.plan_token == own.plan_token && binding.iteration_layout_fingerprint != 0u &&
+      binding.batch.batch_size == impl_->batch_size &&
+      binding.batch.total_orbitals == impl_->total_orbitals &&
+      binding.batch.total_matrix_elements == impl_->total_matrices &&
+      binding.batch.orbital_offset_count == impl_->batch_size + 1 &&
+      binding.batch.matrix_offset_count == impl_->batch_size + 1 &&
+      binding.batch.bucket_system_count == impl_->batch_size &&
+      binding.batch.active_elements == impl_->batch_size &&
+      binding.batch.plan_token == own.plan_token && binding.batch.orbital_offsets != nullptr &&
+      binding.batch.matrix_offsets != nullptr && binding.batch.bucket_systems != nullptr &&
+      binding.batch.active != nullptr && binding.provider.buckets == impl_->buckets.data() &&
+      binding.provider.bucket_count == static_cast<std::int64_t>(impl_->buckets.size()) &&
+      binding.provider.solver == impl_->solver &&
+      binding.provider.parameters == impl_->parameters && binding.provider.blas == impl_->blas &&
+      binding.provider.device_workspace == binding.workspace.solver_device_workspace &&
+      binding.provider.device_workspace_bytes == binding.workspace.solver_device_workspace_bytes &&
+      binding.provider.host_workspace == binding.workspace.solver_host_workspace &&
+      binding.provider.host_workspace_bytes == binding.workspace.solver_host_workspace_bytes &&
+      same_provider_requirements(binding.provider.requirements, own.provider) &&
+      binding.provider.plan_token == own.plan_token &&
+      binding.cache.cholesky_factors == expected_cache.cholesky_factors &&
+      binding.cache.factor_elements == expected_cache.factor_elements &&
+      binding.cache.geometry_generations == expected_cache.geometry_generations &&
+      binding.cache.generation_elements == expected_cache.generation_elements &&
+      binding.cache.factor_statuses == expected_cache.factor_statuses &&
+      binding.cache.status_elements == expected_cache.status_elements &&
+      binding.cache.plan_token == own.plan_token &&
+      binding.workspace.plan_token == own.plan_token &&
+      binding.workspace.matrix_a_elements == impl_->total_matrices &&
+      binding.workspace.matrix_b_elements == impl_->total_matrices &&
+      binding.workspace.eigenvalue_elements == impl_->total_orbitals &&
+      binding.workspace.factor_pointer_elements == impl_->batch_size &&
+      binding.workspace.matrix_pointer_elements == impl_->batch_size &&
+      binding.workspace.info_a_elements == impl_->batch_size &&
+      binding.workspace.info_b_elements == impl_->batch_size &&
+      binding.workspace.eligible_elements == impl_->batch_size &&
+      binding.workspace.sequence_active_elements == 1 &&
+      same_provider_requirements({binding.workspace.solver_device_workspace_bytes,
+                                  binding.workspace.solver_host_workspace_bytes},
+                                 own.provider) &&
+      binding.options.minimum_overlap_rcond == impl_->options.minimum_overlap_rcond &&
+      binding.options.symmetry_tolerance == impl_->options.symmetry_tolerance &&
+      binding.options.deterministic_debug == impl_->options.deterministic_debug &&
+      binding.overlap_input == expected_overlap &&
+      binding.overlap_elements == impl_->total_matrices &&
+      binding.setup_system_errors == expected_system_errors &&
+      binding.setup_system_error_elements == impl_->batch_size &&
+      binding.setup_device_error == expected_device_error && binding.provenance_seal != 0u &&
+      binding.provenance_seal == binding_provenance_seal(binding, impl_->binding_salt);
+  if (!valid_binding) {
+    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidIterationProvenance,
+                   SetupField::kOverlapFactorization);
+  }
+  if (geometry_generation <= binding.geometry_generation) {
+    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidGeneration,
+                   SetupField::kGeometryGeneration);
+  }
+
+  AddressRange setup_range{};
+  AddressRange input_range{};
+  AddressRange expected_input_range{};
+  if (!make_range(setup_device_arena, own.setup_device_bytes, setup_range) ||
+      !make_elements_range(device_overlap, device_overlap_elements, input_range) ||
+      !make_elements_range(expected_overlap, impl_->total_matrices, expected_input_range) ||
+      (overlaps(setup_range, input_range) && (input_range.begin != expected_input_range.begin ||
+                                              input_range.end != expected_input_range.end))) {
+    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidOverlap,
+                   SetupField::kOverlap);
+  }
+
+  std::array<AddressRange, 19> protected_ranges{};
+  if (!make_elements_range(binding.batch.orbital_offsets, binding.batch.orbital_offset_count,
+                           protected_ranges[0]) ||
+      !make_elements_range(binding.batch.matrix_offsets, binding.batch.matrix_offset_count,
+                           protected_ranges[1]) ||
+      !make_elements_range(binding.batch.bucket_systems, binding.batch.bucket_system_count,
+                           protected_ranges[2]) ||
+      !make_elements_range(binding.batch.active, binding.batch.active_elements,
+                           protected_ranges[3]) ||
+      !make_elements_range(binding.cache.cholesky_factors, binding.cache.factor_elements,
+                           protected_ranges[4]) ||
+      !make_elements_range(binding.cache.geometry_generations, binding.cache.generation_elements,
+                           protected_ranges[5]) ||
+      !make_elements_range(binding.cache.factor_statuses, binding.cache.status_elements,
+                           protected_ranges[6]) ||
+      !make_elements_range(binding.workspace.matrix_scratch_a, binding.workspace.matrix_a_elements,
+                           protected_ranges[7]) ||
+      !make_elements_range(binding.workspace.matrix_scratch_b, binding.workspace.matrix_b_elements,
+                           protected_ranges[8]) ||
+      !make_elements_range(binding.workspace.eigenvalue_scratch,
+                           binding.workspace.eigenvalue_elements, protected_ranges[9]) ||
+      !make_elements_range(binding.workspace.factor_pointers,
+                           binding.workspace.factor_pointer_elements, protected_ranges[10]) ||
+      !make_elements_range(binding.workspace.matrix_pointers,
+                           binding.workspace.matrix_pointer_elements, protected_ranges[11]) ||
+      !make_elements_range(binding.workspace.info_a, binding.workspace.info_a_elements,
+                           protected_ranges[12]) ||
+      !make_elements_range(binding.workspace.info_b, binding.workspace.info_b_elements,
+                           protected_ranges[13]) ||
+      !make_elements_range(binding.workspace.eligible, binding.workspace.eligible_elements,
+                           protected_ranges[14]) ||
+      !make_elements_range(binding.workspace.sequence_active,
+                           binding.workspace.sequence_active_elements, protected_ranges[15]) ||
+      !make_range(binding.workspace.solver_device_workspace,
+                  binding.workspace.solver_device_workspace_bytes, protected_ranges[16]) ||
+      !make_elements_range(binding.setup_system_errors, binding.setup_system_error_elements,
+                           protected_ranges[17]) ||
+      !make_elements_range(binding.setup_device_error, 1, protected_ranges[18]) ||
+      !pairwise_disjoint(protected_ranges)) {
+    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidIterationProvenance,
+                   SetupField::kOverlapFactorization);
+  }
+  for (const AddressRange& range : protected_ranges) {
+    if (overlaps(input_range, range)) {
+      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidOverlap,
+                     SetupField::kOverlap);
+    }
+  }
+
+  auto* const setup_active = reinterpret_cast<std::uint8_t*>(setup + own.active_offset);
+  cuda_status =
+      cudaMemsetAsync(setup_active, 1, static_cast<std::size_t>(impl_->batch_size), stream);
+  if (cuda_status == cudaSuccess) {
+    cuda_status = reset_gfn2_eigensolver_device_errors_cuda(
+        impl_->batch_size, binding.setup_system_errors, binding.setup_device_error, stream);
+  }
+  if (cuda_status != cudaSuccess) {
+    return cuda_failure(SetupError::kCudaError, SetupField::kOverlapFactorization, cuda_status);
+  }
+
+  Gfn2EigensolverDeviceBatch refactor_batch = binding.batch;
+  refactor_batch.active = setup_active;
+  const Gfn2EigensolverLaunchResult launch = factor_gfn2_overlap_cuda(
+      refactor_batch, binding.provider.buckets, binding.provider.bucket_count, device_overlap,
+      geometry_generation, binding.options, binding.provider.solver, binding.provider.parameters,
+      binding.workspace, binding.cache, binding.setup_system_errors, binding.setup_device_error,
+      stream, Gfn2EigensolverFactorCachePolicy::kPreservePriorOnFailure);
+  if (!launch.success()) {
+    SetupDiagnostic diagnostic =
+        failure(GPUXTB_STATUS_EIGENSOLVER_FAILED, SetupError::kProviderLaunchFailed,
+                SetupField::kOverlapFactorization);
+    diagnostic.cuda_status = launch.cuda_status;
+    diagnostic.cublas_status = launch.cublas_status;
+    diagnostic.cusolver_status = launch.cusolver_status;
+    return diagnostic;
+  }
+
+  binding.geometry_generation = geometry_generation;
+  binding.provenance_seal = binding_provenance_seal(binding, impl_->binding_salt);
   return {};
 }
 

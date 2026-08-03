@@ -1,6 +1,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -59,7 +60,10 @@ class DeviceAllocation {
   }
 
   bool allocate(std::size_t bytes) {
-    return bytes != 0u && cudaMalloc(&pointer_, bytes) == cudaSuccess;
+    if (bytes == 0u || cudaMalloc(&pointer_, bytes) != cudaSuccess) {
+      return false;
+    }
+    return true;
   }
 
   void* get() const noexcept { return pointer_; }
@@ -125,6 +129,24 @@ class ProviderHandles {
   cublasHandle_t blas = nullptr;
 };
 
+class GraphResources {
+ public:
+  GraphResources() = default;
+  GraphResources(const GraphResources&) = delete;
+  GraphResources& operator=(const GraphResources&) = delete;
+  ~GraphResources() {
+    if (executable != nullptr) {
+      (void)cudaGraphExecDestroy(executable);
+    }
+    if (graph != nullptr) {
+      (void)cudaGraphDestroy(graph);
+    }
+  }
+
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t executable = nullptr;
+};
+
 struct IterationWorkspaceFixture {
   Gfn2SccIterationDevicePlan plan{};
   Gfn2SccIterationArenaRequirements requirements{};
@@ -180,7 +202,8 @@ bool near(double first, double second, double tolerance = 3.0e-10) {
   return std::abs(first - second) <= tolerance * scale;
 }
 
-bool factors_reconstruct_overlap(const HostSccCase& host, const Gfn2SccSetupTopology& topology,
+bool factors_reconstruct_overlap(const std::vector<double>& overlap,
+                                 const Gfn2SccSetupTopology& topology,
                                  const std::vector<double>& factors) {
   const Gfn2RaggedTopologyView& topology_view = topology.host_topology();
   const auto& buckets = topology.eigensolver_buckets();
@@ -200,7 +223,7 @@ bool factors_reconstruct_overlap(const HostSccCase& host, const Gfn2SccSetupTopo
                              factors[static_cast<std::size_t>(factor_begin + column + inner * n)];
           }
           if (!near(reconstructed,
-                    host.overlap()[static_cast<std::size_t>(input_begin + row * n + column)])) {
+                    overlap[static_cast<std::size_t>(input_begin + row * n + column)])) {
             return false;
           }
         }
@@ -208,6 +231,56 @@ bool factors_reconstruct_overlap(const HostSccCase& host, const Gfn2SccSetupTopo
     }
   }
   return true;
+}
+
+bool factor_reconstructs_system(const std::vector<double>& overlap,
+                                const Gfn2SccSetupTopology& topology,
+                                const std::vector<double>& factors, std::int64_t requested_system) {
+  const Gfn2RaggedTopologyView& view = topology.host_topology();
+  for (const Gfn2EigensolverBucket& bucket : topology.eigensolver_buckets()) {
+    const std::int64_t n = bucket.orbital_count;
+    const std::int64_t stride = n * n;
+    for (std::int64_t local = 0; local < bucket.system_count; ++local) {
+      const std::int64_t slot = bucket.system_index_offset + local;
+      const std::int64_t system = view.bucket_systems[slot];
+      if (system != requested_system) {
+        continue;
+      }
+      const std::int64_t input_begin = view.matrix_offsets[system];
+      const std::int64_t factor_begin = bucket.matrix_scratch_offset + local * stride;
+      for (std::int64_t row = 0; row < n; ++row) {
+        for (std::int64_t column = 0; column < n; ++column) {
+          double reconstructed = 0.0;
+          for (std::int64_t inner = 0; inner <= std::min(row, column); ++inner) {
+            reconstructed += factors[static_cast<std::size_t>(factor_begin + row + inner * n)] *
+                             factors[static_cast<std::size_t>(factor_begin + column + inner * n)];
+          }
+          if (!near(reconstructed,
+                    overlap[static_cast<std::size_t>(input_begin + row * n + column)])) {
+            return false;
+          }
+        }
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<double> changed_overlap(const HostSccCase& host, const Gfn2SccSetupTopology& topology,
+                                    double scale) {
+  std::vector<double> result = host.overlap();
+  const Gfn2RaggedTopologyView& view = topology.host_topology();
+  for (std::int64_t system = 0; system < view.batch_size; ++system) {
+    const std::int64_t orbitals =
+        view.batch_orbital_offsets[system + 1] - view.batch_orbital_offsets[system];
+    const std::int64_t matrix_begin = view.matrix_offsets[system];
+    const double shift = scale * static_cast<double>(system + 1);
+    for (std::int64_t orbital = 0; orbital < orbitals; ++orbital) {
+      result[static_cast<std::size_t>(matrix_begin + orbital * orbitals + orbital)] += shift;
+    }
+  }
+  return result;
 }
 
 std::pair<std::int64_t, std::int64_t> provider_factor_range_for_system(
@@ -237,10 +310,14 @@ struct ProductionFixture {
   DeviceAllocation setup_arena;
   Gfn2SccSetupEigensolverBinding binding{};
 
-  bool create() {
+  bool create(std::int64_t batch_size = 4) {
     HostSccCaseOptions options;
-    options.systems = {SmallSystemKind::kH2, SmallSystemKind::kHe, SmallSystemKind::kLiH,
-                       SmallSystemKind::kCH2};
+    constexpr std::array<SmallSystemKind, 4> pattern{SmallSystemKind::kH2, SmallSystemKind::kHe,
+                                                     SmallSystemKind::kLiH, SmallSystemKind::kCH2};
+    options.systems.reserve(static_cast<std::size_t>(batch_size));
+    for (std::int64_t system = 0; system < batch_size; ++system) {
+      options.systems.push_back(pattern[static_cast<std::size_t>(system) % pattern.size()]);
+    }
     options.geometry_generation = kGeneration;
     std::string error;
     if (HostSccCase::create(options, host, error) != GPUXTB_STATUS_SUCCESS || !handles.create()) {
@@ -338,7 +415,7 @@ int test_four_system_provider_and_cache() {
                     [](std::uint32_t value) { return value == 0u; }));
   CHECK(std::all_of(generations.begin(), generations.end(),
                     [](std::uint64_t value) { return value == kGeneration; }));
-  CHECK(factors_reconstruct_overlap(fixture.host, fixture.topology, factors));
+  CHECK(factors_reconstruct_overlap(fixture.host.overlap(), fixture.topology, factors));
 
   const Gfn2SccSetupEigensolverBinding first = fixture.binding;
   Gfn2SccSetupEigensolverBinding second{};
@@ -356,6 +433,233 @@ int test_four_system_provider_and_cache() {
   CHECK(first.provider.host_workspace == second.provider.host_workspace);
   CHECK(first.overlap_input == second.overlap_input);
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+  return 0;
+}
+
+int test_device_overlap_refactor_batches_and_fail_closed_aliases() {
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    ProductionFixture fixture;
+    CHECK(fixture.create(batch_size));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+
+    const std::vector<double> changed = changed_overlap(fixture.host, fixture.topology, 0.004);
+    DeviceAllocation device_overlap;
+    CHECK(device_overlap.allocate(changed.size() * sizeof(double)));
+    CUDA_CHECK(cudaMemcpyAsync(device_overlap.get(), changed.data(),
+                               changed.size() * sizeof(double), cudaMemcpyHostToDevice,
+                               fixture.handles.stream));
+
+    /* A synchronous provenance/alias rejection must enqueue no diagnostic
+     * reset and must not advance the host-side generation descriptor. */
+    CUDA_CHECK(cudaMemsetAsync(fixture.binding.setup_system_errors, 0x5a,
+                               static_cast<std::size_t>(batch_size) * sizeof(std::uint32_t),
+                               fixture.handles.stream));
+    CUDA_CHECK(cudaMemsetAsync(fixture.binding.setup_device_error, 0x5a, sizeof(std::uint32_t),
+                               fixture.handles.stream));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+    const std::uint64_t previous_generation = fixture.binding.geometry_generation;
+    auto diagnostic = fixture.setup.refactor_overlap_from_device_async(
+        fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, fixture.binding,
+        fixture.binding.cache.cholesky_factors, fixture.binding.cache.factor_elements,
+        kGeneration + 1u, fixture.handles.stream);
+    CHECK(diagnostic.error == Gfn2SccSetupEigensolverError::kInvalidOverlap);
+    CHECK(fixture.binding.geometry_generation == previous_generation);
+    std::vector<std::uint32_t> untouched_errors;
+    CHECK(download(fixture.binding.setup_system_errors, static_cast<std::size_t>(batch_size),
+                   untouched_errors, fixture.handles.stream));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+    CHECK(std::all_of(untouched_errors.begin(), untouched_errors.end(),
+                      [](std::uint32_t value) { return value == UINT32_C(0x5a5a5a5a); }));
+
+    Gfn2SccSetupEigensolverBinding forged = fixture.binding;
+    forged.owner_identity = nullptr;
+    diagnostic = fixture.setup.refactor_overlap_from_device_async(
+        fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, forged,
+        static_cast<const double*>(device_overlap.get()), static_cast<std::int64_t>(changed.size()),
+        kGeneration + 1u, fixture.handles.stream);
+    CHECK(diagnostic.error == Gfn2SccSetupEigensolverError::kInvalidIterationProvenance);
+
+    forged = fixture.binding;
+    forged.workspace.matrix_scratch_a = static_cast<double*>(device_overlap.get());
+    diagnostic = fixture.setup.refactor_overlap_from_device_async(
+        fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, forged,
+        static_cast<const double*>(device_overlap.get()), static_cast<std::int64_t>(changed.size()),
+        kGeneration + 1u, fixture.handles.stream);
+    CHECK(diagnostic.error == Gfn2SccSetupEigensolverError::kInvalidIterationProvenance);
+
+    diagnostic = fixture.setup.refactor_overlap_from_device_async(
+        fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, fixture.binding,
+        static_cast<const double*>(device_overlap.get()), static_cast<std::int64_t>(changed.size()),
+        previous_generation, fixture.handles.stream);
+    CHECK(diagnostic.error == Gfn2SccSetupEigensolverError::kInvalidGeneration);
+    CHECK(fixture.binding.geometry_generation == previous_generation);
+
+    diagnostic = fixture.setup.refactor_overlap_from_device_async(
+        fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, fixture.binding,
+        static_cast<const double*>(device_overlap.get()), static_cast<std::int64_t>(changed.size()),
+        kGeneration + 1u, fixture.handles.stream);
+    CHECK(diagnostic.success());
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+    CHECK(fixture.binding.geometry_generation == kGeneration + 1u);
+
+    std::vector<std::uint32_t> errors;
+    std::vector<std::uint32_t> statuses;
+    std::vector<std::uint64_t> generations;
+    std::vector<double> factors;
+    CHECK(download(fixture.binding.setup_system_errors, static_cast<std::size_t>(batch_size),
+                   errors, fixture.handles.stream));
+    CHECK(download(fixture.binding.cache.factor_statuses, static_cast<std::size_t>(batch_size),
+                   statuses, fixture.handles.stream));
+    CHECK(download(fixture.binding.cache.geometry_generations, static_cast<std::size_t>(batch_size),
+                   generations, fixture.handles.stream));
+    CHECK(download(fixture.binding.cache.cholesky_factors, changed.size(), factors,
+                   fixture.handles.stream));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+    CHECK(
+        std::all_of(errors.begin(), errors.end(), [](std::uint32_t value) { return value == 0u; }));
+    CHECK(std::all_of(statuses.begin(), statuses.end(),
+                      [](std::uint32_t value) { return value == 0u; }));
+    CHECK(std::all_of(generations.begin(), generations.end(),
+                      [](std::uint64_t value) { return value == kGeneration + 1u; }));
+    CHECK(factors_reconstruct_overlap(changed, fixture.topology, factors));
+
+    /* Repeat with the same allocation and a new value. Batch one uses the
+     * default stream while the remaining cases exercise the caller's custom
+     * nonblocking stream. */
+    const std::vector<double> repeated = changed_overlap(fixture.host, fixture.topology, 0.008);
+    cudaStream_t refactor_stream = fixture.handles.stream;
+    if (batch_size == 1) {
+      CUDA_CHECK(cudaMemcpy(device_overlap.get(), repeated.data(), repeated.size() * sizeof(double),
+                            cudaMemcpyHostToDevice));
+      refactor_stream = nullptr;
+    } else {
+      CUDA_CHECK(cudaMemcpyAsync(device_overlap.get(), repeated.data(),
+                                 repeated.size() * sizeof(double), cudaMemcpyHostToDevice,
+                                 refactor_stream));
+    }
+    diagnostic = fixture.setup.refactor_overlap_from_device_async(
+        fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, fixture.binding,
+        static_cast<const double*>(device_overlap.get()),
+        static_cast<std::int64_t>(repeated.size()), kGeneration + 2u, refactor_stream);
+    CHECK(diagnostic.success());
+    if (refactor_stream == nullptr) {
+      CUDA_CHECK(cudaDeviceSynchronize());
+    } else {
+      CUDA_CHECK(cudaStreamSynchronize(refactor_stream));
+    }
+    CHECK(download(fixture.binding.cache.cholesky_factors, repeated.size(), factors,
+                   fixture.handles.stream));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+    CHECK(factors_reconstruct_overlap(repeated, fixture.topology, factors));
+  }
+  return 0;
+}
+
+int test_device_overlap_refactor_peer_failure() {
+  constexpr std::int64_t kFailedSystem = 3;
+  ProductionFixture fixture;
+  CHECK(fixture.create(8));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+
+  std::vector<double> before;
+  CHECK(download(fixture.binding.cache.cholesky_factors,
+                 static_cast<std::size_t>(fixture.host.integral_plan().total_matrix_elements),
+                 before, fixture.handles.stream));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+
+  std::vector<double> changed = changed_overlap(fixture.host, fixture.topology, 0.006);
+  const std::int64_t failed_begin = fixture.topology.host_topology().matrix_offsets[kFailedSystem];
+  changed[static_cast<std::size_t>(failed_begin)] = std::numeric_limits<double>::quiet_NaN();
+  DeviceAllocation device_overlap;
+  CHECK(device_overlap.allocate(changed.size() * sizeof(double)));
+  CUDA_CHECK(cudaMemcpyAsync(device_overlap.get(), changed.data(), changed.size() * sizeof(double),
+                             cudaMemcpyHostToDevice, fixture.handles.stream));
+  CHECK(fixture.setup
+            .refactor_overlap_from_device_async(
+                fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes,
+                fixture.binding, static_cast<const double*>(device_overlap.get()),
+                static_cast<std::int64_t>(changed.size()), kGeneration + 2u, fixture.handles.stream)
+            .success());
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+
+  std::vector<double> after;
+  std::vector<std::uint32_t> errors;
+  std::vector<std::uint32_t> statuses;
+  std::vector<std::uint64_t> generations;
+  CHECK(download(fixture.binding.cache.cholesky_factors, before.size(), after,
+                 fixture.handles.stream));
+  CHECK(download(fixture.binding.setup_system_errors,
+                 static_cast<std::size_t>(fixture.host.batch_size()), errors,
+                 fixture.handles.stream));
+  CHECK(download(fixture.binding.cache.factor_statuses,
+                 static_cast<std::size_t>(fixture.host.batch_size()), statuses,
+                 fixture.handles.stream));
+  CHECK(download(fixture.binding.cache.geometry_generations,
+                 static_cast<std::size_t>(fixture.host.batch_size()), generations,
+                 fixture.handles.stream));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+
+  const std::uint32_t expected =
+      static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kNonfiniteOverlap);
+  const auto [factor_begin, factor_end] =
+      provider_factor_range_for_system(fixture.topology, kFailedSystem);
+  CHECK(factor_begin >= 0 && factor_end > factor_begin);
+  CHECK(std::equal(before.begin() + factor_begin, before.begin() + factor_end,
+                   after.begin() + factor_begin));
+  for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
+    const std::size_t index = static_cast<std::size_t>(system);
+    if (system == kFailedSystem) {
+      CHECK(errors[index] == expected);
+      CHECK(statuses[index] == 0u);
+      CHECK(generations[index] == kGeneration);
+    } else {
+      CHECK(errors[index] == 0u);
+      CHECK(statuses[index] == 0u);
+      CHECK(generations[index] == kGeneration + 2u);
+      CHECK(factor_reconstructs_system(changed, fixture.topology, after, system));
+    }
+  }
+  return 0;
+}
+
+int test_device_overlap_refactor_graph_replay() {
+  ProductionFixture fixture;
+  CHECK(fixture.create(8));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+  const std::vector<double> first = changed_overlap(fixture.host, fixture.topology, 0.003);
+  const std::vector<double> second = changed_overlap(fixture.host, fixture.topology, 0.009);
+  DeviceAllocation device_overlap;
+  CHECK(device_overlap.allocate(first.size() * sizeof(double)));
+
+  GraphResources graph;
+  CUDA_CHECK(cudaStreamBeginCapture(fixture.handles.stream, cudaStreamCaptureModeThreadLocal));
+  const auto diagnostic = fixture.setup.refactor_overlap_from_device_async(
+      fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, fixture.binding,
+      static_cast<const double*>(device_overlap.get()), static_cast<std::int64_t>(first.size()),
+      kGeneration + 3u, fixture.handles.stream);
+  const cudaError_t end_capture = cudaStreamEndCapture(fixture.handles.stream, &graph.graph);
+  CHECK(diagnostic.success());
+  CUDA_CHECK(end_capture);
+  CUDA_CHECK(cudaGraphInstantiate(&graph.executable, graph.graph, 0));
+
+  CUDA_CHECK(cudaMemcpyAsync(device_overlap.get(), first.data(), first.size() * sizeof(double),
+                             cudaMemcpyHostToDevice, fixture.handles.stream));
+  CUDA_CHECK(cudaGraphLaunch(graph.executable, fixture.handles.stream));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+  std::vector<double> factors;
+  CHECK(download(fixture.binding.cache.cholesky_factors, first.size(), factors,
+                 fixture.handles.stream));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+  CHECK(factors_reconstruct_overlap(first, fixture.topology, factors));
+
+  CUDA_CHECK(cudaMemcpyAsync(device_overlap.get(), second.data(), second.size() * sizeof(double),
+                             cudaMemcpyHostToDevice, fixture.handles.stream));
+  CUDA_CHECK(cudaGraphLaunch(graph.executable, fixture.handles.stream));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+  CHECK(download(fixture.binding.cache.cholesky_factors, second.size(), factors,
+                 fixture.handles.stream));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+  CHECK(factors_reconstruct_overlap(second, fixture.topology, factors));
   return 0;
 }
 
@@ -491,6 +795,18 @@ int main() {
   CUDA_CHECK(cudaSetDevice(0));
 
   int status = test_four_system_provider_and_cache();
+  if (status != 0) {
+    return status;
+  }
+  status = test_device_overlap_refactor_batches_and_fail_closed_aliases();
+  if (status != 0) {
+    return status;
+  }
+  status = test_device_overlap_refactor_peer_failure();
+  if (status != 0) {
+    return status;
+  }
+  status = test_device_overlap_refactor_graph_replay();
   if (status != 0) {
     return status;
   }
