@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/cuda/gfn2_scc_iteration_control.cuh"
 #include "gpuxtb/gpuxtb.h"
 
 namespace gpuxtb::detail::cuda {
@@ -21,6 +22,8 @@ enum class Gfn2PeriodicEmbeddingDeviceError : std::uint32_t {
   kNonsymmetricResponseMatrix = 6u,
   kNonfinitePotentialArithmetic = 7u,
   kNonfiniteEnergyArithmetic = 8u,
+  kInvalidActivity = 9u,
+  kStaleGeometry = 10u,
 };
 
 /*
@@ -43,6 +46,9 @@ struct Gfn2PeriodicEmbeddingDeviceBatch {
   const std::int64_t* matrix_offsets = nullptr;
   const double* shifts = nullptr;
   const double* response_matrices = nullptr;
+
+  /* Optional for the standalone combined API; required by SCC split APIs. */
+  std::uint64_t geometry_generation = 0u;
 };
 
 /*
@@ -95,6 +101,39 @@ cudaError_t evaluate_gfn2_periodic_embedding_cuda(
     const double* raw_atomic_charges, double* atomic_potentials, double* energies,
     gpuxtb_status_t* system_statuses, const Gfn2PeriodicEmbeddingDeviceWorkspace& workspace,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/* Clear SCC split-stage peer diagnostics and the plan-only first error. */
+cudaError_t reset_gfn2_periodic_embedding_scc_device_errors_cuda(
+    std::int64_t batch_size, std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Publish V = b + A*q_mixed for active SCC members. Numerical errors are
+ * isolated in system_errors; device_error contains plan/activity/provenance
+ * failures only. Inactive systems retain their public potential bytes and do
+ * not inspect shifts, response matrices, or mixed charges.
+ *
+ * Only workspace.potential_scratch and workspace.sequence_active are required
+ * or accessed. workspace.raw_response_scratch may be null.
+ */
+cudaError_t evaluate_gfn2_periodic_embedding_scc_potential_cuda(
+    const Gfn2PeriodicEmbeddingDeviceBatch& batch, std::uint64_t expected_geometry_generation,
+    const double* mixed_atomic_charges, const Gfn2SccIterationDeviceActivity& activity,
+    double* atomic_potentials, const Gfn2PeriodicEmbeddingDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Publish the pure raw-charge energy
+ * q_raw^T*b + one-half*q_raw^T*A*q_raw for active SCC members. Mixed charges,
+ * potentials, and workspace.potential_scratch are not inspected.
+ */
+cudaError_t evaluate_gfn2_periodic_embedding_scc_energy_cuda(
+    const Gfn2PeriodicEmbeddingDeviceBatch& batch, std::uint64_t expected_geometry_generation,
+    const double* raw_atomic_charges, const Gfn2SccIterationDeviceActivity& activity,
+    double* energies, const Gfn2PeriodicEmbeddingDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 

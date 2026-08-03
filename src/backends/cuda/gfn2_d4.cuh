@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/cuda/gfn2_scc_iteration_control.cuh"
+
 namespace gpuxtb::detail::cuda {
 
 inline constexpr std::int64_t kGfn2D4MaximumReferences = 7;
@@ -101,6 +103,8 @@ enum class Gfn2D4DeviceError : std::uint32_t {
   kNonfiniteCharge = 5u,
   kInvalidDamping = 6u,
   kNonfiniteArithmetic = 7u,
+  kInvalidActivity = 8u,
+  kStaleGeometry = 9u,
 };
 
 /* SplitMix64 finalizer used by the order-sensitive, parallelizable fingerprint. */
@@ -161,6 +165,40 @@ cudaError_t evaluate_gfn2_d4_two_body_cuda(
     const Gfn2D4DeviceBatch& batch, const Gfn2D4DeviceParameters& parameters,
     const Gfn2D4DeviceCache& cache, const double* atomic_charges, double* energies,
     double* atomic_potentials, const Gfn2D4DeviceWorkspace& workspace, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Evaluate only the self-consistent D4 charge derivative used by the SCC
+ * Hamiltonian. The weights are prepared from mixed_atomic_charges; no energy
+ * is formed or published. Inactive systems are skipped before cache or charge
+ * values are read. A stale scalar cache generation is a plan failure only
+ * when at least one system is active.
+ *
+ * Only workspace.weights, workspace.weight_charge_derivatives,
+ * workspace.atom_scratch, and workspace.system_errors are required or
+ * accessed. The other workspace fields may be null with zero extents.
+ */
+cudaError_t evaluate_gfn2_d4_scc_potential_cuda(
+    const Gfn2D4DeviceBatch& batch, const Gfn2D4DeviceParameters& parameters,
+    const Gfn2D4DeviceCache& cache, std::uint64_t expected_geometry_generation,
+    const double* mixed_atomic_charges, const Gfn2SccIterationDeviceActivity& activity,
+    double* atomic_potentials, const Gfn2D4DeviceWorkspace& workspace, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Evaluate only the pure self-consistent D4 two-body energy used by the final
+ * SCC functional. The weights are prepared from raw_atomic_charges; charge
+ * derivatives and atomic potentials are neither computed nor inspected.
+ *
+ * Only workspace.weights, workspace.batch_scratch, and
+ * workspace.system_errors are required or accessed. The other workspace
+ * fields may be null with zero extents.
+ */
+cudaError_t evaluate_gfn2_d4_scc_energy_cuda(
+    const Gfn2D4DeviceBatch& batch, const Gfn2D4DeviceParameters& parameters,
+    const Gfn2D4DeviceCache& cache, std::uint64_t expected_geometry_generation,
+    const double* raw_atomic_charges, const Gfn2SccIterationDeviceActivity& activity,
+    double* energies, const Gfn2D4DeviceWorkspace& workspace, std::uint32_t* device_error,
     cudaStream_t stream = nullptr) noexcept;
 
 /*

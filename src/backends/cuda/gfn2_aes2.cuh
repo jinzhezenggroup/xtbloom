@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/cuda/gfn2_scc_iteration_control.cuh"
+
 namespace gpuxtb::detail::cuda {
 
 inline constexpr std::int64_t kGfn2AES2PairDataElements = 5;
@@ -87,6 +89,9 @@ struct Gfn2AES2DeviceWorkspace {
   std::int64_t gradient_elements = 0;
   double* coordination_scratch = nullptr;
   std::int64_t coordination_elements = 0;
+  /* One caller-owned uint32 used only as an unpublished SCC peer-error sink. */
+  std::uint32_t* scc_peer_error_scratch = nullptr;
+  std::int64_t scc_peer_error_elements = 0;
 };
 
 static_assert(std::is_trivially_copyable_v<Gfn2AES2DeviceBatch>);
@@ -147,6 +152,24 @@ cudaError_t add_gfn2_aes2_vjp_cuda(const Gfn2AES2DeviceBatch& batch,
                                    const Gfn2AES2DeviceWorkspace& workspace,
                                    std::uint32_t* system_errors, std::uint32_t* device_error,
                                    cudaStream_t stream = nullptr) noexcept;
+
+/* Active-aware mixed-multipole potential reusing the existing pair cache. */
+cudaError_t evaluate_gfn2_aes2_scc_potential_cuda(
+    const Gfn2AES2DeviceBatch& batch, const Gfn2AES2DeviceCache& cache,
+    std::uint64_t geometry_generation, const Gfn2SccIterationDeviceActivity& activity,
+    const double* atomic_charges, const double* atomic_dipoles, const double* atomic_quadrupoles,
+    double* charge_potentials, double* dipole_potentials, double* quadrupole_potentials,
+    const Gfn2AES2DeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* plan_error, cudaStream_t stream = nullptr) noexcept;
+
+/* Active-aware raw-multipole energy overwrite; the public seed is never read. */
+cudaError_t evaluate_gfn2_aes2_scc_energy_cuda(
+    const Gfn2AES2DeviceBatch& batch, const Gfn2AES2DeviceCache& cache,
+    std::uint64_t geometry_generation, const Gfn2SccIterationDeviceActivity& activity,
+    const double* atomic_charges, const double* atomic_dipoles, const double* atomic_quadrupoles,
+    double* component_energies, const Gfn2AES2DeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* plan_error,
+    cudaStream_t stream = nullptr) noexcept;
 
 /*
  * All launchers are allocation-free, enqueue exclusively on the supplied

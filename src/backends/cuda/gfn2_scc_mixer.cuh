@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "backends/cuda/gfn2_scc.cuh"
+#include "backends/cuda/gfn2_scc_iteration_control.cuh"
 
 namespace gpuxtb::detail::cuda {
 
@@ -67,7 +68,12 @@ struct Gfn2SccMixerDeviceState {
   std::uint64_t* restart_counts = nullptr;
   gpuxtb_status_t* system_statuses = nullptr;
   std::uint8_t* initialized = nullptr;
-  std::uint8_t* converged = nullptr;
+  /*
+   * Residual-only diagnostic using the mixer's RMS and maximum thresholds.
+   * This byte never authorizes or suppresses an SCC iteration. Terminal
+   * convergence belongs exclusively to Gfn2SccDeviceState::converged.
+   */
+  std::uint8_t* residual_converged = nullptr;
 
   std::int64_t total_vector_elements = 0;
   std::int64_t history_elements = 0;
@@ -80,8 +86,10 @@ struct Gfn2SccMixerDeviceState {
  * Caller-owned tentative storage for a parallel ragged-batch transition.
  * Four vector arrays have total_vector_elements entries. beta and
  * coefficients have respectively batch_size * history_size^2 and
- * batch_size * history_size entries. sequence_active is one sticky-sequence
- * snapshot scalar. Failed members may modify only their private scratch slice.
+ * batch_size * history_size entries. sequence_active is the stage-local plan
+ * latch: mix refreshes it from canonical activity on every launch/Graph replay
+ * and only plan failures may close it. Failed members may modify only their
+ * private scratch slice.
  */
 struct Gfn2SccMixerDeviceWorkspace {
   double* residual = nullptr;
@@ -138,23 +146,34 @@ cudaError_t restart_gfn2_scc_mixer_system_cuda(
 /*
  * Generate the next mixed qsh/dipole/quadrupole vectors entirely on device.
  *
- * Every SUCCESS, initialized, unconverged member is advanced independently.
- * Existing terminal or converged members are skipped without inspecting raw
- * data or output. The private current input is always the generated mixed
- * vector; raw/public terminal publication remains the responsibility of the
- * SCC state composer. next_mixed may exactly alias raw field-by-field.
+ * The canonical iteration activity projection is the sole normal execution
+ * authority: sequence_active is tested before active_mask, and both are
+ * tested before any member offset, raw multipole, or mixer-history read.
+ * residual_converged is diagnostic only and never suppresses a transition.
+ * The private current input is always the generated mixed vector; raw/public
+ * terminal publication remains the responsibility of the SCC state composer.
+ * next_mixed may exactly alias raw field-by-field.
  *
  * Numerical failure leaves raw/next_mixed and all persistent numerical
  * history unchanged for that member; only system_statuses records
  * GPUXTB_STATUS_INTERNAL_ERROR. Healthy peers still commit. The launcher has
  * no steady-state allocation, host/device transfer, or synchronization and is
  * safe for custom streams and CUDA Graph capture.
+ *
+ * The SCC composer must not feed device_error to #87 normalization because it
+ * uses Gfn2SccMixerDeviceError codes while system_statuses uses
+ * gpuxtb_status_t codes. The canonical kMixer report therefore uses
+ * system_statuses with kGpuxtbStatus, a peer mask containing only
+ * GPUXTB_STATUS_INTERNAL_ERROR, a null device_error, and workspace's
+ * sequence_active as the plan latch. device_error remains a tracing channel;
+ * a closed plan latch is recorded through #87's SequenceClosed fallback.
  */
 cudaError_t mix_gfn2_scc_broyden_cuda(
     const Gfn2SccDeviceBatch& batch, const Gfn2SccMixerDevicePolicy& policy,
-    const Gfn2SccDeviceConstMultipoles& raw, const Gfn2SccDeviceMultipoles& next_mixed,
-    const Gfn2SccMixerDeviceState& state, const Gfn2SccMixerDeviceWorkspace& workspace,
-    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+    const Gfn2SccIterationDeviceActivity& activity, const Gfn2SccDeviceConstMultipoles& raw,
+    const Gfn2SccDeviceMultipoles& next_mixed, const Gfn2SccMixerDeviceState& state,
+    const Gfn2SccMixerDeviceWorkspace& workspace, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 

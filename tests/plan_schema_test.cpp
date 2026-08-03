@@ -141,8 +141,8 @@ HostTopology make_topology(std::int64_t batch_size, bool explicit_pairs = false)
     host.atom_offsets.push_back(atom_end);
     host.batch_shell_offsets.push_back(static_cast<std::int64_t>(host.shell_to_atom.size()));
     host.batch_orbital_offsets.push_back(static_cast<std::int64_t>(host.orbital_to_shell.size()));
-    const std::int64_t orbitals =
-        host.batch_orbital_offsets.back() - host.batch_orbital_offsets[system];
+    const std::int64_t orbitals = host.batch_orbital_offsets.back() -
+                                  host.batch_orbital_offsets[static_cast<std::size_t>(system)];
     system_orbitals[static_cast<std::size_t>(system)] = static_cast<std::int32_t>(orbitals);
     host.matrix_offsets.push_back(host.matrix_offsets.back() + orbitals * orbitals);
     host.pair_offsets.push_back(host.pair_offsets.back() + triangle(atom_count));

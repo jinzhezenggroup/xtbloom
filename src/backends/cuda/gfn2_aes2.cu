@@ -580,6 +580,101 @@ __global__ void publish_energy_kernel(std::int64_t batch_size, const double* bat
   }
 }
 
+inline constexpr std::uint32_t kSccInactiveMarker = 0xffffffffu;
+
+__device__ void record_aes2_scc_plan_error(std::uint32_t* plan_error, Gfn2AES2DeviceError error) {
+  atomicCAS(plan_error, static_cast<std::uint32_t>(Gfn2AES2DeviceError::kSuccess),
+            static_cast<std::uint32_t>(error));
+}
+
+__global__ void aes2_scc_plan_preflight_kernel(Gfn2AES2DeviceBatch batch, Gfn2AES2DeviceCache cache,
+                                               std::uint64_t geometry_generation,
+                                               Gfn2SccIterationDeviceActivity activity,
+                                               std::uint32_t* plan_error) {
+  __shared__ int sequence_active;
+  __shared__ int any_active;
+  if (threadIdx.x == 0) {
+    sequence_active = atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u) == 1u;
+    any_active = 0;
+  }
+  __syncthreads();
+  if (sequence_active == 0) {
+    return;
+  }
+  for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
+    if (activity.active_mask[system] == 1u) {
+      atomicExch(&any_active, 1);
+    }
+  }
+  __syncthreads();
+  if (any_active == 0 || atomicAdd(plan_error, 0u) != 0u) {
+    return;
+  }
+  if (threadIdx.x == 0 &&
+      (geometry_generation == 0u || cache.geometry_generation != geometry_generation ||
+       cache.plan_token != batch.plan_token)) {
+    record_aes2_scc_plan_error(plan_error, Gfn2AES2DeviceError::kCacheMismatch);
+  }
+  __syncthreads();
+  if (atomicAdd(plan_error, 0u) != 0u) {
+    return;
+  }
+  for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
+    if (activity.active_mask[system] != 1u) {
+      continue;
+    }
+    const std::int64_t atom_begin = batch.atom_offsets[system];
+    const std::int64_t atom_end = batch.atom_offsets[system + 1];
+    const std::int64_t pair_begin = batch.pair_offsets[system];
+    const std::int64_t pair_end = batch.pair_offsets[system + 1];
+    const bool endpoints_valid = atom_begin >= 0 && atom_begin <= atom_end &&
+                                 atom_end <= batch.total_atoms && pair_begin >= 0 &&
+                                 pair_begin <= pair_end && pair_end <= batch.total_pairs;
+    bool valid = endpoints_valid;
+    if (valid) {
+      const std::int64_t atoms = atom_end - atom_begin;
+      const bool triangle_representable = atoms <= 1 || atoms <= kInt64Maximum / (atoms - 1);
+      valid = triangle_representable && pair_end - pair_begin == triangle_count(atoms);
+    }
+    if (valid && system == 0) {
+      valid = atom_begin == 0 && pair_begin == 0;
+    }
+    if (valid && system + 1 == batch.batch_size) {
+      valid = atom_end == batch.total_atoms && pair_end == batch.total_pairs;
+    }
+    if (!valid) {
+      record_aes2_scc_plan_error(plan_error, Gfn2AES2DeviceError::kInvalidOffsets);
+    }
+  }
+}
+
+__global__ void aes2_scc_gate_kernel(std::int64_t batch_size,
+                                     Gfn2SccIterationDeviceActivity activity,
+                                     const std::uint32_t* plan_error,
+                                     std::uint32_t* system_errors) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (system >= batch_size) {
+    return;
+  }
+  const bool sequence_active =
+      atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u) == 1u;
+  if (!sequence_active) {
+    atomicCAS(system_errors + system, 0u, kSccInactiveMarker);
+    return;
+  }
+  if (activity.active_mask[system] != 1u ||
+      atomicAdd(const_cast<std::uint32_t*>(plan_error), 0u) != 0u) {
+    atomicCAS(system_errors + system, 0u, kSccInactiveMarker);
+  }
+}
+
+__global__ void aes2_scc_cleanup_kernel(std::int64_t batch_size, std::uint32_t* system_errors) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (system < batch_size) {
+    atomicCAS(system_errors + system, kSccInactiveMarker, 0u);
+  }
+}
+
 __device__ bool pair_vjp(const double* pair_data, double average_radius,
                          double first_radius_cn_derivative, double second_radius_cn_derivative,
                          std::int64_t first, std::int64_t second, const double* charges,
@@ -946,6 +1041,30 @@ cudaError_t validate_cache(const Gfn2AES2DeviceBatch& batch,
              : cudaErrorInvalidValue;
 }
 
+cudaError_t validate_scc_common(const Gfn2AES2DeviceBatch& batch, const Gfn2AES2DeviceCache& cache,
+                                const Gfn2SccIterationDeviceActivity& activity,
+                                const Gfn2AES2DeviceWorkspace& workspace,
+                                std::uint32_t* system_errors, std::uint32_t* plan_error,
+                                CommonBytes* bytes) noexcept {
+  cudaError_t status = validate_common(batch, system_errors, plan_error, bytes);
+  if (status != cudaSuccess) {
+    return status;
+  }
+  const std::int64_t required_pair_elements = batch.total_pairs * kGfn2AES2PairDataElements;
+  if (cache.pair_data_elements != required_pair_elements ||
+      (required_pair_elements != 0 &&
+       (cache.pair_data == nullptr || !is_aligned(cache.pair_data, alignof(double)))) ||
+      activity.active_mask == nullptr || activity.sequence_active == nullptr ||
+      activity.batch_elements != batch.batch_size || activity.sequence_elements != 1 ||
+      activity.plan_token != batch.plan_token || workspace.scc_peer_error_scratch == nullptr ||
+      workspace.scc_peer_error_elements != 1 ||
+      !is_aligned(activity.sequence_active, alignof(std::uint32_t)) ||
+      !is_aligned(workspace.scc_peer_error_scratch, alignof(std::uint32_t))) {
+    return cudaErrorInvalidValue;
+  }
+  return cudaSuccess;
+}
+
 cudaError_t check_launch() noexcept { return cudaGetLastError(); }
 
 }  // namespace
@@ -1190,6 +1309,175 @@ cudaError_t add_gfn2_aes2_vjp_cuda(
   publish_vjp_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0, stream>>>(
       batch, workspace.gradient_scratch, workspace.coordination_scratch, gradients,
       coordination_adjoints, system_errors);
+  return check_launch();
+}
+
+cudaError_t evaluate_gfn2_aes2_scc_potential_cuda(
+    const Gfn2AES2DeviceBatch& batch, const Gfn2AES2DeviceCache& cache,
+    std::uint64_t geometry_generation, const Gfn2SccIterationDeviceActivity& activity,
+    const double* atomic_charges, const double* atomic_dipoles, const double* atomic_quadrupoles,
+    double* charge_potentials, double* dipole_potentials, double* quadrupole_potentials,
+    const Gfn2AES2DeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* plan_error, cudaStream_t stream) noexcept {
+  CommonBytes bytes{};
+  cudaError_t status =
+      validate_scc_common(batch, cache, activity, workspace, system_errors, plan_error, &bytes);
+  if (status != cudaSuccess) {
+    /* Do not derive element counts from a batch that failed overflow validation. */
+    return status;
+  }
+  const std::int64_t required = batch.total_atoms * kGfn2AES2PotentialElementsPerAtom;
+  if (atomic_charges == nullptr || atomic_dipoles == nullptr || atomic_quadrupoles == nullptr ||
+      charge_potentials == nullptr || dipole_potentials == nullptr ||
+      quadrupole_potentials == nullptr || workspace.potential_scratch == nullptr ||
+      workspace.potential_elements < required || !is_aligned(atomic_charges, alignof(double)) ||
+      !is_aligned(atomic_dipoles, alignof(double)) ||
+      !is_aligned(atomic_quadrupoles, alignof(double)) ||
+      !is_aligned(charge_potentials, alignof(double)) ||
+      !is_aligned(dipole_potentials, alignof(double)) ||
+      !is_aligned(quadrupole_potentials, alignof(double)) ||
+      !is_aligned(workspace.potential_scratch, alignof(double))) {
+    return cudaErrorInvalidValue;
+  }
+  const MemoryRange ranges[]{
+      {batch.atom_offsets, bytes.atom_offsets},
+      {batch.pair_offsets, bytes.pair_offsets},
+      {batch.dipole_kernel, bytes.atoms},
+      {batch.quadrupole_kernel, bytes.atoms},
+      {batch.multipole_radius, bytes.atoms},
+      {batch.multipole_valence_cn, bytes.atoms},
+      {cache.pair_data, bytes.pair_data},
+      {activity.active_mask, static_cast<std::size_t>(batch.batch_size)},
+      {activity.sequence_active, sizeof(*activity.sequence_active)},
+      {atomic_charges, bytes.atoms},
+      {atomic_dipoles, bytes.dipoles},
+      {atomic_quadrupoles, bytes.quadrupoles},
+      {charge_potentials, bytes.atoms},
+      {dipole_potentials, bytes.dipoles},
+      {quadrupole_potentials, bytes.quadrupoles},
+      {workspace.potential_scratch, bytes.potentials},
+      {workspace.scc_peer_error_scratch, sizeof(*workspace.scc_peer_error_scratch)},
+      {system_errors, bytes.system_errors},
+      {plan_error, sizeof(*plan_error)}};
+  if (!pairwise_disjoint(ranges)) {
+    return cudaErrorInvalidValue;
+  }
+  status = cudaMemsetAsync(workspace.scc_peer_error_scratch, 0,
+                           sizeof(*workspace.scc_peer_error_scratch), stream);
+  if (status != cudaSuccess) {
+    return status;
+  }
+  aes2_scc_plan_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+      batch, cache, geometry_generation, activity, plan_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  const unsigned int gate_blocks =
+      static_cast<unsigned int>((batch.batch_size + kThreadsPerBlock - 1) / kThreadsPerBlock);
+  aes2_scc_gate_kernel<<<gate_blocks, kThreadsPerBlock, 0, stream>>>(batch.batch_size, activity,
+                                                                     plan_error, system_errors);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  potential_preflight_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                               stream>>>(batch, cache, atomic_charges, atomic_dipoles,
+                                         atomic_quadrupoles, workspace.potential_scratch,
+                                         system_errors, workspace.scc_peer_error_scratch);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  publish_potential_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                             stream>>>(batch, workspace.potential_scratch, charge_potentials,
+                                       dipole_potentials, quadrupole_potentials, system_errors);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  aes2_scc_cleanup_kernel<<<gate_blocks, kThreadsPerBlock, 0, stream>>>(batch.batch_size,
+                                                                        system_errors);
+  return check_launch();
+}
+
+cudaError_t evaluate_gfn2_aes2_scc_energy_cuda(
+    const Gfn2AES2DeviceBatch& batch, const Gfn2AES2DeviceCache& cache,
+    std::uint64_t geometry_generation, const Gfn2SccIterationDeviceActivity& activity,
+    const double* atomic_charges, const double* atomic_dipoles, const double* atomic_quadrupoles,
+    double* component_energies, const Gfn2AES2DeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* plan_error, cudaStream_t stream) noexcept {
+  CommonBytes bytes{};
+  cudaError_t status =
+      validate_scc_common(batch, cache, activity, workspace, system_errors, plan_error, &bytes);
+  if (status != cudaSuccess || atomic_charges == nullptr || atomic_dipoles == nullptr ||
+      atomic_quadrupoles == nullptr || component_energies == nullptr ||
+      workspace.batch_scratch == nullptr || workspace.batch_elements < batch.batch_size ||
+      !is_aligned(atomic_charges, alignof(double)) ||
+      !is_aligned(atomic_dipoles, alignof(double)) ||
+      !is_aligned(atomic_quadrupoles, alignof(double)) ||
+      !is_aligned(component_energies, alignof(double)) ||
+      !is_aligned(workspace.batch_scratch, alignof(double))) {
+    return status == cudaSuccess ? cudaErrorInvalidValue : status;
+  }
+  const MemoryRange ranges[]{
+      {batch.atom_offsets, bytes.atom_offsets},
+      {batch.pair_offsets, bytes.pair_offsets},
+      {batch.dipole_kernel, bytes.atoms},
+      {batch.quadrupole_kernel, bytes.atoms},
+      {batch.multipole_radius, bytes.atoms},
+      {batch.multipole_valence_cn, bytes.atoms},
+      {cache.pair_data, bytes.pair_data},
+      {activity.active_mask, static_cast<std::size_t>(batch.batch_size)},
+      {activity.sequence_active, sizeof(*activity.sequence_active)},
+      {atomic_charges, bytes.atoms},
+      {atomic_dipoles, bytes.dipoles},
+      {atomic_quadrupoles, bytes.quadrupoles},
+      {component_energies, bytes.batch},
+      {workspace.batch_scratch, bytes.batch},
+      {workspace.scc_peer_error_scratch, sizeof(*workspace.scc_peer_error_scratch)},
+      {system_errors, bytes.system_errors},
+      {plan_error, sizeof(*plan_error)}};
+  if (!pairwise_disjoint(ranges)) {
+    return cudaErrorInvalidValue;
+  }
+  status = cudaMemsetAsync(workspace.scc_peer_error_scratch, 0,
+                           sizeof(*workspace.scc_peer_error_scratch), stream);
+  if (status == cudaSuccess) {
+    status = cudaMemsetAsync(workspace.batch_scratch, 0, bytes.batch, stream);
+  }
+  if (status != cudaSuccess) {
+    return status;
+  }
+  aes2_scc_plan_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+      batch, cache, geometry_generation, activity, plan_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  const unsigned int blocks =
+      static_cast<unsigned int>((batch.batch_size + kThreadsPerBlock - 1) / kThreadsPerBlock);
+  aes2_scc_gate_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(batch.batch_size, activity,
+                                                                plan_error, system_errors);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  energy_preflight_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                            stream>>>(
+      batch, cache, atomic_charges, atomic_dipoles, atomic_quadrupoles, workspace.batch_scratch,
+      workspace.batch_scratch, system_errors, workspace.scc_peer_error_scratch);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  publish_energy_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+      batch.batch_size, workspace.batch_scratch, component_energies, system_errors);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  aes2_scc_cleanup_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(batch.batch_size, system_errors);
   return check_launch();
 }
 

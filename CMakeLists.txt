@@ -130,6 +130,7 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/gfn2_scc_classical_energy.cu
     src/backends/cuda/gfn2_scc_energy.cu
     src/backends/cuda/gfn2_scc_free_energy.cu
+    src/backends/cuda/gfn2_scc_iteration_control.cu
     src/backends/cuda/gfn2_scc_mixer.cu
     src/backends/cuda/gfn2_scc_potential.cu
   )
@@ -545,6 +546,75 @@ if(GPUXTB_BUILD_TESTS)
       CUDA_SEPARABLE_COMPILATION ON
     )
     add_test(NAME gpuxtb.cuda.scc_bridge COMMAND gpuxtb_cuda_scc_bridge_test)
+
+    add_executable(gpuxtb_cuda_scc_iteration_control_test
+      tests/cuda_scc_iteration_control_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_scc_iteration_control_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_iteration_control_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_iteration_control_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_iteration_control_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_iteration_control
+      COMMAND gpuxtb_cuda_scc_iteration_control_test
+    )
+
+    add_executable(gpuxtb_cuda_scc_electrostatic_components_test
+      tests/cuda_scc_electrostatic_components_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_scc_electrostatic_components_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_electrostatic_components_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_electrostatic_components_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_electrostatic_components_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_electrostatic_components
+      COMMAND gpuxtb_cuda_scc_electrostatic_components_test
+    )
+
+    add_executable(gpuxtb_cuda_scc_d4_periodic_test
+      tests/cuda_scc_d4_periodic_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_scc_d4_periodic_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_d4_periodic_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_d4_periodic_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_d4_periodic_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_d4_periodic
+      COMMAND gpuxtb_cuda_scc_d4_periodic_test
+    )
 
     add_executable(gpuxtb_cuda_scc_free_energy_test
       tests/cuda_scc_free_energy_test.cu

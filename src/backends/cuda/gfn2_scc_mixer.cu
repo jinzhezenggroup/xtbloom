@@ -28,10 +28,6 @@ __device__ void record_error(std::uint32_t* device_error, Gfn2SccMixerDeviceErro
             static_cast<std::uint32_t>(error));
 }
 
-__device__ bool known_system_status(gpuxtb_status_t status) {
-  return status >= GPUXTB_STATUS_SUCCESS && status <= GPUXTB_STATUS_EIGENSOLVER_FAILED;
-}
-
 __device__ std::int64_t system_vector_begin(const Gfn2SccDeviceBatch& batch, std::int64_t system) {
   return batch.shell_offsets[system] + kMultipoleComponentsPerAtom * batch.atom_offsets[system];
 }
@@ -130,6 +126,104 @@ __global__ void capture_sequence_kernel(const std::uint32_t* device_error,
   }
 }
 
+/*
+ * Start a reusable mixer stage from the canonical SCC sequence latch. Unlike
+ * standalone initialize/restart, an old mixer diagnostic must not become an
+ * independent execution authority. Each Graph replay therefore refreshes the
+ * stage-local latch solely from the canonical ledger.
+ */
+__global__ void begin_mixer_stage_kernel(Gfn2SccIterationDeviceActivity activity,
+                                         Gfn2SccMixerDeviceWorkspace workspace,
+                                         std::uint32_t* device_error) {
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    const std::uint32_t sequence =
+        atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u);
+    if (sequence > 1u) {
+      record_error(device_error, Gfn2SccMixerDeviceError::kInvalidState);
+      *workspace.sequence_active = 0u;
+      return;
+    }
+    *workspace.sequence_active = sequence;
+  }
+}
+
+/*
+ * Publish a clean per-member diagnostic generation before any preflight may
+ * close the mixer stage. This separate launch is required: clearing inside a
+ * multi-block topology kernel would race a peer block closing the stage latch,
+ * potentially leaving stale non-peer statuses visible to #87 normalization.
+ */
+__global__ void prepare_active_mixer_statuses_kernel(Gfn2SccIterationDeviceActivity activity,
+                                                     Gfn2SccMixerDeviceState state) {
+  if (atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u) != 1u) {
+    return;
+  }
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (system >= activity.batch_elements) {
+    return;
+  }
+  const std::uint8_t active = activity.active_mask[system];
+  if (active == 1u) {
+    state.system_statuses[system] = GPUXTB_STATUS_SUCCESS;
+  }
+}
+
+/*
+ * Validate only members requested by the canonical ledger. Inactive members
+ * may intentionally carry stale or poisoned generation-local data, including
+ * offsets, and must remain unread. A malformed active slice is a plan failure
+ * and closes this mixer stage before the numerical kernel can inspect it.
+ */
+__global__ void active_topology_preflight_kernel(Gfn2SccDeviceBatch batch,
+                                                 Gfn2SccIterationDeviceActivity activity,
+                                                 Gfn2SccMixerDeviceWorkspace workspace,
+                                                 std::uint32_t* device_error) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) {
+    return;
+  }
+  if (atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u) != 1u ||
+      atomicAdd(workspace.sequence_active, 0u) != 1u) {
+    return;
+  }
+  bool have_previous_active = false;
+  std::int64_t previous_shell_end = 0;
+  std::int64_t previous_atom_end = 0;
+  for (std::int64_t system = 0; system < batch.batch_size; ++system) {
+    const std::uint8_t active = activity.active_mask[system];
+    if (active > 1u) {
+      record_error(device_error, Gfn2SccMixerDeviceError::kInvalidState);
+      atomicExch(workspace.sequence_active, 0u);
+      return;
+    }
+    if (active == 0u) {
+      continue;
+    }
+
+    /* Read offsets only after this exact member passed the canonical gate. */
+    const std::int64_t shell_begin = batch.shell_offsets[system];
+    const std::int64_t shell_end = batch.shell_offsets[system + 1];
+    const std::int64_t atom_begin = batch.atom_offsets[system];
+    const std::int64_t atom_end = batch.atom_offsets[system + 1];
+    const bool invalid_local = shell_begin < 0 || shell_begin >= shell_end ||
+                               shell_end > batch.total_shells || atom_begin < 0 ||
+                               atom_begin >= atom_end || atom_end > batch.total_atoms;
+    const bool invalid_endpoint =
+        (system == 0 && (shell_begin != 0 || atom_begin != 0)) ||
+        (system == batch.batch_size - 1 &&
+         (shell_end != batch.total_shells || atom_end != batch.total_atoms));
+    const bool overlaps_previous = have_previous_active && (shell_begin < previous_shell_end ||
+                                                            atom_begin < previous_atom_end);
+    if (invalid_local || invalid_endpoint || overlaps_previous) {
+      record_error(device_error, Gfn2SccMixerDeviceError::kInvalidOffsets);
+      atomicExch(workspace.sequence_active, 0u);
+      return;
+    }
+    have_previous_active = true;
+    previous_shell_end = shell_end;
+    previous_atom_end = atom_end;
+  }
+}
+
 __global__ void initialize_state_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDevicePolicy policy,
                                         Gfn2SccDeviceConstMultipoles initial,
                                         Gfn2SccMixerDeviceState state,
@@ -162,7 +256,7 @@ __global__ void initialize_state_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDe
     state.restart_counts[system] = 0u;
     state.system_statuses[system] = GPUXTB_STATUS_SUCCESS;
     state.initialized[system] = 1u;
-    state.converged[system] = 0u;
+    state.residual_converged[system] = 0u;
   }
 }
 
@@ -223,7 +317,7 @@ __global__ void restart_system_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDevi
     state.iterations[system] = 0u;
     ++state.restart_counts[system];
     state.system_statuses[system] = GPUXTB_STATUS_SUCCESS;
-    state.converged[system] = 0u;
+    state.residual_converged[system] = 0u;
   }
 }
 
@@ -284,6 +378,7 @@ __device__ void record_numeric_failure(Gfn2SccMixerDeviceState state, std::int64
 }
 
 __global__ void mix_broyden_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDevicePolicy policy,
+                                   Gfn2SccIterationDeviceActivity activity,
                                    Gfn2SccDeviceConstMultipoles raw,
                                    Gfn2SccDeviceMultipoles next_mixed,
                                    Gfn2SccMixerDeviceState state,
@@ -304,16 +399,24 @@ __global__ void mix_broyden_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDeviceP
   if (threadIdx.x == 0) {
     active = 0;
     valid = 1;
-    if (atomicAdd(workspace.sequence_active, 0u) == 1u) {
-      const gpuxtb_status_t status = state.system_statuses[system];
-      const std::uint8_t initialized = state.initialized[system];
-      const std::uint8_t converged = state.converged[system];
-      if (!known_system_status(status) || initialized != 1u || converged > 1u) {
+    /* Canonical sequence and member activity precede every member-local read,
+     * including offsets and private mixer diagnostics/history. */
+    if (atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u) != 1u) {
+      valid = 0;
+    } else {
+      const std::uint8_t requested = activity.active_mask[system];
+      if (requested > 1u) {
         record_error(device_error, Gfn2SccMixerDeviceError::kInvalidState);
-        record_numeric_failure(state, system);
         valid = 0;
-      } else if (status == GPUXTB_STATUS_SUCCESS && converged == 0u) {
+      } else if (requested == 1u && atomicAdd(workspace.sequence_active, 0u) == 1u) {
         active = 1;
+        const std::uint8_t initialized = state.initialized[system];
+        if (initialized != 1u) {
+          record_error(device_error, Gfn2SccMixerDeviceError::kInvalidState);
+          record_numeric_failure(state, system);
+          active = 0;
+          valid = 0;
+        }
       }
     }
   }
@@ -639,10 +742,10 @@ __global__ void mix_broyden_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDeviceP
     state.residual_maximum[system] = system_residual_maximum;
     state.iterations[system] = old_iteration + 1u;
     state.system_statuses[system] = GPUXTB_STATUS_SUCCESS;
-    state.converged[system] = system_residual_rms < policy.rms_tolerance &&
-                                      system_residual_maximum < policy.maximum_tolerance
-                                  ? 1u
-                                  : 0u;
+    state.residual_converged[system] = system_residual_rms < policy.rms_tolerance &&
+                                               system_residual_maximum < policy.maximum_tolerance
+                                           ? 1u
+                                           : 0u;
   }
 }
 
@@ -787,7 +890,15 @@ bool valid_state(const Gfn2SccMixerDeviceState& state, const Gfn2SccDeviceBatch&
          is_aligned(state.restart_counts, alignof(std::uint64_t)) &&
          is_aligned(state.system_statuses, alignof(gpuxtb_status_t)) &&
          is_aligned(state.initialized, alignof(std::uint8_t)) &&
-         is_aligned(state.converged, alignof(std::uint8_t));
+         is_aligned(state.residual_converged, alignof(std::uint8_t));
+}
+
+bool valid_activity(const Gfn2SccIterationDeviceActivity& activity,
+                    const Gfn2SccDeviceBatch& batch) noexcept {
+  return activity.plan_token == batch.plan_token && activity.batch_elements == batch.batch_size &&
+         activity.sequence_elements == 1 &&
+         is_aligned(activity.active_mask, alignof(std::uint8_t)) &&
+         is_aligned(activity.sequence_active, alignof(std::uint32_t));
 }
 
 bool valid_workspace(const Gfn2SccMixerDeviceWorkspace& workspace, const Gfn2SccDeviceBatch& batch,
@@ -807,10 +918,12 @@ bool valid_workspace(const Gfn2SccMixerDeviceWorkspace& workspace, const Gfn2Scc
 
 bool validate_ranges(const Gfn2SccDeviceBatch& batch, const ValidatedDimensions& dimensions,
                      const Gfn2SccDeviceConstMultipoles& input,
-                     const Gfn2SccDeviceMultipoles* output, const Gfn2SccMixerDeviceState& state,
+                     const Gfn2SccDeviceMultipoles* output,
+                     const Gfn2SccIterationDeviceActivity* activity,
+                     const Gfn2SccMixerDeviceState& state,
                      const Gfn2SccMixerDeviceWorkspace& workspace,
                      std::uint32_t* device_error) noexcept {
-  std::array<AddressRange, 5> reads;
+  std::array<AddressRange, 7> reads{};
   std::array<AddressRange, 24> writes;
   if (!make_address_range(batch.shell_offsets, batch.shell_offset_count,
                           sizeof(*batch.shell_offsets), &reads[0]) ||
@@ -821,7 +934,6 @@ bool validate_ranges(const Gfn2SccDeviceBatch& batch, const ValidatedDimensions&
                           &reads[3]) ||
       !make_address_range(input.atomic_quadrupoles, dimensions.quadrupole_elements, sizeof(double),
                           &reads[4]) ||
-      !pairwise_disjoint(reads) ||
       !make_address_range(state.current_inputs, dimensions.vector_elements, sizeof(double),
                           &writes[0]) ||
       !make_address_range(state.previous_inputs, dimensions.vector_elements, sizeof(double),
@@ -841,7 +953,8 @@ bool validate_ranges(const Gfn2SccDeviceBatch& batch, const ValidatedDimensions&
       !make_address_range(state.system_statuses, batch.batch_size, sizeof(gpuxtb_status_t),
                           &writes[10]) ||
       !make_address_range(state.initialized, batch.batch_size, sizeof(std::uint8_t), &writes[11]) ||
-      !make_address_range(state.converged, batch.batch_size, sizeof(std::uint8_t), &writes[12]) ||
+      !make_address_range(state.residual_converged, batch.batch_size, sizeof(std::uint8_t),
+                          &writes[12]) ||
       !make_address_range(workspace.residual, dimensions.vector_elements, sizeof(double),
                           &writes[13]) ||
       !make_address_range(workspace.mixed, dimensions.vector_elements, sizeof(double),
@@ -855,6 +968,15 @@ bool validate_ranges(const Gfn2SccDeviceBatch& batch, const ValidatedDimensions&
                           &writes[18]) ||
       !make_address_range(workspace.sequence_active, 1, sizeof(std::uint32_t), &writes[19]) ||
       !make_address_range(device_error, 1, sizeof(std::uint32_t), &writes[23])) {
+    return false;
+  }
+  if (activity != nullptr &&
+      (!make_address_range(activity->active_mask, batch.batch_size, sizeof(std::uint8_t),
+                           &reads[5]) ||
+       !make_address_range(activity->sequence_active, 1, sizeof(std::uint32_t), &reads[6]))) {
+    return false;
+  }
+  if (!pairwise_disjoint(reads)) {
     return false;
   }
   if (output != nullptr) {
@@ -902,6 +1024,7 @@ bool validate_ranges(const Gfn2SccDeviceBatch& batch, const ValidatedDimensions&
 cudaError_t validate_common(const Gfn2SccDeviceBatch& batch, const Gfn2SccMixerDevicePolicy& policy,
                             const Gfn2SccDeviceConstMultipoles& input,
                             const Gfn2SccDeviceMultipoles* output,
+                            const Gfn2SccIterationDeviceActivity* activity,
                             const Gfn2SccMixerDeviceState& state,
                             const Gfn2SccMixerDeviceWorkspace& workspace,
                             std::uint32_t* device_error, ValidatedDimensions* dimensions) noexcept {
@@ -910,9 +1033,11 @@ cudaError_t validate_common(const Gfn2SccDeviceBatch& batch, const Gfn2SccMixerD
       !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
       !valid_const_multipoles(input, batch, *dimensions) ||
       (output != nullptr && !valid_multipoles(*output, batch, *dimensions)) ||
+      (activity != nullptr && !valid_activity(*activity, batch)) ||
       !valid_state(state, batch, *dimensions) || !valid_workspace(workspace, batch, *dimensions) ||
       !is_aligned(device_error, alignof(std::uint32_t)) ||
-      !validate_ranges(batch, *dimensions, input, output, state, workspace, device_error)) {
+      !validate_ranges(batch, *dimensions, input, output, activity, state, workspace,
+                       device_error)) {
     return cudaErrorInvalidValue;
   }
   return cudaSuccess;
@@ -940,8 +1065,8 @@ cudaError_t initialize_gfn2_scc_mixer_cuda(const Gfn2SccDeviceBatch& batch,
                                            std::uint32_t* device_error,
                                            cudaStream_t stream) noexcept {
   ValidatedDimensions dimensions;
-  cudaError_t status =
-      validate_common(batch, policy, initial, nullptr, state, workspace, device_error, &dimensions);
+  cudaError_t status = validate_common(batch, policy, initial, nullptr, nullptr, state, workspace,
+                                       device_error, &dimensions);
   if (status != cudaSuccess) {
     return status;
   }
@@ -972,8 +1097,8 @@ cudaError_t restart_gfn2_scc_mixer_system_cuda(
     const Gfn2SccMixerDeviceWorkspace& workspace, std::uint32_t* device_error,
     cudaStream_t stream) noexcept {
   ValidatedDimensions dimensions;
-  cudaError_t status = validate_common(batch, policy, current_public, nullptr, state, workspace,
-                                       device_error, &dimensions);
+  cudaError_t status = validate_common(batch, policy, current_public, nullptr, nullptr, state,
+                                       workspace, device_error, &dimensions);
   if (status != cudaSuccess || system < 0 || system >= batch.batch_size) {
     return cudaErrorInvalidValue;
   }
@@ -988,23 +1113,38 @@ cudaError_t restart_gfn2_scc_mixer_system_cuda(
 
 cudaError_t mix_gfn2_scc_broyden_cuda(const Gfn2SccDeviceBatch& batch,
                                       const Gfn2SccMixerDevicePolicy& policy,
+                                      const Gfn2SccIterationDeviceActivity& activity,
                                       const Gfn2SccDeviceConstMultipoles& raw,
                                       const Gfn2SccDeviceMultipoles& next_mixed,
                                       const Gfn2SccMixerDeviceState& state,
                                       const Gfn2SccMixerDeviceWorkspace& workspace,
                                       std::uint32_t* device_error, cudaStream_t stream) noexcept {
   ValidatedDimensions dimensions;
-  cudaError_t status =
-      validate_common(batch, policy, raw, &next_mixed, state, workspace, device_error, &dimensions);
+  cudaError_t status = validate_common(batch, policy, raw, &next_mixed, &activity, state, workspace,
+                                       device_error, &dimensions);
   if (status != cudaSuccess) {
     return status;
   }
-  status = launch_topology_and_capture(batch, workspace, device_error, stream);
+  begin_mixer_stage_kernel<<<1, 1, 0, stream>>>(activity, workspace, device_error);
+  status = cudaPeekAtLastError();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  const unsigned int status_blocks =
+      static_cast<unsigned int>((batch.batch_size + kThreadsPerBlock - 1) / kThreadsPerBlock);
+  prepare_active_mixer_statuses_kernel<<<status_blocks, kThreadsPerBlock, 0, stream>>>(activity,
+                                                                                       state);
+  status = cudaPeekAtLastError();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  active_topology_preflight_kernel<<<1, 1, 0, stream>>>(batch, activity, workspace, device_error);
+  status = cudaPeekAtLastError();
   if (status != cudaSuccess) {
     return status;
   }
   mix_broyden_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0, stream>>>(
-      batch, policy, raw, next_mixed, state, workspace, device_error);
+      batch, policy, activity, raw, next_mixed, state, workspace, device_error);
   return cudaPeekAtLastError();
 }
 

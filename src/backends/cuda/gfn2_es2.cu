@@ -485,6 +485,236 @@ __global__ void add_if_success_kernel(std::int64_t count, const double* source, 
   }
 }
 
+__device__ void record_scc_plan_error(std::uint32_t* plan_error, Gfn2ES2DeviceError error) {
+  atomicCAS(plan_error, static_cast<std::uint32_t>(Gfn2ES2DeviceError::kSuccess),
+            static_cast<std::uint32_t>(error));
+}
+
+__device__ void record_scc_system_error(std::uint32_t* system_errors, std::int64_t system,
+                                        Gfn2ES2DeviceError error) {
+  atomicCAS(system_errors + system, static_cast<std::uint32_t>(Gfn2ES2DeviceError::kSuccess),
+            static_cast<std::uint32_t>(error));
+}
+
+__device__ bool scc_member_is_active(const Gfn2SccIterationDeviceActivity& activity,
+                                     const std::uint32_t* system_errors,
+                                     const std::uint32_t* plan_error, std::int64_t system) {
+  /* Canonical sequence and member activity always precede numerical reads. */
+  if (atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u) != 1u ||
+      activity.active_mask[system] != 1u) {
+    return false;
+  }
+  return atomicAdd(const_cast<std::uint32_t*>(plan_error), 0u) == 0u &&
+         atomicAdd(const_cast<std::uint32_t*>(system_errors) + system, 0u) == 0u;
+}
+
+/* Device offset contents are a plan-level contract and are checked once before physics reads. */
+__global__ void es2_scc_plan_preflight_kernel(Gfn2ES2DeviceBatch batch, Gfn2ES2DeviceCache cache,
+                                              std::uint64_t geometry_generation,
+                                              Gfn2SccIterationDeviceActivity activity,
+                                              std::uint32_t* plan_error) {
+  __shared__ int sequence_active;
+  __shared__ int any_active;
+  if (threadIdx.x == 0) {
+    sequence_active = atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u) == 1u;
+    any_active = 0;
+  }
+  __syncthreads();
+  if (sequence_active == 0) {
+    return;
+  }
+  for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
+    if (activity.active_mask[system] == 1u) {
+      atomicExch(&any_active, 1);
+    }
+  }
+  __syncthreads();
+  if (any_active == 0 || atomicAdd(plan_error, 0u) != 0u) {
+    return;
+  }
+  if (threadIdx.x == 0 &&
+      (geometry_generation == 0u || cache.geometry_generation != geometry_generation ||
+       cache.plan_token != batch.plan_token)) {
+    record_scc_plan_error(plan_error, Gfn2ES2DeviceError::kInvalidCacheMatrix);
+  }
+  __syncthreads();
+  if (atomicAdd(plan_error, 0u) != 0u) {
+    return;
+  }
+  for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
+    /* Inactive topology is generation-local poison by contract. Only an active
+     * member may authorize reads of its ragged boundaries and atom partition. */
+    if (activity.active_mask[system] != 1u) {
+      continue;
+    }
+    const std::int64_t atom_begin = batch.atom_offsets[system];
+    const std::int64_t atom_end = batch.atom_offsets[system + 1];
+    const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+    const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
+    const std::int64_t matrix_begin = batch.matrix_offsets[system];
+    const std::int64_t matrix_end = batch.matrix_offsets[system + 1];
+    bool valid = atom_begin >= 0 && atom_begin <= atom_end && atom_end <= batch.total_atoms &&
+                 shell_begin >= 0 && shell_begin <= shell_end && shell_end <= batch.total_shells &&
+                 matrix_begin >= 0 && matrix_begin <= matrix_end &&
+                 matrix_end <= batch.total_matrix_elements;
+    if (valid) {
+      const std::int64_t shells = shell_end - shell_begin;
+      const bool square_representable = shells == 0 || shells <= kInt64Maximum / shells;
+      valid = square_representable && matrix_end - matrix_begin == shells * shells;
+    }
+    if (valid && system == 0) {
+      valid = atom_begin == 0 && shell_begin == 0 && matrix_begin == 0;
+    }
+    if (valid && system + 1 == batch.batch_size) {
+      valid = atom_end == batch.total_atoms && shell_end == batch.total_shells &&
+              matrix_end == batch.total_matrix_elements;
+    }
+    if (valid) {
+      valid = batch.atom_shell_offsets[atom_begin] == shell_begin &&
+              batch.atom_shell_offsets[atom_end] == shell_end;
+    }
+    if (valid) {
+      for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+        const std::int64_t atom_shell_begin = batch.atom_shell_offsets[atom];
+        const std::int64_t atom_shell_end = batch.atom_shell_offsets[atom + 1];
+        if (atom_shell_begin < shell_begin || atom_shell_begin > atom_shell_end ||
+            atom_shell_end > shell_end) {
+          valid = false;
+          break;
+        }
+      }
+    }
+    if (!valid) {
+      record_scc_plan_error(plan_error, Gfn2ES2DeviceError::kInvalidOffsets);
+    }
+  }
+}
+
+__global__ void es2_scc_potential_preflight_kernel(
+    Gfn2ES2DeviceBatch batch, Gfn2ES2DeviceCache cache, Gfn2SccIterationDeviceActivity activity,
+    const double* shell_charges, double* shell_scratch, std::uint32_t* system_errors,
+    const std::uint32_t* plan_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  __shared__ int active;
+  if (threadIdx.x == 0) {
+    active = scc_member_is_active(activity, system_errors, plan_error, system) ? 1 : 0;
+  }
+  __syncthreads();
+  if (active == 0) {
+    return;
+  }
+
+  const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+  const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
+  const std::int64_t matrix_begin = batch.matrix_offsets[system];
+  const std::int64_t shells = shell_end - shell_begin;
+  for (std::int64_t row = shell_begin + threadIdx.x; row < shell_end; row += blockDim.x) {
+    double potential = 0.0;
+    const std::int64_t local_row = row - shell_begin;
+    for (std::int64_t column = shell_begin; column < shell_end; ++column) {
+      const double kernel =
+          cache.coulomb_matrix[matrix_begin + local_row * shells + column - shell_begin];
+      const double charge = shell_charges[column];
+      if (!(kernel > 0.0) || !isfinite(kernel)) {
+        record_scc_system_error(system_errors, system, Gfn2ES2DeviceError::kInvalidCacheMatrix);
+        return;
+      }
+      if (!isfinite(charge)) {
+        record_scc_system_error(system_errors, system, Gfn2ES2DeviceError::kNonfiniteShellCharge);
+        return;
+      }
+      const double contribution = kernel * charge;
+      const double updated = potential + contribution;
+      if (!isfinite(contribution) || !isfinite(updated)) {
+        record_scc_system_error(system_errors, system,
+                                Gfn2ES2DeviceError::kNonfinitePotentialArithmetic);
+        return;
+      }
+      potential = updated;
+    }
+    shell_scratch[row] = potential;
+  }
+}
+
+__global__ void es2_scc_publish_potential_kernel(
+    Gfn2ES2DeviceBatch batch, Gfn2SccIterationDeviceActivity activity, const double* shell_scratch,
+    double* shell_potentials, const std::uint32_t* system_errors, const std::uint32_t* plan_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!scc_member_is_active(activity, system_errors, plan_error, system)) {
+    return;
+  }
+  const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+  const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
+  for (std::int64_t shell = shell_begin + threadIdx.x; shell < shell_end; shell += blockDim.x) {
+    shell_potentials[shell] = shell_scratch[shell];
+  }
+}
+
+__global__ void es2_scc_energy_preflight_kernel(Gfn2ES2DeviceBatch batch, Gfn2ES2DeviceCache cache,
+                                                Gfn2SccIterationDeviceActivity activity,
+                                                const double* shell_charges, double* batch_scratch,
+                                                std::uint32_t* system_errors,
+                                                const std::uint32_t* plan_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (threadIdx.x != 0 || !scc_member_is_active(activity, system_errors, plan_error, system)) {
+    return;
+  }
+  const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+  const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
+  const std::int64_t matrix_begin = batch.matrix_offsets[system];
+  const std::int64_t shells = shell_end - shell_begin;
+  double energy = 0.0;
+  for (std::int64_t row = shell_begin; row < shell_end; ++row) {
+    const double row_charge = shell_charges[row];
+    if (!isfinite(row_charge)) {
+      record_scc_system_error(system_errors, system, Gfn2ES2DeviceError::kNonfiniteShellCharge);
+      return;
+    }
+    double potential = 0.0;
+    for (std::int64_t column = shell_begin; column < shell_end; ++column) {
+      const double kernel =
+          cache.coulomb_matrix[matrix_begin + (row - shell_begin) * shells + column - shell_begin];
+      const double column_charge = shell_charges[column];
+      if (!(kernel > 0.0) || !isfinite(kernel)) {
+        record_scc_system_error(system_errors, system, Gfn2ES2DeviceError::kInvalidCacheMatrix);
+        return;
+      }
+      if (!isfinite(column_charge)) {
+        record_scc_system_error(system_errors, system, Gfn2ES2DeviceError::kNonfiniteShellCharge);
+        return;
+      }
+      const double contribution = kernel * column_charge;
+      const double updated = potential + contribution;
+      if (!isfinite(contribution) || !isfinite(updated)) {
+        record_scc_system_error(system_errors, system,
+                                Gfn2ES2DeviceError::kNonfiniteEnergyArithmetic);
+        return;
+      }
+      potential = updated;
+    }
+    const double contribution = 0.5 * row_charge * potential;
+    const double updated = energy + contribution;
+    if (!isfinite(contribution) || !isfinite(updated)) {
+      record_scc_system_error(system_errors, system,
+                              Gfn2ES2DeviceError::kNonfiniteEnergyArithmetic);
+      return;
+    }
+    energy = updated;
+  }
+  batch_scratch[system] = energy;
+}
+
+__global__ void es2_scc_publish_energy_kernel(Gfn2SccIterationDeviceActivity activity,
+                                              const double* batch_scratch,
+                                              double* component_energies,
+                                              const std::uint32_t* system_errors,
+                                              const std::uint32_t* plan_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (threadIdx.x == 0 && scc_member_is_active(activity, system_errors, plan_error, system)) {
+    component_energies[system] = batch_scratch[system];
+  }
+}
+
 bool count_bytes(std::int64_t count, std::size_t element_size, std::size_t* bytes) noexcept {
   if (count < 0 ||
       static_cast<std::uint64_t>(count) >
@@ -616,6 +846,29 @@ cudaError_t validate_cache(const Gfn2ES2DeviceBatch& batch,
   return cudaSuccess;
 }
 
+cudaError_t validate_scc_control(const Gfn2ES2DeviceBatch& batch, const Gfn2ES2DeviceCache& cache,
+                                 std::uint64_t geometry_generation,
+                                 const Gfn2SccIterationDeviceActivity& activity,
+                                 std::uint32_t* system_errors, std::uint32_t* plan_error,
+                                 CommonBytes* bytes, std::size_t* system_error_bytes) noexcept {
+  cudaError_t status = validate_common(batch, plan_error, bytes);
+  if (status != cudaSuccess) {
+    return status;
+  }
+  if (cache.coulomb_matrix == nullptr || cache.matrix_elements != batch.total_matrix_elements ||
+      !is_aligned(cache.coulomb_matrix, alignof(double)) || activity.active_mask == nullptr ||
+      activity.sequence_active == nullptr || activity.batch_elements != batch.batch_size ||
+      activity.sequence_elements != 1 || activity.plan_token != batch.plan_token ||
+      system_errors == nullptr || !is_aligned(activity.sequence_active, alignof(std::uint32_t)) ||
+      !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(plan_error, alignof(std::uint32_t)) ||
+      !count_bytes(batch.batch_size, sizeof(std::uint32_t), system_error_bytes)) {
+    return cudaErrorInvalidValue;
+  }
+  (void)geometry_generation;
+  return cudaSuccess;
+}
+
 cudaError_t copy_grid(std::int64_t count, unsigned int* blocks) noexcept {
   if (count <= 0) {
     return cudaErrorInvalidValue;
@@ -639,6 +892,22 @@ cudaError_t reset_gfn2_es2_device_error_cuda(std::uint32_t* device_error,
     return cudaErrorInvalidValue;
   }
   return cudaMemsetAsync(device_error, 0, sizeof(*device_error), stream);
+}
+
+cudaError_t reset_gfn2_es2_scc_errors_cuda(std::int64_t batch_size, std::uint32_t* system_errors,
+                                           std::uint32_t* plan_error,
+                                           cudaStream_t stream) noexcept {
+  std::size_t system_error_bytes = 0;
+  if (batch_size <= 0 || system_errors == nullptr || plan_error == nullptr ||
+      !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(plan_error, alignof(std::uint32_t)) ||
+      !count_bytes(batch_size, sizeof(std::uint32_t), &system_error_bytes) ||
+      ranges_overlap(system_errors, system_error_bytes, plan_error, sizeof(*plan_error))) {
+    return cudaErrorInvalidValue;
+  }
+  cudaError_t status = cudaMemsetAsync(system_errors, 0, system_error_bytes, stream);
+  return status == cudaSuccess ? cudaMemsetAsync(plan_error, 0, sizeof(*plan_error), stream)
+                               : status;
 }
 
 cudaError_t update_gfn2_es2_geometry_cache_cuda(const Gfn2ES2DeviceBatch& batch,
@@ -853,6 +1122,113 @@ cudaError_t add_gfn2_es2_gradient_cuda(const Gfn2ES2DeviceBatch& batch,
   }
   add_if_success_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
       batch.total_atoms * 3, workspace.gradient_scratch, gradients, device_error);
+  return check_launch();
+}
+
+cudaError_t evaluate_gfn2_es2_scc_potential_cuda(
+    const Gfn2ES2DeviceBatch& batch, const Gfn2ES2DeviceCache& cache,
+    std::uint64_t geometry_generation, const Gfn2SccIterationDeviceActivity& activity,
+    const double* mixed_shell_charges, double* shell_potentials,
+    const Gfn2ES2DeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* plan_error, cudaStream_t stream) noexcept {
+  CommonBytes bytes{};
+  std::size_t system_error_bytes = 0;
+  cudaError_t status = validate_scc_control(batch, cache, geometry_generation, activity,
+                                            system_errors, plan_error, &bytes, &system_error_bytes);
+  if (status != cudaSuccess || mixed_shell_charges == nullptr || shell_potentials == nullptr ||
+      workspace.shell_scratch == nullptr || workspace.shell_elements < batch.total_shells ||
+      !is_aligned(mixed_shell_charges, alignof(double)) ||
+      !is_aligned(shell_potentials, alignof(double)) ||
+      !is_aligned(workspace.shell_scratch, alignof(double))) {
+    return status == cudaSuccess ? cudaErrorInvalidValue : status;
+  }
+  const MemoryRange ranges[]{{batch.atom_offsets, bytes.atom_offsets},
+                             {batch.batch_shell_offsets, bytes.batch_shell_offsets},
+                             {batch.atom_shell_offsets, bytes.atom_shell_offsets},
+                             {batch.matrix_offsets, bytes.matrix_offsets},
+                             {batch.shell_to_atom, bytes.shell_to_atom},
+                             {batch.shell_hardness, bytes.shell_hardness},
+                             {cache.coulomb_matrix, bytes.matrix},
+                             {activity.active_mask, static_cast<std::size_t>(batch.batch_size)},
+                             {activity.sequence_active, sizeof(*activity.sequence_active)},
+                             {system_errors, system_error_bytes},
+                             {plan_error, sizeof(*plan_error)},
+                             {mixed_shell_charges, bytes.shells},
+                             {shell_potentials, bytes.shells},
+                             {workspace.shell_scratch, bytes.shells}};
+  if (!pairwise_disjoint(ranges)) {
+    return cudaErrorInvalidValue;
+  }
+  es2_scc_plan_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+      batch, cache, geometry_generation, activity, plan_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  es2_scc_potential_preflight_kernel<<<static_cast<unsigned int>(batch.batch_size),
+                                       kThreadsPerBlock, 0, stream>>>(
+      batch, cache, activity, mixed_shell_charges, workspace.shell_scratch, system_errors,
+      plan_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  es2_scc_publish_potential_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
+                                     0, stream>>>(batch, activity, workspace.shell_scratch,
+                                                  shell_potentials, system_errors, plan_error);
+  return check_launch();
+}
+
+cudaError_t evaluate_gfn2_es2_scc_energy_cuda(
+    const Gfn2ES2DeviceBatch& batch, const Gfn2ES2DeviceCache& cache,
+    std::uint64_t geometry_generation, const Gfn2SccIterationDeviceActivity& activity,
+    const double* raw_shell_charges, double* component_energies,
+    const Gfn2ES2DeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* plan_error, cudaStream_t stream) noexcept {
+  CommonBytes bytes{};
+  std::size_t system_error_bytes = 0;
+  cudaError_t status = validate_scc_control(batch, cache, geometry_generation, activity,
+                                            system_errors, plan_error, &bytes, &system_error_bytes);
+  if (status != cudaSuccess || raw_shell_charges == nullptr || component_energies == nullptr ||
+      workspace.batch_scratch == nullptr || workspace.batch_elements < batch.batch_size ||
+      !is_aligned(raw_shell_charges, alignof(double)) ||
+      !is_aligned(component_energies, alignof(double)) ||
+      !is_aligned(workspace.batch_scratch, alignof(double))) {
+    return status == cudaSuccess ? cudaErrorInvalidValue : status;
+  }
+  const MemoryRange ranges[]{{batch.atom_offsets, bytes.atom_offsets},
+                             {batch.batch_shell_offsets, bytes.batch_shell_offsets},
+                             {batch.atom_shell_offsets, bytes.atom_shell_offsets},
+                             {batch.matrix_offsets, bytes.matrix_offsets},
+                             {batch.shell_to_atom, bytes.shell_to_atom},
+                             {batch.shell_hardness, bytes.shell_hardness},
+                             {cache.coulomb_matrix, bytes.matrix},
+                             {activity.active_mask, static_cast<std::size_t>(batch.batch_size)},
+                             {activity.sequence_active, sizeof(*activity.sequence_active)},
+                             {system_errors, system_error_bytes},
+                             {plan_error, sizeof(*plan_error)},
+                             {raw_shell_charges, bytes.shells},
+                             {component_energies, bytes.batch},
+                             {workspace.batch_scratch, bytes.batch}};
+  if (!pairwise_disjoint(ranges)) {
+    return cudaErrorInvalidValue;
+  }
+  es2_scc_plan_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+      batch, cache, geometry_generation, activity, plan_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  es2_scc_energy_preflight_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
+                                    0, stream>>>(batch, cache, activity, raw_shell_charges,
+                                                 workspace.batch_scratch, system_errors,
+                                                 plan_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  es2_scc_publish_energy_kernel<<<static_cast<unsigned int>(batch.batch_size), 1, 0, stream>>>(
+      activity, workspace.batch_scratch, component_energies, system_errors, plan_error);
   return check_launch();
 }
 

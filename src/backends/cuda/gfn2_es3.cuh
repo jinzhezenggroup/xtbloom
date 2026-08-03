@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/cuda/gfn2_scc_iteration_control.cuh"
+
 namespace gpuxtb::detail::cuda {
 
 /* Semantic input and arithmetic errors detected asynchronously by ES3 kernels. */
@@ -36,6 +38,8 @@ struct Gfn2ES3DeviceBatch {
   std::int64_t shell_gamma3_count = 0;
   const std::int64_t* batch_shell_offsets = nullptr;
   const double* shell_gamma3 = nullptr;
+  /* Optional setup identity used by SCC-specific consumers. */
+  std::uint64_t plan_token = 0u;
 };
 
 static_assert(std::is_trivially_copyable_v<Gfn2ES3DeviceBatch>);
@@ -68,6 +72,26 @@ cudaError_t add_gfn2_es3_energy_cuda(const Gfn2ES3DeviceBatch& batch, const doub
  */
 cudaError_t reset_gfn2_es3_device_error_cuda(std::uint32_t* device_error,
                                              cudaStream_t stream = nullptr) noexcept;
+
+/* Reset SCC-local peer diagnostics and the ES3 plan-only latch. */
+cudaError_t reset_gfn2_es3_scc_errors_cuda(std::int64_t batch_size, std::uint32_t* system_errors,
+                                           std::uint32_t* plan_error,
+                                           cudaStream_t stream = nullptr) noexcept;
+
+/* Active-aware mixed-charge potential with per-system transactional publication. */
+cudaError_t evaluate_gfn2_es3_scc_potential_cuda(
+    const Gfn2ES3DeviceBatch& batch, const Gfn2SccIterationDeviceActivity& activity,
+    const double* mixed_shell_charges, double* shell_potentials, std::uint32_t* system_errors,
+    std::uint32_t* plan_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Active-aware raw ES3 energy.  One thread follows CPU shell order and
+ * overwrites the pure component from exact zero without reading its target.
+ */
+cudaError_t evaluate_gfn2_es3_scc_energy_cuda(
+    const Gfn2ES3DeviceBatch& batch, const Gfn2SccIterationDeviceActivity& activity,
+    const double* raw_shell_charges, double* component_energies, std::uint32_t* system_errors,
+    std::uint32_t* plan_error, cudaStream_t stream = nullptr) noexcept;
 
 /*
  * All operations are allocation-free, enqueue only on the supplied stream,

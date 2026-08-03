@@ -33,10 +33,15 @@ namespace {
 using gpuxtb::detail::cuda::Gfn2SccDeviceBatch;
 using gpuxtb::detail::cuda::Gfn2SccDeviceConstMultipoles;
 using gpuxtb::detail::cuda::Gfn2SccDeviceMultipoles;
+using gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity;
+using gpuxtb::detail::cuda::Gfn2SccIterationDeviceLedger;
 using gpuxtb::detail::cuda::Gfn2SccMixerDeviceError;
 using gpuxtb::detail::cuda::Gfn2SccMixerDevicePolicy;
 using gpuxtb::detail::cuda::Gfn2SccMixerDeviceState;
 using gpuxtb::detail::cuda::Gfn2SccMixerDeviceWorkspace;
+using gpuxtb::detail::cuda::Gfn2SccStageCodeFormat;
+using gpuxtb::detail::cuda::Gfn2SccStageDeviceReport;
+using gpuxtb::detail::cuda::Gfn2SccStageId;
 using gpuxtb::detail::gfn2::BasisPlan;
 using gpuxtb::detail::gfn2::SccMixerPlan;
 using gpuxtb::detail::gfn2::SccMixerState;
@@ -268,7 +273,7 @@ struct StateSnapshot {
   std::vector<std::uint64_t> restarts;
   std::vector<gpuxtb_status_t> statuses;
   std::vector<std::uint8_t> initialized;
-  std::vector<std::uint8_t> converged;
+  std::vector<std::uint8_t> residual_converged;
 };
 
 struct MultipoleSnapshot {
@@ -298,7 +303,9 @@ struct DeviceFixture {
   DeviceBuffer<std::uint64_t> restarts;
   DeviceBuffer<gpuxtb_status_t> statuses;
   DeviceBuffer<std::uint8_t> initialized;
-  DeviceBuffer<std::uint8_t> converged;
+  DeviceBuffer<std::uint8_t> residual_converged;
+  DeviceBuffer<std::uint8_t> active_mask;
+  DeviceBuffer<std::uint32_t> canonical_sequence;
   DeviceBuffer<double> residual_scratch;
   DeviceBuffer<double> mixed_scratch;
   DeviceBuffer<double> df_scratch;
@@ -312,6 +319,7 @@ struct DeviceFixture {
   Gfn2SccMixerDevicePolicy policy;
   Gfn2SccDeviceConstMultipoles raw;
   Gfn2SccDeviceMultipoles output;
+  Gfn2SccIterationDeviceActivity activity;
   Gfn2SccMixerDeviceState state;
   Gfn2SccMixerDeviceWorkspace workspace;
 
@@ -323,7 +331,7 @@ struct DeviceFixture {
     const std::size_t history = vectors * static_cast<std::size_t>(kHistorySize);
     const std::size_t omega_count = batch_size * static_cast<std::size_t>(kHistorySize);
     const std::size_t beta_count = omega_count * static_cast<std::size_t>(kHistorySize);
-    const std::array<cudaError_t, 29> allocations{{
+    const std::array<cudaError_t, 31> allocations{{
         shell_offsets.allocate(batch_size + 1u),
         atom_offsets.allocate(batch_size + 1u),
         raw_shell.allocate(shells),
@@ -344,7 +352,9 @@ struct DeviceFixture {
         restarts.allocate(batch_size),
         statuses.allocate(batch_size),
         initialized.allocate(batch_size),
-        converged.allocate(batch_size),
+        residual_converged.allocate(batch_size),
+        active_mask.allocate(batch_size),
+        canonical_sequence.allocate(1u),
         residual_scratch.allocate(vectors),
         mixed_scratch.allocate(vectors),
         df_scratch.allocate(vectors),
@@ -384,6 +394,8 @@ struct DeviceFixture {
               output_quadrupole.get(),
               static_cast<std::int64_t>(atoms * 6u),
               kPlanToken};
+    activity = {active_mask.get(), canonical_sequence.get(), static_cast<std::int64_t>(batch_size),
+                1, kPlanToken};
     state = {current.get(),
              previous.get(),
              previous_residual.get(),
@@ -396,7 +408,7 @@ struct DeviceFixture {
              restarts.get(),
              statuses.get(),
              initialized.get(),
-             converged.get(),
+             residual_converged.get(),
              static_cast<std::int64_t>(vectors),
              static_cast<std::int64_t>(history),
              static_cast<std::int64_t>(omega_count),
@@ -422,7 +434,26 @@ struct DeviceFixture {
     if (status == cudaSuccess) {
       status = copy_raw(cpu, stream);
     }
+    if (status == cudaSuccess) {
+      status = set_all_active(stream);
+    }
     return status;
+  }
+
+  cudaError_t set_activity(const std::vector<std::uint8_t>& mask, std::uint32_t sequence_value,
+                           cudaStream_t stream = nullptr) {
+    if (mask.size() != active_mask.size()) {
+      return cudaErrorInvalidValue;
+    }
+    cudaError_t status = active_mask.copy_from(mask.data(), mask.size(), stream);
+    if (status == cudaSuccess) {
+      status = canonical_sequence.copy_from(&sequence_value, 1u, stream);
+    }
+    return status;
+  }
+
+  cudaError_t set_all_active(cudaStream_t stream = nullptr) {
+    return set_activity(std::vector<std::uint8_t>(active_mask.size(), 1u), 1u, stream);
   }
 
   cudaError_t copy_raw(const CpuFixture& cpu, cudaStream_t stream = nullptr) {
@@ -463,6 +494,21 @@ struct DeviceFixture {
     if (status == cudaSuccess) {
       status =
           output_quadrupole.copy_to(snapshot.quadrupole.data(), snapshot.quadrupole.size(), stream);
+    }
+    return status == cudaSuccess ? cudaStreamSynchronize(stream) : status;
+  }
+
+  cudaError_t snapshot_raw(MultipoleSnapshot& snapshot, cudaStream_t stream = nullptr) const {
+    snapshot.shell.resize(raw_shell.size());
+    snapshot.dipole.resize(raw_dipole.size());
+    snapshot.quadrupole.resize(raw_quadrupole.size());
+    cudaError_t status = raw_shell.copy_to(snapshot.shell.data(), snapshot.shell.size(), stream);
+    if (status == cudaSuccess) {
+      status = raw_dipole.copy_to(snapshot.dipole.data(), snapshot.dipole.size(), stream);
+    }
+    if (status == cudaSuccess) {
+      status =
+          raw_quadrupole.copy_to(snapshot.quadrupole.data(), snapshot.quadrupole.size(), stream);
     }
     return status == cudaSuccess ? cudaStreamSynchronize(stream) : status;
   }
@@ -521,7 +567,7 @@ struct DeviceFixture {
     snapshot.restarts.resize(restarts.size());
     snapshot.statuses.resize(statuses.size());
     snapshot.initialized.resize(initialized.size());
-    snapshot.converged.resize(converged.size());
+    snapshot.residual_converged.resize(residual_converged.size());
     const std::array<cudaError_t, 13> copies{{
         current.copy_to(snapshot.current.data(), snapshot.current.size(), stream),
         previous.copy_to(snapshot.previous.data(), snapshot.previous.size(), stream),
@@ -536,7 +582,8 @@ struct DeviceFixture {
         restarts.copy_to(snapshot.restarts.data(), snapshot.restarts.size(), stream),
         statuses.copy_to(snapshot.statuses.data(), snapshot.statuses.size(), stream),
         initialized.copy_to(snapshot.initialized.data(), snapshot.initialized.size(), stream),
-        converged.copy_to(snapshot.converged.data(), snapshot.converged.size(), stream),
+        residual_converged.copy_to(snapshot.residual_converged.data(),
+                                   snapshot.residual_converged.size(), stream),
     }};
     for (cudaError_t copy : copies) {
       if (copy != cudaSuccess) {
@@ -614,7 +661,8 @@ int compare_cpu_and_device(const CpuFixture& cpu, DeviceFixture& device,
   CHECK(std::equal(gpu.restarts.begin(), gpu.restarts.end(), cpu.state.restart_counts));
   CHECK(std::equal(gpu.statuses.begin(), gpu.statuses.end(), cpu.state.system_statuses));
   CHECK(std::equal(gpu.initialized.begin(), gpu.initialized.end(), cpu.state.initialized));
-  CHECK(std::equal(gpu.converged.begin(), gpu.converged.end(), cpu.state.converged));
+  CHECK(std::equal(gpu.residual_converged.begin(), gpu.residual_converged.end(),
+                   cpu.state.converged));
   return 0;
 }
 
@@ -641,8 +689,8 @@ int test_cpu_parity_for_batch(std::size_t batch_size) {
               cpu.plan, cpu.wavefunction, cpu.state, cpu.scratch, error) == GPUXTB_STATUS_SUCCESS);
     CUDA_CHECK(device.reset_error());
     CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
-        device.batch, device.policy, device.raw, device.output, device.state, device.workspace,
-        device.error.get()));
+        device.batch, device.policy, device.activity, device.raw, device.output, device.state,
+        device.workspace, device.error.get()));
     CUDA_CHECK(cudaDeviceSynchronize());
     std::uint32_t semantic_error = 99u;
     CUDA_CHECK(device.error.copy_to(&semantic_error, 1u));
@@ -705,15 +753,15 @@ int test_nextafter_convergence_boundaries_match_cpu() {
               cpu.plan, cpu.wavefunction, cpu.state, cpu.scratch, error) == GPUXTB_STATUS_SUCCESS);
     CUDA_CHECK(device.reset_error());
     CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
-        device.batch, device.policy, device.raw, device.output, device.state, device.workspace,
-        device.error.get()));
+        device.batch, device.policy, device.activity, device.raw, device.output, device.state,
+        device.workspace, device.error.get()));
     CUDA_CHECK(cudaDeviceSynchronize());
     StateSnapshot gpu;
     CUDA_CHECK(device.snapshot(gpu));
     CHECK(cpu.state.residual_rms[0] == gpu.rms[0]);
     CHECK(cpu.state.residual_maximum[0] == gpu.maximum[0]);
     CHECK((cpu.state.converged[0] == 1u) == boundary.converged);
-    CHECK(gpu.converged[0] == cpu.state.converged[0]);
+    CHECK(gpu.residual_converged[0] == cpu.state.converged[0]);
   }
   return 0;
 }
@@ -746,7 +794,7 @@ bool equal_target_slice(const StateSnapshot& before, const StateSnapshot& after,
          before.iterations[system] == after.iterations[system] &&
          before.restarts[system] == after.restarts[system] &&
          before.initialized[system] == after.initialized[system] &&
-         before.converged[system] == after.converged[system];
+         before.residual_converged[system] == after.residual_converged[system];
 }
 
 bool equal_complete_system(const StateSnapshot& before, const StateSnapshot& after,
@@ -761,7 +809,8 @@ bool equal_snapshots(const StateSnapshot& first, const StateSnapshot& second) {
          first.u == second.u && first.omega == second.omega && first.rms == second.rms &&
          first.maximum == second.maximum && first.iterations == second.iterations &&
          first.restarts == second.restarts && first.statuses == second.statuses &&
-         first.initialized == second.initialized && first.converged == second.converged;
+         first.initialized == second.initialized &&
+         first.residual_converged == second.residual_converged;
 }
 
 bool equal_multipoles(const MultipoleSnapshot& first, const MultipoleSnapshot& second) {
@@ -815,7 +864,7 @@ int test_nonfinite_initialize_is_whole_call_atomic() {
   return 0;
 }
 
-int test_topology_and_sticky_errors_are_whole_call_noops() {
+int test_topology_and_canonical_sequence_gates() {
   CpuFixture cpu;
   std::string error;
   CHECK(make_cpu_fixture(8u, cpu, error));
@@ -824,6 +873,9 @@ int test_topology_and_sticky_errors_are_whole_call_noops() {
   CHECK(initialize_device(device) == 0);
   CUDA_CHECK(device.install_raw_iteration(cpu, 0u));
 
+  /* The future composer normalizes system_statuses in gpuxtb_status_t space
+   * and this sequence latch separately; the mixer enum scalar is tracing-only
+   * because its numeric domain must never be compared with status codes. */
   constexpr double first_sentinel = -901.25;
   CUDA_CHECK(device.fill_output(first_sentinel));
   StateSnapshot before_invalid_offsets;
@@ -835,8 +887,8 @@ int test_topology_and_sticky_errors_are_whole_call_noops() {
   CUDA_CHECK(device.shell_offsets.copy_from(invalid_offsets.data(), invalid_offsets.size()));
   CUDA_CHECK(device.reset_error());
   CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
-      device.batch, device.policy, device.raw, device.output, device.state, device.workspace,
-      device.error.get()));
+      device.batch, device.policy, device.activity, device.raw, device.output, device.state,
+      device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
   StateSnapshot after_invalid_offsets;
   MultipoleSnapshot output_after_invalid_offsets;
@@ -859,10 +911,11 @@ int test_topology_and_sticky_errors_are_whole_call_noops() {
   CUDA_CHECK(device.snapshot_output(output_before_sticky));
   const std::uint32_t sticky =
       static_cast<std::uint32_t>(Gfn2SccMixerDeviceError::kNonfiniteRawMultipole);
+  CUDA_CHECK(device.set_activity(std::vector<std::uint8_t>(8u, 1u), 0u));
   CUDA_CHECK(device.error.copy_from(&sticky, 1u));
   CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
-      device.batch, device.policy, device.raw, device.output, device.state, device.workspace,
-      device.error.get()));
+      device.batch, device.policy, device.activity, device.raw, device.output, device.state,
+      device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
   StateSnapshot after_sticky;
   MultipoleSnapshot output_after_sticky;
@@ -874,6 +927,167 @@ int test_topology_and_sticky_errors_are_whole_call_noops() {
   CHECK(semantic_error == sticky);
   CHECK(equal_snapshots(before_sticky, after_sticky));
   CHECK(equal_multipoles(output_before_sticky, output_after_sticky));
+
+  /* A mixer diagnostic is sticky for tracing but is not an execution gate.
+   * Reopening only the canonical sequence must advance every requested member. */
+  CUDA_CHECK(device.set_all_active());
+  StateSnapshot before_reopened;
+  CUDA_CHECK(device.snapshot(before_reopened));
+  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+      device.batch, device.policy, device.activity, device.raw, device.output, device.state,
+      device.workspace, device.error.get()));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  StateSnapshot after_reopened;
+  CUDA_CHECK(device.snapshot(after_reopened));
+  CHECK(after_reopened.iterations[0] == before_reopened.iterations[0] + 1u);
+  semantic_error = 0u;
+  CUDA_CHECK(device.error.copy_to(&semantic_error, 1u));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(semantic_error == sticky);
+  return 0;
+}
+
+int test_active_topology_projection_and_normalization() {
+  for (bool shift_first_begin : {true, false}) {
+    CpuFixture cpu;
+    std::string error;
+    CHECK(make_cpu_fixture(8u, cpu, error));
+    DeviceFixture device;
+    CUDA_CHECK(device.setup(cpu));
+    CHECK(initialize_device(device) == 0);
+    CUDA_CHECK(device.install_raw_iteration(cpu, 0u));
+
+    constexpr std::size_t stale = 3u;
+    const gpuxtb_status_t stale_status = GPUXTB_STATUS_SCC_NOT_CONVERGED;
+    CUDA_CHECK(cudaMemcpy(device.statuses.get() + stale, &stale_status, sizeof(stale_status),
+                          cudaMemcpyHostToDevice));
+    constexpr double sentinel = -906.25;
+    CUDA_CHECK(device.fill_output(sentinel));
+    StateSnapshot before;
+    MultipoleSnapshot output_before;
+    CUDA_CHECK(device.snapshot(before));
+    CUDA_CHECK(device.snapshot_output(output_before));
+
+    std::vector<std::int64_t> shell_offsets = cpu.layout.batch_shell_offsets;
+    if (shift_first_begin) {
+      /* Keep both leading active slices locally valid and nonoverlapping while
+       * shifting system zero away from the required packed origin. */
+      CHECK(shell_offsets[2] > 2);
+      shell_offsets[0] = 1;
+      shell_offsets[1] = 2;
+    } else {
+      /* Keep the last slice nonempty while shifting its active endpoint away
+       * from the complete packed shell extent. */
+      CHECK(shell_offsets[7] < shell_offsets[8] - 1);
+      --shell_offsets[8];
+    }
+    CUDA_CHECK(device.shell_offsets.copy_from(shell_offsets.data(), shell_offsets.size()));
+    CUDA_CHECK(device.reset_error());
+    CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+        device.batch, device.policy, device.activity, device.raw, device.output, device.state,
+        device.workspace, device.error.get()));
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    StateSnapshot after;
+    MultipoleSnapshot output_after;
+    CUDA_CHECK(device.snapshot(after));
+    CUDA_CHECK(device.snapshot_output(output_after));
+    for (std::size_t system = 0u; system < 8u; ++system) {
+      CHECK(equal_target_slice(before, after, cpu, system));
+      CHECK(after.statuses[system] == GPUXTB_STATUS_SUCCESS);
+    }
+    CHECK(equal_multipoles(output_before, output_after));
+    std::uint32_t mixer_error = 0u;
+    std::uint32_t stage_sequence = 1u;
+    CUDA_CHECK(device.error.copy_to(&mixer_error, 1u));
+    CUDA_CHECK(device.sequence.copy_to(&stage_sequence, 1u));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CHECK(mixer_error == static_cast<std::uint32_t>(Gfn2SccMixerDeviceError::kInvalidOffsets));
+    CHECK(stage_sequence == 0u);
+
+    DeviceBuffer<gpuxtb_status_t> pending_statuses;
+    DeviceBuffer<std::uint64_t> system_failure_records;
+    DeviceBuffer<std::uint64_t> plan_failure_record;
+    CUDA_CHECK(pending_statuses.allocate(8u));
+    CUDA_CHECK(system_failure_records.allocate(8u));
+    CUDA_CHECK(plan_failure_record.allocate(1u));
+    CUDA_CHECK(pending_statuses.fill_zero());
+    CUDA_CHECK(system_failure_records.fill_zero());
+    CUDA_CHECK(plan_failure_record.fill_zero());
+    Gfn2SccIterationDeviceLedger ledger = {device.active_mask.get(),
+                                           pending_statuses.get(),
+                                           system_failure_records.get(),
+                                           plan_failure_record.get(),
+                                           device.canonical_sequence.get(),
+                                           8,
+                                           1,
+                                           kPlanToken};
+    Gfn2SccStageDeviceReport report;
+    report.stage = Gfn2SccStageId::kMixer;
+    report.system_code_format = Gfn2SccStageCodeFormat::kGpuxtbStatus;
+    report.system_codes = device.statuses.get();
+    report.system_code_elements = 8;
+    report.device_error = nullptr;
+    report.device_error_elements = 0;
+    report.stage_sequence_active = device.sequence.get();
+    report.stage_sequence_elements = 1;
+    report.peer_error_mask = std::uint64_t{1}
+                             << static_cast<std::uint32_t>(GPUXTB_STATUS_INTERNAL_ERROR);
+    report.peer_failure_status = GPUXTB_STATUS_INTERNAL_ERROR;
+    report.plan_token = kPlanToken;
+    CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(report, ledger));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    std::uint64_t plan_failure = 0u;
+    std::vector<std::uint64_t> member_failures(8u, 1u);
+    CUDA_CHECK(plan_failure_record.copy_to(&plan_failure, 1u));
+    CUDA_CHECK(system_failure_records.copy_to(member_failures.data(), member_failures.size()));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CHECK(gpuxtb::detail::cuda::gfn2_scc_failure_stage(plan_failure) == Gfn2SccStageId::kMixer);
+    CHECK(gpuxtb::detail::cuda::gfn2_scc_failure_code(plan_failure) ==
+          gpuxtb::detail::cuda::kGfn2SccStageSequenceClosedCode);
+    CHECK(std::all_of(member_failures.begin(), member_failures.end(),
+                      [](std::uint64_t value) { return value == 0u; }));
+  }
+
+  CpuFixture cpu;
+  std::string error;
+  CHECK(make_cpu_fixture(8u, cpu, error));
+  DeviceFixture device;
+  CUDA_CHECK(device.setup(cpu));
+  CHECK(initialize_device(device) == 0);
+  CUDA_CHECK(device.install_raw_iteration(cpu, 0u));
+  std::vector<std::uint8_t> active(8u, 0u);
+  active[0] = 1u;
+  active[2] = 1u;
+  CUDA_CHECK(device.set_activity(active, 1u));
+  std::vector<std::int64_t> overlapping_offsets = cpu.layout.batch_shell_offsets;
+  overlapping_offsets[2] = overlapping_offsets[1] - 1;
+  CUDA_CHECK(
+      device.shell_offsets.copy_from(overlapping_offsets.data(), overlapping_offsets.size()));
+  constexpr double sentinel = -907.5;
+  CUDA_CHECK(device.fill_output(sentinel));
+  StateSnapshot before;
+  MultipoleSnapshot output_before;
+  CUDA_CHECK(device.snapshot(before));
+  CUDA_CHECK(device.snapshot_output(output_before));
+  CUDA_CHECK(device.reset_error());
+  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+      device.batch, device.policy, device.activity, device.raw, device.output, device.state,
+      device.workspace, device.error.get()));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  StateSnapshot after;
+  MultipoleSnapshot output_after;
+  CUDA_CHECK(device.snapshot(after));
+  CUDA_CHECK(device.snapshot_output(output_after));
+  CHECK(equal_snapshots(before, after));
+  CHECK(equal_multipoles(output_before, output_after));
+  std::uint32_t mixer_error = 0u;
+  std::uint32_t stage_sequence = 1u;
+  CUDA_CHECK(device.error.copy_to(&mixer_error, 1u));
+  CUDA_CHECK(device.sequence.copy_to(&stage_sequence, 1u));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(mixer_error == static_cast<std::uint32_t>(Gfn2SccMixerDeviceError::kInvalidOffsets));
+  CHECK(stage_sequence == 0u);
   return 0;
 }
 
@@ -895,8 +1109,8 @@ int test_iteration_overflow_isolated_from_healthy_peers() {
   CUDA_CHECK(device.snapshot(before));
   CUDA_CHECK(device.reset_error());
   CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
-      device.batch, device.policy, device.raw, device.output, device.state, device.workspace,
-      device.error.get()));
+      device.batch, device.policy, device.activity, device.raw, device.output, device.state,
+      device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
   StateSnapshot after;
   MultipoleSnapshot output;
@@ -926,8 +1140,8 @@ int test_corrupted_active_history_isolated_from_healthy_peers() {
       CUDA_CHECK(device.install_raw_iteration(cpu, iteration));
       CUDA_CHECK(device.reset_error());
       CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
-          device.batch, device.policy, device.raw, device.output, device.state, device.workspace,
-          device.error.get()));
+          device.batch, device.policy, device.activity, device.raw, device.output, device.state,
+          device.workspace, device.error.get()));
       CUDA_CHECK(cudaDeviceSynchronize());
     }
 
@@ -949,8 +1163,8 @@ int test_corrupted_active_history_isolated_from_healthy_peers() {
     CUDA_CHECK(device.snapshot(before));
     CUDA_CHECK(device.reset_error());
     CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
-        device.batch, device.policy, device.raw, device.output, device.state, device.workspace,
-        device.error.get()));
+        device.batch, device.policy, device.activity, device.raw, device.output, device.state,
+        device.workspace, device.error.get()));
     CUDA_CHECK(cudaDeviceSynchronize());
     StateSnapshot after;
     MultipoleSnapshot output;
@@ -969,7 +1183,7 @@ int test_corrupted_active_history_isolated_from_healthy_peers() {
   return 0;
 }
 
-int test_peer_failure_and_terminal_skip() {
+int test_peer_failure_and_canonical_inactive_members() {
   CpuFixture cpu;
   std::string error;
   CHECK(make_cpu_fixture(8u, cpu, error));
@@ -982,15 +1196,17 @@ int test_peer_failure_and_terminal_skip() {
   CUDA_CHECK(device.copy_raw(cpu));
   CUDA_CHECK(device.reset_error());
   CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
-      device.batch, device.policy, device.raw, device.output, device.state, device.workspace,
-      device.error.get()));
+      device.batch, device.policy, device.activity, device.raw, device.output, device.state,
+      device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
 
   StateSnapshot before;
   CUDA_CHECK(device.snapshot(before));
   constexpr std::size_t failed = 3u;
+  constexpr std::size_t stale_mixer_status = 4u;
   constexpr std::size_t terminal = 5u;
-  constexpr std::size_t converged = 6u;
+  constexpr std::size_t residual_pass = 6u;
+  constexpr std::size_t maximum_iteration = 7u;
   std::vector<double> raw_shell(device.raw_shell.size());
   std::vector<double> raw_dipole(device.raw_dipole.size());
   std::vector<double> raw_quadrupole(device.raw_quadrupole.size());
@@ -1007,19 +1223,42 @@ int test_peer_failure_and_terminal_skip() {
       std::numeric_limits<double>::quiet_NaN();
   raw_shell[static_cast<std::size_t>(cpu.layout.batch_shell_offsets[terminal])] =
       std::numeric_limits<double>::quiet_NaN();
-  raw_shell[static_cast<std::size_t>(cpu.layout.batch_shell_offsets[converged])] =
+  raw_shell[static_cast<std::size_t>(cpu.layout.batch_shell_offsets[residual_pass])] =
+      std::numeric_limits<double>::quiet_NaN();
+  raw_shell[static_cast<std::size_t>(cpu.layout.batch_shell_offsets[maximum_iteration])] =
       std::numeric_limits<double>::quiet_NaN();
   CUDA_CHECK(device.raw_shell.copy_from(raw_shell.data(), raw_shell.size()));
   CUDA_CHECK(device.raw_dipole.copy_from(raw_dipole.data(), raw_dipole.size()));
   CUDA_CHECK(device.raw_quadrupole.copy_from(raw_quadrupole.data(), raw_quadrupole.size()));
   const gpuxtb_status_t terminal_status = GPUXTB_STATUS_SCC_NOT_CONVERGED;
-  const std::uint8_t converged_flag = 1u;
+  const std::uint8_t poisoned_residual_diagnostic = 2u;
+  const std::uint8_t residual_pass_flag = 1u;
+  const std::uint64_t exhausted_iterations = std::numeric_limits<std::uint64_t>::max();
   CUDA_CHECK(cudaMemcpy(device.statuses.get() + terminal, &terminal_status, sizeof(terminal_status),
                         cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(device.converged.get() + converged, &converged_flag, sizeof(converged_flag),
+  CUDA_CHECK(cudaMemcpy(device.statuses.get() + stale_mixer_status, &terminal_status,
+                        sizeof(terminal_status), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(device.residual_converged.get() + stale_mixer_status,
+                        &poisoned_residual_diagnostic, sizeof(poisoned_residual_diagnostic),
                         cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(device.residual_converged.get() + residual_pass, &residual_pass_flag,
+                        sizeof(residual_pass_flag), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(device.iterations.get() + maximum_iteration, &exhausted_iterations,
+                        sizeof(exhausted_iterations), cudaMemcpyHostToDevice));
   before.statuses[terminal] = terminal_status;
-  before.converged[converged] = converged_flag;
+  before.statuses[stale_mixer_status] = terminal_status;
+  before.residual_converged[stale_mixer_status] = poisoned_residual_diagnostic;
+  before.residual_converged[residual_pass] = residual_pass_flag;
+  before.iterations[maximum_iteration] = exhausted_iterations;
+  std::vector<std::uint8_t> active(8u, 1u);
+  active[terminal] = 0u;
+  active[residual_pass] = 0u;
+  active[maximum_iteration] = 0u;
+  CUDA_CHECK(device.set_activity(active, 1u));
+  std::vector<std::int64_t> inactive_poisoned_offsets = cpu.layout.batch_shell_offsets;
+  inactive_poisoned_offsets[residual_pass] = -17;
+  CUDA_CHECK(device.shell_offsets.copy_from(inactive_poisoned_offsets.data(),
+                                            inactive_poisoned_offsets.size()));
   constexpr double sentinel = -1234.5;
   std::vector<double> sent_shell(device.output_shell.size(), sentinel);
   std::vector<double> sent_dipole(device.output_dipole.size(), sentinel);
@@ -1030,8 +1269,8 @@ int test_peer_failure_and_terminal_skip() {
 
   CUDA_CHECK(device.reset_error());
   CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
-      device.batch, device.policy, device.raw, device.output, device.state, device.workspace,
-      device.error.get()));
+      device.batch, device.policy, device.activity, device.raw, device.output, device.state,
+      device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
   std::uint32_t semantic_error = 0u;
   CUDA_CHECK(device.error.copy_to(&semantic_error, 1u));
@@ -1043,8 +1282,11 @@ int test_peer_failure_and_terminal_skip() {
   CHECK(after.statuses[failed] == GPUXTB_STATUS_INTERNAL_ERROR);
   CHECK(equal_target_slice(before, after, cpu, terminal));
   CHECK(after.statuses[terminal] == terminal_status);
-  CHECK(equal_target_slice(before, after, cpu, converged));
-  CHECK(after.statuses[converged] == GPUXTB_STATUS_SUCCESS);
+  CHECK(equal_complete_system(before, after, cpu, residual_pass));
+  CHECK(equal_complete_system(before, after, cpu, maximum_iteration));
+  CHECK(after.iterations[stale_mixer_status] == before.iterations[stale_mixer_status] + 1u);
+  CHECK(after.statuses[stale_mixer_status] == GPUXTB_STATUS_SUCCESS);
+  CHECK(after.residual_converged[stale_mixer_status] == 0u);
   CHECK(after.iterations[0] == before.iterations[0] + 1u);
   std::vector<double> output_shell(device.output_shell.size());
   std::vector<double> output_dipole(device.output_dipole.size());
@@ -1053,7 +1295,7 @@ int test_peer_failure_and_terminal_skip() {
   CUDA_CHECK(device.output_dipole.copy_to(output_dipole.data(), output_dipole.size()));
   CUDA_CHECK(device.output_quadrupole.copy_to(output_quadrupole.data(), output_quadrupole.size()));
   CUDA_CHECK(cudaDeviceSynchronize());
-  for (std::size_t skipped : {failed, terminal, converged}) {
+  for (std::size_t skipped : {failed, terminal, residual_pass, maximum_iteration}) {
     const std::int64_t shell_begin = cpu.layout.batch_shell_offsets[skipped];
     const std::int64_t shell_end = cpu.layout.batch_shell_offsets[skipped + 1u];
     const std::int64_t atom_begin = cpu.layout.atom_offsets[skipped];
@@ -1082,8 +1324,8 @@ int test_restart_atomicity_and_private_mixed_semantics() {
   CUDA_CHECK(device.copy_raw(cpu));
   CUDA_CHECK(device.reset_error());
   CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
-      device.batch, device.policy, device.raw, device.output, device.state, device.workspace,
-      device.error.get()));
+      device.batch, device.policy, device.activity, device.raw, device.output, device.state,
+      device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
 
   constexpr std::size_t target = 2u;
@@ -1107,7 +1349,7 @@ int test_restart_atomicity_and_private_mixed_semantics() {
   CHECK(restarted.iterations[target] == 0u);
   CHECK(restarted.restarts[target] == before.restarts[target] + 1u);
   CHECK(restarted.statuses[target] == GPUXTB_STATUS_SUCCESS);
-  CHECK(restarted.converged[target] == 0u);
+  CHECK(restarted.residual_converged[target] == 0u);
   CHECK(std::all_of(restarted.previous.begin() + begin, restarted.previous.begin() + begin + count,
                     [](double value) { return value == 0.0; }));
   CHECK(std::all_of(restarted.previous_residual.begin() + begin,
@@ -1163,8 +1405,9 @@ int test_restart_atomicity_and_private_mixed_semantics() {
     CHECK(equal_complete_system(before_overflow_restart, after_overflow_restart, cpu, system));
   }
 
-  /* A converged mixer still stores/publishes its damped private next input;
-   * the SCC composer, not this primitive, publishes terminal raw values. */
+  /* Passing residual thresholds is diagnostic only. The composer may still
+   * reject its energy criterion, so canonical activity must request and run
+   * the following Broyden transition. */
   Gfn2SccMixerDevicePolicy loose = device.policy;
   loose.rms_tolerance = 1.0e10;
   loose.maximum_tolerance = 1.0e10;
@@ -1175,19 +1418,71 @@ int test_restart_atomicity_and_private_mixed_semantics() {
   CUDA_CHECK(device.raw_dipole.copy_from(public_dipole.data(), public_dipole.size()));
   CUDA_CHECK(device.raw_quadrupole.copy_from(public_quadrupole.data(), public_quadrupole.size()));
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(device.batch, loose, device.raw,
-                                                             device.output, device.state,
-                                                             device.workspace, device.error.get()));
+  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+      device.batch, loose, device.activity, device.raw, device.output, device.state,
+      device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
   StateSnapshot mixed;
   CUDA_CHECK(device.snapshot(mixed));
   std::vector<double> output_shell(device.output_shell.size());
   CUDA_CHECK(device.output_shell.copy_to(output_shell.data(), output_shell.size()));
   CUDA_CHECK(cudaDeviceSynchronize());
-  CHECK(mixed.converged[target] == 1u);
+  CHECK(mixed.residual_converged[target] == 1u);
   const std::size_t target_shell = static_cast<std::size_t>(cpu.layout.batch_shell_offsets[target]);
   CHECK(output_shell[target_shell] == mixed.current[begin]);
   CHECK(output_shell[target_shell] != public_shell[target_shell]);
+  CUDA_CHECK(device.reset_error());
+  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+      device.batch, loose, device.activity, device.raw, device.output, device.state,
+      device.workspace, device.error.get()));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  StateSnapshot after_energy_fail;
+  CUDA_CHECK(device.snapshot(after_energy_fail));
+  CHECK(after_energy_fail.iterations[target] == mixed.iterations[target] + 1u);
+  CHECK(after_energy_fail.previous[begin] == mixed.current[begin]);
+  return 0;
+}
+
+int test_alias_matches_distinct_ragged_batch() {
+  CpuFixture cpu;
+  std::string error;
+  CHECK(make_cpu_fixture(8u, cpu, error));
+  DeviceFixture distinct;
+  DeviceFixture aliased;
+  CUDA_CHECK(distinct.setup(cpu));
+  CUDA_CHECK(aliased.setup(cpu));
+  CHECK(initialize_device(distinct) == 0);
+  CHECK(initialize_device(aliased) == 0);
+  CUDA_CHECK(distinct.install_raw_iteration(cpu, 0u));
+  CUDA_CHECK(aliased.install_raw_iteration(cpu, 0u));
+
+  Gfn2SccDeviceMultipoles in_place = {aliased.raw_shell.get(),
+                                      aliased.raw.shell_elements,
+                                      aliased.raw_dipole.get(),
+                                      aliased.raw.dipole_elements,
+                                      aliased.raw_quadrupole.get(),
+                                      aliased.raw.quadrupole_elements,
+                                      kPlanToken};
+  CUDA_CHECK(distinct.reset_error());
+  CUDA_CHECK(aliased.reset_error());
+  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+      distinct.batch, distinct.policy, distinct.activity, distinct.raw, distinct.output,
+      distinct.state, distinct.workspace, distinct.error.get()));
+  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+      aliased.batch, aliased.policy, aliased.activity, aliased.raw, in_place, aliased.state,
+      aliased.workspace, aliased.error.get()));
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  StateSnapshot distinct_state;
+  StateSnapshot aliased_state;
+  MultipoleSnapshot distinct_output;
+  MultipoleSnapshot aliased_output;
+  CUDA_CHECK(distinct.snapshot(distinct_state));
+  CUDA_CHECK(aliased.snapshot(aliased_state));
+  CUDA_CHECK(distinct.snapshot_output(distinct_output));
+  CUDA_CHECK(aliased.snapshot_raw(aliased_output));
+  CHECK(equal_snapshots(distinct_state, aliased_state));
+  CHECK(equal_multipoles(distinct_output, aliased_output));
   return 0;
 }
 
@@ -1211,17 +1506,22 @@ int test_custom_stream_and_graph_replay() {
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
   CUDA_CHECK(device.reset_error(stream));
   CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
-      device.batch, device.policy, device.raw, device.output, device.state, device.workspace,
-      device.error.get(), stream));
+      device.batch, device.policy, device.activity, device.raw, device.output, device.state,
+      device.workspace, device.error.get(), stream));
   CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
   CUDA_CHECK(cudaGraphInstantiate(&executable, graph, nullptr, nullptr, 0));
   CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  StateSnapshot after_first_replay;
+  CUDA_CHECK(device.snapshot(after_first_replay, stream));
+  CUDA_CHECK(device.install_raw_iteration(cpu, 1u, stream));
   CUDA_CHECK(cudaGraphLaunch(executable, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   StateSnapshot after;
   CUDA_CHECK(device.snapshot(after, stream));
   CHECK(std::all_of(after.iterations.begin(), after.iterations.end(),
                     [](std::uint64_t value) { return value == 2u; }));
+  CHECK(after.current != after_first_replay.current);
   std::uint32_t semantic_error = 99u;
   CUDA_CHECK(device.error.copy_to(&semantic_error, 1u, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -1241,18 +1541,28 @@ int test_host_validation() {
   Gfn2SccMixerDevicePolicy invalid = device.policy;
   invalid.history_size = 0;
   CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
-            device.batch, invalid, device.raw, device.output, device.state, device.workspace,
-            device.error.get()) == cudaErrorInvalidValue);
+            device.batch, invalid, device.activity, device.raw, device.output, device.state,
+            device.workspace, device.error.get()) == cudaErrorInvalidValue);
   Gfn2SccDeviceBatch wrong_token = device.batch;
   wrong_token.plan_token ^= 1u;
   CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
-            wrong_token, device.policy, device.raw, device.output, device.state, device.workspace,
-            device.error.get()) == cudaErrorInvalidValue);
+            wrong_token, device.policy, device.activity, device.raw, device.output, device.state,
+            device.workspace, device.error.get()) == cudaErrorInvalidValue);
+  Gfn2SccIterationDeviceActivity wrong_activity = device.activity;
+  wrong_activity.plan_token ^= 1u;
+  CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+            device.batch, device.policy, wrong_activity, device.raw, device.output, device.state,
+            device.workspace, device.error.get()) == cudaErrorInvalidValue);
+  wrong_activity = device.activity;
+  wrong_activity.batch_elements = 0;
+  CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+            device.batch, device.policy, wrong_activity, device.raw, device.output, device.state,
+            device.workspace, device.error.get()) == cudaErrorInvalidValue);
   Gfn2SccDeviceMultipoles aliased = device.output;
   aliased.shell_charges = device.state.current_inputs;
   CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
-            device.batch, device.policy, device.raw, aliased, device.state, device.workspace,
-            device.error.get()) == cudaErrorInvalidValue);
+            device.batch, device.policy, device.activity, device.raw, aliased, device.state,
+            device.workspace, device.error.get()) == cudaErrorInvalidValue);
   Gfn2SccDeviceMultipoles in_place = {device.raw_shell.get(),
                                       device.raw.shell_elements,
                                       device.raw_dipole.get(),
@@ -1262,9 +1572,9 @@ int test_host_validation() {
                                       kPlanToken};
   CHECK(initialize_device(device) == 0);
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(device.batch, device.policy,
-                                                             device.raw, in_place, device.state,
-                                                             device.workspace, device.error.get()));
+  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+      device.batch, device.policy, device.activity, device.raw, in_place, device.state,
+      device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
   return 0;
 }
@@ -1288,7 +1598,10 @@ int main() {
   if (const int status = test_nonfinite_initialize_is_whole_call_atomic(); status != 0) {
     return status;
   }
-  if (const int status = test_topology_and_sticky_errors_are_whole_call_noops(); status != 0) {
+  if (const int status = test_topology_and_canonical_sequence_gates(); status != 0) {
+    return status;
+  }
+  if (const int status = test_active_topology_projection_and_normalization(); status != 0) {
     return status;
   }
   if (const int status = test_iteration_overflow_isolated_from_healthy_peers(); status != 0) {
@@ -1297,10 +1610,13 @@ int main() {
   if (const int status = test_corrupted_active_history_isolated_from_healthy_peers(); status != 0) {
     return status;
   }
-  if (const int status = test_peer_failure_and_terminal_skip(); status != 0) {
+  if (const int status = test_peer_failure_and_canonical_inactive_members(); status != 0) {
     return status;
   }
   if (const int status = test_restart_atomicity_and_private_mixed_semantics(); status != 0) {
+    return status;
+  }
+  if (const int status = test_alias_matches_distinct_ragged_batch(); status != 0) {
     return status;
   }
   if (const int status = test_custom_stream_and_graph_replay(); status != 0) {

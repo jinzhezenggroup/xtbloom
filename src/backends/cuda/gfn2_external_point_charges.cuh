@@ -5,6 +5,8 @@
 
 #include <cstdint>
 
+#include "backends/cuda/gfn2_scc_iteration_control.cuh"
+
 namespace gpuxtb::detail::cuda {
 
 /* Semantic input errors detected asynchronously by external point-charge kernels. */
@@ -16,6 +18,7 @@ enum class Gfn2ExternalPointChargeDeviceError : std::uint32_t {
   kInvalidPointChargeInput = 4u,
   kNonfiniteShellValue = 5u,
   kNonfinitePairArithmetic = 6u,
+  kCacheMismatch = 7u,
 };
 
 /*
@@ -47,6 +50,22 @@ struct Gfn2ExternalPointChargeDeviceBatch {
   const double* point_positions = nullptr;
   const double* point_charges = nullptr;
   const double* point_hardnesses = nullptr;
+  /* Optional setup identity used by SCC-specific cache consumers. */
+  std::uint64_t plan_token = 0u;
+};
+
+/* Geometry-generation-scoped explicit point-charge shell-potential cache. */
+struct Gfn2ExternalPointChargeDeviceCache {
+  double* shell_potentials = nullptr;
+  std::int64_t shell_elements = 0;
+  std::uint64_t geometry_generation = 0u;
+  std::uint64_t plan_token = 0u;
+};
+
+/* Caller-owned unpublished potential storage for transactional SCC updates. */
+struct Gfn2ExternalPointChargeDeviceWorkspace {
+  double* shell_scratch = nullptr;
+  std::int64_t shell_elements = 0;
 };
 
 /*
@@ -90,6 +109,32 @@ cudaError_t add_gfn2_external_point_charge_forces_cuda(
  */
 cudaError_t reset_gfn2_external_point_charge_device_error_cuda(
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+cudaError_t reset_gfn2_external_point_charge_scc_errors_cuda(
+    std::int64_t batch_size, std::uint32_t* system_errors, std::uint32_t* plan_error,
+    cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Build active members of the geometry-scoped Vpc cache. Inactive geometry
+ * and point-charge arrays remain unread and their previous cache slices remain
+ * untouched.
+ */
+cudaError_t update_gfn2_external_point_charge_scc_potential_cache_cuda(
+    const Gfn2ExternalPointChargeDeviceBatch& batch, const Gfn2SccIterationDeviceActivity& activity,
+    const Gfn2ExternalPointChargeDeviceCache& cache, std::uint64_t geometry_generation,
+    const Gfn2ExternalPointChargeDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* plan_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Overwrite raw Epc = sum_s q_raw,s Vpc,s in CPU shell order. The cache
+ * generation is validated only when at least one member is active. No
+ * one-half factor is applied and the public destination is never read.
+ */
+cudaError_t evaluate_gfn2_external_point_charge_scc_energy_cuda(
+    const Gfn2ExternalPointChargeDeviceBatch& batch, const Gfn2SccIterationDeviceActivity& activity,
+    const Gfn2ExternalPointChargeDeviceCache& cache, std::uint64_t geometry_generation,
+    const double* raw_shell_charges, double* component_energies, std::uint32_t* system_errors,
+    std::uint32_t* plan_error, cudaStream_t stream = nullptr) noexcept;
 
 /*
  * Every launcher is allocation-free and performs no device-wide or stream

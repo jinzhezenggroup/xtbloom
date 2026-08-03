@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/cuda/gfn2_scc_iteration_control.cuh"
+
 namespace gpuxtb::detail::cuda {
 
 /* First semantic or arithmetic failure recorded by an ES2 device sequence. */
@@ -140,6 +142,43 @@ cudaError_t add_gfn2_es2_gradient_cuda(const Gfn2ES2DeviceBatch& batch,
  */
 cudaError_t reset_gfn2_es2_device_error_cuda(std::uint32_t* device_error,
                                              cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Reset the SCC-local peer diagnostics and plan-only latch.  The canonical
+ * iteration activity is read-only; a later normalization stage folds these
+ * diagnostics into that ledger without mixing ES2 codes with other domains.
+ */
+cudaError_t reset_gfn2_es2_scc_errors_cuda(std::int64_t batch_size, std::uint32_t* system_errors,
+                                           std::uint32_t* plan_error,
+                                           cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Evaluate the mixed-charge ES2 potential for active SCC members.  Inactive
+ * members are rejected before any charge or Gamma-cache read and retain their
+ * output bytes.  Numerical failures are isolated per system; malformed device
+ * offset partitions set only plan_error and suppress publication for the
+ * complete stage.
+ */
+cudaError_t evaluate_gfn2_es2_scc_potential_cuda(
+    const Gfn2ES2DeviceBatch& batch, const Gfn2ES2DeviceCache& cache,
+    std::uint64_t geometry_generation, const Gfn2SccIterationDeviceActivity& activity,
+    const double* mixed_shell_charges, double* shell_potentials,
+    const Gfn2ES2DeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* plan_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Evaluate the pure raw-charge ES2 component and overwrite one value per
+ * active system.  The destination is never read: each successful value starts
+ * from exact zero and is published transactionally after the complete system
+ * calculation succeeds.  The same charge-independent Gamma cache can be
+ * reused by this raw phase and the mixed-potential phase above.
+ */
+cudaError_t evaluate_gfn2_es2_scc_energy_cuda(
+    const Gfn2ES2DeviceBatch& batch, const Gfn2ES2DeviceCache& cache,
+    std::uint64_t geometry_generation, const Gfn2SccIterationDeviceActivity& activity,
+    const double* raw_shell_charges, double* component_energies,
+    const Gfn2ES2DeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* plan_error, cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 

@@ -54,6 +54,19 @@ __device__ bool sequence_is_valid(const std::uint32_t* device_error) {
          static_cast<std::uint32_t>(Gfn2D4DeviceError::kSuccess);
 }
 
+/* SCC consumers always inspect the canonical sequence gate before any member
+ * byte or numerical buffer. The ledger is immutable for the duration of a
+ * queued stage, so ordinary byte loads are sufficient after the stream-ordered
+ * uint32 gate read. */
+__device__ bool scc_sequence_is_open(const Gfn2SccIterationDeviceActivity& activity) {
+  return atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u) == 1u;
+}
+
+__device__ bool scc_system_is_active(const Gfn2SccIterationDeviceActivity& activity,
+                                     std::int64_t system) {
+  return scc_sequence_is_open(activity) && activity.active_mask[system] == 1u;
+}
+
 /*
  * Read the sticky error once per block. A per-thread atomic read creates severe
  * contention on a single address for large batches, while a non-atomic load
@@ -205,6 +218,193 @@ __global__ void topology_preflight_kernel(Gfn2D4DeviceBatch batch,
   }
 }
 
+/* Validate activity and scalar cache provenance without touching topology or
+ * numerical data. In particular, an all-inactive call accepts a stale cache
+ * generation and is safe even when every device-side geometry buffer is
+ * deliberately poisoned. */
+__global__ void scc_activity_preflight_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceCache cache,
+                                              std::uint64_t expected_geometry_generation,
+                                              Gfn2SccIterationDeviceActivity activity,
+                                              std::uint32_t* device_error) {
+  if (blockIdx.x != 0) {
+    return;
+  }
+  __shared__ int run;
+  __shared__ int invalid_activity;
+  __shared__ int any_active;
+  if (threadIdx.x == 0) {
+    const std::uint32_t sequence =
+        atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u);
+    run = sequence == 1u ? 1 : 0;
+    invalid_activity = sequence > 1u ? 1 : 0;
+    any_active = 0;
+  }
+  __syncthreads();
+  if (run == 0) {
+    if (threadIdx.x == 0 && invalid_activity != 0) {
+      record_error(device_error, Gfn2D4DeviceError::kInvalidActivity);
+    }
+    return;
+  }
+  for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
+    const std::uint8_t active = activity.active_mask[system];
+    if (active > 1u) {
+      atomicExch(&invalid_activity, 1);
+    } else if (active == 1u) {
+      atomicExch(&any_active, 1);
+    }
+  }
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    if (invalid_activity != 0) {
+      record_error(device_error, Gfn2D4DeviceError::kInvalidActivity);
+    } else if (any_active != 0 &&
+               (expected_geometry_generation == 0u || cache.geometry_generation == 0u ||
+                cache.geometry_generation != expected_geometry_generation)) {
+      record_error(device_error, Gfn2D4DeviceError::kStaleGeometry);
+    }
+  }
+}
+
+/* SCC topology validation is activity-gated. The all-inactive fast path exits
+ * before even the first ragged offset is loaded. */
+__global__ void scc_topology_preflight_kernel(Gfn2D4DeviceBatch batch,
+                                              Gfn2D4DeviceParameters parameters,
+                                              Gfn2SccIterationDeviceActivity activity,
+                                              std::uint32_t* device_error) {
+  if (blockIdx.x != 0) {
+    return;
+  }
+  __shared__ int run;
+  __shared__ int any_active;
+  __shared__ std::uint64_t partial_hash[kThreadsPerBlock];
+  if (threadIdx.x == 0) {
+    run = scc_sequence_is_open(activity) && sequence_is_valid(device_error) ? 1 : 0;
+    any_active = 0;
+  }
+  __syncthreads();
+  if (run == 0) {
+    return;
+  }
+  for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
+    if (activity.active_mask[system] == 1u) {
+      atomicExch(&any_active, 1);
+    }
+  }
+  __syncthreads();
+  if (any_active == 0) {
+    return;
+  }
+  if (threadIdx.x == 0 && (batch.atom_offsets[0] != 0 || batch.pair_offsets[0] != 0 ||
+                           batch.atom_offsets[batch.batch_size] != batch.total_atoms ||
+                           batch.pair_offsets[batch.batch_size] != batch.total_pairs)) {
+    record_error(device_error, Gfn2D4DeviceError::kInvalidOffsets);
+  }
+  for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
+    if (activity.active_mask[system] != 1u) {
+      continue;
+    }
+    const std::int64_t atom_begin = batch.atom_offsets[system];
+    const std::int64_t atom_end = batch.atom_offsets[system + 1];
+    const std::int64_t pair_begin = batch.pair_offsets[system];
+    const std::int64_t pair_end = batch.pair_offsets[system + 1];
+    if (atom_begin < 0 || atom_begin > atom_end || atom_end > batch.total_atoms || pair_begin < 0 ||
+        pair_begin > pair_end || pair_end > batch.total_pairs) {
+      record_error(device_error, Gfn2D4DeviceError::kInvalidOffsets);
+      continue;
+    }
+    std::int64_t expected_pairs = 0;
+    if (!packed_pair_count(atom_end - atom_begin, expected_pairs) ||
+        pair_end - pair_begin != expected_pairs) {
+      record_error(device_error, Gfn2D4DeviceError::kInvalidOffsets);
+      continue;
+    }
+    for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+      const std::int32_t atomic_number = batch.atomic_numbers[atom];
+      if (atomic_number <= 0 || atomic_number > parameters.element_count) {
+        record_error(device_error, Gfn2D4DeviceError::kInvalidAtomicNumber);
+        break;
+      }
+      const Gfn2D4DeviceElementData element = parameters.elements[atomic_number - 1];
+      if (element.reference_count == 0 || element.reference_count > kGfn2D4MaximumReferences ||
+          static_cast<std::int64_t>(element.reference_offset) + element.reference_count >
+              parameters.reference_count ||
+          !(element.covalent_radius > 0.0) || !isfinite(element.covalent_radius) ||
+          !isfinite(element.electronegativity) || !(element.r4r2 > 0.0) ||
+          !isfinite(element.r4r2) || !(element.effective_charge > 0.0) ||
+          !isfinite(element.effective_charge) || !(element.hardness > 0.0) ||
+          !isfinite(element.hardness)) {
+        record_error(device_error, Gfn2D4DeviceError::kInvalidParameterData);
+        break;
+      }
+    }
+  }
+  /* atomic_number_hash is the immutable batch/parameter binding authority.
+   * Recompute it whenever the SCC stage has work, exactly as the standalone
+   * D4 topology preflight does, so an in-range element reorder cannot silently
+   * combine new element data with an old geometry cache. */
+  std::uint64_t local_hash = 0u;
+  for (std::int64_t atom = threadIdx.x; atom < batch.total_atoms; atom += blockDim.x) {
+    local_hash ^= gfn2_d4_atomic_number_hash_contribution(batch.atomic_numbers[atom], atom);
+  }
+  partial_hash[threadIdx.x] = local_hash;
+  __syncthreads();
+  for (int offset = blockDim.x / 2; offset > 0; offset /= 2) {
+    if (threadIdx.x < offset) {
+      partial_hash[threadIdx.x] ^= partial_hash[threadIdx.x + offset];
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    const std::uint64_t atomic_number_hash =
+        partial_hash[0] ^ 0x243f6a8885a308d3ULL ^
+        gfn2_d4_hash_mix(static_cast<std::uint64_t>(batch.total_atoms));
+    if (atomic_number_hash != batch.atomic_number_hash) {
+      record_error(device_error, Gfn2D4DeviceError::kInvalidAtomicNumber);
+    }
+  }
+}
+
+/* One block owns one active member, so inactive systems are rejected before
+ * their offset, cache, or diagnostic slices are touched. */
+__global__ void scc_cache_preflight_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceCache cache,
+                                           Gfn2SccIterationDeviceActivity activity,
+                                           Gfn2D4DeviceWorkspace workspace,
+                                           std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!scc_system_is_active(activity, system)) {
+    return;
+  }
+  __shared__ std::uint32_t shared_error;
+  if (!block_sequence_is_valid(device_error, shared_error)) {
+    return;
+  }
+  if (!system_is_valid(workspace, system)) {
+    return;
+  }
+  const std::int64_t atom_begin = batch.atom_offsets[system];
+  const std::int64_t atom_end = batch.atom_offsets[system + 1];
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    if (!isfinite(cache.coordination_numbers[atom])) {
+      record_system_error(workspace, system, Gfn2D4DeviceError::kInvalidCoordination);
+    }
+  }
+  const std::int64_t pair_begin = batch.pair_offsets[system];
+  const std::int64_t pair_end = batch.pair_offsets[system + 1];
+  for (std::int64_t pair = pair_begin + threadIdx.x; pair < pair_end; pair += blockDim.x) {
+    const double* values = cache.pair_data + pair * kGfn2D4PairDataElements;
+    const double distance_squared =
+        values[0] * values[0] + values[1] * values[1] + values[2] * values[2];
+    if (!isfinite(values[0]) || !isfinite(values[1]) || !isfinite(values[2]) ||
+        !isfinite(values[3]) || !isfinite(values[4]) ||
+        !(distance_squared >= kMinimumDistanceSquared) || values[3] < 0.0) {
+      record_system_error(workspace, system,
+                          values[3] < 0.0 ? Gfn2D4DeviceError::kInvalidDamping
+                                          : Gfn2D4DeviceError::kNonfiniteArithmetic);
+    }
+  }
+}
+
 __global__ void cache_preflight_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceCache cache,
                                        Gfn2D4DeviceWorkspace workspace,
                                        std::uint32_t* device_error) {
@@ -242,19 +442,12 @@ __global__ void cache_preflight_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceCach
   }
 }
 
-__global__ void prepare_weights_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameters parameters,
-                                       Gfn2D4DeviceCache cache, const double* atomic_charges,
-                                       bool zero_charges, Gfn2D4DeviceWorkspace workspace,
-                                       std::uint32_t* device_error) {
-  __shared__ std::uint32_t shared_error;
-  if (!block_sequence_is_valid(device_error, shared_error)) {
-    return;
-  }
-  const std::int64_t atom = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (atom >= batch.total_atoms) {
-    return;
-  }
-  const std::int64_t system = system_for_atom(batch, atom);
+__device__ void prepare_atom_weights(Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameters parameters,
+                                     Gfn2D4DeviceCache cache, const double* atomic_charges,
+                                     bool zero_charges, bool write_cn_derivatives,
+                                     bool write_charge_derivatives, std::int64_t system,
+                                     std::int64_t atom, Gfn2D4DeviceWorkspace workspace,
+                                     std::uint32_t* device_error) {
   if (!system_is_valid(workspace, system)) {
     return;
   }
@@ -285,8 +478,12 @@ __global__ void prepare_weights_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DevicePara
   const std::int64_t output_offset = atom * kGfn2D4MaximumReferences;
   for (std::int64_t local = 0; local < kGfn2D4MaximumReferences; ++local) {
     workspace.weights[output_offset + local] = 0.0;
-    workspace.weight_cn_derivatives[output_offset + local] = 0.0;
-    workspace.weight_charge_derivatives[output_offset + local] = 0.0;
+    if (write_cn_derivatives) {
+      workspace.weight_cn_derivatives[output_offset + local] = 0.0;
+    }
+    if (write_charge_derivatives) {
+      workspace.weight_charge_derivatives[output_offset + local] = 0.0;
+    }
   }
 
   double normalization = 0.0;
@@ -306,8 +503,10 @@ __global__ void prepare_weights_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DevicePara
       const double delta = coordination - reference.coordination_number;
       const double value = exp(-factor * delta * delta);
       normalization += value;
-      normalization_derivative +=
-          2.0 * factor * (reference.coordination_number - coordination) * value;
+      if (write_cn_derivatives) {
+        normalization_derivative +=
+            2.0 * factor * (reference.coordination_number - coordination) * value;
+      }
     }
   }
   const double inverse_normalization =
@@ -325,31 +524,89 @@ __global__ void prepare_weights_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DevicePara
       const double delta = coordination - reference.coordination_number;
       const double value = exp(-factor * delta * delta);
       numerator += value;
-      numerator_derivative += 2.0 * factor * (reference.coordination_number - coordination) * value;
+      if (write_cn_derivatives) {
+        numerator_derivative +=
+            2.0 * factor * (reference.coordination_number - coordination) * value;
+      }
     }
     double cn_weight = numerator * inverse_normalization;
     if (!isfinite(cn_weight) || inverse_normalization == 0.0) {
       cn_weight = fabs(maximum_reference_cn - reference.coordination_number) < 1.0e-12 ? 1.0 : 0.0;
     }
-    double cn_derivative =
-        inverse_normalization *
-        (numerator_derivative - numerator * normalization_derivative * inverse_normalization);
-    if (!isfinite(cn_derivative) || inverse_normalization == 0.0) {
-      cn_derivative = 0.0;
+    double cn_derivative = 0.0;
+    if (write_cn_derivatives) {
+      cn_derivative =
+          inverse_normalization *
+          (numerator_derivative - numerator * normalization_derivative * inverse_normalization);
+      if (!isfinite(cn_derivative) || inverse_normalization == 0.0) {
+        cn_derivative = 0.0;
+      }
     }
     const double qref = reference.charge + element.effective_charge;
     const double scaling = charge_scale(kChargeScalingHeight, charge_steepness, qref, qmod);
     const double derivative =
-        cn_weight * charge_scale_derivative(kChargeScalingHeight, charge_steepness, qref, qmod);
+        write_charge_derivatives ? cn_weight * charge_scale_derivative(kChargeScalingHeight,
+                                                                       charge_steepness, qref, qmod)
+                                 : 0.0;
     const double weight = cn_weight * scaling;
     const double cn_scaled_derivative = cn_derivative * scaling;
-    if (!isfinite(weight) || !isfinite(derivative) || !isfinite(cn_scaled_derivative)) {
+    if (!isfinite(weight) || (write_charge_derivatives && !isfinite(derivative)) ||
+        (write_cn_derivatives && !isfinite(cn_scaled_derivative))) {
       record_system_error(workspace, system, Gfn2D4DeviceError::kNonfiniteArithmetic);
       return;
     }
     workspace.weights[output_offset + local] = weight;
-    workspace.weight_cn_derivatives[output_offset + local] = cn_scaled_derivative;
-    workspace.weight_charge_derivatives[output_offset + local] = derivative;
+    if (write_cn_derivatives) {
+      workspace.weight_cn_derivatives[output_offset + local] = cn_scaled_derivative;
+    }
+    if (write_charge_derivatives) {
+      workspace.weight_charge_derivatives[output_offset + local] = derivative;
+    }
+  }
+}
+
+__global__ void prepare_weights_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameters parameters,
+                                       Gfn2D4DeviceCache cache, const double* atomic_charges,
+                                       bool zero_charges, bool write_cn_derivatives,
+                                       bool write_charge_derivatives,
+                                       Gfn2D4DeviceWorkspace workspace,
+                                       std::uint32_t* device_error) {
+  __shared__ std::uint32_t shared_error;
+  if (!block_sequence_is_valid(device_error, shared_error)) {
+    return;
+  }
+  const std::int64_t atom = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (atom >= batch.total_atoms) {
+    return;
+  }
+  prepare_atom_weights(batch, parameters, cache, atomic_charges, zero_charges, write_cn_derivatives,
+                       write_charge_derivatives, system_for_atom(batch, atom), atom, workspace,
+                       device_error);
+}
+
+/* A block owns one SCC system. The canonical sequence and member byte are
+ * consumed before the first ragged offset, atom, cache value, or diagnostic
+ * slice for that system. This is intentionally separate from the standalone
+ * atom-grid kernel, whose system lookup necessarily reads the global offsets. */
+__global__ void scc_prepare_weights_kernel(
+    Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameters parameters, Gfn2D4DeviceCache cache,
+    const double* atomic_charges, bool zero_charges, bool write_cn_derivatives,
+    bool write_charge_derivatives, Gfn2SccIterationDeviceActivity activity,
+    Gfn2D4DeviceWorkspace workspace, std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!scc_system_is_active(activity, system)) {
+    return;
+  }
+  __shared__ std::uint32_t shared_error;
+  if (!block_sequence_is_valid(device_error, shared_error) || !system_is_valid(workspace, system)) {
+    return;
+  }
+  const std::int64_t atom_begin = batch.atom_offsets[system];
+  const std::int64_t atom_end = batch.atom_offsets[system + 1];
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    prepare_atom_weights(batch, parameters, cache, atomic_charges, zero_charges,
+                         write_cn_derivatives, write_charge_derivatives, system, atom, workspace,
+                         device_error);
   }
 }
 
@@ -394,6 +651,203 @@ __device__ PairCoefficient pair_coefficient(Gfn2D4DeviceBatch batch,
     }
   }
   return result;
+}
+
+struct PairChargeDerivative {
+  double first;
+  double second;
+};
+
+/* SCC potential mode deliberately reads no CN-derivative workspace. */
+__device__ PairChargeDerivative pair_charge_derivative(Gfn2D4DeviceBatch batch,
+                                                       Gfn2D4DeviceParameters parameters,
+                                                       Gfn2D4DeviceWorkspace workspace,
+                                                       std::int64_t first, std::int64_t second) {
+  const Gfn2D4DeviceElementData first_element =
+      parameters.elements[batch.atomic_numbers[first] - 1];
+  const Gfn2D4DeviceElementData second_element =
+      parameters.elements[batch.atomic_numbers[second] - 1];
+  const std::int64_t first_weight = first * kGfn2D4MaximumReferences;
+  const std::int64_t second_weight = second * kGfn2D4MaximumReferences;
+  PairChargeDerivative result{0.0, 0.0};
+  for (std::int64_t first_ref = 0; first_ref < first_element.reference_count; ++first_ref) {
+    const std::int64_t global_first = first_element.reference_offset + first_ref;
+    const double first_value = workspace.weights[first_weight + first_ref];
+    const double first_derivative = workspace.weight_charge_derivatives[first_weight + first_ref];
+    for (std::int64_t second_ref = 0; second_ref < second_element.reference_count; ++second_ref) {
+      const std::int64_t global_second = second_element.reference_offset + second_ref;
+      const double reference_c6 =
+          parameters.reference_c6[global_first * parameters.reference_count + global_second];
+      const double second_value = workspace.weights[second_weight + second_ref];
+      const double second_derivative =
+          workspace.weight_charge_derivatives[second_weight + second_ref];
+      result.first += first_derivative * second_value * reference_c6;
+      result.second += first_value * second_derivative * reference_c6;
+    }
+  }
+  return result;
+}
+
+/* SCC energy mode reads only charge-dependent weights and immutable tables. */
+__device__ double pair_c6_coefficient(Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameters parameters,
+                                      Gfn2D4DeviceWorkspace workspace, std::int64_t first,
+                                      std::int64_t second) {
+  const Gfn2D4DeviceElementData first_element =
+      parameters.elements[batch.atomic_numbers[first] - 1];
+  const Gfn2D4DeviceElementData second_element =
+      parameters.elements[batch.atomic_numbers[second] - 1];
+  const std::int64_t first_weight = first * kGfn2D4MaximumReferences;
+  const std::int64_t second_weight = second * kGfn2D4MaximumReferences;
+  double c6 = 0.0;
+  for (std::int64_t first_ref = 0; first_ref < first_element.reference_count; ++first_ref) {
+    const std::int64_t global_first = first_element.reference_offset + first_ref;
+    const double first_value = workspace.weights[first_weight + first_ref];
+    for (std::int64_t second_ref = 0; second_ref < second_element.reference_count; ++second_ref) {
+      const std::int64_t global_second = second_element.reference_offset + second_ref;
+      const double reference_c6 =
+          parameters.reference_c6[global_first * parameters.reference_count + global_second];
+      c6 += first_value * workspace.weights[second_weight + second_ref] * reference_c6;
+    }
+  }
+  return c6;
+}
+
+__global__ void scc_potential_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameters parameters,
+                                     Gfn2D4DeviceCache cache,
+                                     Gfn2SccIterationDeviceActivity activity,
+                                     Gfn2D4DeviceWorkspace workspace, std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!scc_system_is_active(activity, system)) {
+    return;
+  }
+  __shared__ std::uint32_t shared_error;
+  if (!block_system_is_valid(workspace, system, device_error, shared_error)) {
+    return;
+  }
+  const std::int64_t begin = batch.atom_offsets[system];
+  const std::int64_t end = batch.atom_offsets[system + 1];
+  for (std::int64_t atom = begin + threadIdx.x; atom < end; atom += blockDim.x) {
+    double potential = 0.0;
+    for (std::int64_t other = begin; other < end; ++other) {
+      if (other == atom) {
+        continue;
+      }
+      const std::int64_t first = atom < other ? atom : other;
+      const std::int64_t second = atom < other ? other : atom;
+      const std::int64_t local_first = first - begin;
+      const std::int64_t local_second = second - begin;
+      const std::int64_t packed_pair =
+          batch.pair_offsets[system] + local_second * (local_second - 1) / 2 + local_first;
+      const double damping = cache.pair_data[packed_pair * kGfn2D4PairDataElements + 3];
+      if (!isfinite(damping) || damping < 0.0) {
+        record_system_error(workspace, system, Gfn2D4DeviceError::kInvalidDamping);
+        return;
+      }
+      if (damping == 0.0) {
+        continue;
+      }
+      const PairChargeDerivative derivative =
+          pair_charge_derivative(batch, parameters, workspace, first, second);
+      potential -= (atom == first ? derivative.first : derivative.second) * damping;
+      if (!isfinite(potential)) {
+        record_system_error(workspace, system, Gfn2D4DeviceError::kNonfiniteArithmetic);
+        return;
+      }
+    }
+    workspace.atom_scratch[atom] = potential;
+  }
+}
+
+__global__ void scc_energy_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameters parameters,
+                                  Gfn2D4DeviceCache cache, Gfn2SccIterationDeviceActivity activity,
+                                  Gfn2D4DeviceWorkspace workspace, std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!scc_system_is_active(activity, system)) {
+    return;
+  }
+  __shared__ double partial[kThreadsPerBlock];
+  __shared__ std::uint32_t shared_error;
+  if (!block_system_is_valid(workspace, system, device_error, shared_error)) {
+    return;
+  }
+  const std::int64_t begin = batch.atom_offsets[system];
+  const std::int64_t end = batch.atom_offsets[system + 1];
+  const std::int64_t atom_count = end - begin;
+  const std::int64_t pair_begin = batch.pair_offsets[system];
+  const std::int64_t pair_end = batch.pair_offsets[system + 1];
+  double local_energy = 0.0;
+  for (std::int64_t local_pair = threadIdx.x; local_pair < pair_end - pair_begin;
+       local_pair += blockDim.x) {
+    std::int64_t local_second =
+        static_cast<std::int64_t>((1.0 + sqrt(1.0 + 8.0 * static_cast<double>(local_pair))) * 0.5);
+    while (local_second * (local_second - 1) / 2 > local_pair) {
+      --local_second;
+    }
+    while (local_second + 1 < atom_count && (local_second + 1) * local_second / 2 <= local_pair) {
+      ++local_second;
+    }
+    const std::int64_t local_first = local_pair - local_second * (local_second - 1) / 2;
+    const std::int64_t first = begin + local_first;
+    const std::int64_t second = begin + local_second;
+    const double damping = cache.pair_data[(pair_begin + local_pair) * kGfn2D4PairDataElements + 3];
+    if (!isfinite(damping) || damping < 0.0) {
+      record_system_error(workspace, system, Gfn2D4DeviceError::kInvalidDamping);
+      local_energy = 0.0;
+      break;
+    }
+    if (damping != 0.0) {
+      local_energy -= pair_c6_coefficient(batch, parameters, workspace, first, second) * damping;
+      if (!isfinite(local_energy)) {
+        record_system_error(workspace, system, Gfn2D4DeviceError::kNonfiniteArithmetic);
+        local_energy = 0.0;
+        break;
+      }
+    }
+  }
+  partial[threadIdx.x] = local_energy;
+  __syncthreads();
+  for (int offset = blockDim.x / 2; offset > 0; offset /= 2) {
+    if (threadIdx.x < offset) {
+      partial[threadIdx.x] += partial[threadIdx.x + offset];
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0 && sequence_is_valid(device_error) && system_is_valid(workspace, system)) {
+    if (isfinite(partial[0])) {
+      workspace.batch_scratch[system] = partial[0];
+    } else {
+      record_system_error(workspace, system, Gfn2D4DeviceError::kNonfiniteArithmetic);
+    }
+  }
+}
+
+__global__ void scc_publish_potential_kernel(Gfn2D4DeviceBatch batch,
+                                             Gfn2SccIterationDeviceActivity activity,
+                                             const double* scratch, double* output,
+                                             Gfn2D4DeviceWorkspace workspace,
+                                             const std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!scc_system_is_active(activity, system) || !sequence_is_valid(device_error) ||
+      !system_is_valid(workspace, system)) {
+    return;
+  }
+  const std::int64_t begin = batch.atom_offsets[system];
+  const std::int64_t end = batch.atom_offsets[system + 1];
+  for (std::int64_t atom = begin + threadIdx.x; atom < end; atom += blockDim.x) {
+    output[atom] = scratch[atom];
+  }
+}
+
+__global__ void scc_publish_energy_kernel(std::int64_t batch_size,
+                                          Gfn2SccIterationDeviceActivity activity,
+                                          const double* scratch, double* output,
+                                          Gfn2D4DeviceWorkspace workspace,
+                                          const std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (system < batch_size && scc_system_is_active(activity, system) &&
+      sequence_is_valid(device_error) && system_is_valid(workspace, system)) {
+    output[system] = scratch[system];
+  }
 }
 
 __global__ void potential_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameters parameters,
@@ -1095,6 +1549,152 @@ bool valid_common_descriptors(const Gfn2D4DeviceBatch& batch,
          is_aligned(device_error, alignof(std::uint32_t));
 }
 
+bool valid_scc_descriptors(const Gfn2D4DeviceBatch& batch, const Gfn2D4DeviceParameters& parameters,
+                           const Gfn2D4DeviceCache& cache,
+                           const Gfn2SccIterationDeviceActivity& activity,
+                           const Gfn2D4DeviceWorkspace& workspace, bool potential_mode,
+                           const std::uint32_t* device_error) {
+  const bool reference_square_representable =
+      parameters.reference_count > 0 &&
+      parameters.reference_count <=
+          std::numeric_limits<std::int64_t>::max() / parameters.reference_count;
+  const bool extents_representable =
+      batch.total_atoms > 0 &&
+      batch.total_atoms <= std::numeric_limits<std::int64_t>::max() / kGfn2D4MaximumReferences &&
+      batch.total_pairs >= 0 &&
+      batch.total_pairs <= std::numeric_limits<std::int64_t>::max() / kGfn2D4PairDataElements;
+  if (!reference_square_representable || !extents_representable) {
+    return false;
+  }
+  const std::int64_t pair_elements = batch.total_pairs * kGfn2D4PairDataElements;
+  const std::int64_t weight_elements = batch.total_atoms * kGfn2D4MaximumReferences;
+  const std::int64_t reference_c6_elements =
+      parameters.reference_count * parameters.reference_count;
+  const bool mode_workspace_valid =
+      potential_mode
+          ? workspace.weight_charge_derivatives != nullptr && workspace.atom_scratch != nullptr &&
+                workspace.atom_elements >= batch.total_atoms &&
+                is_aligned(workspace.weight_charge_derivatives, alignof(double)) &&
+                is_aligned(workspace.atom_scratch, alignof(double))
+          : workspace.batch_scratch != nullptr && workspace.batch_elements >= batch.batch_size &&
+                is_aligned(workspace.batch_scratch, alignof(double));
+  return batch.batch_size > 0 && batch.batch_size <= std::numeric_limits<unsigned int>::max() &&
+         batch.plan_token != 0u && batch.atom_offsets != nullptr && batch.pair_offsets != nullptr &&
+         batch.atomic_numbers != nullptr && parameters.elements != nullptr &&
+         parameters.element_count > 0 && parameters.references != nullptr &&
+         parameters.reference_c6 != nullptr &&
+         parameters.reference_c6_elements >= reference_c6_elements &&
+         cache.plan_token == batch.plan_token &&
+         (batch.total_pairs == 0 || cache.pair_data != nullptr) &&
+         cache.pair_data_elements == pair_elements && cache.coordination_numbers != nullptr &&
+         cache.coordination_elements == batch.total_atoms &&
+         activity.plan_token == batch.plan_token && activity.batch_elements == batch.batch_size &&
+         activity.sequence_elements == 1 && activity.active_mask != nullptr &&
+         activity.sequence_active != nullptr && workspace.weights != nullptr &&
+         workspace.weight_elements >= weight_elements && workspace.system_errors != nullptr &&
+         workspace.system_error_elements >= batch.batch_size && mode_workspace_valid &&
+         device_error != nullptr && is_aligned(batch.atom_offsets, alignof(std::int64_t)) &&
+         is_aligned(batch.pair_offsets, alignof(std::int64_t)) &&
+         is_aligned(batch.atomic_numbers, alignof(std::int32_t)) &&
+         is_aligned(parameters.elements, alignof(Gfn2D4DeviceElementData)) &&
+         is_aligned(parameters.references, alignof(Gfn2D4DeviceReferenceData)) &&
+         is_aligned(parameters.reference_c6, alignof(double)) &&
+         (cache.pair_data == nullptr || is_aligned(cache.pair_data, alignof(double))) &&
+         is_aligned(cache.coordination_numbers, alignof(double)) &&
+         is_aligned(activity.active_mask, alignof(std::uint8_t)) &&
+         is_aligned(activity.sequence_active, alignof(std::uint32_t)) &&
+         is_aligned(workspace.weights, alignof(double)) &&
+         is_aligned(workspace.system_errors, alignof(std::uint32_t)) &&
+         is_aligned(device_error, alignof(std::uint32_t));
+}
+
+bool valid_scc_potential_ranges(const Gfn2D4DeviceBatch& batch,
+                                const Gfn2D4DeviceParameters& parameters,
+                                const Gfn2D4DeviceCache& cache, const double* charges,
+                                const Gfn2SccIterationDeviceActivity& activity, double* potentials,
+                                const Gfn2D4DeviceWorkspace& workspace,
+                                std::uint32_t* device_error) {
+  const std::int64_t pair_elements = batch.total_pairs * kGfn2D4PairDataElements;
+  const std::int64_t weight_elements = batch.total_atoms * kGfn2D4MaximumReferences;
+  const std::int64_t reference_c6_elements =
+      parameters.reference_count * parameters.reference_count;
+  std::array<AddressRange, 11> reads;
+  std::array<AddressRange, 6> writes;
+  return make_address_range(batch.atom_offsets, batch.batch_size + 1, sizeof(*batch.atom_offsets),
+                            reads[0]) &&
+         make_address_range(batch.pair_offsets, batch.batch_size + 1, sizeof(*batch.pair_offsets),
+                            reads[1]) &&
+         make_address_range(batch.atomic_numbers, batch.total_atoms, sizeof(*batch.atomic_numbers),
+                            reads[2]) &&
+         make_address_range(parameters.elements, parameters.element_count,
+                            sizeof(*parameters.elements), reads[3]) &&
+         make_address_range(parameters.references, parameters.reference_count,
+                            sizeof(*parameters.references), reads[4]) &&
+         make_address_range(parameters.reference_c6, reference_c6_elements,
+                            sizeof(*parameters.reference_c6), reads[5]) &&
+         make_address_range(cache.pair_data, pair_elements, sizeof(*cache.pair_data), reads[6]) &&
+         make_address_range(cache.coordination_numbers, batch.total_atoms,
+                            sizeof(*cache.coordination_numbers), reads[7]) &&
+         make_address_range(charges, batch.total_atoms, sizeof(*charges), reads[8]) &&
+         make_address_range(activity.active_mask, batch.batch_size, sizeof(*activity.active_mask),
+                            reads[9]) &&
+         make_address_range(activity.sequence_active, 1, sizeof(*activity.sequence_active),
+                            reads[10]) &&
+         make_address_range(workspace.weights, weight_elements, sizeof(*workspace.weights),
+                            writes[0]) &&
+         make_address_range(workspace.weight_charge_derivatives, weight_elements,
+                            sizeof(*workspace.weight_charge_derivatives), writes[1]) &&
+         make_address_range(workspace.atom_scratch, batch.total_atoms,
+                            sizeof(*workspace.atom_scratch), writes[2]) &&
+         make_address_range(workspace.system_errors, batch.batch_size,
+                            sizeof(*workspace.system_errors), writes[3]) &&
+         make_address_range(potentials, batch.total_atoms, sizeof(*potentials), writes[4]) &&
+         make_address_range(device_error, 1, sizeof(*device_error), writes[5]) &&
+         writable_ranges_are_disjoint(reads, writes);
+}
+
+bool valid_scc_energy_ranges(const Gfn2D4DeviceBatch& batch,
+                             const Gfn2D4DeviceParameters& parameters,
+                             const Gfn2D4DeviceCache& cache, const double* charges,
+                             const Gfn2SccIterationDeviceActivity& activity, double* energies,
+                             const Gfn2D4DeviceWorkspace& workspace, std::uint32_t* device_error) {
+  const std::int64_t pair_elements = batch.total_pairs * kGfn2D4PairDataElements;
+  const std::int64_t weight_elements = batch.total_atoms * kGfn2D4MaximumReferences;
+  const std::int64_t reference_c6_elements =
+      parameters.reference_count * parameters.reference_count;
+  std::array<AddressRange, 11> reads;
+  std::array<AddressRange, 5> writes;
+  return make_address_range(batch.atom_offsets, batch.batch_size + 1, sizeof(*batch.atom_offsets),
+                            reads[0]) &&
+         make_address_range(batch.pair_offsets, batch.batch_size + 1, sizeof(*batch.pair_offsets),
+                            reads[1]) &&
+         make_address_range(batch.atomic_numbers, batch.total_atoms, sizeof(*batch.atomic_numbers),
+                            reads[2]) &&
+         make_address_range(parameters.elements, parameters.element_count,
+                            sizeof(*parameters.elements), reads[3]) &&
+         make_address_range(parameters.references, parameters.reference_count,
+                            sizeof(*parameters.references), reads[4]) &&
+         make_address_range(parameters.reference_c6, reference_c6_elements,
+                            sizeof(*parameters.reference_c6), reads[5]) &&
+         make_address_range(cache.pair_data, pair_elements, sizeof(*cache.pair_data), reads[6]) &&
+         make_address_range(cache.coordination_numbers, batch.total_atoms,
+                            sizeof(*cache.coordination_numbers), reads[7]) &&
+         make_address_range(charges, batch.total_atoms, sizeof(*charges), reads[8]) &&
+         make_address_range(activity.active_mask, batch.batch_size, sizeof(*activity.active_mask),
+                            reads[9]) &&
+         make_address_range(activity.sequence_active, 1, sizeof(*activity.sequence_active),
+                            reads[10]) &&
+         make_address_range(workspace.weights, weight_elements, sizeof(*workspace.weights),
+                            writes[0]) &&
+         make_address_range(workspace.batch_scratch, batch.batch_size,
+                            sizeof(*workspace.batch_scratch), writes[1]) &&
+         make_address_range(workspace.system_errors, batch.batch_size,
+                            sizeof(*workspace.system_errors), writes[2]) &&
+         make_address_range(energies, batch.batch_size, sizeof(*energies), writes[3]) &&
+         make_address_range(device_error, 1, sizeof(*device_error), writes[4]) &&
+         writable_ranges_are_disjoint(reads, writes);
+}
+
 template <std::size_t ReadCount, std::size_t WriteCount>
 bool make_common_ranges(const Gfn2D4DeviceBatch& batch, const Gfn2D4DeviceParameters& parameters,
                         const Gfn2D4DeviceCache& cache, const Gfn2D4DeviceWorkspace& workspace,
@@ -1308,7 +1908,7 @@ cudaError_t evaluate_gfn2_d4_two_body_cuda(
     return status;
   }
   prepare_weights_kernel<<<atom_blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, parameters, cache, atomic_charges, false, workspace, device_error);
+      batch, parameters, cache, atomic_charges, false, true, true, workspace, device_error);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;
@@ -1333,6 +1933,112 @@ cudaError_t evaluate_gfn2_d4_two_body_cuda(
   }
   publish_batch_kernel<<<batch_blocks, kThreadsPerBlock, 0, stream>>>(
       batch.batch_size, workspace.batch_scratch, energies, workspace, device_error);
+  return check_launch();
+}
+
+cudaError_t evaluate_gfn2_d4_scc_potential_cuda(
+    const Gfn2D4DeviceBatch& batch, const Gfn2D4DeviceParameters& parameters,
+    const Gfn2D4DeviceCache& cache, std::uint64_t expected_geometry_generation,
+    const double* mixed_atomic_charges, const Gfn2SccIterationDeviceActivity& activity,
+    double* atomic_potentials, const Gfn2D4DeviceWorkspace& workspace, std::uint32_t* device_error,
+    cudaStream_t stream) noexcept {
+  if (!valid_scc_descriptors(batch, parameters, cache, activity, workspace, true, device_error) ||
+      mixed_atomic_charges == nullptr || atomic_potentials == nullptr ||
+      !is_aligned(mixed_atomic_charges, alignof(double)) ||
+      !is_aligned(atomic_potentials, alignof(double)) ||
+      !valid_scc_potential_ranges(batch, parameters, cache, mixed_atomic_charges, activity,
+                                  atomic_potentials, workspace, device_error)) {
+    return cudaErrorInvalidValue;
+  }
+  cudaError_t status = cudaSuccess;
+  scc_activity_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+      batch, cache, expected_geometry_generation, activity, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  scc_topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, parameters, activity,
+                                                                    device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  scc_cache_preflight_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                               stream>>>(batch, cache, activity, workspace, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  scc_prepare_weights_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                               stream>>>(batch, parameters, cache, mixed_atomic_charges, false,
+                                         false, true, activity, workspace, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  scc_potential_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                         stream>>>(batch, parameters, cache, activity, workspace, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  scc_publish_potential_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                                 stream>>>(batch, activity, workspace.atom_scratch,
+                                           atomic_potentials, workspace, device_error);
+  return check_launch();
+}
+
+cudaError_t evaluate_gfn2_d4_scc_energy_cuda(
+    const Gfn2D4DeviceBatch& batch, const Gfn2D4DeviceParameters& parameters,
+    const Gfn2D4DeviceCache& cache, std::uint64_t expected_geometry_generation,
+    const double* raw_atomic_charges, const Gfn2SccIterationDeviceActivity& activity,
+    double* energies, const Gfn2D4DeviceWorkspace& workspace, std::uint32_t* device_error,
+    cudaStream_t stream) noexcept {
+  if (!valid_scc_descriptors(batch, parameters, cache, activity, workspace, false, device_error) ||
+      raw_atomic_charges == nullptr || energies == nullptr ||
+      !is_aligned(raw_atomic_charges, alignof(double)) || !is_aligned(energies, alignof(double)) ||
+      !valid_scc_energy_ranges(batch, parameters, cache, raw_atomic_charges, activity, energies,
+                               workspace, device_error)) {
+    return cudaErrorInvalidValue;
+  }
+  unsigned int batch_blocks = 0;
+  cudaError_t status = launch_grid(batch.batch_size, &batch_blocks);
+  if (status != cudaSuccess) {
+    return status;
+  }
+  scc_activity_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+      batch, cache, expected_geometry_generation, activity, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  scc_topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, parameters, activity,
+                                                                    device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  scc_cache_preflight_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                               stream>>>(batch, cache, activity, workspace, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  scc_prepare_weights_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                               stream>>>(batch, parameters, cache, raw_atomic_charges, false, false,
+                                         false, activity, workspace, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  scc_energy_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0, stream>>>(
+      batch, parameters, cache, activity, workspace, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  scc_publish_energy_kernel<<<batch_blocks, kThreadsPerBlock, 0, stream>>>(
+      batch.batch_size, activity, workspace.batch_scratch, energies, workspace, device_error);
   return check_launch();
 }
 
@@ -1385,7 +2091,7 @@ cudaError_t add_gfn2_d4_two_body_gradient_cuda(const Gfn2D4DeviceBatch& batch,
     return status;
   }
   prepare_weights_kernel<<<atom_blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, parameters, cache, atomic_charges, false, workspace, device_error);
+      batch, parameters, cache, atomic_charges, false, true, true, workspace, device_error);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;
@@ -1454,7 +2160,7 @@ cudaError_t evaluate_gfn2_d4_atm_cuda(const Gfn2D4DeviceBatch& batch,
     return status;
   }
   prepare_weights_kernel<<<atom_blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, parameters, cache, nullptr, true, workspace, device_error);
+      batch, parameters, cache, nullptr, true, true, true, workspace, device_error);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;
@@ -1516,7 +2222,7 @@ cudaError_t add_gfn2_d4_atm_gradient_cuda(const Gfn2D4DeviceBatch& batch,
     return status;
   }
   prepare_weights_kernel<<<atom_blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, parameters, cache, nullptr, true, workspace, device_error);
+      batch, parameters, cache, nullptr, true, true, true, workspace, device_error);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;
