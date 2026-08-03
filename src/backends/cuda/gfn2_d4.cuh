@@ -74,15 +74,22 @@ struct Gfn2D4DeviceCache {
   std::uint64_t plan_token = 0;
 };
 
-/* Caller-owned device scratch. Counts are doubles rather than bytes. */
+/* Caller-owned device scratch. Numerical counts are doubles rather than bytes. */
 struct Gfn2D4DeviceWorkspace {
   double* weights = nullptr;
+  double* weight_cn_derivatives = nullptr;
   double* weight_charge_derivatives = nullptr;
   std::int64_t weight_elements = 0;
   double* atom_scratch = nullptr;
+  double* coordination_adjoints = nullptr;
   std::int64_t atom_elements = 0;
   double* batch_scratch = nullptr;
   std::int64_t batch_elements = 0;
+  double* gradient_scratch = nullptr;
+  std::int64_t gradient_elements = 0;
+  /* One sticky Gfn2D4DeviceError per ragged batch member. */
+  std::uint32_t* system_errors = nullptr;
+  std::int64_t system_error_elements = 0;
 };
 
 enum class Gfn2D4DeviceError : std::uint32_t {
@@ -135,24 +142,59 @@ static_assert(std::is_trivially_copyable_v<Gfn2D4DeviceBatch>);
 static_assert(std::is_trivially_copyable_v<Gfn2D4DeviceCache>);
 static_assert(std::is_trivially_copyable_v<Gfn2D4DeviceWorkspace>);
 
-/* Clear the sticky semantic error before starting a dependent D4 sequence. */
-cudaError_t reset_gfn2_d4_device_error_cuda(std::uint32_t* device_error,
-                                            cudaStream_t stream = nullptr) noexcept;
+/* Clear per-system numerical status and the sequence-level topology status. */
+cudaError_t reset_gfn2_d4_device_errors_cuda(std::int64_t batch_size, std::uint32_t* system_errors,
+                                             std::uint32_t* device_error,
+                                             cudaStream_t stream = nullptr) noexcept;
 
 /*
  * Overwrite one two-body energy per system and dE_D4/dq per atom. Inputs,
  * outputs, topology, parameters, and scratch remain on device. The launch is
  * allocation-free, synchronization-free, custom-stream safe, and suitable for
- * CUDA Graph capture. Results are published only when the whole batch passes
- * semantic validation. Every writable range (workspace, outputs, and
- * device_error) must be disjoint from every input and from every other
- * writable range; read-only input ranges may alias one another.
+ * CUDA Graph capture. Numerical failures are sticky per system: healthy peers
+ * publish normally, while a failed member keeps its previous outputs.
+ * Topology/provenance failures use device_error and disable the whole
+ * sequence. Every writable range must be disjoint from every input and every
+ * other writable range; read-only input ranges may alias one another.
  */
 cudaError_t evaluate_gfn2_d4_two_body_cuda(
     const Gfn2D4DeviceBatch& batch, const Gfn2D4DeviceParameters& parameters,
     const Gfn2D4DeviceCache& cache, const double* atomic_charges, double* energies,
     double* atomic_potentials, const Gfn2D4DeviceWorkspace& workspace, std::uint32_t* device_error,
     cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Accumulate the complete self-consistent two-body coordinate derivative at
+ * fixed charges. The unpublished gradient delta and CN adjoints live in the
+ * caller-owned workspace, so a failed member leaves its gradient slice
+ * unchanged without suppressing healthy peers.
+ */
+cudaError_t add_gfn2_d4_two_body_gradient_cuda(const Gfn2D4DeviceBatch& batch,
+                                               const Gfn2D4DeviceParameters& parameters,
+                                               const Gfn2D4DeviceCache& cache,
+                                               const double* atomic_charges, double* gradients,
+                                               const Gfn2D4DeviceWorkspace& workspace,
+                                               std::uint32_t* device_error,
+                                               cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Overwrite one q=0 Axilrod--Teller--Muto energy per system. This is the GFN2
+ * non-self-consistent three-body term and deliberately has no charge VJP.
+ */
+cudaError_t evaluate_gfn2_d4_atm_cuda(const Gfn2D4DeviceBatch& batch,
+                                      const Gfn2D4DeviceParameters& parameters,
+                                      const Gfn2D4DeviceCache& cache, double* energies,
+                                      const Gfn2D4DeviceWorkspace& workspace,
+                                      std::uint32_t* device_error,
+                                      cudaStream_t stream = nullptr) noexcept;
+
+/* Accumulate the analytic ATM coordinate derivative, including its CN VJP. */
+cudaError_t add_gfn2_d4_atm_gradient_cuda(const Gfn2D4DeviceBatch& batch,
+                                          const Gfn2D4DeviceParameters& parameters,
+                                          const Gfn2D4DeviceCache& cache, double* gradients,
+                                          const Gfn2D4DeviceWorkspace& workspace,
+                                          std::uint32_t* device_error,
+                                          cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 

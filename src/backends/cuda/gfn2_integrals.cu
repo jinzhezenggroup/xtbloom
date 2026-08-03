@@ -1,0 +1,1067 @@
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+
+#include "backends/cuda/gfn2_integrals.cuh"
+
+namespace gpuxtb::detail::cuda {
+namespace {
+
+constexpr int kThreadsPerBlock = 64;
+constexpr std::int64_t kMaximumInt64 = 9223372036854775807LL;
+constexpr double kSqrtThree = 1.732050807568877293527446341505872367;
+constexpr double kSqrtPiCubed = 5.5683279968317061;
+constexpr double kMaximumCoordinate = 3.3519519824856493e153;
+constexpr int kMaximumCartesianBlock = 36;
+constexpr int kMultipoleComponents = 9;
+
+struct SystemRanges {
+  std::int64_t atom_begin;
+  std::int64_t atom_end;
+  std::int64_t shell_begin;
+  std::int64_t shell_end;
+  std::int64_t orbital_begin;
+  std::int64_t orbital_end;
+  std::int64_t matrix_begin;
+  std::int64_t matrix_end;
+  std::int64_t shell_pair_begin;
+  std::int64_t shell_pair_end;
+};
+
+__device__ bool sequence_is_active(const Gfn2IntegralDeviceWorkspace& workspace) {
+  return atomicAdd(workspace.sequence_active, 0u) == 1u;
+}
+
+__device__ bool system_is_valid(const std::uint32_t* system_errors, std::int64_t system) {
+  return atomicAdd(const_cast<std::uint32_t*>(system_errors) + system, 0u) ==
+         static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kSuccess);
+}
+
+__device__ void record_system_error(std::uint32_t* system_errors, std::int64_t system,
+                                    std::uint32_t* device_error, Gfn2IntegralDeviceError error) {
+  const std::uint32_t code = static_cast<std::uint32_t>(error);
+  if (atomicCAS(system_errors + system,
+                static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kSuccess),
+                code) == static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kSuccess)) {
+    atomicCAS(device_error, static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kSuccess), code);
+  }
+}
+
+__device__ bool valid_closed_range(std::int64_t begin, std::int64_t end, std::int64_t total) {
+  return begin >= 0 && end >= 0 && begin <= end && end <= total;
+}
+
+__device__ bool checked_square(std::int64_t value, std::int64_t* square) {
+  if (value < 0 || (value != 0 && value > kMaximumInt64 / value)) {
+    return false;
+  }
+  *square = value * value;
+  return true;
+}
+
+__global__ void capture_sequence_kernel(const std::uint32_t* device_error,
+                                        Gfn2IntegralDeviceWorkspace workspace) {
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    *workspace.sequence_active =
+        atomicAdd(const_cast<std::uint32_t*>(device_error), 0u) ==
+                static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kSuccess)
+            ? 1u
+            : 0u;
+  }
+}
+
+/*
+ * One block validates one member. Every outer offset is range-checked before
+ * subtraction, multiplication, or use as an index, including adversarial
+ * INT64_MIN/INT64_MAX device values.
+ */
+__global__ void topology_preflight_kernel(Gfn2IntegralDeviceBatch batch, const double* positions,
+                                          Gfn2IntegralDeviceWorkspace workspace,
+                                          std::uint32_t* system_errors,
+                                          std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!sequence_is_active(workspace) || !system_is_valid(system_errors, system)) {
+    return;
+  }
+
+  __shared__ SystemRanges ranges;
+  __shared__ int valid;
+  if (threadIdx.x == 0) {
+    valid = 1;
+    ranges.atom_begin = batch.atom_offsets[system];
+    ranges.atom_end = batch.atom_offsets[system + 1];
+    ranges.shell_begin = batch.batch_shell_offsets[system];
+    ranges.shell_end = batch.batch_shell_offsets[system + 1];
+    ranges.orbital_begin = batch.batch_orbital_offsets[system];
+    ranges.orbital_end = batch.batch_orbital_offsets[system + 1];
+    ranges.matrix_begin = batch.matrix_offsets[system];
+    ranges.matrix_end = batch.matrix_offsets[system + 1];
+    ranges.shell_pair_begin = batch.shell_pair_offsets[system];
+    ranges.shell_pair_end = batch.shell_pair_offsets[system + 1];
+
+    if (!valid_closed_range(ranges.atom_begin, ranges.atom_end, batch.total_atoms) ||
+        !valid_closed_range(ranges.shell_begin, ranges.shell_end, batch.total_shells) ||
+        !valid_closed_range(ranges.orbital_begin, ranges.orbital_end, batch.total_orbitals) ||
+        !valid_closed_range(ranges.matrix_begin, ranges.matrix_end, batch.total_matrix_elements) ||
+        !valid_closed_range(ranges.shell_pair_begin, ranges.shell_pair_end,
+                            batch.total_shell_pair_elements)) {
+      valid = 0;
+    }
+    if (valid != 0) {
+      const std::int64_t shells = ranges.shell_end - ranges.shell_begin;
+      const std::int64_t orbitals = ranges.orbital_end - ranges.orbital_begin;
+      std::int64_t expected_pairs = 0;
+      std::int64_t expected_matrix = 0;
+      valid = shells <= batch.maximum_system_shells && checked_square(shells, &expected_pairs) &&
+              checked_square(orbitals, &expected_matrix) &&
+              ranges.shell_pair_end - ranges.shell_pair_begin == expected_pairs &&
+              ranges.matrix_end - ranges.matrix_begin == expected_matrix;
+    }
+    if (valid != 0) {
+      valid = batch.atom_shell_offsets[ranges.atom_begin] == ranges.shell_begin &&
+              batch.atom_shell_offsets[ranges.atom_end] == ranges.shell_end &&
+              batch.shell_orbital_offsets[ranges.shell_begin] == ranges.orbital_begin &&
+              batch.shell_orbital_offsets[ranges.shell_end] == ranges.orbital_end;
+    }
+    if (valid != 0 && system == 0) {
+      valid = ranges.atom_begin == 0 && ranges.shell_begin == 0 && ranges.orbital_begin == 0 &&
+              ranges.matrix_begin == 0 && ranges.shell_pair_begin == 0;
+    }
+    if (valid != 0 && system + 1 == batch.batch_size) {
+      valid = ranges.atom_end == batch.total_atoms && ranges.shell_end == batch.total_shells &&
+              ranges.orbital_end == batch.total_orbitals &&
+              ranges.matrix_end == batch.total_matrix_elements &&
+              ranges.shell_pair_end == batch.total_shell_pair_elements;
+    }
+    if (valid == 0) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kInvalidOffsets);
+    }
+  }
+  __syncthreads();
+  if (valid == 0) {
+    return;
+  }
+
+  for (std::int64_t atom = ranges.atom_begin + threadIdx.x; atom < ranges.atom_end;
+       atom += blockDim.x) {
+    const std::int64_t shell_begin = batch.atom_shell_offsets[atom];
+    const std::int64_t shell_end = batch.atom_shell_offsets[atom + 1];
+    if (!valid_closed_range(shell_begin, shell_end, batch.total_shells) ||
+        shell_begin < ranges.shell_begin || shell_end > ranges.shell_end ||
+        shell_begin == shell_end) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kInvalidOffsets);
+      atomicExch(&valid, 0);
+    }
+    const std::int64_t coordinate = atom * 3;
+    for (int axis = 0; axis < 3; ++axis) {
+      const double value = positions[coordinate + axis];
+      if (!isfinite(value)) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2IntegralDeviceError::kNonfinitePosition);
+        atomicExch(&valid, 0);
+      } else if (fabs(value) > kMaximumCoordinate) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2IntegralDeviceError::kCoordinateDifferenceOverflow);
+        atomicExch(&valid, 0);
+      }
+    }
+  }
+
+  for (std::int64_t shell = ranges.shell_begin + threadIdx.x; shell < ranges.shell_end;
+       shell += blockDim.x) {
+    const std::int64_t atom = batch.shell_to_atom[shell];
+    const std::uint8_t angular_momentum = batch.angular_momenta[shell];
+    const std::int64_t orbital_begin = batch.shell_orbital_offsets[shell];
+    const std::int64_t orbital_end = batch.shell_orbital_offsets[shell + 1];
+    const std::int64_t primitive_begin = batch.shell_primitive_offsets[shell];
+    const std::int64_t primitive_end = batch.shell_primitive_offsets[shell + 1];
+    bool shell_valid = atom >= ranges.atom_begin && atom < ranges.atom_end;
+    if (shell_valid) {
+      shell_valid =
+          shell >= batch.atom_shell_offsets[atom] && shell < batch.atom_shell_offsets[atom + 1];
+    }
+    shell_valid =
+        shell_valid && angular_momentum <= 2u &&
+        valid_closed_range(orbital_begin, orbital_end, batch.total_orbitals) &&
+        orbital_begin >= ranges.orbital_begin && orbital_end <= ranges.orbital_end &&
+        orbital_end - orbital_begin == 2 * static_cast<std::int64_t>(angular_momentum) + 1 &&
+        valid_closed_range(primitive_begin, primitive_end, batch.total_primitives) &&
+        primitive_begin < primitive_end;
+    if (!shell_valid) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kInvalidShellMetadata);
+      atomicExch(&valid, 0);
+    }
+  }
+  __syncthreads();
+  if (valid == 0) {
+    return;
+  }
+
+  const std::int64_t primitive_begin = batch.shell_primitive_offsets[ranges.shell_begin];
+  const std::int64_t primitive_end = batch.shell_primitive_offsets[ranges.shell_end];
+  for (std::int64_t primitive = primitive_begin + threadIdx.x; primitive < primitive_end;
+       primitive += blockDim.x) {
+    const double exponent = batch.primitive_exponents[primitive];
+    const double coefficient = batch.primitive_coefficients[primitive];
+    if (!(exponent > 0.0) || !isfinite(exponent) || !isfinite(coefficient)) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kInvalidPrimitiveData);
+      atomicExch(&valid, 0);
+    }
+  }
+}
+
+__device__ int cartesian_count(std::uint8_t angular_momentum) {
+  const int l = static_cast<int>(angular_momentum);
+  return (l + 1) * (l + 2) / 2;
+}
+
+__device__ int spherical_count(std::uint8_t angular_momentum) {
+  return 2 * static_cast<int>(angular_momentum) + 1;
+}
+
+__device__ void cartesian_exponent(std::uint8_t angular_momentum, int function, int* x, int* y,
+                                   int* z) {
+  if (angular_momentum == 0u) {
+    *x = 0;
+    *y = 0;
+    *z = 0;
+  } else if (angular_momentum == 1u) {
+    *x = function == 0 ? 1 : 0;
+    *y = function == 1 ? 1 : 0;
+    *z = function == 2 ? 1 : 0;
+  } else {
+    constexpr int exponents[6][3] = {{2, 0, 0}, {1, 1, 0}, {1, 0, 1},
+                                     {0, 2, 0}, {0, 1, 1}, {0, 0, 2}};
+    *x = exponents[function][0];
+    *y = exponents[function][1];
+    *z = exponents[function][2];
+  }
+}
+
+__device__ void multipole_power(int component, int* x, int* y, int* z) {
+  constexpr int powers[kMultipoleComponents][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1},
+                                                   {2, 0, 0}, {1, 1, 0}, {0, 2, 0},
+                                                   {1, 0, 1}, {0, 1, 1}, {0, 0, 2}};
+  *x = powers[component][0];
+  *y = powers[component][1];
+  *z = powers[component][2];
+}
+
+/* tblite real-spherical rows in [-l,...,+l] and CCA Cartesian columns. */
+__device__ double spherical_coefficient(std::uint8_t angular_momentum, int spherical,
+                                        int cartesian) {
+  if (angular_momentum == 0u) {
+    return spherical == 0 && cartesian == 0 ? 1.0 : 0.0;
+  }
+  if (angular_momentum == 1u) {
+    const int selected = spherical == 0 ? 1 : (spherical == 1 ? 2 : 0);
+    return cartesian == selected ? 1.0 : 0.0;
+  }
+  if (spherical == 0) {
+    return cartesian == 1 ? kSqrtThree : 0.0;
+  }
+  if (spherical == 1) {
+    return cartesian == 4 ? kSqrtThree : 0.0;
+  }
+  if (spherical == 2) {
+    return cartesian == 0 || cartesian == 3 ? -0.5 : (cartesian == 5 ? 1.0 : 0.0);
+  }
+  if (spherical == 3) {
+    return cartesian == 2 ? kSqrtThree : 0.0;
+  }
+  return cartesian == 0 ? 0.5 * kSqrtThree : (cartesian == 3 ? -0.5 * kSqrtThree : 0.0);
+}
+
+__device__ void make_axis_overlap(double product_minus_i, double product_minus_j,
+                                  double inverse_twice_sum, int maximum_a, int maximum_b,
+                                  double overlap[6][3]) {
+#pragma unroll
+  for (int a = 0; a < 6; ++a) {
+#pragma unroll
+    for (int b = 0; b < 3; ++b) {
+      overlap[a][b] = 0.0;
+    }
+  }
+  overlap[0][0] = 1.0;
+  for (int a = 1; a <= maximum_a; ++a) {
+    overlap[a][0] = product_minus_i * overlap[a - 1][0];
+    if (a > 1) {
+      overlap[a][0] += static_cast<double>(a - 1) * inverse_twice_sum * overlap[a - 2][0];
+    }
+  }
+  for (int b = 1; b <= maximum_b; ++b) {
+    overlap[0][b] = product_minus_j * overlap[0][b - 1];
+    if (b > 1) {
+      overlap[0][b] += static_cast<double>(b - 1) * inverse_twice_sum * overlap[0][b - 2];
+    }
+    for (int a = 1; a <= maximum_a; ++a) {
+      overlap[a][b] = product_minus_i * overlap[a - 1][b] +
+                      static_cast<double>(b) * inverse_twice_sum * overlap[a - 1][b - 1];
+      if (a > 1) {
+        overlap[a][b] += static_cast<double>(a - 1) * inverse_twice_sum * overlap[a - 2][b];
+      }
+    }
+  }
+}
+
+/*
+ * Evaluate one unique shell pair. Cartesian primitive contractions are staged
+ * in shared memory before the spherical transform, preserving the CPU
+ * contraction order while letting up to 36 lanes own independent functions.
+ */
+__global__ void integral_shell_pair_kernel(Gfn2IntegralDeviceBatch batch, const double* positions,
+                                           Gfn2IntegralDeviceWorkspace workspace,
+                                           std::uint32_t* system_errors,
+                                           std::uint32_t* device_error,
+                                           std::int64_t maximum_pair_blocks) {
+  const std::int64_t global_pair = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t system = global_pair / maximum_pair_blocks;
+  const std::int64_t local_pair = global_pair - system * maximum_pair_blocks;
+  if (!sequence_is_active(workspace) || !system_is_valid(system_errors, system)) {
+    return;
+  }
+
+  const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+  const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
+  const std::int64_t shells = shell_end - shell_begin;
+  if (local_pair >= shells * shells) {
+    return;
+  }
+  const std::int64_t bra_shell = shell_begin + local_pair / shells;
+  const std::int64_t ket_shell = shell_begin + local_pair % shells;
+  const std::int64_t bra_atom = batch.shell_to_atom[bra_shell];
+  const std::int64_t ket_atom = batch.shell_to_atom[ket_shell];
+  if (bra_atom > ket_atom || (bra_atom == ket_atom && bra_shell > ket_shell)) {
+    return;
+  }
+
+  const std::uint8_t bra_l = batch.angular_momenta[bra_shell];
+  const std::uint8_t ket_l = batch.angular_momenta[ket_shell];
+  const int bra_cartesian_count = cartesian_count(bra_l);
+  const int ket_cartesian_count = cartesian_count(ket_l);
+  const int cartesian_block_size = bra_cartesian_count * ket_cartesian_count;
+  const int bra_spherical_count = spherical_count(bra_l);
+  const int ket_spherical_count = spherical_count(ket_l);
+  const int spherical_block_size = bra_spherical_count * ket_spherical_count;
+  const double vector[3] = {positions[ket_atom * 3] - positions[bra_atom * 3],
+                            positions[ket_atom * 3 + 1] - positions[bra_atom * 3 + 1],
+                            positions[ket_atom * 3 + 2] - positions[bra_atom * 3 + 2]};
+  if (!isfinite(vector[0]) || !isfinite(vector[1]) || !isfinite(vector[2])) {
+    if (threadIdx.x == 0) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kCoordinateDifferenceOverflow);
+    }
+    return;
+  }
+  const double distance_squared =
+      vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2];
+  if (!isfinite(distance_squared)) {
+    if (threadIdx.x == 0) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kCoordinateDifferenceOverflow);
+    }
+    return;
+  }
+
+  __shared__ double cartesian_overlap[kMaximumCartesianBlock];
+  __shared__ double cartesian_multipole[kMultipoleComponents * kMaximumCartesianBlock];
+  const int cartesian_index = static_cast<int>(threadIdx.x);
+  if (cartesian_index < cartesian_block_size) {
+    const int bra_cartesian = cartesian_index / ket_cartesian_count;
+    const int ket_cartesian = cartesian_index % ket_cartesian_count;
+    int bra_power[3];
+    int ket_power[3];
+    cartesian_exponent(bra_l, bra_cartesian, &bra_power[0], &bra_power[1], &bra_power[2]);
+    cartesian_exponent(ket_l, ket_cartesian, &ket_power[0], &ket_power[1], &ket_power[2]);
+    double overlap_value = 0.0;
+    double multipoles[kMultipoleComponents] = {};
+    const std::int64_t bra_primitive_begin = batch.shell_primitive_offsets[bra_shell];
+    const std::int64_t bra_primitive_end = batch.shell_primitive_offsets[bra_shell + 1];
+    const std::int64_t ket_primitive_begin = batch.shell_primitive_offsets[ket_shell];
+    const std::int64_t ket_primitive_end = batch.shell_primitive_offsets[ket_shell + 1];
+
+    for (std::int64_t ket_primitive = ket_primitive_begin; ket_primitive < ket_primitive_end;
+         ++ket_primitive) {
+      const double ket_alpha = batch.primitive_exponents[ket_primitive];
+      for (std::int64_t bra_primitive = bra_primitive_begin; bra_primitive < bra_primitive_end;
+           ++bra_primitive) {
+        const double bra_alpha = batch.primitive_exponents[bra_primitive];
+        const double alpha_sum = ket_alpha + bra_alpha;
+        const double inverse_sum = 1.0 / alpha_sum;
+        const double product_exponent = ket_alpha * bra_alpha * distance_squared * inverse_sum;
+        if (product_exponent > batch.integral_cutoff) {
+          continue;
+        }
+        const double sqrt_inverse_sum = sqrt(inverse_sum);
+        const double primitive_prefactor = exp(-product_exponent) * kSqrtPiCubed *
+                                           sqrt_inverse_sum * sqrt_inverse_sum * sqrt_inverse_sum *
+                                           batch.primitive_coefficients[ket_primitive] *
+                                           batch.primitive_coefficients[bra_primitive];
+        const double inverse_twice_sum = 0.5 * inverse_sum;
+        double axis[3][6][3];
+        for (int coordinate = 0; coordinate < 3; ++coordinate) {
+          const double product_minus_i = -vector[coordinate] * bra_alpha * inverse_sum;
+          const double product_minus_j = +vector[coordinate] * ket_alpha * inverse_sum;
+          make_axis_overlap(product_minus_i, product_minus_j, inverse_twice_sum,
+                            static_cast<int>(ket_l) + 2, static_cast<int>(bra_l), axis[coordinate]);
+        }
+        const double x = axis[0][ket_power[0]][bra_power[0]];
+        const double y = axis[1][ket_power[1]][bra_power[1]];
+        const double z = axis[2][ket_power[2]][bra_power[2]];
+        overlap_value += primitive_prefactor * x * y * z;
+        for (int component = 0; component < kMultipoleComponents; ++component) {
+          int moment_power[3];
+          multipole_power(component, &moment_power[0], &moment_power[1], &moment_power[2]);
+          multipoles[component] += primitive_prefactor *
+                                   axis[0][ket_power[0] + moment_power[0]][bra_power[0]] *
+                                   axis[1][ket_power[1] + moment_power[1]][bra_power[1]] *
+                                   axis[2][ket_power[2] + moment_power[2]][bra_power[2]];
+        }
+      }
+    }
+    bool finite = isfinite(overlap_value);
+    cartesian_overlap[cartesian_index] = overlap_value;
+    for (int component = 0; component < kMultipoleComponents; ++component) {
+      cartesian_multipole[component * kMaximumCartesianBlock + cartesian_index] =
+          multipoles[component];
+      finite = finite && isfinite(multipoles[component]);
+    }
+    if (!finite) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kNonfiniteIntegralArithmetic);
+    }
+  }
+  __syncthreads();
+  if (!system_is_valid(system_errors, system)) {
+    return;
+  }
+
+  const int spherical_index = static_cast<int>(threadIdx.x);
+  if (spherical_index >= spherical_block_size) {
+    return;
+  }
+  const int bra_ao = spherical_index / ket_spherical_count;
+  const int ket_ao = spherical_index % ket_spherical_count;
+  if (bra_shell == ket_shell && bra_ao > ket_ao) {
+    return;
+  }
+  double overlap_value = 0.0;
+  double raw_multipoles[kMultipoleComponents] = {};
+  for (int bra_cartesian = 0; bra_cartesian < bra_cartesian_count; ++bra_cartesian) {
+    const double bra_coefficient = spherical_coefficient(bra_l, bra_ao, bra_cartesian);
+    if (bra_coefficient == 0.0) {
+      continue;
+    }
+    for (int ket_cartesian = 0; ket_cartesian < ket_cartesian_count; ++ket_cartesian) {
+      const double ket_coefficient = spherical_coefficient(ket_l, ket_ao, ket_cartesian);
+      if (ket_coefficient == 0.0) {
+        continue;
+      }
+      const int index = bra_cartesian * ket_cartesian_count + ket_cartesian;
+      overlap_value += bra_coefficient * cartesian_overlap[index] * ket_coefficient;
+      for (int component = 0; component < kMultipoleComponents; ++component) {
+        raw_multipoles[component] +=
+            bra_coefficient * cartesian_multipole[component * kMaximumCartesianBlock + index] *
+            ket_coefficient;
+      }
+    }
+  }
+
+  double dipole[3] = {raw_multipoles[0], raw_multipoles[1], raw_multipoles[2]};
+  const double trace = 0.5 * (raw_multipoles[3] + raw_multipoles[5] + raw_multipoles[8]);
+  double quadrupole[6] = {1.5 * raw_multipoles[3] - trace, 1.5 * raw_multipoles[4],
+                          1.5 * raw_multipoles[5] - trace, 1.5 * raw_multipoles[6],
+                          1.5 * raw_multipoles[7],         1.5 * raw_multipoles[8] - trace};
+  bool finite = isfinite(overlap_value);
+  for (double value : dipole) {
+    finite = finite && isfinite(value);
+  }
+  for (double value : quadrupole) {
+    finite = finite && isfinite(value);
+  }
+  if (!finite) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kNonfiniteIntegralArithmetic);
+    return;
+  }
+
+  const std::int64_t orbital_begin = batch.batch_orbital_offsets[system];
+  const std::int64_t orbital_count = batch.batch_orbital_offsets[system + 1] - orbital_begin;
+  const std::int64_t matrix_begin = batch.matrix_offsets[system];
+  const std::int64_t bra_orbital = batch.shell_orbital_offsets[bra_shell] - orbital_begin + bra_ao;
+  const std::int64_t ket_orbital = batch.shell_orbital_offsets[ket_shell] - orbital_begin + ket_ao;
+  const std::int64_t forward = matrix_begin + bra_orbital * orbital_count + ket_orbital;
+  const std::int64_t reverse = matrix_begin + ket_orbital * orbital_count + bra_orbital;
+  workspace.overlap_scratch[forward] = overlap_value;
+  workspace.overlap_scratch[reverse] = overlap_value;
+  for (int component = 0; component < 3; ++component) {
+    workspace.dipole_scratch[component * batch.total_matrix_elements + forward] = dipole[component];
+  }
+  for (int component = 0; component < 6; ++component) {
+    workspace.quadrupole_scratch[component * batch.total_matrix_elements + forward] =
+        quadrupole[component];
+  }
+  if (bra_shell == ket_shell) {
+    for (int component = 0; component < 3; ++component) {
+      workspace.dipole_scratch[component * batch.total_matrix_elements + reverse] =
+          dipole[component];
+    }
+    for (int component = 0; component < 6; ++component) {
+      workspace.quadrupole_scratch[component * batch.total_matrix_elements + reverse] =
+          quadrupole[component];
+    }
+    return;
+  }
+
+  double shifted_dipole[3];
+  for (int component = 0; component < 3; ++component) {
+    shifted_dipole[component] = dipole[component] + vector[component] * overlap_value;
+    workspace.dipole_scratch[component * batch.total_matrix_elements + reverse] =
+        shifted_dipole[component];
+  }
+  const double shift[6] = {
+      2.0 * vector[0] * dipole[0] + vector[0] * vector[0] * overlap_value,
+      vector[0] * dipole[1] + vector[1] * dipole[0] + vector[0] * vector[1] * overlap_value,
+      2.0 * vector[1] * dipole[1] + vector[1] * vector[1] * overlap_value,
+      vector[0] * dipole[2] + vector[2] * dipole[0] + vector[0] * vector[2] * overlap_value,
+      vector[1] * dipole[2] + vector[2] * dipole[1] + vector[1] * vector[2] * overlap_value,
+      2.0 * vector[2] * dipole[2] + vector[2] * vector[2] * overlap_value};
+  const double shift_trace = 0.5 * (shift[0] + shift[2] + shift[5]);
+  for (int component = 0; component < 6; ++component) {
+    const bool diagonal = component == 0 || component == 2 || component == 5;
+    const double shifted =
+        quadrupole[component] + 1.5 * shift[component] - (diagonal ? shift_trace : 0.0);
+    if (!isfinite(shifted)) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kNonfiniteIntegralArithmetic);
+      return;
+    }
+    workspace.quadrupole_scratch[component * batch.total_matrix_elements + reverse] = shifted;
+  }
+}
+
+__global__ void publish_integrals_kernel(Gfn2IntegralDeviceBatch batch, const double* overlap_in,
+                                         const double* dipole_in, const double* quadrupole_in,
+                                         double* overlap, double* dipole, double* quadrupole,
+                                         Gfn2IntegralDeviceWorkspace workspace,
+                                         const std::uint32_t* system_errors) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!sequence_is_active(workspace) || !system_is_valid(system_errors, system)) {
+    return;
+  }
+  const std::int64_t begin = batch.matrix_offsets[system];
+  const std::int64_t end = batch.matrix_offsets[system + 1];
+  for (std::int64_t element = begin + threadIdx.x; element < end; element += blockDim.x) {
+    overlap[element] = overlap_in[element];
+    for (int component = 0; component < 3; ++component) {
+      dipole[component * batch.total_matrix_elements + element] =
+          dipole_in[component * batch.total_matrix_elements + element];
+    }
+    for (int component = 0; component < 6; ++component) {
+      quadrupole[component * batch.total_matrix_elements + element] =
+          quadrupole_in[component * batch.total_matrix_elements + element];
+    }
+  }
+}
+
+__global__ void h0_preflight_kernel(Gfn2IntegralDeviceBatch batch, Gfn2H0DevicePlan plan,
+                                    const double* coordination_numbers, const double* overlap,
+                                    Gfn2IntegralDeviceWorkspace workspace,
+                                    std::uint32_t* system_errors, std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!sequence_is_active(workspace) || !system_is_valid(system_errors, system)) {
+    return;
+  }
+  __shared__ int valid;
+  if (threadIdx.x == 0) {
+    valid = 1;
+  }
+  __syncthreads();
+  const std::int64_t atom_begin = batch.atom_offsets[system];
+  const std::int64_t atom_end = batch.atom_offsets[system + 1];
+  const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+  const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
+  const std::int64_t pair_begin = batch.shell_pair_offsets[system];
+  const std::int64_t pair_end = batch.shell_pair_offsets[system + 1];
+  const std::int64_t matrix_begin = batch.matrix_offsets[system];
+  const std::int64_t matrix_end = batch.matrix_offsets[system + 1];
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    if (!(plan.atomic_radii[atom] > 0.0) || !isfinite(plan.atomic_radii[atom]) ||
+        !isfinite(coordination_numbers[atom])) {
+      record_system_error(system_errors, system, device_error,
+                          isfinite(coordination_numbers[atom])
+                              ? Gfn2IntegralDeviceError::kInvalidH0Parameter
+                              : Gfn2IntegralDeviceError::kInvalidCoordination);
+      atomicExch(&valid, 0);
+    }
+  }
+  for (std::int64_t shell = shell_begin + threadIdx.x; shell < shell_end; shell += blockDim.x) {
+    if (!isfinite(plan.shell_levels[shell]) || !isfinite(plan.shell_coordination_scale[shell]) ||
+        !isfinite(plan.shell_polynomial[shell])) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kInvalidH0Parameter);
+      atomicExch(&valid, 0);
+    }
+  }
+  for (std::int64_t pair = pair_begin + threadIdx.x; pair < pair_end; pair += blockDim.x) {
+    if (!(plan.shell_pair_scale[pair] > 0.0) || !isfinite(plan.shell_pair_scale[pair])) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kInvalidH0Parameter);
+      atomicExch(&valid, 0);
+    }
+  }
+  for (std::int64_t element = matrix_begin + threadIdx.x; element < matrix_end;
+       element += blockDim.x) {
+    if (!isfinite(overlap[element])) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kNonfiniteOverlap);
+      atomicExch(&valid, 0);
+    }
+  }
+}
+
+__global__ void h0_shell_pair_kernel(Gfn2IntegralDeviceBatch batch, Gfn2H0DevicePlan plan,
+                                     const double* positions, const double* coordination_numbers,
+                                     const double* overlap, Gfn2IntegralDeviceWorkspace workspace,
+                                     std::uint32_t* system_errors, std::uint32_t* device_error,
+                                     std::int64_t maximum_pair_blocks) {
+  const std::int64_t global_pair = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t system = global_pair / maximum_pair_blocks;
+  const std::int64_t local_pair = global_pair - system * maximum_pair_blocks;
+  if (!sequence_is_active(workspace) || !system_is_valid(system_errors, system)) {
+    return;
+  }
+  const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+  const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
+  const std::int64_t shells = shell_end - shell_begin;
+  if (local_pair >= shells * shells) {
+    return;
+  }
+  const std::int64_t first_shell = shell_begin + local_pair / shells;
+  const std::int64_t second_shell = shell_begin + local_pair % shells;
+  const std::int64_t first_atom = batch.shell_to_atom[first_shell];
+  const std::int64_t second_atom = batch.shell_to_atom[second_shell];
+  const double first_level =
+      plan.shell_levels[first_shell] -
+      plan.shell_coordination_scale[first_shell] * coordination_numbers[first_atom];
+  const double second_level =
+      plan.shell_levels[second_shell] -
+      plan.shell_coordination_scale[second_shell] * coordination_numbers[second_atom];
+  double spatial_scale = 1.0;
+  if (first_atom != second_atom) {
+    const double dx = positions[first_atom * 3] - positions[second_atom * 3];
+    const double dy = positions[first_atom * 3 + 1] - positions[second_atom * 3 + 1];
+    const double dz = positions[first_atom * 3 + 2] - positions[second_atom * 3 + 2];
+    const double distance = sqrt(dx * dx + dy * dy + dz * dz);
+    const double reduced_distance =
+        sqrt(distance / (plan.atomic_radii[first_atom] + plan.atomic_radii[second_atom]));
+    const double polynomial = (1.0 + plan.shell_polynomial[first_shell] * reduced_distance) *
+                              (1.0 + plan.shell_polynomial[second_shell] * reduced_distance);
+    const std::int64_t pair = batch.shell_pair_offsets[system] + local_pair;
+    spatial_scale = plan.shell_pair_scale[pair] * polynomial;
+  }
+  const double factor = 0.5 * (first_level + second_level) * spatial_scale;
+  if (!isfinite(factor)) {
+    if (threadIdx.x == 0) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kNonfiniteH0Arithmetic);
+    }
+    return;
+  }
+  const std::int64_t first_begin = batch.shell_orbital_offsets[first_shell];
+  const std::int64_t first_end = batch.shell_orbital_offsets[first_shell + 1];
+  const std::int64_t second_begin = batch.shell_orbital_offsets[second_shell];
+  const std::int64_t second_end = batch.shell_orbital_offsets[second_shell + 1];
+  const std::int64_t first_count = first_end - first_begin;
+  const std::int64_t second_count = second_end - second_begin;
+  const std::int64_t orbital_begin = batch.batch_orbital_offsets[system];
+  const std::int64_t orbitals = batch.batch_orbital_offsets[system + 1] - orbital_begin;
+  const std::int64_t matrix_begin = batch.matrix_offsets[system];
+  for (std::int64_t local = threadIdx.x; local < first_count * second_count; local += blockDim.x) {
+    const std::int64_t first_ao = first_begin + local / second_count;
+    const std::int64_t second_ao = second_begin + local % second_count;
+    const std::int64_t matrix =
+        matrix_begin + (first_ao - orbital_begin) * orbitals + second_ao - orbital_begin;
+    const double value = overlap[matrix] * factor;
+    if (!isfinite(value)) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kNonfiniteH0Arithmetic);
+    } else {
+      workspace.h0_scratch[matrix] = value;
+    }
+  }
+}
+
+__global__ void publish_h0_kernel(Gfn2IntegralDeviceBatch batch,
+                                  Gfn2IntegralDeviceWorkspace workspace, double* hamiltonian,
+                                  const std::uint32_t* system_errors) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!sequence_is_active(workspace) || !system_is_valid(system_errors, system)) {
+    return;
+  }
+  const std::int64_t begin = batch.matrix_offsets[system];
+  const std::int64_t end = batch.matrix_offsets[system + 1];
+  for (std::int64_t element = begin + threadIdx.x; element < end; element += blockDim.x) {
+    hamiltonian[element] = workspace.h0_scratch[element];
+  }
+}
+
+bool is_aligned(const void* pointer, std::size_t alignment) noexcept {
+  return pointer != nullptr && reinterpret_cast<std::uintptr_t>(pointer) % alignment == 0u;
+}
+
+template <typename T>
+bool required_pointer(const T* pointer, std::int64_t elements) noexcept {
+  return elements == 0 || is_aligned(pointer, alignof(T));
+}
+
+struct MemoryRange {
+  std::uintptr_t begin = 0u;
+  std::uintptr_t end = 0u;
+};
+
+bool make_range(const void* pointer, std::int64_t elements, std::size_t element_size,
+                MemoryRange* range) noexcept {
+  if (elements < 0 || element_size == 0u ||
+      static_cast<std::uint64_t>(elements) >
+          static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() / element_size)) {
+    return false;
+  }
+  const std::size_t bytes = static_cast<std::size_t>(elements) * element_size;
+  if (bytes == 0u) {
+    *range = {};
+    return true;
+  }
+  if (pointer == nullptr) {
+    return false;
+  }
+  const std::uintptr_t begin = reinterpret_cast<std::uintptr_t>(pointer);
+  if (begin > std::numeric_limits<std::uintptr_t>::max() - bytes) {
+    return false;
+  }
+  *range = {begin, begin + bytes};
+  return true;
+}
+
+bool overlaps(const MemoryRange& first, const MemoryRange& second) noexcept {
+  return first.begin < second.end && second.begin < first.end;
+}
+
+template <std::size_t ReadCount, std::size_t WriteCount>
+bool writes_are_disjoint(const std::array<MemoryRange, ReadCount>& reads,
+                         const std::array<MemoryRange, WriteCount>& writes) noexcept {
+  for (std::size_t write = 0; write < WriteCount; ++write) {
+    for (const MemoryRange& read : reads) {
+      if (overlaps(writes[write], read)) {
+        return false;
+      }
+    }
+    for (std::size_t peer = write + 1; peer < WriteCount; ++peer) {
+      if (overlaps(writes[write], writes[peer])) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+cudaError_t validate_common(const Gfn2IntegralDeviceBatch& batch,
+                            const Gfn2IntegralDeviceWorkspace& workspace,
+                            std::uint32_t* system_errors, std::uint32_t* device_error,
+                            std::int64_t* maximum_pair_blocks, unsigned int* grid_blocks) noexcept {
+  if (batch.batch_size <= 0 || batch.total_atoms <= 0 || batch.total_shells <= 0 ||
+      batch.total_orbitals <= 0 || batch.total_primitives <= 0 ||
+      batch.total_matrix_elements <= 0 || batch.total_shell_pair_elements <= 0 ||
+      batch.maximum_system_shells <= 0 || !(batch.integral_cutoff > 0.0) ||
+      !std::isfinite(batch.integral_cutoff) || batch.plan_token == 0u ||
+      workspace.plan_token != batch.plan_token ||
+      batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      batch.total_atoms == kMaximumInt64 || batch.total_shells == kMaximumInt64 ||
+      batch.total_atoms > kMaximumInt64 / 3 ||
+      batch.total_matrix_elements > kMaximumInt64 / kGfn2IntegralQuadrupoleComponents ||
+      batch.atom_offset_count != batch.batch_size + 1 ||
+      batch.batch_shell_offset_count != batch.batch_size + 1 ||
+      batch.batch_orbital_offset_count != batch.batch_size + 1 ||
+      batch.matrix_offset_count != batch.batch_size + 1 ||
+      batch.shell_pair_offset_count != batch.batch_size + 1 ||
+      batch.atom_shell_offset_count != batch.total_atoms + 1 ||
+      batch.shell_orbital_offset_count != batch.total_shells + 1 ||
+      batch.shell_primitive_offset_count != batch.total_shells + 1 ||
+      batch.shell_to_atom_count != batch.total_shells ||
+      batch.angular_momentum_count != batch.total_shells ||
+      batch.primitive_exponent_count != batch.total_primitives ||
+      batch.primitive_coefficient_count != batch.total_primitives ||
+      !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.batch_shell_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.batch_orbital_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.matrix_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.shell_pair_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.atom_shell_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.shell_orbital_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.shell_primitive_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.shell_to_atom, alignof(std::int64_t)) || batch.angular_momenta == nullptr ||
+      !is_aligned(batch.primitive_exponents, alignof(double)) ||
+      !is_aligned(batch.primitive_coefficients, alignof(double)) ||
+      workspace.sequence_elements < 1 ||
+      !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||
+      !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(device_error, alignof(std::uint32_t))) {
+    return batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max())
+               ? cudaErrorInvalidConfiguration
+               : cudaErrorInvalidValue;
+  }
+  if (batch.maximum_system_shells > kMaximumInt64 / batch.maximum_system_shells) {
+    return cudaErrorInvalidConfiguration;
+  }
+  *maximum_pair_blocks = batch.maximum_system_shells * batch.maximum_system_shells;
+  if (*maximum_pair_blocks > kMaximumInt64 / batch.batch_size) {
+    return cudaErrorInvalidConfiguration;
+  }
+  const std::int64_t blocks = *maximum_pair_blocks * batch.batch_size;
+  if (blocks <= 0 || blocks > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
+    return cudaErrorInvalidConfiguration;
+  }
+  *grid_blocks = static_cast<unsigned int>(blocks);
+  return cudaSuccess;
+}
+
+cudaError_t check_launch() noexcept { return cudaPeekAtLastError(); }
+
+}  // namespace
+
+cudaError_t reset_gfn2_integral_device_errors_cuda(std::int64_t batch_size,
+                                                   std::uint32_t* system_errors,
+                                                   std::uint32_t* device_error,
+                                                   cudaStream_t stream) noexcept {
+  if (batch_size <= 0 || system_errors == nullptr || device_error == nullptr ||
+      !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(device_error, alignof(std::uint32_t)) ||
+      static_cast<std::uint64_t>(batch_size) >
+          std::numeric_limits<std::size_t>::max() / sizeof(*system_errors)) {
+    return cudaErrorInvalidValue;
+  }
+  MemoryRange systems;
+  MemoryRange diagnostic;
+  if (!make_range(system_errors, batch_size, sizeof(*system_errors), &systems) ||
+      !make_range(device_error, 1, sizeof(*device_error), &diagnostic) ||
+      overlaps(systems, diagnostic)) {
+    return cudaErrorInvalidValue;
+  }
+  cudaError_t status = cudaMemsetAsync(
+      system_errors, 0, static_cast<std::size_t>(batch_size) * sizeof(*system_errors), stream);
+  return status == cudaSuccess ? cudaMemsetAsync(device_error, 0, sizeof(*device_error), stream)
+                               : status;
+}
+
+cudaError_t evaluate_gfn2_integrals_cuda(const Gfn2IntegralDeviceBatch& batch,
+                                         const double* positions, double* overlap, double* dipole,
+                                         double* quadrupole,
+                                         const Gfn2IntegralDeviceWorkspace& workspace,
+                                         std::uint32_t* system_errors, std::uint32_t* device_error,
+                                         cudaStream_t stream) noexcept {
+  std::int64_t maximum_pair_blocks = 0;
+  unsigned int grid_blocks = 0u;
+  cudaError_t status = validate_common(batch, workspace, system_errors, device_error,
+                                       &maximum_pair_blocks, &grid_blocks);
+  if (status != cudaSuccess) {
+    return status;
+  }
+  const std::int64_t dipole_elements = batch.total_matrix_elements * kGfn2IntegralDipoleComponents;
+  const std::int64_t quadrupole_elements =
+      batch.total_matrix_elements * kGfn2IntegralQuadrupoleComponents;
+  if (positions == nullptr || overlap == nullptr || dipole == nullptr || quadrupole == nullptr ||
+      workspace.overlap_elements < batch.total_matrix_elements ||
+      workspace.dipole_elements < dipole_elements ||
+      workspace.quadrupole_elements < quadrupole_elements ||
+      !required_pointer(positions, batch.total_atoms * 3) ||
+      !required_pointer(overlap, batch.total_matrix_elements) ||
+      !required_pointer(dipole, dipole_elements) ||
+      !required_pointer(quadrupole, quadrupole_elements) ||
+      !required_pointer(workspace.overlap_scratch, batch.total_matrix_elements) ||
+      !required_pointer(workspace.dipole_scratch, dipole_elements) ||
+      !required_pointer(workspace.quadrupole_scratch, quadrupole_elements)) {
+    return cudaErrorInvalidValue;
+  }
+
+  std::array<MemoryRange, 13> reads;
+  std::array<MemoryRange, 9> writes;
+  if (!make_range(batch.atom_offsets, batch.atom_offset_count, sizeof(*batch.atom_offsets),
+                  &reads[0]) ||
+      !make_range(batch.batch_shell_offsets, batch.batch_shell_offset_count,
+                  sizeof(*batch.batch_shell_offsets), &reads[1]) ||
+      !make_range(batch.batch_orbital_offsets, batch.batch_orbital_offset_count,
+                  sizeof(*batch.batch_orbital_offsets), &reads[2]) ||
+      !make_range(batch.matrix_offsets, batch.matrix_offset_count, sizeof(*batch.matrix_offsets),
+                  &reads[3]) ||
+      !make_range(batch.shell_pair_offsets, batch.shell_pair_offset_count,
+                  sizeof(*batch.shell_pair_offsets), &reads[4]) ||
+      !make_range(batch.atom_shell_offsets, batch.atom_shell_offset_count,
+                  sizeof(*batch.atom_shell_offsets), &reads[5]) ||
+      !make_range(batch.shell_orbital_offsets, batch.shell_orbital_offset_count,
+                  sizeof(*batch.shell_orbital_offsets), &reads[6]) ||
+      !make_range(batch.shell_primitive_offsets, batch.shell_primitive_offset_count,
+                  sizeof(*batch.shell_primitive_offsets), &reads[7]) ||
+      !make_range(batch.shell_to_atom, batch.shell_to_atom_count, sizeof(*batch.shell_to_atom),
+                  &reads[8]) ||
+      !make_range(batch.angular_momenta, batch.angular_momentum_count,
+                  sizeof(*batch.angular_momenta), &reads[9]) ||
+      !make_range(batch.primitive_exponents, batch.primitive_exponent_count,
+                  sizeof(*batch.primitive_exponents), &reads[10]) ||
+      !make_range(batch.primitive_coefficients, batch.primitive_coefficient_count,
+                  sizeof(*batch.primitive_coefficients), &reads[11]) ||
+      !make_range(positions, batch.total_atoms * 3, sizeof(*positions), &reads[12]) ||
+      !make_range(overlap, batch.total_matrix_elements, sizeof(*overlap), &writes[0]) ||
+      !make_range(dipole, dipole_elements, sizeof(*dipole), &writes[1]) ||
+      !make_range(quadrupole, quadrupole_elements, sizeof(*quadrupole), &writes[2]) ||
+      !make_range(workspace.overlap_scratch, batch.total_matrix_elements,
+                  sizeof(*workspace.overlap_scratch), &writes[3]) ||
+      !make_range(workspace.dipole_scratch, dipole_elements, sizeof(*workspace.dipole_scratch),
+                  &writes[4]) ||
+      !make_range(workspace.quadrupole_scratch, quadrupole_elements,
+                  sizeof(*workspace.quadrupole_scratch), &writes[5]) ||
+      !make_range(workspace.sequence_active, 1, sizeof(*workspace.sequence_active), &writes[6]) ||
+      !make_range(system_errors, batch.batch_size, sizeof(*system_errors), &writes[7]) ||
+      !make_range(device_error, 1, sizeof(*device_error), &writes[8]) ||
+      !writes_are_disjoint(reads, writes)) {
+    return cudaErrorInvalidValue;
+  }
+
+  capture_sequence_kernel<<<1, 1, 0, stream>>>(device_error, workspace);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  topology_preflight_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                              stream>>>(batch, positions, workspace, system_errors, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  integral_shell_pair_kernel<<<grid_blocks, kThreadsPerBlock, 0, stream>>>(
+      batch, positions, workspace, system_errors, device_error, maximum_pair_blocks);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  publish_integrals_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                             stream>>>(batch, workspace.overlap_scratch, workspace.dipole_scratch,
+                                       workspace.quadrupole_scratch, overlap, dipole, quadrupole,
+                                       workspace, system_errors);
+  return check_launch();
+}
+
+cudaError_t evaluate_gfn2_h0_cuda(const Gfn2IntegralDeviceBatch& batch,
+                                  const Gfn2H0DevicePlan& plan, const double* positions,
+                                  const double* coordination_numbers, const double* overlap,
+                                  double* hamiltonian, const Gfn2IntegralDeviceWorkspace& workspace,
+                                  std::uint32_t* system_errors, std::uint32_t* device_error,
+                                  cudaStream_t stream) noexcept {
+  std::int64_t maximum_pair_blocks = 0;
+  unsigned int grid_blocks = 0u;
+  cudaError_t status = validate_common(batch, workspace, system_errors, device_error,
+                                       &maximum_pair_blocks, &grid_blocks);
+  if (status != cudaSuccess || plan.plan_token != batch.plan_token ||
+      plan.atomic_radius_count != batch.total_atoms ||
+      plan.shell_level_count != batch.total_shells ||
+      plan.shell_coordination_scale_count != batch.total_shells ||
+      plan.shell_polynomial_count != batch.total_shells ||
+      plan.shell_pair_scale_count != batch.total_shell_pair_elements || positions == nullptr ||
+      coordination_numbers == nullptr || overlap == nullptr || hamiltonian == nullptr ||
+      workspace.h0_elements < batch.total_matrix_elements ||
+      !required_pointer(plan.atomic_radii, batch.total_atoms) ||
+      !required_pointer(plan.shell_levels, batch.total_shells) ||
+      !required_pointer(plan.shell_coordination_scale, batch.total_shells) ||
+      !required_pointer(plan.shell_polynomial, batch.total_shells) ||
+      !required_pointer(plan.shell_pair_scale, batch.total_shell_pair_elements) ||
+      !required_pointer(positions, batch.total_atoms * 3) ||
+      !required_pointer(coordination_numbers, batch.total_atoms) ||
+      !required_pointer(overlap, batch.total_matrix_elements) ||
+      !required_pointer(hamiltonian, batch.total_matrix_elements) ||
+      !required_pointer(workspace.h0_scratch, batch.total_matrix_elements)) {
+    return status == cudaSuccess ? cudaErrorInvalidValue : status;
+  }
+
+  std::array<MemoryRange, 20> reads;
+  std::array<MemoryRange, 5> writes;
+  if (!make_range(batch.atom_offsets, batch.atom_offset_count, sizeof(*batch.atom_offsets),
+                  &reads[0]) ||
+      !make_range(batch.batch_shell_offsets, batch.batch_shell_offset_count,
+                  sizeof(*batch.batch_shell_offsets), &reads[1]) ||
+      !make_range(batch.batch_orbital_offsets, batch.batch_orbital_offset_count,
+                  sizeof(*batch.batch_orbital_offsets), &reads[2]) ||
+      !make_range(batch.matrix_offsets, batch.matrix_offset_count, sizeof(*batch.matrix_offsets),
+                  &reads[3]) ||
+      !make_range(batch.shell_pair_offsets, batch.shell_pair_offset_count,
+                  sizeof(*batch.shell_pair_offsets), &reads[4]) ||
+      !make_range(batch.atom_shell_offsets, batch.atom_shell_offset_count,
+                  sizeof(*batch.atom_shell_offsets), &reads[5]) ||
+      !make_range(batch.shell_orbital_offsets, batch.shell_orbital_offset_count,
+                  sizeof(*batch.shell_orbital_offsets), &reads[6]) ||
+      !make_range(batch.shell_primitive_offsets, batch.shell_primitive_offset_count,
+                  sizeof(*batch.shell_primitive_offsets), &reads[7]) ||
+      !make_range(batch.shell_to_atom, batch.shell_to_atom_count, sizeof(*batch.shell_to_atom),
+                  &reads[8]) ||
+      !make_range(batch.angular_momenta, batch.angular_momentum_count,
+                  sizeof(*batch.angular_momenta), &reads[9]) ||
+      !make_range(batch.primitive_exponents, batch.primitive_exponent_count,
+                  sizeof(*batch.primitive_exponents), &reads[10]) ||
+      !make_range(batch.primitive_coefficients, batch.primitive_coefficient_count,
+                  sizeof(*batch.primitive_coefficients), &reads[11]) ||
+      !make_range(plan.atomic_radii, batch.total_atoms, sizeof(*plan.atomic_radii), &reads[12]) ||
+      !make_range(plan.shell_levels, batch.total_shells, sizeof(*plan.shell_levels), &reads[13]) ||
+      !make_range(plan.shell_coordination_scale, batch.total_shells,
+                  sizeof(*plan.shell_coordination_scale), &reads[14]) ||
+      !make_range(plan.shell_polynomial, batch.total_shells, sizeof(*plan.shell_polynomial),
+                  &reads[15]) ||
+      !make_range(plan.shell_pair_scale, batch.total_shell_pair_elements,
+                  sizeof(*plan.shell_pair_scale), &reads[16]) ||
+      !make_range(positions, batch.total_atoms * 3, sizeof(*positions), &reads[17]) ||
+      !make_range(coordination_numbers, batch.total_atoms, sizeof(*coordination_numbers),
+                  &reads[18]) ||
+      !make_range(overlap, batch.total_matrix_elements, sizeof(*overlap), &reads[19]) ||
+      !make_range(hamiltonian, batch.total_matrix_elements, sizeof(*hamiltonian), &writes[0]) ||
+      !make_range(workspace.h0_scratch, batch.total_matrix_elements, sizeof(*workspace.h0_scratch),
+                  &writes[1]) ||
+      !make_range(workspace.sequence_active, 1, sizeof(*workspace.sequence_active), &writes[2]) ||
+      !make_range(system_errors, batch.batch_size, sizeof(*system_errors), &writes[3]) ||
+      !make_range(device_error, 1, sizeof(*device_error), &writes[4]) ||
+      !writes_are_disjoint(reads, writes)) {
+    return cudaErrorInvalidValue;
+  }
+
+  capture_sequence_kernel<<<1, 1, 0, stream>>>(device_error, workspace);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  topology_preflight_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                              stream>>>(batch, positions, workspace, system_errors, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  h0_preflight_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0, stream>>>(
+      batch, plan, coordination_numbers, overlap, workspace, system_errors, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  h0_shell_pair_kernel<<<grid_blocks, kThreadsPerBlock, 0, stream>>>(
+      batch, plan, positions, coordination_numbers, overlap, workspace, system_errors, device_error,
+      maximum_pair_blocks);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  publish_h0_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0, stream>>>(
+      batch, workspace, hamiltonian, system_errors);
+  return check_launch();
+}
+
+}  // namespace gpuxtb::detail::cuda

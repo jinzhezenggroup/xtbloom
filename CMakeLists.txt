@@ -113,6 +113,8 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/gfn2_es2.cu
     src/backends/cuda/gfn2_es3.cu
     src/backends/cuda/gfn2_external_point_charges.cu
+    src/backends/cuda/gfn2_geometry.cu
+    src/backends/cuda/gfn2_integrals.cu
     src/backends/cuda/gfn2_parameters.cu
     src/backends/cuda/gfn2_periodic_embedding.cu
     src/backends/cuda/gfn2_repulsion.cu
@@ -126,6 +128,11 @@ if(GPUXTB_HAS_CUDA)
   )
   target_link_libraries(gpuxtb_cuda_backend PUBLIC CUDA::cudart)
   target_compile_definitions(gpuxtb_cuda_backend PRIVATE GPUXTB_HAS_CUDA=1)
+  if(GPUXTB_BUILD_TESTS)
+    # White-box CUDA kernels exercise otherwise unreachable transactional
+    # overflow boundaries without shipping test entry points in release builds.
+    target_compile_definitions(gpuxtb_cuda_backend PRIVATE GPUXTB_CUDA_TEST_HOOKS=1)
+  endif()
   set_target_properties(gpuxtb_cuda_backend PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_STANDARD 17
@@ -242,6 +249,42 @@ if(GPUXTB_BUILD_TESTS)
     add_test(NAME gpuxtb.cuda.external_point_charges
       COMMAND gpuxtb_cuda_external_point_charges_test
     )
+
+    add_executable(gpuxtb_cuda_geometry_test tests/cuda_geometry_test.cu)
+    target_link_libraries(gpuxtb_cuda_geometry_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_geometry_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_geometry_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_geometry_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.geometry COMMAND gpuxtb_cuda_geometry_test)
+
+    add_executable(gpuxtb_cuda_integrals_test tests/cuda_integrals_test.cu)
+    target_link_libraries(gpuxtb_cuda_integrals_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_integrals_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_integrals_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_integrals_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.integrals COMMAND gpuxtb_cuda_integrals_test)
 
     add_executable(gpuxtb_cuda_es3_test tests/cuda_es3_test.cu)
     target_link_libraries(gpuxtb_cuda_es3_test PRIVATE
