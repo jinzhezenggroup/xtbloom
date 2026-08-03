@@ -111,6 +111,7 @@ endif()
 if(GPUXTB_HAS_CUDA)
   add_library(gpuxtb_cuda_backend OBJECT
     src/backends/cuda/cuda_runtime.cu
+    src/runtime/gfn2_cuda_execution.cu
     src/backends/cuda/gfn2_aes2.cu
     src/backends/cuda/gfn2_classical_force.cu
     src/backends/cuda/gfn2_d4.cu
@@ -603,6 +604,31 @@ if(GPUXTB_BUILD_TESTS)
     )
     add_test(NAME gpuxtb.cuda.energy_force_execution
       COMMAND gpuxtb_cuda_energy_force_execution_test
+    )
+
+    add_executable(gpuxtb_cuda_gfn2_runtime_owner_test
+      tests/cuda_gfn2_runtime_owner_test.cu
+      tests/support/gfn2_scc_test_case.cpp
+    )
+    target_link_libraries(gpuxtb_cuda_gfn2_runtime_owner_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_gfn2_runtime_owner_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_gfn2_runtime_owner_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_gfn2_runtime_owner_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.gfn2_runtime_owner
+      COMMAND gpuxtb_cuda_gfn2_runtime_owner_test
     )
 
     add_executable(gpuxtb_cuda_eigensolver_test tests/cuda_eigensolver_test.cu)

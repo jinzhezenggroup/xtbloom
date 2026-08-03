@@ -10,6 +10,7 @@
 namespace gpuxtb::detail {
 
 class Gfn2CpuExecutionCache;
+class Gfn2CudaExecutionCache;
 
 /* Runtime state is opaque at the ABI boundary so backend internals can evolve. */
 struct Context {
@@ -25,6 +26,15 @@ struct Context {
    * handle. The executor serializes access to cached batch plans per context.
    */
   std::shared_ptr<Gfn2CpuExecutionCache> gfn2_cpu_execution_cache;
+
+  /*
+   * CUDA contexts likewise own one reusable fixed-topology GFN2 runtime.
+   * The cache header deliberately contains no CUDA types, so this ownership
+   * remains an incomplete-type boundary that a future HIP cache can mirror.
+   * Public descriptor staging and execution are connected in #114; eager
+   * construction here establishes the production context lifetime now.
+   */
+  std::shared_ptr<Gfn2CudaExecutionCache> gfn2_cuda_execution_cache;
 };
 
 gpuxtb_status_t create_context(const gpuxtb_context_options_t& options, Context*& context,

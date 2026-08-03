@@ -5,6 +5,9 @@
 #include <utility>
 
 #include "runtime/gfn2_cpu_execution.hpp"
+#if defined(GPUXTB_HAS_CUDA)
+#include "runtime/gfn2_cuda_execution.hpp"
+#endif
 
 namespace gpuxtb::detail {
 namespace {
@@ -91,6 +94,20 @@ gpuxtb_status_t create_context(const gpuxtb_context_options_t& options, Context*
       return GPUXTB_STATUS_ALLOCATION_FAILED;
     }
   }
+#if defined(GPUXTB_HAS_CUDA)
+  if (selected == GPUXTB_BACKEND_CUDA) {
+    try {
+      /* The fixed-topology CUDA runtime is context scoped even before #114
+       * connects public descriptor staging and result publication. */
+      created->gfn2_cuda_execution_cache =
+          std::make_shared<Gfn2CudaExecutionCache>(resolved_device, options.stream);
+    } catch (const std::bad_alloc&) {
+      delete created;
+      error = "failed to allocate CUDA GFN2 execution cache";
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
+  }
+#endif
   context = created;
   return GPUXTB_STATUS_SUCCESS;
 }
