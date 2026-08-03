@@ -131,10 +131,13 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/gfn2_scc_energy.cu
     src/backends/cuda/gfn2_scc_free_energy.cu
     src/backends/cuda/gfn2_scc_iteration.cu
+    src/backends/cuda/gfn2_scc_iteration_arena.cu
     src/backends/cuda/gfn2_scc_iteration_control.cu
+    src/backends/cuda/gfn2_scc_iteration_reports.cu
     src/backends/cuda/gfn2_scc_mixer.cu
     src/backends/cuda/gfn2_scc_potential.cu
     src/backends/cuda/gfn2_scc_publication.cu
+    src/backends/cuda/gfn2_scc_setup_topology.cu
   )
   target_include_directories(gpuxtb_cuda_backend PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -640,6 +643,75 @@ if(GPUXTB_BUILD_TESTS)
     )
     add_test(NAME gpuxtb.cuda.scc_iteration_composer
       COMMAND gpuxtb_cuda_scc_iteration_composer_test
+    )
+
+    add_executable(gpuxtb_cuda_scc_iteration_arena_test
+      tests/cuda_scc_iteration_arena_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_scc_iteration_arena_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_iteration_arena_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_iteration_arena_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_iteration_arena_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_iteration_arena
+      COMMAND gpuxtb_cuda_scc_iteration_arena_test
+    )
+
+    add_executable(gpuxtb_cuda_scc_iteration_reports_test
+      tests/cuda_scc_iteration_reports_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_scc_iteration_reports_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_iteration_reports_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_iteration_reports_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_iteration_reports_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_iteration_reports
+      COMMAND gpuxtb_cuda_scc_iteration_reports_test
+    )
+
+    add_executable(gpuxtb_cuda_scc_setup_topology_test
+      tests/cuda_scc_setup_topology_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_scc_setup_topology_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_setup_topology_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_setup_topology_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_setup_topology_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_setup_topology
+      COMMAND gpuxtb_cuda_scc_setup_topology_test
     )
 
     add_executable(gpuxtb_cuda_scc_electrostatic_components_test
