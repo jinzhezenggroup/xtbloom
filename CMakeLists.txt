@@ -45,6 +45,7 @@ add_library(gpuxtb_gfn2_cpu OBJECT
   src/model/gfn2/es2.cpp
   src/model/gfn2/es3.cpp
   src/model/gfn2/external_point_charges.cpp
+  src/model/gfn2/force.cpp
   src/model/gfn2/h0.cpp
   src/model/gfn2/integrals.cpp
   src/model/gfn2/mulliken.cpp
@@ -1158,6 +1159,11 @@ if(GPUXTB_BUILD_TESTS)
   target_link_libraries(gpuxtb_h0_test PRIVATE gpuxtb_gfn2_cpu)
   target_compile_features(gpuxtb_h0_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.h0 COMMAND gpuxtb_h0_test)
+
+  add_executable(gpuxtb_force_test tests/force_test.cpp)
+  target_link_libraries(gpuxtb_force_test PRIVATE gpuxtb_gfn2_cpu)
+  target_compile_features(gpuxtb_force_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.gfn2.force COMMAND gpuxtb_force_test)
 
   add_executable(gpuxtb_external_point_charges_test tests/external_point_charges_test.cpp)
   target_link_libraries(gpuxtb_external_point_charges_test PRIVATE gpuxtb_gfn2_cpu)
