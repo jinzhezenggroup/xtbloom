@@ -108,13 +108,16 @@ endif()
 if(GPUXTB_HAS_CUDA)
   add_library(gpuxtb_cuda_backend OBJECT
     src/backends/cuda/cuda_runtime.cu
+    src/backends/cuda/gfn2_aes2.cu
     src/backends/cuda/gfn2_d4.cu
     src/backends/cuda/gfn2_es2.cu
     src/backends/cuda/gfn2_es3.cu
     src/backends/cuda/gfn2_external_point_charges.cu
     src/backends/cuda/gfn2_parameters.cu
+    src/backends/cuda/gfn2_periodic_embedding.cu
     src/backends/cuda/gfn2_repulsion.cu
     src/backends/cuda/gfn2_scc.cu
+    src/backends/cuda/gfn2_scc_mixer.cu
   )
   target_include_directories(gpuxtb_cuda_backend PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -276,6 +279,24 @@ if(GPUXTB_BUILD_TESTS)
     )
     add_test(NAME gpuxtb.cuda.es2 COMMAND gpuxtb_cuda_es2_test)
 
+    add_executable(gpuxtb_cuda_aes2_test tests/cuda_aes2_test.cu)
+    target_link_libraries(gpuxtb_cuda_aes2_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_aes2_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_aes2_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_aes2_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.aes2 COMMAND gpuxtb_cuda_aes2_test)
+
     add_executable(gpuxtb_cuda_d4_test tests/cuda_d4_test.cu)
     target_link_libraries(gpuxtb_cuda_d4_test PRIVATE
       gpuxtb::gpuxtb
@@ -294,6 +315,29 @@ if(GPUXTB_BUILD_TESTS)
     )
     add_test(NAME gpuxtb.cuda.d4 COMMAND gpuxtb_cuda_d4_test)
 
+    add_executable(gpuxtb_cuda_periodic_embedding_test
+      tests/cuda_periodic_embedding_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_periodic_embedding_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+    )
+    target_include_directories(gpuxtb_cuda_periodic_embedding_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_periodic_embedding_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_periodic_embedding_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.periodic_embedding
+      COMMAND gpuxtb_cuda_periodic_embedding_test
+    )
+
     add_executable(gpuxtb_cuda_scc_test tests/cuda_scc_test.cu)
     target_link_libraries(gpuxtb_cuda_scc_test PRIVATE
       gpuxtb::gpuxtb
@@ -310,6 +354,24 @@ if(GPUXTB_BUILD_TESTS)
       CUDA_SEPARABLE_COMPILATION ON
     )
     add_test(NAME gpuxtb.cuda.scc COMMAND gpuxtb_cuda_scc_test)
+
+    add_executable(gpuxtb_cuda_scc_mixer_test tests/cuda_scc_mixer_test.cu)
+    target_link_libraries(gpuxtb_cuda_scc_mixer_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_mixer_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_mixer_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_scc_mixer_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_mixer COMMAND gpuxtb_cuda_scc_mixer_test)
   endif()
 
   add_executable(gpuxtb_repulsion_test tests/repulsion_test.cpp)
