@@ -24,6 +24,10 @@ enum class Gfn2IntegralDeviceError : std::uint32_t {
   kInvalidCoordination = 8u,
   kNonfiniteOverlap = 9u,
   kNonfiniteH0Arithmetic = 10u,
+  kInvalidActiveMask = 11u,
+  kNonfiniteAdjoint = 12u,
+  kNonfiniteGradientSeed = 13u,
+  kNonfiniteGradientArithmetic = 14u,
 };
 
 /*

@@ -45,6 +45,7 @@ add_library(gpuxtb_gfn2_cpu OBJECT
   src/model/gfn2/es2.cpp
   src/model/gfn2/es3.cpp
   src/model/gfn2/external_point_charges.cpp
+  src/model/gfn2/force.cpp
   src/model/gfn2/h0.cpp
   src/model/gfn2/integrals.cpp
   src/model/gfn2/mulliken.cpp
@@ -113,13 +114,16 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/gfn2_classical_force.cu
     src/backends/cuda/gfn2_d4.cu
     src/backends/cuda/gfn2_density.cu
+    src/backends/cuda/gfn2_electronic_gradient.cu
     src/backends/cuda/gfn2_eigensolver.cu
     src/backends/cuda/gfn2_es2.cu
     src/backends/cuda/gfn2_es3.cu
     src/backends/cuda/gfn2_external_point_charges.cu
     src/backends/cuda/gfn2_force_composition.cu
     src/backends/cuda/gfn2_geometry.cu
+    src/backends/cuda/gfn2_h0_force.cu
     src/backends/cuda/gfn2_hamiltonian.cu
+    src/backends/cuda/gfn2_hamiltonian_force.cu
     src/backends/cuda/gfn2_integrals.cu
     src/backends/cuda/gfn2_mulliken.cu
     src/backends/cuda/gfn2_occupations.cu
@@ -372,6 +376,60 @@ if(GPUXTB_BUILD_TESTS)
     )
     add_test(NAME gpuxtb.cuda.integrals COMMAND gpuxtb_cuda_integrals_test)
 
+    add_executable(gpuxtb_cuda_integral_force_test tests/cuda_integral_force_test.cu)
+    target_link_libraries(gpuxtb_cuda_integral_force_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_integral_force_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_integral_force_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_integral_force_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.integral_force COMMAND gpuxtb_cuda_integral_force_test)
+
+    add_executable(gpuxtb_cuda_h0_force_test tests/cuda_h0_force_test.cu)
+    target_link_libraries(gpuxtb_cuda_h0_force_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_h0_force_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_h0_force_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_h0_force_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.h0_force COMMAND gpuxtb_cuda_h0_force_test)
+
+    add_executable(gpuxtb_cuda_hamiltonian_force_test tests/cuda_hamiltonian_force_test.cu)
+    target_link_libraries(gpuxtb_cuda_hamiltonian_force_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_hamiltonian_force_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_hamiltonian_force_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_hamiltonian_force_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.hamiltonian_force COMMAND gpuxtb_cuda_hamiltonian_force_test)
+
     add_executable(gpuxtb_cuda_hamiltonian_test tests/cuda_hamiltonian_test.cu)
     target_link_libraries(gpuxtb_cuda_hamiltonian_test PRIVATE
       gpuxtb::gpuxtb
@@ -442,6 +500,26 @@ if(GPUXTB_BUILD_TESTS)
       CUDA_SEPARABLE_COMPILATION ON
     )
     add_test(NAME gpuxtb.cuda.density COMMAND gpuxtb_cuda_density_test)
+
+    add_executable(gpuxtb_cuda_electronic_gradient_test
+      tests/cuda_electronic_gradient_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_electronic_gradient_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_electronic_gradient_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_electronic_gradient_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_electronic_gradient_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.electronic_gradient COMMAND gpuxtb_cuda_electronic_gradient_test)
 
     add_executable(gpuxtb_cuda_eigensolver_test tests/cuda_eigensolver_test.cu)
     target_link_libraries(gpuxtb_cuda_eigensolver_test PRIVATE
