@@ -114,6 +114,169 @@ __device__ bool sequence_is_active(const Gfn2SccPotentialDeviceWorkspace& worksp
   return atomicAdd(workspace.sequence_active, 0u) == 1u;
 }
 
+__device__ bool canonical_member_is_active(const Gfn2SccIterationDeviceActivity& activity,
+                                           const Gfn2SccPotentialDeviceWorkspace& workspace,
+                                           const std::uint32_t* system_errors,
+                                           std::int64_t system) {
+  /* The canonical sequence is authoritative and must precede every member or
+   * numerical read.  workspace.sequence_active is only this stage's report
+   * latch; it never derives a second activity policy. */
+  return atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u) == 1u &&
+         sequence_is_active(workspace) && activity.active_mask[system] == 1u &&
+         system_is_valid(system_errors, system);
+}
+
+/* Active-aware plan validation follows the same gate order as the physics
+ * primitives: sequence, any-active, then active topology.  Inactive offsets
+ * are generation-local poison and cannot be used to validate their peers. */
+__global__ void canonical_topology_preflight_kernel(Gfn2SccPotentialDeviceBatch batch,
+                                                    Gfn2SccIterationDeviceActivity activity,
+                                                    Gfn2SccPotentialDeviceWorkspace workspace,
+                                                    std::uint32_t* device_error) {
+  __shared__ int sequence_open;
+  __shared__ int any_active;
+  if (threadIdx.x == 0) {
+    sequence_open =
+        atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u) == 1u ? 1 : 0;
+    any_active = 0;
+    *workspace.sequence_active =
+        sequence_open != 0 && !is_plan_error(atomicAdd(device_error, 0u)) ? 1u : 0u;
+  }
+  __syncthreads();
+  if (sequence_open == 0 || !sequence_is_active(workspace)) {
+    return;
+  }
+  for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
+    if (activity.active_mask[system] == 1u) {
+      atomicExch(&any_active, 1);
+    }
+  }
+  __syncthreads();
+  if (any_active == 0 || !sequence_is_active(workspace)) {
+    return;
+  }
+
+  const std::int64_t dipole_total = batch.total_atoms * kGfn2SccPotentialDipoleComponents;
+  const std::int64_t quadrupole_total = batch.total_atoms * kGfn2SccPotentialQuadrupoleComponents;
+  for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
+    if (activity.active_mask[system] != 1u) {
+      continue;
+    }
+    const std::int64_t atom_begin = batch.atom_offsets[system];
+    const std::int64_t atom_end = batch.atom_offsets[system + 1];
+    const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+    const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
+    const std::int64_t qsh_begin = batch.qsh_offsets[system];
+    const std::int64_t qsh_end = batch.qsh_offsets[system + 1];
+    const std::int64_t qat_begin = batch.qat_offsets[system];
+    const std::int64_t qat_end = batch.qat_offsets[system + 1];
+    const std::int64_t dipole_begin = batch.dipole_offsets[system];
+    const std::int64_t dipole_end = batch.dipole_offsets[system + 1];
+    const std::int64_t quadrupole_begin = batch.quadrupole_offsets[system];
+    const std::int64_t quadrupole_end = batch.quadrupole_offsets[system + 1];
+    bool valid =
+        atom_begin >= 0 && atom_begin <= atom_end && atom_end <= batch.total_atoms &&
+        shell_begin >= 0 && shell_begin <= shell_end && shell_end <= batch.total_shells &&
+        qsh_begin >= 0 && qsh_begin <= qsh_end && qsh_end <= batch.total_shells && qat_begin >= 0 &&
+        qat_begin <= qat_end && qat_end <= batch.total_atoms && dipole_begin >= 0 &&
+        dipole_begin <= dipole_end && dipole_end <= dipole_total && quadrupole_begin >= 0 &&
+        quadrupole_begin <= quadrupole_end && quadrupole_end <= quadrupole_total &&
+        qsh_end - qsh_begin == shell_end - shell_begin &&
+        qat_end - qat_begin == atom_end - atom_begin &&
+        dipole_end - dipole_begin == (atom_end - atom_begin) * kGfn2SccPotentialDipoleComponents &&
+        quadrupole_end - quadrupole_begin ==
+            (atom_end - atom_begin) * kGfn2SccPotentialQuadrupoleComponents;
+    if (valid && system == 0) {
+      valid = atom_begin == 0 && shell_begin == 0 && qsh_begin == 0 && qat_begin == 0 &&
+              dipole_begin == 0 && quadrupole_begin == 0;
+    }
+    if (valid && system + 1 == batch.batch_size) {
+      valid = atom_end == batch.total_atoms && shell_end == batch.total_shells &&
+              qsh_end == batch.total_shells && qat_end == batch.total_atoms &&
+              dipole_end == dipole_total && quadrupole_end == quadrupole_total;
+    }
+    if (!valid) {
+      record_plan_error(device_error, workspace.sequence_active,
+                        Gfn2SccPotentialDeviceError::kInvalidOffsets);
+    }
+  }
+}
+
+__global__ void reduce_mixed_atomic_charge_kernel(Gfn2SccPotentialDeviceBatch batch,
+                                                  Gfn2SccPotentialDeviceMixedFields mixed,
+                                                  Gfn2SccIterationDeviceActivity activity,
+                                                  Gfn2SccPotentialDeviceWorkspace workspace,
+                                                  std::uint32_t* system_errors,
+                                                  std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  __shared__ int active;
+  __shared__ int valid;
+  if (threadIdx.x == 0) {
+    active = canonical_member_is_active(activity, workspace, system_errors, system) ? 1 : 0;
+    valid = 1;
+  }
+  __syncthreads();
+  if (active == 0) {
+    return;
+  }
+
+  const std::int64_t atom_begin = batch.atom_offsets[system];
+  const std::int64_t atom_end = batch.atom_offsets[system + 1];
+  const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+  const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
+  const std::int64_t qsh_begin = batch.qsh_offsets[system];
+  for (std::int64_t shell = shell_begin + threadIdx.x; shell < shell_end; shell += blockDim.x) {
+    const std::int64_t atom = batch.shell_to_atom[shell];
+    if (atom < atom_begin || atom >= atom_end) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2SccPotentialDeviceError::kInvalidShellMetadata);
+      atomicExch(&valid, 0);
+      continue;
+    }
+    if (!isfinite(mixed.qsh[qsh_begin + shell - shell_begin])) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2SccPotentialDeviceError::kNonfiniteMixedShellCharge);
+      atomicExch(&valid, 0);
+    }
+  }
+  __syncthreads();
+  if (valid == 0) {
+    return;
+  }
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    double charge = 0.0;
+    for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
+      if (batch.shell_to_atom[shell] != atom) {
+        continue;
+      }
+      const double updated = charge + mixed.qsh[qsh_begin + shell - shell_begin];
+      if (!isfinite(updated)) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2SccPotentialDeviceError::kNonfiniteAtomicChargeReduction);
+        atomicExch(&valid, 0);
+        break;
+      }
+      charge = updated;
+    }
+    workspace.atom_scratch[atom] = charge;
+  }
+}
+
+__global__ void publish_mixed_atomic_charge_kernel(
+    Gfn2SccPotentialDeviceBatch batch, Gfn2SccIterationDeviceActivity activity,
+    Gfn2SccPotentialDeviceTopologyMultipoles topology, Gfn2SccPotentialDeviceWorkspace workspace,
+    const std::uint32_t* system_errors) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!canonical_member_is_active(activity, workspace, system_errors, system)) {
+    return;
+  }
+  const std::int64_t atom_begin = batch.atom_offsets[system];
+  const std::int64_t atom_end = batch.atom_offsets[system + 1];
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    topology.atomic_charges[atom] = workspace.atom_scratch[atom];
+  }
+}
+
 __global__ void gather_mixed_kernel(Gfn2SccPotentialDeviceBatch batch,
                                     Gfn2SccPotentialDeviceMixedFields mixed,
                                     Gfn2SccPotentialDeviceActivity activity,
@@ -269,9 +432,47 @@ __device__ double load_component(const double* values, std::int64_t index, bool 
   return value;
 }
 
+__device__ int requested_member(const Gfn2SccPotentialDeviceActivity& activity,
+                                const Gfn2SccPotentialDeviceWorkspace& workspace,
+                                std::uint32_t* system_errors, std::int64_t system,
+                                std::uint32_t* device_error) {
+  if (!sequence_is_active(workspace) || !system_is_valid(system_errors, system)) {
+    return 0;
+  }
+  const std::uint8_t state = activity.active_mask == nullptr ? 1u : activity.active_mask[system];
+  if (state > 1u) {
+    if (device_error != nullptr) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2SccPotentialDeviceError::kInvalidActiveMask);
+    }
+    return 0;
+  }
+  return state == 1u ? 1 : 0;
+}
+
+__device__ int requested_member(const Gfn2SccIterationDeviceActivity& activity,
+                                const Gfn2SccPotentialDeviceWorkspace& workspace,
+                                std::uint32_t* system_errors, std::int64_t system,
+                                std::uint32_t* device_error) {
+  if (atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u) != 1u ||
+      !sequence_is_active(workspace) || !system_is_valid(system_errors, system)) {
+    return 0;
+  }
+  const std::uint8_t state = activity.active_mask[system];
+  if (state > 1u) {
+    if (device_error != nullptr) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2SccPotentialDeviceError::kInvalidActiveMask);
+    }
+    return 0;
+  }
+  return state == 1u ? 1 : 0;
+}
+
+template <typename Activity>
 __global__ void compose_potential_kernel(Gfn2SccPotentialDeviceBatch batch,
                                          Gfn2SccPotentialDeviceComponents components,
-                                         Gfn2SccPotentialDeviceActivity activity,
+                                         Activity activity,
                                          Gfn2SccPotentialDeviceWorkspace workspace,
                                          std::uint32_t* system_errors,
                                          std::uint32_t* device_error) {
@@ -281,17 +482,8 @@ __global__ void compose_potential_kernel(Gfn2SccPotentialDeviceBatch batch,
   if (threadIdx.x == 0) {
     active = 0;
     valid = 1;
-    if (sequence_is_active(workspace) && system_is_valid(system_errors, system)) {
-      const std::uint8_t state =
-          activity.active_mask == nullptr ? 1u : activity.active_mask[system];
-      if (state > 1u) {
-        record_system_error(system_errors, system, device_error,
-                            Gfn2SccPotentialDeviceError::kInvalidActiveMask);
-        valid = 0;
-      } else {
-        active = state == 1u ? 1 : 0;
-      }
-    }
+    active = requested_member(activity, workspace, system_errors, system, device_error);
+    valid = active;
   }
   __syncthreads();
   if (active == 0) {
@@ -382,14 +574,14 @@ __global__ void compose_potential_kernel(Gfn2SccPotentialDeviceBatch batch,
   (void)valid;
 }
 
-__global__ void publish_potential_kernel(Gfn2SccPotentialDeviceBatch batch,
-                                         Gfn2SccPotentialDeviceActivity activity,
+template <typename Activity>
+__global__ void publish_potential_kernel(Gfn2SccPotentialDeviceBatch batch, Activity activity,
                                          Gfn2SccPotentialDeviceResults results,
                                          Gfn2SccPotentialDeviceWorkspace workspace,
                                          const std::uint32_t* system_errors) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
-  if (!sequence_is_active(workspace) || !system_is_valid(system_errors, system) ||
-      (activity.active_mask != nullptr && activity.active_mask[system] != 1u)) {
+  if (requested_member(activity, workspace, const_cast<std::uint32_t*>(system_errors), system,
+                       nullptr) == 0) {
     return;
   }
   const std::int64_t shell_begin = batch.qsh_offsets[system];
@@ -506,6 +698,15 @@ bool validate_common(const Gfn2SccPotentialDeviceBatch& batch,
          is_aligned(device_error, alignof(std::uint32_t));
 }
 
+bool validate_canonical_activity(const Gfn2SccPotentialDeviceBatch& batch,
+                                 const Gfn2SccIterationDeviceActivity& activity) noexcept {
+  return activity.plan_token == batch.plan_token && activity.active_mask != nullptr &&
+         activity.sequence_active != nullptr && activity.batch_elements == batch.batch_size &&
+         activity.sequence_elements == 1 &&
+         is_aligned(activity.active_mask, alignof(std::uint8_t)) &&
+         is_aligned(activity.sequence_active, alignof(std::uint32_t));
+}
+
 template <std::size_t ReadCount, std::size_t WriteCount>
 bool disjoint_bindings(const std::array<AddressRange, ReadCount>& reads,
                        const std::array<AddressRange, WriteCount>& writes) noexcept {
@@ -588,6 +789,61 @@ bool validate_gather(const Gfn2SccPotentialDeviceBatch& batch,
       !make_range(workspace.sequence_active, 1, sizeof(std::uint32_t), &writes[8]) ||
       !make_range(system_errors, batch.batch_size, sizeof(std::uint32_t), &writes[9]) ||
       !make_range(device_error, 1, sizeof(std::uint32_t), &writes[10])) {
+    return false;
+  }
+  return disjoint_bindings(reads, writes);
+}
+
+bool validate_canonical_reduction(const Gfn2SccPotentialDeviceBatch& batch,
+                                  const Gfn2SccPotentialDeviceMixedFields& mixed,
+                                  const Gfn2SccIterationDeviceActivity& activity,
+                                  const Gfn2SccPotentialDeviceTopologyMultipoles& topology,
+                                  const Gfn2SccPotentialDeviceWorkspace& workspace,
+                                  std::uint32_t* system_errors,
+                                  std::uint32_t* device_error) noexcept {
+  const Gfn2SccPotentialDeviceActivity compatibility_activity{
+      activity.active_mask, activity.batch_elements, activity.plan_token};
+  std::int64_t dipole_elements = 0;
+  std::int64_t quadrupole_elements = 0;
+  if (!validate_canonical_activity(batch, activity) ||
+      !validate_common(batch, compatibility_activity, workspace, system_errors, device_error) ||
+      !checked_multiply(batch.total_atoms, kGfn2SccPotentialDipoleComponents, &dipole_elements) ||
+      !checked_multiply(batch.total_atoms, kGfn2SccPotentialQuadrupoleComponents,
+                        &quadrupole_elements) ||
+      mixed.plan_token != batch.plan_token || mixed.qsh_elements != batch.total_shells ||
+      mixed.dipole_elements != dipole_elements ||
+      mixed.quadrupole_elements != quadrupole_elements || topology.plan_token != batch.plan_token ||
+      topology.shell_elements != batch.total_shells ||
+      topology.atom_elements != batch.total_atoms || topology.dipole_elements != dipole_elements ||
+      topology.quadrupole_elements != quadrupole_elements || topology.shell_charges != mixed.qsh ||
+      topology.atomic_dipoles != mixed.dipoles ||
+      topology.atomic_quadrupoles != mixed.quadrupoles ||
+      (batch.total_shells != 0 && !is_aligned(mixed.qsh, alignof(double))) ||
+      (dipole_elements != 0 && !is_aligned(mixed.dipoles, alignof(double))) ||
+      (quadrupole_elements != 0 && !is_aligned(mixed.quadrupoles, alignof(double))) ||
+      (batch.total_atoms != 0 && !is_aligned(topology.atomic_charges, alignof(double)))) {
+    return false;
+  }
+
+  std::array<AddressRange, 10> reads{};
+  std::array<AddressRange, 5> writes{};
+  if (!make_range(batch.atom_offsets, batch.atom_offset_count, sizeof(std::int64_t), &reads[0]) ||
+      !make_range(batch.batch_shell_offsets, batch.batch_shell_offset_count, sizeof(std::int64_t),
+                  &reads[1]) ||
+      !make_range(batch.qsh_offsets, batch.qsh_offset_count, sizeof(std::int64_t), &reads[2]) ||
+      !make_range(batch.shell_to_atom, batch.shell_to_atom_count, sizeof(std::int64_t),
+                  &reads[3]) ||
+      !make_range(activity.active_mask, activity.batch_elements, sizeof(std::uint8_t), &reads[4]) ||
+      !make_range(activity.sequence_active, 1, sizeof(std::uint32_t), &reads[5]) ||
+      !make_range(mixed.qsh, mixed.qsh_elements, sizeof(double), &reads[6]) ||
+      !make_range(mixed.dipoles, mixed.dipole_elements, sizeof(double), &reads[7]) ||
+      !make_range(mixed.quadrupoles, mixed.quadrupole_elements, sizeof(double), &reads[8]) ||
+      !make_range(batch.qat_offsets, batch.qat_offset_count, sizeof(std::int64_t), &reads[9]) ||
+      !make_range(topology.atomic_charges, topology.atom_elements, sizeof(double), &writes[0]) ||
+      !make_range(workspace.atom_scratch, workspace.atom_elements, sizeof(double), &writes[1]) ||
+      !make_range(workspace.sequence_active, 1, sizeof(std::uint32_t), &writes[2]) ||
+      !make_range(system_errors, batch.batch_size, sizeof(std::uint32_t), &writes[3]) ||
+      !make_range(device_error, 1, sizeof(std::uint32_t), &writes[4])) {
     return false;
   }
   return disjoint_bindings(reads, writes);
@@ -688,6 +944,42 @@ bool validate_compose(const Gfn2SccPotentialDeviceBatch& batch,
   return disjoint_bindings(reads, writes);
 }
 
+bool validate_canonical_compose(const Gfn2SccPotentialDeviceBatch& batch,
+                                const Gfn2SccPotentialDeviceComponents& components,
+                                const Gfn2SccIterationDeviceActivity& activity,
+                                const Gfn2SccPotentialDeviceResults& results,
+                                const Gfn2SccPotentialDeviceWorkspace& workspace,
+                                std::uint32_t* system_errors,
+                                std::uint32_t* device_error) noexcept {
+  if (!validate_canonical_activity(batch, activity)) {
+    return false;
+  }
+  const Gfn2SccPotentialDeviceActivity compatibility_activity{
+      activity.active_mask, activity.batch_elements, activity.plan_token};
+  if (!validate_compose(batch, components, compatibility_activity, results, workspace,
+                        system_errors, device_error)) {
+    return false;
+  }
+  AddressRange sequence;
+  std::array<AddressRange, 7> writes{};
+  if (!make_range(activity.sequence_active, 1, sizeof(std::uint32_t), &sequence) ||
+      !make_range(results.shell, results.shell_elements, sizeof(double), &writes[0]) ||
+      !make_range(results.atomic, results.atom_elements, sizeof(double), &writes[1]) ||
+      !make_range(results.dipole, results.dipole_elements, sizeof(double), &writes[2]) ||
+      !make_range(results.quadrupole, results.quadrupole_elements, sizeof(double), &writes[3]) ||
+      !make_range(workspace.sequence_active, 1, sizeof(std::uint32_t), &writes[4]) ||
+      !make_range(system_errors, batch.batch_size, sizeof(std::uint32_t), &writes[5]) ||
+      !make_range(device_error, 1, sizeof(std::uint32_t), &writes[6])) {
+    return false;
+  }
+  for (const AddressRange& write : writes) {
+    if (ranges_overlap(sequence, write)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 cudaError_t launch_preflight(const Gfn2SccPotentialDeviceBatch& batch,
                              const Gfn2SccPotentialDeviceWorkspace& workspace,
                              std::uint32_t* device_error, cudaStream_t stream) noexcept {
@@ -698,6 +990,15 @@ cudaError_t launch_preflight(const Gfn2SccPotentialDeviceBatch& batch,
   }
   topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, workspace.sequence_active,
                                                                 device_error);
+  return cudaGetLastError();
+}
+
+cudaError_t launch_canonical_preflight(const Gfn2SccPotentialDeviceBatch& batch,
+                                       const Gfn2SccIterationDeviceActivity& activity,
+                                       const Gfn2SccPotentialDeviceWorkspace& workspace,
+                                       std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  canonical_topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, activity,
+                                                                          workspace, device_error);
   return cudaGetLastError();
 }
 
@@ -750,6 +1051,33 @@ cudaError_t gather_gfn2_scc_mixed_multipoles_cuda(
   return cudaGetLastError();
 }
 
+cudaError_t reduce_gfn2_scc_mixed_atomic_charges_cuda(
+    const Gfn2SccPotentialDeviceBatch& batch, const Gfn2SccPotentialDeviceMixedFields& mixed,
+    const Gfn2SccIterationDeviceActivity& activity,
+    const Gfn2SccPotentialDeviceTopologyMultipoles& topology,
+    const Gfn2SccPotentialDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  if (!validate_canonical_reduction(batch, mixed, activity, topology, workspace, system_errors,
+                                    device_error)) {
+    return cudaErrorInvalidValue;
+  }
+  cudaError_t status = launch_canonical_preflight(batch, activity, workspace, device_error, stream);
+  if (status != cudaSuccess) {
+    return status;
+  }
+  reduce_mixed_atomic_charge_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
+                                      0, stream>>>(batch, mixed, activity, workspace, system_errors,
+                                                   device_error);
+  status = cudaGetLastError();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  publish_mixed_atomic_charge_kernel<<<static_cast<unsigned int>(batch.batch_size),
+                                       kThreadsPerBlock, 0, stream>>>(batch, activity, topology,
+                                                                      workspace, system_errors);
+  return cudaGetLastError();
+}
+
 cudaError_t compose_gfn2_scc_potentials_cuda(
     const Gfn2SccPotentialDeviceBatch& batch, const Gfn2SccPotentialDeviceComponents& components,
     const Gfn2SccPotentialDeviceActivity& activity, const Gfn2SccPotentialDeviceResults& results,
@@ -760,6 +1088,31 @@ cudaError_t compose_gfn2_scc_potentials_cuda(
     return cudaErrorInvalidValue;
   }
   cudaError_t status = launch_preflight(batch, workspace, device_error, stream);
+  if (status != cudaSuccess) {
+    return status;
+  }
+  compose_potential_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                             stream>>>(batch, components, activity, workspace, system_errors,
+                                       device_error);
+  status = cudaGetLastError();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  publish_potential_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                             stream>>>(batch, activity, results, workspace, system_errors);
+  return cudaGetLastError();
+}
+
+cudaError_t compose_gfn2_scc_potentials_cuda(
+    const Gfn2SccPotentialDeviceBatch& batch, const Gfn2SccPotentialDeviceComponents& components,
+    const Gfn2SccIterationDeviceActivity& activity, const Gfn2SccPotentialDeviceResults& results,
+    const Gfn2SccPotentialDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  if (!validate_canonical_compose(batch, components, activity, results, workspace, system_errors,
+                                  device_error)) {
+    return cudaErrorInvalidValue;
+  }
+  cudaError_t status = launch_canonical_preflight(batch, activity, workspace, device_error, stream);
   if (status != cudaSuccess) {
     return status;
   }

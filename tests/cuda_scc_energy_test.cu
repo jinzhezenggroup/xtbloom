@@ -18,6 +18,7 @@ using gpuxtb::detail::cuda::evaluate_gfn2_scc_electronic_energy_cuda;
 using gpuxtb::detail::cuda::Gfn2SccEnergyDeviceBatch;
 using gpuxtb::detail::cuda::Gfn2SccEnergyDeviceError;
 using gpuxtb::detail::cuda::Gfn2SccEnergyDeviceWorkspace;
+using gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity;
 using gpuxtb::detail::cuda::reset_gfn2_scc_energy_device_errors_cuda;
 
 #define CHECK(condition) \
@@ -149,6 +150,7 @@ struct DeviceCase {
   DeviceBuffer<double> core_scratch;
   DeviceBuffer<double> free_scratch;
   DeviceBuffer<std::uint32_t> sequence_active;
+  DeviceBuffer<std::uint32_t> canonical_sequence;
   DeviceBuffer<std::uint32_t> system_errors;
   DeviceBuffer<std::uint32_t> device_error;
   Gfn2SccEnergyDeviceBatch batch;
@@ -165,6 +167,7 @@ struct DeviceCase {
         core_scratch(host.entropies.size()),
         free_scratch(host.entropies.size()),
         sequence_active(1u),
+        canonical_sequence(1u),
         system_errors(host.entropies.size()),
         device_error(1u) {
     CHECK_CUDA(matrix_offsets.upload(host.matrix_offsets));
@@ -210,6 +213,11 @@ int launch(DeviceCase& device, const HostCase& host, cudaStream_t stream = nullp
             device.device_error.get(), stream) == cudaSuccess);
   CHECK(cudaStreamSynchronize(stream) == cudaSuccess);
   return 0;
+}
+
+Gfn2SccIterationDeviceActivity canonical_activity(const DeviceCase& device) {
+  return {device.active.get(), device.canonical_sequence.get(), device.batch.batch_size, 1,
+          device.batch.plan_token};
 }
 
 int test_batch_parity_and_custom_stream() {
@@ -494,14 +502,150 @@ int test_cuda_graph_replay() {
   return 0;
 }
 
+int test_canonical_activity_and_poisoned_inactive_topology() {
+  constexpr double sentinel = -981.75;
+  for (const std::size_t batch_size : std::array<std::size_t, 4>{{1u, 8u, 32u, 128u}}) {
+    HostCase host = make_case(batch_size);
+    DeviceCase device(host);
+    CHECK(device.canonical_sequence.upload(std::vector<std::uint32_t>{1u}) == cudaSuccess);
+    CHECK(device.core.upload(std::vector<double>(batch_size, sentinel)) == cudaSuccess);
+    CHECK(device.free.upload(std::vector<double>(batch_size, sentinel)) == cudaSuccess);
+    cudaStream_t stream = nullptr;
+    CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) == cudaSuccess);
+    CHECK(reset_gfn2_scc_energy_device_errors_cuda(
+              device.batch.batch_size, device.system_errors.get(), device.device_error.get(),
+              stream) == cudaSuccess);
+    CHECK(evaluate_gfn2_scc_electronic_energy_cuda(
+              device.batch, device.density.get(), device.h0.get(), device.entropies.get(),
+              host.temperature, canonical_activity(device), device.core.get(), device.free.get(),
+              device.workspace, device.system_errors.get(), device.device_error.get(),
+              stream) == cudaSuccess);
+    CHECK(cudaStreamSynchronize(stream) == cudaSuccess);
+    CHECK(cudaStreamDestroy(stream) == cudaSuccess);
+    std::vector<double> core;
+    std::vector<double> free;
+    CHECK(device.core.download(core) == cudaSuccess);
+    CHECK(device.free.download(free) == cudaSuccess);
+    for (std::size_t system = 0; system < batch_size; ++system) {
+      CHECK(near(core[system], host.expected_core[system]));
+      CHECK(near(free[system], host.expected_free[system]));
+    }
+  }
+
+  {
+    HostCase graph_host = make_case(8u);
+    DeviceCase graph_device(graph_host);
+    CHECK(graph_device.canonical_sequence.upload(std::vector<std::uint32_t>{1u}) == cudaSuccess);
+    cudaStream_t stream = nullptr;
+    cudaGraph_t graph = nullptr;
+    cudaGraphExec_t executable = nullptr;
+    CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) == cudaSuccess);
+    CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal) == cudaSuccess);
+    CHECK(reset_gfn2_scc_energy_device_errors_cuda(
+              graph_device.batch.batch_size, graph_device.system_errors.get(),
+              graph_device.device_error.get(), stream) == cudaSuccess);
+    CHECK(evaluate_gfn2_scc_electronic_energy_cuda(
+              graph_device.batch, graph_device.density.get(), graph_device.h0.get(),
+              graph_device.entropies.get(), graph_host.temperature,
+              canonical_activity(graph_device), graph_device.core.get(), graph_device.free.get(),
+              graph_device.workspace, graph_device.system_errors.get(),
+              graph_device.device_error.get(), stream) == cudaSuccess);
+    CHECK(cudaStreamEndCapture(stream, &graph) == cudaSuccess);
+    CHECK(cudaGraphInstantiate(&executable, graph, 0) == cudaSuccess);
+    CHECK(cudaGraphLaunch(executable, stream) == cudaSuccess);
+    CHECK(cudaGraphLaunch(executable, stream) == cudaSuccess);
+    CHECK(cudaStreamSynchronize(stream) == cudaSuccess);
+    std::vector<double> core;
+    CHECK(graph_device.core.download(core) == cudaSuccess);
+    for (std::size_t system = 0; system < core.size(); ++system) {
+      CHECK(near(core[system], graph_host.expected_core[system]));
+    }
+    CHECK(cudaGraphExecDestroy(executable) == cudaSuccess);
+    CHECK(cudaGraphDestroy(graph) == cudaSuccess);
+    CHECK(cudaStreamDestroy(stream) == cudaSuccess);
+  }
+
+  HostCase host = make_case(8u);
+  for (std::size_t system = 4u; system < 8u; ++system) {
+    host.active[system] = 0u;
+    host.entropies[system] = std::numeric_limits<double>::quiet_NaN();
+    for (std::int64_t element = host.matrix_offsets[system];
+         element < host.matrix_offsets[system + 1u]; ++element) {
+      host.density[static_cast<std::size_t>(element)] = std::numeric_limits<double>::quiet_NaN();
+      host.h0[static_cast<std::size_t>(element)] = std::numeric_limits<double>::quiet_NaN();
+    }
+  }
+  DeviceCase device(host);
+  CHECK(device.canonical_sequence.upload(std::vector<std::uint32_t>{1u}) == cudaSuccess);
+  CHECK(device.core.upload(std::vector<double>(8u, sentinel)) == cudaSuccess);
+  CHECK(device.free.upload(std::vector<double>(8u, sentinel)) == cudaSuccess);
+  std::vector<std::int64_t> poisoned_offsets = host.matrix_offsets;
+  for (std::size_t boundary = 5u; boundary < poisoned_offsets.size(); ++boundary) {
+    poisoned_offsets[boundary] = -77;
+  }
+  CHECK(device.matrix_offsets.upload(poisoned_offsets) == cudaSuccess);
+  CHECK(reset_gfn2_scc_energy_device_errors_cuda(device.batch.batch_size,
+                                                 device.system_errors.get(),
+                                                 device.device_error.get()) == cudaSuccess);
+  CHECK(evaluate_gfn2_scc_electronic_energy_cuda(
+            device.batch, device.density.get(), device.h0.get(), device.entropies.get(),
+            host.temperature, canonical_activity(device), device.core.get(), device.free.get(),
+            device.workspace, device.system_errors.get(),
+            device.device_error.get()) == cudaSuccess);
+  CHECK(cudaDeviceSynchronize() == cudaSuccess);
+  std::vector<double> core;
+  std::vector<double> free;
+  std::vector<std::uint32_t> errors;
+  std::vector<std::uint32_t> device_error;
+  std::vector<std::uint32_t> sequence;
+  CHECK(device.core.download(core) == cudaSuccess);
+  CHECK(device.free.download(free) == cudaSuccess);
+  CHECK(device.system_errors.download(errors) == cudaSuccess);
+  CHECK(device.device_error.download(device_error) == cudaSuccess);
+  CHECK(device.sequence_active.download(sequence) == cudaSuccess);
+  for (std::size_t system = 0; system < 8u; ++system) {
+    if (system < 4u) {
+      CHECK(near(core[system], host.expected_core[system]));
+      CHECK(near(free[system], host.expected_free[system]));
+    } else {
+      CHECK(core[system] == sentinel && free[system] == sentinel);
+    }
+    CHECK(errors[system] == 0u);
+  }
+  CHECK(device_error[0] == 0u && sequence[0] == 1u);
+
+  /* Sequence closure dominates deliberately invalid active topology. */
+  CHECK(device.canonical_sequence.upload(std::vector<std::uint32_t>{0u}) == cudaSuccess);
+  poisoned_offsets[0] = -1;
+  CHECK(device.matrix_offsets.upload(poisoned_offsets) == cudaSuccess);
+  CHECK(device.core.upload(std::vector<double>(8u, sentinel)) == cudaSuccess);
+  CHECK(reset_gfn2_scc_energy_device_errors_cuda(device.batch.batch_size,
+                                                 device.system_errors.get(),
+                                                 device.device_error.get()) == cudaSuccess);
+  CHECK(evaluate_gfn2_scc_electronic_energy_cuda(
+            device.batch, device.density.get(), device.h0.get(), device.entropies.get(),
+            host.temperature, canonical_activity(device), device.core.get(), device.free.get(),
+            device.workspace, device.system_errors.get(),
+            device.device_error.get()) == cudaSuccess);
+  CHECK(cudaDeviceSynchronize() == cudaSuccess);
+  CHECK(device.core.download(core) == cudaSuccess);
+  CHECK(device.device_error.download(device_error) == cudaSuccess);
+  CHECK(device.sequence_active.download(sequence) == cudaSuccess);
+  CHECK(std::all_of(core.begin(), core.end(),
+                    [sentinel](double value) { return value == sentinel; }));
+  CHECK(device_error[0] == 0u && sequence[0] == 0u);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
-  const std::array<int (*)(), 8> tests{
+  const std::array<int (*)(), 9> tests{
       {test_batch_parity_and_custom_stream, test_all_empty_batch,
        test_peer_isolation_and_inactive_skip, test_reduction_and_addition_overflow,
        test_first_error_diagnostics_are_consistent, test_offset_active_and_sticky_fail_closed,
-       test_host_validation_and_aliases, test_cuda_graph_replay}};
+       test_host_validation_and_aliases, test_cuda_graph_replay,
+       test_canonical_activity_and_poisoned_inactive_topology}};
   for (const auto test : tests) {
     const int line = test();
     if (line != 0) {

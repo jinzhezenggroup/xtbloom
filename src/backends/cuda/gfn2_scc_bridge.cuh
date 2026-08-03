@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "backends/common/gfn2_plan_schema.hpp"
+#include "backends/cuda/gfn2_scc_iteration_control.cuh"
 
 namespace gpuxtb::detail::cuda {
 
@@ -120,6 +121,15 @@ cudaError_t reset_gfn2_scc_bridge_stage_cuda(std::int64_t batch_size,
                                              std::uint32_t* sequence_active,
                                              cudaStream_t stream = nullptr) noexcept;
 
+/* Reset diagnostics for the canonical bridge without allocating a redundant
+ * downstream activity array.  sequence_active remains a stage-local report
+ * latch and is opened by the subsequent canonical collect launch. */
+cudaError_t reset_gfn2_scc_bridge_device_errors_cuda(std::int64_t batch_size,
+                                                     std::uint32_t* system_errors,
+                                                     std::uint32_t* device_error,
+                                                     std::uint32_t* sequence_active,
+                                                     cudaStream_t stream = nullptr) noexcept;
+
 /*
  * Collect complete scalar shell potentials in the exact CPU expansion order:
  *
@@ -135,6 +145,19 @@ cudaError_t collect_gfn2_scc_shell_scalar_potential_cuda(
     const Gfn2SccBridgeDeviceBatch& batch, const Gfn2SccBridgeDevicePotentialFields& potential,
     const Gfn2SccBridgeDeviceStageInput& stage, const Gfn2SccBridgeDeviceOutput& output,
     const Gfn2SccBridgeDeviceWorkspace& workspace, cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Canonical SCC edge: complete_vsh = field_vsh + field_vat(shell_to_atom).
+ * The canonical ledger is the only sequence/member authority; no requested or
+ * downstream activity copy is produced.  The stage-local sequence latch in
+ * workspace is retained solely for normalized diagnostics and Graph replay.
+ */
+cudaError_t collect_gfn2_scc_shell_scalar_potential_cuda(
+    const Gfn2SccBridgeDeviceBatch& batch, const Gfn2SccBridgeDevicePotentialFields& potential,
+    const Gfn2SccIterationDeviceActivity& activity, double* shell_scalar,
+    std::int64_t shell_elements, const Gfn2SccBridgeDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 

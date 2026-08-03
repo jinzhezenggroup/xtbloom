@@ -149,7 +149,10 @@ cudaError_t reset_gfn2_scc_free_energy_device_errors_cuda(std::int64_t batch_siz
  * The launcher allocates, transfers, and synchronizes nothing; it uses only
  * stream, supports CUDA Graph capture/replay, and isolates numerical failures
  * per system. Every writable range must be disjoint from all readable ranges
- * and from every other writable range.
+ * and from every other writable range, except diagnostics.entropy may exactly
+ * alias input.entropy. That zero-copy edge is safe because the reduction reads
+ * entropy into unpublished scratch before the later publication kernel writes
+ * the identical value.
  */
 cudaError_t compose_gfn2_scc_free_energy_cuda(const Gfn2SccFreeEnergyDeviceBatch& batch,
                                               const Gfn2SccFreeEnergyDeviceInput& input,

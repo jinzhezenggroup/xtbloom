@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/cuda/gfn2_scc_iteration_control.cuh"
+
 namespace gpuxtb::detail::cuda {
 
 inline constexpr std::int64_t kGfn2SccPotentialDipoleComponents = 3;
@@ -183,6 +185,21 @@ cudaError_t gather_gfn2_scc_mixed_multipoles_cuda(
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
 /*
+ * Project only mixed shell charges to topology-major atomic charges under the
+ * canonical SCC ledger.  shell_charges, atomic_dipoles, and
+ * atomic_quadrupoles in topology must be exact zero-copy aliases of mixed;
+ * only atomic_charges is materialized through caller-owned scratch.  The
+ * sequence gate is checked before the active mask, and inactive ragged slices
+ * (including their offsets and numerical values) are never inspected.
+ */
+cudaError_t reduce_gfn2_scc_mixed_atomic_charges_cuda(
+    const Gfn2SccPotentialDeviceBatch& batch, const Gfn2SccPotentialDeviceMixedFields& mixed,
+    const Gfn2SccIterationDeviceActivity& activity,
+    const Gfn2SccPotentialDeviceTopologyMultipoles& topology,
+    const Gfn2SccPotentialDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
  * Compose component potentials in CPU order and map topology-major arrays back
  * to field layouts. Shell order is ES2, ES3, explicit-PC; atomic order is AES2,
  * periodic, D4. Disabled components require null+zero extents and publish zero.
@@ -190,6 +207,15 @@ cudaError_t gather_gfn2_scc_mixed_multipoles_cuda(
 cudaError_t compose_gfn2_scc_potentials_cuda(
     const Gfn2SccPotentialDeviceBatch& batch, const Gfn2SccPotentialDeviceComponents& components,
     const Gfn2SccPotentialDeviceActivity& activity, const Gfn2SccPotentialDeviceResults& results,
+    const Gfn2SccPotentialDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/* Canonical-ledger overload used by the SCC iteration composer.  Unlike the
+ * compatibility entry above, its plan preflight reads offsets only for active
+ * systems and never derives a second requested-activity policy. */
+cudaError_t compose_gfn2_scc_potentials_cuda(
+    const Gfn2SccPotentialDeviceBatch& batch, const Gfn2SccPotentialDeviceComponents& components,
+    const Gfn2SccIterationDeviceActivity& activity, const Gfn2SccPotentialDeviceResults& results,
     const Gfn2SccPotentialDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 

@@ -233,6 +233,10 @@ bool ranges_overlap(const AddressRange& lhs, const AddressRange& rhs) noexcept {
   return lhs.begin != lhs.end && rhs.begin != rhs.end && lhs.begin < rhs.end && rhs.begin < lhs.end;
 }
 
+bool ranges_equal(const AddressRange& lhs, const AddressRange& rhs) noexcept {
+  return lhs.begin == rhs.begin && lhs.end == rhs.end;
+}
+
 bool valid_input(const double* pointer, std::int64_t elements, std::int64_t batch_size,
                  bool enabled) noexcept {
   if (!enabled) {
@@ -372,8 +376,11 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
         return false;
       }
     }
-    for (const AddressRange& read : reads) {
-      if (ranges_overlap(writes[lhs], read)) {
+    for (std::size_t read_index = 0; read_index < reads.size(); ++read_index) {
+      const AddressRange& read = reads[read_index];
+      const bool in_place_entropy =
+          lhs == 7u && read_index == 1u && ranges_equal(writes[lhs], read);
+      if (ranges_overlap(writes[lhs], read) && !in_place_entropy) {
         return false;
       }
     }

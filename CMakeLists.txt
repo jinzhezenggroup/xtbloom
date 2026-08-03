@@ -130,9 +130,11 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/gfn2_scc_classical_energy.cu
     src/backends/cuda/gfn2_scc_energy.cu
     src/backends/cuda/gfn2_scc_free_energy.cu
+    src/backends/cuda/gfn2_scc_iteration.cu
     src/backends/cuda/gfn2_scc_iteration_control.cu
     src/backends/cuda/gfn2_scc_mixer.cu
     src/backends/cuda/gfn2_scc_potential.cu
+    src/backends/cuda/gfn2_scc_publication.cu
   )
   target_include_directories(gpuxtb_cuda_backend PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -568,6 +570,76 @@ if(GPUXTB_BUILD_TESTS)
     )
     add_test(NAME gpuxtb.cuda.scc_iteration_control
       COMMAND gpuxtb_cuda_scc_iteration_control_test
+    )
+
+    add_executable(gpuxtb_cuda_scc_iteration_binding_test
+      tests/cuda_scc_iteration_binding_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_scc_iteration_binding_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_iteration_binding_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_iteration_binding_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_iteration_binding_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_iteration_binding
+      COMMAND gpuxtb_cuda_scc_iteration_binding_test
+    )
+
+    add_executable(gpuxtb_cuda_scc_publication_test
+      tests/cuda_scc_publication_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_scc_publication_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_publication_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_publication_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_publication_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_publication
+      COMMAND gpuxtb_cuda_scc_publication_test
+    )
+
+    add_executable(gpuxtb_cuda_scc_iteration_composer_test
+      tests/cuda_scc_iteration_composer_test.cu
+      tests/support/gfn2_scc_test_case.cpp
+    )
+    target_link_libraries(gpuxtb_cuda_scc_iteration_composer_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_iteration_composer_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_iteration_composer_test
+      PRIVATE GPUXTB_HAS_CUDA=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_iteration_composer_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_iteration_composer
+      COMMAND gpuxtb_cuda_scc_iteration_composer_test
     )
 
     add_executable(gpuxtb_cuda_scc_electrostatic_components_test

@@ -67,11 +67,108 @@ __global__ void capture_sequence_kernel(const std::uint32_t* device_error,
   }
 }
 
-__global__ void reduce_electronic_energy_kernel(
-    Gfn2SccEnergyDeviceBatch batch, const double* density, const double* h0,
-    const double* entropies, double electronic_temperature, const std::uint8_t* active_systems,
-    Gfn2SccEnergyDeviceWorkspace workspace, std::uint32_t* system_errors,
-    std::uint32_t* device_error) {
+__device__ bool is_energy_plan_error(std::uint32_t error) {
+  return error == static_cast<std::uint32_t>(Gfn2SccEnergyDeviceError::kInvalidOffsets);
+}
+
+/* The canonical SCC entry validates only members authorized by the ledger.
+ * A closed sequence returns before even the active mask is inspected; an open
+ * sequence with no active members returns before matrix offsets are read. */
+__global__ void canonical_energy_topology_preflight_kernel(Gfn2SccEnergyDeviceBatch batch,
+                                                           Gfn2SccIterationDeviceActivity activity,
+                                                           Gfn2SccEnergyDeviceWorkspace workspace,
+                                                           std::uint32_t* device_error) {
+  __shared__ int sequence_open;
+  __shared__ int any_active;
+  if (threadIdx.x == 0) {
+    sequence_open =
+        atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u) == 1u ? 1 : 0;
+    any_active = 0;
+    *workspace.sequence_active =
+        sequence_open != 0 && !is_energy_plan_error(atomicAdd(device_error, 0u)) ? 1u : 0u;
+  }
+  __syncthreads();
+  if (sequence_open == 0 || atomicAdd(workspace.sequence_active, 0u) != 1u) {
+    return;
+  }
+  for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
+    if (activity.active_mask[system] == 1u) {
+      atomicExch(&any_active, 1);
+    }
+  }
+  __syncthreads();
+  if (any_active == 0 || atomicAdd(workspace.sequence_active, 0u) != 1u) {
+    return;
+  }
+  for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
+    if (activity.active_mask[system] != 1u) {
+      continue;
+    }
+    const std::int64_t begin = batch.matrix_offsets[system];
+    const std::int64_t end = batch.matrix_offsets[system + 1];
+    bool valid = begin >= 0 && begin <= end && end <= batch.total_matrix_elements;
+    if (valid && system == 0) {
+      valid = begin == 0;
+    }
+    if (valid && system + 1 == batch.batch_size) {
+      valid = end == batch.total_matrix_elements;
+    }
+    if (!valid) {
+      record_error(device_error, Gfn2SccEnergyDeviceError::kInvalidOffsets);
+      atomicExch(workspace.sequence_active, 0u);
+    }
+  }
+}
+
+__device__ int requested_energy_member(const std::uint8_t* active_systems,
+                                       const Gfn2SccEnergyDeviceWorkspace& workspace,
+                                       std::uint32_t* system_errors, std::int64_t system,
+                                       std::uint32_t* device_error) {
+  if (atomicAdd(workspace.sequence_active, 0u) != 1u ||
+      atomicAdd(system_errors + system, 0u) !=
+          static_cast<std::uint32_t>(Gfn2SccEnergyDeviceError::kSuccess)) {
+    return 0;
+  }
+  const std::uint8_t state = active_systems == nullptr ? 1u : active_systems[system];
+  if (state > 1u) {
+    if (device_error != nullptr) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2SccEnergyDeviceError::kInvalidActiveState);
+    }
+    return 0;
+  }
+  return state == 1u ? 1 : 0;
+}
+
+__device__ int requested_energy_member(const Gfn2SccIterationDeviceActivity& activity,
+                                       const Gfn2SccEnergyDeviceWorkspace& workspace,
+                                       std::uint32_t* system_errors, std::int64_t system,
+                                       std::uint32_t* device_error) {
+  if (atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u) != 1u ||
+      atomicAdd(workspace.sequence_active, 0u) != 1u ||
+      atomicAdd(system_errors + system, 0u) !=
+          static_cast<std::uint32_t>(Gfn2SccEnergyDeviceError::kSuccess)) {
+    return 0;
+  }
+  const std::uint8_t state = activity.active_mask[system];
+  if (state > 1u) {
+    if (device_error != nullptr) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2SccEnergyDeviceError::kInvalidActiveState);
+    }
+    return 0;
+  }
+  return state == 1u ? 1 : 0;
+}
+
+template <typename Activity>
+__global__ void reduce_electronic_energy_kernel(Gfn2SccEnergyDeviceBatch batch,
+                                                const double* density, const double* h0,
+                                                const double* entropies,
+                                                double electronic_temperature, Activity activity,
+                                                Gfn2SccEnergyDeviceWorkspace workspace,
+                                                std::uint32_t* system_errors,
+                                                std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   __shared__ int active;
   __shared__ int valid;
@@ -80,18 +177,8 @@ __global__ void reduce_electronic_energy_kernel(
   if (threadIdx.x == 0) {
     active = 0;
     valid = 1;
-    if (atomicAdd(workspace.sequence_active, 0u) == 1u &&
-        atomicAdd(system_errors + system, 0u) ==
-            static_cast<std::uint32_t>(Gfn2SccEnergyDeviceError::kSuccess)) {
-      const std::uint8_t state = active_systems == nullptr ? 1u : active_systems[system];
-      if (state > 1u) {
-        record_system_error(system_errors, system, device_error,
-                            Gfn2SccEnergyDeviceError::kInvalidActiveState);
-        valid = 0;
-      } else {
-        active = state == 1u ? 1 : 0;
-      }
-    }
+    active = requested_energy_member(activity, workspace, system_errors, system, device_error);
+    valid = active;
   }
   __syncthreads();
   if (active == 0) {
@@ -160,17 +247,16 @@ __global__ void reduce_electronic_energy_kernel(
   }
 }
 
-__global__ void publish_electronic_energy_kernel(Gfn2SccEnergyDeviceBatch batch,
-                                                 const std::uint8_t* active_systems,
+template <typename Activity>
+__global__ void publish_electronic_energy_kernel(Gfn2SccEnergyDeviceBatch batch, Activity activity,
                                                  double* core_energies,
                                                  double* electronic_free_energies,
                                                  Gfn2SccEnergyDeviceWorkspace workspace,
                                                  const std::uint32_t* system_errors) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (system >= batch.batch_size || atomicAdd(workspace.sequence_active, 0u) != 1u ||
-      atomicAdd(const_cast<std::uint32_t*>(system_errors + system), 0u) !=
-          static_cast<std::uint32_t>(Gfn2SccEnergyDeviceError::kSuccess) ||
-      (active_systems != nullptr && active_systems[system] != 1u)) {
+  if (system >= batch.batch_size ||
+      requested_energy_member(activity, workspace, const_cast<std::uint32_t*>(system_errors),
+                              system, nullptr) == 0) {
     return;
   }
   core_energies[system] = workspace.core_energy_scratch[system];
@@ -290,6 +376,43 @@ bool validate_launch(const Gfn2SccEnergyDeviceBatch& batch, const double* densit
   return true;
 }
 
+bool validate_canonical_launch(const Gfn2SccEnergyDeviceBatch& batch, const double* density,
+                               const double* h0, const double* entropies,
+                               double electronic_temperature,
+                               const Gfn2SccIterationDeviceActivity& activity,
+                               double* core_energies, double* electronic_free_energies,
+                               const Gfn2SccEnergyDeviceWorkspace& workspace,
+                               std::uint32_t* system_errors, std::uint32_t* device_error) noexcept {
+  if (activity.plan_token != batch.plan_token || activity.active_mask == nullptr ||
+      activity.sequence_active == nullptr || activity.batch_elements != batch.batch_size ||
+      activity.sequence_elements != 1 || !is_aligned(activity.active_mask, alignof(std::uint8_t)) ||
+      !is_aligned(activity.sequence_active, alignof(std::uint32_t)) ||
+      !validate_launch(batch, density, h0, entropies, electronic_temperature, activity.active_mask,
+                       core_energies, electronic_free_energies, workspace, system_errors,
+                       device_error)) {
+    return false;
+  }
+  AddressRange sequence;
+  AddressRange writes[7];
+  if (!make_range(activity.sequence_active, 1, sizeof(std::uint32_t), &sequence) ||
+      !make_range(core_energies, batch.batch_size, sizeof(double), &writes[0]) ||
+      !make_range(electronic_free_energies, batch.batch_size, sizeof(double), &writes[1]) ||
+      !make_range(workspace.core_energy_scratch, batch.batch_size, sizeof(double), &writes[2]) ||
+      !make_range(workspace.electronic_free_energy_scratch, batch.batch_size, sizeof(double),
+                  &writes[3]) ||
+      !make_range(workspace.sequence_active, 1, sizeof(std::uint32_t), &writes[4]) ||
+      !make_range(system_errors, batch.batch_size, sizeof(std::uint32_t), &writes[5]) ||
+      !make_range(device_error, 1, sizeof(std::uint32_t), &writes[6])) {
+    return false;
+  }
+  for (const AddressRange& write : writes) {
+    if (ranges_overlap(sequence, write)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 cudaError_t reset_gfn2_scc_energy_device_errors_cuda(std::int64_t batch_size,
@@ -349,6 +472,38 @@ cudaError_t evaluate_gfn2_scc_electronic_energy_cuda(
       static_cast<unsigned int>((batch.batch_size + kThreadsPerBlock - 1) / kThreadsPerBlock);
   publish_electronic_energy_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
       batch, active_systems, core_energies, electronic_free_energies, workspace, system_errors);
+  return cudaGetLastError();
+}
+
+cudaError_t evaluate_gfn2_scc_electronic_energy_cuda(
+    const Gfn2SccEnergyDeviceBatch& batch, const double* density, const double* h0,
+    const double* entropies, double electronic_temperature,
+    const Gfn2SccIterationDeviceActivity& activity, double* core_energies,
+    double* electronic_free_energies, const Gfn2SccEnergyDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  if (!validate_canonical_launch(batch, density, h0, entropies, electronic_temperature, activity,
+                                 core_energies, electronic_free_energies, workspace, system_errors,
+                                 device_error)) {
+    return cudaErrorInvalidValue;
+  }
+  canonical_energy_topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+      batch, activity, workspace, device_error);
+  cudaError_t status = cudaGetLastError();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  reduce_electronic_energy_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
+                                    0, stream>>>(batch, density, h0, entropies,
+                                                 electronic_temperature, activity, workspace,
+                                                 system_errors, device_error);
+  status = cudaGetLastError();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  const unsigned int blocks =
+      static_cast<unsigned int>((batch.batch_size + kThreadsPerBlock - 1) / kThreadsPerBlock);
+  publish_electronic_energy_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+      batch, activity, core_energies, electronic_free_energies, workspace, system_errors);
   return cudaGetLastError();
 }
 

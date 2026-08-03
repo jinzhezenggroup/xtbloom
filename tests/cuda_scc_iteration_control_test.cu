@@ -22,12 +22,26 @@ using gpuxtb::detail::cuda::Gfn2SccIterationDevicePolicy;
 using gpuxtb::detail::cuda::Gfn2SccIterationDeviceProvenance;
 using gpuxtb::detail::cuda::Gfn2SccIterationDeviceStateInput;
 using gpuxtb::detail::cuda::Gfn2SccStageCodeFormat;
+using gpuxtb::detail::cuda::Gfn2SccStageDeviceCodeRole;
 using gpuxtb::detail::cuda::Gfn2SccStageDeviceReport;
 using gpuxtb::detail::cuda::Gfn2SccStageId;
 
 constexpr std::uint64_t kPlanToken = 0x87c0ffee12345678ULL;
 constexpr std::uint64_t kGeometryGeneration = 17u;
 constexpr std::uint64_t kWarmStartGeneration = 29u;
+
+// Stage-qualified failure records are persistent diagnostics, so extending
+// the DAG must never renumber an identity already emitted by older builds.
+static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kActivity) == 1u);
+static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kStatePublication) == 23u);
+static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kES2RawEnergy) == 24u);
+static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kES3RawEnergy) == 25u);
+static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kAES2RawEnergy) == 26u);
+static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kD4RawEnergy) == 27u);
+static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kExplicitPointChargeRawEnergy) == 28u);
+static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kPeriodicRawEnergy) == 29u);
+static_assert(gpuxtb::detail::cuda::gfn2_scc_stage_id_is_valid(Gfn2SccStageId::kPeriodicRawEnergy));
+static_assert(!gpuxtb::detail::cuda::gfn2_scc_stage_id_in_domain(static_cast<Gfn2SccStageId>(30u)));
 
 #define CHECK(condition)                                                                         \
   do {                                                                                           \
@@ -431,7 +445,7 @@ int test_batch_provenance_and_embedded_alias() {
   };
   const Gfn2SccCacheProvenanceBinding invalid_owner_binding{
       valid_view,
-      static_cast<Gfn2SccStageId>(static_cast<std::uint32_t>(Gfn2SccStageId::kStatePublication) +
+      static_cast<Gfn2SccStageId>(static_cast<std::uint32_t>(Gfn2SccStageId::kPeriodicRawEnergy) +
                                   1u),
       0u};
   CUDA_CHECK(fixture.cache_bindings.copy_from(&invalid_owner_binding, 1u));
@@ -560,6 +574,121 @@ int test_device_first_plan_precedence() {
   CUDA_CHECK(fixture.snapshot(latched));
   CUDA_CHECK(cudaDeviceSynchronize());
   CHECK(latched.plan_failure == record(Gfn2SccStageId::kEigensolver, 91u));
+  return 0;
+}
+
+int test_device_code_roles_and_raw_energy_stages() {
+  Fixture fixture(8u);
+  CHECK(fixture.valid());
+  std::vector<std::uint64_t> iterations(8u, 0u);
+  std::vector<gpuxtb_status_t> statuses(8u, GPUXTB_STATUS_SUCCESS);
+  std::vector<std::uint8_t> converged(8u, 0u);
+  CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
+
+  const Gfn2SccStageDeviceReport default_report{};
+  CHECK(default_report.device_code_role == Gfn2SccStageDeviceCodeRole::kMixedFirstError);
+
+  struct CollisionCase {
+    Gfn2SccStageId stage;
+    std::uint32_t code;
+  };
+  const CollisionCase collisions[] = {
+      {Gfn2SccStageId::kES2Potential, 8u},
+      {Gfn2SccStageId::kES2RawEnergy, 8u},
+      {Gfn2SccStageId::kAES2Potential, 1u},
+      {Gfn2SccStageId::kAES2RawEnergy, 1u},
+  };
+  for (const CollisionCase collision : collisions) {
+    Snapshot ignored;
+    CHECK(derive_and_snapshot(fixture, ignored) == 0);
+    std::vector<std::uint32_t> codes(8u, 0u);
+    codes[0] = collision.code;
+    CUDA_CHECK(fixture.install_stage(codes, collision.code, 1u));
+    const Gfn2SccStageDeviceReport report{
+        collision.stage,
+        Gfn2SccStageCodeFormat::kUint32Error,
+        fixture.stage_codes.get(),
+        8,
+        fixture.device_error.get(),
+        1,
+        fixture.stage_sequence.get(),
+        1,
+        std::uint64_t{1} << collision.code,
+        GPUXTB_STATUS_INTERNAL_ERROR,
+        kPlanToken,
+        Gfn2SccStageDeviceCodeRole::kPlanOnly,
+    };
+    CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
+    Snapshot normalized;
+    CUDA_CHECK(fixture.snapshot(normalized));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CHECK(normalized.sequence_active == 0u);
+    CHECK(normalized.plan_failure == record(collision.stage, collision.code));
+    CHECK(std::all_of(normalized.active.begin(), normalized.active.end(),
+                      [](std::uint8_t active) { return active == 0u; }));
+    CHECK(std::all_of(normalized.failures.begin(), normalized.failures.end(),
+                      [](std::uint64_t failure) { return failure == 0u; }));
+  }
+
+  // The plan-only role applies only to the scalar. Per-system peer codes keep
+  // their existing mask-based isolation and retain the raw-energy stage ID.
+  Snapshot ignored;
+  CHECK(derive_and_snapshot(fixture, ignored) == 0);
+  std::vector<std::uint32_t> codes(8u, 0u);
+  codes[2] = 8u;
+  CUDA_CHECK(fixture.install_stage(codes, 0u, 1u));
+  const Gfn2SccStageDeviceReport plan_only_system_peer{
+      Gfn2SccStageId::kES2RawEnergy,
+      Gfn2SccStageCodeFormat::kUint32Error,
+      fixture.stage_codes.get(),
+      8,
+      fixture.device_error.get(),
+      1,
+      fixture.stage_sequence.get(),
+      1,
+      std::uint64_t{1} << 8u,
+      GPUXTB_STATUS_INTERNAL_ERROR,
+      kPlanToken,
+      Gfn2SccStageDeviceCodeRole::kPlanOnly,
+  };
+  CUDA_CHECK(
+      gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(plan_only_system_peer, fixture.ledger));
+  Snapshot system_peer;
+  CUDA_CHECK(fixture.snapshot(system_peer));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(system_peer.sequence_active == 1u);
+  CHECK(system_peer.plan_failure == 0u);
+  CHECK(system_peer.active[2] == 0u);
+  CHECK(system_peer.failures[2] == record(Gfn2SccStageId::kES2RawEnergy, 8u));
+
+  // An explicit mixed-first-error role is the legacy behavior: a matching
+  // device scalar localizes the peer instead of closing the batch sequence.
+  CHECK(derive_and_snapshot(fixture, ignored) == 0);
+  codes.assign(8u, 0u);
+  codes[3] = 5u;
+  CUDA_CHECK(fixture.install_stage(codes, 5u, 1u));
+  const Gfn2SccStageDeviceReport mixed_report{
+      Gfn2SccStageId::kHamiltonian,
+      Gfn2SccStageCodeFormat::kUint32Error,
+      fixture.stage_codes.get(),
+      8,
+      fixture.device_error.get(),
+      1,
+      fixture.stage_sequence.get(),
+      1,
+      std::uint64_t{1} << 5u,
+      GPUXTB_STATUS_INTERNAL_ERROR,
+      kPlanToken,
+      Gfn2SccStageDeviceCodeRole::kMixedFirstError,
+  };
+  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(mixed_report, fixture.ledger));
+  Snapshot mixed;
+  CUDA_CHECK(fixture.snapshot(mixed));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(mixed.sequence_active == 1u);
+  CHECK(mixed.plan_failure == 0u);
+  CHECK(mixed.active[3] == 0u);
+  CHECK(mixed.failures[3] == record(Gfn2SccStageId::kHamiltonian, 5u));
   return 0;
 }
 
@@ -865,7 +994,7 @@ int test_host_validation() {
   const std::vector<std::uint32_t> codes(1u, 77u);
   CUDA_CHECK(fixture.install_stage(codes, 77u, 1u));
   Gfn2SccStageDeviceReport invalid_stage_report{
-      static_cast<Gfn2SccStageId>(static_cast<std::uint32_t>(Gfn2SccStageId::kStatePublication) +
+      static_cast<Gfn2SccStageId>(static_cast<std::uint32_t>(Gfn2SccStageId::kPeriodicRawEnergy) +
                                   1u),
       Gfn2SccStageCodeFormat::kUint32Error,
       fixture.stage_codes.get(),
@@ -878,6 +1007,21 @@ int test_host_validation() {
       GPUXTB_STATUS_INTERNAL_ERROR,
       kPlanToken,
   };
+
+  Gfn2SccStageDeviceReport invalid_role_report = invalid_stage_report;
+  invalid_role_report.stage = Gfn2SccStageId::kES2RawEnergy;
+  invalid_role_report.device_code_role =
+      static_cast<Gfn2SccStageDeviceCodeRole>(std::numeric_limits<std::uint32_t>::max());
+  CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(invalid_role_report, fixture.ledger) ==
+        cudaErrorInvalidValue);
+
+  Gfn2SccStageDeviceReport missing_plan_scalar = invalid_stage_report;
+  missing_plan_scalar.stage = Gfn2SccStageId::kES2RawEnergy;
+  missing_plan_scalar.device_error = nullptr;
+  missing_plan_scalar.device_error_elements = 0;
+  missing_plan_scalar.device_code_role = Gfn2SccStageDeviceCodeRole::kPlanOnly;
+  CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(missing_plan_scalar, fixture.ledger) ==
+        cudaErrorInvalidValue);
 
   // Capture makes the no-launch contract observable: rejecting a malformed
   // host descriptor must leave an empty graph and preserve the ledger.
@@ -929,6 +1073,9 @@ int main() {
     return status;
   }
   if (const int status = test_device_first_plan_precedence(); status != 0) {
+    return status;
+  }
+  if (const int status = test_device_code_roles_and_raw_energy_stages(); status != 0) {
     return status;
   }
   if (const int status = test_unknown_unlocalized_and_inactive_poison(); status != 0) {

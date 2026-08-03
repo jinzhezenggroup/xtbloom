@@ -205,6 +205,180 @@ __global__ void publish_shell_scalar_and_gate_kernel(Gfn2SccBridgeDeviceBatch ba
   }
 }
 
+__device__ bool canonical_sequence_is_open(const Gfn2SccIterationDeviceActivity& activity,
+                                           const Gfn2SccBridgeDeviceWorkspace& workspace) {
+  return load_error(activity.sequence_active) == 1u && sequence_is_active(workspace);
+}
+
+__device__ bool canonical_system_is_active(const Gfn2SccIterationDeviceActivity& activity,
+                                           const Gfn2SccBridgeDeviceWorkspace& workspace,
+                                           const std::uint32_t* system_errors,
+                                           std::int64_t system) {
+  /* Preserve the canonical order: sequence, member, then stage diagnostics.
+   * No offset or numerical field is touched until all three gates pass. */
+  return canonical_sequence_is_open(activity, workspace) && activity.active_mask[system] == 1u &&
+         load_error(system_errors + system) == 0u;
+}
+
+__device__ bool canonical_bridge_plan_error(std::uint32_t error) {
+  return error == static_cast<std::uint32_t>(Gfn2SccBridgeDeviceError::kInvalidTopologyOffsets) ||
+         error == static_cast<std::uint32_t>(Gfn2SccBridgeDeviceError::kInvalidFieldOffsets) ||
+         error == static_cast<std::uint32_t>(Gfn2SccBridgeDeviceError::kInvalidShellToAtom) ||
+         error == static_cast<std::uint32_t>(Gfn2SccBridgeDeviceError::kUpstreamPlanFailure);
+}
+
+__device__ void record_canonical_plan_error(const Gfn2SccBridgeDeviceWorkspace& workspace,
+                                            std::uint32_t* device_error,
+                                            Gfn2SccBridgeDeviceError error) {
+  atomicCAS(device_error, 0u, static_cast<std::uint32_t>(error));
+  atomicExch(workspace.sequence_active, 0u);
+}
+
+__device__ void record_canonical_system_error(std::uint32_t* system_errors,
+                                              std::uint32_t* device_error, std::int64_t system,
+                                              Gfn2SccBridgeDeviceError error) {
+  const std::uint32_t code = static_cast<std::uint32_t>(error);
+  /* The canonical bridge report is PlanOnly. Peer codes live exclusively in
+   * the indexed array so normalization can disable one member without
+   * promoting that code through the plan-only scalar. */
+  atomicCAS(system_errors + system, 0u, code);
+  (void)device_error;
+}
+
+__global__ void canonical_bridge_preflight_kernel(Gfn2SccBridgeDeviceBatch batch,
+                                                  Gfn2SccBridgeDevicePotentialFields potential,
+                                                  Gfn2SccIterationDeviceActivity activity,
+                                                  Gfn2SccBridgeDeviceWorkspace workspace,
+                                                  std::uint32_t* device_error) {
+  __shared__ int sequence_open;
+  __shared__ int any_active;
+  if (threadIdx.x == 0) {
+    sequence_open = load_error(activity.sequence_active) == 1u ? 1 : 0;
+    any_active = 0;
+    *workspace.sequence_active =
+        sequence_open != 0 && !canonical_bridge_plan_error(load_error(device_error)) ? 1u : 0u;
+  }
+  __syncthreads();
+  if (sequence_open == 0 || !sequence_is_active(workspace)) {
+    return;
+  }
+  const Gfn2RaggedTopologyView& topology = batch.topology;
+  for (std::int64_t system = threadIdx.x; system < topology.batch_size; system += blockDim.x) {
+    if (activity.active_mask[system] == 1u) {
+      atomicExch(&any_active, 1);
+    }
+  }
+  __syncthreads();
+  if (any_active == 0 || !sequence_is_active(workspace)) {
+    return;
+  }
+
+  for (std::int64_t system = threadIdx.x; system < topology.batch_size; system += blockDim.x) {
+    if (activity.active_mask[system] != 1u) {
+      continue;
+    }
+    const std::int64_t atom_begin = topology.atom_offsets[system];
+    const std::int64_t atom_end = topology.atom_offsets[system + 1];
+    const std::int64_t shell_begin = topology.batch_shell_offsets[system];
+    const std::int64_t shell_end = topology.batch_shell_offsets[system + 1];
+    const std::int64_t qsh_begin = batch.qsh_offsets[system];
+    const std::int64_t qsh_end = batch.qsh_offsets[system + 1];
+    const std::int64_t qat_begin = batch.qat_offsets[system];
+    const std::int64_t qat_end = batch.qat_offsets[system + 1];
+    bool valid = valid_range(atom_begin, atom_end, topology.total_atoms) &&
+                 valid_range(shell_begin, shell_end, topology.total_shells);
+    if (valid && system == 0) {
+      valid = atom_begin == 0 && shell_begin == 0;
+    }
+    if (valid && system + 1 == topology.batch_size) {
+      valid = atom_end == topology.total_atoms && shell_end == topology.total_shells;
+    }
+    if (!valid) {
+      record_canonical_plan_error(workspace, device_error,
+                                  Gfn2SccBridgeDeviceError::kInvalidTopologyOffsets);
+      continue;
+    }
+    if (!valid_range(qsh_begin, qsh_end, potential.shell_elements) ||
+        !valid_range(qat_begin, qat_end, potential.atom_elements) ||
+        qsh_end - qsh_begin != shell_end - shell_begin ||
+        qat_end - qat_begin != atom_end - atom_begin) {
+      record_canonical_plan_error(workspace, device_error,
+                                  Gfn2SccBridgeDeviceError::kInvalidFieldOffsets);
+      continue;
+    }
+    for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
+      const std::int64_t atom = topology.shell_to_atom[shell];
+      if (atom < atom_begin || atom >= atom_end) {
+        record_canonical_plan_error(workspace, device_error,
+                                    Gfn2SccBridgeDeviceError::kInvalidShellToAtom);
+        break;
+      }
+    }
+  }
+}
+
+__global__ void collect_canonical_shell_scalar_kernel(Gfn2SccBridgeDeviceBatch batch,
+                                                      Gfn2SccBridgeDevicePotentialFields potential,
+                                                      Gfn2SccIterationDeviceActivity activity,
+                                                      Gfn2SccBridgeDeviceWorkspace workspace,
+                                                      std::uint32_t* system_errors,
+                                                      std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  __shared__ int active;
+  if (threadIdx.x == 0) {
+    active = canonical_system_is_active(activity, workspace, system_errors, system) ? 1 : 0;
+  }
+  __syncthreads();
+  if (active == 0) {
+    return;
+  }
+
+  const Gfn2RaggedTopologyView& topology = batch.topology;
+  const std::int64_t atom_begin = topology.atom_offsets[system];
+  const std::int64_t shell_begin = topology.batch_shell_offsets[system];
+  const std::int64_t shell_end = topology.batch_shell_offsets[system + 1];
+  const std::int64_t qsh_begin = batch.qsh_offsets[system];
+  const std::int64_t qat_begin = batch.qat_offsets[system];
+  for (std::int64_t shell = shell_begin + threadIdx.x; shell < shell_end; shell += blockDim.x) {
+    const std::int64_t atom = topology.shell_to_atom[shell];
+    const double shell_value = potential.shell[qsh_begin + shell - shell_begin];
+    const double atomic_value = potential.atomic[qat_begin + atom - atom_begin];
+    if (!isfinite(shell_value)) {
+      record_canonical_system_error(system_errors, device_error, system,
+                                    Gfn2SccBridgeDeviceError::kNonfiniteShellPotential);
+      continue;
+    }
+    if (!isfinite(atomic_value)) {
+      record_canonical_system_error(system_errors, device_error, system,
+                                    Gfn2SccBridgeDeviceError::kNonfiniteAtomicPotential);
+      continue;
+    }
+    const double complete = shell_value + atomic_value;
+    if (!isfinite(complete)) {
+      record_canonical_system_error(system_errors, device_error, system,
+                                    Gfn2SccBridgeDeviceError::kNonfiniteScalarPotentialArithmetic);
+      continue;
+    }
+    workspace.shell_scratch[shell] = complete;
+  }
+}
+
+__global__ void publish_canonical_shell_scalar_kernel(Gfn2SccBridgeDeviceBatch batch,
+                                                      Gfn2SccIterationDeviceActivity activity,
+                                                      double* shell_scalar,
+                                                      Gfn2SccBridgeDeviceWorkspace workspace,
+                                                      const std::uint32_t* system_errors) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!canonical_system_is_active(activity, workspace, system_errors, system)) {
+    return;
+  }
+  const std::int64_t shell_begin = batch.topology.batch_shell_offsets[system];
+  const std::int64_t shell_end = batch.topology.batch_shell_offsets[system + 1];
+  for (std::int64_t shell = shell_begin + threadIdx.x; shell < shell_end; shell += blockDim.x) {
+    shell_scalar[shell] = workspace.shell_scratch[shell];
+  }
+}
+
 bool is_aligned(const void* pointer, std::size_t alignment) noexcept {
   return pointer != nullptr && reinterpret_cast<std::uintptr_t>(pointer) % alignment == 0u;
 }
@@ -331,6 +505,70 @@ bool valid_host_binding(const Gfn2SccBridgeDeviceBatch& batch,
   return disjoint_bindings(reads, writes);
 }
 
+bool valid_canonical_host_binding(const Gfn2SccBridgeDeviceBatch& batch,
+                                  const Gfn2SccBridgeDevicePotentialFields& potential,
+                                  const Gfn2SccIterationDeviceActivity& activity,
+                                  double* shell_scalar, std::int64_t shell_elements,
+                                  const Gfn2SccBridgeDeviceWorkspace& workspace,
+                                  std::uint32_t* system_errors,
+                                  std::uint32_t* device_error) noexcept {
+  const Gfn2RaggedTopologyView& topology = batch.topology;
+  if (topology.memory_space != Gfn2PlanMemorySpace::kCudaDevice || topology.plan_token == 0u ||
+      topology.batch_size <= 0 || topology.total_atoms < 0 || topology.total_shells < 0 ||
+      topology.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      topology.atom_offset_count != topology.batch_size + 1 ||
+      topology.batch_shell_offset_count != topology.batch_size + 1 ||
+      topology.shell_to_atom_count != topology.total_shells ||
+      batch.qsh_offset_count != topology.batch_size + 1 ||
+      batch.qat_offset_count != topology.batch_size + 1 ||
+      potential.plan_token != topology.plan_token || activity.plan_token != topology.plan_token ||
+      workspace.plan_token != topology.plan_token ||
+      potential.shell_elements < topology.total_shells ||
+      potential.atom_elements < topology.total_atoms || activity.active_mask == nullptr ||
+      activity.sequence_active == nullptr || activity.batch_elements != topology.batch_size ||
+      activity.sequence_elements != 1 || shell_elements != topology.total_shells ||
+      workspace.shell_elements < topology.total_shells || workspace.sequence_elements < 1 ||
+      !is_aligned(topology.atom_offsets, alignof(std::int64_t)) ||
+      !is_aligned(topology.batch_shell_offsets, alignof(std::int64_t)) ||
+      (topology.total_shells != 0 && !is_aligned(topology.shell_to_atom, alignof(std::int64_t))) ||
+      !is_aligned(batch.qsh_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.qat_offsets, alignof(std::int64_t)) ||
+      (potential.shell_elements != 0 && !is_aligned(potential.shell, alignof(double))) ||
+      (potential.atom_elements != 0 && !is_aligned(potential.atomic, alignof(double))) ||
+      !is_aligned(activity.active_mask, alignof(std::uint8_t)) ||
+      !is_aligned(activity.sequence_active, alignof(std::uint32_t)) ||
+      (topology.total_shells != 0 && !is_aligned(shell_scalar, alignof(double))) ||
+      (topology.total_shells != 0 && !is_aligned(workspace.shell_scratch, alignof(double))) ||
+      !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||
+      !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(device_error, alignof(std::uint32_t))) {
+    return false;
+  }
+
+  std::array<AddressRange, 9> reads{};
+  std::array<AddressRange, 5> writes{};
+  if (!make_range(topology.atom_offsets, topology.atom_offset_count, sizeof(std::int64_t),
+                  &reads[0]) ||
+      !make_range(topology.batch_shell_offsets, topology.batch_shell_offset_count,
+                  sizeof(std::int64_t), &reads[1]) ||
+      !make_range(topology.shell_to_atom, topology.shell_to_atom_count, sizeof(std::int64_t),
+                  &reads[2]) ||
+      !make_range(batch.qsh_offsets, batch.qsh_offset_count, sizeof(std::int64_t), &reads[3]) ||
+      !make_range(batch.qat_offsets, batch.qat_offset_count, sizeof(std::int64_t), &reads[4]) ||
+      !make_range(potential.shell, potential.shell_elements, sizeof(double), &reads[5]) ||
+      !make_range(potential.atomic, potential.atom_elements, sizeof(double), &reads[6]) ||
+      !make_range(activity.active_mask, activity.batch_elements, sizeof(std::uint8_t), &reads[7]) ||
+      !make_range(activity.sequence_active, 1, sizeof(std::uint32_t), &reads[8]) ||
+      !make_range(shell_scalar, shell_elements, sizeof(double), &writes[0]) ||
+      !make_range(workspace.shell_scratch, workspace.shell_elements, sizeof(double), &writes[1]) ||
+      !make_range(workspace.sequence_active, 1, sizeof(std::uint32_t), &writes[2]) ||
+      !make_range(system_errors, topology.batch_size, sizeof(std::uint32_t), &writes[3]) ||
+      !make_range(device_error, 1, sizeof(std::uint32_t), &writes[4])) {
+    return false;
+  }
+  return disjoint_bindings(reads, writes);
+}
+
 }  // namespace
 
 cudaError_t reset_gfn2_scc_bridge_stage_cuda(std::int64_t batch_size,
@@ -359,6 +597,36 @@ cudaError_t reset_gfn2_scc_bridge_stage_cuda(std::int64_t batch_size,
       cudaMemsetAsync(downstream_active, 0, static_cast<std::size_t>(batch_size), stream);
   if (status == cudaSuccess) {
     status = cudaMemsetAsync(downstream_plan_error, 0, sizeof(std::uint32_t), stream);
+  }
+  return status == cudaSuccess ? cudaMemsetAsync(sequence_active, 0, sizeof(std::uint32_t), stream)
+                               : status;
+}
+
+cudaError_t reset_gfn2_scc_bridge_device_errors_cuda(std::int64_t batch_size,
+                                                     std::uint32_t* system_errors,
+                                                     std::uint32_t* device_error,
+                                                     std::uint32_t* sequence_active,
+                                                     cudaStream_t stream) noexcept {
+  if (batch_size <= 0 ||
+      static_cast<std::uint64_t>(batch_size) > std::numeric_limits<std::size_t>::max() ||
+      !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(device_error, alignof(std::uint32_t)) ||
+      !is_aligned(sequence_active, alignof(std::uint32_t))) {
+    return cudaErrorInvalidValue;
+  }
+  AddressRange systems;
+  AddressRange device;
+  AddressRange sequence;
+  if (!make_range(system_errors, batch_size, sizeof(std::uint32_t), &systems) ||
+      !make_range(device_error, 1, sizeof(std::uint32_t), &device) ||
+      !make_range(sequence_active, 1, sizeof(std::uint32_t), &sequence) ||
+      overlaps(systems, device) || overlaps(systems, sequence) || overlaps(device, sequence)) {
+    return cudaErrorInvalidValue;
+  }
+  cudaError_t status = cudaMemsetAsync(
+      system_errors, 0, static_cast<std::size_t>(batch_size) * sizeof(std::uint32_t), stream);
+  if (status == cudaSuccess) {
+    status = cudaMemsetAsync(device_error, 0, sizeof(std::uint32_t), stream);
   }
   return status == cudaSuccess ? cudaMemsetAsync(sequence_active, 0, sizeof(std::uint32_t), stream)
                                : status;
@@ -394,6 +662,36 @@ cudaError_t collect_gfn2_scc_shell_scalar_potential_cuda(
   publish_shell_scalar_and_gate_kernel<<<static_cast<unsigned int>(batch.topology.batch_size),
                                          kThreadsPerBlock, 0, stream>>>(batch, stage, output,
                                                                         workspace);
+  return cudaPeekAtLastError();
+}
+
+cudaError_t collect_gfn2_scc_shell_scalar_potential_cuda(
+    const Gfn2SccBridgeDeviceBatch& batch, const Gfn2SccBridgeDevicePotentialFields& potential,
+    const Gfn2SccIterationDeviceActivity& activity, double* shell_scalar,
+    std::int64_t shell_elements, const Gfn2SccBridgeDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  if (!valid_canonical_host_binding(batch, potential, activity, shell_scalar, shell_elements,
+                                    workspace, system_errors, device_error)) {
+    return batch.topology.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max())
+               ? cudaErrorInvalidConfiguration
+               : cudaErrorInvalidValue;
+  }
+  canonical_bridge_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, potential, activity,
+                                                                        workspace, device_error);
+  cudaError_t status = cudaPeekAtLastError();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  collect_canonical_shell_scalar_kernel<<<static_cast<unsigned int>(batch.topology.batch_size),
+                                          kThreadsPerBlock, 0, stream>>>(
+      batch, potential, activity, workspace, system_errors, device_error);
+  status = cudaPeekAtLastError();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  publish_canonical_shell_scalar_kernel<<<static_cast<unsigned int>(batch.topology.batch_size),
+                                          kThreadsPerBlock, 0, stream>>>(
+      batch, activity, shell_scalar, workspace, system_errors);
   return cudaPeekAtLastError();
 }
 

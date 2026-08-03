@@ -771,6 +771,72 @@ int test_hostile_metadata_alias_token_misalignment_and_reset() {
   return 0;
 }
 
+int test_staged_occupation_entropy_exact_alias_and_overlap_rejection() {
+  HostCase host = make_case(8u);
+  DeviceCase device(host);
+
+  /* The iteration composer keeps the staged occupation entropy as the
+   * canonical storage for the free-energy entropy diagnostic. Exact aliasing
+   * of that input/output pair is therefore both intentional and safe: the
+   * composition kernel snapshots the input in unpublished scratch before the
+   * publication kernel writes the identical value back. */
+  device.diagnostics.entropy = const_cast<double*>(device.input.entropy);
+  CHECK(device.fill_outputs(kSentinel) == cudaSuccess);
+  CHECK(launch(device) == 0);
+
+  std::array<std::vector<double>, kGfn2SccFreeEnergyDiagnosticComponents> output;
+  CHECK(download_outputs(device, output) == 0);
+  for (std::size_t component = 0; component < output.size(); ++component) {
+    if (component == 7u) {
+      CHECK(std::all_of(output[component].begin(), output[component].end(),
+                        [](double value) { return value == kSentinel; }));
+    } else {
+      CHECK(output[component] == host.expected[component]);
+    }
+  }
+  std::vector<double> aliased_entropy;
+  CHECK(device.inputs[1].download(aliased_entropy) == cudaSuccess);
+  CHECK(cudaDeviceSynchronize() == cudaSuccess);
+  CHECK(aliased_entropy == host.expected[7]);
+
+  HostCase overlap_host = make_case(2u);
+  DeviceCase overlap_device(overlap_host);
+  DeviceBuffer<double> overlap_storage(3u);
+  CHECK(overlap_storage.upload({overlap_host.inputs[1][0], overlap_host.inputs[1][1], kSentinel}) ==
+        cudaSuccess);
+  CHECK(cudaDeviceSynchronize() == cudaSuccess);
+
+  /* A shifted output shares only one element with the entropy input. Accepting
+   * it would let publication overwrite a peer input, so only exact full-range
+   * equality is legal. */
+  Gfn2SccFreeEnergyDeviceInput partial_input = overlap_device.input;
+  partial_input.entropy = overlap_storage.get();
+  Gfn2SccFreeEnergyDeviceDiagnostics partial_diagnostics = overlap_device.diagnostics;
+  partial_diagnostics.entropy = overlap_storage.get() + 1;
+  CHECK(compose_gfn2_scc_free_energy_cuda(
+            overlap_device.batch, partial_input, overlap_device.activity, partial_diagnostics,
+            overlap_device.workspace, overlap_device.system_errors.get(),
+            overlap_device.device_error.get()) == cudaErrorInvalidValue);
+
+  /* Exact overlap is special only for occupation entropy -> entropy trace.
+   * Binding the entropy destination to any other readable component remains a
+   * forbidden write-after-read hazard. */
+  Gfn2SccFreeEnergyDeviceDiagnostics wrong_input_alias = overlap_device.diagnostics;
+  wrong_input_alias.entropy = const_cast<double*>(overlap_device.input.core);
+  CHECK(compose_gfn2_scc_free_energy_cuda(
+            overlap_device.batch, overlap_device.input, overlap_device.activity, wrong_input_alias,
+            overlap_device.workspace, overlap_device.system_errors.get(),
+            overlap_device.device_error.get()) == cudaErrorInvalidValue);
+
+  Gfn2SccFreeEnergyDeviceDiagnostics wrong_output_alias = overlap_device.diagnostics;
+  wrong_output_alias.internal_energy = const_cast<double*>(overlap_device.input.entropy);
+  CHECK(compose_gfn2_scc_free_energy_cuda(
+            overlap_device.batch, overlap_device.input, overlap_device.activity, wrong_output_alias,
+            overlap_device.workspace, overlap_device.system_errors.get(),
+            overlap_device.device_error.get()) == cudaErrorInvalidValue);
+  return 0;
+}
+
 int test_cuda_graph_replay() {
   HostCase host = make_case(32u);
   DeviceCase device(host);
@@ -806,13 +872,14 @@ int test_cuda_graph_replay() {
 }  // namespace
 
 int main() {
-  const std::array<int (*)(), 8> tests{
+  const std::array<int (*)(), 9> tests{
       {test_batch_parity_custom_stream_and_disabled_terms,
        test_exact_cpu_association_and_subtotal_counterexamples,
        test_final_fma_rounding_counterexample, test_existing_cuda_stage_output_binding,
        test_nonfinite_peer_isolation_inactive_and_upstream_system_error,
        test_intermediate_and_final_fma_overflow_and_sticky_plan_error,
-       test_hostile_metadata_alias_token_misalignment_and_reset, test_cuda_graph_replay}};
+       test_hostile_metadata_alias_token_misalignment_and_reset,
+       test_staged_occupation_entropy_exact_alias_and_overlap_rejection, test_cuda_graph_replay}};
   for (const auto test : tests) {
     const int status = test();
     if (status != 0) {

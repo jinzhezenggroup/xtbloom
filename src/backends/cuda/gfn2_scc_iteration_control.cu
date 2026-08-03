@@ -344,8 +344,11 @@ __global__ void normalize_stage_kernel(Gfn2SccStageDeviceReport report,
     }
     if (classified_peer(code, report.peer_error_mask)) {
       // The device scalar identifies one specific sticky peer error.  A
-      // different classified peer code cannot localize that scalar.
-      if (code == device_code) {
+      // different classified peer code cannot localize that scalar. Plan-only
+      // scalars deliberately never participate in peer localization, even if
+      // their integer value collides with this per-system peer domain.
+      if (report.device_code_role == Gfn2SccStageDeviceCodeRole::kMixedFirstError &&
+          code == device_code) {
         atomicAdd(&matching_device_peer_count, 1);
       }
     } else {
@@ -358,7 +361,9 @@ __global__ void normalize_stage_kernel(Gfn2SccStageDeviceReport report,
   if (threadIdx.x == 0) {
     const bool latch_failed = stage_sequence != 1u;
     const bool has_system_plan = indexed_plan != kNoIndexedCode;
-    const bool device_is_peer = classified_peer(device_code, report.peer_error_mask);
+    const bool device_is_peer =
+        report.device_code_role == Gfn2SccStageDeviceCodeRole::kMixedFirstError &&
+        classified_peer(device_code, report.peer_error_mask);
     const bool device_is_plan = device_code != 0u && !device_is_peer;
     const bool peer_is_unlocalized = device_is_peer && matching_device_peer_count == 0;
     if (invalid_activity != 0) {
@@ -473,6 +478,9 @@ cudaError_t normalize_gfn2_scc_stage_cuda(const Gfn2SccStageDeviceReport& report
            ? report.stage_sequence_elements != 0
            : report.stage_sequence_elements != 1 ||
                  !is_aligned(report.stage_sequence_active, alignof(std::uint32_t))) ||
+      !gfn2_scc_stage_device_code_role_is_valid(report.device_code_role) ||
+      (report.device_code_role == Gfn2SccStageDeviceCodeRole::kPlanOnly &&
+       report.device_error == nullptr) ||
       (report.peer_error_mask & 1u) != 0u ||
       (report.peer_failure_status != GPUXTB_STATUS_INTERNAL_ERROR &&
        report.peer_failure_status != GPUXTB_STATUS_EIGENSOLVER_FAILED)) {

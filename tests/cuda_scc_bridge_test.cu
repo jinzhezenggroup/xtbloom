@@ -25,6 +25,8 @@ using gpuxtb::detail::cuda::Gfn2SccBridgeDeviceOutput;
 using gpuxtb::detail::cuda::Gfn2SccBridgeDevicePotentialFields;
 using gpuxtb::detail::cuda::Gfn2SccBridgeDeviceStageInput;
 using gpuxtb::detail::cuda::Gfn2SccBridgeDeviceWorkspace;
+using gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity;
+using gpuxtb::detail::cuda::reset_gfn2_scc_bridge_device_errors_cuda;
 using gpuxtb::detail::cuda::reset_gfn2_scc_bridge_stage_cuda;
 
 #define CHECK(condition)                                                                   \
@@ -357,6 +359,18 @@ int launch(DeviceCase& device, cudaStream_t stream = nullptr) {
   CHECK(collect_gfn2_scc_shell_scalar_potential_cuda(device.batch, device.potential, device.stage,
                                                      device.output, device.workspace,
                                                      stream) == cudaSuccess);
+  CHECK(cudaStreamSynchronize(stream) == cudaSuccess);
+  return 0;
+}
+
+int launch_canonical(DeviceCase& device, cudaStream_t stream = nullptr) {
+  const Gfn2SccIterationDeviceActivity activity{device.requested_active.get(),
+                                                device.upstream_sequence_active.get(),
+                                                device.batch.topology.batch_size, 1, kPlanToken};
+  CHECK(collect_gfn2_scc_shell_scalar_potential_cuda(
+            device.batch, device.potential, activity, device.output_shell.get(),
+            static_cast<std::int64_t>(device.output_shell.size()), device.workspace,
+            device.system_errors.get(), device.output_plan_error.get(), stream) == cudaSuccess);
   CHECK(cudaStreamSynchronize(stream) == cudaSuccess);
   return 0;
 }
@@ -722,16 +736,177 @@ int test_host_binding_validation() {
   return 0;
 }
 
+int test_canonical_activity_zero_copy_edge() {
+  for (std::size_t batch_size : std::array<std::size_t, 4>{{1u, 8u, 32u, 128u}}) {
+    HostCase host = make_case(batch_size);
+    DeviceCase device(host);
+    cudaStream_t stream = nullptr;
+    CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) == cudaSuccess);
+    CHECK(reset_gfn2_scc_bridge_device_errors_cuda(
+              host.batch_size, device.system_errors.get(), device.output_plan_error.get(),
+              device.sequence_active.get(), stream) == cudaSuccess);
+    CHECK(launch_canonical(device, stream) == 0);
+    std::vector<double> shell;
+    std::vector<std::uint32_t> errors;
+    std::vector<std::uint32_t> plan;
+    std::vector<std::uint32_t> sequence;
+    CHECK(device.output_shell.download(shell, stream) == cudaSuccess);
+    CHECK(device.system_errors.download(errors, stream) == cudaSuccess);
+    CHECK(device.output_plan_error.download(plan, stream) == cudaSuccess);
+    CHECK(device.sequence_active.download(sequence, stream) == cudaSuccess);
+    CHECK(cudaStreamSynchronize(stream) == cudaSuccess);
+    CHECK(cudaStreamDestroy(stream) == cudaSuccess);
+    CHECK(shell == host.expected && plan[0] == 0u && sequence[0] == 1u);
+    CHECK(
+        std::all_of(errors.begin(), errors.end(), [](std::uint32_t value) { return value == 0u; }));
+  }
+
+  {
+    HostCase graph_host = make_case(8u);
+    DeviceCase graph_device(graph_host);
+    cudaStream_t stream = nullptr;
+    cudaGraph_t graph = nullptr;
+    cudaGraphExec_t executable = nullptr;
+    CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) == cudaSuccess);
+    CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal) == cudaSuccess);
+    CHECK(reset_gfn2_scc_bridge_device_errors_cuda(
+              graph_host.batch_size, graph_device.system_errors.get(),
+              graph_device.output_plan_error.get(), graph_device.sequence_active.get(),
+              stream) == cudaSuccess);
+    const Gfn2SccIterationDeviceActivity activity{graph_device.requested_active.get(),
+                                                  graph_device.upstream_sequence_active.get(),
+                                                  graph_host.batch_size, 1, kPlanToken};
+    CHECK(collect_gfn2_scc_shell_scalar_potential_cuda(
+              graph_device.batch, graph_device.potential, activity, graph_device.output_shell.get(),
+              static_cast<std::int64_t>(graph_device.output_shell.size()), graph_device.workspace,
+              graph_device.system_errors.get(), graph_device.output_plan_error.get(),
+              stream) == cudaSuccess);
+    CHECK(cudaStreamEndCapture(stream, &graph) == cudaSuccess);
+    CHECK(cudaGraphInstantiate(&executable, graph, 0) == cudaSuccess);
+    CHECK(cudaGraphLaunch(executable, stream) == cudaSuccess);
+    CHECK(cudaGraphLaunch(executable, stream) == cudaSuccess);
+    CHECK(cudaStreamSynchronize(stream) == cudaSuccess);
+    std::vector<double> shell;
+    CHECK(graph_device.output_shell.download(shell) == cudaSuccess);
+    CHECK(shell == graph_host.expected);
+    CHECK(cudaGraphExecDestroy(executable) == cudaSuccess);
+    CHECK(cudaGraphDestroy(graph) == cudaSuccess);
+    CHECK(cudaStreamDestroy(stream) == cudaSuccess);
+  }
+
+  {
+    HostCase suffix_host = make_case(8u);
+    for (std::size_t system = 4u; system < 8u; ++system) {
+      suffix_host.requested_active[system] = 0u;
+    }
+    DeviceCase suffix_device(suffix_host);
+    std::vector<std::int64_t> atom_offsets = suffix_host.atom_offsets;
+    std::vector<std::int64_t> shell_offsets = suffix_host.shell_offsets;
+    std::vector<std::int64_t> qsh_offsets = suffix_host.qsh_offsets;
+    std::vector<std::int64_t> qat_offsets = suffix_host.qat_offsets;
+    for (std::size_t boundary = 5u; boundary < atom_offsets.size(); ++boundary) {
+      atom_offsets[boundary] = -41;
+      shell_offsets[boundary] = -42;
+      qsh_offsets[boundary] = -43;
+      qat_offsets[boundary] = -44;
+    }
+    CHECK(suffix_device.atom_offsets.upload(atom_offsets) == cudaSuccess);
+    CHECK(suffix_device.shell_offsets.upload(shell_offsets) == cudaSuccess);
+    CHECK(suffix_device.qsh_offsets.upload(qsh_offsets) == cudaSuccess);
+    CHECK(suffix_device.qat_offsets.upload(qat_offsets) == cudaSuccess);
+    CHECK(reset_gfn2_scc_bridge_device_errors_cuda(
+              suffix_host.batch_size, suffix_device.system_errors.get(),
+              suffix_device.output_plan_error.get(),
+              suffix_device.sequence_active.get()) == cudaSuccess);
+    CHECK(suffix_device.fill_output(kSentinel) == cudaSuccess);
+    CHECK(launch_canonical(suffix_device) == 0);
+    std::vector<double> shell;
+    std::vector<std::uint32_t> plan;
+    std::vector<std::uint32_t> sequence;
+    CHECK(suffix_device.output_shell.download(shell) == cudaSuccess);
+    CHECK(suffix_device.output_plan_error.download(plan) == cudaSuccess);
+    CHECK(suffix_device.sequence_active.download(sequence) == cudaSuccess);
+    CHECK(cudaDeviceSynchronize() == cudaSuccess);
+    CHECK(plan[0] == 0u && sequence[0] == 1u);
+    for (std::size_t system = 0; system < 8u; ++system) {
+      for (std::size_t local_shell = 0; local_shell < 4u; ++local_shell) {
+        const std::size_t index = system * 4u + local_shell;
+        CHECK(shell[index] == (system < 4u ? suffix_host.expected[index] : kSentinel));
+      }
+    }
+  }
+
+  HostCase host = make_case(8u);
+  host.requested_active[2] = 0u;
+  for (std::size_t local_shell = 0; local_shell < 4u; ++local_shell) {
+    host.shell_field[static_cast<std::size_t>(host.qsh_offsets[2]) + local_shell] =
+        std::numeric_limits<double>::quiet_NaN();
+  }
+  host.shell_field[static_cast<std::size_t>(host.qsh_offsets[5])] =
+      std::numeric_limits<double>::quiet_NaN();
+  DeviceCase device(host);
+  CHECK(reset_gfn2_scc_bridge_device_errors_cuda(host.batch_size, device.system_errors.get(),
+                                                 device.output_plan_error.get(),
+                                                 device.sequence_active.get()) == cudaSuccess);
+  CHECK(device.fill_output(kSentinel) == cudaSuccess);
+  CHECK(launch_canonical(device) == 0);
+  std::vector<double> shell;
+  std::vector<std::uint32_t> errors;
+  std::vector<std::uint32_t> plan;
+  std::vector<std::uint32_t> sequence;
+  CHECK(device.output_shell.download(shell) == cudaSuccess);
+  CHECK(device.system_errors.download(errors) == cudaSuccess);
+  CHECK(device.output_plan_error.download(plan) == cudaSuccess);
+  CHECK(device.sequence_active.download(sequence) == cudaSuccess);
+  CHECK(cudaDeviceSynchronize() == cudaSuccess);
+  CHECK(errors[5] ==
+        static_cast<std::uint32_t>(Gfn2SccBridgeDeviceError::kNonfiniteShellPotential));
+  CHECK(errors[2] == 0u && plan[0] == 0u && sequence[0] == 1u);
+  for (std::size_t system = 0; system < 8u; ++system) {
+    for (std::size_t local_shell = 0; local_shell < 4u; ++local_shell) {
+      const std::size_t index = system * 4u + local_shell;
+      CHECK(shell[index] == (system == 2u || system == 5u ? kSentinel : host.expected[index]));
+    }
+  }
+
+  /* A closed canonical sequence must return before poisoned topology, while a
+   * plan error in an active member is retained only in the plan scalar. */
+  CHECK(device.upstream_sequence_active.upload_one(0u) == cudaSuccess);
+  CHECK(device.atom_offsets.upload_one(-9, 0u) == cudaSuccess);
+  CHECK(reset_gfn2_scc_bridge_device_errors_cuda(host.batch_size, device.system_errors.get(),
+                                                 device.output_plan_error.get(),
+                                                 device.sequence_active.get()) == cudaSuccess);
+  CHECK(device.fill_output(kSentinel) == cudaSuccess);
+  CHECK(launch_canonical(device) == 0);
+  CHECK(device.output_plan_error.download(plan) == cudaSuccess);
+  CHECK(device.sequence_active.download(sequence) == cudaSuccess);
+  CHECK(cudaDeviceSynchronize() == cudaSuccess);
+  CHECK(plan[0] == 0u && sequence[0] == 0u);
+
+  CHECK(device.upstream_sequence_active.upload_one(1u) == cudaSuccess);
+  CHECK(reset_gfn2_scc_bridge_device_errors_cuda(host.batch_size, device.system_errors.get(),
+                                                 device.output_plan_error.get(),
+                                                 device.sequence_active.get()) == cudaSuccess);
+  CHECK(launch_canonical(device) == 0);
+  CHECK(device.output_plan_error.download(plan) == cudaSuccess);
+  CHECK(device.sequence_active.download(sequence) == cudaSuccess);
+  CHECK(cudaDeviceSynchronize() == cudaSuccess);
+  CHECK(plan[0] == static_cast<std::uint32_t>(Gfn2SccBridgeDeviceError::kInvalidTopologyOffsets));
+  CHECK(sequence[0] == 0u);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
-  const std::array<int (*)(), 6> tests{{
+  const std::array<int (*)(), 7> tests{{
       test_batch_parity_real_spd_and_custom_stream,
       test_inactive_poison_and_upstream_peer_isolation,
       test_numerical_failures_and_active_validation,
       test_plan_fail_closed_and_sticky_classification,
       test_graph_replay_changed_inputs_and_status,
       test_host_binding_validation,
+      test_canonical_activity_zero_copy_edge,
   }};
   for (const auto test : tests) {
     const int status = test();

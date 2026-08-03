@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/cuda/gfn2_scc_iteration_control.cuh"
+
 namespace gpuxtb::detail::cuda {
 
 /* First asynchronous semantic or arithmetic failure in an energy sequence. */
@@ -78,6 +80,17 @@ cudaError_t evaluate_gfn2_scc_electronic_energy_cuda(
     double* core_energies, double* electronic_free_energies,
     const Gfn2SccEnergyDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/* Canonical-ledger overload for one SCC iteration.  It checks the canonical
+ * sequence before the active mask and validates only active matrix partitions,
+ * so inactive topology and numerical slices may remain deliberately poisoned. */
+cudaError_t evaluate_gfn2_scc_electronic_energy_cuda(
+    const Gfn2SccEnergyDeviceBatch& batch, const double* density, const double* h0,
+    const double* entropies, double electronic_temperature,
+    const Gfn2SccIterationDeviceActivity& activity, double* core_energies,
+    double* electronic_free_energies, const Gfn2SccEnergyDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 

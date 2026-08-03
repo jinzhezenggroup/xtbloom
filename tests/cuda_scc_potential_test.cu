@@ -24,6 +24,7 @@ namespace {
 
 using gpuxtb::detail::cuda::compose_gfn2_scc_potentials_cuda;
 using gpuxtb::detail::cuda::gather_gfn2_scc_mixed_multipoles_cuda;
+using gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity;
 using gpuxtb::detail::cuda::Gfn2SccPotentialComponent;
 using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceActivity;
 using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch;
@@ -34,6 +35,7 @@ using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceResults;
 using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceTopologyMultipoles;
 using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace;
 using gpuxtb::detail::cuda::kGfn2SccPotentialAllComponents;
+using gpuxtb::detail::cuda::reduce_gfn2_scc_mixed_atomic_charges_cuda;
 using gpuxtb::detail::cuda::reset_gfn2_scc_potential_device_errors_cuda;
 
 constexpr std::uint64_t kPlanToken = 0x77c20a5e61d934bfULL;
@@ -335,6 +337,7 @@ struct DeviceFixture {
   DeviceBuffer<double> scratch_dipole;
   DeviceBuffer<double> scratch_quadrupole;
   DeviceBuffer<std::uint32_t> sequence_active;
+  DeviceBuffer<std::uint32_t> canonical_sequence;
   DeviceBuffer<std::uint32_t> system_errors;
   DeviceBuffer<std::uint32_t> device_error;
 
@@ -384,6 +387,7 @@ struct DeviceFixture {
     ALLOCATE(scratch_dipole, dipoles)
     ALLOCATE(scratch_quadrupole, quadrupoles)
     ALLOCATE(sequence_active, 1u)
+    ALLOCATE(canonical_sequence, 1u)
     ALLOCATE(system_errors, static_cast<std::size_t>(host.batch_size))
     ALLOCATE(device_error, 1u)
 #undef ALLOCATE
@@ -432,6 +436,10 @@ struct DeviceFixture {
     return {active.get(), host.batch_size, kPlanToken};
   }
 
+  Gfn2SccIterationDeviceActivity canonical_activity(const HostCase& host) const {
+    return {active.get(), canonical_sequence.get(), host.batch_size, 1, kPlanToken};
+  }
+
   Gfn2SccPotentialDeviceMixedFields mixed(const HostCase& host) const {
     return {mixed_qsh.get(),
             static_cast<std::int64_t>(host.mixed_qsh.size()),
@@ -450,6 +458,18 @@ struct DeviceFixture {
             topology_dipole.get(),
             static_cast<std::int64_t>(host.mixed_dipole.size()),
             topology_quadrupole.get(),
+            static_cast<std::int64_t>(host.mixed_quadrupole.size()),
+            kPlanToken};
+  }
+
+  Gfn2SccPotentialDeviceTopologyMultipoles zero_copy_topology(const HostCase& host) {
+    return {mixed_qsh.get(),
+            static_cast<std::int64_t>(host.mixed_qsh.size()),
+            topology_atom.get(),
+            static_cast<std::int64_t>(host.aes2_atomic.size()),
+            mixed_dipole.get(),
+            static_cast<std::int64_t>(host.mixed_dipole.size()),
+            mixed_quadrupole.get(),
             static_cast<std::int64_t>(host.mixed_quadrupole.size()),
             kPlanToken};
   }
@@ -1181,6 +1201,172 @@ int test_alias_token_misalignment_and_reset_validation() {
   return 0;
 }
 
+int test_canonical_zero_copy_reduction_and_compose() {
+  constexpr std::uint32_t mask = kGfn2SccPotentialAllComponents;
+  for (const std::size_t batch_size : {1u, 8u, 32u, 128u}) {
+    HostCase host = make_case(batch_size);
+    DeviceFixture device;
+    CUDA_CHECK(device.initialize(host));
+    const std::uint32_t open = 1u;
+    CUDA_CHECK(device.canonical_sequence.copy_from(&open, 1u));
+    CUDA_CHECK(reset_gfn2_scc_potential_device_errors_cuda(
+        host.batch_size, device.system_errors.get(), device.device_error.get()));
+    const auto topology = device.zero_copy_topology(host);
+    CHECK(topology.shell_charges == device.mixed_qsh.get());
+    CHECK(topology.atomic_dipoles == device.mixed_dipole.get());
+    CHECK(topology.atomic_quadrupoles == device.mixed_quadrupole.get());
+    CUDA_CHECK(reduce_gfn2_scc_mixed_atomic_charges_cuda(
+        device.batch(host), device.mixed(host), device.canonical_activity(host), topology,
+        device.workspace(host), device.system_errors.get(), device.device_error.get()));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    std::vector<double> atomic(host.aes2_atomic.size());
+    CUDA_CHECK(device.topology_atom.copy_to(atomic.data(), atomic.size()));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CHECK(atomic == gather_reference(host).atom);
+
+    CUDA_CHECK(reset_gfn2_scc_potential_device_errors_cuda(
+        host.batch_size, device.system_errors.get(), device.device_error.get()));
+    CUDA_CHECK(compose_gfn2_scc_potentials_cuda(
+        device.batch(host), device.components(host, mask), device.canonical_activity(host),
+        device.results(host), device.workspace(host), device.system_errors.get(),
+        device.device_error.get()));
+    ComposeResult actual;
+    CUDA_CHECK(download_compose(host, device, actual));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CHECK(equal_result(actual, compose_reference(host, mask)));
+  }
+
+  {
+    HostCase graph_host = make_case(8u);
+    DeviceFixture graph_device;
+    CUDA_CHECK(graph_device.initialize(graph_host));
+    const std::uint32_t open = 1u;
+    CUDA_CHECK(graph_device.canonical_sequence.copy_from(&open, 1u));
+    cudaStream_t stream = nullptr;
+    cudaGraph_t graph = nullptr;
+    cudaGraphExec_t executable = nullptr;
+    CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+    CUDA_CHECK(reset_gfn2_scc_potential_device_errors_cuda(
+        graph_host.batch_size, graph_device.system_errors.get(), graph_device.device_error.get(),
+        stream));
+    CUDA_CHECK(reduce_gfn2_scc_mixed_atomic_charges_cuda(
+        graph_device.batch(graph_host), graph_device.mixed(graph_host),
+        graph_device.canonical_activity(graph_host), graph_device.zero_copy_topology(graph_host),
+        graph_device.workspace(graph_host), graph_device.system_errors.get(),
+        graph_device.device_error.get(), stream));
+    CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
+    CUDA_CHECK(cudaGraphInstantiate(&executable, graph, 0));
+    CUDA_CHECK(cudaGraphLaunch(executable, stream));
+    CUDA_CHECK(cudaGraphLaunch(executable, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    std::vector<double> atomic(graph_host.aes2_atomic.size());
+    CUDA_CHECK(graph_device.topology_atom.copy_to(atomic.data(), atomic.size()));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CHECK(atomic == gather_reference(graph_host).atom);
+    CUDA_CHECK(cudaGraphExecDestroy(executable));
+    CUDA_CHECK(cudaGraphDestroy(graph));
+    CUDA_CHECK(cudaStreamDestroy(stream));
+  }
+
+  HostCase host = make_case(8u);
+  for (std::size_t system = 4u; system < 8u; ++system) {
+    host.active[system] = 0u;
+    for (std::int64_t shell = host.shell_offsets[system]; shell < host.shell_offsets[system + 1u];
+         ++shell) {
+      host.mixed_qsh[static_cast<std::size_t>(shell)] = std::numeric_limits<double>::quiet_NaN();
+      host.es2[static_cast<std::size_t>(shell)] = std::numeric_limits<double>::quiet_NaN();
+      host.shell_to_atom[static_cast<std::size_t>(shell)] = -99;
+    }
+    for (std::int64_t atom = host.atom_offsets[system]; atom < host.atom_offsets[system + 1u];
+         ++atom) {
+      host.aes2_atomic[static_cast<std::size_t>(atom)] = std::numeric_limits<double>::quiet_NaN();
+      for (int component = 0; component < 3; ++component) {
+        host.mixed_dipole[static_cast<std::size_t>(atom * 3 + component)] =
+            std::numeric_limits<double>::quiet_NaN();
+      }
+      for (int component = 0; component < 6; ++component) {
+        host.mixed_quadrupole[static_cast<std::size_t>(atom * 6 + component)] =
+            std::numeric_limits<double>::quiet_NaN();
+      }
+    }
+  }
+  const GatherResult expected_reduction = gather_reference(host);
+  const ComposeResult expected_compose = compose_reference(host, mask);
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host));
+  const std::uint32_t open = 1u;
+  CUDA_CHECK(device.canonical_sequence.copy_from(&open, 1u));
+  std::vector<std::int64_t> poisoned_atoms = host.atom_offsets;
+  std::vector<std::int64_t> poisoned_shells = host.shell_offsets;
+  std::vector<std::int64_t> poisoned_qsh = host.qsh_offsets;
+  std::vector<std::int64_t> poisoned_qat = host.qat_offsets;
+  std::vector<std::int64_t> poisoned_dipoles = host.dipole_offsets;
+  std::vector<std::int64_t> poisoned_quadrupoles = host.quadrupole_offsets;
+  for (std::size_t boundary = 5u; boundary < poisoned_atoms.size(); ++boundary) {
+    poisoned_atoms[boundary] = -101;
+    poisoned_shells[boundary] = -102;
+    poisoned_qsh[boundary] = -103;
+    poisoned_qat[boundary] = -104;
+    poisoned_dipoles[boundary] = -105;
+    poisoned_quadrupoles[boundary] = -106;
+  }
+  CUDA_CHECK(device.atom_offsets.copy_from(poisoned_atoms.data(), poisoned_atoms.size()));
+  CUDA_CHECK(device.shell_offsets.copy_from(poisoned_shells.data(), poisoned_shells.size()));
+  CUDA_CHECK(device.qsh_offsets.copy_from(poisoned_qsh.data(), poisoned_qsh.size()));
+  CUDA_CHECK(device.qat_offsets.copy_from(poisoned_qat.data(), poisoned_qat.size()));
+  CUDA_CHECK(device.dipole_offsets.copy_from(poisoned_dipoles.data(), poisoned_dipoles.size()));
+  CUDA_CHECK(device.quadrupole_offsets.copy_from(poisoned_quadrupoles.data(),
+                                                 poisoned_quadrupoles.size()));
+  CUDA_CHECK(reset_gfn2_scc_potential_device_errors_cuda(
+      host.batch_size, device.system_errors.get(), device.device_error.get()));
+  CUDA_CHECK(reduce_gfn2_scc_mixed_atomic_charges_cuda(
+      device.batch(host), device.mixed(host), device.canonical_activity(host),
+      device.zero_copy_topology(host), device.workspace(host), device.system_errors.get(),
+      device.device_error.get()));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  std::vector<double> atomic(host.aes2_atomic.size());
+  CUDA_CHECK(device.topology_atom.copy_to(atomic.data(), atomic.size()));
+  std::vector<std::uint32_t> errors(static_cast<std::size_t>(host.batch_size));
+  std::uint32_t plan_error = 99u;
+  CUDA_CHECK(device.system_errors.copy_to(errors.data(), errors.size()));
+  CUDA_CHECK(device.device_error.copy_to(&plan_error, 1u));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(atomic == expected_reduction.atom);
+  CHECK(plan_error == 0u);
+  CHECK(std::all_of(errors.begin(), errors.end(), [](std::uint32_t value) { return value == 0u; }));
+
+  CUDA_CHECK(reset_gfn2_scc_potential_device_errors_cuda(
+      host.batch_size, device.system_errors.get(), device.device_error.get()));
+  CUDA_CHECK(compose_gfn2_scc_potentials_cuda(device.batch(host), device.components(host, mask),
+                                              device.canonical_activity(host), device.results(host),
+                                              device.workspace(host), device.system_errors.get(),
+                                              device.device_error.get()));
+  ComposeResult actual;
+  CUDA_CHECK(download_compose(host, device, actual));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(equal_result(actual, expected_compose));
+
+  /* A closed sequence must return before even active topology is consulted. */
+  const std::uint32_t closed = 0u;
+  CUDA_CHECK(device.canonical_sequence.copy_from(&closed, 1u));
+  poisoned_atoms[0] = -1;
+  CUDA_CHECK(device.atom_offsets.copy_from(poisoned_atoms.data(), poisoned_atoms.size()));
+  CUDA_CHECK(device.topology_atom.fill(kSentinel, atomic.size()));
+  CUDA_CHECK(reset_gfn2_scc_potential_device_errors_cuda(
+      host.batch_size, device.system_errors.get(), device.device_error.get()));
+  CUDA_CHECK(reduce_gfn2_scc_mixed_atomic_charges_cuda(
+      device.batch(host), device.mixed(host), device.canonical_activity(host),
+      device.zero_copy_topology(host), device.workspace(host), device.system_errors.get(),
+      device.device_error.get()));
+  CUDA_CHECK(device.device_error.copy_to(&plan_error, 1u));
+  CUDA_CHECK(device.topology_atom.copy_to(atomic.data(), atomic.size()));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(plan_error == 0u);
+  CHECK(std::all_of(atomic.begin(), atomic.end(), [](double value) { return value == kSentinel; }));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -1194,7 +1380,7 @@ int main() {
     std::fprintf(stderr, "CUDA SCC potential Graph failed at line %d\n", status);
     return status;
   }
-  const std::array<int (*)(), 11> tests{{
+  const std::array<int (*)(), 12> tests{{
       test_disabled_null_zero,
       test_one_hot_component_wiring,
       test_inactive_poison_and_bad_mapping_peer_isolation,
@@ -1206,6 +1392,7 @@ int main() {
       test_sticky_plan_and_numerical_error,
       test_invalid_active_mask_peer_isolation,
       test_alias_token_misalignment_and_reset_validation,
+      test_canonical_zero_copy_reduction_and_compose,
   }};
   for (const auto test : tests) {
     const int status = test();

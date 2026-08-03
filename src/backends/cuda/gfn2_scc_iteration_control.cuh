@@ -40,13 +40,22 @@ enum class Gfn2SccStageId : std::uint32_t {
   kFreeEnergy = 21u,
   kMixer = 22u,
   kStatePublication = 23u,
+  // Raw classical-energy evaluation is a distinct DAG phase from potential
+  // construction even when both phases reuse one primitive's diagnostics.
+  // Append new identities so every pre-existing stage value remains stable.
+  kES2RawEnergy = 24u,
+  kES3RawEnergy = 25u,
+  kAES2RawEnergy = 26u,
+  kD4RawEnergy = 27u,
+  kExplicitPointChargeRawEnergy = 28u,
+  kPeriodicRawEnergy = 29u,
 };
 
 /* True for every enumerator, including the non-executable kNone sentinel. */
 [[nodiscard]] inline __host__ __device__ constexpr bool gfn2_scc_stage_id_in_domain(
     Gfn2SccStageId stage) noexcept {
   return static_cast<std::uint32_t>(stage) <=
-         static_cast<std::uint32_t>(Gfn2SccStageId::kStatePublication);
+         static_cast<std::uint32_t>(Gfn2SccStageId::kPeriodicRawEnergy);
 }
 
 /* Stage reports and cache owners must name one of the executable stages. */
@@ -60,6 +69,25 @@ enum class Gfn2SccStageCodeFormat : std::uint32_t {
   kUint32Error = 0u,
   kGpuxtbStatus = 1u,
 };
+
+/*
+ * Interpretation of the primitive's sticky device-wide first-error scalar.
+ * kMixedFirstError preserves the legacy contract: peer-mask membership makes
+ * the scalar peer-local when it can be matched to an active system, while all
+ * other nonzero values are plan failures. kPlanOnly prevents plan diagnostics
+ * from being mistaken for peer errors when the two domains reuse an integer.
+ * Per-system codes are classified by peer_error_mask under either role.
+ */
+enum class Gfn2SccStageDeviceCodeRole : std::uint32_t {
+  kMixedFirstError = 0u,
+  kPlanOnly = 1u,
+};
+
+[[nodiscard]] inline __host__ __device__ constexpr bool gfn2_scc_stage_device_code_role_is_valid(
+    Gfn2SccStageDeviceCodeRole role) noexcept {
+  return role == Gfn2SccStageDeviceCodeRole::kMixedFirstError ||
+         role == Gfn2SccStageDeviceCodeRole::kPlanOnly;
+}
 
 /* Controller-owned codes stored under kActivity or kWarmStartProvenance. */
 enum class Gfn2SccIterationControlCode : std::uint32_t {
@@ -169,11 +197,12 @@ struct Gfn2SccIterationDeviceActivity {
  * One stage's raw diagnostics. peer_error_mask classifies only codes 1..63;
  * bit N corresponds to raw code N. A classified peer summary must also be
  * localizable through system_codes, otherwise normalization fails closed as a
- * plan error. A non-peer device_error is the stage's sticky first plan code
- * and is preserved ahead of indexed system plan codes. A closed
- * stage_sequence_active still promotes a peer device_error to a plan failure,
- * preventing a later unclassified failure from being hidden by an earlier
- * peer error.
+ * plan error. device_code_role determines whether peer_error_mask may classify
+ * the device scalar or that scalar is plan-only. A non-peer device_error is
+ * the stage's sticky first plan code and is preserved ahead of indexed system
+ * plan codes. A closed stage_sequence_active still promotes a peer device_error
+ * to a plan failure, preventing a later unclassified failure from being hidden
+ * by an earlier peer error.
  */
 struct Gfn2SccStageDeviceReport {
   Gfn2SccStageId stage = Gfn2SccStageId::kNone;
@@ -189,6 +218,10 @@ struct Gfn2SccStageDeviceReport {
   std::uint64_t peer_error_mask = 0u;
   gpuxtb_status_t peer_failure_status = GPUXTB_STATUS_INTERNAL_ERROR;
   std::uint64_t plan_token = 0u;
+
+  // Kept at the tail so legacy aggregate initializers retain the mixed-first-
+  // error behavior while callers migrate raw-energy reports to kPlanOnly.
+  Gfn2SccStageDeviceCodeRole device_code_role = Gfn2SccStageDeviceCodeRole::kMixedFirstError;
 };
 
 static_assert(std::is_trivially_copyable_v<Gfn2SccIterationDevicePolicy>);
