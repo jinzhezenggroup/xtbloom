@@ -146,6 +146,7 @@ struct DeviceFixture {
   DeviceBuffer<Gfn2D4DeviceElementData> elements;
   DeviceBuffer<Gfn2D4DeviceReferenceData> references;
   DeviceBuffer<double> reference_c6;
+  DeviceBuffer<double> positions;
   DeviceBuffer<double> pair_data;
   DeviceBuffer<double> coordination;
   DeviceBuffer<double> charges;
@@ -161,6 +162,10 @@ struct DeviceFixture {
   DeviceBuffer<double> gradients;
   DeviceBuffer<std::uint32_t> system_errors;
   DeviceBuffer<std::uint32_t> error;
+  DeviceBuffer<double> pair_scratch;
+  DeviceBuffer<double> coordination_scratch;
+  DeviceBuffer<std::uint64_t> geometry_generations;
+  DeviceBuffer<std::uint32_t> geometry_sequence_active;
   Gfn2D4DeviceBatch batch;
   Gfn2D4DeviceParameters parameters;
   Gfn2D4DeviceCache cache;
@@ -168,7 +173,9 @@ struct DeviceFixture {
 
   bool initialize(const HostFixture& host, cudaStream_t stream) {
     return initialize(host.plan, HostFixture::atom_offsets, HostFixture::atomic_numbers,
-                      host.pair_data, host.coordination, HostFixture::charges, stream);
+                      host.pair_data, host.coordination, HostFixture::charges, stream) &&
+           positions.copy_from(HostFixture::positions.data(), HostFixture::positions.size(),
+                               stream) == cudaSuccess;
   }
 
   template <typename Offsets, typename AtomicNumbers, typename Charges>
@@ -210,6 +217,7 @@ struct DeviceFixture {
         elements.allocate(host_elements.size()) != cudaSuccess ||
         references.allocate(host_references.size()) != cudaSuccess ||
         reference_c6.allocate(gpuxtb::parameters::d4::kReferenceC6.size()) != cudaSuccess ||
+        positions.allocate(atom_count * 3u) != cudaSuccess ||
         pair_data.allocate(std::max<std::size_t>(host_pair_data.size(), 1u)) != cudaSuccess ||
         coordination.allocate(atom_count) != cudaSuccess ||
         charges.allocate(atom_count) != cudaSuccess ||
@@ -223,9 +231,14 @@ struct DeviceFixture {
         batch_scratch.allocate(batch_count) != cudaSuccess ||
         gradient_scratch.allocate(atom_count * 3u) != cudaSuccess ||
         gradients.allocate(atom_count * 3u) != cudaSuccess ||
-        system_errors.allocate(batch_count) != cudaSuccess || error.allocate(1) != cudaSuccess) {
+        system_errors.allocate(batch_count) != cudaSuccess || error.allocate(1) != cudaSuccess ||
+        pair_scratch.allocate(std::max<std::size_t>(host_pair_data.size(), 1u)) != cudaSuccess ||
+        coordination_scratch.allocate(atom_count) != cudaSuccess ||
+        geometry_generations.allocate(batch_count) != cudaSuccess ||
+        geometry_sequence_active.allocate(1) != cudaSuccess) {
       return false;
     }
+    const std::vector<std::uint64_t> initial_generations(batch_count, 7u);
     if (atom_offsets.copy_from(host_atom_offsets.data(), host_atom_offsets.size(), stream) !=
             cudaSuccess ||
         pair_offsets.copy_from(host_plan.pair_offsets().data(), host_plan.pair_offsets().size(),
@@ -242,7 +255,9 @@ struct DeviceFixture {
              cudaSuccess) ||
         coordination.copy_from(host_coordination.data(), host_coordination.size(), stream) !=
             cudaSuccess ||
-        charges.copy_from(host_charges.data(), host_charges.size(), stream) != cudaSuccess) {
+        charges.copy_from(host_charges.data(), host_charges.size(), stream) != cudaSuccess ||
+        geometry_generations.copy_from(initial_generations.data(), initial_generations.size(),
+                                       stream) != cudaSuccess) {
       return false;
     }
 
@@ -279,7 +294,15 @@ struct DeviceFixture {
                  gradient_scratch.get(),
                  static_cast<std::int64_t>(atom_count * 3u),
                  system_errors.get(),
-                 static_cast<std::int64_t>(batch_count)};
+                 static_cast<std::int64_t>(batch_count),
+                 pair_scratch.get(),
+                 static_cast<std::int64_t>(host_pair_data.size()),
+                 coordination_scratch.get(),
+                 static_cast<std::int64_t>(atom_count),
+                 geometry_generations.get(),
+                 static_cast<std::int64_t>(batch_count),
+                 geometry_sequence_active.get(),
+                 1};
     return cudaStreamSynchronize(stream) == cudaSuccess;
   }
 
@@ -288,6 +311,303 @@ struct DeviceFixture {
         batch.batch_size, system_errors.get(), error.get(), stream);
   }
 };
+
+int run_geometry_refresh_batch_case(std::size_t batch_count) {
+  std::vector<std::int64_t> atom_offsets(batch_count + 1u, 0);
+  for (std::size_t system = 0; system < batch_count; ++system) {
+    atom_offsets[system + 1u] = atom_offsets[system] + static_cast<std::int64_t>(2u + system % 4u);
+  }
+  const std::size_t atom_count = static_cast<std::size_t>(atom_offsets.back());
+  constexpr std::array<std::int32_t, 5> element_pattern{8, 1, 6, 7, 16};
+  constexpr std::array<std::array<double, 3>, 5> local_positions{{
+      {{0.0, 0.0, 0.0}},
+      {{1.43, 1.11, 0.0}},
+      {{-1.26, 1.37, 0.42}},
+      {{0.38, -0.71, 2.18}},
+      {{-1.91, -0.53, 0.84}},
+  }};
+  std::vector<std::int32_t> atomic_numbers(atom_count);
+  std::vector<double> positions(atom_count * 3u);
+  std::vector<double> charges(atom_count, 0.0);
+  for (std::size_t system = 0; system < batch_count; ++system) {
+    const std::size_t begin = static_cast<std::size_t>(atom_offsets[system]);
+    const std::size_t end = static_cast<std::size_t>(atom_offsets[system + 1u]);
+    for (std::size_t atom = begin; atom < end; ++atom) {
+      const std::size_t local = atom - begin;
+      atomic_numbers[atom] = element_pattern[local];
+      for (std::size_t axis = 0; axis < 3u; ++axis) {
+        positions[atom * 3u + axis] =
+            local_positions[local][axis] +
+            2.0e-4 * static_cast<double>((system + 1u) * (local + axis + 1u));
+      }
+    }
+  }
+
+  gpuxtb::detail::gfn2::D4Plan plan;
+  std::string error;
+  CHECK(gpuxtb::detail::gfn2::make_d4_plan(
+            static_cast<std::int64_t>(batch_count), static_cast<std::int64_t>(atom_count),
+            atom_offsets.data(), atomic_numbers.data(), plan, error) == GPUXTB_STATUS_SUCCESS);
+  std::vector<std::byte> workspace_storage(plan.workspace_size_bytes() +
+                                           gpuxtb::detail::gfn2::kD4WorkspaceAlignment - 1u);
+  const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(workspace_storage.data());
+  const std::uintptr_t aligned = (address + gpuxtb::detail::gfn2::kD4WorkspaceAlignment - 1u) &
+                                 ~(gpuxtb::detail::gfn2::kD4WorkspaceAlignment - 1u);
+  gpuxtb::detail::gfn2::D4Workspace host_workspace;
+  CHECK(gpuxtb::detail::gfn2::bind_d4_workspace(plan, reinterpret_cast<void*>(aligned),
+                                                plan.workspace_size_bytes(), host_workspace,
+                                                error) == GPUXTB_STATUS_SUCCESS);
+  std::vector<double> pair_data(static_cast<std::size_t>(plan.total_pairs()) *
+                                gpuxtb::detail::gfn2::kD4PairDataElements);
+  std::vector<double> coordination(atom_count);
+  gpuxtb::detail::gfn2::D4GeometryCache host_cache;
+  CHECK(gpuxtb::detail::gfn2::update_d4_geometry_cache_cpu(
+            plan, positions.data(), 7u, pair_data.data(), pair_data.size(), coordination.data(),
+            coordination.size(), host_workspace, host_cache, error) == GPUXTB_STATUS_SUCCESS);
+
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CHECK(device.initialize(plan, atom_offsets, atomic_numbers, pair_data, coordination, charges,
+                          stream));
+
+  auto refresh_and_compare = [&](std::uint64_t generation) -> int {
+    CUDA_CHECK(device.positions.copy_from(positions.data(), positions.size(), stream));
+    device.cache.geometry_generation = generation;
+    CUDA_CHECK(device.reset(stream));
+    CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_d4_geometry_cache_cuda(
+        device.batch, device.parameters, device.positions.get(), device.cache, device.workspace,
+        device.error.get(), stream));
+    CHECK(gpuxtb::detail::gfn2::update_d4_geometry_cache_cpu(
+              plan, positions.data(), generation, pair_data.data(), pair_data.size(),
+              coordination.data(), coordination.size(), host_workspace, host_cache,
+              error) == GPUXTB_STATUS_SUCCESS);
+
+    std::vector<double> actual_pairs(pair_data.size());
+    std::vector<double> actual_coordination(coordination.size());
+    std::vector<std::uint64_t> actual_generations(batch_count, 0u);
+    std::vector<std::uint32_t> system_errors(batch_count, 99u);
+    std::uint32_t device_error = 99u;
+    if (!actual_pairs.empty()) {
+      CUDA_CHECK(device.pair_data.copy_to(actual_pairs.data(), actual_pairs.size(), stream));
+    }
+    CUDA_CHECK(device.coordination.copy_to(actual_coordination.data(), actual_coordination.size(),
+                                           stream));
+    CUDA_CHECK(device.geometry_generations.copy_to(actual_generations.data(),
+                                                   actual_generations.size(), stream));
+    CUDA_CHECK(device.system_errors.copy_to(system_errors.data(), system_errors.size(), stream));
+    CUDA_CHECK(device.error.copy_to(&device_error, 1, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(device_error == static_cast<std::uint32_t>(Gfn2D4DeviceError::kSuccess));
+    CHECK(std::all_of(system_errors.begin(), system_errors.end(),
+                      [](std::uint32_t value) { return value == 0u; }));
+    CHECK(std::all_of(actual_generations.begin(), actual_generations.end(),
+                      [generation](std::uint64_t value) { return value == generation; }));
+    for (std::size_t element = 0; element < pair_data.size(); ++element) {
+      CHECK(near(actual_pairs[element], pair_data[element], 3.0e-15, 4.0e-14));
+    }
+    for (std::size_t atom = 0; atom < coordination.size(); ++atom) {
+      CHECK(near(actual_coordination[atom], coordination[atom], 3.0e-14, 4.0e-14));
+    }
+    return 0;
+  };
+
+  for (std::size_t atom = 0; atom < atom_count; ++atom) {
+    positions[atom * 3u] += 7.0e-4 * static_cast<double>(atom % 5u + 1u);
+    positions[atom * 3u + 1u] -= 4.0e-4 * static_cast<double>(atom % 3u + 1u);
+  }
+  CHECK(refresh_and_compare(29u) == 0);
+  for (std::size_t atom = 0; atom < atom_count; ++atom) {
+    positions[atom * 3u + 2u] += 9.0e-4 * static_cast<double>(atom % 7u + 1u);
+  }
+  CHECK(refresh_and_compare(30u) == 0);
+
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
+int test_geometry_refresh_cpu_parity_ragged_batches() {
+  for (const std::size_t batch_count : std::array<std::size_t, 4>{1u, 8u, 32u, 128u}) {
+    CHECK(run_geometry_refresh_batch_case(batch_count) == 0);
+  }
+  return 0;
+}
+
+int test_geometry_refresh_peer_and_plan_failure_atomicity() {
+  HostFixture host;
+  CHECK(host.initialize());
+  const std::vector<double> baseline_pairs = host.pair_data;
+  const std::vector<double> baseline_coordination = host.coordination;
+  std::array<double, HostFixture::positions.size()> expected_positions = HostFixture::positions;
+  expected_positions[12] += 0.31;
+  std::string error;
+  CHECK(gpuxtb::detail::gfn2::update_d4_geometry_cache_cpu(
+            host.plan, expected_positions.data(), 31u, host.pair_data.data(), host.pair_data.size(),
+            host.coordination.data(), host.coordination.size(), host.workspace, host.cache,
+            error) == GPUXTB_STATUS_SUCCESS);
+
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CHECK(device.initialize(host.plan, HostFixture::atom_offsets, HostFixture::atomic_numbers,
+                          baseline_pairs, baseline_coordination, HostFixture::charges, stream));
+  std::array<double, HostFixture::positions.size()> bad_positions = expected_positions;
+  bad_positions[0] = std::numeric_limits<double>::quiet_NaN();
+  CUDA_CHECK(device.positions.copy_from(bad_positions.data(), bad_positions.size(), stream));
+  device.cache.geometry_generation = 31u;
+  CUDA_CHECK(device.reset(stream));
+  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_d4_geometry_cache_cuda(
+      device.batch, device.parameters, device.positions.get(), device.cache, device.workspace,
+      device.error.get(), stream));
+
+  std::vector<double> actual_pairs(host.pair_data.size());
+  std::vector<double> actual_coordination(host.coordination.size());
+  std::array<std::uint64_t, 2> generations{};
+  std::array<std::uint32_t, 2> system_errors{};
+  std::uint32_t device_error = 99u;
+  CUDA_CHECK(device.pair_data.copy_to(actual_pairs.data(), actual_pairs.size(), stream));
+  CUDA_CHECK(
+      device.coordination.copy_to(actual_coordination.data(), actual_coordination.size(), stream));
+  CUDA_CHECK(device.geometry_generations.copy_to(generations.data(), generations.size(), stream));
+  CUDA_CHECK(device.system_errors.copy_to(system_errors.data(), system_errors.size(), stream));
+  CUDA_CHECK(device.error.copy_to(&device_error, 1, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(system_errors[0] == static_cast<std::uint32_t>(Gfn2D4DeviceError::kNonfinitePosition));
+  CHECK(system_errors[1] == 0u);
+  CHECK(device_error == static_cast<std::uint32_t>(Gfn2D4DeviceError::kSuccess));
+  CHECK(generations[0] == 7u);
+  CHECK(generations[1] == 31u);
+  const std::size_t first_pair_elements = static_cast<std::size_t>(host.plan.pair_offsets()[1]) *
+                                          gpuxtb::detail::gfn2::kD4PairDataElements;
+  for (std::size_t element = 0; element < first_pair_elements; ++element) {
+    CHECK(actual_pairs[element] == baseline_pairs[element]);
+  }
+  for (std::size_t element = first_pair_elements; element < actual_pairs.size(); ++element) {
+    CHECK(near(actual_pairs[element], host.pair_data[element], 3.0e-15, 4.0e-14));
+  }
+  const std::size_t first_atoms = static_cast<std::size_t>(HostFixture::atom_offsets[1]);
+  for (std::size_t atom = 0; atom < first_atoms; ++atom) {
+    CHECK(actual_coordination[atom] == baseline_coordination[atom]);
+  }
+  for (std::size_t atom = first_atoms; atom < actual_coordination.size(); ++atom) {
+    CHECK(near(actual_coordination[atom], host.coordination[atom], 3.0e-14, 4.0e-14));
+  }
+
+  /* Immutable topology corruption fails closed without publishing any peer. */
+  const std::vector<double> before_plan_failure_pairs = actual_pairs;
+  const std::vector<double> before_plan_failure_coordination = actual_coordination;
+  constexpr std::array<std::int32_t, 5> invalid_atomic_numbers{0, 1, 1, 6, 8};
+  CUDA_CHECK(device.atomic_numbers.copy_from(invalid_atomic_numbers.data(),
+                                             invalid_atomic_numbers.size(), stream));
+  CUDA_CHECK(
+      device.positions.copy_from(expected_positions.data(), expected_positions.size(), stream));
+  device.cache.geometry_generation = 32u;
+  CUDA_CHECK(device.reset(stream));
+  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_d4_geometry_cache_cuda(
+      device.batch, device.parameters, device.positions.get(), device.cache, device.workspace,
+      device.error.get(), stream));
+  CUDA_CHECK(device.pair_data.copy_to(actual_pairs.data(), actual_pairs.size(), stream));
+  CUDA_CHECK(
+      device.coordination.copy_to(actual_coordination.data(), actual_coordination.size(), stream));
+  CUDA_CHECK(device.geometry_generations.copy_to(generations.data(), generations.size(), stream));
+  CUDA_CHECK(device.system_errors.copy_to(system_errors.data(), system_errors.size(), stream));
+  CUDA_CHECK(device.error.copy_to(&device_error, 1, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(device_error == static_cast<std::uint32_t>(Gfn2D4DeviceError::kInvalidAtomicNumber));
+  CHECK(system_errors[0] == 0u && system_errors[1] == 0u);
+  CHECK(actual_pairs == before_plan_failure_pairs);
+  CHECK(actual_coordination == before_plan_failure_coordination);
+  CHECK(generations[0] == 7u && generations[1] == 31u);
+
+  /* Host-visible aliases are rejected before any asynchronous work is queued. */
+  Gfn2D4DeviceWorkspace aliased_workspace = device.workspace;
+  aliased_workspace.pair_scratch = const_cast<double*>(device.cache.pair_data);
+  CHECK(gpuxtb::detail::cuda::update_gfn2_d4_geometry_cache_cuda(
+            device.batch, device.parameters, device.positions.get(), device.cache,
+            aliased_workspace, device.error.get(), stream) == cudaErrorInvalidValue);
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
+int test_geometry_refresh_graph_capture_and_replay() {
+  HostFixture host;
+  CHECK(host.initialize());
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CHECK(device.initialize(host, stream));
+  device.cache.geometry_generation = 41u;
+
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t executable = nullptr;
+  CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
+  CUDA_CHECK(device.reset(stream));
+  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_d4_geometry_cache_cuda(
+      device.batch, device.parameters, device.positions.get(), device.cache, device.workspace,
+      device.error.get(), stream));
+  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_two_body_cuda(
+      device.batch, device.parameters, device.cache, device.charges.get(), device.energies.get(),
+      device.potentials.get(), device.workspace, device.error.get(), stream));
+  CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
+  CUDA_CHECK(cudaGraphInstantiate(&executable, graph, nullptr, nullptr, 0u));
+
+  auto replay_and_compare =
+      [&](const std::array<double, HostFixture::positions.size()>& positions) -> int {
+    std::string error;
+    CHECK(gpuxtb::detail::gfn2::update_d4_geometry_cache_cpu(
+              host.plan, positions.data(), 41u, host.pair_data.data(), host.pair_data.size(),
+              host.coordination.data(), host.coordination.size(), host.workspace, host.cache,
+              error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_cpu(
+              host.plan, host.cache, HostFixture::charges.data(), host.energies.data(),
+              host.potentials.data(), host.workspace, error) == GPUXTB_STATUS_SUCCESS);
+    CUDA_CHECK(device.positions.copy_from(positions.data(), positions.size(), stream));
+    CUDA_CHECK(cudaGraphLaunch(executable, stream));
+
+    std::vector<double> actual_pairs(host.pair_data.size());
+    std::vector<double> actual_coordination(host.coordination.size());
+    std::array<double, 2> energies{};
+    std::array<double, 5> potentials{};
+    std::array<std::uint64_t, 2> generations{};
+    std::uint32_t device_error = 99u;
+    CUDA_CHECK(device.pair_data.copy_to(actual_pairs.data(), actual_pairs.size(), stream));
+    CUDA_CHECK(device.coordination.copy_to(actual_coordination.data(), actual_coordination.size(),
+                                           stream));
+    CUDA_CHECK(device.energies.copy_to(energies.data(), energies.size(), stream));
+    CUDA_CHECK(device.potentials.copy_to(potentials.data(), potentials.size(), stream));
+    CUDA_CHECK(device.geometry_generations.copy_to(generations.data(), generations.size(), stream));
+    CUDA_CHECK(device.error.copy_to(&device_error, 1, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(device_error == static_cast<std::uint32_t>(Gfn2D4DeviceError::kSuccess));
+    CHECK(generations[0] == 41u && generations[1] == 41u);
+    for (std::size_t element = 0; element < actual_pairs.size(); ++element) {
+      CHECK(near(actual_pairs[element], host.pair_data[element], 3.0e-15, 4.0e-14));
+    }
+    for (std::size_t atom = 0; atom < actual_coordination.size(); ++atom) {
+      CHECK(near(actual_coordination[atom], host.coordination[atom], 3.0e-14, 4.0e-14));
+      CHECK(near(potentials[atom], host.potentials[atom], 2.0e-12, 2.0e-13));
+    }
+    for (std::size_t system = 0; system < energies.size(); ++system) {
+      CHECK(near(energies[system], host.energies[system], 2.0e-12, 2.0e-13));
+    }
+    return 0;
+  };
+
+  std::array<double, HostFixture::positions.size()> first_positions = HostFixture::positions;
+  first_positions[3] += 0.08;
+  first_positions[13] -= 0.06;
+  CHECK(replay_and_compare(first_positions) == 0);
+  std::array<double, HostFixture::positions.size()> second_positions = HostFixture::positions;
+  second_positions[4] -= 0.11;
+  second_positions[12] += 0.17;
+  second_positions[14] += 0.09;
+  CHECK(replay_and_compare(second_positions) == 0);
+
+  CUDA_CHECK(cudaGraphExecDestroy(executable));
+  CUDA_CHECK(cudaGraphDestroy(graph));
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
 
 int test_cpu_parity_and_ragged_batch() {
   HostFixture host;
@@ -1308,6 +1628,18 @@ int test_graph_capture_and_replay() {
 }  // namespace
 
 int main() {
+  if (const int status = test_geometry_refresh_cpu_parity_ragged_batches(); status != 0) {
+    std::cerr << "CUDA D4 geometry-refresh parity test failed at line " << status << '\n';
+    return status;
+  }
+  if (const int status = test_geometry_refresh_peer_and_plan_failure_atomicity(); status != 0) {
+    std::cerr << "CUDA D4 geometry-refresh atomicity test failed at line " << status << '\n';
+    return status;
+  }
+  if (const int status = test_geometry_refresh_graph_capture_and_replay(); status != 0) {
+    std::cerr << "CUDA D4 geometry-refresh Graph test failed at line " << status << '\n';
+    return status;
+  }
   if (const int status = test_cpu_parity_and_ragged_batch(); status != 0) {
     std::cerr << "CUDA D4 CPU-parity test failed at line " << status << '\n';
     return status;

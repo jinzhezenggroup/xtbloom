@@ -16,6 +16,7 @@ constexpr double kChargeScalingSteepness = 2.0;
 constexpr double kReferenceWeightFactor = 6.0;
 constexpr double kMinimumWeightNorm = 1.4916681462400413e-154;
 constexpr double kCoordinationCutoffSquared = 30.0 * 30.0;
+constexpr double kTwoBodyCutoffSquared = 50.0 * 50.0;
 constexpr double kAtmCutoffSquared = 25.0 * 25.0;
 constexpr double kMinimumDistanceSquared = 1.0e-12;
 constexpr double kCoordinationSteepness = 7.5;
@@ -23,6 +24,8 @@ constexpr double kEnK4 = 4.10451;
 constexpr double kEnK5 = 19.08857;
 constexpr double kEnK6 = 2.0 * 11.28174 * 11.28174;
 constexpr double kInverseSqrtPi = 0.5641895835477562869480794515607726;
+constexpr double kDispersionS6 = 1.0;
+constexpr double kDispersionS8 = 2.7;
 constexpr double kDispersionA1 = 0.52;
 constexpr double kDispersionA2 = 5.0;
 constexpr double kDispersionS9 = 5.0;
@@ -126,6 +129,38 @@ __device__ std::int64_t system_for_pair(Gfn2D4DeviceBatch batch, std::int64_t pa
   return lower;
 }
 
+struct D4GeometrySystemRanges {
+  std::int64_t atom_begin;
+  std::int64_t atom_end;
+  std::int64_t pair_begin;
+  std::int64_t pair_end;
+};
+
+__device__ bool geometry_sequence_is_active(const Gfn2D4DeviceWorkspace& workspace) {
+  return atomicAdd(workspace.geometry_sequence_active, 0u) == 1u;
+}
+
+/*
+ * Load one ragged member only after the immutable-sequence gate and the
+ * peer-local sticky status both permit work. All callers invoke this helper
+ * uniformly across a block because it contains a block synchronization.
+ */
+__device__ bool load_geometry_system(const Gfn2D4DeviceBatch& batch, std::int64_t system,
+                                     const Gfn2D4DeviceWorkspace& workspace,
+                                     D4GeometrySystemRanges* ranges, int* valid) {
+  if (threadIdx.x == 0) {
+    *valid = geometry_sequence_is_active(workspace) && system_is_valid(workspace, system) ? 1 : 0;
+    if (*valid != 0) {
+      ranges->atom_begin = batch.atom_offsets[system];
+      ranges->atom_end = batch.atom_offsets[system + 1];
+      ranges->pair_begin = batch.pair_offsets[system];
+      ranges->pair_end = batch.pair_offsets[system + 1];
+    }
+  }
+  __syncthreads();
+  return *valid != 0;
+}
+
 /* Match the CPU plan's checked n*(n-1)/2 construction without signed overflow. */
 __device__ bool packed_pair_count(std::int64_t atoms, std::int64_t& pairs) {
   if (atoms < 0 || (atoms > 0 && atoms - 1 > kMaximumInt64 / atoms)) {
@@ -216,6 +251,197 @@ __global__ void topology_preflight_kernel(Gfn2D4DeviceBatch batch,
     if (atomic_number_hash != batch.atomic_number_hash) {
       record_error(device_error, Gfn2D4DeviceError::kInvalidAtomicNumber);
     }
+  }
+}
+
+/* Snapshot plan validity before peer-local numerical work begins. */
+__global__ void capture_geometry_sequence_kernel(const std::uint32_t* device_error,
+                                                 std::uint32_t* sequence_active) {
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    *sequence_active = atomicAdd(const_cast<std::uint32_t*>(device_error), 0u) ==
+                               static_cast<std::uint32_t>(Gfn2D4DeviceError::kSuccess)
+                           ? 1u
+                           : 0u;
+  }
+}
+
+/*
+ * Form the exact five-value CPU D4 pair layout in unpublished storage. One
+ * thread owns an upper atom and therefore all packed lower pairs below it;
+ * no pair atomics or inter-block reductions are required.
+ */
+__global__ void build_d4_geometry_pairs_kernel(Gfn2D4DeviceBatch batch,
+                                               Gfn2D4DeviceParameters parameters,
+                                               const double* positions,
+                                               Gfn2D4DeviceWorkspace workspace) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  __shared__ D4GeometrySystemRanges ranges;
+  __shared__ int valid;
+  if (!load_geometry_system(batch, system, workspace, &ranges, &valid)) {
+    return;
+  }
+  /* Finish every shared valid read before position validation may update it. */
+  __syncthreads();
+
+  for (std::int64_t atom = ranges.atom_begin + threadIdx.x; atom < ranges.atom_end;
+       atom += blockDim.x) {
+    const std::int64_t coordinate = atom * 3;
+    if (!isfinite(positions[coordinate]) || !isfinite(positions[coordinate + 1]) ||
+        !isfinite(positions[coordinate + 2])) {
+      record_system_error(workspace, system, Gfn2D4DeviceError::kNonfinitePosition);
+      atomicExch(&valid, 0);
+    }
+  }
+  __syncthreads();
+  if (valid == 0) {
+    return;
+  }
+
+  for (std::int64_t second = ranges.atom_begin + 1 + threadIdx.x; second < ranges.atom_end;
+       second += blockDim.x) {
+    const std::int64_t local_second = second - ranges.atom_begin;
+    const std::int64_t second_coordinate = second * 3;
+    const Gfn2D4DeviceElementData second_element =
+        parameters.elements[batch.atomic_numbers[second] - 1];
+    for (std::int64_t first = ranges.atom_begin; first < second; ++first) {
+      const std::int64_t first_coordinate = first * 3;
+      const double dx = positions[first_coordinate] - positions[second_coordinate];
+      const double dy = positions[first_coordinate + 1] - positions[second_coordinate + 1];
+      const double dz = positions[first_coordinate + 2] - positions[second_coordinate + 2];
+      if (!isfinite(dx) || !isfinite(dy) || !isfinite(dz)) {
+        record_system_error(workspace, system, Gfn2D4DeviceError::kCoordinateDifferenceOverflow);
+        continue;
+      }
+      const double distance_squared = dx * dx + dy * dy + dz * dz;
+      if (!isfinite(distance_squared)) {
+        record_system_error(workspace, system, Gfn2D4DeviceError::kNonfiniteGeometryArithmetic);
+        continue;
+      }
+      if (distance_squared < kMinimumDistanceSquared) {
+        record_system_error(workspace, system, Gfn2D4DeviceError::kCoincidentAtoms);
+        continue;
+      }
+
+      double damping = 0.0;
+      double damping_derivative = 0.0;
+      if (distance_squared <= kTwoBodyCutoffSquared) {
+        const Gfn2D4DeviceElementData first_element =
+            parameters.elements[batch.atomic_numbers[first] - 1];
+        const double rrij = 3.0 * first_element.r4r2 * second_element.r4r2;
+        const double r0 = kDispersionA1 * sqrt(rrij) + kDispersionA2;
+        const double r2_squared = distance_squared * distance_squared;
+        const double r2_cubed = r2_squared * distance_squared;
+        const double r0_squared = r0 * r0;
+        const double r0_fourth = r0_squared * r0_squared;
+        const double r0_sixth = r0_fourth * r0_squared;
+        const double t6 = 1.0 / (r2_cubed + r0_sixth);
+        const double t8 = 1.0 / (r2_squared * r2_squared + r0_fourth * r0_fourth);
+        damping = kDispersionS6 * t6 + kDispersionS8 * rrij * t8;
+        damping_derivative = kDispersionS6 * (-6.0 * r2_squared * t6 * t6) +
+                             kDispersionS8 * rrij * (-8.0 * r2_cubed * t8 * t8);
+      }
+      if (!isfinite(damping) || !isfinite(damping_derivative)) {
+        record_system_error(workspace, system, Gfn2D4DeviceError::kNonfiniteGeometryArithmetic);
+        continue;
+      }
+
+      const std::int64_t local_first = first - ranges.atom_begin;
+      const std::int64_t pair =
+          ranges.pair_begin + local_second * (local_second - 1) / 2 + local_first;
+      double* const output = workspace.pair_scratch + pair * kGfn2D4PairDataElements;
+      output[0] = dx;
+      output[1] = dy;
+      output[2] = dz;
+      output[3] = damping;
+      output[4] = damping_derivative;
+    }
+  }
+}
+
+/*
+ * Accumulate each atom's peers in ascending atom order. That is exactly the
+ * contribution order induced by update_d4_geometry_cache_cpu's nested pair
+ * loop, while assigning one output atom to one thread avoids atomics.
+ */
+__global__ void build_d4_coordination_kernel(Gfn2D4DeviceBatch batch,
+                                             Gfn2D4DeviceParameters parameters,
+                                             Gfn2D4DeviceWorkspace workspace) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  __shared__ D4GeometrySystemRanges ranges;
+  __shared__ int valid;
+  if (!load_geometry_system(batch, system, workspace, &ranges, &valid)) {
+    return;
+  }
+
+  for (std::int64_t atom = ranges.atom_begin + threadIdx.x; atom < ranges.atom_end;
+       atom += blockDim.x) {
+    double coordination = 0.0;
+    const Gfn2D4DeviceElementData atom_element =
+        parameters.elements[batch.atomic_numbers[atom] - 1];
+    for (std::int64_t peer = ranges.atom_begin; peer < ranges.atom_end; ++peer) {
+      if (peer == atom) {
+        continue;
+      }
+      const std::int64_t first = atom < peer ? atom : peer;
+      const std::int64_t second = atom < peer ? peer : atom;
+      const std::int64_t local_first = first - ranges.atom_begin;
+      const std::int64_t local_second = second - ranges.atom_begin;
+      const std::int64_t pair =
+          ranges.pair_begin + local_second * (local_second - 1) / 2 + local_first;
+      const double* const values = workspace.pair_scratch + pair * kGfn2D4PairDataElements;
+      const double distance_squared =
+          values[0] * values[0] + values[1] * values[1] + values[2] * values[2];
+      if (distance_squared <= kCoordinationCutoffSquared) {
+        const Gfn2D4DeviceElementData peer_element =
+            parameters.elements[batch.atomic_numbers[peer] - 1];
+        const double radius = atom_element.covalent_radius + peer_element.covalent_radius;
+        const double en_delta =
+            fabs(atom_element.electronegativity - peer_element.electronegativity);
+        const double en_factor = kEnK4 * exp(-((en_delta + kEnK5) * (en_delta + kEnK5)) / kEnK6);
+        const double distance = sqrt(distance_squared);
+        const double exponent = kCoordinationSteepness * (distance - radius) / radius;
+        coordination += 0.5 * en_factor * (1.0 + erf(-exponent));
+      }
+      if (!isfinite(coordination)) {
+        record_system_error(workspace, system, Gfn2D4DeviceError::kNonfiniteGeometryArithmetic);
+        break;
+      }
+    }
+    workspace.coordination_scratch[atom] = coordination;
+  }
+}
+
+__global__ void publish_d4_geometry_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceCache cache,
+                                           Gfn2D4DeviceWorkspace workspace) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!geometry_sequence_is_active(workspace) || !system_is_valid(workspace, system)) {
+    return;
+  }
+  double* const pair_data = const_cast<double*>(cache.pair_data);
+  double* const coordination_numbers = const_cast<double*>(cache.coordination_numbers);
+  const std::int64_t pair_begin = batch.pair_offsets[system];
+  const std::int64_t pair_end = batch.pair_offsets[system + 1];
+  for (std::int64_t pair = pair_begin + threadIdx.x; pair < pair_end; pair += blockDim.x) {
+    const std::int64_t base = pair * kGfn2D4PairDataElements;
+    for (std::int64_t component = 0; component < kGfn2D4PairDataElements; ++component) {
+      pair_data[base + component] = workspace.pair_scratch[base + component];
+    }
+  }
+  const std::int64_t atom_begin = batch.atom_offsets[system];
+  const std::int64_t atom_end = batch.atom_offsets[system + 1];
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    coordination_numbers[atom] = workspace.coordination_scratch[atom];
+  }
+}
+
+/* A separate launch makes generation publication strictly follow cache data. */
+__global__ void publish_d4_geometry_generation_kernel(Gfn2D4DeviceBatch batch,
+                                                      std::uint64_t geometry_generation,
+                                                      Gfn2D4DeviceWorkspace workspace) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (threadIdx.x == 0 && geometry_sequence_is_active(workspace) &&
+      system_is_valid(workspace, system)) {
+    workspace.geometry_generations[system] = geometry_generation;
   }
 }
 
@@ -1491,6 +1717,80 @@ bool writable_ranges_are_disjoint(const std::array<AddressRange, ReadCount>& rea
   return true;
 }
 
+bool valid_geometry_refresh_descriptors(const Gfn2D4DeviceBatch& batch,
+                                        const Gfn2D4DeviceParameters& parameters,
+                                        const double* positions, const Gfn2D4DeviceCache& cache,
+                                        const Gfn2D4DeviceWorkspace& workspace,
+                                        const std::uint32_t* device_error) {
+  const bool extents_representable =
+      batch.batch_size > 0 && batch.batch_size <= std::numeric_limits<int>::max() &&
+      batch.total_atoms > 0 && batch.total_atoms <= std::numeric_limits<std::int64_t>::max() / 3 &&
+      batch.total_pairs >= 0 &&
+      batch.total_pairs <= std::numeric_limits<std::int64_t>::max() / kGfn2D4PairDataElements;
+  if (!extents_representable) {
+    return false;
+  }
+  const std::int64_t coordinate_elements = batch.total_atoms * 3;
+  const std::int64_t pair_elements = batch.total_pairs * kGfn2D4PairDataElements;
+  if (batch.plan_token == 0u || batch.atom_offsets == nullptr || batch.pair_offsets == nullptr ||
+      batch.atomic_numbers == nullptr || parameters.elements == nullptr ||
+      parameters.element_count <= 0 || parameters.reference_count <= 0 || positions == nullptr ||
+      cache.plan_token != batch.plan_token || cache.geometry_generation == 0u ||
+      cache.pair_data_elements != pair_elements || cache.coordination_numbers == nullptr ||
+      cache.coordination_elements != batch.total_atoms ||
+      (pair_elements != 0 && cache.pair_data == nullptr) ||
+      workspace.pair_scratch_elements < pair_elements ||
+      (pair_elements != 0 && workspace.pair_scratch == nullptr) ||
+      workspace.coordination_scratch == nullptr ||
+      workspace.coordination_scratch_elements < batch.total_atoms ||
+      workspace.geometry_generations == nullptr ||
+      workspace.geometry_generation_elements < batch.batch_size ||
+      workspace.geometry_sequence_active == nullptr || workspace.geometry_sequence_elements < 1 ||
+      workspace.system_errors == nullptr || workspace.system_error_elements < batch.batch_size ||
+      device_error == nullptr || !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.pair_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.atomic_numbers, alignof(std::int32_t)) ||
+      !is_aligned(parameters.elements, alignof(Gfn2D4DeviceElementData)) ||
+      !is_aligned(positions, alignof(double)) ||
+      (cache.pair_data != nullptr && !is_aligned(cache.pair_data, alignof(double))) ||
+      !is_aligned(cache.coordination_numbers, alignof(double)) ||
+      (workspace.pair_scratch != nullptr && !is_aligned(workspace.pair_scratch, alignof(double))) ||
+      !is_aligned(workspace.coordination_scratch, alignof(double)) ||
+      !is_aligned(workspace.geometry_generations, alignof(std::uint64_t)) ||
+      !is_aligned(workspace.geometry_sequence_active, alignof(std::uint32_t)) ||
+      !is_aligned(workspace.system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(device_error, alignof(std::uint32_t))) {
+    return false;
+  }
+
+  std::array<AddressRange, 5> reads;
+  std::array<AddressRange, 8> writes;
+  return make_address_range(batch.atom_offsets, batch.batch_size + 1, sizeof(*batch.atom_offsets),
+                            reads[0]) &&
+         make_address_range(batch.pair_offsets, batch.batch_size + 1, sizeof(*batch.pair_offsets),
+                            reads[1]) &&
+         make_address_range(batch.atomic_numbers, batch.total_atoms, sizeof(*batch.atomic_numbers),
+                            reads[2]) &&
+         make_address_range(parameters.elements, parameters.element_count,
+                            sizeof(*parameters.elements), reads[3]) &&
+         make_address_range(positions, coordinate_elements, sizeof(*positions), reads[4]) &&
+         make_address_range(cache.pair_data, pair_elements, sizeof(*cache.pair_data), writes[0]) &&
+         make_address_range(cache.coordination_numbers, batch.total_atoms,
+                            sizeof(*cache.coordination_numbers), writes[1]) &&
+         make_address_range(workspace.pair_scratch, pair_elements, sizeof(*workspace.pair_scratch),
+                            writes[2]) &&
+         make_address_range(workspace.coordination_scratch, batch.total_atoms,
+                            sizeof(*workspace.coordination_scratch), writes[3]) &&
+         make_address_range(workspace.geometry_generations, batch.batch_size,
+                            sizeof(*workspace.geometry_generations), writes[4]) &&
+         make_address_range(workspace.geometry_sequence_active, 1,
+                            sizeof(*workspace.geometry_sequence_active), writes[5]) &&
+         make_address_range(workspace.system_errors, batch.batch_size,
+                            sizeof(*workspace.system_errors), writes[6]) &&
+         make_address_range(device_error, 1, sizeof(*device_error), writes[7]) &&
+         writable_ranges_are_disjoint(reads, writes);
+}
+
 bool valid_common_descriptors(const Gfn2D4DeviceBatch& batch,
                               const Gfn2D4DeviceParameters& parameters,
                               const Gfn2D4DeviceCache& cache,
@@ -1775,6 +2075,48 @@ cudaError_t reset_gfn2_d4_device_errors_cuda(std::int64_t batch_size, std::uint3
     return status;
   }
   return cudaMemsetAsync(device_error, 0, sizeof(*device_error), stream);
+}
+
+cudaError_t update_gfn2_d4_geometry_cache_cuda(
+    const Gfn2D4DeviceBatch& batch, const Gfn2D4DeviceParameters& parameters,
+    const double* positions, const Gfn2D4DeviceCache& cache, const Gfn2D4DeviceWorkspace& workspace,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  if (!valid_geometry_refresh_descriptors(batch, parameters, positions, cache, workspace,
+                                          device_error)) {
+    return cudaErrorInvalidValue;
+  }
+  topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, parameters, device_error);
+  cudaError_t status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  capture_geometry_sequence_kernel<<<1, 1, 0, stream>>>(device_error,
+                                                        workspace.geometry_sequence_active);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  const unsigned int blocks = static_cast<unsigned int>(batch.batch_size);
+  build_d4_geometry_pairs_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(batch, parameters,
+                                                                          positions, workspace);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  build_d4_coordination_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(batch, parameters,
+                                                                        workspace);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  publish_d4_geometry_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(batch, cache, workspace);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  publish_d4_geometry_generation_kernel<<<blocks, 1, 0, stream>>>(batch, cache.geometry_generation,
+                                                                  workspace);
+  return check_launch();
 }
 
 cudaError_t evaluate_gfn2_d4_two_body_cuda(

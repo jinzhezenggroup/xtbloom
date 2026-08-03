@@ -92,6 +92,30 @@ struct Gfn2D4DeviceWorkspace {
   /* One sticky Gfn2D4DeviceError per ragged batch member. */
   std::uint32_t* system_errors = nullptr;
   std::int64_t system_error_elements = 0;
+
+  /*
+   * Unpublished changed-geometry state. These fields are used only by
+   * update_gfn2_d4_geometry_cache_cuda; the energy/gradient launchers above
+   * neither require nor inspect them. Keeping the storage caller-owned makes
+   * repeated refreshes allocation-free and CUDA Graph capture safe.
+   */
+  double* pair_scratch = nullptr;
+  std::int64_t pair_scratch_elements = 0;
+  double* coordination_scratch = nullptr;
+  std::int64_t coordination_scratch_elements = 0;
+
+  /*
+   * geometry_generations is published per system after its pair and CN slices
+   * have committed. A failed peer therefore retains both its old numerical
+   * cache and its old generation even though Gfn2D4DeviceCache keeps the
+   * legacy scalar generation required by existing consumers.
+   */
+  std::uint64_t* geometry_generations = nullptr;
+  std::int64_t geometry_generation_elements = 0;
+
+  /* One internal stream-ordered gate snapshot; values are 0 or 1. */
+  std::uint32_t* geometry_sequence_active = nullptr;
+  std::int64_t geometry_sequence_elements = 0;
 };
 
 enum class Gfn2D4DeviceError : std::uint32_t {
@@ -105,6 +129,10 @@ enum class Gfn2D4DeviceError : std::uint32_t {
   kNonfiniteArithmetic = 7u,
   kInvalidActivity = 8u,
   kStaleGeometry = 9u,
+  kNonfinitePosition = 10u,
+  kCoordinateDifferenceOverflow = 11u,
+  kCoincidentAtoms = 12u,
+  kNonfiniteGeometryArithmetic = 13u,
 };
 
 /* SplitMix64 finalizer used by the order-sensitive, parallelizable fingerprint. */
@@ -150,6 +178,27 @@ static_assert(std::is_trivially_copyable_v<Gfn2D4DeviceWorkspace>);
 cudaError_t reset_gfn2_d4_device_errors_cuda(std::int64_t batch_size, std::uint32_t* system_errors,
                                              std::uint32_t* device_error,
                                              cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Rebuild the D4 pair/CN cache directly from atom-major device positions in
+ * bohr. cache.geometry_generation is the requested nonzero generation and
+ * must already be bound to the generation argument used by downstream D4
+ * consumers. The cache retains its legacy read-only pointer view; setup must
+ * bind those pointers to writable CUDA allocations for this update call.
+ *
+ * Publication is transactional per ragged system. Pair data and coordination
+ * numbers are first formed in workspace scratch, healthy peers then publish
+ * their numerical slices, and only a later kernel publishes their entry in
+ * workspace.geometry_generations. A peer-local numerical failure leaves all
+ * three old slices unchanged; immutable topology/parameter failure closes the
+ * whole sequence through device_error. The launcher allocates, transfers,
+ * polls, and synchronizes nowhere and is safe on custom streams and in CUDA
+ * Graph capture.
+ */
+cudaError_t update_gfn2_d4_geometry_cache_cuda(
+    const Gfn2D4DeviceBatch& batch, const Gfn2D4DeviceParameters& parameters,
+    const double* positions, const Gfn2D4DeviceCache& cache, const Gfn2D4DeviceWorkspace& workspace,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
 /*
  * Overwrite one two-body energy per system and dE_D4/dq per atom. Inputs,
