@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "backends/cuda/cuda_atomics.cuh"
 #include "backends/cuda/gfn2_parameters.cuh"
 #include "backends/cuda/gfn2_repulsion.cuh"
 
@@ -122,16 +123,16 @@ __global__ void gfn2_repulsion_kernel(Gfn2RepulsionDeviceBatch batch, double* en
         first_fx += fx;
         first_fy += fy;
         first_fz += fz;
-        atomicAdd(&forces[second_coordinate], -fx);
-        atomicAdd(&forces[second_coordinate + 1], -fy);
-        atomicAdd(&forces[second_coordinate + 2], -fz);
+        atomic_add_fp64(&forces[second_coordinate], -fx);
+        atomic_add_fp64(&forces[second_coordinate + 1], -fy);
+        atomic_add_fp64(&forces[second_coordinate + 2], -fz);
       }
     }
 
     if (forces != nullptr) {
-      atomicAdd(&forces[first_coordinate], first_fx);
-      atomicAdd(&forces[first_coordinate + 1], first_fy);
-      atomicAdd(&forces[first_coordinate + 2], first_fz);
+      atomic_add_fp64(&forces[first_coordinate], first_fx);
+      atomic_add_fp64(&forces[first_coordinate + 1], first_fy);
+      atomic_add_fp64(&forces[first_coordinate + 2], first_fz);
     }
   }
 
@@ -144,7 +145,7 @@ __global__ void gfn2_repulsion_kernel(Gfn2RepulsionDeviceBatch batch, double* en
     __syncthreads();
   }
   if (threadIdx.x == 0) {
-    atomicAdd(&energies[system], energy_sums[0]);
+    atomic_add_fp64(&energies[system], energy_sums[0]);
   }
 }
 

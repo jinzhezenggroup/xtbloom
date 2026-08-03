@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "backends/cuda/cuda_atomics.cuh"
 #include "backends/cuda/gfn2_es2.cuh"
 
 namespace gpuxtb::detail::cuda {
@@ -335,21 +336,6 @@ __global__ void energy_preflight_kernel(Gfn2ES2DeviceBatch batch, Gfn2ES2DeviceC
   }
 }
 
-__device__ double atomic_add_double(double* address, double value) {
-#if __CUDA_ARCH__ >= 600
-  return atomicAdd(address, value);
-#else
-  auto* bits = reinterpret_cast<unsigned long long*>(address);
-  unsigned long long old = *bits;
-  unsigned long long assumed = 0;
-  do {
-    assumed = old;
-    old = atomicCAS(bits, assumed, __double_as_longlong(value + __longlong_as_double(assumed)));
-  } while (assumed != old);
-  return __longlong_as_double(old);
-#endif
-}
-
 __global__ void gradient_preflight_kernel(Gfn2ES2DeviceBatch batch, Gfn2ES2DeviceCache cache,
                                           const double* positions, const double* shell_charges,
                                           double* gradient_scratch, std::uint32_t* device_error) {
@@ -429,10 +415,9 @@ __global__ void gradient_preflight_kernel(Gfn2ES2DeviceBatch batch, Gfn2ES2Devic
           record_error(device_error, Gfn2ES2DeviceError::kNonfiniteGradientArithmetic);
           return;
         }
-        const double old_first =
-            atomic_add_double(gradient_scratch + first_index, pair_contribution);
+        const double old_first = atomic_add_fp64(gradient_scratch + first_index, pair_contribution);
         const double old_second =
-            atomic_add_double(gradient_scratch + second_index, -pair_contribution);
+            atomic_add_fp64(gradient_scratch + second_index, -pair_contribution);
         if (!isfinite(old_first) || !isfinite(old_first + pair_contribution) ||
             !isfinite(old_second) || !isfinite(old_second - pair_contribution)) {
           record_error(device_error, Gfn2ES2DeviceError::kNonfiniteGradientArithmetic);

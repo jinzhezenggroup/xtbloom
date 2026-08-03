@@ -233,6 +233,21 @@ if(GPUXTB_BUILD_TESTS)
   add_test(NAME gpuxtb.gfn2.plan_schema COMMAND gpuxtb_plan_schema_test)
 
   if(GPUXTB_HAS_CUDA)
+    add_executable(gpuxtb_cuda_atomics_test tests/cuda_atomics_test.cu)
+    target_link_libraries(gpuxtb_cuda_atomics_test PRIVATE CUDA::cudart)
+    target_include_directories(gpuxtb_cuda_atomics_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_atomics_test PRIVATE
+      GPUXTB_FORCE_FP64_ATOMIC_CAS=1
+    )
+    set_target_properties(gpuxtb_cuda_atomics_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+    )
+    add_test(NAME gpuxtb.cuda.atomics COMMAND gpuxtb_cuda_atomics_test)
+
     add_executable(gpuxtb_cuda_parameters_test tests/cuda_parameters_test.cu)
     target_link_libraries(gpuxtb_cuda_parameters_test PRIVATE
       gpuxtb::gpuxtb

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "backends/cuda/cuda_atomics.cuh"
 #include "backends/cuda/gfn2_integral_force.cuh"
 #include "backends/cuda/gfn2_integrals.cuh"
 
@@ -1089,7 +1090,7 @@ __device__ bool force_add_atomic(double* target, double contribution) {
   if (!isfinite(contribution)) {
     return false;
   }
-  const double previous = atomicAdd(target, contribution);
+  const double previous = atomic_add_fp64(target, contribution);
   return isfinite(previous) && isfinite(previous + contribution);
 }
 

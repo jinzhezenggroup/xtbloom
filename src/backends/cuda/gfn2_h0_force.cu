@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "backends/cuda/cuda_atomics.cuh"
 #include "backends/cuda/gfn2_h0_force.cuh"
 
 namespace gpuxtb::detail::cuda {
@@ -60,7 +61,7 @@ __device__ bool add_finite_atomic(double* target, double contribution) {
   if (!isfinite(contribution)) {
     return false;
   }
-  const double previous = atomicAdd(target, contribution);
+  const double previous = atomic_add_fp64(target, contribution);
   return isfinite(previous) && isfinite(previous + contribution);
 }
 

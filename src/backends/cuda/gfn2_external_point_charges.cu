@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "backends/cuda/cuda_atomics.cuh"
 #include "backends/cuda/gfn2_external_point_charges.cuh"
 
 namespace gpuxtb::detail::cuda {
@@ -750,9 +751,9 @@ __global__ void pc_gated_force_kernel(Gfn2ExternalPointChargeDeviceBatch batch,
         break;
       }
       if (point_forces != nullptr) {
-        atomicAdd(&workspace.point_scratch[point_coordinate], -force.x);
-        atomicAdd(&workspace.point_scratch[point_coordinate + 1], -force.y);
-        atomicAdd(&workspace.point_scratch[point_coordinate + 2], -force.z);
+        atomic_add_fp64(&workspace.point_scratch[point_coordinate], -force.x);
+        atomic_add_fp64(&workspace.point_scratch[point_coordinate + 1], -force.y);
+        atomic_add_fp64(&workspace.point_scratch[point_coordinate + 2], -force.z);
       }
     }
     if (!finite_result) {
@@ -760,9 +761,9 @@ __global__ void pc_gated_force_kernel(Gfn2ExternalPointChargeDeviceBatch batch,
                                    Gfn2ExternalPointChargeDeviceError::kNonfinitePairArithmetic);
       atomicExch(&valid, 0);
     } else if (qm_forces != nullptr) {
-      atomicAdd(&workspace.qm_scratch[atom_coordinate], atom_fx);
-      atomicAdd(&workspace.qm_scratch[atom_coordinate + 1], atom_fy);
-      atomicAdd(&workspace.qm_scratch[atom_coordinate + 2], atom_fz);
+      atomic_add_fp64(&workspace.qm_scratch[atom_coordinate], atom_fx);
+      atomic_add_fp64(&workspace.qm_scratch[atom_coordinate + 1], atom_fy);
+      atomic_add_fp64(&workspace.qm_scratch[atom_coordinate + 2], atom_fz);
     }
   }
   __syncthreads();

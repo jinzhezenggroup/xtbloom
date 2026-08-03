@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "backends/cuda/cuda_atomics.cuh"
 #include "backends/cuda/gfn2_d4.cuh"
 
 namespace gpuxtb::detail::cuda {
@@ -1286,13 +1287,13 @@ __global__ void atm_gradient_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceParamet
           return;
         }
         for (int axis = 0; axis < 3; ++axis) {
-          atomicAdd(workspace.gradient_scratch + i * 3 + axis, -dgij[axis] - dgik[axis]);
-          atomicAdd(workspace.gradient_scratch + j * 3 + axis, dgij[axis] - dgjk[axis]);
-          atomicAdd(workspace.gradient_scratch + k * 3 + axis, dgik[axis] + dgjk[axis]);
+          atomic_add_fp64(workspace.gradient_scratch + i * 3 + axis, -dgij[axis] - dgik[axis]);
+          atomic_add_fp64(workspace.gradient_scratch + j * 3 + axis, dgij[axis] - dgjk[axis]);
+          atomic_add_fp64(workspace.gradient_scratch + k * 3 + axis, dgik[axis] + dgjk[axis]);
         }
-        atomicAdd(workspace.coordination_adjoints + i, i_adjoint);
-        atomicAdd(workspace.coordination_adjoints + j, j_adjoint);
-        atomicAdd(workspace.coordination_adjoints + k, k_adjoint);
+        atomic_add_fp64(workspace.coordination_adjoints + i, i_adjoint);
+        atomic_add_fp64(workspace.coordination_adjoints + j, j_adjoint);
+        atomic_add_fp64(workspace.coordination_adjoints + k, k_adjoint);
       }
     }
   }
