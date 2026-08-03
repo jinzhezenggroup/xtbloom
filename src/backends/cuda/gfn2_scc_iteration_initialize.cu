@@ -865,15 +865,30 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
 }  // namespace
 
 struct Gfn2SccIterationInitializer::Impl {
-  void* image = nullptr;
+  void* device_checkpoint = nullptr;
   void* device_arena = nullptr;
+  cudaEvent_t restore_complete = nullptr;
   std::size_t image_bytes = 0u;
   std::uint64_t plan_token = 0u;
   std::uint64_t initialization_generation = 0u;
   Mode mode = Mode::kFresh;
+  int device_ordinal = -1;
+  bool has_tracked_restore = false;
 
   ~Impl() {
-    if (image != nullptr) (void)cudaFreeHost(image);
+    int previous_device = -1;
+    const bool restore_device =
+        device_ordinal >= 0 && cudaGetDevice(&previous_device) == cudaSuccess &&
+        previous_device != device_ordinal && cudaSetDevice(device_ordinal) == cudaSuccess;
+    /* Every ordinary restore is chained through this event. Waiting for the
+     * last record therefore drains source use on every submission stream
+     * without escalating teardown to a device-wide synchronization. */
+    if (restore_complete != nullptr) {
+      if (has_tracked_restore) (void)cudaEventSynchronize(restore_complete);
+      (void)cudaEventDestroy(restore_complete);
+    }
+    if (device_checkpoint != nullptr) (void)cudaFree(device_checkpoint);
+    if (restore_device) (void)cudaSetDevice(previous_device);
   }
 };
 
@@ -930,17 +945,46 @@ Gfn2SccIterationInitializationDiagnostic Gfn2SccIterationInitializer::create(
   try {
     std::unique_ptr<Impl> candidate(new (std::nothrow) Impl());
     if (candidate == nullptr) return fail(Error::kAllocationFailed, Field::kArena);
-    const cudaError_t allocation_status = cudaMallocHost(&candidate->image, current.total_bytes);
-    if (allocation_status != cudaSuccess) {
-      candidate->image = nullptr;
-      return fail(allocation_status == cudaErrorMemoryAllocation ? Error::kAllocationFailed
-                                                                 : Error::kCudaError,
-                  Field::kArena, -1, current.total_bytes, 0u, allocation_status);
+    const cudaError_t device_query_status = cudaGetDevice(&candidate->device_ordinal);
+    if (device_query_status != cudaSuccess) {
+      candidate->device_ordinal = -1;
+      return fail(Error::kCudaError, Field::kArena, -1, current.total_bytes, 0u,
+                  device_query_status);
     }
-    std::memset(candidate->image, 0, current.total_bytes);
-    ImageBuilder packer(device_arena, current.total_bytes, candidate->image);
+    void* host_image = nullptr;
+    const cudaError_t host_allocation_status = cudaMallocHost(&host_image, current.total_bytes);
+    if (host_allocation_status != cudaSuccess) {
+      return fail(host_allocation_status == cudaErrorMemoryAllocation ? Error::kAllocationFailed
+                                                                      : Error::kCudaError,
+                  Field::kArena, -1, current.total_bytes, 0u, host_allocation_status);
+    }
+    std::unique_ptr<void, decltype(&cudaFreeHost)> packed_image(host_image, &cudaFreeHost);
+    std::memset(host_image, 0, current.total_bytes);
+    ImageBuilder packer(device_arena, current.total_bytes, host_image);
     diagnostic = project_state_image(shape, plan, state, workspace, report_storage, host, packer);
     if (!diagnostic.success()) return diagnostic;
+
+    const cudaError_t device_allocation_status =
+        cudaMalloc(&candidate->device_checkpoint, current.total_bytes);
+    if (device_allocation_status != cudaSuccess) {
+      candidate->device_checkpoint = nullptr;
+      return fail(device_allocation_status == cudaErrorMemoryAllocation ? Error::kAllocationFailed
+                                                                        : Error::kCudaError,
+                  Field::kArena, -1, current.total_bytes, 0u, device_allocation_status);
+    }
+    const cudaError_t upload_status = cudaMemcpy(candidate->device_checkpoint, host_image,
+                                                 current.total_bytes, cudaMemcpyHostToDevice);
+    if (upload_status != cudaSuccess) {
+      return fail(Error::kCudaError, Field::kArena, -1, current.total_bytes, 0u, upload_status);
+    }
+    const cudaError_t event_status =
+        cudaEventCreateWithFlags(&candidate->restore_complete, cudaEventDisableTiming);
+    if (event_status != cudaSuccess) {
+      candidate->restore_complete = nullptr;
+      return fail(
+          event_status == cudaErrorMemoryAllocation ? Error::kAllocationFailed : Error::kCudaError,
+          Field::kArena, -1, current.total_bytes, 0u, event_status);
+    }
 
     candidate->device_arena = device_arena;
     candidate->image_bytes = current.total_bytes;
@@ -976,6 +1020,10 @@ Gfn2SccIterationInitializationMode Gfn2SccIterationInitializer::mode() const noe
   return impl_ == nullptr ? Mode::kFresh : impl_->mode;
 }
 
+const void* Gfn2SccIterationInitializer::device_checkpoint() const noexcept {
+  return impl_ == nullptr ? nullptr : impl_->device_checkpoint;
+}
+
 Gfn2SccIterationInitializationDiagnostic Gfn2SccIterationInitializer::upload_async(
     void* device_arena, std::size_t device_arena_bytes, Gfn2SccIterationInitializationReady& ready,
     cudaStream_t stream) const noexcept {
@@ -985,6 +1033,10 @@ Gfn2SccIterationInitializationDiagnostic Gfn2SccIterationInitializer::upload_asy
     return fail(Error::kInvalidArena, Field::kArena, -1, impl_->image_bytes, device_arena_bytes);
   }
 
+  /* Keep the stale-allocation diagnostic ahead of cudaMemcpyAsync. Some CUDA
+   * drivers do not safely reject a previously freed UVA destination inside
+   * the D2D submission path itself. This metadata query neither transfers
+   * data nor synchronizes queued stream work. */
   cudaPointerAttributes attributes{};
   const cudaError_t attribute_status = cudaPointerGetAttributes(&attributes, device_arena);
   if (attribute_status != cudaSuccess) {
@@ -997,11 +1049,39 @@ Gfn2SccIterationInitializationDiagnostic Gfn2SccIterationInitializer::upload_asy
                 device_arena_bytes);
   }
 
-  const cudaError_t status = cudaMemcpyAsync(device_arena, impl_->image, impl_->image_bytes,
-                                             cudaMemcpyHostToDevice, stream);
-  if (status != cudaSuccess) {
+  cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+  const cudaError_t capture_query_status = cudaStreamIsCapturing(stream, &capture_status);
+  if (capture_query_status != cudaSuccess) {
     return fail(Error::kCudaError, Field::kArena, -1, impl_->image_bytes, device_arena_bytes,
-                status);
+                capture_query_status);
+  }
+  const bool track_restore = capture_status == cudaStreamCaptureStatusNone;
+  if (track_restore && impl_->has_tracked_restore) {
+    const cudaError_t wait_status = cudaStreamWaitEvent(stream, impl_->restore_complete, 0u);
+    if (wait_status != cudaSuccess) {
+      return fail(Error::kCudaError, Field::kArena, -1, impl_->image_bytes, device_arena_bytes,
+                  wait_status);
+    }
+  }
+
+  const cudaError_t status = cudaMemcpyAsync(device_arena, impl_->device_checkpoint,
+                                             impl_->image_bytes, cudaMemcpyDeviceToDevice, stream);
+  if (status != cudaSuccess) {
+    const Error error = status == cudaErrorInvalidValue || status == cudaErrorInvalidDevicePointer
+                            ? Error::kInvalidArenaMemory
+                            : Error::kCudaError;
+    return fail(error, Field::kArena, -1, impl_->image_bytes, device_arena_bytes, status);
+  }
+  if (track_restore) {
+    const cudaError_t record_status = cudaEventRecord(impl_->restore_complete, stream);
+    if (record_status != cudaSuccess) {
+      /* The D2D submission was already accepted. Drain this exceptional path
+       * so a later owner destruction cannot release its source prematurely. */
+      (void)cudaStreamSynchronize(stream);
+      return fail(Error::kCudaError, Field::kArena, -1, impl_->image_bytes, device_arena_bytes,
+                  record_status);
+    }
+    impl_->has_tracked_restore = true;
   }
 
   Gfn2SccIterationInitializationReady candidate{};

@@ -174,8 +174,8 @@ struct Gfn2SccIterationHostInitialization {
 };
 
 /*
- * Published only after the one packed H2D initialization copy is accepted.
- * ready_on_stream means consumers on stream are ordered after initialization;
+ * Published only after the device-checkpoint restore is accepted.
+ * ready_on_stream means consumers on stream are ordered after restoration;
  * consumers on another stream must wait on a caller-recorded event.
  */
 struct Gfn2SccIterationInitializationReady {
@@ -199,11 +199,14 @@ static_assert(std::is_trivially_copyable_v<Gfn2SccIterationInitializationReady>)
 static_assert(std::is_standard_layout_v<Gfn2SccIterationInitializationReady>);
 
 /*
- * Move-only owner of one immutable pinned initialization image. create()
- * validates every host extent/value and every arena projection before
- * allocating or publishing output. The owner, arena, and source image must
- * outlive queued uploads; moving or destroying an owner with a copy in flight
- * is unsupported.
+ * Move-only owner of one immutable device-resident initialization image.
+ * create() validates and packs every host extent/value before performing the
+ * one setup-time H2D transfer into this checkpoint. upload_async() therefore
+ * restores only with an allocation-free D2D copy and is safe to capture in a
+ * CUDA Graph. The owner must outlive every graph executable that captures a
+ * restore; ordinary queued restores are chained through a reusable event and
+ * drained before destruction releases their source allocation. Host calls on
+ * one initializer must be externally serialized.
  */
 class Gfn2SccIterationInitializer {
  public:
@@ -228,9 +231,13 @@ class Gfn2SccIterationInitializer {
   [[nodiscard]] std::uint64_t initialization_generation() const noexcept;
   [[nodiscard]] Gfn2SccIterationInitializationMode mode() const noexcept;
 
+  /* Stable opaque address of the immutable device checkpoint. This is exposed
+   * for runtime identity/diagnostics; callers must never modify or free it. */
+  [[nodiscard]] const void* device_checkpoint() const noexcept;
+
   /*
-   * Allocation-free setup submission. ready is cleared before validation and
-   * published only after the single packed transfer is accepted by CUDA.
+   * Allocation-free, host-transfer-free restore. ready is cleared before
+   * validation and published only after the D2D copy is accepted by CUDA.
    */
   [[nodiscard]] Gfn2SccIterationInitializationDiagnostic upload_async(
       void* device_arena, std::size_t device_arena_bytes,

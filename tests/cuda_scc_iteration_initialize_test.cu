@@ -59,6 +59,27 @@ struct Stream {
   }
 };
 
+struct Graph {
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t executable = nullptr;
+
+  Graph() = default;
+  Graph(const Graph&) = delete;
+  Graph& operator=(const Graph&) = delete;
+  ~Graph() {
+    if (executable != nullptr) (void)cudaGraphExecDestroy(executable);
+    if (graph != nullptr) (void)cudaGraphDestroy(graph);
+  }
+};
+
+/* Keep a custom stream busy long enough to exercise initializer destruction
+ * while a checkpoint restore is definitely still queued. */
+__global__ void delay_device_cycles(unsigned long long cycles) {
+  const unsigned long long begin = clock64();
+  while (clock64() - begin < cycles) {
+  }
+}
+
 constexpr std::uint64_t kToken = 0x106c0deULL;
 constexpr std::int64_t kBatch = 2;
 constexpr std::int64_t kAtoms = 3;
@@ -179,8 +200,11 @@ int test_fresh_initialization_and_stream_ready_publication() {
   CHECK(initializer.image_bytes() == arena.requirements.total_bytes);
   CHECK(initializer.plan_token() == kToken);
   CHECK(initializer.initialization_generation() == 3u);
+  CHECK(initializer.device_checkpoint() != nullptr);
+  CHECK(initializer.device_checkpoint() != arena.allocation.pointer);
 
-  /* create() prepares only the host image and must not touch the device arena. */
+  /* create() establishes a separate immutable device checkpoint and must not
+   * touch the mutable destination arena. */
   std::array<std::byte, 32> sentinel{};
   CUDA_CHECK(cudaMemcpy(sentinel.data(), arena.allocation.pointer, sentinel.size(),
                         cudaMemcpyDeviceToHost));
@@ -235,6 +259,108 @@ int test_fresh_initialization_and_stream_ready_publication() {
   const auto report_errors = copy_from_device(arena.reports.system_errors,
                                               arena.reports.system_error_elements, stream.value);
   for (const std::uint32_t value : report_errors) CHECK(value == 0u);
+  return 0;
+}
+
+int test_device_checkpoint_repeated_restore_and_graph_replay() {
+  const std::uint32_t mandatory = static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
+                                  static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
+                                  static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2);
+  BoundArena arena(mandatory);
+  CHECK(arena.valid);
+  FreshData data;
+  Gfn2SccIterationInitializer initializer;
+  CHECK(
+      Gfn2SccIterationInitializer::create(arena.plan, arena.requirements, arena.allocation.pointer,
+                                          arena.requirements.total_bytes, arena.state,
+                                          arena.workspace, arena.reports, data.view(), initializer)
+          .success());
+
+  const void* const checkpoint = initializer.device_checkpoint();
+  CHECK(checkpoint != nullptr);
+  CHECK(checkpoint != arena.allocation.pointer);
+  cudaPointerAttributes checkpoint_attributes{};
+  CUDA_CHECK(cudaPointerGetAttributes(&checkpoint_attributes, checkpoint));
+  CHECK(checkpoint_attributes.type == cudaMemoryTypeDevice);
+
+  Stream stream;
+  CHECK(stream.value != nullptr);
+  Gfn2SccIterationInitializationReady ready{};
+  for (std::uint8_t fill : {std::uint8_t{0x19}, std::uint8_t{0xe3}}) {
+    CUDA_CHECK(cudaMemsetAsync(arena.allocation.pointer, fill, arena.requirements.total_bytes,
+                               stream.value));
+    const auto diagnostic = initializer.upload_async(
+        arena.allocation.pointer, arena.requirements.total_bytes, ready, stream.value);
+    CHECK(diagnostic.success());
+    CHECK(initializer.device_checkpoint() == checkpoint);
+    CHECK(ready.device_arena == arena.allocation.pointer);
+    CHECK(copy_from_device(arena.state.raw_population.qsh, kShells, stream.value) == data.qsh);
+  }
+
+  Graph captured;
+  CUDA_CHECK(cudaStreamBeginCapture(stream.value, cudaStreamCaptureModeThreadLocal));
+  const auto capture_diagnostic = initializer.upload_async(
+      arena.allocation.pointer, arena.requirements.total_bytes, ready, stream.value);
+  CHECK(capture_diagnostic.success());
+  CUDA_CHECK(cudaStreamEndCapture(stream.value, &captured.graph));
+  CHECK(captured.graph != nullptr);
+
+  std::size_t node_count = 0u;
+  CUDA_CHECK(cudaGraphGetNodes(captured.graph, nullptr, &node_count));
+  CHECK(node_count == 1u);
+  std::array<cudaGraphNode_t, 1> nodes{};
+  CUDA_CHECK(cudaGraphGetNodes(captured.graph, nodes.data(), &node_count));
+  cudaGraphNodeType node_type{};
+  CUDA_CHECK(cudaGraphNodeGetType(nodes[0], &node_type));
+  CHECK(node_type == cudaGraphNodeTypeMemcpy);
+  cudaMemcpy3DParms copy_parameters{};
+  CUDA_CHECK(cudaGraphMemcpyNodeGetParams(nodes[0], &copy_parameters));
+  CHECK(copy_parameters.kind == cudaMemcpyDeviceToDevice);
+  CHECK(copy_parameters.srcPtr.ptr == checkpoint);
+  CHECK(copy_parameters.dstPtr.ptr == arena.allocation.pointer);
+  CHECK(copy_parameters.extent.width == arena.requirements.total_bytes);
+  CUDA_CHECK(cudaGraphInstantiate(&captured.executable, captured.graph, nullptr, nullptr, 0u));
+
+  for (std::uint8_t fill : {std::uint8_t{0x47}, std::uint8_t{0xb2}, std::uint8_t{0x6d}}) {
+    CUDA_CHECK(cudaMemsetAsync(arena.allocation.pointer, fill, arena.requirements.total_bytes,
+                               stream.value));
+    CUDA_CHECK(cudaGraphLaunch(captured.executable, stream.value));
+    CHECK(copy_from_device(arena.state.raw_population.qsh, kShells, stream.value) == data.qsh);
+    CHECK(initializer.device_checkpoint() == checkpoint);
+  }
+  return 0;
+}
+
+int test_queued_restore_is_drained_before_checkpoint_destruction() {
+  const std::uint32_t mandatory = static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
+                                  static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
+                                  static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2);
+  BoundArena arena(mandatory);
+  CHECK(arena.valid);
+  FreshData data;
+  Stream stream;
+  CHECK(stream.value != nullptr);
+
+  {
+    Gfn2SccIterationInitializer initializer;
+    CHECK(Gfn2SccIterationInitializer::create(
+              arena.plan, arena.requirements, arena.allocation.pointer,
+              arena.requirements.total_bytes, arena.state, arena.workspace, arena.reports,
+              data.view(), initializer)
+              .success());
+    CUDA_CHECK(cudaMemsetAsync(arena.allocation.pointer, 0xa9, arena.requirements.total_bytes,
+                               stream.value));
+    delay_device_cycles<<<1, 1, 0, stream.value>>>(5'000'000ULL);
+    CUDA_CHECK(cudaGetLastError());
+    Gfn2SccIterationInitializationReady ready{};
+    CHECK(initializer
+              .upload_async(arena.allocation.pointer, arena.requirements.total_bytes, ready,
+                            stream.value)
+              .success());
+    /* Deliberately leave the restore queued when the device checkpoint owner
+     * is destroyed. Its completion event must drain source use before free. */
+  }
+  CHECK(copy_from_device(arena.state.raw_population.qsh, kShells, stream.value) == data.qsh);
   return 0;
 }
 
@@ -568,8 +694,10 @@ int test_failed_upload_clears_ready_and_submits_no_partial_copy() {
 }  // namespace
 
 int main() {
-  const std::array<int (*)(), 5> tests{{
+  const std::array<int (*)(), 7> tests{{
       test_fresh_initialization_and_stream_ready_publication,
+      test_device_checkpoint_repeated_restore_and_graph_replay,
+      test_queued_restore_is_drained_before_checkpoint_destruction,
       test_warm_checkpoint_round_trip,
       test_max_iteration_preserves_mixer_and_scc_status_roles,
       test_invalid_host_state_is_transactional,

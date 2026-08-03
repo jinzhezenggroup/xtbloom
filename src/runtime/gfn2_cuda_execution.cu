@@ -1462,9 +1462,10 @@ struct Gfn2CudaExecutionCache::Impl {
   struct Prepared {
     explicit Prepared(cudaStream_t owner_stream) noexcept : stream(owner_stream) {}
     ~Prepared() {
-      /* Setup owners retain pinned upload images. A failed candidate and a
+      /* Setup owners retain pinned provider images and the SCC initializer
+       * retains its immutable device checkpoint. A failed candidate and a
        * replaced cache both wait for only their own stream before releasing
-       * those images or any arena referenced by queued setup work. */
+       * any source image or arena referenced by queued setup work. */
       if (submitted) {
         /* cudaStreamSynchronize(nullptr) waits for the selected legacy default
          * stream only; setup teardown never escalates to a device-wide fence. */
@@ -3341,8 +3342,8 @@ struct Gfn2CudaExecutionCache::Impl {
     }
 
     /* The smoke borrows the initialized SCC storage only long enough to drive
-     * the terminal chain. Re-upload the immutable fresh image so the published
-     * runtime still starts at iteration zero. */
+     * the terminal chain. Restore the immutable device checkpoint so the
+     * published runtime still starts at iteration zero. */
     const auto restore_diagnostic = candidate.initializer.upload_async(
         candidate.iteration_arena.get(), candidate.iteration_arena.bytes(), candidate.ready,
         stream);
@@ -4343,7 +4344,7 @@ struct Gfn2CudaExecutionCache::Impl {
       const auto diagnostic = current.initializer.upload_async(
           current.iteration_arena.get(), current.iteration_arena.bytes(), current.ready, stream);
       if (!diagnostic.success()) {
-        error = setup_error_message("CUDA SCC fresh-state upload", diagnostic.status,
+        error = setup_error_message("CUDA SCC fresh-state restore", diagnostic.status,
                                     static_cast<std::uint32_t>(diagnostic.error),
                                     static_cast<std::uint32_t>(diagnostic.field), diagnostic.index);
         return diagnostic.status;
