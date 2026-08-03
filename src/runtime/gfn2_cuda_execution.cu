@@ -566,13 +566,20 @@ __global__ void commit_gfn2_numerical_refresh_kernel(NumericalRefreshDeviceBindi
     binding.public_overlap[index] = binding.candidate_overlap[index];
     binding.public_h0[index] = binding.candidate_h0[index];
   }
-  for (std::int64_t index = matrix_begin * 3 + threadIdx.x; index < matrix_end * 3;
-       index += blockDim.x) {
-    binding.public_dipole[index] = binding.candidate_dipole[index];
-  }
-  for (std::int64_t index = matrix_begin * 6 + threadIdx.x; index < matrix_end * 6;
-       index += blockDim.x) {
-    binding.public_quadrupole[index] = binding.candidate_quadrupole[index];
+  /* Integral multipoles are global component-major arrays.  A peer owns its
+   * matrix interval in every component plane; treating 3*M or 6*M as one
+   * contiguous per-peer interval would publish bytes belonging to adjacent
+   * peers and violate transactional rollback. */
+  for (std::int64_t matrix = matrix_begin + threadIdx.x; matrix < matrix_end;
+       matrix += blockDim.x) {
+    for (std::int64_t component = 0; component < 3; ++component) {
+      const std::int64_t index = component * binding.total_matrices + matrix;
+      binding.public_dipole[index] = binding.candidate_dipole[index];
+    }
+    for (std::int64_t component = 0; component < 6; ++component) {
+      const std::int64_t index = component * binding.total_matrices + matrix;
+      binding.public_quadrupole[index] = binding.candidate_quadrupole[index];
+    }
   }
 
   const std::int64_t pair_begin = binding.geometry_pair_offsets[system];
@@ -4582,6 +4589,49 @@ struct Gfn2CudaExecutionCache::Impl {
         opaque_address(current.eigensolver_binding.cache.geometry_generations);
     identity.overlap_factor_statuses =
         opaque_address(current.eigensolver_binding.cache.factor_statuses);
+    const auto opaque_buffer = [](const double* address, std::int64_t elements) noexcept {
+      return Gfn2CudaOpaqueBufferIdentity{opaque_address(address), elements};
+    };
+    const auto& numerical = current.numerical.device;
+    identity.committed_positions =
+        opaque_buffer(numerical.committed_positions, numerical.total_atoms * 3);
+    identity.committed_geometry_pairs =
+        opaque_buffer(numerical.public_geometry_pairs, numerical.geometry_pair_elements);
+    identity.committed_coordination_numbers =
+        opaque_buffer(numerical.public_coordination, numerical.total_atoms);
+    identity.committed_overlap = opaque_buffer(numerical.public_overlap, numerical.total_matrices);
+    identity.committed_dipole_integrals =
+        opaque_buffer(numerical.public_dipole, numerical.total_matrices * 3);
+    identity.committed_quadrupole_integrals =
+        opaque_buffer(numerical.public_quadrupole, numerical.total_matrices * 6);
+    identity.committed_h0 = opaque_buffer(numerical.public_h0, numerical.total_matrices);
+    identity.committed_es2 = opaque_buffer(numerical.public_es2, numerical.es2_elements);
+    identity.committed_aes2 = opaque_buffer(numerical.public_aes2, numerical.aes2_elements);
+    identity.committed_d4_pairs = opaque_buffer(
+        numerical.public_d4_pairs, numerical.d4_enabled != 0u ? numerical.d4_pair_elements : 0);
+    identity.committed_d4_coordination_numbers = opaque_buffer(
+        numerical.public_d4_coordination, numerical.d4_enabled != 0u ? numerical.total_atoms : 0);
+    identity.committed_point_charge_positions =
+        opaque_buffer(numerical.committed_point_positions,
+                      numerical.point_enabled != 0u ? numerical.total_point_charges * 3 : 0);
+    identity.committed_point_charge_values =
+        opaque_buffer(numerical.committed_point_values,
+                      numerical.point_enabled != 0u ? numerical.total_point_charges : 0);
+    identity.committed_point_charge_gammas =
+        opaque_buffer(numerical.committed_point_gammas,
+                      numerical.point_enabled != 0u ? numerical.total_point_charges : 0);
+    identity.committed_point_charge_shell_potential = opaque_buffer(
+        numerical.public_point_shell, numerical.point_enabled != 0u ? numerical.total_shells : 0);
+    identity.committed_periodic_shifts =
+        opaque_buffer(numerical.committed_periodic_shifts,
+                      numerical.periodic_enabled != 0u ? numerical.total_atoms : 0);
+    identity.committed_periodic_response =
+        opaque_buffer(numerical.committed_periodic_response,
+                      numerical.periodic_enabled != 0u ? numerical.total_response_elements : 0);
+    identity.committed_generation_elements = numerical.batch_size;
+    identity.numerical_eligible_elements = numerical.batch_size;
+    identity.overlap_factor_generation_elements = numerical.batch_size;
+    identity.overlap_factor_status_elements = numerical.batch_size;
     identity.inference_arena = opaque_address(current.inference_arena.get());
     identity.inference_epoch_consumer = opaque_address(&current.inference.epoch_consumer);
     identity.inference_results = opaque_address(&current.inference.publication_results);

@@ -11,6 +11,20 @@
 namespace gpuxtb::detail {
 
 /*
+ * Opaque identity for one runtime-owned numerical leaf.
+ *
+ * address is diagnostic metadata, not a host pointer.  Tests may pass it to
+ * the selected accelerator backend's explicit download primitive, but code at
+ * this CUDA-free boundary must never dereference it.  elements is the active
+ * scalar extent (not bytes) and is zero exactly when the optional leaf is not
+ * present for the prepared topology.
+ */
+struct Gfn2CudaOpaqueBufferIdentity {
+  std::uintptr_t address = 0u;
+  std::int64_t elements = 0;
+};
+
+/*
  * CUDA-free observability for the context-owned restricted GFN2 runtime.
  *
  * The addresses are opaque identities only: callers must never dereference
@@ -68,6 +82,36 @@ struct Gfn2CudaExecutionIdentity {
   std::uintptr_t numerical_eligible_mask = 0u;
   std::uintptr_t overlap_factor_generations = 0u;
   std::uintptr_t overlap_factor_statuses = 0u;
+
+  /*
+   * Stable, runtime-owned committed numerical leaves.  These identities make
+   * fixed-topology refresh publication directly testable without exposing a
+   * CUDA type or promising that a future HIP backend uses the same address
+   * representation.  Integral multipoles retain their production global
+   * component-major layout.
+   */
+  Gfn2CudaOpaqueBufferIdentity committed_positions{};
+  Gfn2CudaOpaqueBufferIdentity committed_geometry_pairs{};
+  Gfn2CudaOpaqueBufferIdentity committed_coordination_numbers{};
+  Gfn2CudaOpaqueBufferIdentity committed_overlap{};
+  Gfn2CudaOpaqueBufferIdentity committed_dipole_integrals{};
+  Gfn2CudaOpaqueBufferIdentity committed_quadrupole_integrals{};
+  Gfn2CudaOpaqueBufferIdentity committed_h0{};
+  Gfn2CudaOpaqueBufferIdentity committed_es2{};
+  Gfn2CudaOpaqueBufferIdentity committed_aes2{};
+  Gfn2CudaOpaqueBufferIdentity committed_d4_pairs{};
+  Gfn2CudaOpaqueBufferIdentity committed_d4_coordination_numbers{};
+  Gfn2CudaOpaqueBufferIdentity committed_point_charge_positions{};
+  Gfn2CudaOpaqueBufferIdentity committed_point_charge_values{};
+  Gfn2CudaOpaqueBufferIdentity committed_point_charge_gammas{};
+  Gfn2CudaOpaqueBufferIdentity committed_point_charge_shell_potential{};
+  Gfn2CudaOpaqueBufferIdentity committed_periodic_shifts{};
+  Gfn2CudaOpaqueBufferIdentity committed_periodic_response{};
+
+  std::int64_t committed_generation_elements = 0;
+  std::int64_t numerical_eligible_elements = 0;
+  std::int64_t overlap_factor_generation_elements = 0;
+  std::int64_t overlap_factor_status_elements = 0;
   std::uintptr_t inference_arena = 0u;
   std::uintptr_t inference_epoch_consumer = 0u;
   std::uintptr_t inference_results = 0u;
