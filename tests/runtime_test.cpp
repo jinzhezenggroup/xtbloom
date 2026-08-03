@@ -66,6 +66,8 @@ int main() {
   const std::int32_t unpaired_electrons[] = {0};
   double energies[1] = {};
   double forces[3] = {};
+  double atomic_charges[1] = {};
+  double point_charge_forces[3] = {};
   std::int32_t scc_iterations[1] = {};
   std::uint8_t scc_converged[1] = {};
   std::int32_t per_system_status[1] = {};
@@ -80,6 +82,9 @@ int main() {
                               0};
   result.energies = {energies, sizeof(energies), GPUXTB_MEMORY_HOST, 0};
   result.forces = {forces, sizeof(forces), GPUXTB_MEMORY_HOST, 0};
+  result.atomic_charges = {atomic_charges, sizeof(atomic_charges), GPUXTB_MEMORY_HOST, 0};
+  result.point_charge_forces = {point_charge_forces, sizeof(point_charge_forces),
+                                GPUXTB_MEMORY_HOST, 0};
   result.scc_iterations = {scc_iterations, sizeof(scc_iterations), GPUXTB_MEMORY_HOST, 0};
   result.scc_converged = {scc_converged, sizeof(scc_converged), GPUXTB_MEMORY_HOST, 0};
   result.per_system_status = {per_system_status, sizeof(per_system_status), GPUXTB_MEMORY_HOST, 0};
@@ -145,6 +150,55 @@ int main() {
   if (cuda_status == GPUXTB_STATUS_SUCCESS) {
     CHECK(gpuxtb_context_get_backend(cuda_context.get()) == GPUXTB_BACKEND_CUDA);
     CHECK(gpuxtb_context_get_device_id(cuda_context.get()) >= 0);
+
+    /*
+     * A HOST tag is untrusted at the CUDA API boundary. This opaque address
+     * stands in for a mislabeled CUDA pointer and must survive descriptor-only
+     * validation without a CPU read; the not-yet-wired topology bridge then
+     * stops deterministically before any output mutation.
+     */
+    compute_options.model = GPUXTB_MODEL_GFN2_XTB;
+    energies[0] = 123.25;
+    forces[0] = -4.0;
+    forces[1] = -5.0;
+    forces[2] = -6.0;
+    scc_iterations[0] = 91;
+    scc_converged[0] = 1u;
+    per_system_status[0] = GPUXTB_STATUS_INTERNAL_ERROR;
+    atomic_charges[0] = 71.25;
+    point_charge_forces[0] = 81.0;
+    point_charge_forces[1] = 82.0;
+    point_charge_forces[2] = 83.0;
+    result.flags = UINT32_C(0xa5a55a5a);
+    gpuxtb_batch_t opaque_batch = batch;
+    opaque_batch.atom_offsets.data = reinterpret_cast<const void*>(std::uintptr_t{0x10000u});
+    CHECK(gpuxtb_compute(cuda_context.get(), &opaque_batch, &compute_options, &result) ==
+          GPUXTB_STATUS_NOT_IMPLEMENTED);
+    CHECK(std::strstr(gpuxtb_get_last_error(), "CUDA GFN2 public inference") != nullptr);
+    CHECK(energies[0] == 123.25);
+    CHECK(forces[0] == -4.0 && forces[1] == -5.0 && forces[2] == -6.0);
+    CHECK(scc_iterations[0] == 91);
+    CHECK(scc_converged[0] == 1u);
+    CHECK(per_system_status[0] == GPUXTB_STATUS_INTERNAL_ERROR);
+    CHECK(atomic_charges[0] == 71.25);
+    CHECK(point_charge_forces[0] == 81.0 && point_charge_forces[1] == 82.0 &&
+          point_charge_forces[2] == 83.0);
+    CHECK(result.flags == UINT32_C(0xa5a55a5a));
+
+    /* Structural failures remain deterministic without consulting storage. */
+    opaque_batch.atom_offsets.size_bytes = sizeof(std::int64_t);
+    CHECK(gpuxtb_compute(cuda_context.get(), &opaque_batch, &compute_options, &result) ==
+          GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(std::strstr(gpuxtb_get_last_error(), "atom_offsets") != nullptr);
+    CHECK(energies[0] == 123.25);
+    CHECK(forces[0] == -4.0 && forces[1] == -5.0 && forces[2] == -6.0);
+    CHECK(scc_iterations[0] == 91);
+    CHECK(scc_converged[0] == 1u);
+    CHECK(per_system_status[0] == GPUXTB_STATUS_INTERNAL_ERROR);
+    CHECK(atomic_charges[0] == 71.25);
+    CHECK(point_charge_forces[0] == 81.0 && point_charge_forces[1] == 82.0 &&
+          point_charge_forces[2] == 83.0);
+    CHECK(result.flags == UINT32_C(0xa5a55a5a));
   } else {
     /* CUDA-enabled builds also run on hosts where the runtime exposes no device. */
     CHECK(cuda_status == GPUXTB_STATUS_BACKEND_UNAVAILABLE);

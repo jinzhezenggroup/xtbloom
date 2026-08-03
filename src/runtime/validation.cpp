@@ -27,6 +27,38 @@ struct ActiveRange {
   bool output;
 };
 
+/*
+ * Byte extents proven by the descriptor prefix. Keeping this POD state on the
+ * stack lets the complete structural validator and the CPU-compatible composed
+ * validator share one prefix pass without allocation or pointed-to reads.
+ */
+struct DescriptorExtentState {
+  std::size_t batch_i32_bytes = 0;
+  std::size_t batch_u8_bytes = 0;
+  std::size_t batch_f64_bytes = 0;
+  std::size_t atom_i32_bytes = 0;
+  std::size_t atom_f64_bytes = 0;
+  std::size_t position_bytes = 0;
+  std::size_t point_f64_bytes = 0;
+  std::size_t point_position_bytes = 0;
+  std::size_t atom_offset_bytes = 0;
+  std::size_t response_f64_bytes = 0;
+  bool response_enabled = false;
+};
+
+struct RequiredInput {
+  const char* name;
+  BufferView buffer;
+  std::size_t bytes;
+};
+
+struct RequiredOutput {
+  const char* name;
+  BufferView buffer;
+  std::size_t bytes;
+  bool requested;
+};
+
 DescriptorValidationResult invalid(std::string error) {
   return {GPUXTB_STATUS_INVALID_ARGUMENT, kNoOffsetValidationPending, std::move(error)};
 }
@@ -236,10 +268,11 @@ DescriptorValidationResult validate_aliases(const std::array<ActiveRange, 19>& r
 
 }  // namespace
 
-DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend,
-                                                        const gpuxtb_batch_t* batch,
-                                                        const gpuxtb_compute_options_t* options,
-                                                        const gpuxtb_batch_result_t* result) {
+namespace {
+
+DescriptorValidationResult validate_compute_descriptor_prefix(
+    gpuxtb_backend_t backend, const gpuxtb_batch_t* batch, const gpuxtb_compute_options_t* options,
+    const gpuxtb_batch_result_t* result, DescriptorExtentState& extents) {
   const std::uint32_t backend_value = raw_enum(backend);
   if (backend_value == GPUXTB_BACKEND_AUTO) {
     return invalid("descriptor validation requires a resolved backend, not AUTO");
@@ -358,11 +391,7 @@ DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend
     return invalid("a declared count overflows the addressable byte size");
   }
 
-  const struct RequiredInput {
-    const char* name;
-    BufferView buffer;
-    std::size_t bytes;
-  } required_inputs[] = {
+  const RequiredInput required_inputs[] = {
       {"atom_offsets", view(batch->atom_offsets), atom_offset_bytes},
       {"atomic_numbers", view(batch->atomic_numbers), atom_i32_bytes},
       {"positions", view(batch->positions), position_bytes},
@@ -431,12 +460,7 @@ DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend
     }
   }
 
-  const struct RequiredOutput {
-    const char* name;
-    BufferView buffer;
-    std::size_t bytes;
-    bool requested;
-  } outputs[] = {
+  const RequiredOutput outputs[] = {
       {"energies", view(result->energies), batch_f64_bytes,
        (options->flags & GPUXTB_COMPUTE_ENERGY) != 0},
       {"forces", view(result->forces), position_bytes,
@@ -459,11 +483,130 @@ DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend
     }
   }
 
+  extents.batch_i32_bytes = batch_i32_bytes;
+  extents.batch_u8_bytes = batch_u8_bytes;
+  extents.batch_f64_bytes = batch_f64_bytes;
+  extents.atom_i32_bytes = atom_i32_bytes;
+  extents.atom_f64_bytes = atom_f64_bytes;
+  extents.position_bytes = position_bytes;
+  extents.point_f64_bytes = point_f64_bytes;
+  extents.point_position_bytes = point_position_bytes;
+  extents.atom_offset_bytes = atom_offset_bytes;
+  extents.response_f64_bytes = response_f64_bytes;
+  extents.response_enabled = response_enabled;
+  return {};
+}
+
+DescriptorValidationResult validate_compute_descriptor_aliases(
+    const gpuxtb_batch_t& batch, const gpuxtb_compute_options_t& options,
+    const gpuxtb_batch_result_t& result, const DescriptorExtentState& extents) {
+  /* One fixed entry per ABI-v1 buffer keeps successful validation allocation-free. */
+  std::array<ActiveRange, 19> ranges{};
+  std::size_t range_count = 0;
+  const RequiredInput alias_inputs[] = {
+      {"atom_offsets", view(batch.atom_offsets), extents.atom_offset_bytes},
+      {"atomic_numbers", view(batch.atomic_numbers), extents.atom_i32_bytes},
+      {"positions", view(batch.positions), extents.position_bytes},
+      {"molecular_charges", view(batch.molecular_charges), extents.batch_f64_bytes},
+      {"unpaired_electrons", view(batch.unpaired_electrons), extents.batch_i32_bytes},
+  };
+  for (const RequiredInput& input : alias_inputs) {
+    DescriptorValidationResult checked =
+        add_active_range(ranges, range_count, input.name, input.buffer, input.bytes, false);
+    if (!checked.ok()) {
+      return checked;
+    }
+  }
+  if (batch.total_point_charges != 0) {
+    const RequiredInput point_alias_inputs[] = {
+        {"point_charge_offsets", view(batch.point_charge_offsets), extents.atom_offset_bytes},
+        {"point_charge_positions", view(batch.point_charge_positions),
+         extents.point_position_bytes},
+        {"point_charge_values", view(batch.point_charge_values), extents.point_f64_bytes},
+        {"point_charge_gammas", view(batch.point_charge_gammas), extents.point_f64_bytes},
+    };
+    for (const RequiredInput& input : point_alias_inputs) {
+      DescriptorValidationResult checked =
+          add_active_range(ranges, range_count, input.name, input.buffer, input.bytes, false);
+      if (!checked.ok()) {
+        return checked;
+      }
+    }
+  }
+  const BufferView potential_shifts = view(batch.atomic_potential_shifts);
+  if (active(potential_shifts)) {
+    DescriptorValidationResult checked =
+        add_active_range(ranges, range_count, "atomic_potential_shifts", potential_shifts,
+                         extents.atom_f64_bytes, false);
+    if (!checked.ok()) {
+      return checked;
+    }
+  }
+  if (extents.response_enabled) {
+    DescriptorValidationResult checked =
+        add_active_range(ranges, range_count, "charge_response_offsets",
+                         view(batch.charge_response_offsets), extents.atom_offset_bytes, false);
+    if (!checked.ok()) {
+      return checked;
+    }
+    checked =
+        add_active_range(ranges, range_count, "charge_response_matrix",
+                         view(batch.charge_response_matrix), extents.response_f64_bytes, false);
+    if (!checked.ok()) {
+      return checked;
+    }
+  }
+  const RequiredOutput outputs[] = {
+      {"energies", view(result.energies), extents.batch_f64_bytes,
+       (options.flags & GPUXTB_COMPUTE_ENERGY) != 0},
+      {"forces", view(result.forces), extents.position_bytes,
+       (options.flags & GPUXTB_COMPUTE_FORCES) != 0},
+      {"atomic_charges", view(result.atomic_charges), extents.atom_f64_bytes,
+       (options.flags & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0},
+      {"point_charge_forces", view(result.point_charge_forces), extents.point_position_bytes,
+       (options.flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0},
+      {"scc_iterations", view(result.scc_iterations), extents.batch_i32_bytes, true},
+      {"scc_converged", view(result.scc_converged), extents.batch_u8_bytes, true},
+      {"per_system_status", view(result.per_system_status), extents.batch_i32_bytes, true},
+  };
+  for (const RequiredOutput& output : outputs) {
+    if (!output.requested) {
+      continue;
+    }
+    DescriptorValidationResult checked =
+        add_active_range(ranges, range_count, output.name, output.buffer, output.bytes, true);
+    if (!checked.ok()) {
+      return checked;
+    }
+  }
+
+  DescriptorValidationResult alias_result = validate_aliases(ranges, range_count);
+  if (!alias_result.ok()) {
+    return alias_result;
+  }
+  return {};
+}
+
+}  // namespace
+
+DescriptorValidationResult validate_compute_descriptor_structure(
+    gpuxtb_backend_t backend, const gpuxtb_batch_t* batch, const gpuxtb_compute_options_t* options,
+    const gpuxtb_batch_result_t* result) {
+  DescriptorExtentState extents;
+  DescriptorValidationResult prefix =
+      validate_compute_descriptor_prefix(backend, batch, options, result, extents);
+  if (!prefix.ok()) {
+    return prefix;
+  }
+  return validate_compute_descriptor_aliases(*batch, *options, *result, extents);
+}
+
+DescriptorValidationResult validate_host_topology_semantics(const gpuxtb_batch_t& batch) {
   DescriptorValidationResult validation;
-  const BufferView atom_offsets = view(batch->atom_offsets);
+  const BufferView atom_offsets = view(batch.atom_offsets);
   if (atom_offsets.memory_space == GPUXTB_MEMORY_HOST) {
-    validation = validate_host_offsets("atom_offsets", atom_offsets, batch->batch_size,
-                                       batch->total_atoms, true);
+    validation = validate_host_offsets("atom_offsets", atom_offsets, batch.batch_size,
+                                       batch.total_atoms, true);
     if (!validation.ok()) {
       return validation;
     }
@@ -471,11 +614,25 @@ DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend
     validation.pending_offset_checks |= kAtomOffsetsNeedStaging;
   }
 
-  if (batch->total_point_charges != 0 || active(point_offsets)) {
+  const BufferView atomic_numbers = view(batch.atomic_numbers);
+  if (atomic_numbers.memory_space != GPUXTB_MEMORY_HOST) {
+    validation.pending_offset_checks |= kAtomicNumbersNeedStaging;
+  }
+  const BufferView molecular_charges = view(batch.molecular_charges);
+  if (molecular_charges.memory_space != GPUXTB_MEMORY_HOST) {
+    validation.pending_offset_checks |= kMolecularChargesNeedStaging;
+  }
+  const BufferView unpaired_electrons = view(batch.unpaired_electrons);
+  if (unpaired_electrons.memory_space != GPUXTB_MEMORY_HOST) {
+    validation.pending_offset_checks |= kUnpairedElectronsNeedStaging;
+  }
+
+  const BufferView point_offsets = view(batch.point_charge_offsets);
+  if (batch.total_point_charges != 0 || active(point_offsets)) {
     if (point_offsets.memory_space == GPUXTB_MEMORY_HOST) {
       DescriptorValidationResult checked =
-          validate_host_offsets("point_charge_offsets", point_offsets, batch->batch_size,
-                                batch->total_point_charges, false);
+          validate_host_offsets("point_charge_offsets", point_offsets, batch.batch_size,
+                                batch.total_point_charges, false);
       if (!checked.ok()) {
         return checked;
       }
@@ -484,11 +641,15 @@ DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend
     }
   }
 
+  const BufferView response_offsets = view(batch.charge_response_offsets);
+  const BufferView response_matrix = view(batch.charge_response_matrix);
+  const bool response_enabled = batch.total_charge_response_elements != 0 ||
+                                active(response_offsets) || active(response_matrix);
   if (response_enabled) {
     if (response_offsets.memory_space == GPUXTB_MEMORY_HOST) {
       DescriptorValidationResult checked =
-          validate_host_offsets("charge_response_offsets", response_offsets, batch->batch_size,
-                                batch->total_charge_response_elements, false);
+          validate_host_offsets("charge_response_offsets", response_offsets, batch.batch_size,
+                                batch.total_charge_response_elements, false);
       if (!checked.ok()) {
         return checked;
       }
@@ -500,7 +661,7 @@ DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend
     const bool response_offsets_on_host = response_offsets.memory_space == GPUXTB_MEMORY_HOST;
     if (atom_offsets_on_host) {
       std::uint64_t expected_total = 0;
-      for (std::int64_t system = 0; system < batch->batch_size; ++system) {
+      for (std::int64_t system = 0; system < batch.batch_size; ++system) {
         const std::int64_t atom_begin = load_offset(atom_offsets, static_cast<std::size_t>(system));
         const std::int64_t atom_end =
             load_offset(atom_offsets, static_cast<std::size_t>(system + 1));
@@ -525,7 +686,7 @@ DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend
         }
       }
       if (expected_total > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
-          static_cast<std::int64_t>(expected_total) != batch->total_charge_response_elements) {
+          static_cast<std::int64_t>(expected_total) != batch.total_charge_response_elements) {
         return invalid("total_charge_response_elements does not match the packed square matrices");
       }
       if (!response_offsets_on_host) {
@@ -535,74 +696,29 @@ DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend
       validation.pending_offset_checks |= kChargeResponseShapeNeedsStaging;
     }
   }
-
-  /* One fixed entry per ABI-v1 buffer keeps successful validation allocation-free. */
-  std::array<ActiveRange, 19> ranges{};
-  std::size_t range_count = 0;
-  const RequiredInput alias_inputs[] = {
-      {"atom_offsets", atom_offsets, atom_offset_bytes},
-      {"atomic_numbers", view(batch->atomic_numbers), atom_i32_bytes},
-      {"positions", view(batch->positions), position_bytes},
-      {"molecular_charges", view(batch->molecular_charges), batch_f64_bytes},
-      {"unpaired_electrons", view(batch->unpaired_electrons), batch_i32_bytes},
-  };
-  for (const RequiredInput& input : alias_inputs) {
-    DescriptorValidationResult checked =
-        add_active_range(ranges, range_count, input.name, input.buffer, input.bytes, false);
-    if (!checked.ok()) {
-      return checked;
-    }
-  }
-  if (batch->total_point_charges != 0) {
-    const RequiredInput point_alias_inputs[] = {
-        {"point_charge_offsets", point_offsets, atom_offset_bytes},
-        {"point_charge_positions", point_positions, point_position_bytes},
-        {"point_charge_values", point_values, point_f64_bytes},
-        {"point_charge_gammas", point_gammas, point_f64_bytes},
-    };
-    for (const RequiredInput& input : point_alias_inputs) {
-      DescriptorValidationResult checked =
-          add_active_range(ranges, range_count, input.name, input.buffer, input.bytes, false);
-      if (!checked.ok()) {
-        return checked;
-      }
-    }
-  }
-  if (active(potential_shifts)) {
-    DescriptorValidationResult checked = add_active_range(
-        ranges, range_count, "atomic_potential_shifts", potential_shifts, atom_f64_bytes, false);
-    if (!checked.ok()) {
-      return checked;
-    }
-  }
-  if (response_enabled) {
-    DescriptorValidationResult checked = add_active_range(
-        ranges, range_count, "charge_response_offsets", response_offsets, atom_offset_bytes, false);
-    if (!checked.ok()) {
-      return checked;
-    }
-    checked = add_active_range(ranges, range_count, "charge_response_matrix", response_matrix,
-                               response_f64_bytes, false);
-    if (!checked.ok()) {
-      return checked;
-    }
-  }
-  for (const RequiredOutput& output : outputs) {
-    if (!output.requested) {
-      continue;
-    }
-    DescriptorValidationResult checked =
-        add_active_range(ranges, range_count, output.name, output.buffer, output.bytes, true);
-    if (!checked.ok()) {
-      return checked;
-    }
-  }
-
-  DescriptorValidationResult alias_result = validate_aliases(ranges, range_count);
-  if (!alias_result.ok()) {
-    return alias_result;
-  }
   return validation;
+}
+
+DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend,
+                                                        const gpuxtb_batch_t* batch,
+                                                        const gpuxtb_compute_options_t* options,
+                                                        const gpuxtb_batch_result_t* result) {
+  DescriptorExtentState extents;
+  DescriptorValidationResult prefix =
+      validate_compute_descriptor_prefix(backend, batch, options, result, extents);
+  if (!prefix.ok()) {
+    return prefix;
+  }
+  DescriptorValidationResult semantics = validate_host_topology_semantics(*batch);
+  if (!semantics.ok()) {
+    return semantics;
+  }
+  DescriptorValidationResult aliases =
+      validate_compute_descriptor_aliases(*batch, *options, *result, extents);
+  if (!aliases.ok()) {
+    return aliases;
+  }
+  return semantics;
 }
 
 }  // namespace gpuxtb::detail

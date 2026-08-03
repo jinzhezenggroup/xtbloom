@@ -198,19 +198,24 @@ gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* 
     return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "context is NULL");
   }
   try {
+    const bool cuda_backend = context->implementation->backend == GPUXTB_BACKEND_CUDA;
     gpuxtb::detail::DescriptorValidationResult validation =
-        gpuxtb::detail::validate_compute_descriptors(context->implementation->backend, batch,
-                                                     options, result);
+        cuda_backend ? gpuxtb::detail::validate_compute_descriptor_structure(
+                           context->implementation->backend, batch, options, result)
+                     : gpuxtb::detail::validate_compute_descriptors(
+                           context->implementation->backend, batch, options, result);
     if (!validation.ok()) {
       return fail(validation.status, std::move(validation.error));
     }
 
     /*
-     * A CUDA backend must stage and validate any device-resident offset arrays
-     * represented by validation.pending_offset_checks before launching kernels
-     * or modifying caller-owned output. The current placeholder performs
-     * neither action, so it can safely return NOT_IMPLEMENTED after the common
-     * descriptor checks while the staging path is developed.
+     * HOST tags at a CUDA boundary are not proof that the pointer is CPU
+     * accessible: a caller may have mislabeled device memory. Until the CUDA
+     * topology bridge verifies pointer attributes and stages its six metadata
+     * classes, CUDA stops after the no-dereference structural layer. The
+     * placeholder below therefore returns NOT_IMPLEMENTED without launching
+     * kernels or modifying caller-owned output. CPU retains complete host
+     * topology semantic validation through validate_compute_descriptors().
      */
     (void)validation.pending_offset_checks;
   } catch (const std::bad_alloc&) {

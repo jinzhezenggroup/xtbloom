@@ -16,11 +16,17 @@
 namespace {
 
 using gpuxtb::detail::DescriptorValidationResult;
+using gpuxtb::detail::kAtomicNumbersNeedStaging;
 using gpuxtb::detail::kAtomOffsetsNeedStaging;
 using gpuxtb::detail::kChargeResponseOffsetsNeedStaging;
 using gpuxtb::detail::kChargeResponseShapeNeedsStaging;
+using gpuxtb::detail::kMolecularChargesNeedStaging;
 using gpuxtb::detail::kPointChargeOffsetsNeedStaging;
+using gpuxtb::detail::kTopologyMetadataStagingMask;
+using gpuxtb::detail::kUnpairedElectronsNeedStaging;
+using gpuxtb::detail::validate_compute_descriptor_structure;
 using gpuxtb::detail::validate_compute_descriptors;
+using gpuxtb::detail::validate_host_topology_semantics;
 
 #define CHECK(condition)                                                                 \
   do {                                                                                   \
@@ -200,6 +206,128 @@ bool test_valid_requests_and_staging_contract() {
   CHECK(checked.ok());
   CHECK((checked.pending_offset_checks & kAtomOffsetsNeedStaging) != 0);
   CHECK((checked.pending_offset_checks & kChargeResponseShapeNeedsStaging) != 0);
+  return true;
+}
+
+bool test_structural_layer_never_dereferences_buffer_storage() {
+  Fixture fixture;
+
+  /*
+   * An opaque address stands in for a CUDA allocation whose caller supplied an
+   * incorrect HOST tag. The structural layer must validate only its descriptor
+   * and address range. Do not pass this intentionally unreadable address to the
+   * host semantic layer: the future CUDA bridge first verifies pointer type and
+   * ownership, then rejects the incorrect tag without touching the allocation.
+   */
+  fixture.batch.atom_offsets.data = reinterpret_cast<const void*>(std::uintptr_t{0x10000u});
+  DescriptorValidationResult checked = validate_compute_descriptor_structure(
+      GPUXTB_BACKEND_CUDA, &fixture.batch, &fixture.options, &fixture.result);
+  CHECK(checked.ok());
+  CHECK(!checked.requires_backend_staging_validation());
+
+  /* Device tags remain opaque through both common validation layers. */
+  fixture.batch.atom_offsets.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
+  fixture.batch.atomic_numbers.data = reinterpret_cast<const void*>(std::uintptr_t{0x20000u});
+  fixture.batch.atomic_numbers.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
+  fixture.batch.molecular_charges.data = reinterpret_cast<const void*>(std::uintptr_t{0x30000u});
+  fixture.batch.molecular_charges.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
+  fixture.batch.unpaired_electrons.data = reinterpret_cast<const void*>(std::uintptr_t{0x40000u});
+  fixture.batch.unpaired_electrons.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
+  checked = validate_compute_descriptors(GPUXTB_BACKEND_CUDA, &fixture.batch, &fixture.options,
+                                         &fixture.result);
+  CHECK(checked.ok());
+  CHECK(checked.pending_offset_checks ==
+        (kAtomOffsetsNeedStaging | kAtomicNumbersNeedStaging | kMolecularChargesNeedStaging |
+         kUnpairedElectronsNeedStaging));
+  return true;
+}
+
+bool test_device_and_mixed_topology_pending_sets() {
+  Fixture device_fixture;
+  device_fixture.enable_point_charges();
+  device_fixture.enable_response();
+
+  /* Distinct opaque addresses exercise every topology staging category. */
+  device_fixture.batch.atom_offsets = {reinterpret_cast<const void*>(std::uintptr_t{0x10000u}),
+                                       device_fixture.batch.atom_offsets.size_bytes,
+                                       GPUXTB_MEMORY_CUDA_DEVICE, 0};
+  device_fixture.batch.atomic_numbers = {reinterpret_cast<const void*>(std::uintptr_t{0x20000u}),
+                                         device_fixture.batch.atomic_numbers.size_bytes,
+                                         GPUXTB_MEMORY_CUDA_DEVICE, 0};
+  device_fixture.batch.molecular_charges = {reinterpret_cast<const void*>(std::uintptr_t{0x30000u}),
+                                            device_fixture.batch.molecular_charges.size_bytes,
+                                            GPUXTB_MEMORY_CUDA_DEVICE, 0};
+  device_fixture.batch.unpaired_electrons = {
+      reinterpret_cast<const void*>(std::uintptr_t{0x40000u}),
+      device_fixture.batch.unpaired_electrons.size_bytes, GPUXTB_MEMORY_CUDA_DEVICE, 0};
+  device_fixture.batch.point_charge_offsets = {
+      reinterpret_cast<const void*>(std::uintptr_t{0x50000u}),
+      device_fixture.batch.point_charge_offsets.size_bytes, GPUXTB_MEMORY_CUDA_DEVICE, 0};
+  device_fixture.batch.charge_response_offsets = {
+      reinterpret_cast<const void*>(std::uintptr_t{0x60000u}),
+      device_fixture.batch.charge_response_offsets.size_bytes, GPUXTB_MEMORY_CUDA_DEVICE, 0};
+
+  DescriptorValidationResult checked = validate_compute_descriptors(
+      GPUXTB_BACKEND_CUDA, &device_fixture.batch, &device_fixture.options, &device_fixture.result);
+  CHECK(checked.ok());
+  CHECK((checked.pending_offset_checks & kTopologyMetadataStagingMask) ==
+        kTopologyMetadataStagingMask);
+  CHECK(checked.pending_offset_checks ==
+        (kTopologyMetadataStagingMask | kChargeResponseShapeNeedsStaging));
+
+  Fixture mixed_fixture;
+  mixed_fixture.enable_point_charges();
+  mixed_fixture.enable_response();
+  mixed_fixture.batch.atomic_numbers.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
+  mixed_fixture.batch.unpaired_electrons.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
+  mixed_fixture.batch.point_charge_offsets.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
+  checked = validate_compute_descriptors(GPUXTB_BACKEND_CUDA, &mixed_fixture.batch,
+                                         &mixed_fixture.options, &mixed_fixture.result);
+  CHECK(checked.ok());
+  CHECK(
+      checked.pending_offset_checks ==
+      (kAtomicNumbersNeedStaging | kUnpairedElectronsNeedStaging | kPointChargeOffsetsNeedStaging));
+
+  /* HOST atom offsets can prove the total shape while response offsets stage. */
+  mixed_fixture.batch.point_charge_offsets.memory_space = GPUXTB_MEMORY_HOST;
+  mixed_fixture.batch.charge_response_offsets.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
+  checked = validate_compute_descriptors(GPUXTB_BACKEND_CUDA, &mixed_fixture.batch,
+                                         &mixed_fixture.options, &mixed_fixture.result);
+  CHECK(checked.ok());
+  CHECK(checked.pending_offset_checks ==
+        (kAtomicNumbersNeedStaging | kUnpairedElectronsNeedStaging |
+         kChargeResponseOffsetsNeedStaging | kChargeResponseShapeNeedsStaging));
+  return true;
+}
+
+bool test_host_semantics_remain_separate_and_unchanged() {
+  Fixture fixture;
+  fixture.atom_offsets[1] = 0;
+
+  DescriptorValidationResult structure = validate_compute_descriptor_structure(
+      GPUXTB_BACKEND_CPU, &fixture.batch, &fixture.options, &fixture.result);
+  CHECK(structure.ok());
+  CHECK(structure.pending_offset_checks == 0u);
+
+  DescriptorValidationResult semantics = validate_host_topology_semantics(fixture.batch);
+  CHECK(semantics.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(semantics.error == "atom_offsets must be strictly increasing");
+
+  /*
+   * The complete structural entry still detects aliases, but the composed CPU
+   * sequence preserves the historical topology-before-alias error priority.
+   */
+  fixture.result.energies.data = fixture.molecular_charges.data();
+  fixture.result.energies.size_bytes = fixture.molecular_charges.size() * sizeof(double);
+  structure = validate_compute_descriptor_structure(GPUXTB_BACKEND_CPU, &fixture.batch,
+                                                    &fixture.options, &fixture.result);
+  CHECK(structure.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(structure.error.find("aliases") != std::string::npos);
+
+  DescriptorValidationResult composed = validate_compute_descriptors(
+      GPUXTB_BACKEND_CPU, &fixture.batch, &fixture.options, &fixture.result);
+  CHECK(composed.status == semantics.status);
+  CHECK(composed.error == semantics.error);
   return true;
 }
 
@@ -562,6 +690,10 @@ int main() {
     bool (*run)();
   } tests[] = {
       {"valid requests and staging contract", test_valid_requests_and_staging_contract},
+      {"structural validation does not dereference storage",
+       test_structural_layer_never_dereferences_buffer_storage},
+      {"device and mixed topology pending sets", test_device_and_mixed_topology_pending_sets},
+      {"host topology semantic split", test_host_semantics_remain_separate_and_unchanged},
       {"headers, counts, and overflow", test_headers_counts_and_overflow},
       {"compute options", test_compute_options},
       {"buffer descriptors and sizes", test_buffer_descriptors_and_sizes},
