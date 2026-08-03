@@ -1,7 +1,10 @@
 #include "runtime/backend.hpp"
 
+#include <memory>
 #include <new>
 #include <utility>
+
+#include "runtime/gfn2_cpu_execution.hpp"
 
 namespace gpuxtb::detail {
 namespace {
@@ -78,6 +81,16 @@ gpuxtb_status_t create_context(const gpuxtb_context_options_t& options, Context*
   created->device_id = resolved_device;
   created->cpu_threads = options.cpu_threads;
   created->stream = options.stream;
+  if (selected == GPUXTB_BACKEND_CPU) {
+    try {
+      /* Eager construction removes the first-compute shared_ptr data race. */
+      created->gfn2_cpu_execution_cache = std::make_shared<Gfn2CpuExecutionCache>();
+    } catch (const std::bad_alloc&) {
+      delete created;
+      error = "failed to allocate CPU GFN2 execution cache";
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
+  }
   context = created;
   return GPUXTB_STATUS_SUCCESS;
 }

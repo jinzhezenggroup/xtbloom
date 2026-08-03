@@ -1,5 +1,7 @@
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 
 #include "gpuxtb/gpuxtb.h"
 
@@ -9,6 +11,22 @@
       return __LINE__;   \
     }                    \
   } while (false)
+
+namespace {
+
+struct ContextDeleter {
+  void operator()(gpuxtb_context_t* context) const noexcept { gpuxtb_context_destroy(context); }
+};
+
+using ContextHandle = std::unique_ptr<gpuxtb_context_t, ContextDeleter>;
+
+ContextHandle create_context(const gpuxtb_context_options_t& options, gpuxtb_status_t& status) {
+  gpuxtb_context_t* raw_context = nullptr;
+  status = gpuxtb_context_create(&options, &raw_context);
+  return ContextHandle(raw_context);
+}
+
+}  // namespace
 
 int main() {
   CHECK(std::strcmp(gpuxtb_status_string(GPUXTB_STATUS_SCC_NOT_CONVERGED), "SCC not converged") ==
@@ -20,9 +38,10 @@ int main() {
   CHECK(gpuxtb_context_options_init(&options, sizeof(options)) == GPUXTB_STATUS_SUCCESS);
   options.backend = GPUXTB_BACKEND_CPU;
 
-  gpuxtb_context_t* context = nullptr;
-  CHECK(gpuxtb_context_create(&options, &context) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb_context_get_device_id(context) == -1);
+  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  ContextHandle context = create_context(options, context_status);
+  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_context_get_device_id(context.get()) == -1);
 
   gpuxtb_batch_t batch;
   gpuxtb_compute_options_t compute_options;
@@ -33,13 +52,15 @@ int main() {
   CHECK(compute_options.electronic_temperature == GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE);
   CHECK(gpuxtb_batch_result_init(&result, sizeof(result)) == GPUXTB_STATUS_SUCCESS);
 
-  /* Descriptor errors take precedence over the unfinished physics backend. */
-  const gpuxtb_status_t compute_status = gpuxtb_compute(context, &batch, &compute_options, &result);
+  /* Descriptor errors are reported before entering numerical execution. */
+  const gpuxtb_status_t compute_status =
+      gpuxtb_compute(context.get(), &batch, &compute_options, &result);
   CHECK(compute_status == GPUXTB_STATUS_INVALID_ARGUMENT);
   CHECK(std::strstr(gpuxtb_get_last_error(), "batch_size") != nullptr);
 
   const std::int64_t atom_offsets[] = {0, 1};
-  const std::int32_t atomic_numbers[] = {1};
+  /* Closed-shell helium exercises the real restricted CPU inference path. */
+  const std::int32_t atomic_numbers[] = {2};
   const double positions[] = {0.0, 0.0, 0.0};
   const double molecular_charges[] = {0.0};
   const std::int32_t unpaired_electrons[] = {0};
@@ -64,29 +85,44 @@ int main() {
   result.per_system_status = {per_system_status, sizeof(per_system_status), GPUXTB_MEMORY_HOST, 0};
 
   const gpuxtb_status_t valid_compute_status =
-      gpuxtb_compute(context, &batch, &compute_options, &result);
-  CHECK(valid_compute_status == GPUXTB_STATUS_NOT_IMPLEMENTED);
-  CHECK(std::strstr(gpuxtb_get_last_error(), "not been implemented") != nullptr);
+      gpuxtb_compute(context.get(), &batch, &compute_options, &result);
+  if (valid_compute_status == GPUXTB_STATUS_BACKEND_UNAVAILABLE) {
+    /* CPU-only CI configurations need not provide a production LP64 MKL runtime. */
+    CHECK(std::strstr(gpuxtb_get_last_error(), "libmkl_rt") != nullptr);
+  } else {
+    CHECK(valid_compute_status == GPUXTB_STATUS_SUCCESS);
+    CHECK(per_system_status[0] == GPUXTB_STATUS_SUCCESS);
+    CHECK(scc_converged[0] == 1u);
+    CHECK(scc_iterations[0] > 0);
+    CHECK(std::isfinite(energies[0]));
+    CHECK(std::isfinite(forces[0]));
+    CHECK(std::isfinite(forces[1]));
+    CHECK(std::isfinite(forces[2]));
+  }
 
   compute_options.model = GPUXTB_MODEL_GFN1_XTB;
-  CHECK(gpuxtb_compute(context, &batch, &compute_options, &result) == GPUXTB_STATUS_NOT_SUPPORTED);
+  CHECK(gpuxtb_compute(context.get(), &batch, &compute_options, &result) ==
+        GPUXTB_STATUS_NOT_SUPPORTED);
   CHECK(std::strstr(gpuxtb_get_last_error(), "GFN1-xTB") != nullptr);
 
-  gpuxtb_context_destroy(context);
+  context.reset();
 
-  gpuxtb_context_t* invalid_context = nullptr;
   options.device_id = -2;
-  CHECK(gpuxtb_context_create(&options, &invalid_context) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  gpuxtb_status_t invalid_context_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  ContextHandle invalid_context = create_context(options, invalid_context_status);
+  CHECK(invalid_context_status == GPUXTB_STATUS_INVALID_ARGUMENT);
   CHECK(invalid_context == nullptr);
 
   options.device_id = -1;
   options.backend = static_cast<gpuxtb_backend_t>(99);
-  CHECK(gpuxtb_context_create(&options, &invalid_context) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  invalid_context = create_context(options, invalid_context_status);
+  CHECK(invalid_context_status == GPUXTB_STATUS_INVALID_ARGUMENT);
   CHECK(invalid_context == nullptr);
 
   options.backend = GPUXTB_BACKEND_CPU;
   options.reserved = 1;
-  CHECK(gpuxtb_context_create(&options, &invalid_context) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  invalid_context = create_context(options, invalid_context_status);
+  CHECK(invalid_context_status == GPUXTB_STATUS_INVALID_ARGUMENT);
   CHECK(invalid_context == nullptr);
 
   struct ExtendedOptions {
@@ -104,24 +140,24 @@ int main() {
 #if defined(GPUXTB_TEST_HAS_CUDA)
   CHECK(gpuxtb_context_options_init(&options, sizeof(options)) == GPUXTB_STATUS_SUCCESS);
   options.backend = GPUXTB_BACKEND_CUDA;
-  context = nullptr;
-  const gpuxtb_status_t cuda_status = gpuxtb_context_create(&options, &context);
+  gpuxtb_status_t cuda_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  ContextHandle cuda_context = create_context(options, cuda_status);
   if (cuda_status == GPUXTB_STATUS_SUCCESS) {
-    CHECK(gpuxtb_context_get_backend(context) == GPUXTB_BACKEND_CUDA);
-    CHECK(gpuxtb_context_get_device_id(context) >= 0);
-    gpuxtb_context_destroy(context);
+    CHECK(gpuxtb_context_get_backend(cuda_context.get()) == GPUXTB_BACKEND_CUDA);
+    CHECK(gpuxtb_context_get_device_id(cuda_context.get()) >= 0);
   } else {
     /* CUDA-enabled builds also run on hosts where the runtime exposes no device. */
     CHECK(cuda_status == GPUXTB_STATUS_BACKEND_UNAVAILABLE);
-    CHECK(context == nullptr);
+    CHECK(cuda_context == nullptr);
   }
 
   CHECK(gpuxtb_context_options_init(&options, sizeof(options)) == GPUXTB_STATUS_SUCCESS);
   options.backend = GPUXTB_BACKEND_AUTO;
   options.device_id = INT32_MAX;
-  context = nullptr;
-  CHECK(gpuxtb_context_create(&options, &context) == GPUXTB_STATUS_BACKEND_UNAVAILABLE);
-  CHECK(context == nullptr);
+  gpuxtb_status_t automatic_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  ContextHandle automatic_context = create_context(options, automatic_status);
+  CHECK(automatic_status == GPUXTB_STATUS_BACKEND_UNAVAILABLE);
+  CHECK(automatic_context == nullptr);
 #endif
   return 0;
 }

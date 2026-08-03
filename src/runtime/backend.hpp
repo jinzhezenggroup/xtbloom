@@ -2,11 +2,14 @@
 #define GPUXTB_RUNTIME_BACKEND_HPP
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 #include "gpuxtb/gpuxtb.h"
 
 namespace gpuxtb::detail {
+
+class Gfn2CpuExecutionCache;
 
 /* Runtime state is opaque at the ABI boundary so backend internals can evolve. */
 struct Context {
@@ -14,6 +17,14 @@ struct Context {
   std::int32_t device_id = -1;
   std::int32_t cpu_threads = 0;
   void* stream = nullptr;
+
+  /*
+   * CPU contexts eagerly construct this execution state so the first compute
+   * call cannot race cache initialization. shared_ptr permits the cache type
+   * to remain incomplete here while Context is destroyed through the opaque C
+   * handle. The executor serializes access to cached batch plans per context.
+   */
+  std::shared_ptr<Gfn2CpuExecutionCache> gfn2_cpu_execution_cache;
 };
 
 gpuxtb_status_t create_context(const gpuxtb_context_options_t& options, Context*& context,

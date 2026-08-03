@@ -9,6 +9,7 @@
 
 #include "gpuxtb/gpuxtb.h"
 #include "runtime/backend.hpp"
+#include "runtime/gfn2_cpu_execution.hpp"
 #include "runtime/validation.hpp"
 
 struct gpuxtb_context {
@@ -227,14 +228,35 @@ gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* 
                 "GFN1-xTB is reserved by the ABI but is not implemented yet");
   }
 
-  /*
-   * Keeping the public contract executable from the first commit lets tests,
-   * bindings, and backend work proceed independently. Physics kernels are
-   * intentionally not approximated here: callers receive an explicit status
-   * until the conformance-tested GFN2 implementation lands.
-   */
+  if (context->implementation->backend == GPUXTB_BACKEND_CPU) {
+    try {
+      const std::shared_ptr<gpuxtb::detail::Gfn2CpuExecutionCache>& cache =
+          context->implementation->gfn2_cpu_execution_cache;
+      if (cache == nullptr) {
+        return fail(GPUXTB_STATUS_INTERNAL_ERROR,
+                    "CPU context does not own a GFN2 execution cache");
+      }
+      std::string error;
+      const gpuxtb_status_t status = gpuxtb::detail::execute_restricted_gfn2_cpu(
+          *cache, *batch, *options, *result, error);
+      if (status != GPUXTB_STATUS_SUCCESS) {
+        return fail(status, std::move(error));
+      }
+      last_error.clear();
+      return GPUXTB_STATUS_SUCCESS;
+    } catch (const std::bad_alloc&) {
+      return fail(GPUXTB_STATUS_ALLOCATION_FAILED,
+                  "failed to allocate CPU GFN2 execution state");
+    } catch (const std::exception& exception) {
+      return fail(GPUXTB_STATUS_INTERNAL_ERROR, exception.what());
+    } catch (...) {
+      return fail(GPUXTB_STATUS_INTERNAL_ERROR,
+                  "unknown exception while executing CPU GFN2 inference");
+    }
+  }
+
   return fail(GPUXTB_STATUS_NOT_IMPLEMENTED,
-              "GFN2-xTB energy and force kernels have not been implemented yet");
+              "CUDA GFN2 public inference is not implemented yet");
 }
 
 }  // extern "C"

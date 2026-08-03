@@ -5,10 +5,11 @@ GPUs. GFN2-xTB is the first implementation target. The public C ABI is designed 
 host or CUDA device pointers, and external point charges that participate in SCC iterations.
 
 > [!IMPORTANT]
-> The full GFN2-xTB inference path is still under construction. Canonical parameters, basis
-> expansion, coordination numbers, and nuclear repulsion are implemented and tested internally,
-> but `gpuxtb_compute` continues to return `GPUXTB_STATUS_NOT_IMPLEMENTED` until the integral, SCC,
-> and analytic-force assembly paths satisfy the conformance gates.
+> Restricted GFN2-xTB inference is available through `gpuxtb_compute` on the CPU backend for host
+> buffers, including energies, analytic QM forces, atomic charges, external point charges in SCC,
+> and point-charge forces. The allocation-free batched CUDA SCC and energy/force executors are
+> implemented internally; connecting them to the public host/device-pointer C API is the next
+> integration milestone. GFN1-xTB and ROCm remain reserved but not implemented.
 
 ## Build
 

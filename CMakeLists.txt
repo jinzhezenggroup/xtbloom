@@ -73,6 +73,7 @@ endif()
 add_library(gpuxtb
   src/api.cpp
   src/runtime/backend.cpp
+  src/runtime/gfn2_cpu_execution.cpp
   src/runtime/validation.cpp
   $<TARGET_OBJECTS:gpuxtb_gfn2_cpu>
 )
@@ -197,6 +198,33 @@ if(GPUXTB_BUILD_TESTS)
   find_package(Threads REQUIRED)
   find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
+  if(GPUXTB_MKL_RT_LIBRARY)
+    get_filename_component(GPUXTB_MKL_RT_DIRECTORY
+      "${GPUXTB_MKL_RT_LIBRARY}" DIRECTORY
+    )
+    if(WIN32)
+      set(GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE PATH)
+    elseif(APPLE)
+      set(GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE DYLD_LIBRARY_PATH)
+    else()
+      set(GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE LD_LIBRARY_PATH)
+    endif()
+
+    function(gpuxtb_configure_mkl_runtime_test target_name test_name)
+      # The production eigensolver opens MKL by soname. Give CTest (including
+      # sanitizer builds) an explicit loader path instead of relying only on
+      # the executable's build RPATH being inherited by dlopen.
+      set_target_properties(${target_name} PROPERTIES
+        BUILD_RPATH "${GPUXTB_MKL_RT_DIRECTORY}"
+      )
+      set_tests_properties(${test_name} PROPERTIES
+        ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+        ENVIRONMENT_MODIFICATION
+          "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_MKL_RT_DIRECTORY}"
+      )
+    endfunction()
+  endif()
+
   add_executable(gpuxtb_c_api_test tests/c_api_test.c)
   target_link_libraries(gpuxtb_c_api_test PRIVATE gpuxtb::gpuxtb)
   set_target_properties(gpuxtb_c_api_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
@@ -209,6 +237,21 @@ if(GPUXTB_BUILD_TESTS)
     target_compile_definitions(gpuxtb_runtime_test PRIVATE GPUXTB_TEST_HAS_CUDA=1)
   endif()
   add_test(NAME gpuxtb.runtime COMMAND gpuxtb_runtime_test)
+  if(GPUXTB_MKL_RT_LIBRARY)
+    gpuxtb_configure_mkl_runtime_test(gpuxtb_runtime_test gpuxtb.runtime)
+  endif()
+
+  if(GPUXTB_MKL_RT_LIBRARY)
+    add_executable(gpuxtb_cpu_public_inference_test
+      tests/cpu_public_inference_test.cpp
+    )
+    target_link_libraries(gpuxtb_cpu_public_inference_test PRIVATE gpuxtb::gpuxtb)
+    target_compile_features(gpuxtb_cpu_public_inference_test PRIVATE cxx_std_17)
+    add_test(NAME gpuxtb.cpu.public_inference COMMAND gpuxtb_cpu_public_inference_test)
+    gpuxtb_configure_mkl_runtime_test(
+      gpuxtb_cpu_public_inference_test gpuxtb.cpu.public_inference
+    )
+  endif()
 
   if(BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
     add_test(
@@ -1280,15 +1323,9 @@ if(GPUXTB_BUILD_TESTS)
       Threads::Threads
     )
     target_compile_features(gpuxtb_eigensolver_test PRIVATE cxx_std_17)
-    get_filename_component(GPUXTB_MKL_RT_DIRECTORY
-      "${GPUXTB_MKL_RT_LIBRARY}" DIRECTORY
-    )
-    set_target_properties(gpuxtb_eigensolver_test PROPERTIES
-      BUILD_RPATH "${GPUXTB_MKL_RT_DIRECTORY}"
-    )
     add_test(NAME gpuxtb.gfn2.eigensolver COMMAND gpuxtb_eigensolver_test)
-    set_tests_properties(gpuxtb.gfn2.eigensolver PROPERTIES
-      ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+    gpuxtb_configure_mkl_runtime_test(
+      gpuxtb_eigensolver_test gpuxtb.gfn2.eigensolver
     )
   else()
     message(STATUS
