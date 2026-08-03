@@ -313,10 +313,11 @@ bool valid_factor_ranges(const Gfn2EigensolverDeviceBatch& batch, const double* 
 
 bool valid_solve_ranges(const Gfn2EigensolverDeviceBatch& batch,
                         const Gfn2EigensolverOverlapCache& cache, const double* hamiltonians,
+                        const std::uint64_t* geometry_epoch,
                         const Gfn2EigensolverDeviceWorkspace& workspace,
                         const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
                         std::uint32_t* device_error) noexcept {
-  std::array<AddressRange, 8> reads{};
+  std::array<AddressRange, 9> reads{};
   std::array<AddressRange, 15> writes{};
   return make_range(batch.orbital_offsets, batch.batch_size + 1, sizeof(std::int64_t), &reads[0]) &&
          make_range(batch.matrix_offsets, batch.batch_size + 1, sizeof(std::int64_t), &reads[1]) &&
@@ -328,6 +329,8 @@ bool valid_solve_ranges(const Gfn2EigensolverDeviceBatch& batch,
                     &reads[5]) &&
          make_range(cache.factor_statuses, batch.batch_size, sizeof(std::uint32_t), &reads[6]) &&
          make_range(hamiltonians, batch.total_matrix_elements, sizeof(double), &reads[7]) &&
+         make_range(geometry_epoch, geometry_epoch == nullptr ? 0 : 1, sizeof(std::uint64_t),
+                    &reads[8]) &&
          make_range(workspace.matrix_scratch_a, batch.total_matrix_elements, sizeof(double),
                     &writes[0]) &&
          make_range(workspace.matrix_scratch_b, batch.total_matrix_elements, sizeof(double),
@@ -596,7 +599,8 @@ __global__ void finalize_overlap_bucket_kernel(
 
 __global__ void prepare_solve_bucket_kernel(
     Gfn2EigensolverDeviceBatch batch, Gfn2EigensolverBucket bucket,
-    Gfn2EigensolverOverlapCache cache, std::uint64_t geometry_generation,
+    Gfn2EigensolverOverlapCache cache, std::uint64_t scalar_generation,
+    const std::uint64_t* device_generation,
     const double* hamiltonians, double symmetry_tolerance, Gfn2EigensolverDeviceWorkspace workspace,
     std::uint32_t* system_errors, std::uint32_t* device_error) {
   const std::int64_t slot = static_cast<std::int64_t>(blockIdx.x);
@@ -625,6 +629,8 @@ __global__ void prepare_solve_bucket_kernel(
         record_system_error(system_errors, system, device_error,
                             Gfn2EigensolverDeviceError::kInvalidActiveMask);
       } else if (active == 1u) {
+        const std::uint64_t geometry_generation =
+            load_geometry_generation({scalar_generation, device_generation});
         const std::int64_t orbital_begin = batch.orbital_offsets[system];
         const std::int64_t orbital_end = batch.orbital_offsets[system + 1];
         const std::int64_t matrix_begin = batch.matrix_offsets[system];
@@ -1030,17 +1036,24 @@ Gfn2EigensolverLaunchResult factor_gfn2_overlap_cuda(
                              device_error, stream, cache_policy);
 }
 
-Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
+static Gfn2EigensolverLaunchResult solve_eigensystems_impl(
     const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
     std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
-    std::uint64_t geometry_generation, const double* hamiltonians,
+    std::uint64_t scalar_generation, const Gfn2GeometryEpochDevice* geometry_epoch,
+    const double* hamiltonians,
     const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver, cusolverDnParams_t parameters,
     cublasHandle_t blas, const Gfn2EigensolverDeviceWorkspace& workspace,
     const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  const bool dynamic_epoch = geometry_epoch != nullptr;
   if (!valid_bucket_plan(batch, buckets, bucket_count) || !valid_options(options) ||
       !valid_workspace(batch, workspace) || !valid_cache(batch, cache) ||
-      geometry_generation == 0u || solver == nullptr || parameters == nullptr || blas == nullptr ||
+      ((!dynamic_epoch && scalar_generation == 0u) ||
+       (dynamic_epoch &&
+        (scalar_generation != 0u || geometry_epoch->value == nullptr ||
+         geometry_epoch->value_elements != 1 || geometry_epoch->plan_token != batch.plan_token ||
+         !is_aligned(geometry_epoch->value, alignof(std::uint64_t))))) ||
+      solver == nullptr || parameters == nullptr || blas == nullptr ||
       results.plan_token != batch.plan_token ||
       results.eigenvalue_elements < batch.total_orbitals ||
       results.coefficient_elements < batch.total_matrix_elements ||
@@ -1049,8 +1062,9 @@ Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
       !is_aligned(results.coefficients, alignof(double)) ||
       !is_aligned(system_errors, alignof(std::uint32_t)) ||
       !is_aligned(device_error, alignof(std::uint32_t)) ||
-      !valid_solve_ranges(batch, cache, hamiltonians, workspace, results, system_errors,
-                          device_error)) {
+      !valid_solve_ranges(batch, cache, hamiltonians,
+                          dynamic_epoch ? geometry_epoch->value : nullptr, workspace, results,
+                          system_errors, device_error)) {
     return invalid_argument();
   }
   Gfn2EigensolverLaunchResult result = configure_solver(solver, stream);
@@ -1072,9 +1086,10 @@ Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
     const std::int64_t orbital_begin = bucket.orbital_scratch_offset;
     const std::int64_t info_begin = bucket.system_index_offset;
     prepare_solve_bucket_kernel<<<static_cast<unsigned int>(bucket.system_count), kThreadsPerSystem,
-                                  0, stream>>>(batch, bucket, cache, geometry_generation,
-                                               hamiltonians, options.symmetry_tolerance, workspace,
-                                               system_errors, device_error);
+                                  0, stream>>>(
+        batch, bucket, cache, scalar_generation,
+        dynamic_epoch ? geometry_epoch->value : nullptr, hamiltonians, options.symmetry_tolerance,
+        workspace, system_errors, device_error);
     result = check_kernel_launch();
     if (!result.success()) {
       return result;
@@ -1120,6 +1135,32 @@ Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
     }
   }
   return launch_success();
+}
+
+Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
+    std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
+    std::uint64_t geometry_generation, const double* hamiltonians,
+    const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver, cusolverDnParams_t parameters,
+    cublasHandle_t blas, const Gfn2EigensolverDeviceWorkspace& workspace,
+    const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  return solve_eigensystems_impl(batch, buckets, bucket_count, cache, geometry_generation, nullptr,
+                                 hamiltonians, options, solver, parameters, blas, workspace, results,
+                                 system_errors, device_error, stream);
+}
+
+Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
+    std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
+    const Gfn2GeometryEpochDevice& geometry_epoch, const double* hamiltonians,
+    const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver, cusolverDnParams_t parameters,
+    cublasHandle_t blas, const Gfn2EigensolverDeviceWorkspace& workspace,
+    const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  return solve_eigensystems_impl(batch, buckets, bucket_count, cache, 0u, &geometry_epoch,
+                                 hamiltonians, options, solver, parameters, blas, workspace, results,
+                                 system_errors, device_error, stream);
 }
 
 }  // namespace gpuxtb::detail::cuda

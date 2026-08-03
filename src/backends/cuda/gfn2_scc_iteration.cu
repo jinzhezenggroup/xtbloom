@@ -2477,8 +2477,10 @@ Gfn2SccIterationBindingDiagnostic bind_gfn2_scc_iteration_cuda(
   return diagnostic;
 }
 
-Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
-    const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
+static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
+    const Gfn2SccIterationBinding& binding,
+    const Gfn2GeometryEpochConsumerDevice* geometry,
+    cudaStream_t stream) noexcept {
   const auto& plan = binding.plan;
   const auto& input = binding.input;
   const auto& state = binding.state;
@@ -2487,6 +2489,22 @@ Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
       input.plan_token != plan.plan_token || state.plan_token != plan.plan_token ||
       workspace.plan_token != plan.plan_token) {
     return invalid_launch_binding();
+  }
+  if (geometry != nullptr &&
+      (geometry->plan_token != plan.plan_token || geometry->epoch.plan_token != plan.plan_token ||
+       geometry->epoch.value_elements != 1 ||
+       geometry->batch_elements != plan.activity_policy.batch_size ||
+       geometry->epoch.value == nullptr || geometry->committed_generations == nullptr ||
+       geometry->eligible_mask == nullptr ||
+       reinterpret_cast<std::uintptr_t>(geometry->epoch.value) % alignof(std::uint64_t) != 0u ||
+       reinterpret_cast<std::uintptr_t>(geometry->committed_generations) %
+               alignof(std::uint64_t) !=
+           0u ||
+       reinterpret_cast<std::uintptr_t>(geometry->eligible_mask) % alignof(std::uint8_t) != 0u)) {
+    Gfn2SccIterationLaunchResult result = invalid_launch_binding(Gfn2SccStageId::kActivity);
+    result.binding = {Gfn2SccIterationBindingError::kCrossPlan,
+                      Gfn2SccIterationBindingField::kGeometry, -1};
+    return result;
   }
 
   if (plan.eigensolver_provider.capture_mode ==
@@ -2524,9 +2542,14 @@ Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
     return check_cuda(stage_report.stage, normalize_stage(stage_report, workspace.ledger, stream));
   };
 
-  if (!check_cuda(Gfn2SccStageId::kActivity, derive_gfn2_scc_iteration_activity_cuda(
-                                                 plan.activity_policy, input.activity_state,
-                                                 plan.provenance, workspace.ledger, stream))) {
+  const cudaError_t activity_status =
+      geometry == nullptr
+          ? derive_gfn2_scc_iteration_activity_cuda(plan.activity_policy, input.activity_state,
+                                                    plan.provenance, workspace.ledger, stream)
+          : derive_gfn2_scc_iteration_activity_cuda(plan.activity_policy, input.activity_state,
+                                                    plan.provenance, *geometry, workspace.ledger,
+                                                    stream);
+  if (!check_cuda(Gfn2SccStageId::kActivity, activity_status)) {
     return failure;
   }
 
@@ -2692,13 +2715,24 @@ Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
                       mutable_device_error(*stage_report), stream))) {
     return failure;
   }
-  const Gfn2EigensolverLaunchResult eigensolver = solve_gfn2_eigensystems_cuda(
-      plan.eigensolver_batch, plan.eigensolver_provider.buckets,
-      plan.eigensolver_provider.bucket_count, plan.overlap_cache, plan.geometry_generation,
-      input.eigensolver_hamiltonians, plan.eigensolver_options, plan.eigensolver_provider.solver,
-      plan.eigensolver_provider.parameters, plan.eigensolver_provider.blas,
-      workspace.eigensolver_workspace, workspace.staged_eigenpairs,
-      mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream);
+  const Gfn2EigensolverLaunchResult eigensolver =
+      geometry == nullptr
+          ? solve_gfn2_eigensystems_cuda(
+                plan.eigensolver_batch, plan.eigensolver_provider.buckets,
+                plan.eigensolver_provider.bucket_count, plan.overlap_cache,
+                plan.geometry_generation, input.eigensolver_hamiltonians,
+                plan.eigensolver_options, plan.eigensolver_provider.solver,
+                plan.eigensolver_provider.parameters, plan.eigensolver_provider.blas,
+                workspace.eigensolver_workspace, workspace.staged_eigenpairs,
+                mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream)
+          : solve_gfn2_eigensystems_cuda(
+                plan.eigensolver_batch, plan.eigensolver_provider.buckets,
+                plan.eigensolver_provider.bucket_count, plan.overlap_cache, geometry->epoch,
+                input.eigensolver_hamiltonians, plan.eigensolver_options,
+                plan.eigensolver_provider.solver, plan.eigensolver_provider.parameters,
+                plan.eigensolver_provider.blas, workspace.eigensolver_workspace,
+                workspace.staged_eigenpairs, mutable_system_codes(*stage_report),
+                mutable_device_error(*stage_report), stream);
   if (!eigensolver.success()) {
     return provider_launch_failure(stage_report->stage, eigensolver);
   }
@@ -2944,6 +2978,18 @@ Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
   }
 
   return {};
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
+  return launch_restricted_scc_iteration_impl(binding, nullptr, stream);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
+    const Gfn2SccIterationBinding& binding,
+    const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream) noexcept {
+  return launch_restricted_scc_iteration_impl(binding, &geometry, stream);
 }
 
 }  // namespace gpuxtb::detail::cuda

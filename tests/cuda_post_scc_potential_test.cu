@@ -138,6 +138,9 @@ struct Fixture {
   DeviceBuffer<double> d_raw_quadrupole;
   DeviceBuffer<std::uint8_t> d_requested;
   DeviceBuffer<gpuxtb_status_t> d_statuses;
+  DeviceBuffer<std::uint64_t> d_geometry_epoch;
+  DeviceBuffer<std::uint64_t> d_committed_generations;
+  DeviceBuffer<std::uint8_t> d_eligible;
 
   DeviceBuffer<double> d_es2_shell;
   DeviceBuffer<double> d_es3_shell;
@@ -284,6 +287,18 @@ struct Fixture {
     UPLOAD(requested)
     UPLOAD(statuses)
 #undef UPLOAD
+    if (status == cudaSuccess) {
+      status = d_geometry_epoch.upload({kGeometryGeneration}, stream);
+    }
+    if (status == cudaSuccess) {
+      status = d_committed_generations.upload(
+          std::vector<std::uint64_t>(static_cast<std::size_t>(count), kGeometryGeneration),
+          stream);
+    }
+    if (status == cudaSuccess) {
+      status = d_eligible.upload(
+          std::vector<std::uint8_t>(static_cast<std::size_t>(count), 1u), stream);
+    }
     const auto doubles = [&](DeviceBuffer<double>& buffer, std::int64_t elements,
                              double value = 0.0) {
       return status == cudaSuccess
@@ -574,6 +589,11 @@ struct Fixture {
     return {d_system_errors.get(), d_device_error.get(), batch_size, kPlanToken};
   }
 
+  Gfn2GeometryEpochConsumerDevice geometry_consumer() {
+    return {{d_geometry_epoch.get(), 1, kPlanToken}, d_committed_generations.get(),
+            d_eligible.get(), batch_size, kPlanToken};
+  }
+
   double expected_shell(std::int64_t system, std::int64_t local,
                         const std::vector<double>& charges) const {
     const std::size_t shell = static_cast<std::size_t>(2 * system + local);
@@ -760,6 +780,152 @@ int run_batch(std::int64_t batch_size) {
   return 0;
 }
 
+int test_device_epoch_graph_replay() {
+  constexpr std::int64_t batch_size = 8;
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  Fixture fixture;
+  CUDA_CHECK(fixture.initialize(batch_size, stream));
+  auto plan = fixture.plan();
+  auto input = fixture.input();
+  auto results = fixture.results();
+  auto intermediates = fixture.intermediates();
+  auto workspace = fixture.workspace();
+  auto diagnostics = fixture.diagnostics();
+  const auto consumer = fixture.geometry_consumer();
+
+  const auto reset_public = [&]() {
+    cudaError_t status = fixture.d_result_shell.overwrite(
+        std::vector<double>(static_cast<std::size_t>(fixture.shells), kSentinel), stream);
+    if (status == cudaSuccess) {
+      status = fixture.d_result_atomic.overwrite(
+          std::vector<double>(static_cast<std::size_t>(fixture.atoms), kSentinel), stream);
+    }
+    if (status == cudaSuccess) {
+      status = fixture.d_result_dipole.overwrite(
+          std::vector<double>(static_cast<std::size_t>(3 * fixture.atoms), kSentinel), stream);
+    }
+    if (status == cudaSuccess) {
+      status = fixture.d_result_quadrupole.overwrite(
+          std::vector<double>(static_cast<std::size_t>(6 * fixture.atoms), kSentinel), stream);
+    }
+    if (status == cudaSuccess) {
+      status = fixture.d_result_shell_scalar.overwrite(
+          std::vector<double>(static_cast<std::size_t>(fixture.shells), kSentinel), stream);
+    }
+    return status;
+  };
+  const auto download_public = [&](std::vector<double>& shell, std::vector<double>& atomic,
+                                   std::vector<double>& scalar,
+                                   std::vector<std::uint32_t>& system_errors,
+                                   std::vector<std::uint32_t>& device_error) {
+    cudaError_t status = fixture.d_result_shell.download(shell, stream);
+    if (status == cudaSuccess) status = fixture.d_result_atomic.download(atomic, stream);
+    if (status == cudaSuccess) status = fixture.d_result_shell_scalar.download(scalar, stream);
+    if (status == cudaSuccess) status = fixture.d_system_errors.download(system_errors, stream);
+    if (status == cudaSuccess) status = fixture.d_device_error.download(device_error, stream);
+    return status;
+  };
+
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t executable = nullptr;
+  CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
+  CUDA_CHECK(refresh_gfn2_post_scc_potentials_cuda(plan, input, results, intermediates, workspace,
+                                                   diagnostics, consumer, stream));
+  CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
+  CUDA_CHECK(cudaGraphInstantiate(&executable, graph, nullptr, nullptr, 0u));
+
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  std::vector<double> shell;
+  std::vector<double> atomic;
+  std::vector<double> scalar;
+  std::vector<std::uint32_t> system_errors;
+  std::vector<std::uint32_t> device_error;
+  CUDA_CHECK(download_public(shell, atomic, scalar, system_errors, device_error));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(device_error[0] == 0u);
+  CHECK(std::all_of(system_errors.begin(), system_errors.end(),
+                    [](std::uint32_t value) { return value == 0u; }));
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    for (std::int64_t local = 0; local < 2; ++local) {
+      const std::size_t index = static_cast<std::size_t>(2 * system + local);
+      CHECK(close(shell[index], fixture.expected_shell(system, local, fixture.raw_shell)));
+      CHECK(close(scalar[index], shell[index] + atomic[index]));
+    }
+  }
+
+  const std::uint64_t next_epoch = kGeometryGeneration + 1u;
+  std::vector<std::uint64_t> committed(static_cast<std::size_t>(batch_size), next_epoch);
+  std::vector<std::uint8_t> eligible(static_cast<std::size_t>(batch_size), 1u);
+  committed[1] = kGeometryGeneration;
+  eligible[2] = 0u;
+  CUDA_CHECK(fixture.d_geometry_epoch.overwrite({next_epoch}, stream));
+  CUDA_CHECK(fixture.d_committed_generations.overwrite(committed, stream));
+  CUDA_CHECK(fixture.d_eligible.overwrite(eligible, stream));
+  CUDA_CHECK(reset_public());
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  CUDA_CHECK(download_public(shell, atomic, scalar, system_errors, device_error));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(device_error[0] == 0u);
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    const bool suppressed = system == 1 || system == 2;
+    if (suppressed) {
+      CHECK(system_errors[static_cast<std::size_t>(system)] != 0u);
+      CHECK(gfn2_post_scc_potential_error_stage(
+                system_errors[static_cast<std::size_t>(system)]) ==
+            Gfn2PostSccPotentialStage::kActivity);
+    }
+    for (std::int64_t local = 0; local < 2; ++local) {
+      const std::size_t index = static_cast<std::size_t>(2 * system + local);
+      if (suppressed) {
+        CHECK(shell[index] == kSentinel);
+        CHECK(atomic[index] == kSentinel);
+        CHECK(scalar[index] == kSentinel);
+      } else {
+        CHECK(close(shell[index], fixture.expected_shell(system, local, fixture.raw_shell)));
+      }
+    }
+  }
+
+  committed.assign(static_cast<std::size_t>(batch_size), next_epoch);
+  eligible.assign(static_cast<std::size_t>(batch_size), 1u);
+  fixture.raw_shell[0] = -0.41;
+  fixture.raw_shell[1] = 0.29;
+  CUDA_CHECK(fixture.d_committed_generations.overwrite(committed, stream));
+  CUDA_CHECK(fixture.d_eligible.overwrite(eligible, stream));
+  CUDA_CHECK(fixture.d_raw_shell.overwrite(fixture.raw_shell, stream));
+  CUDA_CHECK(reset_public());
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  CUDA_CHECK(download_public(shell, atomic, scalar, system_errors, device_error));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(device_error[0] == 0u);
+  CHECK(std::all_of(system_errors.begin(), system_errors.end(),
+                    [](std::uint32_t value) { return value == 0u; }));
+  CHECK(close(shell[0], fixture.expected_shell(0, 0, fixture.raw_shell)));
+  CHECK(close(shell[1], fixture.expected_shell(0, 1, fixture.raw_shell)));
+
+  eligible[3] = 2u;
+  CUDA_CHECK(fixture.d_eligible.overwrite(eligible, stream));
+  CUDA_CHECK(reset_public());
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  CUDA_CHECK(download_public(shell, atomic, scalar, system_errors, device_error));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(gfn2_post_scc_potential_error_stage(device_error[0]) ==
+        Gfn2PostSccPotentialStage::kActivity);
+  CHECK(std::all_of(shell.begin(), shell.end(), [](double value) { return value == kSentinel; }));
+
+  Gfn2GeometryEpochConsumerDevice cross_plan = consumer;
+  cross_plan.plan_token ^= 1u;
+  CHECK(refresh_gfn2_post_scc_potentials_cuda(plan, input, results, intermediates, workspace,
+                                              diagnostics, cross_plan, stream) ==
+        cudaErrorInvalidValue);
+
+  CUDA_CHECK(cudaGraphExecDestroy(executable));
+  CUDA_CHECK(cudaGraphDestroy(graph));
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -768,5 +934,5 @@ int main() {
       return line;
     }
   }
-  return 0;
+  return test_device_epoch_graph_replay();
 }

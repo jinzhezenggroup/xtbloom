@@ -12,6 +12,7 @@
 #include "backends/cuda/gfn2_es3.cuh"
 #include "backends/cuda/gfn2_external_point_charges.cuh"
 #include "backends/cuda/gfn2_force_common.cuh"
+#include "backends/cuda/gfn2_geometry.cuh"
 #include "backends/cuda/gfn2_periodic_embedding.cuh"
 #include "backends/cuda/gfn2_scc_bridge.cuh"
 #include "backends/cuda/gfn2_scc_potential.cuh"
@@ -178,6 +179,16 @@ cudaError_t refresh_gfn2_post_scc_potentials_cuda(
     const Gfn2PostSccPotentialDeviceIntermediates& intermediates,
     const Gfn2PostSccPotentialDeviceWorkspace& workspace,
     const Gfn2PostSccPotentialDeviceDiagnostics& diagnostics,
+    cudaStream_t stream = nullptr) noexcept;
+
+/* Replay-safe refresh gated by the runtime-owned geometry transaction. */
+cudaError_t refresh_gfn2_post_scc_potentials_cuda(
+    const Gfn2PostSccPotentialDevicePlan& plan, const Gfn2PostSccPotentialDeviceInput& input,
+    const Gfn2PostSccPotentialDeviceResults& results,
+    const Gfn2PostSccPotentialDeviceIntermediates& intermediates,
+    const Gfn2PostSccPotentialDeviceWorkspace& workspace,
+    const Gfn2PostSccPotentialDeviceDiagnostics& diagnostics,
+    const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda

@@ -59,6 +59,12 @@ static_assert(std::is_standard_layout_v<Gfn2SccLoopLaunchResult>);
 [[nodiscard]] Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(
     const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
 
+/* Replay-safe bounded loop using one immutable device-epoch consumer view. */
+[[nodiscard]] Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(
+    const Gfn2SccIterationBinding& binding,
+    const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream = nullptr) noexcept;
+
 }  // namespace gpuxtb::detail::cuda
 
 #endif  // GPUXTB_BACKENDS_CUDA_GFN2_SCC_LOOP_CUH

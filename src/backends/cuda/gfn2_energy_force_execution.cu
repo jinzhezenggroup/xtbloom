@@ -19,8 +19,52 @@ __device__ void record_execution_error(std::uint32_t* system_errors, std::int64_
   atomicCAS(device_error, 0u, value);
 }
 
+__global__ void preflight_geometry_transaction_kernel(
+    std::int64_t batch_size, Gfn2GeometryEpochConsumerDevice geometry,
+    std::uint32_t* plan_failure, std::uint32_t* execution_device_error) {
+  __shared__ int invalid;
+  if (threadIdx.x == 0) {
+    invalid = *geometry.epoch.value == 0u ? 1 : 0;
+  }
+  __syncthreads();
+  for (std::int64_t system = threadIdx.x; system < batch_size; system += blockDim.x) {
+    if (geometry.eligible_mask[system] > 1u) {
+      atomicExch(&invalid, 1);
+    }
+  }
+  __syncthreads();
+  if (threadIdx.x == 0 && invalid != 0) {
+    const std::uint32_t value = static_cast<std::uint32_t>(
+        Gfn2EnergyForceExecutionDeviceError::kInvalidGeometryTransaction);
+    atomicCAS(plan_failure, 0u, value);
+    atomicCAS(execution_device_error, 0u, value);
+  }
+}
+
+__device__ bool geometry_transaction_allows(
+    std::int64_t system, Gfn2GeometryEpochConsumerDevice geometry, int dynamic_epoch,
+    std::uint32_t* execution_errors, std::uint32_t* execution_device_error) {
+  if (dynamic_epoch == 0) {
+    return true;
+  }
+  const std::uint8_t eligible = geometry.eligible_mask[system];
+  if (eligible != 1u) {
+    record_execution_error(execution_errors, system, execution_device_error,
+                           Gfn2EnergyForceExecutionDeviceError::kIneligibleGeometry);
+    return false;
+  }
+  if (geometry.committed_generations[system] != *geometry.epoch.value) {
+    record_execution_error(execution_errors, system, execution_device_error,
+                           Gfn2EnergyForceExecutionDeviceError::kStaleGeometry);
+    return false;
+  }
+  return true;
+}
+
 __global__ void gate_after_energy_kernel(std::int64_t batch_size, Gfn2ForceDeviceActivity activity,
                                          Gfn2TotalEnergyDeviceSccState scc_state,
+                                         Gfn2GeometryEpochConsumerDevice geometry,
+                                         int dynamic_epoch,
                                          const std::uint32_t* energy_errors,
                                          const std::uint32_t* plan_failure,
                                          std::uint8_t* success_mask,
@@ -32,6 +76,10 @@ __global__ void gate_after_energy_kernel(std::int64_t batch_size, Gfn2ForceDevic
   }
   success_mask[system] = 0u;
   if (atomicAdd(const_cast<std::uint32_t*>(plan_failure), 0u) != 0u) {
+    return;
+  }
+  if (!geometry_transaction_allows(system, geometry, dynamic_epoch, execution_errors,
+                                   execution_device_error)) {
     return;
   }
   if (energy_errors[system] != 0u) {
@@ -56,6 +104,8 @@ __global__ void gate_after_energy_kernel(std::int64_t batch_size, Gfn2ForceDevic
 
 __global__ void publish_energy_only_kernel(std::int64_t batch_size,
                                            Gfn2TotalEnergyDeviceSccState scc_state,
+                                           Gfn2GeometryEpochConsumerDevice geometry,
+                                           int dynamic_epoch,
                                            const std::uint32_t* energy_errors,
                                            const double* staged_energy, double* public_energy,
                                            const std::uint32_t* plan_failure,
@@ -66,6 +116,10 @@ __global__ void publish_energy_only_kernel(std::int64_t batch_size,
     return;
   }
   if (atomicAdd(const_cast<std::uint32_t*>(plan_failure), 0u) != 0u) {
+    return;
+  }
+  if (!geometry_transaction_allows(system, geometry, dynamic_epoch, execution_errors,
+                                   execution_device_error)) {
     return;
   }
   if (energy_errors[system] != 0u) {
@@ -241,6 +295,7 @@ __global__ void record_composition_plan_failure_kernel(const std::uint32_t* comp
 __global__ void publish_execution_results_kernel(
     Gfn2IntegralDeviceBatch integral_batch, Gfn2ExternalPointChargeDeviceBatch external_batch,
     Gfn2ForceDeviceActivity activity, Gfn2TotalEnergyDeviceSccState scc_state,
+    Gfn2GeometryEpochConsumerDevice geometry, int dynamic_epoch,
     const std::uint8_t* final_success_mask, const std::uint32_t* energy_errors,
     const std::uint32_t* execution_errors, const std::uint32_t* plan_failure,
     Gfn2EnergyForceExecutionDeviceIntermediates intermediates,
@@ -249,6 +304,11 @@ __global__ void publish_execution_results_kernel(
   if (atomicAdd(const_cast<std::uint32_t*>(plan_failure), 0u) != 0u ||
       energy_errors[system] != 0u || scc_state.converged[system] != 1u ||
       scc_state.system_statuses[system] != GPUXTB_STATUS_SUCCESS) {
+    return;
+  }
+  if (dynamic_epoch != 0 &&
+      (geometry.eligible_mask[system] != 1u ||
+       geometry.committed_generations[system] != *geometry.epoch.value)) {
     return;
   }
   const std::uint8_t requested = activity.requested_mask[system];
@@ -475,13 +535,14 @@ cudaError_t check_launch() noexcept { return cudaPeekAtLastError(); }
 
 }  // namespace
 
-cudaError_t execute_gfn2_energy_force_cuda(
+static cudaError_t execute_energy_force_impl(
     const Gfn2EnergyForceExecutionDevicePlan& plan,
     const Gfn2EnergyForceExecutionDeviceInput& input,
     const Gfn2EnergyForceExecutionDeviceResults& results,
     const Gfn2EnergyForceExecutionDeviceIntermediates& intermediates,
     const Gfn2EnergyForceExecutionDeviceWorkspace& workspace,
-    const Gfn2EnergyForceExecutionDeviceDiagnostics& diagnostics, cudaStream_t stream) noexcept {
+    const Gfn2EnergyForceExecutionDeviceDiagnostics& diagnostics,
+    const Gfn2GeometryEpochConsumerDevice* geometry, cudaStream_t stream) noexcept {
   const std::int64_t batch_size = plan.total_energy_batch.batch_size;
   if (plan.compute_forces > 1u || plan.plan_token == 0u || batch_size <= 0 ||
       plan.total_energy_batch.plan_token != plan.plan_token ||
@@ -500,6 +561,18 @@ cudaError_t execute_gfn2_energy_force_cuda(
       diagnostics.total_energy_device_error == nullptr) {
     return cudaErrorInvalidValue;
   }
+  if (geometry != nullptr &&
+      (geometry->plan_token != plan.plan_token || geometry->epoch.plan_token != plan.plan_token ||
+       geometry->epoch.value_elements != 1 || geometry->batch_elements != batch_size ||
+       geometry->epoch.value == nullptr || geometry->committed_generations == nullptr ||
+       geometry->eligible_mask == nullptr ||
+       reinterpret_cast<std::uintptr_t>(geometry->epoch.value) % alignof(std::uint64_t) != 0u ||
+       reinterpret_cast<std::uintptr_t>(geometry->committed_generations) %
+               alignof(std::uint64_t) !=
+           0u ||
+       reinterpret_cast<std::uintptr_t>(geometry->eligible_mask) % alignof(std::uint8_t) != 0u)) {
+    return cudaErrorInvalidValue;
+  }
   if (plan.compute_forces == 1u) {
     const cudaError_t binding_status =
         validate_force_binding(plan, input, results, intermediates, workspace, diagnostics);
@@ -514,6 +587,16 @@ cudaError_t execute_gfn2_energy_force_cuda(
   }
   if (status != cudaSuccess) {
     return status;
+  }
+  const Gfn2GeometryEpochConsumerDevice consumer =
+      geometry == nullptr ? Gfn2GeometryEpochConsumerDevice{} : *geometry;
+  if (geometry != nullptr) {
+    preflight_geometry_transaction_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+        batch_size, consumer, workspace.plan_failure, diagnostics.execution_device_error);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
   }
   status =
       reset_gfn2_total_energy_device_errors_cuda(batch_size, diagnostics.total_energy_system_errors,
@@ -537,7 +620,8 @@ cudaError_t execute_gfn2_energy_force_cuda(
   }
   if (plan.compute_forces == 0u) {
     publish_energy_only_kernel<<<static_cast<unsigned int>(batch_size), 1, 0, stream>>>(
-        batch_size, input.scc_state, diagnostics.total_energy_system_errors,
+        batch_size, input.scc_state, consumer, geometry == nullptr ? 0 : 1,
+        diagnostics.total_energy_system_errors,
         intermediates.energy.total_energy, results.energy.total_energy, workspace.plan_failure,
         diagnostics.execution_system_errors, diagnostics.execution_device_error);
     return check_launch();
@@ -545,8 +629,9 @@ cudaError_t execute_gfn2_energy_force_cuda(
 
   const int blocks = static_cast<int>((batch_size + kThreadsPerBlock - 1) / kThreadsPerBlock);
   gate_after_energy_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
-      batch_size, input.force_activity, input.scc_state, diagnostics.total_energy_system_errors,
-      workspace.plan_failure, workspace.energy_success_mask, diagnostics.execution_system_errors,
+      batch_size, input.force_activity, input.scc_state, consumer, geometry == nullptr ? 0 : 1,
+      diagnostics.total_energy_system_errors, workspace.plan_failure,
+      workspace.energy_success_mask, diagnostics.execution_system_errors,
       diagnostics.execution_device_error);
   status = check_launch();
   if (status != cudaSuccess) {
@@ -564,10 +649,18 @@ cudaError_t execute_gfn2_energy_force_cuda(
   Gfn2PostSccPotentialDeviceInput post_scc_input = input.post_scc_potential;
   post_scc_input.activity = {workspace.energy_success_mask, input.force_activity.system_statuses,
                              batch_size, plan.plan_token};
-  status = refresh_gfn2_post_scc_potentials_cuda(
-      plan.post_scc_potential_plan, post_scc_input, intermediates.post_scc_potential,
-      intermediates.post_scc_potential_intermediates, workspace.post_scc_potential,
-      diagnostics.post_scc_potential, stream);
+  status = geometry == nullptr
+               ? refresh_gfn2_post_scc_potentials_cuda(
+                     plan.post_scc_potential_plan, post_scc_input,
+                     intermediates.post_scc_potential,
+                     intermediates.post_scc_potential_intermediates,
+                     workspace.post_scc_potential, diagnostics.post_scc_potential, stream)
+               : refresh_gfn2_post_scc_potentials_cuda(
+                     plan.post_scc_potential_plan, post_scc_input,
+                     intermediates.post_scc_potential,
+                     intermediates.post_scc_potential_intermediates,
+                     workspace.post_scc_potential, diagnostics.post_scc_potential, *geometry,
+                     stream);
   if (status != cudaSuccess) {
     return status;
   }
@@ -630,10 +723,17 @@ cudaError_t execute_gfn2_energy_force_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  status = add_gfn2_coordination_vjp_cuda(
-      plan.coordination_batch, plan.coordination_cache, plan.geometry_generation,
-      intermediates.h0.coordination_adjoint, intermediates.h0.gradients, workspace.coordination,
-      diagnostics.coordination_system_errors, diagnostics.coordination_device_error, stream);
+  status = geometry == nullptr
+               ? add_gfn2_coordination_vjp_cuda(
+                     plan.coordination_batch, plan.coordination_cache, plan.geometry_generation,
+                     intermediates.h0.coordination_adjoint, intermediates.h0.gradients,
+                     workspace.coordination, diagnostics.coordination_system_errors,
+                     diagnostics.coordination_device_error, stream)
+               : add_gfn2_coordination_vjp_cuda(
+                     plan.coordination_batch, plan.coordination_cache, geometry->epoch,
+                     intermediates.h0.coordination_adjoint, intermediates.h0.gradients,
+                     workspace.coordination, diagnostics.coordination_system_errors,
+                     diagnostics.coordination_device_error, stream);
   if (status != cudaSuccess) {
     return status;
   }
@@ -659,10 +759,17 @@ cudaError_t execute_gfn2_energy_force_cuda(
   const Gfn2ForceDeviceActivity classical_activity{workspace.coordination_success_mask,
                                                    input.force_activity.system_statuses, batch_size,
                                                    plan.plan_token};
-  status = add_gfn2_classical_forces_cuda(plan.classical_plan, classical_activity, input.classical,
-                                          intermediates.classical, workspace.classical,
-                                          diagnostics.classical_system_errors,
-                                          diagnostics.classical_device_error, stream);
+  status = geometry == nullptr
+               ? add_gfn2_classical_forces_cuda(
+                     plan.classical_plan, classical_activity, input.classical,
+                     intermediates.classical, workspace.classical,
+                     diagnostics.classical_system_errors, diagnostics.classical_device_error,
+                     stream)
+               : add_gfn2_classical_forces_cuda(
+                     plan.classical_plan, classical_activity, input.classical,
+                     intermediates.classical, workspace.classical, geometry->epoch,
+                     diagnostics.classical_system_errors, diagnostics.classical_device_error,
+                     stream);
   if (status != cudaSuccess) {
     return status;
   }
@@ -765,9 +872,33 @@ cudaError_t execute_gfn2_energy_force_cuda(
   publish_execution_results_kernel<<<static_cast<unsigned int>(batch_size), kThreadsPerBlock, 0,
                                      stream>>>(
       plan.integral_batch, plan.external_point_charge_batch, input.force_activity, input.scc_state,
-      workspace.energy_success_mask, diagnostics.total_energy_system_errors,
+      consumer, geometry == nullptr ? 0 : 1, workspace.energy_success_mask,
+      diagnostics.total_energy_system_errors,
       diagnostics.execution_system_errors, workspace.plan_failure, intermediates, results);
   return check_launch();
+}
+
+cudaError_t execute_gfn2_energy_force_cuda(
+    const Gfn2EnergyForceExecutionDevicePlan& plan,
+    const Gfn2EnergyForceExecutionDeviceInput& input,
+    const Gfn2EnergyForceExecutionDeviceResults& results,
+    const Gfn2EnergyForceExecutionDeviceIntermediates& intermediates,
+    const Gfn2EnergyForceExecutionDeviceWorkspace& workspace,
+    const Gfn2EnergyForceExecutionDeviceDiagnostics& diagnostics, cudaStream_t stream) noexcept {
+  return execute_energy_force_impl(plan, input, results, intermediates, workspace, diagnostics,
+                                   nullptr, stream);
+}
+
+cudaError_t execute_gfn2_energy_force_cuda(
+    const Gfn2EnergyForceExecutionDevicePlan& plan,
+    const Gfn2EnergyForceExecutionDeviceInput& input,
+    const Gfn2EnergyForceExecutionDeviceResults& results,
+    const Gfn2EnergyForceExecutionDeviceIntermediates& intermediates,
+    const Gfn2EnergyForceExecutionDeviceWorkspace& workspace,
+    const Gfn2EnergyForceExecutionDeviceDiagnostics& diagnostics,
+    const Gfn2GeometryEpochConsumerDevice& geometry, cudaStream_t stream) noexcept {
+  return execute_energy_force_impl(plan, input, results, intermediates, workspace, diagnostics,
+                                   &geometry, stream);
 }
 
 }  // namespace gpuxtb::detail::cuda

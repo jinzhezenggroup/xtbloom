@@ -174,6 +174,14 @@ cudaError_t add_gfn2_classical_forces_cuda(
     const Gfn2ClassicalForceDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
+/* Replay-safe force reverse consuming geometry caches from the device epoch. */
+cudaError_t add_gfn2_classical_forces_cuda(
+    const Gfn2ClassicalForceDevicePlan& plan, const Gfn2ForceDeviceActivity& activity,
+    const Gfn2ClassicalForceDeviceInput& input, const Gfn2ClassicalForceDeviceOutput& output,
+    const Gfn2ClassicalForceDeviceWorkspace& workspace,
+    const Gfn2GeometryEpochDevice& geometry_epoch, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
 }  // namespace gpuxtb::detail::cuda
 
 #endif  // GPUXTB_BACKENDS_CUDA_GFN2_CLASSICAL_FORCE_CUH

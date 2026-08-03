@@ -99,6 +99,7 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
                                  const Gfn2ClassicalForceDeviceInput& input,
                                  const Gfn2ClassicalForceDeviceOutput& output,
                                  const Gfn2ClassicalForceDeviceWorkspace& workspace,
+                                 const Gfn2GeometryEpochDevice* geometry_epoch,
                                  std::uint32_t* system_errors,
                                  std::uint32_t* device_error) noexcept {
   const bool extent_representable =
@@ -127,6 +128,11 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
       !aligned_pointer(workspace.primitive_device_error) ||
       !aligned_pointer(workspace.sequence_active) || !aligned_pointer(system_errors) ||
       !aligned_pointer(device_error)) {
+    return false;
+  }
+  if (geometry_epoch != nullptr &&
+      (geometry_epoch->plan_token != plan.plan_token || geometry_epoch->value_elements != 1 ||
+       !aligned_pointer(geometry_epoch->value))) {
     return false;
   }
 
@@ -266,7 +272,7 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
     return false;
   }
 
-  std::array<AddressRange, 40> reads{};
+  std::array<AddressRange, 41> reads{};
   std::size_t read_count = 0u;
   if (!append_range(reads, &read_count, plan.atom_offsets, plan.batch_size + 1) ||
       !append_range(reads, &read_count, plan.atomic_numbers, plan.total_atoms) ||
@@ -322,6 +328,10 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
   if (!needs_aes2 &&
       component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kD4TwoBody) &&
       !append_range(reads, &read_count, input.atomic_charges, plan.total_atoms)) {
+    return false;
+  }
+  if (geometry_epoch != nullptr &&
+      !append_range(reads, &read_count, geometry_epoch->value, 1)) {
     return false;
   }
 
@@ -857,13 +867,14 @@ cudaError_t reset_gfn2_classical_force_device_errors_cuda(std::int64_t batch_siz
                                : status;
 }
 
-cudaError_t add_gfn2_classical_forces_cuda(
+static cudaError_t add_classical_forces_impl(
     const Gfn2ClassicalForceDevicePlan& plan, const Gfn2ForceDeviceActivity& activity,
     const Gfn2ClassicalForceDeviceInput& input, const Gfn2ClassicalForceDeviceOutput& output,
-    const Gfn2ClassicalForceDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    const Gfn2ClassicalForceDeviceWorkspace& workspace,
+    const Gfn2GeometryEpochDevice* geometry_epoch, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream) noexcept {
-  if (!validate_common_descriptors(plan, activity, input, output, workspace, system_errors,
-                                   device_error)) {
+  if (!validate_common_descriptors(plan, activity, input, output, workspace, geometry_epoch,
+                                   system_errors, device_error)) {
     return cudaErrorInvalidValue;
   }
 
@@ -934,10 +945,17 @@ cudaError_t add_gfn2_classical_forces_cuda(
     if (status != cudaSuccess) {
       return status;
     }
-    status = add_gfn2_coordination_vjp_cuda(
-        plan.geometry_batch, plan.geometry_cache, plan.geometry_generation,
-        workspace.coordination_adjoints, workspace.gradient_scratch, workspace.geometry_workspace,
-        workspace.primitive_system_errors, workspace.primitive_device_error, stream);
+    status = geometry_epoch == nullptr
+                 ? add_gfn2_coordination_vjp_cuda(
+                       plan.geometry_batch, plan.geometry_cache, plan.geometry_generation,
+                       workspace.coordination_adjoints, workspace.gradient_scratch,
+                       workspace.geometry_workspace, workspace.primitive_system_errors,
+                       workspace.primitive_device_error, stream)
+                 : add_gfn2_coordination_vjp_cuda(
+                       plan.geometry_batch, plan.geometry_cache, *geometry_epoch,
+                       workspace.coordination_adjoints, workspace.gradient_scratch,
+                       workspace.geometry_workspace, workspace.primitive_system_errors,
+                       workspace.primitive_device_error, stream);
     if (status != cudaSuccess) {
       return status;
     }
@@ -996,6 +1014,25 @@ cudaError_t add_gfn2_classical_forces_cuda(
   publish_force_kernel<<<static_cast<unsigned int>(plan.batch_size), kThreadsPerBlock, 0, stream>>>(
       plan, output, workspace, system_errors);
   return check_launch();
+}
+
+cudaError_t add_gfn2_classical_forces_cuda(
+    const Gfn2ClassicalForceDevicePlan& plan, const Gfn2ForceDeviceActivity& activity,
+    const Gfn2ClassicalForceDeviceInput& input, const Gfn2ClassicalForceDeviceOutput& output,
+    const Gfn2ClassicalForceDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  return add_classical_forces_impl(plan, activity, input, output, workspace, nullptr, system_errors,
+                                   device_error, stream);
+}
+
+cudaError_t add_gfn2_classical_forces_cuda(
+    const Gfn2ClassicalForceDevicePlan& plan, const Gfn2ForceDeviceActivity& activity,
+    const Gfn2ClassicalForceDeviceInput& input, const Gfn2ClassicalForceDeviceOutput& output,
+    const Gfn2ClassicalForceDeviceWorkspace& workspace,
+    const Gfn2GeometryEpochDevice& geometry_epoch, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  return add_classical_forces_impl(plan, activity, input, output, workspace, &geometry_epoch,
+                                   system_errors, device_error, stream);
 }
 
 }  // namespace gpuxtb::detail::cuda

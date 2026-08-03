@@ -16,6 +16,10 @@ constexpr std::uint32_t kMandatoryComponents =
     static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
     static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2);
 constexpr std::uint32_t kInvalidRequestedMask = 1u;
+constexpr std::uint32_t kIneligibleGeometry = 2u;
+constexpr std::uint32_t kStaleGeometry = 3u;
+constexpr std::uint32_t kInvalidGeometryEpoch = 4u;
+constexpr std::uint32_t kInvalidEligibilityMask = 5u;
 constexpr std::uint32_t kClosedStageWithoutCode = 0x00fffffeu;
 
 template <typename T>
@@ -64,6 +68,7 @@ bool public_results_are_disjoint(const Gfn2PostSccPotentialDevicePlan& plan,
                                  const Gfn2PostSccPotentialDeviceIntermediates& intermediates,
                                  const Gfn2PostSccPotentialDeviceWorkspace& workspace,
                                  const Gfn2PostSccPotentialDeviceDiagnostics& diagnostics,
+                                 const Gfn2GeometryEpochConsumerDevice* geometry,
                                  std::int64_t batch_size) noexcept {
   std::array<AddressRange, 5> public_writes{};
   if (!make_range(results.complete.shell, results.complete.shell_elements, sizeof(double),
@@ -86,7 +91,7 @@ bool public_results_are_disjoint(const Gfn2PostSccPotentialDevicePlan& plan,
     }
   }
 
-  std::array<AddressRange, 40> protected_ranges{};
+  std::array<AddressRange, 44> protected_ranges{};
   std::size_t count = 0u;
   auto append = [&](const void* pointer, std::int64_t elements, std::size_t element_size) {
     return count < protected_ranges.size() &&
@@ -137,6 +142,12 @@ bool public_results_are_disjoint(const Gfn2PostSccPotentialDevicePlan& plan,
       !append(workspace.scalar_bridge.sequence_active, 1, sizeof(std::uint32_t)) ||
       !append(diagnostics.system_errors, batch_size, sizeof(std::uint32_t)) ||
       !append(diagnostics.device_error, 1, sizeof(std::uint32_t))) {
+    return false;
+  }
+  if (geometry != nullptr &&
+      (!append(geometry->epoch.value, 1, sizeof(std::uint64_t)) ||
+       !append(geometry->committed_generations, batch_size, sizeof(std::uint64_t)) ||
+       !append(geometry->eligible_mask, batch_size, sizeof(std::uint8_t)))) {
     return false;
   }
   /* Optional component descriptors are completely opaque when their SCC bit
@@ -266,7 +277,8 @@ bool validate_common(const Gfn2PostSccPotentialDevicePlan& plan,
                      const Gfn2PostSccPotentialDeviceResults& results,
                      const Gfn2PostSccPotentialDeviceIntermediates& intermediates,
                      const Gfn2PostSccPotentialDeviceWorkspace& workspace,
-                     const Gfn2PostSccPotentialDeviceDiagnostics& diagnostics) noexcept {
+                     const Gfn2PostSccPotentialDeviceDiagnostics& diagnostics,
+                     const Gfn2GeometryEpochConsumerDevice* geometry) noexcept {
   const auto& batch = plan.potential_batch;
   if (plan.plan_token == 0u || plan.geometry_generation == 0u ||
       batch.plan_token != plan.plan_token || batch.batch_size <= 0 || batch.total_atoms <= 0 ||
@@ -325,6 +337,38 @@ bool validate_common(const Gfn2PostSccPotentialDevicePlan& plan,
       !aligned_pointer(workspace.stage_device_error) ||
       !aligned_pointer(diagnostics.system_errors) || !aligned_pointer(diagnostics.device_error)) {
     return false;
+  }
+  if (geometry != nullptr &&
+      (geometry->plan_token != plan.plan_token || geometry->epoch.plan_token != plan.plan_token ||
+       geometry->epoch.value_elements != 1 || geometry->batch_elements != batch.batch_size ||
+       !aligned_pointer(geometry->epoch.value) ||
+       !aligned_pointer(geometry->committed_generations) ||
+       !aligned_pointer(geometry->eligible_mask))) {
+    return false;
+  }
+
+  if (geometry != nullptr) {
+    std::array<AddressRange, 3> reads{};
+    std::array<AddressRange, 4> gate_writes{};
+    if (!make_range(geometry->epoch.value, 1, sizeof(std::uint64_t), &reads[0]) ||
+        !make_range(geometry->committed_generations, batch.batch_size, sizeof(std::uint64_t),
+                    &reads[1]) ||
+        !make_range(geometry->eligible_mask, batch.batch_size, sizeof(std::uint8_t), &reads[2]) ||
+        !make_range(workspace.active_mask, batch.batch_size, sizeof(std::uint8_t),
+                    &gate_writes[0]) ||
+        !make_range(workspace.sequence_active, 1, sizeof(std::uint32_t), &gate_writes[1]) ||
+        !make_range(diagnostics.system_errors, batch.batch_size, sizeof(std::uint32_t),
+                    &gate_writes[2]) ||
+        !make_range(diagnostics.device_error, 1, sizeof(std::uint32_t), &gate_writes[3])) {
+      return false;
+    }
+    for (const AddressRange& read : reads) {
+      for (const AddressRange& write : gate_writes) {
+        if (overlaps(read, write)) {
+          return false;
+        }
+      }
+    }
   }
 
   const auto& bridge = plan.scalar_bridge_batch;
@@ -396,27 +440,56 @@ bool validate_common(const Gfn2PostSccPotentialDevicePlan& plan,
   }
 
   return public_results_are_disjoint(plan, input, results, intermediates, workspace, diagnostics,
-                                     batch.batch_size);
+                                     geometry, batch.batch_size);
 }
 
 __global__ void initialize_activity_kernel(Gfn2ForceDeviceActivity source,
+                                           Gfn2GeometryEpochConsumerDevice geometry,
+                                           int dynamic_epoch,
                                            std::uint8_t* active_mask,
                                            std::uint32_t* sequence_active,
-                                           std::uint32_t* system_errors) {
-  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (system == 0) {
+                                           std::uint32_t* system_errors,
+                                           std::uint32_t* device_error) {
+  __shared__ std::uint64_t epoch;
+  __shared__ int invalid_geometry;
+  if (threadIdx.x == 0) {
     *sequence_active = 1u;
+    epoch = dynamic_epoch != 0 ? *geometry.epoch.value : 0u;
+    invalid_geometry = dynamic_epoch != 0 && epoch == 0u ? 1 : 0;
   }
-  if (system >= source.batch_elements) {
-    return;
+  __syncthreads();
+  for (std::int64_t system = threadIdx.x; system < source.batch_elements;
+       system += blockDim.x) {
+    active_mask[system] = 0u;
+    const std::uint8_t requested = source.requested_mask[system];
+    if (requested > 1u) {
+      system_errors[system] = gfn2_post_scc_potential_error(
+          Gfn2PostSccPotentialStage::kActivity, kInvalidRequestedMask);
+    } else if (requested == 1u && source.system_statuses[system] == GPUXTB_STATUS_SUCCESS) {
+      if (dynamic_epoch == 0) {
+        active_mask[system] = 1u;
+        continue;
+      }
+      const std::uint8_t eligible = geometry.eligible_mask[system];
+      if (eligible > 1u) {
+        atomicExch(&invalid_geometry, 1);
+      } else if (eligible == 0u) {
+        system_errors[system] = gfn2_post_scc_potential_error(
+            Gfn2PostSccPotentialStage::kActivity, kIneligibleGeometry);
+      } else if (geometry.committed_generations[system] != epoch) {
+        system_errors[system] = gfn2_post_scc_potential_error(
+            Gfn2PostSccPotentialStage::kActivity, kStaleGeometry);
+      } else {
+        active_mask[system] = 1u;
+      }
+    }
   }
-  active_mask[system] = 0u;
-  const std::uint8_t requested = source.requested_mask[system];
-  if (requested > 1u) {
-    system_errors[system] =
-        gfn2_post_scc_potential_error(Gfn2PostSccPotentialStage::kActivity, kInvalidRequestedMask);
-  } else if (requested == 1u && source.system_statuses[system] == GPUXTB_STATUS_SUCCESS) {
-    active_mask[system] = 1u;
+  __syncthreads();
+  if (threadIdx.x == 0 && invalid_geometry != 0) {
+    const std::uint32_t raw = epoch == 0u ? kInvalidGeometryEpoch : kInvalidEligibilityMask;
+    atomicCAS(device_error, 0u,
+              gfn2_post_scc_potential_error(Gfn2PostSccPotentialStage::kActivity, raw));
+    atomicExch(sequence_active, 0u);
   }
 }
 
@@ -508,13 +581,14 @@ cudaError_t check_launch() noexcept { return cudaGetLastError(); }
 
 }  // namespace
 
-cudaError_t refresh_gfn2_post_scc_potentials_cuda(
+static cudaError_t refresh_post_scc_potentials_impl(
     const Gfn2PostSccPotentialDevicePlan& plan, const Gfn2PostSccPotentialDeviceInput& input,
     const Gfn2PostSccPotentialDeviceResults& results,
     const Gfn2PostSccPotentialDeviceIntermediates& intermediates,
     const Gfn2PostSccPotentialDeviceWorkspace& workspace,
-    const Gfn2PostSccPotentialDeviceDiagnostics& diagnostics, cudaStream_t stream) noexcept {
-  if (!validate_common(plan, input, results, intermediates, workspace, diagnostics)) {
+    const Gfn2PostSccPotentialDeviceDiagnostics& diagnostics,
+    const Gfn2GeometryEpochConsumerDevice* geometry, cudaStream_t stream) noexcept {
+  if (!validate_common(plan, input, results, intermediates, workspace, diagnostics, geometry)) {
     return cudaErrorInvalidValue;
   }
 
@@ -531,8 +605,11 @@ cudaError_t refresh_gfn2_post_scc_potentials_cuda(
   }
   const unsigned int gate_blocks =
       static_cast<unsigned int>((batch_size + kThreadsPerBlock - 1) / kThreadsPerBlock);
-  initialize_activity_kernel<<<gate_blocks, kThreadsPerBlock, 0, stream>>>(
-      input.activity, workspace.active_mask, workspace.sequence_active, diagnostics.system_errors);
+  const Gfn2GeometryEpochConsumerDevice consumer =
+      geometry == nullptr ? Gfn2GeometryEpochConsumerDevice{} : *geometry;
+  initialize_activity_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+      input.activity, consumer, geometry == nullptr ? 0 : 1, workspace.active_mask,
+      workspace.sequence_active, diagnostics.system_errors, diagnostics.device_error);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;
@@ -694,6 +771,27 @@ cudaError_t refresh_gfn2_post_scc_potentials_cuda(
       plan.potential_batch, workspace.active_mask, workspace.sequence_active,
       intermediates.complete, intermediates.shell_scalar, results.complete, results.shell_scalar);
   return check_launch();
+}
+
+cudaError_t refresh_gfn2_post_scc_potentials_cuda(
+    const Gfn2PostSccPotentialDevicePlan& plan, const Gfn2PostSccPotentialDeviceInput& input,
+    const Gfn2PostSccPotentialDeviceResults& results,
+    const Gfn2PostSccPotentialDeviceIntermediates& intermediates,
+    const Gfn2PostSccPotentialDeviceWorkspace& workspace,
+    const Gfn2PostSccPotentialDeviceDiagnostics& diagnostics, cudaStream_t stream) noexcept {
+  return refresh_post_scc_potentials_impl(plan, input, results, intermediates, workspace,
+                                          diagnostics, nullptr, stream);
+}
+
+cudaError_t refresh_gfn2_post_scc_potentials_cuda(
+    const Gfn2PostSccPotentialDevicePlan& plan, const Gfn2PostSccPotentialDeviceInput& input,
+    const Gfn2PostSccPotentialDeviceResults& results,
+    const Gfn2PostSccPotentialDeviceIntermediates& intermediates,
+    const Gfn2PostSccPotentialDeviceWorkspace& workspace,
+    const Gfn2PostSccPotentialDeviceDiagnostics& diagnostics,
+    const Gfn2GeometryEpochConsumerDevice& geometry, cudaStream_t stream) noexcept {
+  return refresh_post_scc_potentials_impl(plan, input, results, intermediates, workspace,
+                                          diagnostics, &geometry, stream);
 }
 
 }  // namespace gpuxtb::detail::cuda

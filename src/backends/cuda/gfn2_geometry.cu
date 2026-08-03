@@ -303,7 +303,9 @@ __global__ void publish_geometry_kernel(Gfn2GeometryDeviceBatch batch,
 
 __global__ void coordination_vjp_kernel(Gfn2GeometryDeviceBatch batch,
                                         Gfn2GeometryDeviceCache cache,
-                                        std::uint64_t geometry_generation, const double* dE_dcn,
+                                        std::uint64_t scalar_generation,
+                                        const std::uint64_t* device_generation,
+                                        const double* dE_dcn,
                                         const double* gradients, double* gradient_scratch,
                                         const std::uint32_t* sequence_active,
                                         std::uint32_t* system_errors, std::uint32_t* device_error) {
@@ -314,6 +316,12 @@ __global__ void coordination_vjp_kernel(Gfn2GeometryDeviceBatch batch,
     return;
   }
   __syncthreads();
+  const std::uint64_t geometry_generation =
+      device_generation == nullptr
+          ? scalar_generation
+          : atomicAdd(reinterpret_cast<unsigned long long*>(
+                          const_cast<std::uint64_t*>(device_generation)),
+                      0ULL);
   if (threadIdx.x == 0 && cache.geometry_generations[system] != geometry_generation) {
     record_system_error(system_errors, system, device_error,
                         Gfn2GeometryDeviceError::kStaleGeometry);
@@ -571,7 +579,8 @@ cudaError_t validate_update(const Gfn2GeometryDeviceBatch& batch, const double* 
 }
 
 cudaError_t validate_vjp(const Gfn2GeometryDeviceBatch& batch, const Gfn2GeometryDeviceCache& cache,
-                         std::uint64_t geometry_generation, const double* dE_dcn, double* gradients,
+                         std::uint64_t scalar_generation, const std::uint64_t* device_generation,
+                         const double* dE_dcn, double* gradients,
                          const Gfn2GeometryDeviceWorkspace& workspace, std::uint32_t* system_errors,
                          std::uint32_t* device_error) noexcept {
   RequiredElements required{};
@@ -580,7 +589,10 @@ cudaError_t validate_vjp(const Gfn2GeometryDeviceBatch& batch, const Gfn2Geometr
   if (status != cudaSuccess) {
     return status;
   }
-  if (geometry_generation == 0u || cache.pair_data_elements < required.pair_data ||
+  if ((device_generation == nullptr ? scalar_generation == 0u
+                                    : scalar_generation != 0u ||
+                                          !is_aligned(device_generation, alignof(std::uint64_t))) ||
+      cache.pair_data_elements < required.pair_data ||
       cache.coordination_elements < batch.total_atoms ||
       !required_pointer(cache.pair_data, required.pair_data) ||
       !required_pointer(cache.coordination_numbers, batch.total_atoms) ||
@@ -591,7 +603,7 @@ cudaError_t validate_vjp(const Gfn2GeometryDeviceBatch& batch, const Gfn2Geometr
     return cudaErrorInvalidValue;
   }
 
-  std::array<AddressRange, 7> reads;
+  std::array<AddressRange, 8> reads;
   std::array<AddressRange, 5> writes;
   if (!make_address_range(batch.atom_offsets, batch.atom_offset_elements,
                           sizeof(*batch.atom_offsets), &reads[0]) ||
@@ -606,6 +618,8 @@ cudaError_t validate_vjp(const Gfn2GeometryDeviceBatch& batch, const Gfn2Geometr
       !make_address_range(cache.geometry_generations, batch.batch_size,
                           sizeof(*cache.geometry_generations), &reads[5]) ||
       !make_address_range(dE_dcn, batch.total_atoms, sizeof(*dE_dcn), &reads[6]) ||
+      !make_address_range(device_generation, device_generation == nullptr ? 0 : 1,
+                          sizeof(std::uint64_t), &reads[7]) ||
       !make_address_range(gradients, required.coordinates, sizeof(*gradients), &writes[0]) ||
       !make_address_range(workspace.gradient_scratch, required.coordinates,
                           sizeof(*workspace.gradient_scratch), &writes[1]) ||
@@ -688,13 +702,20 @@ cudaError_t update_gfn2_geometry_cache_cuda(
   return check_launch();
 }
 
-cudaError_t add_gfn2_coordination_vjp_cuda(
+static cudaError_t add_coordination_vjp_impl(
     const Gfn2GeometryDeviceBatch& batch, const Gfn2GeometryDeviceCache& cache,
-    std::uint64_t geometry_generation, const double* dE_dcn, double* gradients,
+    std::uint64_t scalar_generation, const Gfn2GeometryEpochDevice* geometry_epoch,
+    const double* dE_dcn, double* gradients,
     const Gfn2GeometryDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream) noexcept {
-  cudaError_t status = validate_vjp(batch, cache, geometry_generation, dE_dcn, gradients, workspace,
-                                    system_errors, device_error);
+  if (geometry_epoch != nullptr &&
+      (geometry_epoch->value_elements != 1 || geometry_epoch->plan_token != batch.plan_token)) {
+    return cudaErrorInvalidValue;
+  }
+  const std::uint64_t* const device_generation =
+      geometry_epoch == nullptr ? nullptr : geometry_epoch->value;
+  cudaError_t status = validate_vjp(batch, cache, scalar_generation, device_generation, dE_dcn,
+                                    gradients, workspace, system_errors, device_error);
   if (status != cudaSuccess) {
     return status;
   }
@@ -710,7 +731,8 @@ cudaError_t add_gfn2_coordination_vjp_cuda(
   }
   const unsigned int blocks = static_cast<unsigned int>(batch.batch_size);
   coordination_vjp_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, cache, geometry_generation, dE_dcn, gradients, workspace.gradient_scratch,
+      batch, cache, scalar_generation, device_generation, dE_dcn, gradients,
+      workspace.gradient_scratch,
       workspace.sequence_active, system_errors, device_error);
   status = check_launch();
   if (status != cudaSuccess) {
@@ -719,6 +741,24 @@ cudaError_t add_gfn2_coordination_vjp_cuda(
   publish_vjp_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
       batch, workspace.gradient_scratch, gradients, workspace.sequence_active, system_errors);
   return check_launch();
+}
+
+cudaError_t add_gfn2_coordination_vjp_cuda(
+    const Gfn2GeometryDeviceBatch& batch, const Gfn2GeometryDeviceCache& cache,
+    std::uint64_t geometry_generation, const double* dE_dcn, double* gradients,
+    const Gfn2GeometryDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  return add_coordination_vjp_impl(batch, cache, geometry_generation, nullptr, dE_dcn, gradients,
+                                   workspace, system_errors, device_error, stream);
+}
+
+cudaError_t add_gfn2_coordination_vjp_cuda(
+    const Gfn2GeometryDeviceBatch& batch, const Gfn2GeometryDeviceCache& cache,
+    const Gfn2GeometryEpochDevice& geometry_epoch, const double* dE_dcn, double* gradients,
+    const Gfn2GeometryDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  return add_coordination_vjp_impl(batch, cache, 0u, &geometry_epoch, dE_dcn, gradients, workspace,
+                                   system_errors, device_error, stream);
 }
 
 }  // namespace gpuxtb::detail::cuda

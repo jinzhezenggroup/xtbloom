@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "backends/common/gfn2_plan_schema.hpp"
+#include "backends/cuda/gfn2_geometry.cuh"
 #include "backends/cuda/gfn2_scc.cuh"
 
 namespace gpuxtb::detail::cuda {
@@ -250,6 +251,18 @@ cudaError_t derive_gfn2_scc_iteration_activity_cuda(
     const Gfn2SccIterationDevicePolicy& policy, const Gfn2SccIterationDeviceStateInput& state,
     const Gfn2SccIterationDeviceProvenance& provenance, const Gfn2SccIterationDeviceLedger& ledger,
     cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Replay-safe activity derivation.  Active SCC members must additionally be
+ * eligible in the numerical-refresh transaction and have every cache bound to
+ * the current device epoch.  The scalar overload above remains the setup-time
+ * and legacy path.
+ */
+cudaError_t derive_gfn2_scc_iteration_activity_cuda(
+    const Gfn2SccIterationDevicePolicy& policy, const Gfn2SccIterationDeviceStateInput& state,
+    const Gfn2SccIterationDeviceProvenance& provenance,
+    const Gfn2GeometryEpochConsumerDevice& geometry,
+    const Gfn2SccIterationDeviceLedger& ledger, cudaStream_t stream = nullptr) noexcept;
 
 /*
  * Fold one completed stage into the canonical ledger. Plan classification has

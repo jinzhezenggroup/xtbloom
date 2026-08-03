@@ -16,6 +16,8 @@ using gpuxtb::detail::Gfn2GenerationScope;
 using gpuxtb::detail::Gfn2GeometryCacheProvenanceView;
 using gpuxtb::detail::Gfn2PlanMemorySpace;
 using gpuxtb::detail::cuda::Gfn2SccCacheProvenanceBinding;
+using gpuxtb::detail::cuda::Gfn2GeometryEpochConsumerDevice;
+using gpuxtb::detail::cuda::Gfn2GeometryEpochDevice;
 using gpuxtb::detail::cuda::Gfn2SccIterationControlCode;
 using gpuxtb::detail::cuda::Gfn2SccIterationDeviceLedger;
 using gpuxtb::detail::cuda::Gfn2SccIterationDevicePolicy;
@@ -139,7 +141,9 @@ struct Fixture {
         iterations(batch),
         statuses(batch),
         converged(batch),
+        geometry_epoch(1u),
         geometry_generations(batch),
+        eligible(batch),
         warm_start_generations(batch),
         cache_bindings(1u),
         active(batch),
@@ -167,7 +171,8 @@ struct Fixture {
 
   bool valid() const {
     return iterations.get() != nullptr && statuses.get() != nullptr && converged.get() != nullptr &&
-           geometry_generations.get() != nullptr && warm_start_generations.get() != nullptr &&
+           geometry_epoch.get() != nullptr && geometry_generations.get() != nullptr &&
+           eligible.get() != nullptr && warm_start_generations.get() != nullptr &&
            cache_bindings.get() != nullptr && active.get() != nullptr &&
            pending_statuses.get() != nullptr && failures.get() != nullptr &&
            plan_failure.get() != nullptr && sequence_active.get() != nullptr &&
@@ -226,6 +231,29 @@ struct Fixture {
                   kWarmStartGeneration,
                   kPlanToken};
     return cudaSuccess;
+  }
+
+  cudaError_t install_geometry_transaction(
+      std::uint64_t epoch, const std::vector<std::uint64_t>& committed,
+      const std::vector<std::uint8_t>& host_eligible, cudaStream_t stream = nullptr) const {
+    if (committed.size() != batch_size || host_eligible.size() != batch_size) {
+      return cudaErrorInvalidValue;
+    }
+    cudaError_t status = geometry_epoch.copy_from(&epoch, 1u, stream);
+    if (status != cudaSuccess) {
+      return status;
+    }
+    status = geometry_generations.copy_from(committed.data(), batch_size, stream);
+    if (status != cudaSuccess) {
+      return status;
+    }
+    return eligible.copy_from(host_eligible.data(), batch_size, stream);
+  }
+
+  [[nodiscard]] Gfn2GeometryEpochConsumerDevice geometry_consumer() const {
+    return {Gfn2GeometryEpochDevice{geometry_epoch.get(), 1, kPlanToken},
+            geometry_generations.get(), eligible.get(), static_cast<std::int64_t>(batch_size),
+            kPlanToken};
   }
 
   cudaError_t install_batch_provenance(std::uint64_t generation, cudaStream_t stream = nullptr) {
@@ -287,7 +315,9 @@ struct Fixture {
   DeviceBuffer<std::uint64_t> iterations;
   DeviceBuffer<gpuxtb_status_t> statuses;
   DeviceBuffer<std::uint8_t> converged;
+  DeviceBuffer<std::uint64_t> geometry_epoch;
   DeviceBuffer<std::uint64_t> geometry_generations;
+  DeviceBuffer<std::uint8_t> eligible;
   DeviceBuffer<std::uint64_t> warm_start_generations;
   DeviceBuffer<Gfn2SccCacheProvenanceBinding> cache_bindings;
   DeviceBuffer<std::uint8_t> active;
@@ -958,6 +988,131 @@ int test_graph_replay_resets_control() {
   return 0;
 }
 
+int test_device_epoch_graph_replay_and_fail_closed_gates() {
+  constexpr std::size_t batch_size = 8u;
+  Fixture fixture(batch_size);
+  CHECK(fixture.valid());
+  std::vector<std::uint64_t> iterations(batch_size, 0u);
+  std::vector<gpuxtb_status_t> statuses(batch_size, GPUXTB_STATUS_SUCCESS);
+  std::vector<std::uint8_t> converged(batch_size, 0u);
+  std::vector<std::uint64_t> committed(batch_size, kGeometryGeneration);
+  std::vector<std::uint64_t> warm(batch_size, kWarmStartGeneration);
+  std::vector<std::uint8_t> eligible(batch_size, 1u);
+  CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
+  CUDA_CHECK(fixture.install_per_system_provenance(committed, warm));
+  CUDA_CHECK(fixture.install_geometry_transaction(kGeometryGeneration, committed, eligible));
+
+  cudaStream_t stream = nullptr;
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t executable = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+  CUDA_CHECK(gpuxtb::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
+      fixture.policy, fixture.state, fixture.provenance, fixture.geometry_consumer(),
+      fixture.ledger, stream));
+  CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
+  CUDA_CHECK(cudaGraphInstantiate(&executable, graph, nullptr, nullptr, 0u));
+
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  Snapshot first;
+  CUDA_CHECK(fixture.snapshot(first, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(first.sequence_active == 1u);
+  CHECK(first.plan_failure == 0u);
+  CHECK(std::all_of(first.active.begin(), first.active.end(),
+                    [](std::uint8_t value) { return value == 1u; }));
+
+  const std::uint64_t next_epoch = kGeometryGeneration + 1u;
+  committed.assign(batch_size, next_epoch);
+  committed[1] = kGeometryGeneration;
+  eligible[2] = 0u;
+  CUDA_CHECK(fixture.install_geometry_transaction(next_epoch, committed, eligible, stream));
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  Snapshot mixed;
+  CUDA_CHECK(fixture.snapshot(mixed, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(mixed.sequence_active == 1u);
+  CHECK(mixed.plan_failure == 0u);
+  CHECK(mixed.active[0] == 1u);
+  CHECK(mixed.active[1] == 0u);
+  CHECK(mixed.active[2] == 0u);
+  for (const std::size_t system : {1u, 2u}) {
+    CHECK(mixed.failures[system] ==
+          record(Gfn2SccStageId::kGeometry,
+                 static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kStaleGeneration)));
+    CHECK(mixed.statuses[system] == GPUXTB_STATUS_INTERNAL_ERROR);
+  }
+
+  committed.assign(batch_size, next_epoch);
+  eligible.assign(batch_size, 1u);
+  CUDA_CHECK(fixture.install_geometry_transaction(next_epoch, committed, eligible, stream));
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  Snapshot refreshed;
+  CUDA_CHECK(fixture.snapshot(refreshed, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(refreshed.sequence_active == 1u);
+  CHECK(refreshed.plan_failure == 0u);
+  CHECK(std::all_of(refreshed.active.begin(), refreshed.active.end(),
+                    [](std::uint8_t value) { return value == 1u; }));
+  CHECK(std::all_of(refreshed.failures.begin(), refreshed.failures.end(),
+                    [](std::uint64_t value) { return value == 0u; }));
+
+  /* Malformed eligibility is plan-wide even when every malformed byte belongs
+   * to an otherwise inactive peer. */
+  converged[3] = 1u;
+  statuses[4] = GPUXTB_STATUS_INTERNAL_ERROR;
+  eligible[3] = 2u;
+  eligible[4] = 2u;
+  CUDA_CHECK(fixture.install_state(iterations, statuses, converged, stream));
+  CUDA_CHECK(fixture.install_geometry_transaction(next_epoch, committed, eligible, stream));
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  Snapshot malformed;
+  CUDA_CHECK(fixture.snapshot(malformed, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(malformed.sequence_active == 0u);
+  CHECK(malformed.plan_failure ==
+        record(Gfn2SccStageId::kActivity,
+               static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kInvalidProvenance)));
+  CHECK(std::all_of(malformed.active.begin(), malformed.active.end(),
+                    [](std::uint8_t value) { return value == 0u; }));
+
+  eligible.assign(batch_size, 1u);
+  CUDA_CHECK(fixture.install_geometry_transaction(0u, committed, eligible, stream));
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  Snapshot zero_epoch;
+  CUDA_CHECK(fixture.snapshot(zero_epoch, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(zero_epoch.sequence_active == 0u);
+  CHECK(zero_epoch.plan_failure == malformed.plan_failure);
+
+  CUDA_CHECK(cudaGraphExecDestroy(executable));
+  CUDA_CHECK(cudaGraphDestroy(graph));
+  CUDA_CHECK(cudaStreamDestroy(stream));
+
+  Gfn2GeometryEpochConsumerDevice cross_plan = fixture.geometry_consumer();
+  cross_plan.plan_token ^= 1u;
+  CHECK(gpuxtb::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
+            fixture.policy, fixture.state, fixture.provenance, cross_plan, fixture.ledger) ==
+        cudaErrorInvalidValue);
+
+  converged[3] = 0u;
+  statuses[4] = GPUXTB_STATUS_SUCCESS;
+  CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
+  CUDA_CHECK(fixture.install_geometry_transaction(next_epoch, committed, eligible));
+  CUDA_CHECK(fixture.active.copy_from(eligible.data(), eligible.size()));
+  Gfn2GeometryEpochConsumerDevice exact_alias = fixture.geometry_consumer();
+  exact_alias.eligible_mask = fixture.active.get();
+  CUDA_CHECK(gpuxtb::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
+      fixture.policy, fixture.state, fixture.provenance, exact_alias, fixture.ledger));
+  Snapshot alias;
+  CUDA_CHECK(fixture.snapshot(alias));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(alias.sequence_active == 1u);
+  CHECK(std::all_of(alias.active.begin(), alias.active.end(),
+                    [](std::uint8_t value) { return value == 1u; }));
+  return 0;
+}
+
 int test_host_validation() {
   Fixture fixture(1u);
   CHECK(fixture.valid());
@@ -1088,6 +1243,9 @@ int main() {
     return status;
   }
   if (const int status = test_graph_replay_resets_control(); status != 0) {
+    return status;
+  }
+  if (const int status = test_device_epoch_graph_replay_and_fail_closed_gates(); status != 0) {
     return status;
   }
   return test_host_validation();

@@ -639,7 +639,9 @@ struct DeviceFixture {
 
   DeviceBuffer<double> geometry_pairs;
   DeviceBuffer<double> geometry_coordination;
+  DeviceBuffer<std::uint64_t> geometry_epoch;
   DeviceBuffer<std::uint64_t> geometry_generations;
+  DeviceBuffer<std::uint8_t> geometry_eligible;
   DeviceBuffer<double> geometry_pair_scratch;
   DeviceBuffer<double> geometry_coordination_scratch;
   DeviceBuffer<double> geometry_update_gradient_scratch;
@@ -851,7 +853,9 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
   ALLOCATE(repulsion_energy, batch)
   ALLOCATE(geometry_pairs, pairs * static_cast<std::size_t>(kGfn2GeometryPairDataElements))
   ALLOCATE(geometry_coordination, atoms)
+  ALLOCATE(geometry_epoch, 1u)
   ALLOCATE(geometry_generations, batch)
+  ALLOCATE(geometry_eligible, batch)
   ALLOCATE(geometry_pair_scratch, pairs * static_cast<std::size_t>(kGfn2GeometryPairDataElements))
   ALLOCATE(geometry_coordination_scratch, atoms)
   ALLOCATE(geometry_update_gradient_scratch, coordinates)
@@ -972,6 +976,8 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
   std::vector<gpuxtb_status_t> all_success(batch, GPUXTB_STATUS_SUCCESS);
   std::vector<std::uint8_t> all_converged(batch, 1u);
   std::vector<std::uint64_t> generations(batch, kGeometryGeneration);
+  std::vector<std::uint8_t> geometry_eligible(batch, 1u);
+  const std::vector<std::uint64_t> geometry_epoch{ kGeometryGeneration };
   /* Deliberately stale last-mixed potentials. The execution must rebuild
    * Hamiltonian force inputs from the final raw SCC multipoles below. */
   std::vector<double> last_mixed_shell_scalar(shells);
@@ -1012,7 +1018,9 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
   COPY(requested, all_requested)
   COPY(statuses, all_success)
   COPY(converged, all_converged)
+  COPY(geometry_epoch, geometry_epoch)
   COPY(geometry_generations, generations)
+  COPY(geometry_eligible, geometry_eligible)
 #undef COPY
   if (status != cudaSuccess) {
     return status;
@@ -1658,6 +1666,17 @@ cudaError_t launch_execution(DeviceFixture& d, cudaStream_t stream) {
                                         d.diagnostics, stream);
 }
 
+Gfn2GeometryEpochConsumerDevice geometry_consumer(DeviceFixture& d, std::size_t batch_size) {
+  return {{d.geometry_epoch.get(), 1, kPlanToken}, d.geometry_generations.get(),
+          d.geometry_eligible.get(), static_cast<std::int64_t>(batch_size), kPlanToken};
+}
+
+cudaError_t launch_execution_device_epoch(DeviceFixture& d, std::size_t batch_size,
+                                          cudaStream_t stream) {
+  return execute_gfn2_energy_force_cuda(d.plan, d.input, d.results, d.intermediates, d.workspace,
+                                        d.diagnostics, geometry_consumer(d, batch_size), stream);
+}
+
 int compare_success(DeviceFixture& d, const HostCase& h, cudaStream_t stream) {
   std::vector<double> energy(h.batch_size);
   std::vector<double> qm(h.expected_qm_force.size());
@@ -1948,6 +1967,115 @@ int test_graph_replay_uses_changed_raw_state() {
   return 0;
 }
 
+int test_device_epoch_graph_replay() {
+  HostCase initial;
+  std::string error;
+  CHECK(make_case(8u, initial, error));
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CUDA_CHECK(initialize_device(device, initial, stream));
+  CUDA_CHECK(seed_public_results(device, initial, stream));
+
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t executable = nullptr;
+  CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
+  CUDA_CHECK(launch_execution_device_epoch(device, initial.batch_size, stream));
+  CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
+  CUDA_CHECK(cudaGraphInstantiate(&executable, graph, nullptr, nullptr, 0u));
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  if (const int line = compare_success(device, initial, stream); line != 0) {
+    return line;
+  }
+
+  const std::uint64_t next_epoch = kGeometryGeneration + 1u;
+  std::vector<std::uint64_t> committed(initial.batch_size, next_epoch);
+  std::vector<std::uint8_t> eligible(initial.batch_size, 1u);
+  committed[1] = kGeometryGeneration;
+  eligible[2] = 0u;
+  CUDA_CHECK(device.geometry_epoch.copy_from(&next_epoch, 1u, stream));
+  CUDA_CHECK(device.geometry_generations.copy_from(committed.data(), committed.size(), stream));
+  CUDA_CHECK(device.geometry_eligible.copy_from(eligible.data(), eligible.size(), stream));
+  CUDA_CHECK(seed_public_results(device, initial, stream));
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+
+  std::vector<double> energy(initial.batch_size);
+  std::vector<double> qm(initial.expected_qm_force.size());
+  std::vector<double> point(initial.expected_point_force.size());
+  std::vector<std::uint32_t> execution_errors(initial.batch_size);
+  std::uint32_t plan_failure = 1u;
+  CUDA_CHECK(device.public_energy.copy_to(energy.data(), energy.size(), stream));
+  CUDA_CHECK(device.public_qm_force.copy_to(qm.data(), qm.size(), stream));
+  CUDA_CHECK(device.public_point_force.copy_to(point.data(), point.size(), stream));
+  CUDA_CHECK(device.execution_system_errors.copy_to(execution_errors.data(),
+                                                     execution_errors.size(), stream));
+  CUDA_CHECK(device.plan_failure.copy_to(&plan_failure, 1u, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(plan_failure == 0u);
+  CHECK(execution_errors[1] ==
+        static_cast<std::uint32_t>(Gfn2EnergyForceExecutionDeviceError::kStaleGeometry));
+  CHECK(execution_errors[2] ==
+        static_cast<std::uint32_t>(Gfn2EnergyForceExecutionDeviceError::kIneligibleGeometry));
+  for (std::size_t system = 0; system < initial.batch_size; ++system) {
+    const bool suppressed = system == 1u || system == 2u;
+    if (suppressed) {
+      CHECK(energy[system] == kSentinel);
+    } else {
+      CHECK(near(energy[system], initial.expected_energy[system]));
+      CHECK(execution_errors[system] == 0u);
+    }
+    const std::int64_t atom_begin = initial.basis.atom_offsets[system];
+    const std::int64_t atom_end = initial.basis.atom_offsets[system + 1u];
+    for (std::int64_t coordinate = 3 * atom_begin; coordinate < 3 * atom_end; ++coordinate) {
+      const std::size_t index = static_cast<std::size_t>(coordinate);
+      if (suppressed) {
+        CHECK(qm[index] == kSentinel);
+      } else {
+        CHECK(near(qm[index], initial.expected_qm_force[index], 2.0e-8, 2.0e-8));
+      }
+    }
+    const std::int64_t point_begin = initial.external_plan.point_charge_offsets[system];
+    const std::int64_t point_end = initial.external_plan.point_charge_offsets[system + 1u];
+    for (std::int64_t coordinate = 3 * point_begin; coordinate < 3 * point_end; ++coordinate) {
+      const std::size_t index = static_cast<std::size_t>(coordinate);
+      if (suppressed) {
+        CHECK(point[index] == kSentinel);
+      } else {
+        CHECK(near(point[index], initial.expected_point_force[index], 2.0e-9, 2.0e-9));
+      }
+    }
+  }
+
+  HostCase changed;
+  CHECK(make_case(8u, changed, error));
+  for (std::size_t shell = 0; shell < changed.shell_charges.size(); ++shell) {
+    changed.shell_charges[shell] =
+        -0.55 * changed.shell_charges[shell] + 0.002 * static_cast<double>(shell + 1u);
+  }
+  std::fill(changed.atomic_charges.begin(), changed.atomic_charges.end(), 0.0);
+  for (std::size_t shell = 0; shell < changed.shell_charges.size(); ++shell) {
+    const std::size_t atom =
+        static_cast<std::size_t>(changed.basis.shell_to_atom[static_cast<std::size_t>(shell)]);
+    changed.atomic_charges[atom] += changed.shell_charges[shell];
+  }
+  CHECK(refresh_physics(changed, error));
+  committed.assign(changed.batch_size, next_epoch);
+  eligible.assign(changed.batch_size, 1u);
+  CUDA_CHECK(device.geometry_generations.copy_from(committed.data(), committed.size(), stream));
+  CUDA_CHECK(device.geometry_eligible.copy_from(eligible.data(), eligible.size(), stream));
+  CUDA_CHECK(seed_public_results(device, changed, stream));
+  CUDA_CHECK(upload_raw_state(device, changed, stream));
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  if (const int line = compare_success(device, changed, stream); line != 0) {
+    return line;
+  }
+
+  CUDA_CHECK(cudaGraphExecDestroy(executable));
+  CUDA_CHECK(cudaGraphDestroy(graph));
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -1965,5 +2093,8 @@ int main() {
   if (const int line = test_plan_failure_suppresses_publication(); line != 0) {
     return line;
   }
-  return test_graph_replay_uses_changed_raw_state();
+  if (const int line = test_graph_replay_uses_changed_raw_state(); line != 0) {
+    return line;
+  }
+  return test_device_epoch_graph_replay();
 }

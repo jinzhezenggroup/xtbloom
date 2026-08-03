@@ -1348,6 +1348,131 @@ int test_production_graph_changed_input_replay(std::int64_t batch_size) {
   return 0;
 }
 
+int test_production_graph_device_epoch_replay() {
+  constexpr std::int64_t batch_size = 8;
+  constexpr std::uint64_t next_generation = kGeometryGeneration + 1u;
+  ProductionFixture fixture;
+  CHECK(fixture.create(false, batch_size));
+  CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
+        Gfn2SccIterationProviderCaptureMode::kGraphSupported);
+
+  std::vector<Gfn2SccCacheProvenanceBinding> provenance;
+  CHECK(download(fixture.binding.plan.provenance.cache_bindings,
+                 fixture.binding.plan.provenance.cache_binding_count, provenance,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  const std::uint64_t* const committed =
+      fixture.binding.plan.geometry_cache.geometry_generations;
+  for (auto& record : provenance) {
+    record.provenance.generation_scope = Gfn2GenerationScope::kPerSystem;
+    record.provenance.geometry_generation = 0u;
+    record.provenance.system_generation_count = batch_size;
+    record.provenance.system_geometry_generations = committed;
+  }
+  CUDA_CHECK(cudaMemcpyAsync(
+      const_cast<Gfn2SccCacheProvenanceBinding*>(
+          fixture.binding.plan.provenance.cache_bindings),
+      provenance.data(), provenance.size() * sizeof(Gfn2SccCacheProvenanceBinding),
+      cudaMemcpyHostToDevice, fixture.handles.stream()));
+
+  DeviceAllocation epoch_storage;
+  DeviceAllocation eligible_storage;
+  CHECK(epoch_storage.allocate(sizeof(std::uint64_t)));
+  CHECK(eligible_storage.allocate(static_cast<std::size_t>(batch_size) * sizeof(std::uint8_t)));
+  auto* const epoch = static_cast<std::uint64_t*>(epoch_storage.get());
+  auto* const eligible = static_cast<std::uint8_t*>(eligible_storage.get());
+  std::vector<std::uint64_t> generations(static_cast<std::size_t>(batch_size),
+                                         kGeometryGeneration);
+  std::vector<std::uint8_t> eligibility(static_cast<std::size_t>(batch_size), 1u);
+  CUDA_CHECK(cudaMemcpyAsync(epoch, &generations[0], sizeof(std::uint64_t),
+                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(const_cast<std::uint64_t*>(committed), generations.data(),
+                             generations.size() * sizeof(std::uint64_t),
+                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(eligible, eligibility.data(), eligibility.size(),
+                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+  const Gfn2GeometryEpochConsumerDevice consumer{
+      {epoch, 1, kPlanToken}, committed, eligible, batch_size, kPlanToken};
+
+  GraphResources graph;
+  CUDA_CHECK(cudaStreamBeginCapture(fixture.handles.stream(), cudaStreamCaptureModeThreadLocal));
+  const Gfn2SccIterationLaunchResult captured =
+      launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, consumer,
+                                                fixture.handles.stream());
+  CHECK(captured.success());
+  CUDA_CHECK(cudaStreamEndCapture(fixture.handles.stream(), graph.graph_address()));
+  CUDA_CHECK(cudaGraphInstantiate(graph.executable_address(), graph.graph(), nullptr, nullptr, 0u));
+
+  CUDA_CHECK(cudaGraphLaunch(graph.executable(), fixture.handles.stream()));
+  std::vector<std::uint64_t> iterations;
+  CHECK(download(fixture.binding.state.scc.iterations, batch_size, iterations,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(std::all_of(iterations.begin(), iterations.end(),
+                    [](std::uint64_t value) { return value == 1u; }));
+
+  Gfn2SccIterationInitializationReady ready{};
+  CHECK(fixture.initializer
+            .upload_async(fixture.iteration_arena.get(), fixture.iteration_arena.bytes(), ready,
+                          fixture.handles.stream())
+            .success());
+  generations.assign(static_cast<std::size_t>(batch_size), next_generation);
+  generations[1] = kGeometryGeneration;
+  eligibility[2] = 0u;
+  CUDA_CHECK(cudaMemcpyAsync(epoch, &next_generation, sizeof(std::uint64_t),
+                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(const_cast<std::uint64_t*>(committed), generations.data(),
+                             generations.size() * sizeof(std::uint64_t),
+                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+  std::vector<std::uint64_t> factor_generations(static_cast<std::size_t>(batch_size),
+                                                next_generation);
+  CUDA_CHECK(cudaMemcpyAsync(
+      fixture.binding.plan.overlap_cache.geometry_generations, factor_generations.data(),
+      factor_generations.size() * sizeof(std::uint64_t), cudaMemcpyHostToDevice,
+      fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(eligible, eligibility.data(), eligibility.size(),
+                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+  CUDA_CHECK(cudaGraphLaunch(graph.executable(), fixture.handles.stream()));
+  std::vector<gpuxtb_status_t> pending_statuses;
+  std::vector<std::uint64_t> failures;
+  CHECK(download(fixture.binding.state.scc.iterations, batch_size, iterations,
+                 fixture.handles.stream()));
+  CHECK(download(fixture.binding.workspace.ledger.pending_statuses, batch_size, pending_statuses,
+                 fixture.handles.stream()));
+  CHECK(download(fixture.binding.workspace.ledger.system_failure_records, batch_size, failures,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(iterations[0] == 1u);
+  CHECK(iterations[1] == 0u);
+  CHECK(iterations[2] == 0u);
+  for (const std::size_t system : {1u, 2u}) {
+    CHECK(pending_statuses[system] == GPUXTB_STATUS_INTERNAL_ERROR);
+    CHECK(failures[system] == gfn2_scc_stage_failure_record(
+                                  Gfn2SccStageId::kGeometry,
+                                  static_cast<std::uint32_t>(
+                                      Gfn2SccIterationControlCode::kStaleGeneration)));
+  }
+
+  CHECK(fixture.initializer
+            .upload_async(fixture.iteration_arena.get(), fixture.iteration_arena.bytes(), ready,
+                          fixture.handles.stream())
+            .success());
+  generations.assign(static_cast<std::size_t>(batch_size), next_generation);
+  eligibility.assign(static_cast<std::size_t>(batch_size), 1u);
+  CUDA_CHECK(cudaMemcpyAsync(const_cast<std::uint64_t*>(committed), generations.data(),
+                             generations.size() * sizeof(std::uint64_t),
+                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(eligible, eligibility.data(), eligibility.size(),
+                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+  CUDA_CHECK(cudaGraphLaunch(graph.executable(), fixture.handles.stream()));
+  CHECK(download(fixture.binding.state.scc.iterations, batch_size, iterations,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(std::all_of(iterations.begin(), iterations.end(),
+                    [](std::uint64_t value) { return value == 1u; }));
+  return 0;
+}
+
 int test_production_loop_cpu_parity(std::int64_t batch_size, bool optional_components,
                                     bool use_default_stream, bool use_ordered_stream = false,
                                     std::uint64_t resumed_iterations = 0u) {
@@ -1679,6 +1804,10 @@ int main() {
     if (status != 0) {
       return status;
     }
+  }
+  status = test_production_graph_device_epoch_replay();
+  if (status != 0) {
+    return status;
   }
   for (const std::int64_t batch_size : {1, 8, 32, 128}) {
     status = test_production_loop_cpu_parity(batch_size, false, false);

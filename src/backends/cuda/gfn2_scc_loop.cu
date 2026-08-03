@@ -2,8 +2,10 @@
 
 namespace gpuxtb::detail::cuda {
 
-Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(const Gfn2SccIterationBinding& binding,
-                                                             cudaStream_t stream) noexcept {
+static Gfn2SccLoopLaunchResult launch_restricted_scc_loop_impl(
+    const Gfn2SccIterationBinding& binding,
+    const Gfn2GeometryEpochConsumerDevice* geometry,
+    cudaStream_t stream) noexcept {
   Gfn2SccLoopLaunchResult result{};
   const std::uint64_t submission_bound = binding.plan.activity_policy.maximum_iterations;
   const auto reject = [&](Gfn2SccIterationBindingError error) {
@@ -24,13 +26,27 @@ Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(const Gfn2SccIterat
   }
 
   for (std::uint64_t iteration = 0u; iteration < submission_bound; ++iteration) {
-    result.iteration = launch_gfn2_restricted_scc_iteration_cuda(binding, stream);
+    result.iteration = geometry == nullptr
+                           ? launch_gfn2_restricted_scc_iteration_cuda(binding, stream)
+                           : launch_gfn2_restricted_scc_iteration_cuda(binding, *geometry, stream);
     if (!result.iteration.success()) {
       return result;
     }
     ++result.submitted_iterations;
   }
   return result;
+}
+
+Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
+  return launch_restricted_scc_loop_impl(binding, nullptr, stream);
+}
+
+Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(
+    const Gfn2SccIterationBinding& binding,
+    const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream) noexcept {
+  return launch_restricted_scc_loop_impl(binding, &geometry, stream);
 }
 
 }  // namespace gpuxtb::detail::cuda

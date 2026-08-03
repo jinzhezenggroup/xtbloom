@@ -35,6 +35,24 @@ struct Gfn2GeometryEpochDevice {
   std::uint64_t plan_token = 0u;
 };
 
+/*
+ * Immutable consumer projection for one runtime-owned numerical transaction.
+ *
+ * epoch is the single device value advanced by preprocessing.  The two
+ * peer-major arrays are published by the terminal numerical-refresh gate: a
+ * consumer may read a member's numerical cache only when eligible_mask is one
+ * and committed_generations equals the current epoch.  Keeping this provenance
+ * device-resident avoids capture-time scalar generations during CUDA Graph
+ * replay while preserving mixed-peer rollback.
+ */
+struct Gfn2GeometryEpochConsumerDevice {
+  Gfn2GeometryEpochDevice epoch{};
+  const std::uint64_t* committed_generations = nullptr;
+  const std::uint8_t* eligible_mask = nullptr;
+  std::int64_t batch_elements = 0;
+  std::uint64_t plan_token = 0u;
+};
+
 /* First asynchronous semantic or numerical failure in a geometry sequence. */
 enum class Gfn2GeometryDeviceError : std::uint32_t {
   kSuccess = 0u,
@@ -107,6 +125,8 @@ static_assert(std::is_trivially_copyable_v<Gfn2GeometryDeviceBatch>);
 static_assert(std::is_standard_layout_v<Gfn2GeometryDeviceBatch>);
 static_assert(std::is_trivially_copyable_v<Gfn2GeometryEpochDevice>);
 static_assert(std::is_standard_layout_v<Gfn2GeometryEpochDevice>);
+static_assert(std::is_trivially_copyable_v<Gfn2GeometryEpochConsumerDevice>);
+static_assert(std::is_standard_layout_v<Gfn2GeometryEpochConsumerDevice>);
 static_assert(std::is_trivially_copyable_v<Gfn2GeometryDeviceCache>);
 static_assert(std::is_standard_layout_v<Gfn2GeometryDeviceCache>);
 static_assert(std::is_trivially_copyable_v<Gfn2GeometryDeviceWorkspace>);
@@ -142,6 +162,13 @@ cudaError_t update_gfn2_geometry_cache_cuda(
 cudaError_t add_gfn2_coordination_vjp_cuda(
     const Gfn2GeometryDeviceBatch& batch, const Gfn2GeometryDeviceCache& cache,
     std::uint64_t geometry_generation, const double* dE_dcn, double* gradients,
+    const Gfn2GeometryDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/* Replay-safe VJP consuming the current runtime-owned device epoch. */
+cudaError_t add_gfn2_coordination_vjp_cuda(
+    const Gfn2GeometryDeviceBatch& batch, const Gfn2GeometryDeviceCache& cache,
+    const Gfn2GeometryEpochDevice& geometry_epoch, const double* dE_dcn, double* gradients,
     const Gfn2GeometryDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 

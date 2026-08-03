@@ -28,6 +28,9 @@ enum class Gfn2EnergyForceExecutionDeviceError : std::uint32_t {
   kClassicalForceFailure = 6u,
   kExternalPointChargeForceFailure = 7u,
   kForceCompositionFailure = 8u,
+  kInvalidGeometryTransaction = 9u,
+  kIneligibleGeometry = 10u,
+  kStaleGeometry = 11u,
 };
 
 /*
@@ -195,6 +198,17 @@ cudaError_t execute_gfn2_energy_force_cuda(
     const Gfn2EnergyForceExecutionDeviceIntermediates& intermediates,
     const Gfn2EnergyForceExecutionDeviceWorkspace& workspace,
     const Gfn2EnergyForceExecutionDeviceDiagnostics& diagnostics,
+    cudaStream_t stream = nullptr) noexcept;
+
+/* Replay-safe execution consuming the runtime-owned geometry transaction. */
+cudaError_t execute_gfn2_energy_force_cuda(
+    const Gfn2EnergyForceExecutionDevicePlan& plan,
+    const Gfn2EnergyForceExecutionDeviceInput& input,
+    const Gfn2EnergyForceExecutionDeviceResults& results,
+    const Gfn2EnergyForceExecutionDeviceIntermediates& intermediates,
+    const Gfn2EnergyForceExecutionDeviceWorkspace& workspace,
+    const Gfn2EnergyForceExecutionDeviceDiagnostics& diagnostics,
+    const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda

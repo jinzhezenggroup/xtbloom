@@ -173,15 +173,25 @@ __device__ void close_plan_sequence(const Gfn2SccIterationDeviceLedger& ledger,
 __global__ void derive_activity_kernel(Gfn2SccIterationDevicePolicy policy,
                                        Gfn2SccIterationDeviceStateInput state,
                                        Gfn2SccIterationDeviceProvenance provenance,
+                                       Gfn2GeometryEpochConsumerDevice geometry,
+                                       int dynamic_epoch,
                                        Gfn2SccIterationDeviceLedger ledger) {
   __shared__ int invalid_state;
+  __shared__ int invalid_geometry;
   __shared__ int any_active;
   __shared__ unsigned long long plan_record;
+  __shared__ unsigned long long expected_generation;
 
   if (threadIdx.x == 0) {
     invalid_state = 0;
+    invalid_geometry = 0;
     any_active = 0;
     plan_record = 0u;
+    expected_generation = dynamic_epoch != 0 ? *geometry.epoch.value
+                                             : provenance.expected_geometry_generation;
+    if (dynamic_epoch != 0 && expected_generation == 0u) {
+      invalid_geometry = 1;
+    }
     *ledger.plan_failure_record = 0u;
     *ledger.sequence_active = 1u;
   }
@@ -190,6 +200,10 @@ __global__ void derive_activity_kernel(Gfn2SccIterationDevicePolicy policy,
   // a late initialization store.
   __syncthreads();
   for (std::int64_t system = threadIdx.x; system < policy.batch_size; system += blockDim.x) {
+    /* The refresh gate may exact-alias ledger.active_mask.  Snapshot it before
+     * this kernel resets the canonical SCC activity byte. */
+    const std::uint8_t refresh_eligible =
+        dynamic_epoch != 0 ? geometry.eligible_mask[system] : 1u;
     const gpuxtb_status_t status = state.system_statuses[system];
     const std::uint8_t converged = state.converged[system];
     const std::uint64_t iterations = state.iterations[system];
@@ -203,7 +217,21 @@ __global__ void derive_activity_kernel(Gfn2SccIterationDevicePolicy policy,
     const bool active = status == GPUXTB_STATUS_SUCCESS && converged == 0u &&
                         iterations < policy.maximum_iterations;
     ledger.active_mask[system] = active ? 1u : 0u;
-    if (active) {
+    /* Eligibility is a plan-owned byte domain, not an activity-dependent
+     * numerical input.  A malformed value invalidates the transaction even
+     * when the corresponding peer is converged, failed, or max-iteration. */
+    if (dynamic_epoch != 0 && refresh_eligible > 1u) {
+      ledger.active_mask[system] = 0u;
+      atomicExch(&invalid_geometry, 1);
+    } else if (active && dynamic_epoch != 0 &&
+               (refresh_eligible != 1u ||
+                geometry.committed_generations[system] != expected_generation)) {
+      ledger.system_failure_records[system] = gfn2_scc_stage_failure_record(
+          Gfn2SccStageId::kGeometry,
+          static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kStaleGeneration));
+      ledger.pending_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
+      ledger.active_mask[system] = 0u;
+    } else if (active) {
       atomicExch(&any_active, 1);
     }
   }
@@ -214,6 +242,13 @@ __global__ void derive_activity_kernel(Gfn2SccIterationDevicePolicy policy,
         ledger, gfn2_scc_stage_failure_record(
                     Gfn2SccStageId::kActivity,
                     static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kInvalidState)));
+    return;
+  }
+  if (invalid_geometry != 0) {
+    close_plan_sequence(
+        ledger, gfn2_scc_stage_failure_record(
+                    Gfn2SccStageId::kActivity,
+                    static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kInvalidProvenance)));
     return;
   }
 
@@ -231,11 +266,14 @@ __global__ void derive_activity_kernel(Gfn2SccIterationDevicePolicy policy,
       bool scope_valid = false;
       if (view.generation_scope == Gfn2GenerationScope::kBatch) {
         scope_valid =
-            view.system_geometry_generations == nullptr && view.system_generation_count == 0;
+            dynamic_epoch == 0 && view.system_geometry_generations == nullptr &&
+            view.system_generation_count == 0;
       } else if (view.generation_scope == Gfn2GenerationScope::kPerSystem) {
         scope_valid =
             view.geometry_generation == 0u && view.system_generation_count == policy.batch_size &&
             aligned_device_pointer(view.system_geometry_generations, alignof(std::uint64_t)) &&
+            (dynamic_epoch == 0 ||
+             view.system_geometry_generations == geometry.committed_generations) &&
             !provenance_generation_aliases_ledger(view, ledger);
       }
       if (!common_valid || !scope_valid) {
@@ -251,7 +289,7 @@ __global__ void derive_activity_kernel(Gfn2SccIterationDevicePolicy policy,
         break;
       }
       if (any_active != 0 && view.generation_scope == Gfn2GenerationScope::kBatch &&
-          view.geometry_generation != provenance.expected_geometry_generation) {
+          view.geometry_generation != expected_generation) {
         plan_record = gfn2_scc_stage_failure_record(
             binding.owner_stage,
             static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kStaleGeneration));
@@ -275,7 +313,7 @@ __global__ void derive_activity_kernel(Gfn2SccIterationDevicePolicy policy,
       const Gfn2SccCacheProvenanceBinding& binding = provenance.cache_bindings[binding_index];
       const Gfn2GeometryCacheProvenanceView& view = binding.provenance;
       if (view.generation_scope == Gfn2GenerationScope::kPerSystem &&
-          view.system_geometry_generations[system] != provenance.expected_geometry_generation) {
+          view.system_geometry_generations[system] != expected_generation) {
         ledger.system_failure_records[system] = gfn2_scc_stage_failure_record(
             binding.owner_stage,
             static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kStaleGeneration));
@@ -412,10 +450,12 @@ __global__ void normalize_stage_kernel(Gfn2SccStageDeviceReport report,
 
 }  // namespace
 
-cudaError_t derive_gfn2_scc_iteration_activity_cuda(
+static cudaError_t derive_activity_impl(
     const Gfn2SccIterationDevicePolicy& policy, const Gfn2SccIterationDeviceStateInput& state,
-    const Gfn2SccIterationDeviceProvenance& provenance, const Gfn2SccIterationDeviceLedger& ledger,
-    cudaStream_t stream) noexcept {
+    const Gfn2SccIterationDeviceProvenance& provenance,
+    const Gfn2GeometryEpochConsumerDevice* geometry,
+    const Gfn2SccIterationDeviceLedger& ledger, cudaStream_t stream) noexcept {
+  const bool dynamic_epoch = geometry != nullptr;
   if (policy.batch_size <= 0 || policy.maximum_iterations == 0u || policy.plan_token == 0u ||
       state.batch_elements != policy.batch_size || state.plan_token != policy.plan_token ||
       provenance.plan_token != policy.plan_token || provenance.cache_binding_count < 0 ||
@@ -423,15 +463,24 @@ cudaError_t derive_gfn2_scc_iteration_activity_cuda(
       !is_aligned(state.system_statuses, alignof(gpuxtb_status_t)) ||
       !is_aligned(state.converged, alignof(std::uint8_t)) ||
       (provenance.cache_binding_count == 0
-           ? provenance.cache_bindings != nullptr || provenance.expected_geometry_generation != 0u
+           ? provenance.cache_bindings != nullptr ||
+                 (!dynamic_epoch && provenance.expected_geometry_generation != 0u)
            : !is_aligned(provenance.cache_bindings, alignof(Gfn2SccCacheProvenanceBinding)) ||
-                 provenance.expected_geometry_generation == 0u) ||
+                 (!dynamic_epoch && provenance.expected_geometry_generation == 0u)) ||
       ((provenance.warm_start_generations == nullptr && provenance.warm_start_elements == 0 &&
         provenance.expected_warm_start_generation == 0u)
            ? false
            : (!is_aligned(provenance.warm_start_generations, alignof(std::uint64_t)) ||
               provenance.warm_start_elements != policy.batch_size ||
               provenance.expected_warm_start_generation == 0u))) {
+    return cudaErrorInvalidValue;
+  }
+  if (dynamic_epoch &&
+      (geometry->plan_token != policy.plan_token || geometry->epoch.plan_token != policy.plan_token ||
+       geometry->epoch.value_elements != 1 || geometry->batch_elements != policy.batch_size ||
+       !is_aligned(geometry->epoch.value, alignof(std::uint64_t)) ||
+       !is_aligned(geometry->committed_generations, alignof(std::uint64_t)) ||
+       !is_aligned(geometry->eligible_mask, alignof(std::uint8_t)))) {
     return cudaErrorInvalidValue;
   }
 
@@ -455,8 +504,47 @@ cudaError_t derive_gfn2_scc_iteration_activity_cuda(
     }
   }
 
-  derive_activity_kernel<<<1, kThreadsPerBlock, 0, stream>>>(policy, state, provenance, ledger);
+  if (dynamic_epoch) {
+    AddressRange epoch_reads[3];
+    if (!make_range(geometry->epoch.value, 1, sizeof(std::uint64_t), &epoch_reads[0]) ||
+        !make_range(geometry->committed_generations, policy.batch_size, sizeof(std::uint64_t),
+                    &epoch_reads[1]) ||
+        !make_range(geometry->eligible_mask, policy.batch_size, sizeof(std::uint8_t),
+                    &epoch_reads[2])) {
+      return cudaErrorInvalidValue;
+    }
+    for (std::size_t index = 0u; index < 2u; ++index) {
+      if (overlaps_any(epoch_reads[index], writes, 5u)) {
+        return cudaErrorInvalidValue;
+      }
+    }
+    const bool eligible_is_ledger =
+        epoch_reads[2].begin == writes[0].begin && epoch_reads[2].end == writes[0].end;
+    if (!eligible_is_ledger && overlaps_any(epoch_reads[2], writes, 5u)) {
+      return cudaErrorInvalidValue;
+    }
+  }
+
+  const Gfn2GeometryEpochConsumerDevice consumer =
+      dynamic_epoch ? *geometry : Gfn2GeometryEpochConsumerDevice{};
+  derive_activity_kernel<<<1, kThreadsPerBlock, 0, stream>>>(policy, state, provenance, consumer,
+                                                             dynamic_epoch ? 1 : 0, ledger);
   return cudaPeekAtLastError();
+}
+
+cudaError_t derive_gfn2_scc_iteration_activity_cuda(
+    const Gfn2SccIterationDevicePolicy& policy, const Gfn2SccIterationDeviceStateInput& state,
+    const Gfn2SccIterationDeviceProvenance& provenance, const Gfn2SccIterationDeviceLedger& ledger,
+    cudaStream_t stream) noexcept {
+  return derive_activity_impl(policy, state, provenance, nullptr, ledger, stream);
+}
+
+cudaError_t derive_gfn2_scc_iteration_activity_cuda(
+    const Gfn2SccIterationDevicePolicy& policy, const Gfn2SccIterationDeviceStateInput& state,
+    const Gfn2SccIterationDeviceProvenance& provenance,
+    const Gfn2GeometryEpochConsumerDevice& geometry,
+    const Gfn2SccIterationDeviceLedger& ledger, cudaStream_t stream) noexcept {
+  return derive_activity_impl(policy, state, provenance, &geometry, ledger, stream);
 }
 
 cudaError_t normalize_gfn2_scc_stage_cuda(const Gfn2SccStageDeviceReport& report,

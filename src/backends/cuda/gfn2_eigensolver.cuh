@@ -245,6 +245,16 @@ Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
     const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
+/* Replay-safe solve against overlap factors published for the current epoch. */
+Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
+    std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
+    const Gfn2GeometryEpochDevice& geometry_epoch, const double* hamiltonians,
+    const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver, cusolverDnParams_t parameters,
+    cublasHandle_t blas, const Gfn2EigensolverDeviceWorkspace& workspace,
+    const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
 }  // namespace gpuxtb::detail::cuda
 
 #endif  // GPUXTB_BACKENDS_CUDA_GFN2_EIGENSOLVER_CUH

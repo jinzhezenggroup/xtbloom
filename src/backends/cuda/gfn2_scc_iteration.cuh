@@ -423,6 +423,12 @@ static_assert(std::is_standard_layout_v<Gfn2SccIterationBinding>);
 [[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
     const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
 
+/* Replay-safe iteration consuming numerical caches published for the device epoch. */
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
+    const Gfn2SccIterationBinding& binding,
+    const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream = nullptr) noexcept;
+
 }  // namespace gpuxtb::detail::cuda
 
 #endif  // GPUXTB_BACKENDS_CUDA_GFN2_SCC_ITERATION_CUH
