@@ -110,10 +110,13 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/cuda_runtime.cu
     src/backends/cuda/gfn2_aes2.cu
     src/backends/cuda/gfn2_d4.cu
+    src/backends/cuda/gfn2_density.cu
+    src/backends/cuda/gfn2_eigensolver.cu
     src/backends/cuda/gfn2_es2.cu
     src/backends/cuda/gfn2_es3.cu
     src/backends/cuda/gfn2_external_point_charges.cu
     src/backends/cuda/gfn2_geometry.cu
+    src/backends/cuda/gfn2_hamiltonian.cu
     src/backends/cuda/gfn2_integrals.cu
     src/backends/cuda/gfn2_mulliken.cu
     src/backends/cuda/gfn2_occupations.cu
@@ -124,13 +127,18 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/gfn2_scc_classical_energy.cu
     src/backends/cuda/gfn2_scc_energy.cu
     src/backends/cuda/gfn2_scc_mixer.cu
+    src/backends/cuda/gfn2_scc_potential.cu
   )
   target_include_directories(gpuxtb_cuda_backend PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
-  target_link_libraries(gpuxtb_cuda_backend PUBLIC CUDA::cudart)
+  target_link_libraries(gpuxtb_cuda_backend PUBLIC
+    CUDA::cublas
+    CUDA::cudart
+    CUDA::cusolver
+  )
   target_compile_definitions(gpuxtb_cuda_backend PRIVATE GPUXTB_HAS_CUDA=1)
   if(GPUXTB_BUILD_TESTS)
     # White-box CUDA kernels exercise otherwise unreachable transactional
@@ -147,7 +155,11 @@ if(GPUXTB_HAS_CUDA)
   )
 
   target_sources(gpuxtb PRIVATE $<TARGET_OBJECTS:gpuxtb_cuda_backend>)
-  target_link_libraries(gpuxtb PRIVATE CUDA::cudart)
+  target_link_libraries(gpuxtb PRIVATE
+    CUDA::cublas
+    CUDA::cudart
+    CUDA::cusolver
+  )
   target_compile_definitions(gpuxtb PRIVATE GPUXTB_HAS_CUDA=1)
   set_target_properties(gpuxtb PROPERTIES
     CUDA_STANDARD 17
@@ -290,6 +302,24 @@ if(GPUXTB_BUILD_TESTS)
     )
     add_test(NAME gpuxtb.cuda.integrals COMMAND gpuxtb_cuda_integrals_test)
 
+    add_executable(gpuxtb_cuda_hamiltonian_test tests/cuda_hamiltonian_test.cu)
+    target_link_libraries(gpuxtb_cuda_hamiltonian_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_hamiltonian_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_hamiltonian_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_hamiltonian_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.hamiltonian COMMAND gpuxtb_cuda_hamiltonian_test)
+
     add_executable(gpuxtb_cuda_mulliken_test tests/cuda_mulliken_test.cu)
     target_link_libraries(gpuxtb_cuda_mulliken_test PRIVATE
       gpuxtb::gpuxtb
@@ -324,6 +354,42 @@ if(GPUXTB_BUILD_TESTS)
       CUDA_SEPARABLE_COMPILATION ON
     )
     add_test(NAME gpuxtb.cuda.occupations COMMAND gpuxtb_cuda_occupations_test)
+
+    add_executable(gpuxtb_cuda_density_test tests/cuda_density_test.cu)
+    target_link_libraries(gpuxtb_cuda_density_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_density_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_density_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_density_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.density COMMAND gpuxtb_cuda_density_test)
+
+    add_executable(gpuxtb_cuda_eigensolver_test tests/cuda_eigensolver_test.cu)
+    target_link_libraries(gpuxtb_cuda_eigensolver_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_eigensolver_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_eigensolver_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_eigensolver_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.eigensolver COMMAND gpuxtb_cuda_eigensolver_test)
 
     add_executable(gpuxtb_cuda_es3_test tests/cuda_es3_test.cu)
     target_link_libraries(gpuxtb_cuda_es3_test PRIVATE
@@ -476,6 +542,24 @@ if(GPUXTB_BUILD_TESTS)
     add_test(NAME gpuxtb.cuda.scc_classical_energy
       COMMAND gpuxtb_cuda_scc_classical_energy_test
     )
+
+    add_executable(gpuxtb_cuda_scc_potential_test tests/cuda_scc_potential_test.cu)
+    target_link_libraries(gpuxtb_cuda_scc_potential_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_potential_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_potential_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_scc_potential_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_potential COMMAND gpuxtb_cuda_scc_potential_test)
 
     add_executable(gpuxtb_cuda_scc_mixer_test tests/cuda_scc_mixer_test.cu)
     target_link_libraries(gpuxtb_cuda_scc_mixer_test PRIVATE
