@@ -36,6 +36,7 @@ if(NOT GPUXTB_ENABLE_CUDA_NORMALIZED STREQUAL "OFF")
 endif()
 
 add_library(gpuxtb_gfn2_cpu OBJECT
+  src/backends/common/gfn2_plan_schema.cpp
   src/model/gfn2/aes2.cpp
   src/model/gfn2/basis.cpp
   src/model/gfn2/coordination.cpp
@@ -121,11 +122,14 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/gfn2_mulliken.cu
     src/backends/cuda/gfn2_occupations.cu
     src/backends/cuda/gfn2_parameters.cu
+    src/backends/cuda/gfn2_plan_schema.cu
     src/backends/cuda/gfn2_periodic_embedding.cu
     src/backends/cuda/gfn2_repulsion.cu
     src/backends/cuda/gfn2_scc.cu
+    src/backends/cuda/gfn2_scc_bridge.cu
     src/backends/cuda/gfn2_scc_classical_energy.cu
     src/backends/cuda/gfn2_scc_energy.cu
+    src/backends/cuda/gfn2_scc_free_energy.cu
     src/backends/cuda/gfn2_scc_mixer.cu
     src/backends/cuda/gfn2_scc_potential.cu
   )
@@ -205,6 +209,11 @@ if(GPUXTB_BUILD_TESTS)
   )
   target_compile_features(gpuxtb_batch_validation_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.batch_validation COMMAND gpuxtb_batch_validation_test)
+
+  add_executable(gpuxtb_plan_schema_test tests/plan_schema_test.cpp)
+  target_link_libraries(gpuxtb_plan_schema_test PRIVATE gpuxtb_gfn2_cpu)
+  target_compile_features(gpuxtb_plan_schema_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.gfn2.plan_schema COMMAND gpuxtb_plan_schema_test)
 
   if(GPUXTB_HAS_CUDA)
     add_executable(gpuxtb_cuda_parameters_test tests/cuda_parameters_test.cu)
@@ -502,6 +511,59 @@ if(GPUXTB_BUILD_TESTS)
       CUDA_SEPARABLE_COMPILATION ON
     )
     add_test(NAME gpuxtb.cuda.scc COMMAND gpuxtb_cuda_scc_test)
+
+    add_executable(gpuxtb_cuda_plan_schema_test tests/cuda_plan_schema_test.cu)
+    target_link_libraries(gpuxtb_cuda_plan_schema_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_plan_schema_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_plan_schema_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_plan_schema_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.plan_schema COMMAND gpuxtb_cuda_plan_schema_test)
+
+    add_executable(gpuxtb_cuda_scc_bridge_test tests/cuda_scc_bridge_test.cu)
+    target_link_libraries(gpuxtb_cuda_scc_bridge_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_bridge_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_bridge_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_scc_bridge_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_bridge COMMAND gpuxtb_cuda_scc_bridge_test)
+
+    add_executable(gpuxtb_cuda_scc_free_energy_test
+      tests/cuda_scc_free_energy_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_scc_free_energy_test PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_free_energy_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_free_energy_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_scc_free_energy_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.scc_free_energy COMMAND gpuxtb_cuda_scc_free_energy_test)
 
     add_executable(gpuxtb_cuda_scc_energy_test tests/cuda_scc_energy_test.cu)
     target_link_libraries(gpuxtb_cuda_scc_energy_test PRIVATE
