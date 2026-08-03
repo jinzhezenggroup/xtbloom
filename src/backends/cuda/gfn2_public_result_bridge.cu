@@ -160,6 +160,7 @@ bool pairwise_disjoint(const RangeList<Capacity>& ranges) noexcept {
  */
 bool valid_launch_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
                           const Gfn2PublicResultBridgeDeviceInput& input,
+                          const Gfn2PublicResultBridgeDeviceStaging& device_staging,
                           const Gfn2PublicResultBridgeDeviceDestinations& destinations,
                           const Gfn2PublicResultBridgeHostStaging& staging,
                           const Gfn2PublicResultBridgeDeviceDiagnostics& diagnostics) noexcept {
@@ -177,6 +178,20 @@ bool valid_launch_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
       canonical(input.publication_plan_error, 1, alignof(std::uint32_t)) &&
       canonical(input.publication_epoch_snapshot, 1, alignof(std::uint64_t)) &&
       canonical(input.current_geometry_epoch, 1, alignof(std::uint64_t)) &&
+      structurally_safe_buffer(device_staging.energies, device_staging.energy_elements,
+                               alignof(double)) &&
+      structurally_safe_buffer(device_staging.qm_forces, device_staging.qm_force_elements,
+                               alignof(double)) &&
+      structurally_safe_buffer(device_staging.atomic_charges,
+                               device_staging.atomic_charge_elements, alignof(double)) &&
+      structurally_safe_buffer(device_staging.point_forces,
+                               device_staging.point_force_elements, alignof(double)) &&
+      structurally_safe_buffer(device_staging.iterations, device_staging.batch_elements,
+                               alignof(std::int32_t)) &&
+      structurally_safe_buffer(device_staging.converged, device_staging.batch_elements,
+                               alignof(std::uint8_t)) &&
+      structurally_safe_buffer(device_staging.system_statuses, device_staging.batch_elements,
+                               alignof(gpuxtb_status_t)) &&
       structurally_safe_destination(destinations.energies, alignof(double)) &&
       structurally_safe_destination(destinations.qm_forces, alignof(double)) &&
       structurally_safe_destination(destinations.atomic_charges, alignof(double)) &&
@@ -211,20 +226,19 @@ bool valid_launch_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
       device_reads.add(input.publication_plan_error, 1, sizeof(std::uint32_t)) &&
       device_reads.add(input.publication_epoch_snapshot, 1, sizeof(std::uint64_t)) &&
       device_reads.add(input.current_geometry_epoch, 1, sizeof(std::uint64_t)) &&
-      device_writes.add(destinations.energies.device_data, destinations.energies.elements,
+      device_writes.add(device_staging.energies, device_staging.energy_elements, sizeof(double)) &&
+      device_writes.add(device_staging.qm_forces, device_staging.qm_force_elements,
                         sizeof(double)) &&
-      device_writes.add(destinations.qm_forces.device_data, destinations.qm_forces.elements,
+      device_writes.add(device_staging.atomic_charges, device_staging.atomic_charge_elements,
                         sizeof(double)) &&
-      device_writes.add(destinations.atomic_charges.device_data,
-                        destinations.atomic_charges.elements, sizeof(double)) &&
-      device_writes.add(destinations.point_forces.device_data, destinations.point_forces.elements,
+      device_writes.add(device_staging.point_forces, device_staging.point_force_elements,
                         sizeof(double)) &&
-      device_writes.add(destinations.iterations.device_data, destinations.iterations.elements,
+      device_writes.add(device_staging.iterations, device_staging.batch_elements,
                         sizeof(std::int32_t)) &&
-      device_writes.add(destinations.converged.device_data, destinations.converged.elements,
+      device_writes.add(device_staging.converged, device_staging.batch_elements,
                         sizeof(std::uint8_t)) &&
-      device_writes.add(destinations.system_statuses.device_data,
-                        destinations.system_statuses.elements, sizeof(gpuxtb_status_t)) &&
+      device_writes.add(device_staging.system_statuses, device_staging.batch_elements,
+                        sizeof(gpuxtb_status_t)) &&
       device_writes.add(diagnostics.control, 1, sizeof(Gfn2PublicResultBridgeControl));
   if (!device_ranges_valid || !disjoint_writes(device_reads, device_writes)) return false;
 
@@ -271,10 +285,12 @@ __host__ __device__ bool valid_destination(const Gfn2PublicResultBridgeDestinati
 
 __host__ __device__ BridgeError static_contract_error(
     const Gfn2PublicResultBridgeDevicePlan& plan, const Gfn2PublicResultBridgeDeviceInput& input,
+    const Gfn2PublicResultBridgeDeviceStaging& device_staging,
     const Gfn2PublicResultBridgeDeviceDestinations& destinations,
     const Gfn2PublicResultBridgeHostStaging& staging,
     const Gfn2PublicResultBridgeDeviceDiagnostics& diagnostics) noexcept {
   if (plan.plan_token == 0u || input.plan_token != plan.plan_token ||
+      device_staging.plan_token != plan.plan_token ||
       destinations.plan_token != plan.plan_token || staging.plan_token != plan.plan_token ||
       diagnostics.plan_token != plan.plan_token) {
     return BridgeError::kPlanTokenMismatch;
@@ -304,6 +320,22 @@ __host__ __device__ BridgeError static_contract_error(
       !canonical(input.system_statuses, extents.diagnostics, alignof(gpuxtb_status_t))) {
     return BridgeError::kInvalidExtents;
   }
+  if (!valid_input_buffer(device_staging.energies, device_staging.energy_elements,
+                          extents.energies, alignof(double)) ||
+      !valid_input_buffer(device_staging.qm_forces, device_staging.qm_force_elements,
+                          extents.qm_forces, alignof(double)) ||
+      !valid_input_buffer(device_staging.atomic_charges,
+                          device_staging.atomic_charge_elements, extents.atomic_charges,
+                          alignof(double)) ||
+      !valid_input_buffer(device_staging.point_forces, device_staging.point_force_elements,
+                          extents.point_forces, alignof(double)) ||
+      device_staging.batch_elements != extents.diagnostics ||
+      !canonical(device_staging.iterations, extents.diagnostics, alignof(std::int32_t)) ||
+      !canonical(device_staging.converged, extents.diagnostics, alignof(std::uint8_t)) ||
+      !canonical(device_staging.system_statuses, extents.diagnostics,
+                 alignof(gpuxtb_status_t))) {
+    return BridgeError::kInvalidExtents;
+  }
 
   const bool destinations_valid =
       valid_destination(destinations.energies, staging.energies, extents.energies,
@@ -329,6 +361,7 @@ __host__ __device__ BridgeError static_contract_error(
 
 __global__ void public_result_preflight_kernel(
     Gfn2PublicResultBridgeDevicePlan plan, Gfn2PublicResultBridgeDeviceInput input,
+    Gfn2PublicResultBridgeDeviceStaging device_staging,
     Gfn2PublicResultBridgeDeviceDestinations destinations,
     Gfn2PublicResultBridgeHostStaging staging,
     Gfn2PublicResultBridgeDeviceDiagnostics diagnostics) {
@@ -340,7 +373,8 @@ __global__ void public_result_preflight_kernel(
   control.publication_epoch_snapshot = *input.publication_epoch_snapshot;
   control.current_geometry_epoch = *input.current_geometry_epoch;
 
-  BridgeError error = static_contract_error(plan, input, destinations, staging, diagnostics);
+  BridgeError error =
+      static_contract_error(plan, input, device_staging, destinations, staging, diagnostics);
   if (error == BridgeError::kSuccess && control.internal_publication_plan_error != 0u) {
     error = BridgeError::kInternalPublicationFailure;
   }
@@ -367,10 +401,7 @@ __global__ void public_result_preflight_kernel(
 }
 
 template <typename T>
-__device__ void copy_flat(const T* source, const Gfn2PublicResultBridgeDestination& destination,
-                          std::int64_t elements) {
-  if (destination.route != Route::kCudaDevice) return;
-  T* const target = static_cast<T*>(destination.device_data);
+__device__ void copy_flat(const T* source, T* target, std::int64_t elements) {
   const std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const std::int64_t stride = static_cast<std::int64_t>(gridDim.x) * blockDim.x;
   for (std::int64_t element = index; element < elements; element += stride) {
@@ -378,22 +409,51 @@ __device__ void copy_flat(const T* source, const Gfn2PublicResultBridgeDestinati
   }
 }
 
-__global__ void copy_public_results_kernel(Gfn2PublicResultBridgeDevicePlan plan,
-                                           Gfn2PublicResultBridgeDeviceInput input,
-                                           Gfn2PublicResultBridgeDeviceDestinations destinations,
-                                           Gfn2PublicResultBridgeDeviceDiagnostics diagnostics) {
+__global__ void prepare_public_results_kernel(
+    Gfn2PublicResultBridgeDevicePlan plan, Gfn2PublicResultBridgeDeviceInput input,
+    Gfn2PublicResultBridgeDeviceStaging device_staging,
+    Gfn2PublicResultBridgeDeviceDiagnostics diagnostics) {
   if (diagnostics.control->aggregate_error != static_cast<std::uint32_t>(BridgeError::kSuccess)) {
     return;
   }
   ExpectedExtents extents;
   if (!expected_extents(plan, extents)) return;
-  copy_flat(input.energies, destinations.energies, extents.energies);
-  copy_flat(input.qm_forces, destinations.qm_forces, extents.qm_forces);
-  copy_flat(input.atomic_charges, destinations.atomic_charges, extents.atomic_charges);
-  copy_flat(input.point_forces, destinations.point_forces, extents.point_forces);
-  copy_flat(input.iterations, destinations.iterations, extents.diagnostics);
-  copy_flat(input.converged, destinations.converged, extents.diagnostics);
-  copy_flat(input.system_statuses, destinations.system_statuses, extents.diagnostics);
+  copy_flat(input.energies, device_staging.energies, extents.energies);
+  copy_flat(input.qm_forces, device_staging.qm_forces, extents.qm_forces);
+  copy_flat(input.atomic_charges, device_staging.atomic_charges, extents.atomic_charges);
+  copy_flat(input.point_forces, device_staging.point_forces, extents.point_forces);
+  copy_flat(input.iterations, device_staging.iterations, extents.diagnostics);
+  copy_flat(input.converged, device_staging.converged, extents.diagnostics);
+  copy_flat(input.system_statuses, device_staging.system_statuses, extents.diagnostics);
+}
+
+template <typename T>
+__device__ void commit_flat(const T* source,
+                            const Gfn2PublicResultBridgeDestination& destination,
+                            std::int64_t elements) {
+  if (destination.route != Route::kCudaDevice) return;
+  copy_flat(source, static_cast<T*>(destination.device_data), elements);
+}
+
+__global__ void commit_public_results_kernel(
+    Gfn2PublicResultBridgeDevicePlan plan,
+    Gfn2PublicResultBridgeDeviceStaging device_staging,
+    Gfn2PublicResultBridgeDeviceDestinations destinations,
+    Gfn2PublicResultBridgeDeviceDiagnostics diagnostics) {
+  if (diagnostics.control->aggregate_error != static_cast<std::uint32_t>(BridgeError::kSuccess)) {
+    return;
+  }
+  ExpectedExtents extents;
+  if (!expected_extents(plan, extents)) return;
+  commit_flat(device_staging.energies, destinations.energies, extents.energies);
+  commit_flat(device_staging.qm_forces, destinations.qm_forces, extents.qm_forces);
+  commit_flat(device_staging.atomic_charges, destinations.atomic_charges,
+              extents.atomic_charges);
+  commit_flat(device_staging.point_forces, destinations.point_forces, extents.point_forces);
+  commit_flat(device_staging.iterations, destinations.iterations, extents.diagnostics);
+  commit_flat(device_staging.converged, destinations.converged, extents.diagnostics);
+  commit_flat(device_staging.system_statuses, destinations.system_statuses,
+              extents.diagnostics);
 }
 
 cudaError_t check_launch() noexcept { return cudaPeekAtLastError(); }
@@ -421,51 +481,152 @@ cudaError_t stage_host_buffer(const T* source, const Gfn2PublicResultBridgeDesti
                          cudaMemcpyDeviceToHost, stream);
 }
 
+__host__ __device__ bool valid_commit_destination(
+    const Gfn2PublicResultBridgeDestination& destination, std::int64_t expected,
+    bool requested, std::size_t alignment) noexcept {
+  if (!requested) {
+    return destination.route == Route::kAbsent && destination.device_data == nullptr &&
+           destination.elements == 0;
+  }
+  if (destination.elements != expected) return false;
+  if (destination.route == Route::kHost) return destination.device_data == nullptr;
+  return destination.route == Route::kCudaDevice &&
+         canonical(destination.device_data, expected, alignment);
+}
+
+bool valid_commit_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
+                          const Gfn2PublicResultBridgeDeviceStaging& device_staging,
+                          const Gfn2PublicResultBridgeDeviceDestinations& destinations,
+                          const Gfn2PublicResultBridgeDeviceDiagnostics& diagnostics) noexcept {
+  ExpectedExtents extents;
+  if (plan.plan_token == 0u || plan.abi_version != kGfn2PublicResultBridgeAbiVersion ||
+      plan.reserved != 0u || plan.requested_properties == 0u ||
+      (plan.requested_properties & ~kKnownProperties) != 0u ||
+      (plan.result_flags & ~kKnownResultFlags) != 0u ||
+      device_staging.plan_token != plan.plan_token ||
+      destinations.plan_token != plan.plan_token || diagnostics.plan_token != plan.plan_token ||
+      diagnostics.control_elements != 1 ||
+      !canonical(diagnostics.control, 1, alignof(Gfn2PublicResultBridgeControl)) ||
+      !expected_extents(plan, extents) ||
+      !valid_input_buffer(device_staging.energies, device_staging.energy_elements,
+                          extents.energies, alignof(double)) ||
+      !valid_input_buffer(device_staging.qm_forces, device_staging.qm_force_elements,
+                          extents.qm_forces, alignof(double)) ||
+      !valid_input_buffer(device_staging.atomic_charges,
+                          device_staging.atomic_charge_elements, extents.atomic_charges,
+                          alignof(double)) ||
+      !valid_input_buffer(device_staging.point_forces, device_staging.point_force_elements,
+                          extents.point_forces, alignof(double)) ||
+      device_staging.batch_elements != extents.diagnostics ||
+      !canonical(device_staging.iterations, extents.diagnostics, alignof(std::int32_t)) ||
+      !canonical(device_staging.converged, extents.diagnostics, alignof(std::uint8_t)) ||
+      !canonical(device_staging.system_statuses, extents.diagnostics,
+                 alignof(gpuxtb_status_t)) ||
+      !valid_commit_destination(destinations.energies, extents.energies,
+                                property_requested(plan, GPUXTB_COMPUTE_ENERGY),
+                                alignof(double)) ||
+      !valid_commit_destination(destinations.qm_forces, extents.qm_forces,
+                                property_requested(plan, GPUXTB_COMPUTE_FORCES),
+                                alignof(double)) ||
+      !valid_commit_destination(destinations.atomic_charges, extents.atomic_charges,
+                                property_requested(plan, GPUXTB_COMPUTE_ATOMIC_CHARGES),
+                                alignof(double)) ||
+      !valid_commit_destination(destinations.point_forces, extents.point_forces,
+                                property_requested(plan, GPUXTB_COMPUTE_POINT_CHARGE_FORCES),
+                                alignof(double)) ||
+      !valid_commit_destination(destinations.iterations, extents.diagnostics, true,
+                                alignof(std::int32_t)) ||
+      !valid_commit_destination(destinations.converged, extents.diagnostics, true,
+                                alignof(std::uint8_t)) ||
+      !valid_commit_destination(destinations.system_statuses, extents.diagnostics, true,
+                                alignof(gpuxtb_status_t))) {
+    return false;
+  }
+
+  RangeList<8> reads;
+  RangeList<7> writes;
+  const bool ranges_valid =
+      reads.add(device_staging.energies, device_staging.energy_elements, sizeof(double)) &&
+      reads.add(device_staging.qm_forces, device_staging.qm_force_elements, sizeof(double)) &&
+      reads.add(device_staging.atomic_charges, device_staging.atomic_charge_elements,
+                sizeof(double)) &&
+      reads.add(device_staging.point_forces, device_staging.point_force_elements,
+                sizeof(double)) &&
+      reads.add(device_staging.iterations, device_staging.batch_elements,
+                sizeof(std::int32_t)) &&
+      reads.add(device_staging.converged, device_staging.batch_elements,
+                sizeof(std::uint8_t)) &&
+      reads.add(device_staging.system_statuses, device_staging.batch_elements,
+                sizeof(gpuxtb_status_t)) &&
+      reads.add(diagnostics.control, 1, sizeof(Gfn2PublicResultBridgeControl)) &&
+      writes.add(destinations.energies.device_data, destinations.energies.elements,
+                 sizeof(double)) &&
+      writes.add(destinations.qm_forces.device_data, destinations.qm_forces.elements,
+                 sizeof(double)) &&
+      writes.add(destinations.atomic_charges.device_data, destinations.atomic_charges.elements,
+                 sizeof(double)) &&
+      writes.add(destinations.point_forces.device_data, destinations.point_forces.elements,
+                 sizeof(double)) &&
+      writes.add(destinations.iterations.device_data, destinations.iterations.elements,
+                 sizeof(std::int32_t)) &&
+      writes.add(destinations.converged.device_data, destinations.converged.elements,
+                 sizeof(std::uint8_t)) &&
+      writes.add(destinations.system_statuses.device_data,
+                 destinations.system_statuses.elements, sizeof(gpuxtb_status_t));
+  return ranges_valid && disjoint_writes(reads, writes);
+}
+
 }  // namespace
 
-cudaError_t bridge_gfn2_public_results_cuda(
+cudaError_t prepare_gfn2_public_results_cuda(
     const Gfn2PublicResultBridgeDevicePlan& plan, const Gfn2PublicResultBridgeDeviceInput& input,
+    const Gfn2PublicResultBridgeDeviceStaging& device_staging,
     const Gfn2PublicResultBridgeDeviceDestinations& destinations,
     const Gfn2PublicResultBridgeHostStaging& staging,
     const Gfn2PublicResultBridgeDeviceDiagnostics& diagnostics, cudaStream_t stream) noexcept {
-  if (!valid_launch_binding(plan, input, destinations, staging, diagnostics)) {
+  if (!valid_launch_binding(plan, input, device_staging, destinations, staging, diagnostics)) {
     return cudaErrorInvalidValue;
   }
 
-  public_result_preflight_kernel<<<1, 1, 0, stream>>>(plan, input, destinations, staging,
-                                                      diagnostics);
+  public_result_preflight_kernel<<<1, 1, 0, stream>>>(plan, input, device_staging, destinations,
+                                                      staging, diagnostics);
   cudaError_t status = check_launch();
   if (status != cudaSuccess) return status;
 
   ExpectedExtents extents;
-  const bool static_contract_valid = static_contract_error(plan, input, destinations, staging,
-                                                           diagnostics) == BridgeError::kSuccess &&
-                                     expected_extents(plan, extents);
+  const bool static_contract_valid =
+      static_contract_error(plan, input, device_staging, destinations, staging, diagnostics) ==
+          BridgeError::kSuccess &&
+      expected_extents(plan, extents);
   if (static_contract_valid) {
-    status = stage_host_buffer(input.energies, destinations.energies, staging.energies,
+    prepare_public_results_kernel<<<copy_block_count(plan), kThreadsPerBlock, 0, stream>>>(
+        plan, input, device_staging, diagnostics);
+    status = check_launch();
+    if (status != cudaSuccess) return status;
+    status = stage_host_buffer(device_staging.energies, destinations.energies, staging.energies,
                                extents.energies, stream);
     if (status == cudaSuccess) {
-      status = stage_host_buffer(input.qm_forces, destinations.qm_forces, staging.qm_forces,
-                                 extents.qm_forces, stream);
+      status = stage_host_buffer(device_staging.qm_forces, destinations.qm_forces,
+                                 staging.qm_forces, extents.qm_forces, stream);
     }
     if (status == cudaSuccess) {
-      status = stage_host_buffer(input.atomic_charges, destinations.atomic_charges,
+      status = stage_host_buffer(device_staging.atomic_charges, destinations.atomic_charges,
                                  staging.atomic_charges, extents.atomic_charges, stream);
     }
     if (status == cudaSuccess) {
-      status = stage_host_buffer(input.point_forces, destinations.point_forces,
+      status = stage_host_buffer(device_staging.point_forces, destinations.point_forces,
                                  staging.point_forces, extents.point_forces, stream);
     }
     if (status == cudaSuccess) {
-      status = stage_host_buffer(input.iterations, destinations.iterations, staging.iterations,
-                                 extents.diagnostics, stream);
+      status = stage_host_buffer(device_staging.iterations, destinations.iterations,
+                                 staging.iterations, extents.diagnostics, stream);
     }
     if (status == cudaSuccess) {
-      status = stage_host_buffer(input.converged, destinations.converged, staging.converged,
-                                 extents.diagnostics, stream);
+      status = stage_host_buffer(device_staging.converged, destinations.converged,
+                                 staging.converged, extents.diagnostics, stream);
     }
     if (status == cudaSuccess) {
-      status = stage_host_buffer(input.system_statuses, destinations.system_statuses,
+      status = stage_host_buffer(device_staging.system_statuses, destinations.system_statuses,
                                  staging.system_statuses, extents.diagnostics, stream);
     }
     if (status != cudaSuccess) return status;
@@ -475,17 +636,21 @@ cudaError_t bridge_gfn2_public_results_cuda(
                            sizeof(Gfn2PublicResultBridgeControl), cudaMemcpyDeviceToHost, stream);
   if (status != cudaSuccess) return status;
 
-  /*
-   * CUDA caller destinations are deliberately last. If any runtime-owned host
-   * staging enqueue above fails synchronously, no caller write has entered the
-   * stream. The copy kernel still observes the earlier device preflight gate.
-   */
-  copy_public_results_kernel<<<copy_block_count(plan), kThreadsPerBlock, 0, stream>>>(
-      plan, input, destinations, diagnostics);
-  status = check_launch();
-  if (status != cudaSuccess) return status;
   *staging.pending_result_flags = plan.result_flags;
   return cudaSuccess;
+}
+
+cudaError_t commit_gfn2_public_results_cuda(
+    const Gfn2PublicResultBridgeDevicePlan& plan,
+    const Gfn2PublicResultBridgeDeviceStaging& device_staging,
+    const Gfn2PublicResultBridgeDeviceDestinations& destinations,
+    const Gfn2PublicResultBridgeDeviceDiagnostics& diagnostics, cudaStream_t stream) noexcept {
+  if (!valid_commit_binding(plan, device_staging, destinations, diagnostics)) {
+    return cudaErrorInvalidValue;
+  }
+  commit_public_results_kernel<<<copy_block_count(plan), kThreadsPerBlock, 0, stream>>>(
+      plan, device_staging, destinations, diagnostics);
+  return check_launch();
 }
 
 }  // namespace gpuxtb::detail::cuda

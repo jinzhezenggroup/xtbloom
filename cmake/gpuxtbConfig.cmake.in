@@ -2,7 +2,17 @@
 
 include(CMakeFindDependencyMacro)
 if(@GPUXTB_HAS_CUDA@)
-  find_dependency(CUDAToolkit)
+  find_dependency(CUDAToolkit
+    @GPUXTB_CUDA_TOOLKIT_MAJOR@.@GPUXTB_CUDA_TOOLKIT_MINOR@
+  )
+  if(NOT CUDAToolkit_VERSION_MAJOR EQUAL @GPUXTB_CUDA_TOOLKIT_MAJOR@)
+    set(gpuxtb_FOUND FALSE)
+    set(gpuxtb_NOT_FOUND_MESSAGE
+      "gpuxtb was built with CUDA @GPUXTB_CUDA_TOOLKIT_MAJOR@.@GPUXTB_CUDA_TOOLKIT_MINOR@; "
+      "found incompatible CUDA ${CUDAToolkit_VERSION}"
+    )
+    return()
+  endif()
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/gpuxtbTargets.cmake")

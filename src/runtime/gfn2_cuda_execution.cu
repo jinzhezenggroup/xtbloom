@@ -1607,8 +1607,18 @@ struct PublicResultState {
   std::uint8_t* converged = nullptr;
   gpuxtb_status_t* system_statuses = nullptr;
   Gfn2PublicResultBridgeControl* host_control = nullptr;
+  Gfn2PublicResultBridgeDeviceStaging device_staging{};
   Gfn2PublicResultBridgeDeviceDiagnostics diagnostics{};
   std::uint32_t pending_result_flags = 0u;
+  bool ready = false;
+};
+
+/* Stack-owned descriptor image kept between the prepare and final commit
+ * phases of one synchronous public transaction. All referenced storage is
+ * owned by Prepared or by the caller and remains live until the call returns. */
+struct PendingPublicResultCommit {
+  Gfn2PublicResultBridgeDevicePlan plan{};
+  Gfn2PublicResultBridgeDeviceDestinations destinations{};
   bool ready = false;
 };
 
@@ -3858,26 +3868,49 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t converged = 0u;
       std::size_t system_statuses = 0u;
       std::size_t control = 0u;
-    } offset;
+    } host_offset;
+    struct DeviceOffsets {
+      std::size_t energies = 0u;
+      std::size_t qm_forces = 0u;
+      std::size_t atomic_charges = 0u;
+      std::size_t point_forces = 0u;
+      std::size_t iterations = 0u;
+      std::size_t converged = 0u;
+      std::size_t system_statuses = 0u;
+      std::size_t control = 0u;
+    } device_offset;
     ArenaLayout host_layout;
-    offset.energies = host_layout.append<double>(energy_requested ? batch : 0);
-    offset.qm_forces = host_layout.append<double>(force_requested ? coordinates : 0);
-    offset.atomic_charges = host_layout.append<double>(charges_requested ? atoms : 0);
-    offset.point_forces =
+    host_offset.energies = host_layout.append<double>(energy_requested ? batch : 0);
+    host_offset.qm_forces = host_layout.append<double>(force_requested ? coordinates : 0);
+    host_offset.atomic_charges = host_layout.append<double>(charges_requested ? atoms : 0);
+    host_offset.point_forces =
         host_layout.append<double>(point_forces_requested ? point_coordinates : 0);
-    offset.iterations = host_layout.append<std::int32_t>(batch);
-    offset.converged = host_layout.append<std::uint8_t>(batch);
-    offset.system_statuses = host_layout.append<gpuxtb_status_t>(batch);
-    offset.control = host_layout.append<Gfn2PublicResultBridgeControl>(1);
-    if (!host_layout.valid()) {
-      error = "public CUDA result host-staging layout overflows size_t";
+    host_offset.iterations = host_layout.append<std::int32_t>(batch);
+    host_offset.converged = host_layout.append<std::uint8_t>(batch);
+    host_offset.system_statuses = host_layout.append<gpuxtb_status_t>(batch);
+    host_offset.control = host_layout.append<Gfn2PublicResultBridgeControl>(1);
+
+    ArenaLayout device_layout;
+    device_offset.energies = device_layout.append<double>(energy_requested ? batch : 0);
+    device_offset.qm_forces =
+        device_layout.append<double>(force_requested ? coordinates : 0);
+    device_offset.atomic_charges =
+        device_layout.append<double>(charges_requested ? atoms : 0);
+    device_offset.point_forces =
+        device_layout.append<double>(point_forces_requested ? point_coordinates : 0);
+    device_offset.iterations = device_layout.append<std::int32_t>(batch);
+    device_offset.converged = device_layout.append<std::uint8_t>(batch);
+    device_offset.system_statuses = device_layout.append<gpuxtb_status_t>(batch);
+    device_offset.control = device_layout.append<Gfn2PublicResultBridgeControl>(1);
+    if (!host_layout.valid() || !device_layout.valid()) {
+      error = "public CUDA result staging layout overflows size_t";
       return GPUXTB_STATUS_ALLOCATION_FAILED;
     }
     cudaError_t cuda_status =
         candidate.public_result_host_arena.allocate(host_layout.bytes());
     if (cuda_status == cudaSuccess) {
       cuda_status = candidate.public_result_device_arena.allocate(
-          sizeof(Gfn2PublicResultBridgeControl));
+          device_layout.bytes());
     }
     if (cuda_status == cudaSuccess) {
       cuda_status = candidate.public_result_completion_event.create(cudaEventDisableTiming);
@@ -3898,22 +3931,43 @@ struct Gfn2CudaExecutionCache::Impl {
     void* const host_arena = candidate.public_result_host_arena.get();
     auto& state = candidate.public_result;
     state = {};
-    state.energies = arena_pointer_if<double>(host_arena, offset.energies,
+    state.energies = arena_pointer_if<double>(host_arena, host_offset.energies,
                                                energy_requested ? batch : 0);
-    state.qm_forces = arena_pointer_if<double>(host_arena, offset.qm_forces,
+    state.qm_forces = arena_pointer_if<double>(host_arena, host_offset.qm_forces,
                                                 force_requested ? coordinates : 0);
-    state.atomic_charges = arena_pointer_if<double>(host_arena, offset.atomic_charges,
+    state.atomic_charges = arena_pointer_if<double>(host_arena, host_offset.atomic_charges,
                                                      charges_requested ? atoms : 0);
     state.point_forces = arena_pointer_if<double>(
-        host_arena, offset.point_forces, point_forces_requested ? point_coordinates : 0);
-    state.iterations = arena_pointer<std::int32_t>(host_arena, offset.iterations);
-    state.converged = arena_pointer<std::uint8_t>(host_arena, offset.converged);
+        host_arena, host_offset.point_forces,
+        point_forces_requested ? point_coordinates : 0);
+    state.iterations = arena_pointer<std::int32_t>(host_arena, host_offset.iterations);
+    state.converged = arena_pointer<std::uint8_t>(host_arena, host_offset.converged);
     state.system_statuses =
-        arena_pointer<gpuxtb_status_t>(host_arena, offset.system_statuses);
+        arena_pointer<gpuxtb_status_t>(host_arena, host_offset.system_statuses);
     state.host_control =
-        arena_pointer<Gfn2PublicResultBridgeControl>(host_arena, offset.control);
+        arena_pointer<Gfn2PublicResultBridgeControl>(host_arena, host_offset.control);
+    void* const device_arena = candidate.public_result_device_arena.get();
+    state.device_staging = {
+        arena_pointer_if<double>(device_arena, device_offset.energies,
+                                 energy_requested ? batch : 0),
+        energy_requested ? batch : 0,
+        arena_pointer_if<double>(device_arena, device_offset.qm_forces,
+                                 force_requested ? coordinates : 0),
+        force_requested ? coordinates : 0,
+        arena_pointer_if<double>(device_arena, device_offset.atomic_charges,
+                                 charges_requested ? atoms : 0),
+        charges_requested ? atoms : 0,
+        arena_pointer_if<double>(device_arena, device_offset.point_forces,
+                                 point_forces_requested ? point_coordinates : 0),
+        point_forces_requested ? point_coordinates : 0,
+        arena_pointer<std::int32_t>(device_arena, device_offset.iterations),
+        arena_pointer<std::uint8_t>(device_arena, device_offset.converged),
+        arena_pointer<gpuxtb_status_t>(device_arena, device_offset.system_statuses),
+        batch,
+        candidate.host.plan_token,
+    };
     state.diagnostics = {
-        static_cast<Gfn2PublicResultBridgeControl*>(candidate.public_result_device_arena.get()),
+        arena_pointer<Gfn2PublicResultBridgeControl>(device_arena, device_offset.control),
         1,
         candidate.host.plan_token,
     };
@@ -4995,10 +5049,12 @@ struct Gfn2CudaExecutionCache::Impl {
     return GPUXTB_STATUS_INTERNAL_ERROR;
   }
 
-  gpuxtb_status_t publish_public_results_locked(Prepared& current, const gpuxtb_batch_t& batch,
+  gpuxtb_status_t prepare_public_results_locked(Prepared& current, const gpuxtb_batch_t& batch,
                                                 const gpuxtb_compute_options_t& options,
                                                 gpuxtb_batch_result_t& result,
+                                                PendingPublicResultCommit& pending,
                                                 std::string& error) {
+    pending = {};
     if (!current.public_result.ready || !current.inference.ready ||
         current.public_result_completion_event.get() == nullptr) {
       error = "CUDA public result bridge requires a complete prepared runtime";
@@ -5101,8 +5157,9 @@ struct Gfn2CudaExecutionCache::Impl {
     staging.pending_result_flags = &public_state.pending_result_flags;
     staging.plan_token = token;
 
-    cudaError_t cuda_status = bridge_gfn2_public_results_cuda(
-        plan, input, destinations, staging, public_state.diagnostics, stream);
+    cudaError_t cuda_status = prepare_gfn2_public_results_cuda(
+        plan, input, public_state.device_staging, destinations, staging,
+        public_state.diagnostics, stream);
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("CUDA public result bridge submission", cuda_status);
       return cuda_status == cudaErrorInvalidValue ? GPUXTB_STATUS_INVALID_ARGUMENT
@@ -5132,6 +5189,72 @@ struct Gfn2CudaExecutionCache::Impl {
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
 
+    pending.plan = plan;
+    pending.destinations = destinations;
+    pending.ready = true;
+    error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  }
+
+  gpuxtb_status_t enqueue_public_result_commit_locked(
+      Prepared& current, const PendingPublicResultCommit& pending, std::string& error) {
+    if (!pending.ready) {
+      error = "CUDA public result commit has no accepted prepared image";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    const cudaError_t cuda_status = commit_gfn2_public_results_cuda(
+        pending.plan, current.public_result.device_staging, pending.destinations,
+        current.public_result.diagnostics, stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA caller-device result commit submission", cuda_status);
+      return cuda_status == cudaErrorInvalidValue ? GPUXTB_STATUS_INVALID_ARGUMENT
+                                                  : GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    /* From this point onward caller CUDA bytes may be modified. No later
+     * failure is recoverable by pretending that the transaction rolled back. */
+    current.submitted = true;
+    return GPUXTB_STATUS_SUCCESS;
+  }
+
+  gpuxtb_status_t finalize_public_result_commit_locked(
+      Prepared& current, const gpuxtb_compute_options_t& options,
+      gpuxtb_batch_result_t& result, bool commit_host_outputs, std::string& error) {
+    cudaError_t cuda_status = cudaEventRecord(current.public_result_completion_event.get(), stream);
+    if (cuda_status == cudaSuccess) {
+      cuda_status = cudaEventSynchronize(current.public_result_completion_event.get());
+    } else {
+      const cudaError_t fallback = cudaStreamSynchronize(stream);
+      if (fallback == cudaSuccess) cuda_status = cudaSuccess;
+    }
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message(
+          "CUDA caller-device result commit failed after its kernel was accepted; caller CUDA "
+          "outputs may have been modified",
+          cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    current.submitted = false;
+    if (!commit_host_outputs) return GPUXTB_STATUS_INTERNAL_ERROR;
+
+    const std::int64_t batch_size = current.host.basis.batch_size;
+    const std::int64_t atoms = current.host.basis.total_atoms;
+    const std::int64_t points = current.host.external.total_point_charges;
+    std::int64_t coordinates = 0;
+    std::int64_t point_coordinates = 0;
+    if (!checked_elements(atoms, 3, coordinates) ||
+        !checked_elements(points, 3, point_coordinates)) {
+      error = "CUDA public result extent changed after commit acceptance";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    const bool energy_requested =
+        (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_ENERGY)) != 0u;
+    const bool force_requested =
+        (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_FORCES)) != 0u;
+    const bool charges_requested =
+        (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_ATOMIC_CHARGES)) != 0u;
+    const bool point_forces_requested =
+        (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_POINT_CHARGE_FORCES)) != 0u;
+    auto& public_state = current.public_result;
     const auto commit_host = [](const gpuxtb_buffer_t& output, const void* staging_data,
                                 std::int64_t elements, std::size_t element_size) {
       if (elements != 0 && output.memory_space == GPUXTB_MEMORY_HOST) {
@@ -5433,25 +5556,47 @@ gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
      * event and aggregate bridge diagnostics are known to have succeeded. */
     working->inference.warm_checkpoint_ready = false;
 
-    if (topology_candidate_pending) {
-      const Gfn2CudaTopologyStagingDiagnostic prepared_commit =
-          implementation.topology_staging.prepare_candidate_commit(error);
-      if (!prepared_commit.success()) return fail_working_transaction(prepared_commit.status);
-    }
-    status = implementation.publish_public_results_locked(*working, batch, options, result, error);
+    PendingPublicResultCommit pending_result;
+    status = implementation.prepare_public_results_locked(*working, batch, options, result,
+                                                          pending_result, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return fail_working_transaction(status);
+
+    /* The prepare event accepted the aggregate diagnostics and the private
+     * host-upload stream is settled before any caller CUDA output is touched. */
     status = implementation.settle_public_submissions_locked(*working, status, error);
     if (status != GPUXTB_STATUS_SUCCESS) {
       abort_topology_candidate();
       return status;
     }
-
-    /* All remaining publication operations are noexcept ownership moves. */
-    if (candidate != nullptr) implementation.prepared = std::move(candidate);
     if (topology_candidate_pending) {
-      implementation.topology_staging.publish_candidate();
-      topology_candidate_pending = false;
+      const Gfn2CudaTopologyStagingDiagnostic prepared_commit =
+          implementation.topology_staging.prepare_candidate_commit(error);
+      if (!prepared_commit.success()) return fail_working_transaction(prepared_commit.status);
+      if (!implementation.topology_staging.candidate_publishable()) {
+        error = "prepared CUDA topology candidate is not publishable";
+        return fail_working_transaction(GPUXTB_STATUS_INTERNAL_ERROR);
+      }
     }
-    return GPUXTB_STATUS_SUCCESS;
+
+    status =
+        implementation.enqueue_public_result_commit_locked(*working, pending_result, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return fail_working_transaction(status);
+
+    /* A successful launch is the caller-device commit point. Ownership moves
+     * must now follow even if stream completion later reports a hard fault;
+     * claiming rollback could not restore caller CUDA bytes. */
+    if (candidate != nullptr) implementation.prepared = std::move(candidate);
+    bool ownership_published = true;
+    if (topology_candidate_pending) {
+      ownership_published = implementation.topology_staging.publish_candidate();
+      topology_candidate_pending = false;
+      if (!ownership_published) {
+        error = "CUDA topology publication invariant failed after caller-device commit acceptance";
+      }
+    }
+    status = implementation.finalize_public_result_commit_locked(
+        *working, options, result, ownership_published, error);
+    return status;
   }();
   return finish(transaction_status);
 }

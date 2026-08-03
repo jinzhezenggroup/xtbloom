@@ -97,8 +97,8 @@ gpuxtb_status_t create_context(const gpuxtb_context_options_t& options, Context*
 #if defined(GPUXTB_HAS_CUDA)
   if (selected == GPUXTB_BACKEND_CUDA) {
     try {
-      /* The fixed-topology CUDA runtime is context scoped even before #114
-       * connects public descriptor staging and result publication. */
+      /* The public CUDA transaction owns one context-scoped fixed-topology
+       * runtime so repeated calls can reuse stable plans and device arenas. */
       created->gfn2_cuda_execution_cache =
           std::make_shared<Gfn2CudaExecutionCache>(resolved_device, options.stream);
     } catch (const std::bad_alloc&) {

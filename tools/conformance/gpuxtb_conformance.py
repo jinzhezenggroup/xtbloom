@@ -238,6 +238,76 @@ ELEMENT_SYMBOLS = (
 )
 
 
+def load_turbomole_coord(path: Path, case: dict[str, Any]) -> dict[str, Any]:
+    """Load the small atomic-unit ``$coord`` subset used by the corpus.
+
+    The conformance inputs may contain unrelated Turbomole directives after
+    the coordinate block (for example ``$eht charge=+1``).  The public C API
+    runner obtains charge and spin from the manifest, so this parser reads
+    exactly the atom rows between ``$coord`` and the next directive and rejects
+    malformed or non-finite coordinates instead of silently guessing.
+    """
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise ConformanceError(
+            f"cannot read Turbomole coordinate file {path}: {exc}"
+        ) from exc
+
+    symbol_numbers = {
+        symbol.lower(): number
+        for number, symbol in enumerate(ELEMENT_SYMBOLS)
+        if symbol
+    }
+    in_coordinates = False
+    found_coordinates = False
+    atomic_numbers: list[int] = []
+    positions: list[list[float]] = []
+    for line_number, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not in_coordinates:
+            if stripped.lower() == "$coord":
+                in_coordinates = True
+                found_coordinates = True
+            continue
+        if stripped.startswith("$"):
+            break
+        if not stripped:
+            continue
+        fields = stripped.split()
+        if len(fields) != 4:
+            raise ConformanceError(
+                f"Turbomole input {path}:{line_number} must contain x y z symbol"
+            )
+        try:
+            position = [float(value) for value in fields[:3]]
+        except ValueError as exc:
+            raise ConformanceError(
+                f"Turbomole input {path}:{line_number} has non-numeric coordinates"
+            ) from exc
+        if any(not math.isfinite(value) for value in position):
+            raise ConformanceError(
+                f"Turbomole input {path}:{line_number} has non-finite coordinates"
+            )
+        symbol = fields[3].lower()
+        if symbol not in symbol_numbers:
+            raise ConformanceError(
+                f"Turbomole input {path}:{line_number} has unsupported element {fields[3]!r}"
+            )
+        positions.append(position)
+        atomic_numbers.append(symbol_numbers[symbol])
+
+    if not found_coordinates:
+        raise ConformanceError(f"Turbomole input {path} has no $coord block")
+    expected_atoms = int(case["atom_count"])
+    if len(atomic_numbers) != expected_atoms:
+        raise ConformanceError(
+            f"case {case['id']} has {len(atomic_numbers)} coordinate rows; "
+            f"expected {expected_atoms}"
+        )
+    return {"atomic_numbers": atomic_numbers, "positions_bohr": positions}
+
+
 def _atomic_numbers(
     value: Any, count: int, property_name: str, path: Path
 ) -> list[int]:
@@ -625,6 +695,10 @@ def check_manifest(manifest_path: Path) -> None:
             raise ConformanceError(
                 f"case {case['id']} has point charges but no qmmm-v1 input schema"
             )
+        else:
+            # Keep gas-phase inputs directly consumable by the public C API
+            # harness, not merely hash-valid for the reference executables.
+            load_turbomole_coord(input_path, case)
         golden = load_json(golden_path)
         if golden.get("case_id") != case["id"]:
             raise ConformanceError(f"golden {golden_path} has the wrong case_id")

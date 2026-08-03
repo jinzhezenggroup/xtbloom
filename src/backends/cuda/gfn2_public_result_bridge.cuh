@@ -28,7 +28,7 @@ enum class Gfn2PublicResultBridgeError : std::uint32_t {
   kInvalidDestinations = 7u,
 };
 
-/* Host outputs are staged; CUDA outputs are written directly after preflight. */
+/* Host and CUDA outputs are both staged before the caller-visible commit. */
 enum class Gfn2PublicResultRoute : std::uint32_t {
   kAbsent = 0u,
   kHost = 1u,
@@ -71,6 +71,29 @@ struct Gfn2PublicResultBridgeDeviceInput {
   const std::uint32_t* publication_plan_error = nullptr;
   const std::uint64_t* publication_epoch_snapshot = nullptr;
   const std::uint64_t* current_geometry_epoch = nullptr;
+  std::uint64_t plan_token = 0u;
+};
+
+/*
+ * Runtime-owned device shadow image produced by prepare. Every active public
+ * field has a private slice, including fields routed to HOST. The final commit
+ * kernel reads only this sealed image, so no recoverable prepare/settlement
+ * failure can have touched a caller CUDA destination.
+ */
+struct Gfn2PublicResultBridgeDeviceStaging {
+  double* energies = nullptr;
+  std::int64_t energy_elements = 0;
+  double* qm_forces = nullptr;
+  std::int64_t qm_force_elements = 0;
+  double* atomic_charges = nullptr;
+  std::int64_t atomic_charge_elements = 0;
+  double* point_forces = nullptr;
+  std::int64_t point_force_elements = 0;
+
+  std::int32_t* iterations = nullptr;
+  std::uint8_t* converged = nullptr;
+  gpuxtb_status_t* system_statuses = nullptr;
+  std::int64_t batch_elements = 0;
   std::uint64_t plan_token = 0u;
 };
 
@@ -139,6 +162,8 @@ static_assert(std::is_trivially_copyable_v<Gfn2PublicResultBridgeDevicePlan>);
 static_assert(std::is_standard_layout_v<Gfn2PublicResultBridgeDevicePlan>);
 static_assert(std::is_trivially_copyable_v<Gfn2PublicResultBridgeDeviceInput>);
 static_assert(std::is_standard_layout_v<Gfn2PublicResultBridgeDeviceInput>);
+static_assert(std::is_trivially_copyable_v<Gfn2PublicResultBridgeDeviceStaging>);
+static_assert(std::is_standard_layout_v<Gfn2PublicResultBridgeDeviceStaging>);
 static_assert(std::is_trivially_copyable_v<Gfn2PublicResultBridgeDestination>);
 static_assert(std::is_standard_layout_v<Gfn2PublicResultBridgeDestination>);
 static_assert(std::is_trivially_copyable_v<Gfn2PublicResultBridgeDeviceDestinations>);
@@ -151,19 +176,35 @@ static_assert(std::is_trivially_copyable_v<Gfn2PublicResultBridgeDeviceDiagnosti
 static_assert(std::is_standard_layout_v<Gfn2PublicResultBridgeDeviceDiagnostics>);
 
 /*
- * Enqueue one transactional public-result bridge on stream.
+ * Prepare one transactional public-result image on stream.
  *
- * The preflight kernel seals the aggregate gate before the copy kernel can
- * touch CUDA caller destinations. Requested host routes are copied only into
- * caller-provided pinned staging, followed by the control record. The owner
- * must wait for this call's stream completion and commit staging/result flags
- * only when control.aggregate_error is kSuccess. No allocation, host polling,
- * callback, or synchronization is performed here.
+ * The preflight kernel seals the aggregate gate before copying every active
+ * field into runtime-owned device staging. Requested host routes are then
+ * downloaded into pinned staging, followed by the control record. This phase
+ * never writes a caller CUDA destination. The owner must wait for completion,
+ * accept the control record, and settle every other recoverable transaction
+ * phase before calling commit_gfn2_public_results_cuda(). No allocation, host
+ * polling, callback, or synchronization is performed here.
  */
-cudaError_t bridge_gfn2_public_results_cuda(
+cudaError_t prepare_gfn2_public_results_cuda(
     const Gfn2PublicResultBridgeDevicePlan& plan, const Gfn2PublicResultBridgeDeviceInput& input,
+    const Gfn2PublicResultBridgeDeviceStaging& device_staging,
     const Gfn2PublicResultBridgeDeviceDestinations& destinations,
     const Gfn2PublicResultBridgeHostStaging& staging,
+    const Gfn2PublicResultBridgeDeviceDiagnostics& diagnostics,
+    cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Final caller-visible CUDA commit. A successful return means the explicit
+ * commit kernel was accepted by the stream; a later asynchronous device fault
+ * cannot be rolled back and must be reported honestly by the synchronous
+ * owner. HOST outputs and result.flags remain an owner-side commit after that
+ * stream completion succeeds.
+ */
+cudaError_t commit_gfn2_public_results_cuda(
+    const Gfn2PublicResultBridgeDevicePlan& plan,
+    const Gfn2PublicResultBridgeDeviceStaging& device_staging,
+    const Gfn2PublicResultBridgeDeviceDestinations& destinations,
     const Gfn2PublicResultBridgeDeviceDiagnostics& diagnostics,
     cudaStream_t stream = nullptr) noexcept;
 

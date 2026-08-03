@@ -105,3 +105,43 @@ cases additionally require `partial_charges_e`, `atomic_dipoles_e_bohr`, and
 `atomic_quadrupoles_e_bohr2`. Each case must be named `<case-id>.json`. This
 makes the same comparison entry usable by the reference generators and future
 C API integration tests.
+
+## Public C API conformance
+
+Build a shared library, then submit all supported restricted cases as one
+host-descriptor ragged batch through the exported C ABI:
+
+```bash
+env LD_LIBRARY_PATH=/path/to/mkl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} \
+  python3 tools/conformance/gpuxtb_public_api.py \
+    --library build/libgpuxtb.so --backend cpu --memory-mode host \
+    --actual-dir build/conformance/gpuxtb-public
+
+srun --gres=gpu:1 env \
+  LD_LIBRARY_PATH=/path/to/mkl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} \
+  python3 tools/conformance/gpuxtb_public_api.py \
+    --library build/libgpuxtb.so --backend cuda --memory-mode device \
+    --actual-dir build/conformance/gpuxtb-public
+
+srun --gres=gpu:1 env \
+  LD_LIBRARY_PATH=/path/to/mkl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} \
+  python3 tools/conformance/gpuxtb_public_api.py \
+    --library build/libgpuxtb.so --backend cuda --memory-mode mixed \
+    --actual-dir build/conformance/gpuxtb-public
+```
+
+Actual JSON is written before comparison. The primary manifest tolerances are
+used unchanged. Energy and QM forces are gated for every supported case;
+QM/MM goldens also gate atomic charges and point-charge forces. `oh_radical`
+is explicitly skipped because its nonzero unpaired-electron count requires
+unrestricted SCC, which the current public GFN2 path does not support. Atomic
+dipoles and quadrupoles are not compared because C API version 1 has no result
+buffers for them.
+
+`--memory-mode device` places every nonempty input and output descriptor in
+CUDA memory. `mixed` leaves topology offsets, atomic numbers, energies,
+charges, SCC iterations, and per-system status on the host; numerical geometry
+and point-charge inputs plus QM/point-charge forces and `scc_converged` use
+CUDA pointers. The runner dynamically loads libcudart, performs explicit
+host/device copies, frees every allocation on success or failure, and restores
+the entry CUDA device. CPU inference accepts only `--memory-mode host`.

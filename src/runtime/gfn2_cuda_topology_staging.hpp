@@ -148,8 +148,12 @@ class Gfn2CudaTopologyStaging {
   [[nodiscard]] Gfn2CudaTopologyStagingDiagnostic prepare_candidate_commit(
       std::string& error);
 
-  /* Publish a successfully prepared candidate using ownership moves only. */
-  void publish_candidate() noexcept;
+  /* True only while the no-fail ownership publication invariant is sealed. */
+  [[nodiscard]] bool candidate_publishable() const noexcept;
+
+  /* Publish a successfully prepared candidate using ownership moves only.
+   * False reports an invariant violation instead of silently doing nothing. */
+  [[nodiscard]] bool publish_candidate() noexcept;
 
   /* Compatibility convenience for users that do not need two-phase commit. */
   [[nodiscard]] Gfn2CudaTopologyStagingDiagnostic commit_candidate(std::string& error);

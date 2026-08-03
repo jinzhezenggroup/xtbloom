@@ -116,6 +116,46 @@ int main() {
   CHECK(mutable_validated.pointer_type == cudaMemoryTypeDevice);
   CHECK(current_device() == context_device);
 
+  /* CUDA descriptors may start inside an allocation, but their full declared
+   * capacity must remain inside that allocation even when the logical prefix
+   * needed by this call would fit. */
+  auto interior_device =
+      const_view(device_data + 1u, 3u * sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+  CHECK(validate_cuda_const_buffer(context_device, "interior_device", interior_device,
+                                   2u * sizeof(double), alignof(double),
+                                   CudaManagedMemoryPolicy::kReject, const_validated,
+                                   error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(const_validated.data == device_data + 1u);
+  auto interior_device_overrun =
+      const_view(device_data + 1u, 4u * sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+  CHECK(validate_cuda_const_buffer(context_device, "interior_device_overrun",
+                                   interior_device_overrun, sizeof(double), alignof(double),
+                                   CudaManagedMemoryPolicy::kReject, const_validated,
+                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(error.find("extends past") != std::string::npos);
+  CHECK(const_validated.data == nullptr);
+  auto device_output_overrun =
+      mutable_view(device_data, 4u * sizeof(double) + 1u, GPUXTB_MEMORY_CUDA_DEVICE);
+  CHECK(validate_cuda_buffer(context_device, "device_output_overrun", device_output_overrun,
+                             sizeof(double), alignof(double),
+                             CudaManagedMemoryPolicy::kReject, mutable_validated,
+                             error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(error.find("extends past") != std::string::npos);
+  CHECK(mutable_validated.data == nullptr);
+
+  const std::uintptr_t device_address = reinterpret_cast<std::uintptr_t>(device_data);
+  const std::size_t overflowing_device_bytes =
+      std::numeric_limits<std::uintptr_t>::max() - device_address + 1u;
+  auto overflowing_device =
+      const_view(device_data, overflowing_device_bytes, GPUXTB_MEMORY_CUDA_DEVICE);
+  CHECK(validate_cuda_const_buffer(context_device, "overflowing_device", overflowing_device,
+                                   sizeof(double), alignof(double),
+                                   CudaManagedMemoryPolicy::kReject, const_validated,
+                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(error.find("overflows uintptr_t") != std::string::npos);
+  CHECK(cudaPeekAtLastError() == cudaSuccess);
+  CHECK(current_device() == context_device);
+
   /* A truthful CUDA allocation and an ordinary host pointer must both fail
    * closed when their public memory-space tags are swapped. */
   auto device_as_host = const_view(device_data, 4u * sizeof(double), GPUXTB_MEMORY_HOST);
@@ -152,6 +192,21 @@ int main() {
                              alignof(double), CudaManagedMemoryPolicy::kAllowOnAllocationDevice,
                              mutable_validated, error) == GPUXTB_STATUS_SUCCESS);
   CHECK(mutable_validated.pointer_type == cudaMemoryTypeManaged);
+  auto interior_managed =
+      const_view(managed_data + 2u, 2u * sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+  CHECK(validate_cuda_const_buffer(context_device, "interior_managed", interior_managed,
+                                   sizeof(double), alignof(double),
+                                   CudaManagedMemoryPolicy::kAllowOnAllocationDevice,
+                                   const_validated, error) == GPUXTB_STATUS_SUCCESS);
+  auto interior_managed_overrun =
+      const_view(managed_data + 2u, 3u * sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+  CHECK(validate_cuda_const_buffer(context_device, "interior_managed_overrun",
+                                   interior_managed_overrun, sizeof(double), alignof(double),
+                                   CudaManagedMemoryPolicy::kAllowOnAllocationDevice,
+                                   const_validated,
+                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(error.find("extends past") != std::string::npos);
+  CHECK(const_validated.data == nullptr);
   auto managed_as_host = const_view(managed_data, 4u * sizeof(double), GPUXTB_MEMORY_HOST);
   CHECK(validate_cuda_const_buffer(context_device, "managed_as_host", managed_as_host,
                                    4u * sizeof(double), alignof(double),

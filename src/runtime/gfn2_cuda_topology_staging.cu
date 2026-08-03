@@ -298,6 +298,12 @@ __global__ void validate_and_compare_topology_kernel(
       set_device_failure(report, DeviceError::kInvalidMetadata, Field::kMolecularCharges, system);
       return;
     }
+    /* +0.0 and -0.0 are the same molecular charge in the public contract.
+     * Canonicalize before the bitwise device-key comparison so alternating
+     * signed-zero inputs cannot manufacture spurious topology candidates. */
+    if (candidate.molecular_charges[system] == 0.0) {
+      candidate.molecular_charges[system] = 0.0;
+    }
     if (candidate.unpaired_electrons[system] != 0) {
       set_device_failure(report, DeviceError::kUnsupportedSpin, Field::kUnpairedElectrons, system);
       return;
@@ -874,18 +880,26 @@ Gfn2CudaTopologyStagingDiagnostic Gfn2CudaTopologyStaging::prepare_candidate_com
   return {};
 }
 
-void Gfn2CudaTopologyStaging::publish_candidate() noexcept {
-  if (!impl_ || !impl_->pending_ready || !impl_->pending || !impl_->pending_snapshot) return;
+bool Gfn2CudaTopologyStaging::candidate_publishable() const noexcept {
+  return impl_ && impl_->pending_ready && impl_->pending && impl_->pending_snapshot;
+}
+
+bool Gfn2CudaTopologyStaging::publish_candidate() noexcept {
+  if (!candidate_publishable()) return false;
   impl_->active = std::move(impl_->pending);
   impl_->committed_snapshot = std::move(impl_->pending_snapshot);
   impl_->pending_ready = false;
   ++impl_->committed_generation;
+  return true;
 }
 
 Gfn2CudaTopologyStagingDiagnostic Gfn2CudaTopologyStaging::commit_candidate(std::string& error) {
   Gfn2CudaTopologyStagingDiagnostic diagnostic = prepare_candidate_commit(error);
   if (!diagnostic.success()) return diagnostic;
-  publish_candidate();
+  if (!publish_candidate()) {
+    error = "prepared CUDA topology candidate violated the publication invariant";
+    return failure(GPUXTB_STATUS_INTERNAL_ERROR, Error::kNoCandidate, Field::kNone);
+  }
   return {};
 }
 

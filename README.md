@@ -7,9 +7,12 @@ host or CUDA device pointers, and external point charges that participate in SCC
 > [!IMPORTANT]
 > Restricted GFN2-xTB inference is available through `gpuxtb_compute` on the CPU backend for host
 > buffers, including energies, analytic QM forces, atomic charges, external point charges in SCC,
-> and point-charge forces. The allocation-free batched CUDA SCC and energy/force executors are
-> implemented internally; connecting them to the public host/device-pointer C API is the next
-> integration milestone. GFN1-xTB and ROCm remain reserved but not implemented.
+> and point-charge forces. The CUDA backend is also connected to the public C API and accepts
+> host, CUDA-device, or mixed input/output descriptors for ragged batches. Its fixed-topology
+> runtime reuses device arenas across changed geometries and includes explicit point charges and
+> caller-supplied periodic `b + A*q` operators in SCC. The public call is synchronous and rejects
+> CUDA stream capture; a future asynchronous ABI remains a separate extension. GFN1-xTB and ROCm
+> remain reserved but not implemented.
 
 ## Build
 

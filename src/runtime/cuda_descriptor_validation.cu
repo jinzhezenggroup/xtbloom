@@ -1,3 +1,4 @@
+#include <cuda.h>
 #include <cuda_runtime_api.h>
 
 #include <cstddef>
@@ -22,6 +23,15 @@ const char* display_name(const char* name) noexcept {
 
 std::string cuda_error_message(const char* operation, cudaError_t status) {
   return std::string(operation) + " failed: " + cudaGetErrorString(status);
+}
+
+std::string cuda_driver_error_message(const char* operation, CUresult status) {
+  const char* detail = nullptr;
+  if (cuGetErrorString(status, &detail) != CUDA_SUCCESS || detail == nullptr) {
+    return std::string(operation) + " failed with CUDA driver status " +
+           std::to_string(static_cast<int>(status));
+  }
+  return std::string(operation) + " failed: " + detail;
 }
 
 /* Failed metadata queries are validation diagnostics, not deferred launch
@@ -79,8 +89,48 @@ gpuxtb_status_t validate_basic_descriptor(const char* name, const void* data,
   if ((address & (alignment - 1u)) != 0u) {
     return invalid(name, " does not satisfy the required alignment", error);
   }
-  if (logical_bytes > std::numeric_limits<std::uintptr_t>::max() - address) {
-    return invalid(name, " logical address range overflows uintptr_t", error);
+  /* size_bytes describes the caller's complete view, not merely the prefix
+   * consumed by the current operation.  Reject an impossible half-open range
+   * before asking CUDA about allocation ownership. */
+  if (size_bytes > std::numeric_limits<std::uintptr_t>::max() - address) {
+    return invalid(name, " declared address range overflows uintptr_t", error);
+  }
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t validate_device_allocation_range(const char* name, const void* data,
+                                                  std::size_t declared_bytes,
+                                                  std::string& error) {
+  CUdeviceptr allocation_base = 0u;
+  std::size_t allocation_bytes = 0u;
+  const CUresult range_status = cuMemGetAddressRange(
+      &allocation_base, &allocation_bytes, reinterpret_cast<CUdeviceptr>(data));
+  if (range_status != CUDA_SUCCESS) {
+    error = cuda_driver_error_message("cuMemGetAddressRange", range_status);
+    if (range_status == CUDA_ERROR_INVALID_VALUE || range_status == CUDA_ERROR_NOT_FOUND) {
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    if (range_status == CUDA_ERROR_DEINITIALIZED || range_status == CUDA_ERROR_NOT_INITIALIZED ||
+        range_status == CUDA_ERROR_INVALID_CONTEXT) {
+      return GPUXTB_STATUS_BACKEND_UNAVAILABLE;
+    }
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+
+  /* cudaMemGetAddressRange accepts an interior device pointer and returns the
+   * containing allocation.  Use subtraction rather than constructing an end
+   * address so the validation itself cannot wrap uintptr_t. */
+  if (allocation_base == 0u || allocation_bytes == 0u) {
+    return invalid(name, " has invalid CUDA allocation-range metadata", error);
+  }
+  const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(data);
+  const std::uintptr_t base = static_cast<std::uintptr_t>(allocation_base);
+  if (address < base) {
+    return invalid(name, " lies before its reported CUDA allocation", error);
+  }
+  const std::uintptr_t offset = address - base;
+  if (offset > allocation_bytes || declared_bytes > allocation_bytes - offset) {
+    return invalid(name, " declared byte range extends past its CUDA allocation", error);
   }
   return GPUXTB_STATUS_SUCCESS;
 }
@@ -273,6 +323,10 @@ gpuxtb_status_t validate_cuda_const_buffer(std::int32_t device_id, const char* n
   PointerFacts facts{};
   status = validate_pointer_facts(device_id, name, buffer.data, buffer.memory_space, managed_policy,
                                   false, facts, error);
+  if (status == GPUXTB_STATUS_SUCCESS &&
+      buffer.memory_space == GPUXTB_MEMORY_CUDA_DEVICE) {
+    status = validate_device_allocation_range(name, buffer.data, buffer.size_bytes, error);
+  }
   status = finish_with_restore(device, status, error);
   if (status != GPUXTB_STATUS_SUCCESS) return status;
 
@@ -297,6 +351,10 @@ gpuxtb_status_t validate_cuda_buffer(std::int32_t device_id, const char* name,
   PointerFacts facts{};
   status = validate_pointer_facts(device_id, name, buffer.data, buffer.memory_space, managed_policy,
                                   true, facts, error);
+  if (status == GPUXTB_STATUS_SUCCESS &&
+      buffer.memory_space == GPUXTB_MEMORY_CUDA_DEVICE) {
+    status = validate_device_allocation_range(name, buffer.data, buffer.size_bytes, error);
+  }
   status = finish_with_restore(device, status, error);
   if (status != GPUXTB_STATUS_SUCCESS) return status;
 

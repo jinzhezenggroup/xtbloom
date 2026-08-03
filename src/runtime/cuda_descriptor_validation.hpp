@@ -91,12 +91,15 @@ class ScopedCudaDevice {
 /*
  * Validate a complete logical byte range without dereferencing it.
  *
- * Both functions check descriptor metadata, capacity, address overflow,
- * natural alignment, memory-space truthfulness, CUDA pointer type, allocation
- * device, and the explicit managed-memory policy.  HOST accepts ordinary and
- * CUDA-registered host storage but rejects device/managed pointers mislabeled
- * as host.  CUDA_DEVICE accepts only a device allocation on device_id, or
- * managed storage when explicitly enabled on that same allocation device.
+ * Both functions check descriptor metadata, capacity, declared-range address
+ * overflow, natural alignment, memory-space truthfulness, CUDA pointer type,
+ * allocation device, and the explicit managed-memory policy.  HOST accepts
+ * ordinary and CUDA-registered host storage but rejects device/managed
+ * pointers mislabeled as host.  CUDA_DEVICE additionally requires the entire
+ * declared size_bytes range, including one beginning at an interior pointer,
+ * to fit in the allocation reported by cuMemGetAddressRange.  It accepts
+ * only a device allocation on device_id, or managed storage when explicitly
+ * enabled on that same allocation device.
  *
  * validate_cuda_buffer additionally rejects CUDA host registrations marked
  * read-only, preserving the writable contract of public result descriptors.

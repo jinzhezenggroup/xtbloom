@@ -16,6 +16,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "gpuxtb_conformance.py"
+PUBLIC_API_TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "gpuxtb_public_api.py"
 MANIFEST = REPOSITORY_ROOT / "data" / "conformance" / "manifest.json"
 SPEC = importlib.util.spec_from_file_location("gpuxtb_conformance_tool", TOOL)
 assert SPEC is not None and SPEC.loader is not None
@@ -48,6 +49,81 @@ class ConformanceToolTest(unittest.TestCase):
         """Hashes, units, array shapes, and the force sign convention are checked."""
         completed = self.run_tool("check")
         self.assertIn("8 cases", completed.stdout)
+
+    def test_gas_phase_coord_inputs_are_parsed_for_public_consumers(self) -> None:
+        """The shared parser handles element case and stops at later directives."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        gas_cases = [
+            case for case in manifest["cases"] if case.get("input_schema") is None
+        ]
+        by_id = {case["id"]: case for case in gas_cases}
+        for case in gas_cases:
+            parsed = CONFORMANCE.load_turbomole_coord(
+                REPOSITORY_ROOT / case["input"], case
+            )
+            self.assertEqual(len(parsed["atomic_numbers"]), case["atom_count"])
+            self.assertEqual(len(parsed["positions_bohr"]), case["atom_count"])
+        self.assertEqual(by_id["h3_plus"]["molecular_charge"], 1)
+        self.assertEqual(
+            CONFORMANCE.load_turbomole_coord(
+                REPOSITORY_ROOT / by_id["h3_plus"]["input"], by_id["h3_plus"]
+            )["atomic_numbers"],
+            [1, 1, 1],
+        )
+
+    def test_coord_parser_rejects_malformed_nonfinite_input(self) -> None:
+        """Public inference must not turn malformed corpus data into ABI calls."""
+        case = {"id": "invalid", "atom_count": 1}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "invalid.coord"
+            path.write_text("$coord\n nan 0 0 h\n$end\n", encoding="utf-8")
+            with self.assertRaisesRegex(CONFORMANCE.ConformanceError, "non-finite"):
+                CONFORMANCE.load_turbomole_coord(path, case)
+
+    def test_public_runner_explicitly_excludes_unrestricted_case(self) -> None:
+        """The unsupported radical is scoped out before loading a shared library."""
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(PUBLIC_API_TOOL),
+                "--library",
+                "/does/not/exist/libgpuxtb.so",
+                "--backend",
+                "cpu",
+                "--case",
+                "oh_radical",
+            ],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+        self.assertIn("SKIP oh_radical", completed.stdout)
+        self.assertIn("restricted closed-shell", completed.stdout)
+
+    def test_public_runner_rejects_cuda_memory_for_cpu_before_loading(self) -> None:
+        """Device descriptors cannot accidentally be routed through the CPU backend."""
+        for memory_mode in ("device", "mixed"):
+            with self.subTest(memory_mode=memory_mode):
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        str(PUBLIC_API_TOOL),
+                        "--library",
+                        "/does/not/exist/libgpuxtb.so",
+                        "--backend",
+                        "cpu",
+                        "--memory-mode",
+                        memory_mode,
+                    ],
+                    cwd=REPOSITORY_ROOT,
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn("CPU backend only supports", completed.stderr)
 
     def test_qmmm_goldens_embed_inputs_and_both_force_domains(self) -> None:
         """QM/MM cases retain exact PC inputs and use force=-gradient twice."""

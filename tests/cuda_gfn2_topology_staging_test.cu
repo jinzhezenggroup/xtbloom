@@ -274,6 +274,45 @@ int exercise_absent_normalization(int device_id, cudaStream_t stream) {
   return 0;
 }
 
+int exercise_signed_zero_and_checked_publish(int device_id, cudaStream_t stream) {
+  Topology canonical = Topology::make(8);
+  canonical.molecular_charges[2] = 0.0;
+  DeviceTopology canonical_device;
+  CHECK(canonical_device.upload(canonical, stream) == 0);
+  Gfn2CudaTopologyStaging staging(device_id, stream);
+  CHECK(staging.valid());
+  CHECK(!staging.candidate_publishable());
+  CHECK(!staging.publish_candidate());
+
+  std::string error;
+  auto result = staging.stage_and_validate(
+      make_batch(canonical, canonical_device, SourceMode::kMixed), error);
+  CHECK(result.success());
+  CHECK(result.disposition == Gfn2CudaTopologyStageDisposition::kCandidate);
+  CHECK(!staging.candidate_publishable());
+  CHECK(staging.prepare_candidate_commit(error).success());
+  CHECK(staging.candidate_publishable());
+  CHECK(staging.publish_candidate());
+  CHECK(!staging.candidate_publishable());
+  CHECK(!staging.publish_candidate());
+  CHECK(staging.committed_snapshot() != nullptr);
+  CHECK(!std::signbit(staging.committed_snapshot()->molecular_charges[2]));
+  const auto committed = staging.identity();
+
+  Topology negative_zero = canonical;
+  negative_zero.molecular_charges[2] = -0.0;
+  DeviceTopology negative_device;
+  CHECK(negative_device.upload(negative_zero, stream) == 0);
+  for (SourceMode mode : {SourceMode::kHost, SourceMode::kDevice, SourceMode::kMixed}) {
+    result = staging.stage_and_validate(make_batch(negative_zero, negative_device, mode), error);
+    CHECK(result.success());
+    CHECK(result.disposition == Gfn2CudaTopologyStageDisposition::kMatchesCommitted);
+    CHECK(staging.candidate_snapshot() == nullptr);
+    CHECK(staging.identity().committed_generation == committed.committed_generation);
+  }
+  return 0;
+}
+
 int exercise_layout_replacement(int device_id, cudaStream_t stream) {
   Topology original = Topology::make(8);
   DeviceTopology original_device;
@@ -481,6 +520,7 @@ int main() {
     CHECK(exercise_sources_and_transactions(batch_size, device_id, stream) == 0);
   }
   CHECK(exercise_absent_normalization(device_id, stream) == 0);
+  CHECK(exercise_signed_zero_and_checked_publish(device_id, stream) == 0);
   CHECK(exercise_layout_replacement(device_id, stream) == 0);
   CHECK(exercise_invalid_matrix(device_id, stream) == 0);
   CHECK(exercise_current_device_and_event(device_id, stream) == 0);

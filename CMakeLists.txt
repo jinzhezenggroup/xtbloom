@@ -167,6 +167,7 @@ if(GPUXTB_HAS_CUDA)
   )
   target_link_libraries(gpuxtb_cuda_backend PUBLIC
     CUDA::cublas
+    CUDA::cuda_driver
     CUDA::cudart
     CUDA::cusolver
   )
@@ -186,8 +187,12 @@ if(GPUXTB_HAS_CUDA)
   )
 
   target_sources(gpuxtb PRIVATE $<TARGET_OBJECTS:gpuxtb_cuda_backend>)
-  target_link_libraries(gpuxtb PRIVATE
+  # CUDA-enabled shared consumers must place these runtime libraries on their
+  # final link line.  Export them transitively; otherwise an installed library
+  # with no build-tree RUNPATH fails to resolve cudart/cuSOLVER symbols.
+  target_link_libraries(gpuxtb PUBLIC
     CUDA::cublas
+    CUDA::cuda_driver
     CUDA::cudart
     CUDA::cusolver
   )
@@ -290,6 +295,8 @@ if(GPUXTB_BUILD_TESTS)
     )
     target_link_libraries(gpuxtb_cuda_descriptor_validation_test PRIVATE
       gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
       CUDA::cudart
     )
     target_include_directories(gpuxtb_cuda_descriptor_validation_test PRIVATE
@@ -314,6 +321,8 @@ if(GPUXTB_BUILD_TESTS)
     )
     target_link_libraries(gpuxtb_cuda_gfn2_topology_staging_test PRIVATE
       gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
       CUDA::cudart
     )
     target_include_directories(gpuxtb_cuda_gfn2_topology_staging_test PRIVATE
@@ -338,6 +347,8 @@ if(GPUXTB_BUILD_TESTS)
     )
     target_link_libraries(gpuxtb_cuda_gfn2_public_result_bridge_test PRIVATE
       gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
       CUDA::cudart
     )
     target_include_directories(gpuxtb_cuda_gfn2_public_result_bridge_test PRIVATE
@@ -399,6 +410,7 @@ if(GPUXTB_BUILD_TESTS)
     target_link_libraries(gpuxtb_cuda_parameters_test PRIVATE
       gpuxtb::gpuxtb
       gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
     )
     target_include_directories(gpuxtb_cuda_parameters_test PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}
@@ -614,6 +626,7 @@ if(GPUXTB_BUILD_TESTS)
     target_link_libraries(gpuxtb_cuda_mulliken_test PRIVATE
       gpuxtb::gpuxtb
       gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
     )
     target_include_directories(gpuxtb_cuda_mulliken_test PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}
@@ -734,6 +747,11 @@ if(GPUXTB_BUILD_TESTS)
     add_executable(gpuxtb_cuda_gfn2_runtime_owner_test
       tests/cuda_gfn2_runtime_owner_test.cu
       tests/support/gfn2_scc_test_case.cpp
+      # This white-box test exercises the internal context owner directly.
+      # Shared-library builds hide that implementation symbol by design, so
+      # compile the owner into the test instead of weakening the public ABI.
+      src/runtime/backend.cpp
+      src/runtime/gfn2_cpu_execution.cpp
     )
     target_link_libraries(gpuxtb_cuda_gfn2_runtime_owner_test PRIVATE
       gpuxtb::gpuxtb
@@ -951,6 +969,7 @@ if(GPUXTB_BUILD_TESTS)
     target_link_libraries(gpuxtb_cuda_periodic_embedding_test PRIVATE
       gpuxtb::gpuxtb
       gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
     )
     target_include_directories(gpuxtb_cuda_periodic_embedding_test PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}
@@ -972,6 +991,7 @@ if(GPUXTB_BUILD_TESTS)
     target_link_libraries(gpuxtb_cuda_scc_test PRIVATE
       gpuxtb::gpuxtb
       gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
     )
     target_include_directories(gpuxtb_cuda_scc_test PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}
@@ -1407,6 +1427,7 @@ if(GPUXTB_BUILD_TESTS)
     target_link_libraries(gpuxtb_cuda_scc_energy_test PRIVATE
       gpuxtb::gpuxtb
       gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
     )
     target_include_directories(gpuxtb_cuda_scc_energy_test PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}
@@ -1426,6 +1447,7 @@ if(GPUXTB_BUILD_TESTS)
     target_link_libraries(gpuxtb_cuda_scc_classical_energy_test PRIVATE
       gpuxtb::gpuxtb
       gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
     )
     target_include_directories(gpuxtb_cuda_scc_classical_energy_test PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}
@@ -1606,6 +1628,56 @@ if(GPUXTB_BUILD_TESTS)
     COMMAND ${Python3_EXECUTABLE} -m unittest discover
             -s tests/conformance -p "test_*.py" -v
   )
+  if(BUILD_SHARED_LIBS AND GPUXTB_MKL_RT_LIBRARY)
+    add_test(
+      NAME gpuxtb.conformance.public_cpu
+      COMMAND ${Python3_EXECUTABLE} tools/conformance/gpuxtb_public_api.py
+              --library $<TARGET_FILE:gpuxtb> --backend cpu --memory-mode host
+              --actual-dir ${CMAKE_CURRENT_BINARY_DIR}/conformance/public-api
+    )
+    set_tests_properties(gpuxtb.conformance.public_cpu PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+      ENVIRONMENT_MODIFICATION
+        "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_MKL_RT_DIRECTORY}"
+      LABELS "conformance;public-api"
+    )
+    if(GPUXTB_HAS_CUDA)
+      add_test(
+        NAME gpuxtb.conformance.public_cuda
+        COMMAND ${Python3_EXECUTABLE} tools/conformance/gpuxtb_public_api.py
+                --library $<TARGET_FILE:gpuxtb> --backend cuda --memory-mode host
+                --actual-dir ${CMAKE_CURRENT_BINARY_DIR}/conformance/public-api
+                --skip-backend-unavailable
+      )
+      set_tests_properties(gpuxtb.conformance.public_cuda PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+        ENVIRONMENT_MODIFICATION
+          "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_MKL_RT_DIRECTORY}"
+        LABELS "conformance;public-api"
+        SKIP_RETURN_CODE 77
+      )
+      foreach(memory_mode IN ITEMS device mixed)
+        add_test(
+          NAME gpuxtb.conformance.public_cuda_${memory_mode}
+          COMMAND ${Python3_EXECUTABLE} tools/conformance/gpuxtb_public_api.py
+                  --library $<TARGET_FILE:gpuxtb> --backend cuda
+                  --memory-mode ${memory_mode}
+                  --actual-dir ${CMAKE_CURRENT_BINARY_DIR}/conformance/public-api
+                  --skip-backend-unavailable
+        )
+        set_tests_properties(gpuxtb.conformance.public_cuda_${memory_mode} PROPERTIES
+          WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+          ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+          ENVIRONMENT_MODIFICATION
+            "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_MKL_RT_DIRECTORY}"
+          LABELS "conformance;public-api"
+          SKIP_RETURN_CODE 77
+        )
+      endforeach()
+    endif()
+  endif()
   add_test(
     NAME gpuxtb.oracle.tblite_observer_patch
     COMMAND ${Python3_EXECUTABLE} -m unittest discover
@@ -1635,6 +1707,16 @@ install(EXPORT gpuxtbTargets
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/gpuxtb
 )
 
+# A CUDA-enabled shared library retains runtime/library symbol requirements
+# from the toolkit used to build it.  Record the compatible major/minor floor
+# so installed consumers fail during find_package instead of at final link.
+if(GPUXTB_HAS_CUDA)
+  set(GPUXTB_CUDA_TOOLKIT_MAJOR ${CUDAToolkit_VERSION_MAJOR})
+  set(GPUXTB_CUDA_TOOLKIT_MINOR ${CUDAToolkit_VERSION_MINOR})
+else()
+  set(GPUXTB_CUDA_TOOLKIT_MAJOR 0)
+  set(GPUXTB_CUDA_TOOLKIT_MINOR 0)
+endif()
 configure_package_config_file(
   cmake/gpuxtbConfig.cmake.in
   ${CMAKE_CURRENT_BINARY_DIR}/gpuxtbConfig.cmake
