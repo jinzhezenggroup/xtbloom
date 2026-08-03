@@ -1,6 +1,7 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -46,6 +47,58 @@ bool near(double actual, double expected, double tolerance = 2.0e-10) {
 
 bool component_enabled(std::uint32_t mask, Gfn2ClassicalForceComponent component) {
   return (mask & static_cast<std::uint32_t>(component)) != 0u;
+}
+
+using Rotation = std::array<double, 9>;
+
+Rotation make_test_rotation() {
+  constexpr double angle = 0.73;
+  constexpr double inverse_norm = 0.40824829046386301637;
+  const std::array<double, 3> axis{inverse_norm, 2.0 * inverse_norm, -inverse_norm};
+  const double cosine = std::cos(angle);
+  const double sine = std::sin(angle);
+  const double complement = 1.0 - cosine;
+  return {
+      cosine + axis[0] * axis[0] * complement,
+      axis[0] * axis[1] * complement - axis[2] * sine,
+      axis[0] * axis[2] * complement + axis[1] * sine,
+      axis[1] * axis[0] * complement + axis[2] * sine,
+      cosine + axis[1] * axis[1] * complement,
+      axis[1] * axis[2] * complement - axis[0] * sine,
+      axis[2] * axis[0] * complement - axis[1] * sine,
+      axis[2] * axis[1] * complement + axis[0] * sine,
+      cosine + axis[2] * axis[2] * complement,
+  };
+}
+
+std::array<double, 3> rotate_vector(const Rotation& rotation, const double* vector) {
+  std::array<double, 3> rotated{};
+  for (std::size_t row = 0; row < 3u; ++row) {
+    for (std::size_t column = 0; column < 3u; ++column) {
+      rotated[row] += rotation[row * 3u + column] * vector[column];
+    }
+  }
+  return rotated;
+}
+
+std::array<double, 6> rotate_quadrupole(const Rotation& rotation, const double* packed) {
+  const double tensor[3][3] = {
+      {packed[0], packed[1], packed[3]},
+      {packed[1], packed[2], packed[4]},
+      {packed[3], packed[4], packed[5]},
+  };
+  double rotated[3][3]{};
+  for (std::size_t row = 0; row < 3u; ++row) {
+    for (std::size_t column = 0; column < 3u; ++column) {
+      for (std::size_t first = 0; first < 3u; ++first) {
+        for (std::size_t second = 0; second < 3u; ++second) {
+          rotated[row][column] +=
+              rotation[row * 3u + first] * tensor[first][second] * rotation[column * 3u + second];
+        }
+      }
+    }
+  }
+  return {rotated[0][0], rotated[0][1], rotated[1][1], rotated[0][2], rotated[1][2], rotated[2][2]};
 }
 
 template <typename T>
@@ -154,6 +207,21 @@ struct HostFixture {
   std::vector<double> d4_pairs;
   std::vector<double> d4_coordination;
   gfn2::D4GeometryCache d4_cache{};
+
+  bool refresh_geometry(std::string& error) {
+    return gfn2::evaluate_coordination_cpu(coordination_plan, positions.data(), coordination.data(),
+                                           error) == GPUXTB_STATUS_SUCCESS &&
+           gfn2::update_es2_geometry_cache_cpu(es2_plan, positions.data(), kGeneration,
+                                               es2_matrix.data(), es2_matrix.size(), es2_workspace,
+                                               es2_cache, error) == GPUXTB_STATUS_SUCCESS &&
+           gfn2::update_aes2_geometry_cache_cpu(
+               aes2_plan, positions.data(), coordination.data(), kGeneration, aes2_pairs.data(),
+               aes2_pairs.size(), aes2_workspace, aes2_cache, error) == GPUXTB_STATUS_SUCCESS &&
+           gfn2::update_d4_geometry_cache_cpu(
+               d4_plan, positions.data(), kGeneration, d4_pairs.data(), d4_pairs.size(),
+               d4_coordination.data(), d4_coordination.size(), d4_workspace, d4_cache,
+               error) == GPUXTB_STATUS_SUCCESS;
+  }
 
   bool initialize(std::size_t requested_batch, std::string& error) {
     batch_size = requested_batch;
@@ -888,6 +956,58 @@ int test_combined_finite_difference_and_invariance() {
   return 0;
 }
 
+int test_combined_rotation_covariance() {
+  std::string error;
+  HostFixture original;
+  CHECK(original.initialize(1u, error));
+  std::fill(original.force_seed.begin(), original.force_seed.end(), 0.0);
+
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture original_device;
+  CHECK(original_device.initialize(original, stream));
+  CHECK(original_device.set_force_seed(original.force_seed, stream));
+  CHECK(original_device.run(kGfn2ClassicalForceAllComponents, stream));
+  std::vector<double> original_force(original.force_seed.size());
+  CHECK(original_device.forces.copy_to(original_force.data(), original_force.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  HostFixture rotated;
+  CHECK(rotated.initialize(1u, error));
+  const Rotation rotation = make_test_rotation();
+  for (std::size_t atom = 0; atom < rotated.atomic_numbers.size(); ++atom) {
+    const std::array<double, 3> position =
+        rotate_vector(rotation, rotated.positions.data() + atom * 3u);
+    const std::array<double, 3> dipole =
+        rotate_vector(rotation, rotated.dipoles.data() + atom * 3u);
+    const std::array<double, 6> quadrupole =
+        rotate_quadrupole(rotation, rotated.quadrupoles.data() + atom * 6u);
+    std::copy(position.begin(), position.end(), rotated.positions.begin() + atom * 3u);
+    std::copy(dipole.begin(), dipole.end(), rotated.dipoles.begin() + atom * 3u);
+    std::copy(quadrupole.begin(), quadrupole.end(), rotated.quadrupoles.begin() + atom * 6u);
+  }
+  std::fill(rotated.force_seed.begin(), rotated.force_seed.end(), 0.0);
+  CHECK(rotated.refresh_geometry(error));
+
+  DeviceFixture rotated_device;
+  CHECK(rotated_device.initialize(rotated, stream));
+  CHECK(rotated_device.set_force_seed(rotated.force_seed, stream));
+  CHECK(rotated_device.run(kGfn2ClassicalForceAllComponents, stream));
+  std::vector<double> rotated_force(rotated.force_seed.size());
+  CHECK(rotated_device.forces.copy_to(rotated_force.data(), rotated_force.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  for (std::size_t atom = 0; atom < original.atomic_numbers.size(); ++atom) {
+    const std::array<double, 3> expected =
+        rotate_vector(rotation, original_force.data() + atom * 3u);
+    for (std::size_t axis = 0; axis < 3u; ++axis) {
+      CHECK(near(rotated_force[atom * 3u + axis], expected[axis], 2.0e-9));
+    }
+  }
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 int test_alias_validation() {
   std::string error;
   HostFixture host;
@@ -1035,6 +1155,9 @@ int main() {
     return line;
   }
   if (const int line = test_combined_finite_difference_and_invariance(); line != 0) {
+    return line;
+  }
+  if (const int line = test_combined_rotation_covariance(); line != 0) {
     return line;
   }
   if (const int line = test_alias_validation(); line != 0) {
