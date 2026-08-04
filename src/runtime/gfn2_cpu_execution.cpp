@@ -23,6 +23,10 @@
 #include <sched.h>
 #endif
 
+#if defined(_WIN32)
+#include <malloc.h>
+#endif
+
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/coordination.hpp"
@@ -51,6 +55,24 @@ constexpr std::size_t kHostAlignment = 64u;
 constexpr std::int64_t kMixerHistory = 8;
 constexpr double kMixerDamping = 0.4;
 constexpr std::size_t kMaximumAutomaticCpuThreads = 64u;
+
+/* ``std::aligned_alloc`` is not provided by MSVC; wrap the platform primitive
+ * so AlignedBuffer can allocate and free without per-platform guards. */
+void* host_aligned_allocate(std::size_t alignment, std::size_t size) {
+#if defined(_WIN32)
+  return _aligned_malloc(size, alignment);
+#else
+  return std::aligned_alloc(alignment, size);
+#endif
+}
+
+void host_aligned_free(void* ptr) {
+#if defined(_WIN32)
+  _aligned_free(ptr);
+#else
+  std::free(ptr);
+#endif
+}
 
 std::size_t process_cpu_count() noexcept {
 #if defined(__linux__)
@@ -217,7 +239,7 @@ class CpuWorkerPool final {
 class AlignedBuffer {
  public:
   AlignedBuffer() noexcept = default;
-  ~AlignedBuffer() { std::free(data_); }
+  ~AlignedBuffer() { host_aligned_free(data_); }
 
   AlignedBuffer(const AlignedBuffer&) = delete;
   AlignedBuffer& operator=(const AlignedBuffer&) = delete;
@@ -227,7 +249,7 @@ class AlignedBuffer {
 
   AlignedBuffer& operator=(AlignedBuffer&& other) noexcept {
     if (this != &other) {
-      std::free(data_);
+      host_aligned_free(data_);
       data_ = std::exchange(other.data_, nullptr);
       size_ = std::exchange(other.size_, 0u);
     }
@@ -241,7 +263,7 @@ class AlignedBuffer {
     }
     const std::size_t useful = std::max<std::size_t>(requested, 1u);
     size_ = (useful + kHostAlignment - 1u) & ~(kHostAlignment - 1u);
-    data_ = std::aligned_alloc(kHostAlignment, size_);
+    data_ = host_aligned_allocate(kHostAlignment, size_);
     if (data_ == nullptr) {
       size_ = 0u;
       return false;

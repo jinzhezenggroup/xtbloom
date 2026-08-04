@@ -41,6 +41,22 @@ cmake -S . -B build-cuda \
   -DCMAKE_CUDA_ARCHITECTURES=120
 ```
 
+## Python package
+
+A Python package wrapping the public C ABI is provided under `python/` and is
+packaged with scikit-build-core:
+
+```console
+pip install .
+```
+
+It offers a tblite-like single-molecule interface (`gpuxtb.Calculator`,
+`gpuxtb.Structure`, `gpuxtb.Result`), native ragged-batch inference
+(`gpuxtb.BatchCalculator`), net charge and spin multiplicity (unpaired
+electrons / spin channels), an ASE calculator (`gpuxtb.ase.GPUxtb`), and a
+dpdata driver plugin registered as `gpuxtb`. Full details are in
+[python/README.md](python/README.md).
+
 ## Design goals
 
 - Match established GFN2-xTB energies and analytic forces before performance tuning.

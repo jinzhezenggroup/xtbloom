@@ -1,0 +1,67 @@
+name: Python wheels
+
+# Builds cross-platform wheels with cibuildwheel (one matrix entry per
+# platform, as recommended by cibuildwheel and modeled on DeePMD-kit's
+# build_wheel.yml). Each entry tells cibuildwheel exactly which build to
+# produce via CIBW_BUILD and which test (if any) to run through cibuildwheel's
+# own test feature.
+#
+# - Linux x86_64 builds a CUDA-enabled wheel in the PyPA CUDA manylinux image
+#   ([tool.cibuildwheel] in pyproject.toml) and runs the full conformance suite
+#   via `test-extras` (deps from the package's `[test]` optional dependency).
+# - Linux aarch64 builds CUDA-enabled on the native ARM runner (no QEMU) and
+#   loads the installed native library as its smoke test.
+# macOS/Windows artifacts are intentionally not published until their CPU
+# eigensolver runtime is functional; an import-only wheel is not a usable
+# scientific package.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build_wheels:
+    name: Build wheels for ${{ matrix.platform_id }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # linux-64 (CUDA-enabled wheels + full test suite)
+          - os: ubuntu-24.04
+            platform_id: manylinux_x86_64
+            build: "cp311-manylinux_x86_64"
+            variant: cuda
+            tests: full
+          # linux-aarch64 (CUDA-enabled wheels, native ARM runner)
+          - os: ubuntu-24.04-arm
+            platform_id: manylinux_aarch64
+            build: "cp311-manylinux_aarch64"
+            variant: cuda
+            tests: smoke
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v4.1
+        env:
+          CIBW_ARCHS: all
+          CIBW_BUILD: ${{ matrix.build }}
+          CIBW_ENVIRONMENT: "GPUXTB_ENABLE_CUDA=${{ matrix.variant == 'cuda' && 'ON' || 'OFF' }}"
+          # Hosted wheel builders have no NVIDIA kernel driver.  Expose the
+          # toolkit stub only inside the isolated wheel test so the CUDA-linked
+          # library can load and exercise its CPU fallback; production code
+          # never searches or preloads stubs.  A real-GPU forced-CUDA test is
+          # run separately on the project GPU before merge/release.
+          CIBW_TEST_COMMAND: ${{ matrix.tests == 'full' && 'bash {project}/python/ci/run-wheel-test.sh full {project}' || 'bash {project}/python/ci/run-wheel-test.sh smoke {project}' }}
+          CIBW_TEST_EXTRAS: ${{ matrix.tests == 'full' && 'test' || '' }}
+        with:
+          output-dir: wheelhouse
+      - name: Enforce PyPI wheel size limit
+        run: python python/ci/check-wheel-size.py wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gpuxtb-wheels-${{ matrix.platform_id }}
+          path: ./wheelhouse/*.whl
