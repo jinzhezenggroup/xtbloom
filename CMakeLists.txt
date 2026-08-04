@@ -213,6 +213,12 @@ if(GPUXTB_BUILD_TESTS)
   find_package(Threads REQUIRED)
   find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
+  add_test(
+    NAME gpuxtb.benchmarks.self_test
+    COMMAND ${Python3_EXECUTABLE} -m unittest -v benchmarks.test_run
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+
   if(GPUXTB_MKL_RT_LIBRARY)
     get_filename_component(GPUXTB_MKL_RT_DIRECTORY
       "${GPUXTB_MKL_RT_LIBRARY}" DIRECTORY
