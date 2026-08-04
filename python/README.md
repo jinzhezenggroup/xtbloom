@@ -21,7 +21,6 @@ Optional extras:
 ```console
 pip install ".[ase]"        # ASE calculator
 pip install ".[dpdata]"     # dpdata driver plugin
-pip install ".[cuda]"       # cuda-python for future direct-device arrays
 pip install ".[test]"       # pytest suite dependencies
 ```
 

@@ -41,12 +41,6 @@ dependencies = [
 [project.optional-dependencies]
 ase = ["ase"]
 dpdata = ["dpdata"]
-# CUDA-enabled wheels do not bundle the CUDA runtime; the PyPI nvidia-* packages
-# supply it at runtime (the CUDA *driver* still comes from the system kernel).
-# gpuxtb.library() locates and preloads them on import.
-cuda = [
-  "cuda-python",
-]
 test = [
   "pytest>=7",
   "pytest-cov",
