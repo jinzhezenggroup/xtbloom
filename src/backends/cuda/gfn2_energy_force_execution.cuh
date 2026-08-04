@@ -34,7 +34,7 @@ enum class Gfn2EnergyForceExecutionDeviceError : std::uint32_t {
 };
 
 /*
- * Immutable restricted-GFN2 execution binding. compute_forces distinguishes
+ * Immutable stationary-GFN2 execution binding. compute_forces distinguishes
  * an energy-only plan from an energy+force plan at setup time. Energy-only
  * execution ignores every force-specific nested descriptor.
  */
@@ -166,7 +166,7 @@ static_assert(std::is_trivially_copyable_v<Gfn2EnergyForceExecutionDeviceDiagnos
 static_assert(std::is_standard_layout_v<Gfn2EnergyForceExecutionDeviceDiagnostics>);
 
 /*
- * Execute post-SCC restricted GFN2 energy and optional analytic forces.
+ * Execute post-SCC GFN2 energy and optional analytic forces.
  *
  * The sequence consumes converged SCC outputs and never launches another SCC
  * iteration. Every stage is enqueued on stream and stage success is propagated
@@ -208,8 +208,7 @@ cudaError_t execute_gfn2_energy_force_cuda(
     const Gfn2EnergyForceExecutionDeviceIntermediates& intermediates,
     const Gfn2EnergyForceExecutionDeviceWorkspace& workspace,
     const Gfn2EnergyForceExecutionDeviceDiagnostics& diagnostics,
-    const Gfn2GeometryEpochConsumerDevice& geometry,
-    cudaStream_t stream = nullptr) noexcept;
+    const Gfn2GeometryEpochConsumerDevice& geometry, cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 

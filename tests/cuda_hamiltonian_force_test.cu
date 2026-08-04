@@ -93,7 +93,9 @@ struct HostCase {
   std::vector<std::int64_t> orbital_to_shell;
   std::vector<std::int64_t> orbital_to_atom;
   std::vector<double> density;
+  std::vector<double> spin_density;
   std::vector<double> shell_scalar;
+  std::vector<double> spin_shell_scalar;
   std::vector<double> dipole_potential;
   std::vector<double> quadrupole_potential;
   std::vector<double> overlap_seed;
@@ -134,7 +136,9 @@ bool make_case(HostCase& data, std::string& error) {
   }
   const std::size_t matrices = static_cast<std::size_t>(data.total_matrices);
   data.density.resize(matrices);
+  data.spin_density.resize(matrices);
   data.shell_scalar.resize(static_cast<std::size_t>(data.total_shells));
+  data.spin_shell_scalar.resize(static_cast<std::size_t>(data.total_shells));
   data.dipole_potential.resize(static_cast<std::size_t>(3 * data.total_atoms));
   data.quadrupole_potential.resize(static_cast<std::size_t>(6 * data.total_atoms));
   data.overlap_seed.resize(matrices);
@@ -142,10 +146,12 @@ bool make_case(HostCase& data, std::string& error) {
   data.quadrupole_seed.resize(6u * matrices);
   for (std::size_t index = 0; index < matrices; ++index) {
     data.density[index] = -0.17 + 0.011 * static_cast<double>((index * 13u) % 37u);
+    data.spin_density[index] = 0.12 - 0.009 * static_cast<double>((index * 5u) % 29u);
     data.overlap_seed[index] = 0.019 - 0.002 * static_cast<double>((index * 7u) % 11u);
   }
   for (std::size_t index = 0; index < data.shell_scalar.size(); ++index) {
     data.shell_scalar[index] = -0.23 + 0.037 * static_cast<double>(index % 13u);
+    data.spin_shell_scalar[index] = 0.16 - 0.021 * static_cast<double>(index % 11u);
   }
   for (std::size_t index = 0; index < data.dipole_potential.size(); ++index) {
     data.dipole_potential[index] = 0.09 - 0.014 * static_cast<double>(index % 17u);
@@ -214,6 +220,34 @@ Adjoints reference(const HostCase& data) {
   return result;
 }
 
+Adjoints reference_with_spin(const HostCase& data) {
+  Adjoints result = reference(data);
+  for (std::int64_t system = 0; system < data.batch_size; ++system) {
+    const std::size_t s = static_cast<std::size_t>(system);
+    const std::int64_t orbital_begin = data.batch_orbital_offsets[s];
+    const std::int64_t orbitals = data.batch_orbital_offsets[s + 1u] - orbital_begin;
+    const std::int64_t matrix_begin = data.matrix_offsets[s];
+    for (std::int64_t local_row = 0; local_row < orbitals; ++local_row) {
+      for (std::int64_t local_column = local_row; local_column < orbitals; ++local_column) {
+        const std::int64_t row = orbital_begin + local_row;
+        const std::int64_t column = orbital_begin + local_column;
+        const std::int64_t row_shell = data.orbital_to_shell[static_cast<std::size_t>(row)];
+        const std::int64_t column_shell = data.orbital_to_shell[static_cast<std::size_t>(column)];
+        const std::int64_t forward = matrix_begin + local_row * orbitals + local_column;
+        const std::int64_t reverse = matrix_begin + local_column * orbitals + local_row;
+        const double pair_spin_density =
+            data.spin_density[static_cast<std::size_t>(forward)] +
+            (forward == reverse ? 0.0 : data.spin_density[static_cast<std::size_t>(reverse)]);
+        result.overlap[static_cast<std::size_t>(forward)] +=
+            -0.5 * pair_spin_density *
+            (data.spin_shell_scalar[static_cast<std::size_t>(row_shell)] +
+             data.spin_shell_scalar[static_cast<std::size_t>(column_shell)]);
+      }
+    }
+  }
+  return result;
+}
+
 double stationary_shift_energy(const HostCase& data, const std::vector<double>& overlap,
                                const std::vector<double>& dipole,
                                const std::vector<double>& quadrupole) {
@@ -269,7 +303,8 @@ struct DeviceFixture {
   DeviceBuffer<std::int64_t> atom_offsets, batch_shell_offsets, batch_orbital_offsets;
   DeviceBuffer<std::int64_t> matrix_offsets, atom_shell_offsets, shell_orbital_offsets;
   DeviceBuffer<std::int64_t> shell_to_atom, orbital_to_shell, orbital_to_atom;
-  DeviceBuffer<double> density, shell_scalar, dipole_potential, quadrupole_potential;
+  DeviceBuffer<double> density, spin_density, shell_scalar, spin_shell_scalar, dipole_potential,
+      quadrupole_potential;
   DeviceBuffer<std::uint8_t> requested;
   DeviceBuffer<gpuxtb_status_t> statuses;
   DeviceBuffer<double> overlap, dipole, quadrupole, overlap_scratch, dipole_scratch,
@@ -291,7 +326,9 @@ struct DeviceFixture {
     UPLOAD(orbital_to_shell, host.orbital_to_shell)
     UPLOAD(orbital_to_atom, host.orbital_to_atom)
     UPLOAD(density, host.density)
+    UPLOAD(spin_density, host.spin_density)
     UPLOAD(shell_scalar, host.shell_scalar)
+    UPLOAD(spin_shell_scalar, host.spin_shell_scalar)
     UPLOAD(dipole_potential, host.dipole_potential)
     UPLOAD(quadrupole_potential, host.quadrupole_potential)
 #undef UPLOAD
@@ -355,6 +392,14 @@ struct DeviceFixture {
             6 * h.total_atoms,
             kPlanToken};
   }
+  Gfn2HamiltonianForceDeviceInput spin_input(const HostCase& h) const {
+    Gfn2HamiltonianForceDeviceInput result = input(h);
+    result.spin_density = spin_density.get();
+    result.spin_density_elements = h.total_matrices;
+    result.spin_shell_scalar_potentials = spin_shell_scalar.get();
+    result.spin_shell_scalar_elements = h.total_shells;
+    return result;
+  }
   Gfn2HamiltonianForceDeviceOutput output(const HostCase& h) {
     return {overlap.get(),    h.total_matrices,     dipole.get(), 3 * h.total_matrices,
             quadrupole.get(), 6 * h.total_matrices, kPlanToken};
@@ -381,11 +426,13 @@ struct DeviceFixture {
   }
 };
 
-cudaError_t launch(DeviceFixture& device, const HostCase& host, cudaStream_t stream) {
+cudaError_t launch(DeviceFixture& device, const HostCase& host, cudaStream_t stream,
+                   bool spin = false) {
   cudaError_t status = gpuxtb::detail::cuda::reset_gfn2_hamiltonian_force_device_errors_cuda(
       host.batch_size, device.system_errors.get(), device.device_error.get(), stream);
   return status == cudaSuccess ? gpuxtb::detail::cuda::add_gfn2_hamiltonian_integral_adjoints_cuda(
-                                     device.batch(host), device.activity(host), device.input(host),
+                                     device.batch(host), device.activity(host),
+                                     spin ? device.spin_input(host) : device.input(host),
                                      device.output(host), device.workspace(host),
                                      device.system_errors.get(), device.device_error.get(), stream)
                                : status;
@@ -515,11 +562,55 @@ int test_status_gate_skips_poisoned_peer() {
   return 0;
 }
 
+int test_unrestricted_overlap_response_and_binding_validation() {
+  HostCase host;
+  std::string error;
+  CHECK(make_case(host, error));
+  const Adjoints expected = reference_with_spin(host);
+
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host, stream));
+  const std::vector<std::uint8_t> requested(2u, 1u);
+  const std::vector<gpuxtb_status_t> statuses(2u, GPUXTB_STATUS_SUCCESS);
+  CUDA_CHECK(device.requested.copy_from(requested.data(), requested.size(), stream));
+  CUDA_CHECK(device.statuses.copy_from(statuses.data(), statuses.size(), stream));
+  CUDA_CHECK(device.seed(host, stream));
+  CUDA_CHECK(launch(device, host, stream, true));
+  CHECK(compare_device(device, host, expected, stream) == 0);
+
+  Gfn2HamiltonianForceDeviceInput invalid = device.spin_input(host);
+  invalid.spin_shell_scalar_potentials = nullptr;
+  CHECK(gpuxtb::detail::cuda::add_gfn2_hamiltonian_integral_adjoints_cuda(
+            device.batch(host), device.activity(host), invalid, device.output(host),
+            device.workspace(host), device.system_errors.get(), device.device_error.get(),
+            stream) == cudaErrorInvalidValue);
+  invalid = device.spin_input(host);
+  invalid.spin_density_elements = host.total_matrices - 1;
+  CHECK(gpuxtb::detail::cuda::add_gfn2_hamiltonian_integral_adjoints_cuda(
+            device.batch(host), device.activity(host), invalid, device.output(host),
+            device.workspace(host), device.system_errors.get(), device.device_error.get(),
+            stream) == cudaErrorInvalidValue);
+  invalid = device.spin_input(host);
+  invalid.spin_density = device.overlap.get();
+  CHECK(gpuxtb::detail::cuda::add_gfn2_hamiltonian_integral_adjoints_cuda(
+            device.batch(host), device.activity(host), invalid, device.output(host),
+            device.workspace(host), device.system_errors.get(), device.device_error.get(),
+            stream) == cudaErrorInvalidValue);
+
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
   if (const int status = test_reference_finite_difference_and_graph(); status != 0) {
     return status;
   }
-  return test_status_gate_skips_poisoned_peer();
+  if (const int status = test_status_gate_skips_poisoned_peer(); status != 0) {
+    return status;
+  }
+  return test_unrestricted_overlap_response_and_binding_validation();
 }

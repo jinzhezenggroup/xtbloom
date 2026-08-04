@@ -158,11 +158,10 @@ Actual JSON is written before comparison. The primary manifest tolerances are
 used unchanged. Energy and QM forces are gated for every case; QM/MM goldens
 also gate atomic charges and point-charge forces. `oh_radical` uses the standard
 shared-orbital (`spin_channels=1`) xTB semantics and gates energy, force, and
-atom-resolved charges. CPU spin-polarized (`spin_channels=2`) inference and
-analytic forces are tested separately until an independently generated
-spin-polarized golden is committed. CUDA spin-polarized inference remains
-explicitly skipped until that backend accepts the ABI-v2 suffix. Atomic dipoles
-and quadrupoles are not compared because the current C result ABI has no output
+atom-resolved charges on both backends. Spin-polarized (`spin_channels=2`)
+inference and analytic forces are exercised on CPU and CUDA separately until an
+independently generated spin-polarized golden is committed. Atomic dipoles and
+quadrupoles are not compared because the current C result ABI has no output
 buffers for them.
 
 `--memory-mode device` places every nonempty input and output descriptor in

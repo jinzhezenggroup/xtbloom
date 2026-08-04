@@ -706,11 +706,166 @@ __global__ void publish_gfn2_warm_checkpoint_generation_kernel(
   binding.warm_checkpoint_generations[system] = publish ? epoch : 0u;
 }
 
+/*
+ * Terminal analytic forces consume physical topology-major arrays, whereas
+ * the converged SCC state is system-major and spin-major. This stable binding
+ * projects the committed state once after the SCC loop so every downstream
+ * force primitive can retain its established physical-offset contract.
+ */
+struct StationaryForceProjectionDeviceBinding {
+  std::uint8_t enabled = 0u;
+  std::int64_t batch_size = 0;
+  std::int64_t total_atoms = 0;
+  std::int64_t total_shells = 0;
+  std::int64_t total_matrix_elements = 0;
+  std::int64_t total_spin_atoms = 0;
+  std::int64_t total_spin_shells = 0;
+  std::int64_t total_spin_matrix_elements = 0;
+
+  const std::int64_t* atom_offsets = nullptr;
+  const std::int64_t* shell_offsets = nullptr;
+  const std::int64_t* matrix_offsets = nullptr;
+  const std::int64_t* atom_shell_offsets = nullptr;
+  const std::int32_t* spin_channels = nullptr;
+  const std::int64_t* spin_atom_offsets = nullptr;
+  const std::int64_t* spin_shell_offsets = nullptr;
+  const std::int64_t* spin_matrix_offsets = nullptr;
+  const std::int64_t* spin_coupling_offsets = nullptr;
+  const double* spin_coupling_matrices = nullptr;
+
+  const double* packed_density = nullptr;
+  const double* packed_energy_weighted_density = nullptr;
+  const double* packed_shell_charges = nullptr;
+  const double* packed_atomic_charges = nullptr;
+  const double* packed_atomic_dipoles = nullptr;
+  const double* packed_atomic_quadrupoles = nullptr;
+
+  double* total_density = nullptr;
+  double* total_energy_weighted_density = nullptr;
+  double* spin_density = nullptr;
+  double* shell_charges = nullptr;
+  double* atomic_charges = nullptr;
+  double* atomic_dipoles = nullptr;
+  double* atomic_quadrupoles = nullptr;
+  double* spin_shell_potentials = nullptr;
+};
+
+static_assert(std::is_trivially_copyable_v<StationaryForceProjectionDeviceBinding>);
+
+__global__ void project_gfn2_stationary_force_state_kernel(
+    StationaryForceProjectionDeviceBinding binding) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (system >= binding.batch_size) return;
+
+  const std::int32_t channels = binding.spin_channels[system];
+  const std::int64_t atom_begin = binding.atom_offsets[system];
+  const std::int64_t atom_end = binding.atom_offsets[system + 1];
+  const std::int64_t shell_begin = binding.shell_offsets[system];
+  const std::int64_t shell_end = binding.shell_offsets[system + 1];
+  const std::int64_t matrix_begin = binding.matrix_offsets[system];
+  const std::int64_t matrix_end = binding.matrix_offsets[system + 1];
+  const std::int64_t spin_atom_begin = binding.spin_atom_offsets[system];
+  const std::int64_t spin_shell_begin = binding.spin_shell_offsets[system];
+  const std::int64_t spin_matrix_begin = binding.spin_matrix_offsets[system];
+  const std::int64_t physical_shells = shell_end - shell_begin;
+  const std::int64_t physical_matrices = matrix_end - matrix_begin;
+
+  for (std::int64_t local = threadIdx.x; local < physical_matrices; local += blockDim.x) {
+    const double alpha_density = binding.packed_density[spin_matrix_begin + local];
+    const double alpha_weighted = binding.packed_energy_weighted_density[spin_matrix_begin + local];
+    if (channels == 1) {
+      binding.total_density[matrix_begin + local] = alpha_density;
+      binding.total_energy_weighted_density[matrix_begin + local] = alpha_weighted;
+      binding.spin_density[matrix_begin + local] = 0.0;
+    } else {
+      const double beta_density =
+          binding.packed_density[spin_matrix_begin + physical_matrices + local];
+      const double beta_weighted =
+          binding.packed_energy_weighted_density[spin_matrix_begin + physical_matrices + local];
+      binding.total_density[matrix_begin + local] = alpha_density + beta_density;
+      binding.total_energy_weighted_density[matrix_begin + local] = alpha_weighted + beta_weighted;
+      binding.spin_density[matrix_begin + local] = alpha_density - beta_density;
+    }
+  }
+
+  for (std::int64_t shell = shell_begin + threadIdx.x; shell < shell_end; shell += blockDim.x) {
+    const std::int64_t local = shell - shell_begin;
+    binding.shell_charges[shell] = binding.packed_shell_charges[spin_shell_begin + local];
+    if (channels == 1) binding.spin_shell_potentials[shell] = 0.0;
+  }
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    const std::int64_t local_atom = atom - atom_begin;
+    const std::int64_t spin_atom = spin_atom_begin + local_atom;
+    binding.atomic_charges[atom] = binding.packed_atomic_charges[spin_atom];
+    for (std::int64_t component = 0; component < 3; ++component) {
+      binding.atomic_dipoles[atom * 3 + component] =
+          binding.packed_atomic_dipoles[spin_atom * 3 + component];
+    }
+    for (std::int64_t component = 0; component < 6; ++component) {
+      binding.atomic_quadrupoles[atom * 6 + component] =
+          binding.packed_atomic_quadrupoles[spin_atom * 6 + component];
+    }
+  }
+
+  if (channels == 2) {
+    /* v_mag = W*m uses the committed raw magnetization shell population.
+     * Coupling rows are atom-local and retain the CPU column accumulation
+     * order, avoiding a different roundoff path in force parity checks. */
+    for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+      const std::int64_t atom_shell_begin = binding.atom_shell_offsets[atom];
+      const std::int64_t atom_shell_end = binding.atom_shell_offsets[atom + 1];
+      const std::int64_t atom_shells = atom_shell_end - atom_shell_begin;
+      const std::int64_t coupling_begin = binding.spin_coupling_offsets[atom];
+      for (std::int64_t shell = atom_shell_begin + threadIdx.x; shell < atom_shell_end;
+           shell += blockDim.x) {
+        const std::int64_t row = shell - atom_shell_begin;
+        double potential = 0.0;
+        for (std::int64_t column = 0; column < atom_shells; ++column) {
+          const std::int64_t magnetization_shell =
+              spin_shell_begin + physical_shells + atom_shell_begin - shell_begin + column;
+          potential += binding.spin_coupling_matrices[coupling_begin + row * atom_shells + column] *
+                       binding.packed_shell_charges[magnetization_shell];
+        }
+        binding.spin_shell_potentials[shell] = potential;
+      }
+    }
+  }
+}
+
+cudaError_t project_gfn2_stationary_force_state_cuda(
+    const StationaryForceProjectionDeviceBinding& binding, cudaStream_t stream) noexcept {
+  if (binding.enabled == 0u) return cudaSuccess;
+  if (binding.enabled != 1u || binding.batch_size <= 0 || binding.total_atoms <= 0 ||
+      binding.total_shells <= 0 || binding.total_matrix_elements <= 0 ||
+      binding.total_spin_atoms < binding.total_atoms ||
+      binding.total_spin_shells < binding.total_shells ||
+      binding.total_spin_matrix_elements < binding.total_matrix_elements ||
+      binding.atom_offsets == nullptr || binding.shell_offsets == nullptr ||
+      binding.matrix_offsets == nullptr || binding.atom_shell_offsets == nullptr ||
+      binding.spin_channels == nullptr || binding.spin_atom_offsets == nullptr ||
+      binding.spin_shell_offsets == nullptr || binding.spin_matrix_offsets == nullptr ||
+      binding.spin_coupling_offsets == nullptr || binding.spin_coupling_matrices == nullptr ||
+      binding.packed_density == nullptr || binding.packed_energy_weighted_density == nullptr ||
+      binding.packed_shell_charges == nullptr || binding.packed_atomic_charges == nullptr ||
+      binding.packed_atomic_dipoles == nullptr || binding.packed_atomic_quadrupoles == nullptr ||
+      binding.total_density == nullptr || binding.total_energy_weighted_density == nullptr ||
+      binding.spin_density == nullptr || binding.shell_charges == nullptr ||
+      binding.atomic_charges == nullptr || binding.atomic_dipoles == nullptr ||
+      binding.atomic_quadrupoles == nullptr || binding.spin_shell_potentials == nullptr ||
+      binding.batch_size > static_cast<std::int64_t>(std::numeric_limits<unsigned int>::max())) {
+    return cudaErrorInvalidValue;
+  }
+  project_gfn2_stationary_force_state_kernel<<<static_cast<unsigned int>(binding.batch_size), 256,
+                                               0, stream>>>(binding);
+  return cudaPeekAtLastError();
+}
+
 struct TopologyKey {
   std::vector<std::int64_t> atom_offsets;
   std::vector<std::int32_t> atomic_numbers;
   std::vector<double> molecular_charges;
   std::vector<std::int32_t> unpaired_electrons;
+  std::vector<std::int32_t> spin_channels;
   std::vector<std::int64_t> point_offsets;
   std::vector<std::int64_t> response_offsets;
   std::uint32_t flags = 0u;
@@ -737,6 +892,7 @@ struct TopologyKey {
     append_vector(atomic_numbers);
     append_vector(molecular_charges);
     append_vector(unpaired_electrons);
+    append_vector(spin_channels);
     append_vector(point_offsets);
     append_vector(response_offsets);
     hash_append(hash, flags);
@@ -776,6 +932,19 @@ bool double_buffer_equals(const gpuxtb_const_buffer_t& buffer,
     if (value != expected[index]) return false;
   }
   return true;
+}
+
+bool spin_channel_buffer_equals(const gpuxtb_batch_t& batch,
+                                const std::vector<std::int32_t>& expected) noexcept {
+  /* ABI-v1 and an empty ABI-v2 suffix both mean one restricted channel. */
+  const bool supplied =
+      batch.struct_size >= GPUXTB_BATCH_V2_SIZE &&
+      (batch.spin_channels.data != nullptr || batch.spin_channels.size_bytes != 0u);
+  if (!supplied) {
+    return std::all_of(expected.begin(), expected.end(),
+                       [](std::int32_t channels) { return channels == 1; });
+  }
+  return buffer_equals(batch.spin_channels, expected);
 }
 
 bool finite_double_buffer(const gpuxtb_const_buffer_t& buffer, std::int64_t elements,
@@ -823,7 +992,8 @@ TopologyMatch match_existing_topology(const gpuxtb_batch_t& batch,
   if (!buffer_equals(batch.atom_offsets, key.atom_offsets) ||
       !buffer_equals(batch.atomic_numbers, key.atomic_numbers) ||
       !double_buffer_equals(batch.molecular_charges, key.molecular_charges) ||
-      !buffer_equals(batch.unpaired_electrons, key.unpaired_electrons)) {
+      !buffer_equals(batch.unpaired_electrons, key.unpaired_electrons) ||
+      !spin_channel_buffer_equals(batch, key.spin_channels)) {
     /* Distinguish a short/wrong-space descriptor from a legitimate topology
      * change so invalid reuse attempts cannot enter candidate construction. */
     std::size_t atom_offset_bytes = 0u;
@@ -839,6 +1009,13 @@ TopologyMatch match_existing_topology(const gpuxtb_batch_t& batch,
         !valid_host_extent(batch.molecular_charges, batch_double_bytes) ||
         !valid_host_extent(batch.unpaired_electrons, batch_integer_bytes)) {
       error = "fixed-topology reuse received a malformed host topology descriptor";
+      return TopologyMatch::kInvalid;
+    }
+    const bool spin_supplied =
+        batch.struct_size >= GPUXTB_BATCH_V2_SIZE &&
+        (batch.spin_channels.data != nullptr || batch.spin_channels.size_bytes != 0u);
+    if (spin_supplied && !valid_host_extent(batch.spin_channels, batch_integer_bytes)) {
+      error = "fixed-topology reuse received malformed host spin_channels";
       return TopologyMatch::kInvalid;
     }
     return TopologyMatch::kMismatch;
@@ -926,7 +1103,7 @@ gpuxtb_status_t make_topology_key(const gpuxtb_batch_t& batch,
       options.charge_tolerance <= 0.0 || !std::isfinite(options.energy_tolerance) ||
       options.energy_tolerance <= 0.0 || !std::isfinite(options.electronic_temperature) ||
       options.electronic_temperature < 0.0) {
-    error = "invalid restricted GFN2 CUDA setup dimensions or compute policy";
+    error = "invalid GFN2 CUDA setup dimensions or compute policy";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
 
@@ -947,6 +1124,16 @@ gpuxtb_status_t make_topology_key(const gpuxtb_batch_t& batch,
   status = copy_host_buffer("unpaired_electrons", batch.unpaired_electrons, batch.batch_size,
                             key.unpaired_electrons, error);
   if (status != GPUXTB_STATUS_SUCCESS) return status;
+  const bool spin_channels_present =
+      batch.struct_size >= GPUXTB_BATCH_V2_SIZE &&
+      (batch.spin_channels.data != nullptr || batch.spin_channels.size_bytes != 0u);
+  if (spin_channels_present) {
+    status = copy_host_buffer("spin_channels", batch.spin_channels, batch.batch_size,
+                              key.spin_channels, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+  } else {
+    key.spin_channels.assign(static_cast<std::size_t>(batch.batch_size), 1);
+  }
 
   for (std::int64_t atom = 0; atom < batch.total_atoms; ++atom) {
     const std::int32_t atomic_number = key.atomic_numbers[static_cast<std::size_t>(atom)];
@@ -960,9 +1147,10 @@ gpuxtb_status_t make_topology_key(const gpuxtb_batch_t& batch,
       error = "molecular_charges contains a nonfinite value";
       return GPUXTB_STATUS_INVALID_ARGUMENT;
     }
-    if (key.unpaired_electrons[static_cast<std::size_t>(system)] != 0) {
-      error = "restricted CUDA GFN2 currently requires zero unpaired electrons";
-      return GPUXTB_STATUS_NOT_SUPPORTED;
+    const std::int32_t channels = key.spin_channels[static_cast<std::size_t>(system)];
+    if (channels != 1 && channels != 2) {
+      error = "spin_channels values must be one or two";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
     }
   }
   for (const double coordinate : positions) {
@@ -1090,6 +1278,7 @@ gpuxtb_status_t make_topology_only_seed(
       snapshot.atomic_numbers.size() != static_cast<std::size_t>(snapshot.total_atoms) ||
       snapshot.molecular_charges.size() != static_cast<std::size_t>(snapshot.batch_size) ||
       snapshot.unpaired_electrons.size() != static_cast<std::size_t>(snapshot.batch_size) ||
+      snapshot.spin_channels.size() != static_cast<std::size_t>(snapshot.batch_size) ||
       snapshot.point_charge_offsets.size() != static_cast<std::size_t>(snapshot.batch_size + 1) ||
       snapshot.charge_response_offsets.size() !=
           static_cast<std::size_t>(snapshot.batch_size + 1)) {
@@ -1101,6 +1290,7 @@ gpuxtb_status_t make_topology_only_seed(
   key.atomic_numbers = snapshot.atomic_numbers;
   key.molecular_charges = snapshot.molecular_charges;
   key.unpaired_electrons = snapshot.unpaired_electrons;
+  key.spin_channels = snapshot.spin_channels;
   key.point_offsets = snapshot.point_charge_offsets;
   key.response_offsets = snapshot.charge_response_offsets;
   key.flags = options.flags;
@@ -1148,6 +1338,7 @@ bool topology_snapshot_matches(const Gfn2CudaTopologyHostSnapshot& snapshot,
          snapshot.atomic_numbers == key.atomic_numbers &&
          snapshot.molecular_charges == key.molecular_charges &&
          snapshot.unpaired_electrons == key.unpaired_electrons &&
+         snapshot.spin_channels == key.spin_channels &&
          snapshot.point_charge_offsets == key.point_offsets &&
          snapshot.charge_response_offsets == key.response_offsets &&
          snapshot.periodic_enabled == key.periodic_enabled && options.flags == key.flags &&
@@ -1248,8 +1439,6 @@ struct HostPlans {
     const std::int64_t batch = static_cast<std::int64_t>(key.molecular_charges.size());
     const std::int64_t atoms = static_cast<std::int64_t>(key.atomic_numbers.size());
     const std::int64_t points = static_cast<std::int64_t>(point_values.size());
-    std::vector<std::int32_t> spin_channels(static_cast<std::size_t>(batch), 1);
-
     gpuxtb_status_t status = make_basis_plan(batch, atoms, key.atom_offsets.data(),
                                              key.atomic_numbers.data(), basis, error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
@@ -1265,7 +1454,7 @@ struct HostPlans {
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = make_wavefunction_layout(basis, key.atomic_numbers.data(),
                                       key.molecular_charges.data(), key.unpaired_electrons.data(),
-                                      spin_channels.data(), wavefunction_layout, error);
+                                      key.spin_channels.data(), wavefunction_layout, error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = make_es2_plan(basis, key.atomic_numbers.data(), es2, error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
@@ -1627,6 +1816,7 @@ struct Gfn2CudaExecutionCache::Impl {
     Gfn2EnergyForceExecutionDeviceIntermediates intermediates{};
     Gfn2EnergyForceExecutionDeviceWorkspace workspace{};
     Gfn2EnergyForceExecutionDeviceDiagnostics diagnostics{};
+    StationaryForceProjectionDeviceBinding stationary_projection{};
   };
 
   struct Prepared {
@@ -2694,6 +2884,14 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t public_point_force = 0u;
       std::size_t staged_qm_force = 0u;
       std::size_t staged_point_force = 0u;
+      std::size_t stationary_density = 0u;
+      std::size_t stationary_weighted_density = 0u;
+      std::size_t stationary_spin_density = 0u;
+      std::size_t stationary_shell_charges = 0u;
+      std::size_t stationary_atomic_charges = 0u;
+      std::size_t stationary_atomic_dipoles = 0u;
+      std::size_t stationary_atomic_quadrupoles = 0u;
+      std::size_t stationary_spin_shell_potential = 0u;
       std::size_t post_complete_shell = 0u;
       std::size_t post_complete_atom = 0u;
       std::size_t post_complete_dipole = 0u;
@@ -2781,6 +2979,15 @@ struct Gfn2CudaExecutionCache::Impl {
       execution.public_point_force = execution_layout.append<double>(point_coordinates);
       execution.staged_qm_force = execution_layout.append<double>(coordinates);
       execution.staged_point_force = execution_layout.append<double>(point_coordinates);
+      execution.stationary_density = execution_layout.append<double>(matrices);
+      execution.stationary_weighted_density = execution_layout.append<double>(matrices);
+      execution.stationary_spin_density = execution_layout.append<double>(matrices);
+      execution.stationary_shell_charges = execution_layout.append<double>(shells);
+      execution.stationary_atomic_charges = execution_layout.append<double>(atoms);
+      execution.stationary_atomic_dipoles = execution_layout.append<double>(coordinates);
+      execution.stationary_atomic_quadrupoles =
+          execution_layout.append<double>(quadrupole_elements);
+      execution.stationary_spin_shell_potential = execution_layout.append<double>(shells);
       execution.post_complete_shell = execution_layout.append<double>(shells);
       execution.post_complete_atom = execution_layout.append<double>(atoms);
       execution.post_complete_dipole = execution_layout.append<double>(coordinates);
@@ -3111,19 +3318,84 @@ struct Gfn2CudaExecutionCache::Impl {
                                               composition_components,
                                               token};
 
-      const auto& raw = candidate.state_seed.raw_population;
+      /* Project the committed spin-major state into stable physical arrays.
+       * Every terminal force descriptor below consumes these buffers, never
+       * SCC iteration scratch or the alpha channel by itself. */
+      auto* const stationary_density =
+          arena_pointer<double>(execution_arena, execution.stationary_density);
+      auto* const stationary_weighted_density =
+          arena_pointer<double>(execution_arena, execution.stationary_weighted_density);
+      auto* const stationary_spin_density =
+          arena_pointer<double>(execution_arena, execution.stationary_spin_density);
+      auto* const stationary_shell_charges =
+          arena_pointer<double>(execution_arena, execution.stationary_shell_charges);
+      auto* const stationary_atomic_charges =
+          arena_pointer<double>(execution_arena, execution.stationary_atomic_charges);
+      auto* const stationary_atomic_dipoles =
+          arena_pointer<double>(execution_arena, execution.stationary_atomic_dipoles);
+      auto* const stationary_atomic_quadrupoles =
+          arena_pointer<double>(execution_arena, execution.stationary_atomic_quadrupoles);
+      auto* const stationary_spin_shell_potential =
+          arena_pointer<double>(execution_arena, execution.stationary_spin_shell_potential);
+      const Gfn2SccPotentialDeviceTopologyMultipoles physical{stationary_shell_charges,
+                                                              shells,
+                                                              stationary_atomic_charges,
+                                                              atoms,
+                                                              stationary_atomic_dipoles,
+                                                              coordinates,
+                                                              stationary_atomic_quadrupoles,
+                                                              quadrupole_elements,
+                                                              token};
+
+      auto& projection = binding.stationary_projection;
+      projection = {};
+      projection.enabled = 1u;
+      projection.batch_size = batch;
+      projection.total_atoms = atoms;
+      projection.total_shells = shells;
+      projection.total_matrix_elements = matrices;
+      projection.total_spin_atoms = candidate.device_wavefunction.total_spin_atoms;
+      projection.total_spin_shells = candidate.device_wavefunction.total_spin_shells;
+      projection.total_spin_matrix_elements =
+          candidate.device_wavefunction.total_spin_matrix_elements;
+      projection.atom_offsets = candidate.device_topology.atom_offsets;
+      projection.shell_offsets = candidate.device_topology.batch_shell_offsets;
+      projection.matrix_offsets = candidate.device_topology.matrix_offsets;
+      projection.atom_shell_offsets = candidate.device_topology.atom_shell_offsets;
+      projection.spin_channels = candidate.device_wavefunction.spin_channels;
+      projection.spin_atom_offsets = candidate.device_wavefunction.spin_atom_offsets;
+      projection.spin_shell_offsets = candidate.device_wavefunction.spin_shell_offsets;
+      projection.spin_matrix_offsets = candidate.device_wavefunction.spin_matrix_offsets;
+      projection.spin_coupling_offsets = candidate.plan_seed.spin_batch.coupling_offsets;
+      projection.spin_coupling_matrices = candidate.plan_seed.spin_batch.coupling_matrices;
+      projection.packed_density = candidate.state_seed.density.density;
+      projection.packed_energy_weighted_density =
+          candidate.state_seed.density.energy_weighted_density;
+      projection.packed_shell_charges = candidate.state_seed.raw_population.qsh;
+      projection.packed_atomic_charges = candidate.state_seed.raw_population.qat;
+      projection.packed_atomic_dipoles = candidate.state_seed.raw_population.dipole;
+      projection.packed_atomic_quadrupoles = candidate.state_seed.raw_population.quadrupole;
+      projection.total_density = stationary_density;
+      projection.total_energy_weighted_density = stationary_weighted_density;
+      projection.spin_density = stationary_spin_density;
+      projection.shell_charges = stationary_shell_charges;
+      projection.atomic_charges = stationary_atomic_charges;
+      projection.atomic_dipoles = stationary_atomic_dipoles;
+      projection.atomic_quadrupoles = stationary_atomic_quadrupoles;
+      projection.spin_shell_potentials = stationary_spin_shell_potential;
+
       binding.input.force_activity = {mask(kRequestedMask),
                                       candidate.state_seed.scc.system_statuses, batch, token};
       binding.input.post_scc_potential = {
           {mask(kRequestedMask), candidate.state_seed.scc.system_statuses, batch, token},
-          raw.qsh,
-          raw.qsh_elements,
-          raw.qat,
-          raw.qat_elements,
-          raw.dipole,
-          raw.dipole_elements,
-          raw.quadrupole,
-          raw.quadrupole_elements,
+          physical.shell_charges,
+          physical.shell_elements,
+          physical.atomic_charges,
+          physical.atom_elements,
+          physical.atomic_dipoles,
+          physical.dipole_elements,
+          physical.atomic_quadrupoles,
+          physical.quadrupole_elements,
           token};
       binding.input.h0 = {positions,
                           coordinates,
@@ -3131,9 +3403,9 @@ struct Gfn2CudaExecutionCache::Impl {
                           atoms,
                           candidate.input_seed.hamiltonian.overlap,
                           matrices,
-                          candidate.state_seed.density.density,
+                          stationary_density,
                           matrices,
-                          candidate.state_seed.density.energy_weighted_density,
+                          stationary_weighted_density,
                           matrices,
                           token};
 
@@ -3147,7 +3419,7 @@ struct Gfn2CudaExecutionCache::Impl {
           arena_pointer<double>(execution_arena, execution.post_complete_quadrupole);
       auto* const post_shell_scalar =
           arena_pointer<double>(execution_arena, execution.post_shell_scalar);
-      binding.input.hamiltonian = {candidate.state_seed.density.density,
+      binding.input.hamiltonian = {stationary_density,
                                    matrices,
                                    post_shell_scalar,
                                    shells,
@@ -3156,20 +3428,24 @@ struct Gfn2CudaExecutionCache::Impl {
                                    post_complete_quadrupole,
                                    quadrupole_elements,
                                    token};
+      binding.input.hamiltonian.spin_density = stationary_spin_density;
+      binding.input.hamiltonian.spin_density_elements = matrices;
+      binding.input.hamiltonian.spin_shell_scalar_potentials = stationary_spin_shell_potential;
+      binding.input.hamiltonian.spin_shell_scalar_elements = shells;
       binding.input.classical = {positions,
                                  coordinates,
                                  candidate.plan_seed.geometry_cache.coordination_numbers,
                                  atoms,
-                                 raw.qsh,
-                                 raw.qsh_elements,
-                                 raw.qat,
-                                 raw.qat_elements,
-                                 raw.dipole,
-                                 raw.dipole_elements,
-                                 raw.quadrupole,
-                                 raw.quadrupole_elements,
+                                 physical.shell_charges,
+                                 physical.shell_elements,
+                                 physical.atomic_charges,
+                                 physical.atom_elements,
+                                 physical.atomic_dipoles,
+                                 physical.dipole_elements,
+                                 physical.atomic_quadrupoles,
+                                 physical.quadrupole_elements,
                                  token};
-      binding.input.external_shell_charges = raw.qsh;
+      binding.input.external_shell_charges = physical.shell_charges;
       binding.input.external_shell_elements = explicit_points ? shells : 0;
 
       auto* const public_qm_force =
@@ -3534,6 +3810,11 @@ struct Gfn2CudaExecutionCache::Impl {
       error = cuda_error_message("CUDA energy/force smoke initialization", cuda_status);
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
+    cuda_status = project_gfn2_stationary_force_state_cuda(binding.stationary_projection, stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA stationary force projection smoke", cuda_status);
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
     cuda_status = execute_gfn2_energy_force_cuda(binding.plan, binding.input, binding.results,
                                                  binding.intermediates, binding.workspace,
                                                  binding.diagnostics, stream);
@@ -3785,7 +4066,10 @@ struct Gfn2CudaExecutionCache::Impl {
         energy_requested ? batch : 0,
         input_if_requested(candidate.energy_force.results.forces.qm_forces, force_requested),
         force_requested ? coordinates : 0,
-        input_if_requested(candidate.state_seed.raw_population.qat, charges_requested),
+        input_if_requested(candidate.energy_force.stationary_projection.enabled == 1u
+                               ? candidate.energy_force.stationary_projection.atomic_charges
+                               : candidate.workspace_seed.physical_topology.atomic_charges,
+                           charges_requested),
         charges_requested ? atoms : 0,
         input_if_requested(candidate.energy_force.results.forces.point_forces,
                            point_forces_requested),
@@ -4254,10 +4538,15 @@ struct Gfn2CudaExecutionCache::Impl {
     candidate->plan_seed.overlap_cache = candidate->eigensolver_binding.cache;
     candidate->plan_seed.eigensolver_options = candidate->eigensolver_binding.options;
 
+    Gfn2SccIterationHostInitialization initialization = candidate->host.initialization();
+    /* Mixed-spin fresh checkpoints must carry the same setup-sealed host
+     * layout that produced the device plan; physical offsets alone cannot
+     * reconstruct per-system spin-major extents. */
+    initialization.wavefunction_layout = candidate->topology_owner.host_wavefunction_layout();
     auto initialization_diagnostic = Gfn2SccIterationInitializer::create(
         candidate->plan_seed, candidate->iteration_requirements, candidate->iteration_arena.get(),
         candidate->iteration_arena.bytes(), candidate->state_seed, candidate->workspace_seed,
-        candidate->report_storage, candidate->host.initialization(), candidate->initializer);
+        candidate->report_storage, initialization, candidate->initializer);
     if (!initialization_diagnostic.success()) {
       error =
           setup_error_message("CUDA SCC initializer construction", initialization_diagnostic.status,
@@ -4932,6 +5221,14 @@ struct Gfn2CudaExecutionCache::Impl {
         inference.terminal_workspace, inference.terminal_diagnostics, stream);
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("CUDA terminal classical energy", cuda_status);
+      return cuda_status == cudaErrorInvalidValue ? GPUXTB_STATUS_INVALID_ARGUMENT
+                                                  : GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
+    cuda_status = project_gfn2_stationary_force_state_cuda(
+        current.energy_force.stationary_projection, stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA stationary force projection", cuda_status);
       return cuda_status == cudaErrorInvalidValue ? GPUXTB_STATUS_INVALID_ARGUMENT
                                                   : GPUXTB_STATUS_INTERNAL_ERROR;
     }

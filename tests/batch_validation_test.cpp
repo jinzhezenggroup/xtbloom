@@ -22,6 +22,7 @@ using gpuxtb::detail::kChargeResponseOffsetsNeedStaging;
 using gpuxtb::detail::kChargeResponseShapeNeedsStaging;
 using gpuxtb::detail::kMolecularChargesNeedStaging;
 using gpuxtb::detail::kPointChargeOffsetsNeedStaging;
+using gpuxtb::detail::kSpinChannelsNeedStaging;
 using gpuxtb::detail::kTopologyMetadataStagingMask;
 using gpuxtb::detail::kUnpairedElectronsNeedStaging;
 using gpuxtb::detail::validate_compute_descriptor_structure;
@@ -253,6 +254,7 @@ bool test_device_and_mixed_topology_pending_sets() {
   Fixture device_fixture;
   device_fixture.enable_point_charges();
   device_fixture.enable_response();
+  device_fixture.enable_spin_channels();
 
   /* Distinct opaque addresses exercise every topology staging category. */
   device_fixture.batch.atom_offsets = {reinterpret_cast<const void*>(std::uintptr_t{0x10000u}),
@@ -267,6 +269,9 @@ bool test_device_and_mixed_topology_pending_sets() {
   device_fixture.batch.unpaired_electrons = {
       reinterpret_cast<const void*>(std::uintptr_t{0x40000u}),
       device_fixture.batch.unpaired_electrons.size_bytes, GPUXTB_MEMORY_CUDA_DEVICE, 0};
+  device_fixture.batch.spin_channels = {reinterpret_cast<const void*>(std::uintptr_t{0x48000u}),
+                                        device_fixture.batch.spin_channels.size_bytes,
+                                        GPUXTB_MEMORY_CUDA_DEVICE, 0};
   device_fixture.batch.point_charge_offsets = {
       reinterpret_cast<const void*>(std::uintptr_t{0x50000u}),
       device_fixture.batch.point_charge_offsets.size_bytes, GPUXTB_MEMORY_CUDA_DEVICE, 0};
@@ -474,9 +479,9 @@ bool test_buffer_descriptors_and_sizes() {
 bool test_spin_channel_abi_v2() {
   Fixture legacy;
   legacy.batch.struct_size = GPUXTB_BATCH_V1_SIZE;
-  legacy.batch.spin_channels = {
-      reinterpret_cast<const void*>(std::uintptr_t{0x10000u}),
-      std::numeric_limits<std::size_t>::max(), static_cast<gpuxtb_memory_space_t>(99), 1};
+  legacy.batch.spin_channels = {reinterpret_cast<const void*>(std::uintptr_t{0x10000u}),
+                                std::numeric_limits<std::size_t>::max(),
+                                static_cast<gpuxtb_memory_space_t>(99), 1};
   /* ABI-v1 callers do not expose the suffix, so its out-of-range bytes stay unread. */
   CHECK(validate_compute_descriptors(GPUXTB_BACKEND_CPU, &legacy.batch, &legacy.options,
                                      &legacy.result)
@@ -485,17 +490,20 @@ bool test_spin_channel_abi_v2() {
   Fixture valid;
   valid.enable_spin_channels();
   CHECK(valid.batch.struct_size == GPUXTB_BATCH_V2_SIZE);
-  CHECK(validate_compute_descriptors(GPUXTB_BACKEND_CPU, &valid.batch, &valid.options,
-                                     &valid.result)
-            .ok());
+  CHECK(
+      validate_compute_descriptors(GPUXTB_BACKEND_CPU, &valid.batch, &valid.options, &valid.result)
+          .ok());
   valid.batch.spin_channels.size_bytes += 64;
-  CHECK(validate_compute_descriptors(GPUXTB_BACKEND_CPU, &valid.batch, &valid.options,
-                                     &valid.result)
-            .ok());
+  CHECK(
+      validate_compute_descriptors(GPUXTB_BACKEND_CPU, &valid.batch, &valid.options, &valid.result)
+          .ok());
   valid.batch.spin_channels.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
   const DescriptorValidationResult staged_spin = validate_host_topology_semantics(valid.batch);
-  CHECK(staged_spin.status == GPUXTB_STATUS_NOT_SUPPORTED);
-  CHECK(staged_spin.error == "device-resident spin_channels are not implemented yet");
+  CHECK(staged_spin.ok());
+  CHECK(staged_spin.pending_offset_checks == kSpinChannelsNeedStaging);
+  CHECK(
+      validate_compute_descriptors(GPUXTB_BACKEND_CUDA, &valid.batch, &valid.options, &valid.result)
+          .ok());
 
   const std::vector<InvalidCase> cases = {
       {"spin channel undersize",
@@ -516,9 +524,6 @@ bool test_spin_channel_abi_v2() {
          f.batch.spin_channels.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
        },
        "context backend is CPU"},
-      {"CUDA rejects unrestricted descriptor suffix",
-       [](Fixture& f) { f.enable_spin_channels(); }, "CUDA unrestricted spin channels",
-       GPUXTB_STATUS_NOT_SUPPORTED, GPUXTB_BACKEND_CUDA},
       {"zero spin channels", [](Fixture& f) { f.enable_spin_channels({1, 0}); }, "one or two"},
       {"three spin channels", [](Fixture& f) { f.enable_spin_channels({3, 1}); }, "one or two"},
       {"spin channels alias output",

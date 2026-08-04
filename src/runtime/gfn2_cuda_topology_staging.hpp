@@ -48,6 +48,7 @@ enum class Gfn2CudaTopologyStagingField : std::uint32_t {
   kChargeResponseOffsets = 8u,
   kArena = 9u,
   kEvent = 10u,
+  kSpinChannels = 11u,
 };
 
 /* CUDA-free diagnostic. cuda_status stores the numeric cudaError_t value. */
@@ -77,6 +78,7 @@ struct Gfn2CudaTopologyHostSnapshot {
   std::vector<std::int32_t> atomic_numbers;
   std::vector<double> molecular_charges;
   std::vector<std::int32_t> unpaired_electrons;
+  std::vector<std::int32_t> spin_channels;
   std::vector<std::int64_t> point_charge_offsets;
   std::vector<std::int64_t> charge_response_offsets;
 };
@@ -89,6 +91,7 @@ struct Gfn2CudaTopologyDeviceKeyIdentity {
   std::uintptr_t atomic_numbers = 0u;
   std::uintptr_t molecular_charges = 0u;
   std::uintptr_t unpaired_electrons = 0u;
+  std::uintptr_t spin_channels = 0u;
   std::uintptr_t point_charge_offsets = 0u;
   std::uintptr_t charge_response_offsets = 0u;
 };
@@ -145,8 +148,7 @@ class Gfn2CudaTopologyStaging {
    * committed owner.  The enclosing runtime can then validate its result
    * bridge before reaching the no-fail publication point.
    */
-  [[nodiscard]] Gfn2CudaTopologyStagingDiagnostic prepare_candidate_commit(
-      std::string& error);
+  [[nodiscard]] Gfn2CudaTopologyStagingDiagnostic prepare_candidate_commit(std::string& error);
 
   /* True only while the no-fail ownership publication invariant is sealed. */
   [[nodiscard]] bool candidate_publishable() const noexcept;

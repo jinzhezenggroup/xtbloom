@@ -15,6 +15,9 @@ pip install .
 This builds `libgpuxtb` from the repository CMake project and bundles it inside
 the wheel under `gpuxtb/lib`. Requires Python >= 3.10, a C++17 compiler, a
 working BLAS/MKL runtime (the CPU eigensolver dlopens `libmkl_rt`), and `numpy`.
+If `GPUXTB_LIBRARY` overrides the bundled native library, keep it version-matched
+with the Python package; older libraries may not implement newer optional ABI
+suffixes such as unrestricted `spin_channels`.
 
 Optional extras:
 
@@ -74,8 +77,8 @@ them through cibuildwheel's own test feature:
   that cannot perform inference.
 
 The public Python interface always uses host buffers on both backends; CUDA
-device-resident memory is a future extension. The current CUDA backend is
-restricted closed-shell only (see the C API documentation).
+device-resident memory is a future extension. CUDA supports the same restricted
+and unrestricted GFN2 spin descriptors as the CPU backend.
 
 ## Usage
 
@@ -109,10 +112,10 @@ calc = Calculator("GFN2-xTB", numbers, positions, charge=-1, multiplicity=2)
 
 * `charge` maps to the C ABI `molecular_charges`.
 * `multiplicity` (or `uhf = multiplicity - 1`) maps to `unpaired_electrons`.
-* `spin_channels` selects restricted (1) or unrestricted (2) orbitals; the
-  CPU backend defaults to unrestricted for open-shell systems. While the public
-  CUDA path remains restricted-only, ``backend="auto"`` routes open-shell or
-  unrestricted structures to CPU instead of failing only on GPU-equipped hosts.
+* `spin_channels` selects restricted (1) or unrestricted (2) orbitals. The
+  high-level Python interface defaults open-shell systems to unrestricted and
+  explicitly submits that choice to either backend; a missing C ABI suffix
+  itself remains the restricted compatibility default.
 
 ### Batched (native)
 

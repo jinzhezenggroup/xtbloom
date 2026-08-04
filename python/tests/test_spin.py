@@ -7,7 +7,6 @@ import numpy as np
 import pytest
 from gpuxtb import Calculator, Context, Structure, library, numbers_to_symbols
 from gpuxtb.exceptions import (
-    GPUxtbNotSupportedError,
     GPUxtbRuntimeError,
     GPUxtbValueError,
 )
@@ -64,13 +63,11 @@ def _library_has_cuda() -> bool:
         return False
 
 
-def test_cuda_open_shell_scope_is_rejected():
-    """Open-shell systems must never reach a CUDA node.
-
-    With a CUDA-capable library this is a scope error; otherwise the explicit
-    CUDA backend is unavailable, which is also a clean failure.
-    """
-    has_cuda = _library_has_cuda()
+@pytest.mark.cuda
+def test_cuda_unrestricted_open_shell_is_supported():
+    """The public Python CUDA path accepts ABI-v2 unrestricted radicals."""
+    if not _library_has_cuda():
+        pytest.skip("CUDA backend is not available on this host")
     case = _cases.case_by_id("oh_radical")
     numbers, positions, charge, uhf, _ = _cases.structure_inputs(case)
     calc = Calculator(
@@ -82,12 +79,27 @@ def test_cuda_open_shell_scope_is_rejected():
         spin_channels=2,
         backend="cuda",
     )
-    with pytest.raises(GPUxtbNotSupportedError if has_cuda else GPUxtbRuntimeError):
-        calc.singlepoint()
+    result = calc.singlepoint()
+    assert calc.backend == library.BACKEND_CUDA
+    assert np.isfinite(result.energy)
+    assert np.all(np.isfinite(result.forces))
+    assert np.all(np.isfinite(result.charges))
+
+    step = 1.0e-4
+    analytic_force = result.forces[1, 2]
+    displaced = np.array(positions, copy=True)
+    displaced[1, 2] += step
+    calc.update(positions=displaced)
+    energy_plus = calc.singlepoint().energy
+    displaced[1, 2] -= 2.0 * step
+    calc.update(positions=displaced)
+    energy_minus = calc.singlepoint().energy
+    finite_difference = -(energy_plus - energy_minus) / (2.0 * step)
+    assert analytic_force == pytest.approx(finite_difference, abs=2.0e-5)
 
 
 @pytest.mark.cuda
-def test_auto_routes_unsupported_spin_to_cpu_on_gpu_hosts():
+def test_auto_keeps_cuda_for_spin_updates_on_gpu_hosts():
     if not _library_has_cuda():
         pytest.skip("CUDA backend is not available on this host")
 
@@ -102,7 +114,7 @@ def test_auto_routes_unsupported_spin_to_cpu_on_gpu_hosts():
         spin_channels=spin,
         backend="auto",
     )
-    assert calc.backend == library.BACKEND_CPU
+    assert calc.backend == library.BACKEND_CUDA
     assert np.isfinite(calc.singlepoint().energy)
 
     closed_case = _cases.case_by_id("ketene")
@@ -112,7 +124,7 @@ def test_auto_routes_unsupported_spin_to_cpu_on_gpu_hosts():
     )
     assert changed.backend == library.BACKEND_CUDA
     changed.update(spin_channels=2)  # unrestricted singlet after CUDA creation
-    assert changed.backend == library.BACKEND_CPU
+    assert changed.backend == library.BACKEND_CUDA
     assert np.isfinite(changed.singlepoint().energy)
     changed.update(spin_channels=1)
     assert changed.backend == library.BACKEND_CUDA

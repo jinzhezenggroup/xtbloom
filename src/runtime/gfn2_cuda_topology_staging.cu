@@ -96,6 +96,7 @@ struct PackedLayout {
   std::size_t atomic_numbers = 0u;
   std::size_t molecular_charges = 0u;
   std::size_t unpaired_electrons = 0u;
+  std::size_t spin_channels = 0u;
   std::size_t point_offsets = 0u;
   std::size_t response_offsets = 0u;
   std::size_t bytes = 0u;
@@ -129,6 +130,7 @@ bool make_layout(const gpuxtb_batch_t& batch, PackedLayout& layout) noexcept {
       !append_array<std::int32_t>(atom_count, cursor, created.atomic_numbers) ||
       !append_array<double>(batch_count, cursor, created.molecular_charges) ||
       !append_array<std::int32_t>(batch_count, cursor, created.unpaired_electrons) ||
+      !append_array<std::int32_t>(batch_count, cursor, created.spin_channels) ||
       !append_array<std::int64_t>(offset_count, cursor, created.point_offsets) ||
       !append_array<std::int64_t>(offset_count, cursor, created.response_offsets)) {
     return false;
@@ -153,6 +155,7 @@ struct DeviceKeyView {
   std::int32_t* atomic_numbers = nullptr;
   double* molecular_charges = nullptr;
   std::int32_t* unpaired_electrons = nullptr;
+  std::int32_t* spin_channels = nullptr;
   std::int64_t* point_offsets = nullptr;
   std::int64_t* response_offsets = nullptr;
 };
@@ -162,6 +165,7 @@ DeviceKeyView device_view(void* base, const PackedLayout& layout) noexcept {
           packed_pointer<std::int32_t>(base, layout.atomic_numbers),
           packed_pointer<double>(base, layout.molecular_charges),
           packed_pointer<std::int32_t>(base, layout.unpaired_electrons),
+          packed_pointer<std::int32_t>(base, layout.spin_channels),
           packed_pointer<std::int64_t>(base, layout.point_offsets),
           packed_pointer<std::int64_t>(base, layout.response_offsets)};
 }
@@ -175,6 +179,7 @@ Gfn2CudaTopologyDeviceKeyIdentity key_identity(void* base, const PackedLayout& l
           reinterpret_cast<std::uintptr_t>(view.atomic_numbers),
           reinterpret_cast<std::uintptr_t>(view.molecular_charges),
           reinterpret_cast<std::uintptr_t>(view.unpaired_electrons),
+          reinterpret_cast<std::uintptr_t>(view.spin_channels),
           reinterpret_cast<std::uintptr_t>(view.point_offsets),
           reinterpret_cast<std::uintptr_t>(view.response_offsets)};
 }
@@ -193,7 +198,6 @@ enum class DeviceError : std::uint32_t {
   kSuccess = 0u,
   kInvalidMetadata = 1u,
   kCountOverflow = 2u,
-  kUnsupportedSpin = 3u,
 };
 
 __device__ void set_device_failure(DeviceReport* report, DeviceError error, Field field,
@@ -225,7 +229,8 @@ __global__ void validate_and_compare_topology_kernel(
     DeviceKeyView candidate, DeviceKeyView committed, std::int64_t batch_size,
     std::int64_t total_atoms, std::int64_t total_point_charges,
     std::int64_t declared_response_elements, bool point_offsets_supplied,
-    bool response_offsets_supplied, bool compare_committed, DeviceReport* report) {
+    bool response_offsets_supplied, bool spin_channels_supplied, bool compare_committed,
+    DeviceReport* report) {
   if (blockIdx.x != 0 || threadIdx.x != 0) return;
   *report = {};
   report->index = -1;
@@ -304,8 +309,9 @@ __global__ void validate_and_compare_topology_kernel(
     if (candidate.molecular_charges[system] == 0.0) {
       candidate.molecular_charges[system] = 0.0;
     }
-    if (candidate.unpaired_electrons[system] != 0) {
-      set_device_failure(report, DeviceError::kUnsupportedSpin, Field::kUnpairedElectrons, system);
+    if (!spin_channels_supplied) candidate.spin_channels[system] = 1;
+    if (candidate.spin_channels[system] != 1 && candidate.spin_channels[system] != 2) {
+      set_device_failure(report, DeviceError::kInvalidMetadata, Field::kSpinChannels, system);
       return;
     }
   }
@@ -341,6 +347,7 @@ __global__ void validate_and_compare_topology_kernel(
             bitwise_equal(candidate.atomic_numbers, committed.atomic_numbers, total_atoms) &&
             bitwise_equal(candidate.molecular_charges, committed.molecular_charges, batch_size) &&
             bitwise_equal(candidate.unpaired_electrons, committed.unpaired_electrons, batch_size) &&
+            bitwise_equal(candidate.spin_channels, committed.spin_channels, batch_size) &&
             bitwise_equal(candidate.point_offsets, committed.point_offsets, batch_size + 1) &&
             bitwise_equal(candidate.response_offsets, committed.response_offsets, batch_size + 1);
   }
@@ -402,6 +409,7 @@ std::size_t field_bytes(const PackedLayout& layout, Field field) noexcept {
     case Field::kMolecularCharges:
       return batch * sizeof(double);
     case Field::kUnpairedElectrons:
+    case Field::kSpinChannels:
       return batch * sizeof(std::int32_t);
     default:
       return 0u;
@@ -418,6 +426,8 @@ std::size_t field_offset(const PackedLayout& layout, Field field) noexcept {
       return layout.molecular_charges;
     case Field::kUnpairedElectrons:
       return layout.unpaired_electrons;
+    case Field::kSpinChannels:
+      return layout.spin_channels;
     case Field::kPointChargeOffsets:
       return layout.point_offsets;
     case Field::kChargeResponseOffsets:
@@ -437,6 +447,8 @@ const char* field_name(Field field) noexcept {
       return "molecular_charges";
     case Field::kUnpairedElectrons:
       return "unpaired_electrons";
+    case Field::kSpinChannels:
+      return "spin_channels";
     case Field::kPointChargeOffsets:
       return "point_charge_offsets";
     case Field::kChargeResponseOffsets:
@@ -456,6 +468,8 @@ const gpuxtb_const_buffer_t& field_buffer(const gpuxtb_batch_t& batch, Field fie
       return batch.molecular_charges;
     case Field::kUnpairedElectrons:
       return batch.unpaired_electrons;
+    case Field::kSpinChannels:
+      return batch.spin_channels;
     case Field::kPointChargeOffsets:
       return batch.point_charge_offsets;
     case Field::kChargeResponseOffsets:
@@ -481,9 +495,6 @@ std::size_t field_alignment(Field field) noexcept {
 Diagnostic diagnostic_from_device_report(const DeviceReport& report) noexcept {
   if (report.error == static_cast<std::uint32_t>(DeviceError::kSuccess)) return {};
   const Field field = static_cast<Field>(report.field);
-  if (report.error == static_cast<std::uint32_t>(DeviceError::kUnsupportedSpin)) {
-    return failure(GPUXTB_STATUS_NOT_SUPPORTED, Error::kInvalidMetadata, field, report.index);
-  }
   if (report.error == static_cast<std::uint32_t>(DeviceError::kCountOverflow)) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, field, report.index);
   }
@@ -493,8 +504,8 @@ Diagnostic diagnostic_from_device_report(const DeviceReport& report) noexcept {
 void set_semantic_error(const Diagnostic& diagnostic, std::string& error) {
   if (diagnostic.error == Error::kCountOverflow) {
     error = "the dense charge-response topology overflows int64_t";
-  } else if (diagnostic.field == Field::kUnpairedElectrons) {
-    error = "restricted CUDA GFN2 requires zero unpaired electrons";
+  } else if (diagnostic.field == Field::kSpinChannels) {
+    error = "spin_channels values must be one or two";
   } else {
     error = std::string(field_name(diagnostic.field)) + " contains invalid topology metadata";
   }
@@ -523,6 +534,9 @@ bool copy_snapshot(const Backing& backing, const DeviceReport& report, bool peri
   created.unpaired_electrons.assign(
       packed_pointer<const std::int32_t>(backing.pinned, layout.unpaired_electrons),
       packed_pointer<const std::int32_t>(backing.pinned, layout.unpaired_electrons) + batch);
+  created.spin_channels.assign(
+      packed_pointer<const std::int32_t>(backing.pinned, layout.spin_channels),
+      packed_pointer<const std::int32_t>(backing.pinned, layout.spin_channels) + batch);
   created.point_charge_offsets.assign(
       packed_pointer<const std::int64_t>(backing.pinned, layout.point_offsets),
       packed_pointer<const std::int64_t>(backing.pinned, layout.point_offsets) + batch + 1u);
@@ -670,16 +684,23 @@ Gfn2CudaTopologyStagingDiagnostic Gfn2CudaTopologyStaging::stage_and_validate(
       batch.charge_response_matrix.data != nullptr || batch.charge_response_matrix.size_bytes != 0u;
   const bool periodic_enabled = batch.atomic_potential_shifts.data != nullptr ||
                                 batch.atomic_potential_shifts.size_bytes != 0u || response_supplied;
+  /* The ABI-v2 suffix is optional. Avoid reading it for an ABI-v1 caller and
+   * let the validation kernel materialize the canonical restricted default. */
+  const bool spin_channels_supplied =
+      batch.struct_size >= GPUXTB_BATCH_V2_SIZE &&
+      (batch.spin_channels.data != nullptr || batch.spin_channels.size_bytes != 0u);
 
   struct Input {
     Field field = Field::kNone;
     CudaValidatedConstBuffer buffer{};
   };
-  Input inputs[] = {{Field::kAtomOffsets, {}},        {Field::kAtomicNumbers, {}},
-                    {Field::kMolecularCharges, {}},   {Field::kUnpairedElectrons, {}},
-                    {Field::kPointChargeOffsets, {}}, {Field::kChargeResponseOffsets, {}}};
-  for (std::size_t index = 0u; index < 6u; ++index) {
+  Input inputs[] = {{Field::kAtomOffsets, {}},          {Field::kAtomicNumbers, {}},
+                    {Field::kMolecularCharges, {}},     {Field::kUnpairedElectrons, {}},
+                    {Field::kSpinChannels, {}},         {Field::kPointChargeOffsets, {}},
+                    {Field::kChargeResponseOffsets, {}}};
+  for (std::size_t index = 0u; index < 7u; ++index) {
     Input& input = inputs[index];
+    if (input.field == Field::kSpinChannels && !spin_channels_supplied) continue;
     if (input.field == Field::kPointChargeOffsets && !point_supplied) continue;
     if (input.field == Field::kChargeResponseOffsets && !response_supplied) continue;
     status = validate_cuda_const_buffer(
@@ -715,6 +736,7 @@ Gfn2CudaTopologyStagingDiagnostic Gfn2CudaTopologyStaging::stage_and_validate(
     return restore_boundary(guard, cuda_failure(Field::kArena, cuda_status), error);
   }
   for (const Input& input : inputs) {
+    if (input.field == Field::kSpinChannels && !spin_channels_supplied) continue;
     if (input.field == Field::kPointChargeOffsets && !point_supplied) continue;
     if (input.field == Field::kChargeResponseOffsets && !response_supplied) continue;
     const std::size_t bytes = field_bytes(layout, input.field);
@@ -744,8 +766,8 @@ Gfn2CudaTopologyStagingDiagnostic Gfn2CudaTopologyStaging::stage_and_validate(
       same_layout ? device_view(impl_->active->canonical, layout) : DeviceKeyView{};
   validate_and_compare_topology_kernel<<<1, 1, 0, impl_->stream>>>(
       candidate, committed, layout.batch_size, layout.total_atoms, layout.total_point_charges,
-      batch.total_charge_response_elements, point_supplied, response_supplied, same_layout,
-      impl_->device_report);
+      batch.total_charge_response_elements, point_supplied, response_supplied,
+      spin_channels_supplied, same_layout, impl_->device_report);
   cuda_status = cudaGetLastError();
   if (cuda_status == cudaSuccess) {
     cuda_status = cudaMemcpyAsync(impl_->pinned_report, impl_->device_report, sizeof(DeviceReport),

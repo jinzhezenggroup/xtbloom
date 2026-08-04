@@ -386,9 +386,6 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
     if (!checked.ok()) {
       return checked;
     }
-    if (backend_value == GPUXTB_BACKEND_CUDA) {
-      return unsupported("CUDA unrestricted spin channels are not implemented yet");
-    }
   }
 
   std::size_t batch_i32_bytes = 0;
@@ -549,9 +546,8 @@ DescriptorValidationResult validate_compute_descriptor_aliases(
   }
   const BufferView spin_channels = spin_channel_view(batch);
   if (active(spin_channels)) {
-    DescriptorValidationResult checked =
-        add_active_range(ranges, range_count, "spin_channels", spin_channels,
-                         extents.batch_i32_bytes, false);
+    DescriptorValidationResult checked = add_active_range(
+        ranges, range_count, "spin_channels", spin_channels, extents.batch_i32_bytes, false);
     if (!checked.ok()) {
       return checked;
     }
@@ -668,16 +664,17 @@ DescriptorValidationResult validate_host_topology_semantics(const gpuxtb_batch_t
   const BufferView spin_channels = spin_channel_view(batch);
   if (active(spin_channels)) {
     if (spin_channels.memory_space != GPUXTB_MEMORY_HOST) {
-      return unsupported("device-resident spin_channels are not implemented yet");
-    }
-    for (std::int64_t system = 0; system < batch.batch_size; ++system) {
-      std::int32_t channels = 0;
-      std::memcpy(&channels,
-                  static_cast<const unsigned char*>(spin_channels.data) +
-                      static_cast<std::size_t>(system) * sizeof(channels),
-                  sizeof(channels));
-      if (channels != 1 && channels != 2) {
-        return invalid("spin_channels values must be one or two");
+      validation.pending_offset_checks |= kSpinChannelsNeedStaging;
+    } else {
+      for (std::int64_t system = 0; system < batch.batch_size; ++system) {
+        std::int32_t channels = 0;
+        std::memcpy(&channels,
+                    static_cast<const unsigned char*>(spin_channels.data) +
+                        static_cast<std::size_t>(system) * sizeof(channels),
+                    sizeof(channels));
+        if (channels != 1 && channels != 2) {
+          return invalid("spin_channels values must be one or two");
+        }
       }
     }
   }

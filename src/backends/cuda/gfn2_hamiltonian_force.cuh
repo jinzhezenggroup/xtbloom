@@ -21,7 +21,7 @@ enum class Gfn2HamiltonianForceDeviceError : std::uint32_t {
   kNonfiniteArithmetic = 6u,
 };
 
-/* Converged restricted density and SCC potentials used by Hamiltonian assembly. */
+/* Converged physical density and SCC potentials used by Hamiltonian assembly. */
 struct Gfn2HamiltonianForceDeviceInput {
   const double* density = nullptr;
   std::int64_t density_elements = 0;
@@ -32,6 +32,17 @@ struct Gfn2HamiltonianForceDeviceInput {
   const double* atomic_quadrupole_potentials = nullptr;
   std::int64_t atomic_quadrupole_elements = 0;
   std::uint64_t plan_token = 0u;
+
+  /*
+   * Optional unrestricted overlap response in physical M/S packing. These
+   * fields intentionally trail plan_token so existing restricted aggregate
+   * initializers remain source compatible. The pair is canonical: either
+   * both pointers are null with zero extents, or both physical arrays exist.
+   */
+  const double* spin_density = nullptr;
+  std::int64_t spin_density_elements = 0;
+  const double* spin_shell_scalar_potentials = nullptr;
+  std::int64_t spin_shell_scalar_elements = 0;
 };
 
 /*
@@ -75,8 +86,10 @@ cudaError_t reset_gfn2_hamiltonian_force_device_errors_cuda(std::int64_t batch_s
 
 /*
  * Reverse the SCC Hamiltonian's explicit S/D/Q dependence at fixed converged
- * density and potentials. The output is an integral adjoint, not a Cartesian
- * force; a subsequent integral reverse pass converts it to dE/dR.
+ * density and potentials. An optional unrestricted P_alpha-P_beta and v_mag
+ * pair contributes only to the overlap adjoint. The output is an integral
+ * adjoint, not a Cartesian force; a subsequent integral reverse pass converts
+ * it to dE/dR.
  *
  * Directed ket-origin multipoles obey the forward assembly exactly:
  * D_mn couples to the potential on atom(n), while D_nm couples to atom(m).
