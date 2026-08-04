@@ -44,6 +44,10 @@ CUDA_MEMCPY_DEVICE_TO_HOST = 2
 CUDA_SPIN_POLARIZED_SCOPE_REASON = (
     "the CUDA public GFN2 path does not support ABI-v2 unrestricted spin_channels yet"
 )
+CUDA_SHARED_OPEN_SHELL_SCOPE_REASON = (
+    "the CUDA public GFN2 path does not support shared-orbital systems with "
+    "nonzero unpaired_electrons yet"
+)
 
 
 class ContextOptions(ctypes.Structure):
@@ -961,6 +965,36 @@ def main(argv: Iterable[str] | None = None) -> int:
             spin_polarized = [
                 case for case in cases if int(case.get("spin_channels", 1)) == 2
             ]
+            if backend == "cuda":
+                cuda_supported = [
+                    case
+                    for case in shared_orbital
+                    if int(case["unpaired_electrons"]) == 0
+                ]
+                cuda_shared_open_shell = [
+                    case
+                    for case in shared_orbital
+                    if int(case["unpaired_electrons"]) != 0
+                ]
+                if cuda_supported:
+                    run_backend(
+                        library,
+                        args.manifest,
+                        manifest,
+                        cuda_supported,
+                        backend,
+                        args.actual_dir,
+                        args.device_id,
+                        args.cpu_threads,
+                        args.memory_mode,
+                        request_forces=True,
+                    )
+                for case in cuda_shared_open_shell:
+                    print(f"SKIP {case['id']}: {CUDA_SHARED_OPEN_SHELL_SCOPE_REASON}")
+                for case in spin_polarized:
+                    print(f"SKIP {case['id']}: {CUDA_SPIN_POLARIZED_SCOPE_REASON}")
+                continue
+
             if shared_orbital:
                 run_backend(
                     library,
@@ -974,10 +1008,6 @@ def main(argv: Iterable[str] | None = None) -> int:
                     args.memory_mode,
                     request_forces=True,
                 )
-            if backend == "cuda":
-                for case in spin_polarized:
-                    print(f"SKIP {case['id']}: {CUDA_SPIN_POLARIZED_SCOPE_REASON}")
-                continue
             if spin_polarized:
                 run_backend(
                     library,
