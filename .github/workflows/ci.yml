@@ -46,7 +46,7 @@ jobs:
           cmake -S tests/install_consumer -B build-static-consumer -G Ninja \
             -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/gpuxtb-static-install"
           cmake --build build-static-consumer --parallel
-          "${PWD}/build-static-consumer/gpuxtb_install_consumer"
+          "${PWD}/build-static-consumer/gpuxtb_install_consumer" smoke
 
   public-cpu-release:
     runs-on: ubuntu-24.04
@@ -75,4 +75,4 @@ jobs:
           cmake -S tests/install_consumer -B build-consumer -G Ninja \
             -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/gpuxtb-install"
           cmake --build build-consumer --parallel
-          "${PWD}/build-consumer/gpuxtb_install_consumer"
+          "${PWD}/build-consumer/gpuxtb_install_consumer" cpu

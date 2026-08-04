@@ -41,6 +41,12 @@ cmake -S . -B build-cuda \
   -DCMAKE_CUDA_ARCHITECTURES=120
 ```
 
+An installed CUDA package requires the external project and runtime loader to
+use a compatible CUDA toolkit. Set `CUDAToolkit_ROOT` while configuring the
+consumer and, when that toolkit is not the system default, expose its `lib64`
+directory to the dynamic loader. gpuxtb does not embed build-host CUDA paths in
+the installed library's RPATH.
+
 ## Python package
 
 A Python package wrapping the public C ABI is provided under `python/` and is

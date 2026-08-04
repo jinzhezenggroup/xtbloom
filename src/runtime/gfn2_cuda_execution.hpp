@@ -246,8 +246,11 @@ class Gfn2CudaExecutionCache {
  * Execute one synchronous public CUDA request as a single cache transaction.
  * Validation, topology staging, candidate refresh, SCC, internal publication,
  * public result bridging, and completion all remain serialized by the cache
- * mutex. On a non-success return caller output bytes and result.flags remain
- * unchanged.
+ * mutex. Failures detected before caller-output commit leave output bytes and
+ * result.flags unchanged. Any later catastrophic failure may return
+ * INTERNAL_ERROR after results were modified. Current-device restoration is a
+ * separate exit boundary and may fail before or after output commit, as
+ * documented by the public API.
  */
 [[nodiscard]] gpuxtb_status_t execute_restricted_gfn2_cuda(
     Gfn2CudaExecutionCache& cache, const gpuxtb_batch_t& batch,
