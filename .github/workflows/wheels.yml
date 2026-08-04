@@ -1,17 +1,16 @@
 name: Python wheels
 
-# Builds cross-platform wheels with cibuildwheel and runs the Python test suite
-# against the built Linux wheel. Kept separate from the C++ CI so packaging
-# jobs can be tuned independently (see https://cibuildwheel.pypa.io).
+# Builds cross-platform wheels with cibuildwheel and tests them through
+# cibuildwheel's own test feature (see `test-command`/`before-test` in
+# pyproject.toml). Kept separate from the C++ CI so packaging jobs can be tuned
+# independently (see https://cibuildwheel.pypa.io).
 #
-# - Linux builds run in the PyPA CUDA manylinux images (see
-#   [tool.cibuildwheel.linux] in pyproject.toml); nvcc in the image means the
-#   CUDA backend is compiled in by default and the full test suite runs here
-#   against an installed system MKL runtime.
-# - macOS builds CPU-only wheels (no CUDA toolkit); the cibuildwheel import
-#   smoke test covers those. Their CPU inference currently needs an MKL runtime
-#   exposing the `libmkl_rt.so` names the eigensolver dlopens, which the
-#   bundled library does not supply, so the deep suite is Linux-only.
+# - Linux wheels build in the PyPA CUDA manylinux images (see
+#   [tool.cibuildwheel.linux] in pyproject.toml) and run the full conformance
+#   suite as the cibuildwheel test.
+# - macOS wheels build CPU-only and get an import smoke test (their CPU
+#   inference needs an MKL runtime exposing the `libmkl_rt.so` names the
+#   eigensolver dlopens, which the bundled library does not provide).
 # - Windows is a follow-up: the C++ CPU eigensolver uses `dlopen`/`libmkl_rt`
 #   and needs a platform port before Windows wheels can build.
 
@@ -32,9 +31,6 @@ jobs:
         os: [ubuntu-24.04, macos-14]
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.22.0
         with:
@@ -43,24 +39,3 @@ jobs:
         with:
           name: gpuxtb-wheels-${{ matrix.os }}
           path: ./wheelhouse/*.whl
-      - name: Install MKL and CUDA runtime (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes libmkl-rt
-          # The built Linux wheel is CUDA-enabled but does not bundle the CUDA
-          # runtime, so provide it from PyPI as documented in python/README.md.
-          python -m pip install \
-            nvidia-cublas-cu12 nvidia-cusolver-cu12 nvidia-cuda-runtime-cu12 nvidia-nvjitlink-cu12
-      - name: Test the Linux wheel (host, with MKL)
-        if: runner.os == 'Linux'
-        run: |
-          mkl_dir="$(dirname "$(dpkg -L libmkl-rt | awk '/\/libmkl_rt\.so$/ { print; exit }')")"
-          nvidia_dir="$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"] + "/nvidia")')"
-          nv_lib_dirs=()
-          while IFS= read -r -d '' d; do nv_lib_dirs+=("$d"); done < \
-            <(find "$nvidia_dir" -maxdepth 4 -type d -name lib -print0)
-          export LD_LIBRARY_PATH="$(printf '%s:' "${nv_lib_dirs[@]}")${mkl_dir}:${LD_LIBRARY_PATH:-}"
-          python -m pip install wheelhouse/*cp312*.whl
-          pip install pytest ase dpdata
-          python -m pytest python/tests -q

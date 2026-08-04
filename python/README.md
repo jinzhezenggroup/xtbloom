@@ -21,7 +21,7 @@ Optional extras:
 ```console
 pip install ".[ase]"        # ASE calculator
 pip install ".[dpdata]"     # dpdata driver plugin
-pip install ".[cuda]"       # cuda-python for future device-memory work
+pip install ".[cuda]"       # CUDA runtime libs (nvidia-*) for CUDA-enabled wheels
 pip install ".[test]"       # pytest suite dependencies
 ```
 
@@ -33,26 +33,25 @@ produced otherwise. The library can be built entirely from PyPI-distributed
 CUDA packages (no preinstalled system CUDA toolkit needed):
 
 ```console
-pip install cuda-toolkit nvidia-cublas-cu12 nvidia-cusolver-cu12 nvidia-cuda-runtime-cu12
+pip install ".[cuda]"       # nvidia-* runtime libraries
 GPUXTB_ENABLE_CUDA=ON pip install .
 ```
 
-If the resulting wheel is CUDA-enabled it does **not** bundle the CUDA runtime
-libraries; at runtime it needs the system CUDA driver plus the PyPI CUDA
-packages above.
+A CUDA-enabled wheel does **not** bundle the CUDA runtime libraries; at runtime
+it needs the system CUDA driver plus the PyPI CUDA packages, which the
+``[cuda]`` extra installs: ``pip install "gpuxtb[cuda]"``.
 
-CI builds wheels with cibuildwheel (`.github/workflows/wheels.yml`):
+CI builds wheels with cibuildwheel (`.github/workflows/wheels.yml`) and tests
+them through cibuildwheel's own test feature:
 
 * **Linux** wheels build in the PyPA CUDA manylinux images
   (`quay.io/manylinux_cuda/manylinux_2_28_*_cuda12_9`), so the CUDA backend is
   compiled in by default (cuSOLVER, which those images do not ship, is pulled
-  from PyPI into the container before the build). The full test suite runs
-  against the built wheel on a host with an MKL runtime and the PyPI
-  `nvidia-*` runtime packages.
-* **macOS** wheels build CPU-only (no CUDA toolkit); they are covered by the
-  cibuildwheel import smoke test. Note their CPU inference currently needs an
-  MKL runtime exposing the `libmkl_rt.so` names the C++ eigensolver dlopens,
-  which the bundled library does not provide on macOS.
+  from PyPI into the container before the build). The full conformance suite
+  runs as the cibuildwheel test with an MKL runtime installed from PyPI.
+* **macOS** wheels build CPU-only (no CUDA toolkit); they only receive an
+  import smoke test because their CPU inference needs an MKL runtime exposing
+  the `libmkl_rt.so` names the C++ eigensolver dlopens.
 * **Windows** wheels are a follow-up (the CPU eigensolver uses `dlopen`).
 
 The public Python interface always uses host buffers on both backends; CUDA
