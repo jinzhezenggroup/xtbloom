@@ -20,16 +20,20 @@
 namespace gpuxtb::detail::gfn2 {
 
 /*
- * Converged restricted stationary data used by the CPU force composer.
+ * Converged stationary data used by the CPU force composer.
  *
- * density and energy_weighted_density contain one row-major AO matrix per
- * system in IntegralPlan packing. scalar_shell_potentials is the complete
+ * density and energy_weighted_density contain the spin-summed row-major AO
+ * matrices, one per system in IntegralPlan packing. For unrestricted systems,
+ * spin_density contains P_alpha-P_beta and spin_scalar_shell_potentials contains
+ * the magnetization-channel derivative dE/dm. They must either both be present
+ * or both be null; restricted systems use canonical nulls (or zero slices in a
+ * mixed batch). scalar_shell_potentials is the complete charge-channel
  * scalar AO potential by shell: shell electrostatics plus every atom-wise
  * AES2, D4, explicit-charge, and host-supplied periodic contribution mapped
  * onto that shell. Dipole and quadrupole potentials are complete atom-major
  * derivatives of the converged interaction energy.
  *
- * scc_energies already contain the converged restricted SCC free energy,
+ * scc_energies already contain the converged SCC free energy,
  * including H0, ES2, ES3, AES2, optional D4 two-body, optional embedding, and
  * finite-temperature entropy. The composer adds geometry-only repulsion and
  * optional D4 ATM. This split matches SccDriverState::free_energies.
@@ -57,6 +61,10 @@ struct RestrictedGfn2StationaryInput {
   const double* point_positions = nullptr;
   const double* point_charges = nullptr;
   const double* point_hardnesses = nullptr;
+
+  /* Optional unrestricted stationary response, one matrix/shell per system. */
+  const double* spin_density = nullptr;
+  const double* spin_scalar_shell_potentials = nullptr;
 };
 
 /*
@@ -113,12 +121,13 @@ struct RestrictedGfn2ForceWorkspace {
 };
 
 /*
- * Compose complete restricted GFN2 energies and analytic forces:
+ * Compose complete restricted or unrestricted GFN2 energies and analytic forces:
  *
  *   E = E_SCC + E_rep + E_D4^ATM,
  *
- *   dE/dR = [P:dH0/dR - W:dS/dR]
+ *   dE/dR = [P_total:dH0/dR - W_total:dS/dR]
  *          + population-response S/D/Q integral contractions
+ *          + unrestricted spin-population overlap response
  *          + ES2 + AES2 + D4(two-body+ATM) + repulsion
  *          + optional explicit point-charge derivatives.
  *

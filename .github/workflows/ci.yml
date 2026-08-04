@@ -26,6 +26,28 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+  static-cpu-package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure static package
+        run: |
+          cmake -S . -B build-static -G Ninja \
+            -DGPUXTB_ENABLE_CUDA=OFF \
+            -DGPUXTB_BUILD_TESTS=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+      - name: Build and install
+        run: |
+          cmake --build build-static --parallel
+          cmake --install build-static --prefix "${RUNNER_TEMP}/gpuxtb-static-install"
+      - name: Consume static exported CMake package
+        run: |
+          cmake -S tests/install_consumer -B build-static-consumer -G Ninja \
+            -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/gpuxtb-static-install"
+          cmake --build build-static-consumer --parallel
+          "${PWD}/build-static-consumer/gpuxtb_install_consumer"
+
   public-cpu-release:
     runs-on: ubuntu-24.04
     steps:

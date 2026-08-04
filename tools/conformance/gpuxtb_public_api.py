@@ -2,9 +2,10 @@
 """Run committed GFN2 conformance cases through the public gpuxtb C ABI.
 
 The runner deliberately uses :mod:`ctypes`: it validates the installed/shared-
-library surface rather than linking to implementation details. Supported cases
-are submitted as one ragged batch so the same gate also exercises public batch
-inference. CUDA runs can place descriptors in host, device, or mixed memory.
+library surface rather than linking to implementation details. Cases are
+submitted in property-compatible ragged batches so the same gate also exercises
+public batch inference. CUDA runs can place descriptors in host, device, or
+mixed memory.
 Comparison uses the primary tolerances from ``data/conformance/manifest.json``
 without reference-engine relaxation.
 """
@@ -15,9 +16,11 @@ import argparse
 import ctypes
 import ctypes.util
 import sys
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from types import TracebackType
+from typing import Any, Self
 
 import gpuxtb_conformance as conformance
 
@@ -38,9 +41,8 @@ CUDA_SUCCESS = 0
 CUDA_MEMCPY_HOST_TO_DEVICE = 1
 CUDA_MEMCPY_DEVICE_TO_HOST = 2
 
-UNRESTRICTED_SCOPE_REASON = (
-    "the current public GFN2 execution path supports only restricted "
-    "closed-shell inference; unpaired_electrons is nonzero"
+CUDA_SPIN_POLARIZED_SCOPE_REASON = (
+    "the CUDA public GFN2 path does not support ABI-v2 unrestricted spin_channels yet"
 )
 
 
@@ -81,7 +83,7 @@ class Buffer(ctypes.Structure):
 
 
 class Batch(ctypes.Structure):
-    """ctypes mirror of ``gpuxtb_batch_t`` ABI version 1."""
+    """ctypes mirror of ``gpuxtb_batch_t`` including its ABI-v2 suffix."""
 
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -102,6 +104,7 @@ class Batch(ctypes.Structure):
         ("atomic_potential_shifts", ConstBuffer),
         ("charge_response_offsets", ConstBuffer),
         ("charge_response_matrix", ConstBuffer),
+        ("spin_channels", ConstBuffer),
     ]
 
 
@@ -200,7 +203,9 @@ class CudaRuntime:
             self.runtime.cudaGetDevice(ctypes.byref(self.original_device)),
             "cudaGetDevice",
         )
-        self._check(self.runtime.cudaSetDevice(device_id), f"cudaSetDevice({device_id})")
+        self._check(
+            self.runtime.cudaSetDevice(device_id), f"cudaSetDevice({device_id})"
+        )
 
     def _error_name(self, status: int) -> str:
         return _decode(self.runtime.cudaGetErrorString(status))
@@ -279,10 +284,15 @@ class CudaRuntime:
         if failures:
             raise conformance.ConformanceError("; ".join(failures))
 
-    def __enter__(self) -> CudaRuntime:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> bool:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
         try:
             self.close()
         except conformance.ConformanceError as cleanup_error:
@@ -313,6 +323,7 @@ class PublicBatchStorage:
     positions: list[float]
     molecular_charges: list[float]
     unpaired_electrons: list[int]
+    spin_channels: list[int]
     point_charge_offsets: list[int]
     point_charge_positions: list[float]
     point_charge_values: list[float]
@@ -409,10 +420,15 @@ class DescriptorMemory:
         if self.cuda is not None:
             self.cuda.close()
 
-    def __enter__(self) -> DescriptorMemory:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> bool:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
         if self.cuda is None:
             return False
         return self.cuda.__exit__(exc_type, exc, traceback)
@@ -487,14 +503,8 @@ def _call_ok(library: ctypes.CDLL, status: int, operation: str) -> None:
 def supported_cases(
     manifest: dict[str, Any], names: list[str] | None
 ) -> list[dict[str, Any]]:
-    """Return restricted cases and state why open-shell goldens are excluded."""
-    supported: list[dict[str, Any]] = []
-    for case in conformance.selected_cases(manifest, names):
-        if int(case["unpaired_electrons"]) != 0:
-            print(f"SKIP {case['id']}: {UNRESTRICTED_SCOPE_REASON}")
-            continue
-        supported.append(case)
-    return supported
+    """Return every selected case supported by at least one public backend."""
+    return conformance.selected_cases(manifest, names)
 
 
 def _flatten(matrix: Sequence[Sequence[float]]) -> list[float]:
@@ -513,14 +523,13 @@ def assemble_batch(
     positions: list[float] = []
     molecular_charges: list[float] = []
     unpaired_electrons: list[int] = []
+    spin_channels: list[int] = []
     point_charge_offsets = [0]
     point_charge_positions: list[float] = []
     point_charge_values: list[float] = []
     point_charge_gammas: list[float] = []
     slices: list[CaseSlice] = []
-    hardness = manifest["reference_engines"]["xtb"][
-        "point_charge_hardness_hartree"
-    ]
+    hardness = manifest["reference_engines"]["xtb"]["point_charge_hardness_hartree"]
 
     for case in cases:
         input_path = conformance.resolve_manifest_path(manifest_path, case["input"])
@@ -545,7 +554,14 @@ def assemble_batch(
         atom_offsets.append(len(atomic_numbers))
         point_charge_offsets.append(len(point_charge_values))
         molecular_charges.append(float(case["molecular_charge"]))
-        unpaired_electrons.append(int(case["unpaired_electrons"]))
+        unpaired = int(case["unpaired_electrons"])
+        unpaired_electrons.append(unpaired)
+        spin_channel_count = case.get("spin_channels", 1)
+        if type(spin_channel_count) is not int or spin_channel_count not in (1, 2):
+            raise conformance.ConformanceError(
+                f"case {case['id']} spin_channels must be one or two"
+            )
+        spin_channels.append(spin_channel_count)
         golden = conformance.load_json(
             conformance.resolve_manifest_path(manifest_path, case["golden"])
         )
@@ -566,6 +582,7 @@ def assemble_batch(
         positions=positions,
         molecular_charges=molecular_charges,
         unpaired_electrons=unpaired_electrons,
+        spin_channels=spin_channels,
         point_charge_offsets=point_charge_offsets,
         point_charge_positions=point_charge_positions,
         point_charge_values=point_charge_values,
@@ -579,8 +596,14 @@ def _make_batch(
     library: ctypes.CDLL,
     storage: PublicBatchStorage,
     memory: DescriptorMemory,
+    include_spin_channels: bool,
 ) -> Batch:
-    """Initialize and bind a public batch using the selected placement policy."""
+    """Initialize and bind a public batch using the selected placement policy.
+
+    CPU calls explicitly bind the ABI-v2 suffix, including channel value one
+    for restricted systems. CUDA calls omit the suffix buffer because the
+    current CUDA descriptor boundary rejects any active spin-channel buffer.
+    """
     batch = Batch()
     _call_ok(
         library,
@@ -606,6 +629,10 @@ def _make_batch(
     batch.unpaired_electrons = memory.input(
         storage, storage.unpaired_electrons, ctypes.c_int32, "unpaired_electrons"
     )
+    if include_spin_channels:
+        batch.spin_channels = memory.input(
+            storage, storage.spin_channels, ctypes.c_int32, "spin_channels"
+        )
     if storage.point_charge_values:
         batch.point_charge_offsets = memory.input(
             storage,
@@ -666,7 +693,10 @@ def _make_context(
 
 
 def _compare_case(
-    manifest: dict[str, Any], case_slice: CaseSlice, actual: dict[str, Any]
+    manifest: dict[str, Any],
+    case_slice: CaseSlice,
+    actual: dict[str, Any],
+    unsupported_properties: dict[str, str],
 ) -> list[str]:
     """Compare exactly the properties exposed by the current public C result ABI."""
     mappings = [
@@ -678,6 +708,12 @@ def _compare_case(
     failures: list[str] = []
     for property_name, tolerance_name in mappings:
         if property_name not in case_slice.expected:
+            continue
+        if property_name in unsupported_properties:
+            print(
+                f"SKIP {case_slice.case['id']} {property_name}: "
+                f"{unsupported_properties[property_name]}"
+            )
             continue
         if property_name not in actual:
             message = f"{case_slice.case['id']} is missing {property_name}"
@@ -709,8 +745,9 @@ def run_backend(
     device_id: int,
     cpu_threads: int,
     memory_mode: str,
+    request_forces: bool,
 ) -> None:
-    """Execute, emit, and compare one backend's public ragged-batch inference."""
+    """Execute and compare one property-compatible public ragged batch."""
     storage = assemble_batch(manifest_path, manifest, cases)
     options = ComputeOptions()
     _call_ok(
@@ -721,7 +758,9 @@ def run_backend(
         "gpuxtb_compute_options_init",
     )
     options.model = GPUXTB_MODEL_GFN2_XTB
-    options.flags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES
+    options.flags = GPUXTB_COMPUTE_ENERGY
+    if request_forces:
+        options.flags |= GPUXTB_COMPUTE_FORCES
     # Pin a stricter SCC solve than the public convenience defaults so this
     # gate measures model/property agreement rather than loose convergence.
     options.max_scc_iterations = 500
@@ -730,23 +769,30 @@ def run_backend(
     options.electronic_temperature = 300.0 * GPUXTB_KELVIN_TO_HARTREE
     if any("partial_charges_e" in item.expected for item in storage.slices):
         options.flags |= GPUXTB_COMPUTE_ATOMIC_CHARGES
-    if storage.point_charge_values:
+    if request_forces and storage.point_charge_values:
         options.flags |= GPUXTB_COMPUTE_POINT_CHARGE_FORCES
 
     systems = len(storage.slices)
     atoms = len(storage.atomic_numbers)
     points = len(storage.point_charge_values)
     energies = (ctypes.c_double * systems)()
-    forces = (ctypes.c_double * (3 * atoms))()
+    forces = (ctypes.c_double * (3 * atoms))() if request_forces else None
     charges = (ctypes.c_double * atoms)()
-    point_forces = (ctypes.c_double * (3 * points))() if points else None
+    point_forces = (
+        (ctypes.c_double * (3 * points))() if request_forces and points else None
+    )
     iterations = (ctypes.c_int32 * systems)()
     converged = (ctypes.c_uint8 * systems)()
     statuses = (ctypes.c_int32 * systems)()
     context = _make_context(library, backend, device_id, cpu_threads)
     try:
         with DescriptorMemory(memory_mode, device_id) as memory:
-            batch = _make_batch(library, storage, memory)
+            batch = _make_batch(
+                library,
+                storage,
+                memory,
+                include_spin_channels=backend == "cpu",
+            )
             result = BatchResult()
             _call_ok(
                 library,
@@ -756,7 +802,8 @@ def run_backend(
                 "gpuxtb_batch_result_init",
             )
             result.energies = memory.output(energies, "energies")
-            result.forces = memory.output(forces, "forces")
+            if forces is not None:
+                result.forces = memory.output(forces, "forces")
             if options.flags & GPUXTB_COMPUTE_ATOMIC_CHARGES:
                 result.atomic_charges = memory.output(charges, "atomic_charges")
             if point_forces is not None:
@@ -765,9 +812,7 @@ def run_backend(
                 )
             result.scc_iterations = memory.output(iterations, "scc_iterations")
             result.scc_converged = memory.output(converged, "scc_converged")
-            result.per_system_status = memory.output(
-                statuses, "per_system_status"
-            )
+            result.per_system_status = memory.output(statuses, "per_system_status")
             _call_ok(
                 library,
                 library.gpuxtb_compute(
@@ -799,14 +844,16 @@ def run_backend(
     artifact_name = backend if memory_mode == "host" else f"{backend}-{memory_mode}"
     backend_dir = actual_root / artifact_name
     failures: list[str] = []
+    unsupported_properties: dict[str, str] = {}
     for index, item in enumerate(storage.slices):
         properties: dict[str, Any] = {
             "energy_hartree": float(energies[index]),
-            "forces_hartree_per_bohr": [
+        }
+        if forces is not None:
+            properties["forces_hartree_per_bohr"] = [
                 float(value)
                 for value in forces[3 * item.atom_begin : 3 * item.atom_end]
-            ],
-        }
+            ]
         if "partial_charges_e" in item.expected:
             properties["partial_charges_e"] = [
                 float(value) for value in charges[item.atom_begin : item.atom_end]
@@ -815,9 +862,7 @@ def run_backend(
             assert point_forces is not None
             properties["point_charge_forces_hartree_per_bohr"] = [
                 float(value)
-                for value in point_forces[
-                    3 * item.point_begin : 3 * item.point_end
-                ]
+                for value in point_forces[3 * item.point_begin : 3 * item.point_end]
             ]
         document = {
             "backend": backend,
@@ -834,13 +879,22 @@ def run_backend(
                 "backend": backend,
                 "engine": "gpuxtb",
                 "memory_mode": memory_mode,
+                "spin_channels": storage.spin_channels[index],
             },
             "result_flags": int(result.flags),
             "schema_version": manifest["golden_schema_version"],
+            "unsupported_properties": unsupported_properties,
             "units": manifest["units"],
         }
         conformance.dump_json(backend_dir / f"{item.case['id']}.json", document)
-        failures.extend(_compare_case(manifest, item, properties))
+        failures.extend(
+            _compare_case(
+                manifest,
+                item,
+                properties,
+                unsupported_properties,
+            )
+        )
     if failures:
         raise conformance.ConformanceError(
             f"{backend}/{memory_mode}: {len(failures)} public C API conformance "
@@ -848,7 +902,8 @@ def run_backend(
         )
     print(
         f"public C API conformance OK: backend={backend}, "
-        f"memory_mode={memory_mode}, cases={systems}, actual_dir={backend_dir}"
+        f"memory_mode={memory_mode}, cases={systems}, forces={request_forces}, "
+        f"actual_dir={backend_dir}"
     )
 
 
@@ -857,9 +912,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, default=conformance.DEFAULT_MANIFEST)
-    parser.add_argument(
-        "--backend", choices=("cpu", "cuda", "all"), default="all"
-    )
+    parser.add_argument("--backend", choices=("cpu", "cuda", "all"), default="all")
     parser.add_argument(
         "--memory-mode",
         choices=("host", "device", "mixed"),
@@ -897,22 +950,47 @@ def main(argv: Iterable[str] | None = None) -> int:
         manifest = conformance.load_json(args.manifest)
         cases = supported_cases(manifest, args.cases)
         if not cases:
-            print("no supported restricted GFN2 conformance cases selected")
+            print("no GFN2 conformance cases selected")
             return 0
         library = _configure_library(args.library)
         backends = ("cpu", "cuda") if args.backend == "all" else (args.backend,)
         for backend in backends:
-            run_backend(
-                library,
-                args.manifest,
-                manifest,
-                cases,
-                backend,
-                args.actual_dir,
-                args.device_id,
-                args.cpu_threads,
-                args.memory_mode,
-            )
+            shared_orbital = [
+                case for case in cases if int(case.get("spin_channels", 1)) == 1
+            ]
+            spin_polarized = [
+                case for case in cases if int(case.get("spin_channels", 1)) == 2
+            ]
+            if shared_orbital:
+                run_backend(
+                    library,
+                    args.manifest,
+                    manifest,
+                    shared_orbital,
+                    backend,
+                    args.actual_dir,
+                    args.device_id,
+                    args.cpu_threads,
+                    args.memory_mode,
+                    request_forces=True,
+                )
+            if backend == "cuda":
+                for case in spin_polarized:
+                    print(f"SKIP {case['id']}: {CUDA_SPIN_POLARIZED_SCOPE_REASON}")
+                continue
+            if spin_polarized:
+                run_backend(
+                    library,
+                    args.manifest,
+                    manifest,
+                    spin_polarized,
+                    backend,
+                    args.actual_dir,
+                    args.device_id,
+                    args.cpu_threads,
+                    args.memory_mode,
+                    request_forces=True,
+                )
     except BackendUnavailable as exc:
         print(f"SKIP {exc}", file=sys.stderr)
         return 77 if args.skip_backend_unavailable else 1

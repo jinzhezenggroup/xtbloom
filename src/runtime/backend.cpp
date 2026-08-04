@@ -87,7 +87,8 @@ gpuxtb_status_t create_context(const gpuxtb_context_options_t& options, Context*
   if (selected == GPUXTB_BACKEND_CPU) {
     try {
       /* Eager construction removes the first-compute shared_ptr data race. */
-      created->gfn2_cpu_execution_cache = std::make_shared<Gfn2CpuExecutionCache>();
+      created->gfn2_cpu_execution_cache =
+          std::make_shared<Gfn2CpuExecutionCache>(options.cpu_threads);
     } catch (const std::bad_alloc&) {
       delete created;
       error = "failed to allocate CPU GFN2 execution cache";

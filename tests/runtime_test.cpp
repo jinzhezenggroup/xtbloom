@@ -112,9 +112,16 @@ int main() {
 
   context.reset();
 
-  options.device_id = -2;
+  options.cpu_threads = -1;
   gpuxtb_status_t invalid_context_status = GPUXTB_STATUS_INTERNAL_ERROR;
   ContextHandle invalid_context = create_context(options, invalid_context_status);
+  CHECK(invalid_context_status == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(invalid_context == nullptr);
+  CHECK(std::strstr(gpuxtb_get_last_error(), "cpu_threads") != nullptr);
+
+  options.cpu_threads = 0;
+  options.device_id = -2;
+  invalid_context = create_context(options, invalid_context_status);
   CHECK(invalid_context_status == GPUXTB_STATUS_INVALID_ARGUMENT);
   CHECK(invalid_context == nullptr);
 

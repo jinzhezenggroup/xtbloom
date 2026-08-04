@@ -21,9 +21,11 @@ struct Context {
 
   /*
    * CPU contexts eagerly construct this execution state so the first compute
-   * call cannot race cache initialization. shared_ptr permits the cache type
-   * to remain incomplete here while Context is destroyed through the opaque C
-   * handle. The executor serializes access to cached batch plans per context.
+   * call cannot race cache initialization. The cache owns the fixed worker
+   * pool selected by cpu_threads. shared_ptr permits the cache type to remain
+   * incomplete here while Context is destroyed through the opaque C handle.
+   * The executor serializes transactions while workers process independent
+   * systems inside one transaction.
    */
   std::shared_ptr<Gfn2CpuExecutionCache> gfn2_cpu_execution_cache;
 

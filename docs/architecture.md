@@ -80,3 +80,26 @@ are introduced after profiling identifies their break-even points.
 
 Benchmarks report latency and throughput separately, include warm-up, exclude one-time parameter
 upload, and compare against current pinned revisions of xtb, tblite, and dxtb on the same hardware.
+
+### CPU batch scheduling
+
+One CPU context owns a fixed worker pool and reusable request/result staging. A public compute call
+remains one serialized context transaction: it stages and validates the complete request, runs
+independent `SystemExecution` objects concurrently, waits for every worker, and publishes outputs
+in system-index order. This retains call-level transactionality, per-system numerical-failure
+isolation, and bitwise batch-versus-serial results. Worker scheduling changes only which system
+runs first, never the arithmetic order within a system.
+
+`cpu_threads=1` executes on the calling thread without waking a background worker. A positive value
+greater than one is clamped to the CPUs available in the process affinity mask; the calling thread
+participates and the context retains the other workers. `cpu_threads=0` selects the affinity count
+capped at 64, which avoids silently constructing an unbounded pool on large shared hosts. The
+verified MKL provider remains LP64 and every factorization/eigensolve installs a thread-local MKL
+limit of one, making the outer system scheduler the sole CPU parallel layer.
+
+The reproducible CPU benchmark protocol compares identical warm public-C-API runs using
+`cpu_threads=1` and an explicit affinity-constrained worker count, recording compiler, ISA,
+affinity, MKL runtime, warm-up count, raw samples, and batch size. Batch-one latency is reported
+separately and is not combined with throughput. A pinned regression threshold will be promoted to
+CI only after the benchmark corpus includes gas, QM/MM, homogeneous, and heterogeneous workloads
+on a named runner; local development measurements are evidence, not a portable CI gate.

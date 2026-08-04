@@ -105,9 +105,13 @@ python3 tools/conformance/gpuxtb_conformance.py compare \
   --actual-dir build/conformance/xtb-cross --case ketene
 ```
 
-`oh_radical` is the initial unrestricted open-shell gate (`--uhf 1`). Its
-committed xtb golden requires the atom-resolved SCC state in addition to energy
-and forces. Atomic quadrupoles use xtb's `xx, xy, yy, xz, yz, zz` ordering.
+`oh_radical` is the initial standard GFN2-xTB open-shell gate (`--uhf 1`). Its
+committed xTB command does not enable the optional spin-polarization container,
+so the manifest explicitly records `spin_channels: 1`: alpha and beta
+occupations share one orbital set. The unpaired-electron count and number of
+orbital spin channels are independent inputs. The golden requires the
+atom-resolved SCC state in addition to energy and forces. Atomic quadrupoles use
+xTB's `xx, xy, yy, xz, yz, zz` ordering.
 The property names encode their atomic units: charge in elementary charge,
 dipole in elementary-charge bohr, and quadrupole in elementary-charge bohr².
 For QM/MM cases, `forces_hartree_per_bohr` is the QM force array and
@@ -126,8 +130,10 @@ C API integration tests.
 
 ## Public C API conformance
 
-Build a shared library, then submit all supported restricted cases as one
-host-descriptor ragged batch through the exported C ABI:
+Build a shared library, then submit property-compatible ragged batches through
+the exported C ABI. Cases request energy, analytic forces, and any golden-backed
+charge outputs. The CPU runner submits the manifest's explicit channel count
+through the ABI-v2 `spin_channels` suffix:
 
 ```bash
 env LD_LIBRARY_PATH=/path/to/mkl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} \
@@ -149,11 +155,14 @@ srun --gres=gpu:1 env \
 ```
 
 Actual JSON is written before comparison. The primary manifest tolerances are
-used unchanged. Energy and QM forces are gated for every supported case;
-QM/MM goldens also gate atomic charges and point-charge forces. `oh_radical`
-is explicitly skipped because its nonzero unpaired-electron count requires
-unrestricted SCC, which the current public GFN2 path does not support. Atomic
-dipoles and quadrupoles are not compared because C API version 1 has no result
+used unchanged. Energy and QM forces are gated for every case; QM/MM goldens
+also gate atomic charges and point-charge forces. `oh_radical` uses the standard
+shared-orbital (`spin_channels=1`) xTB semantics and gates energy, force, and
+atom-resolved charges. CPU spin-polarized (`spin_channels=2`) inference and
+analytic forces are tested separately until an independently generated
+spin-polarized golden is committed. CUDA spin-polarized inference remains
+explicitly skipped until that backend accepts the ABI-v2 suffix. Atomic dipoles
+and quadrupoles are not compared because the current C result ABI has no output
 buffers for them.
 
 `--memory-mode device` places every nonempty input and output descriptor in

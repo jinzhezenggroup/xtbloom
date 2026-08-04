@@ -1,6 +1,7 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
+find_dependency(Threads)
 if(@GPUXTB_HAS_CUDA@)
   find_dependency(CUDAToolkit
     @GPUXTB_CUDA_TOOLKIT_MAJOR@.@GPUXTB_CUDA_TOOLKIT_MINOR@

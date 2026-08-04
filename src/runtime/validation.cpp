@@ -101,6 +101,16 @@ BufferView view(const gpuxtb_buffer_t& buffer) {
 
 bool active(const BufferView& buffer) { return buffer.data != nullptr || buffer.size_bytes != 0; }
 
+bool has_spin_channel_suffix(const gpuxtb_batch_t& batch) {
+  return batch.struct_size >= GPUXTB_BATCH_V2_SIZE;
+}
+
+BufferView spin_channel_view(const gpuxtb_batch_t& batch) {
+  /* Do not read beyond an ABI-v1 caller's allocation. */
+  return has_spin_channel_suffix(batch) ? view(batch.spin_channels)
+                                        : BufferView{nullptr, 0u, GPUXTB_MEMORY_HOST, 0u};
+}
+
 bool checked_add(std::size_t lhs, std::size_t rhs, std::size_t& result) {
   if (rhs > std::numeric_limits<std::size_t>::max() - lhs) {
     return false;
@@ -218,7 +228,8 @@ DescriptorValidationResult validate_host_offsets(const char* name, const BufferV
   return {};
 }
 
-DescriptorValidationResult add_active_range(std::array<ActiveRange, 19>& ranges,
+template <std::size_t N>
+DescriptorValidationResult add_active_range(std::array<ActiveRange, N>& ranges,
                                             std::size_t& range_count, const char* name,
                                             const BufferView& buffer, std::size_t logical_bytes,
                                             bool output) {
@@ -244,7 +255,8 @@ bool ranges_overlap(const ActiveRange& lhs, const ActiveRange& rhs) {
   return lhs_begin < rhs_end && rhs_begin < lhs_end;
 }
 
-DescriptorValidationResult validate_aliases(const std::array<ActiveRange, 19>& ranges,
+template <std::size_t N>
+DescriptorValidationResult validate_aliases(const std::array<ActiveRange, N>& ranges,
                                             std::size_t range_count) {
   for (std::size_t lhs_index = 0; lhs_index < range_count; ++lhs_index) {
     for (std::size_t rhs_index = lhs_index + 1; rhs_index < range_count; ++rhs_index) {
@@ -367,6 +379,17 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
       return checked;
     }
   }
+  const BufferView spin_channels = spin_channel_view(*batch);
+  if (active(spin_channels)) {
+    DescriptorValidationResult checked =
+        validate_buffer_descriptor("spin_channels", spin_channels, backend);
+    if (!checked.ok()) {
+      return checked;
+    }
+    if (backend_value == GPUXTB_BACKEND_CUDA) {
+      return unsupported("CUDA unrestricted spin channels are not implemented yet");
+    }
+  }
 
   std::size_t batch_i32_bytes = 0;
   std::size_t batch_u8_bytes = 0;
@@ -400,6 +423,13 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
   };
   for (const RequiredInput& input : required_inputs) {
     DescriptorValidationResult checked = require_bytes(input.name, input.buffer, input.bytes);
+    if (!checked.ok()) {
+      return checked;
+    }
+  }
+  if (active(spin_channels)) {
+    DescriptorValidationResult checked =
+        require_bytes("spin_channels", spin_channels, batch_i32_bytes);
     if (!checked.ok()) {
       return checked;
     }
@@ -501,7 +531,7 @@ DescriptorValidationResult validate_compute_descriptor_aliases(
     const gpuxtb_batch_t& batch, const gpuxtb_compute_options_t& options,
     const gpuxtb_batch_result_t& result, const DescriptorExtentState& extents) {
   /* One fixed entry per ABI-v1 buffer keeps successful validation allocation-free. */
-  std::array<ActiveRange, 19> ranges{};
+  std::array<ActiveRange, 20> ranges{};
   std::size_t range_count = 0;
   const RequiredInput alias_inputs[] = {
       {"atom_offsets", view(batch.atom_offsets), extents.atom_offset_bytes},
@@ -513,6 +543,15 @@ DescriptorValidationResult validate_compute_descriptor_aliases(
   for (const RequiredInput& input : alias_inputs) {
     DescriptorValidationResult checked =
         add_active_range(ranges, range_count, input.name, input.buffer, input.bytes, false);
+    if (!checked.ok()) {
+      return checked;
+    }
+  }
+  const BufferView spin_channels = spin_channel_view(batch);
+  if (active(spin_channels)) {
+    DescriptorValidationResult checked =
+        add_active_range(ranges, range_count, "spin_channels", spin_channels,
+                         extents.batch_i32_bytes, false);
     if (!checked.ok()) {
       return checked;
     }
@@ -625,6 +664,22 @@ DescriptorValidationResult validate_host_topology_semantics(const gpuxtb_batch_t
   const BufferView unpaired_electrons = view(batch.unpaired_electrons);
   if (unpaired_electrons.memory_space != GPUXTB_MEMORY_HOST) {
     validation.pending_offset_checks |= kUnpairedElectronsNeedStaging;
+  }
+  const BufferView spin_channels = spin_channel_view(batch);
+  if (active(spin_channels)) {
+    if (spin_channels.memory_space != GPUXTB_MEMORY_HOST) {
+      return unsupported("device-resident spin_channels are not implemented yet");
+    }
+    for (std::int64_t system = 0; system < batch.batch_size; ++system) {
+      std::int32_t channels = 0;
+      std::memcpy(&channels,
+                  static_cast<const unsigned char*>(spin_channels.data) +
+                      static_cast<std::size_t>(system) * sizeof(channels),
+                  sizeof(channels));
+      if (channels != 1 && channels != 2) {
+        return invalid("spin_channels values must be one or two");
+      }
+    }
   }
 
   const BufferView point_offsets = view(batch.point_charge_offsets);

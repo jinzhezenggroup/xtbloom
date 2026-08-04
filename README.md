@@ -26,6 +26,12 @@ ctest --test-dir build --output-on-failure
 available and otherwise produces a CPU-only library. The ROCm enum is reserved in the ABI, but the
 backend is not implemented yet.
 
+CPU contexts use `gpuxtb_context_options_t::cpu_threads` as the outer batch-parallelism ceiling.
+Set it to one for deterministic serial execution, to a positive value for that many available CPU
+workers, or to zero for an affinity-aware automatic choice (currently capped at 64). The CPU
+runtime keeps its workers and numerical staging for the lifetime of the context; MKL remains LP64
+and one-thread-per-worker so batch parallelism does not create nested BLAS oversubscription.
+
 On the current development machine, CUDA 12.9.1 can be selected explicitly with:
 
 ```console

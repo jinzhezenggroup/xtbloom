@@ -22,6 +22,14 @@ SPEC = importlib.util.spec_from_file_location("gpuxtb_conformance_tool", TOOL)
 assert SPEC is not None and SPEC.loader is not None
 CONFORMANCE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CONFORMANCE)
+sys.modules.setdefault("gpuxtb_conformance", CONFORMANCE)
+PUBLIC_SPEC = importlib.util.spec_from_file_location(
+    "gpuxtb_public_api_tool", PUBLIC_API_TOOL
+)
+assert PUBLIC_SPEC is not None and PUBLIC_SPEC.loader is not None
+PUBLIC_API = importlib.util.module_from_spec(PUBLIC_SPEC)
+sys.modules[PUBLIC_SPEC.name] = PUBLIC_API
+PUBLIC_SPEC.loader.exec_module(PUBLIC_API)
 
 
 class ConformanceToolTest(unittest.TestCase):
@@ -103,8 +111,16 @@ class ConformanceToolTest(unittest.TestCase):
             with self.assertRaisesRegex(CONFORMANCE.ConformanceError, "non-finite"):
                 CONFORMANCE.load_turbomole_coord(path, case)
 
-    def test_public_runner_explicitly_excludes_unrestricted_case(self) -> None:
-        """The unsupported radical is scoped out before loading a shared library."""
+    def test_public_runner_preserves_open_shell_channel_metadata(self) -> None:
+        """Unpaired electrons do not implicitly enable spin polarization."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        cases = PUBLIC_API.supported_cases(manifest, ["oh_radical"])
+        self.assertEqual([case["id"] for case in cases], ["oh_radical"])
+        storage = PUBLIC_API.assemble_batch(MANIFEST, manifest, cases)
+        self.assertEqual(storage.unpaired_electrons, [1])
+        self.assertEqual(storage.spin_channels, [1])
+        self.assertEqual(PUBLIC_API.Batch._fields_[-1][0], "spin_channels")
+
         completed = subprocess.run(
             [
                 sys.executable,
@@ -121,9 +137,28 @@ class ConformanceToolTest(unittest.TestCase):
             text=True,
             capture_output=True,
         )
-        self.assertEqual(completed.returncode, 0, msg=completed.stderr)
-        self.assertIn("SKIP oh_radical", completed.stdout)
-        self.assertIn("restricted closed-shell", completed.stdout)
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("shared library is missing", completed.stderr)
+        self.assertNotIn("SKIP oh_radical", completed.stdout)
+
+    def test_public_open_shell_comparison_requires_force_energy_and_charge(self) -> None:
+        """The standard xTB OH golden gates every public property it contains."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        cases = PUBLIC_API.supported_cases(manifest, ["oh_radical"])
+        case_slice = PUBLIC_API.assemble_batch(MANIFEST, manifest, cases).slices[0]
+        actual = {
+            "energy_hartree": case_slice.expected["energy_hartree"],
+            "forces_hartree_per_bohr": case_slice.expected["forces_hartree_per_bohr"],
+            "partial_charges_e": case_slice.expected["partial_charges_e"],
+        }
+        unsupported: dict[str, str] = {}
+        self.assertEqual(
+            PUBLIC_API._compare_case(manifest, case_slice, actual, unsupported), []
+        )
+        actual["energy_hartree"] += 1.0e-3
+        failures = PUBLIC_API._compare_case(manifest, case_slice, actual, unsupported)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("energy_hartree", failures[0])
 
     def test_public_runner_rejects_cuda_memory_for_cpu_before_loading(self) -> None:
         """Device descriptors cannot accidentally be routed through the CPU backend."""
@@ -237,9 +272,7 @@ class ConformanceToolTest(unittest.TestCase):
                 encoding="utf-8"
             )
         )["properties"]
-        self.assertAlmostEqual(
-            hardness["energy_hartree"], -10.16092775478, delta=1e-11
-        )
+        self.assertAlmostEqual(hardness["energy_hartree"], -10.16092775478, delta=1e-11)
         self.assertAlmostEqual(
             hardness["gradient_hartree_per_bohr"][12],
             -2.0334108000991e-3,
@@ -255,9 +288,7 @@ class ConformanceToolTest(unittest.TestCase):
                 encoding="utf-8"
             )
         )["properties"]
-        self.assertAlmostEqual(
-            gamma999["energy_hartree"], -10.16878826896, delta=1e-11
-        )
+        self.assertAlmostEqual(gamma999["energy_hartree"], -10.16878826896, delta=1e-11)
 
     def test_qmmm_input_rejects_element_and_gamma_semantic_mismatches(self) -> None:
         """The oracle cannot calculate a different element/gamma model than declared."""

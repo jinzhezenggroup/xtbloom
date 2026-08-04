@@ -15,6 +15,7 @@
 #include "model/gfn2/mulliken.hpp"
 #include "model/gfn2/periodic_embedding.hpp"
 #include "model/gfn2/scc_mixer.hpp"
+#include "model/gfn2/spin.hpp"
 #include "model/gfn2/wavefunction.hpp"
 
 namespace gpuxtb::detail::gfn2 {
@@ -144,6 +145,7 @@ struct SccDriverState {
   double* es2_energies = nullptr;
   double* es3_energies = nullptr;
   double* aes2_energies = nullptr;
+  double* spin_energies = nullptr;
   double* d4_two_body_energies = nullptr;
   double* explicit_point_charge_energies = nullptr;
   double* periodic_embedding_energies = nullptr;
@@ -182,6 +184,7 @@ struct SccDriverWorkspace {
   double* shell_potentials = nullptr;
   double* dipole_potentials = nullptr;
   double* quadrupole_potentials = nullptr;
+  double* spin_shell_potentials = nullptr;
   double* raw_qsh = nullptr;
   double* raw_qat = nullptr;
   double* raw_dipoles = nullptr;
@@ -190,6 +193,7 @@ struct SccDriverWorkspace {
   double* es2_energies = nullptr;
   double* es3_energies = nullptr;
   double* aes2_energies = nullptr;
+  double* spin_energies = nullptr;
   double* explicit_point_charge_energies = nullptr;
   double* internal_energies = nullptr;
   double* free_energies = nullptr;
@@ -215,8 +219,10 @@ struct SccDriverWorkspace {
 
 /*
  * Seal exact component compatibility and precompute all state/scratch offsets.
- * Unrestricted layouts are rejected until a spin-polarization potential is
- * available. Compatibility overloads use kDefaultSccEnergyTolerance. The
+ * Restricted and unrestricted systems may coexist in one ragged batch; the
+ * driver derives the atom-local GFN2 spin-polarization plan from the same
+ * canonical basis metadata. Compatibility overloads use
+ * kDefaultSccEnergyTolerance. The
  * production convergence gate requires both the mixer RMS residual and the
  * absolute complete SCC free-energy change to be strictly below tolerance.
  */

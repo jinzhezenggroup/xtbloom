@@ -131,6 +131,7 @@ typedef struct gpuxtb_context_options {
   uint32_t api_version;
   gpuxtb_backend_t backend;
   int32_t device_id;
+  /* CPU batch parallelism: zero selects automatic, one disables parallelism. */
   int32_t cpu_threads;
   uint32_t reserved;
   /* Native cudaStream_t or hipStream_t cast to void*. NULL selects the default. */
@@ -162,7 +163,10 @@ typedef struct gpuxtb_buffer {
  * atom_offsets contains batch_size + 1 int64_t values. atomic_numbers contains
  * total_atoms int32_t values. positions contains total_atoms * 3 doubles.
  * molecular_charges contains batch_size doubles and unpaired_electrons contains
- * batch_size int32_t values.
+ * batch_size int32_t values. The ABI-v2 spin_channels field, when present,
+ * contains batch_size int32_t values equal to one (restricted) or two
+ * (unrestricted). A missing or NULL spin_channels buffer preserves the ABI-v1
+ * restricted default.
  *
  * External point charges participate in every SCC iteration. When
  * total_point_charges is nonzero, point_charge_offsets has batch_size + 1
@@ -199,10 +203,14 @@ typedef struct gpuxtb_batch {
   gpuxtb_const_buffer_t atomic_potential_shifts;
   gpuxtb_const_buffer_t charge_response_offsets;
   gpuxtb_const_buffer_t charge_response_matrix;
+  /* ABI v2 optional suffix; NULL selects one restricted channel per system. */
+  gpuxtb_const_buffer_t spin_channels;
 } gpuxtb_batch_t;
 
 #define GPUXTB_BATCH_V1_SIZE \
   (offsetof(gpuxtb_batch_t, charge_response_matrix) + sizeof(gpuxtb_const_buffer_t))
+#define GPUXTB_BATCH_V2_SIZE \
+  (offsetof(gpuxtb_batch_t, spin_channels) + sizeof(gpuxtb_const_buffer_t))
 
 /*
  * electronic_temperature is k_B*T in Hartree. Bindings that accept kelvin

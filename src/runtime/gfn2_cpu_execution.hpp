@@ -1,6 +1,7 @@
 #ifndef GPUXTB_RUNTIME_GFN2_CPU_EXECUTION_HPP
 #define GPUXTB_RUNTIME_GFN2_CPU_EXECUTION_HPP
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -17,7 +18,13 @@ namespace gpuxtb::detail {
  */
 class Gfn2CpuExecutionCache {
  public:
-  Gfn2CpuExecutionCache();
+  /*
+   * cpu_threads is the context-wide outer batch parallelism requested by the
+   * public API. Zero selects an affinity-aware automatic value; one keeps the
+   * execution path serial. The implementation owns persistent workers so a
+   * steady-state compute call never creates or destroys threads.
+   */
+  explicit Gfn2CpuExecutionCache(std::int32_t cpu_threads);
   ~Gfn2CpuExecutionCache();
 
   Gfn2CpuExecutionCache(const Gfn2CpuExecutionCache&) = delete;
@@ -27,10 +34,11 @@ class Gfn2CpuExecutionCache {
   struct Impl;
   std::unique_ptr<Impl> impl_;
 
-  friend gpuxtb_status_t execute_restricted_gfn2_cpu(
-      Gfn2CpuExecutionCache& cache, const gpuxtb_batch_t& batch,
-      const gpuxtb_compute_options_t& options, gpuxtb_batch_result_t& result,
-      std::string& error);
+  friend gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
+                                                     const gpuxtb_batch_t& batch,
+                                                     const gpuxtb_compute_options_t& options,
+                                                     gpuxtb_batch_result_t& result,
+                                                     std::string& error);
 };
 
 /*
@@ -42,10 +50,9 @@ class Gfn2CpuExecutionCache {
  * batch member reaches either a successful or documented terminal state.
  */
 gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
-                                             const gpuxtb_batch_t& batch,
-                                             const gpuxtb_compute_options_t& options,
-                                             gpuxtb_batch_result_t& result,
-                                             std::string& error);
+                                            const gpuxtb_batch_t& batch,
+                                            const gpuxtb_compute_options_t& options,
+                                            gpuxtb_batch_result_t& result, std::string& error);
 
 }  // namespace gpuxtb::detail
 

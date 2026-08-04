@@ -62,7 +62,7 @@
     },
     {
       "atom_count": 2,
-      "description": "Neutral OH radical exercises unrestricted open-shell SCC and atom-resolved charge, dipole, and quadrupole state.",
+      "description": "Neutral OH radical exercises the standard GFN2-xTB shared-orbital open-shell SCC state and atom-resolved charge, dipole, and quadrupole state.",
       "golden": "data/conformance/golden/oh_radical.json",
       "golden_sha256": "218ed420399030b4ff2e777daf6b3b113c9765054617b3b1345f2c9621318304",
       "id": "oh_radical",
@@ -71,6 +71,7 @@
       "molecular_charge": 0,
       "reference_engine": "xtb",
       "reference_output_sha256": "df4b58ef6644f5234e448e369c9a41c2b3035d37ad4edb82553aec813e61e237",
+      "spin_channels": 1,
       "unpaired_electrons": 1
     },
     {

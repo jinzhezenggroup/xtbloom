@@ -331,6 +331,8 @@ struct FixtureTopology {
   std::vector<std::int32_t> atomic_numbers;
   std::vector<double> positions;
   std::vector<double> molecular_charges;
+  std::vector<std::int32_t> unpaired_electrons;
+  std::vector<std::int32_t> spin_channels;
 };
 
 std::size_t append_test_segment(std::size_t cursor, std::size_t bytes, std::size_t alignment) {
@@ -341,9 +343,9 @@ std::size_t append_test_segment(std::size_t cursor, std::size_t bytes, std::size
 std::size_t expected_disabled_state_size(const Fixture& fixture) {
   const std::size_t batch = static_cast<std::size_t>(fixture.batch_size);
   std::size_t cursor = 0u;
-  /* Five legacy thermodynamic traces plus the six complete-energy traces
+  /* Five legacy thermodynamic traces plus the seven complete-energy traces
    * that remain when optional D4 and periodic embedding are disabled. */
-  for (int field = 0; field < 11; ++field) {
+  for (int field = 0; field < 12; ++field) {
     cursor = append_test_segment(cursor, batch * sizeof(double), alignof(double));
   }
   cursor = append_test_segment(cursor, batch * sizeof(std::uint64_t), alignof(std::uint64_t));
@@ -378,12 +380,13 @@ std::size_t expected_disabled_workspace_size(const Fixture& fixture) {
   cursor =
       append_test_segment(cursor, doubles(wavefunction.quadrupole.element_count), alignof(double));
   cursor = append_test_segment(cursor, doubles(wavefunction.qsh.element_count), alignof(double));
+  cursor = append_test_segment(cursor, doubles(wavefunction.qsh.element_count), alignof(double));
   cursor = append_test_segment(cursor, doubles(wavefunction.qat.element_count), alignof(double));
   cursor = append_test_segment(cursor, doubles(wavefunction.dipole.element_count), alignof(double));
   cursor =
       append_test_segment(cursor, doubles(wavefunction.quadrupole.element_count), alignof(double));
-  /* core, ES2, ES3, AES2, explicit-PC, internal, and complete free energy */
-  for (int field = 0; field < 7; ++field) {
+  /* core, ES2, ES3, AES2, spin, explicit-PC, internal, and complete free energy */
+  for (int field = 0; field < 8; ++field) {
     cursor = append_test_segment(cursor, batch * sizeof(double), alignof(double));
   }
   cursor = append_test_segment(cursor, doubles(wavefunction.total_shells), alignof(double));
@@ -460,7 +463,11 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
         topology->atomic_numbers.size() !=
             static_cast<std::size_t>(topology->atom_offsets.back()) ||
         topology->positions.size() != 3u * topology->atomic_numbers.size() ||
-        topology->molecular_charges.size() != static_cast<std::size_t>(batch_size)) {
+        topology->molecular_charges.size() != static_cast<std::size_t>(batch_size) ||
+        (!topology->unpaired_electrons.empty() &&
+         topology->unpaired_electrons.size() != static_cast<std::size_t>(batch_size)) ||
+        (!topology->spin_channels.empty() &&
+         topology->spin_channels.size() != static_cast<std::size_t>(batch_size))) {
       error = "test fixture topology is malformed";
       return false;
     }
@@ -472,6 +479,12 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
   const std::int64_t total_atoms = fixture.atom_offsets.back();
   fixture.unpaired.assign(static_cast<std::size_t>(batch_size), 0);
   fixture.spins.assign(static_cast<std::size_t>(batch_size), 1);
+  if (topology != nullptr && !topology->unpaired_electrons.empty()) {
+    fixture.unpaired = topology->unpaired_electrons;
+  }
+  if (topology != nullptr && !topology->spin_channels.empty()) {
+    fixture.spins = topology->spin_channels;
+  }
   fixture.coordination.assign(static_cast<std::size_t>(total_atoms), 0.0);
 
   if (make_basis_plan(batch_size, total_atoms, fixture.atom_offsets.data(),
@@ -668,7 +681,7 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
 }
 
 int test_complete_energy_components_free_energy_and_restart() {
-  const FixtureTopology topology{{0, 2}, {1, 1}, {-0.7, 0.0, 0.0, 0.7, 0.0, 0.0}, {0.0}};
+  const FixtureTopology topology{{0, 2}, {1, 1}, {-0.7, 0.0, 0.0, 0.7, 0.0, 0.0}, {0.0}, {}, {}};
   Fixture fixture;
   std::string error;
   error.reserve(256u);
@@ -696,11 +709,12 @@ int test_complete_energy_components_free_energy_and_restart() {
                                      fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
   CHECK(fixture.driver_state.converged[0] == 1u);
 
-  const std::array<double, 7> components{{
+  const std::array<double, 8> components{{
       fixture.driver_state.core_energies[0],
       fixture.driver_state.es2_energies[0],
       fixture.driver_state.es3_energies[0],
       fixture.driver_state.aes2_energies[0],
+      fixture.driver_state.spin_energies[0],
       fixture.driver_state.d4_two_body_energies[0],
       fixture.driver_state.explicit_point_charge_energies[0],
       fixture.driver_state.periodic_embedding_energies[0],
@@ -759,7 +773,8 @@ int test_complete_energy_components_free_energy_and_restart() {
         fixture.driver_state.free_energy_changes, fixture.driver_state.entropies,
         fixture.driver_state.band_energies, fixture.driver_state.core_energies,
         fixture.driver_state.es2_energies, fixture.driver_state.es3_energies,
-        fixture.driver_state.aes2_energies, fixture.driver_state.d4_two_body_energies,
+        fixture.driver_state.aes2_energies, fixture.driver_state.spin_energies,
+        fixture.driver_state.d4_two_body_energies,
         fixture.driver_state.explicit_point_charge_energies,
         fixture.driver_state.periodic_embedding_energies, fixture.driver_state.internal_energies}) {
     CHECK(std::isnan(trace[0]));
@@ -827,7 +842,8 @@ int test_energy_and_residual_convergence_gates_are_independent_and_strict() {
 }
 
 int test_complete_energy_failure_isolated_from_ragged_peer() {
-  const FixtureTopology topology{{0, 1, 2}, {1, 2}, {0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, {1.0, 2.0}};
+  const FixtureTopology topology{{0, 1, 2},  {1, 2}, {0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+                                 {1.0, 2.0}, {},     {}};
   Fixture fixture;
   std::string error;
   CHECK(make_fixture(2, fixture, error, 1u, 1.0e100, false, &topology));
@@ -954,39 +970,40 @@ int test_structural_failure_atomicity_and_zero_allocation() {
   return 0;
 }
 
-int test_unrestricted_is_rejected_without_spin_polarization() {
-  const std::array<std::int64_t, 2> atom_offsets{{0, 1}};
-  const std::array<std::int32_t, 1> atomic_numbers{{1}};
-  const std::array<double, 1> charges{{1.0}};
-  const std::array<std::int32_t, 1> unpaired{{0}};
-  const std::array<std::int32_t, 1> spins{{2}};
-  BasisPlan basis;
-  IntegralPlan integrals;
-  WavefunctionLayout wavefunction;
-  ES2Plan es2;
-  ES3Plan es3;
-  AES2Plan aes2;
-  MullikenPlan mulliken;
-  EigensolverPlan eigensolver;
-  SccMixerPlan mixer;
-  SccDriverPlan driver;
+int test_mixed_restricted_unrestricted_hydrogen_batch() {
+  const FixtureTopology topology{{0, 1, 2},  {1, 1}, {0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+                                 {1.0, 0.0}, {0, 1}, {1, 2}};
+  Fixture fixture;
   std::string error;
-  CHECK(make_basis_plan(1, 1, atom_offsets.data(), atomic_numbers.data(), basis, error) ==
-        GPUXTB_STATUS_SUCCESS);
-  CHECK(make_integral_plan(basis, integrals, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(make_wavefunction_layout(basis, atomic_numbers.data(), charges.data(), unpaired.data(),
-                                 spins.data(), wavefunction, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(make_es2_plan(basis, atomic_numbers.data(), es2, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(make_es3_plan(basis, atomic_numbers.data(), es3, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(make_aes2_plan(basis, atomic_numbers.data(), aes2, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(make_mulliken_plan(basis, integrals, wavefunction, mulliken, error) ==
-        GPUXTB_STATUS_SUCCESS);
-  CHECK(make_eigensolver_plan(wavefunction, eigensolver, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(make_scc_mixer_plan(wavefunction, 3, 0.4, 1.0e-10, 1.0e-10, mixer, error) ==
-        GPUXTB_STATUS_SUCCESS);
-  CHECK(make_scc_driver_plan(wavefunction, mulliken, es2, es3, aes2, eigensolver, mixer, 5u, 0.0,
-                             driver, error) == GPUXTB_STATUS_NOT_SUPPORTED);
-  CHECK(!driver.sealed());
+  CHECK(make_fixture(2, fixture, error, 1u, 1.0e100, false, &topology, false, false, 1.0e100));
+
+  const std::int64_t open_shell_qsh = fixture.wavefunction_layout.qsh.system_offsets[1];
+  CHECK(fixture.wavefunction_layout.qsh.system_offsets[2] - open_shell_qsh == 2);
+  CHECK(fixture.wavefunction.qsh[open_shell_qsh] == 0.0);
+  fixture.wavefunction.qsh[open_shell_qsh + 1] = -1.0;
+  CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 1, fixture.wavefunction,
+                                      fixture.mixer_state, fixture.driver_state,
+                                      error) == GPUXTB_STATUS_SUCCESS);
+
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.system_statuses[1] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.spin_energies[0] == 0.0);
+  CHECK(std::abs(fixture.driver_state.spin_energies[1] + 0.0358125) < 2.0e-14);
+
+  const std::int64_t h0_index = fixture.mulliken_plan.matrix_offsets()[1];
+  const std::int64_t hamiltonian_base = fixture.wavefunction_layout.density.system_offsets[1];
+  const double h0 = fixture.h0[static_cast<std::size_t>(h0_index)];
+  const double overlap = fixture.overlap[static_cast<std::size_t>(h0_index)];
+  CHECK(std::abs(fixture.driver_scratch.hamiltonian[hamiltonian_base] - (h0 - overlap * 0.071625)) <
+        2.0e-15);
+  CHECK(std::abs(fixture.driver_scratch.hamiltonian[hamiltonian_base + 1] -
+                 (h0 + overlap * 0.071625)) < 2.0e-15);
+  CHECK(std::abs(fixture.wavefunction.qsh[open_shell_qsh]) < 2.0e-13);
+  CHECK(std::abs(fixture.wavefunction.qsh[open_shell_qsh + 1] + 1.0) < 2.0e-13);
   return 0;
 }
 
@@ -1153,7 +1170,7 @@ int test_disabled_layout_and_bitwise_compatibility() {
 }
 
 int test_optional_d4_potential_energy_restart_and_zero_allocation() {
-  const FixtureTopology topology{{0, 2}, {6, 8}, {-1.1, 0.0, 0.0, 1.1, 0.0, 0.0}, {0.0}};
+  const FixtureTopology topology{{0, 2}, {6, 8}, {-1.1, 0.0, 0.0, 1.1, 0.0, 0.0}, {0.0}, {}, {}};
   Fixture reference;
   Fixture enabled;
   Fixture combined;
@@ -1344,7 +1361,8 @@ int test_optional_d4_potential_energy_restart_and_zero_allocation() {
 
 int test_d4_atm_is_not_part_of_scc() {
   const FixtureTopology topology{
-      {0, 3}, {6, 6, 6}, {0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 1.5, 2.598076211353316, 0.0}, {0.0}};
+      {0, 3}, {6, 6, 6}, {0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 1.5, 2.598076211353316, 0.0},
+      {0.0},  {},        {}};
   Fixture fixture;
   std::string error;
   CHECK(make_fixture(1, fixture, error, 5u, 1.0e-10, false, &topology, false, true));
@@ -1414,7 +1432,7 @@ int test_optional_periodic_embedding_and_explicit_point_charge_composition() {
 
 int test_ragged_dense_periodic_response_publishes_raw_energy() {
   const FixtureTopology topology{
-      {0, 2, 3}, {6, 1, 1}, {0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0}, {1.0, 1.0}};
+      {0, 2, 3}, {6, 1, 1}, {0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0}, {1.0, 1.0}, {}, {}};
   Fixture fixture;
   std::string error;
   CHECK(make_fixture(2, fixture, error, 5u, 1.0e6, true, &topology));
@@ -1734,7 +1752,7 @@ int main() {
   if (const int status = test_control_descriptors_cannot_alias_numerical_storage(); status != 0) {
     return status;
   }
-  if (const int status = test_unrestricted_is_rejected_without_spin_polarization(); status != 0) {
+  if (const int status = test_mixed_restricted_unrestricted_hydrogen_batch(); status != 0) {
     return status;
   }
   if (const int status = test_max_iteration_status_counts_attempts(); status != 0) {

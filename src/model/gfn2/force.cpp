@@ -75,7 +75,7 @@ gpuxtb_status_t validate_numerical_ranges(
     const D4GeometryCache* d4_cache, const RestrictedGfn2StationaryInput& input, double* energies,
     double* qm_forces, double* point_forces, const RestrictedGfn2ComponentGradients& components,
     const RestrictedGfn2ForceWorkspace& workspace, bool force_requested, std::string& error) {
-  std::array<AddressRange, 20> reads{};
+  std::array<AddressRange, 24> reads{};
   std::array<AddressRange, 32> writes{};
   std::size_t read_count = 0u;
   std::size_t write_count = 0u;
@@ -104,6 +104,9 @@ gpuxtb_status_t validate_numerical_ranges(
   if (force_requested) {
     if (!add_read(input.coordination_numbers, atoms) || !add_read(input.overlap, matrix) ||
         !add_read(input.density, matrix) || !add_read(input.energy_weighted_density, matrix) ||
+        !add_read(input.spin_density, input.spin_density == nullptr ? 0 : matrix) ||
+        !add_read(input.spin_scalar_shell_potentials,
+                  input.spin_scalar_shell_potentials == nullptr ? 0 : shells) ||
         !add_read(input.shell_charges, shells) || !add_read(input.atomic_charges, atoms) ||
         !add_read(input.atomic_dipoles, atoms * 3) ||
         !add_read(input.atomic_quadrupoles, atoms * 6) ||
@@ -229,8 +232,8 @@ gpuxtb_status_t validate_plan_compatibility(
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
   for (std::int32_t spin_channels : mulliken.spin_channels()) {
-    if (spin_channels != 1) {
-      error = "restricted GFN2 force composition requires exactly one spin channel";
+    if (spin_channels != 1 && spin_channels != 2) {
+      error = "GFN2 force composition requires one or two spin channels";
       return GPUXTB_STATUS_INVALID_ARGUMENT;
     }
   }
@@ -285,7 +288,8 @@ gpuxtb_status_t add_stationary_integral_adjoints(
         const double scalar_factor =
             -0.5 * (scalar_shell_potentials[row_shell] + scalar_shell_potentials[column_shell]);
         overlap_adjoint[forward] += pair_density * scalar_factor;
-        for (std::int64_t component = 0; component < 3; ++component) {
+        for (std::int64_t component = 0; dipole_potentials != nullptr && component < 3;
+             ++component) {
           const std::int64_t forward_index = component * total_matrix + forward;
           const std::int64_t reverse_index = component * total_matrix + reverse;
           dipole_adjoint[forward_index] +=
@@ -293,7 +297,8 @@ gpuxtb_status_t add_stationary_integral_adjoints(
           dipole_adjoint[reverse_index] +=
               -0.5 * pair_density * dipole_potentials[row_atom * 3 + component];
         }
-        for (std::int64_t component = 0; component < 6; ++component) {
+        for (std::int64_t component = 0; quadrupole_potentials != nullptr && component < 6;
+             ++component) {
           const std::int64_t forward_index = component * total_matrix + forward;
           const std::int64_t reverse_index = component * total_matrix + reverse;
           quadrupole_adjoint[forward_index] +=
@@ -364,6 +369,16 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
   const bool external_enabled = external != nullptr;
+  const bool has_unrestricted_system =
+      std::find(mulliken.spin_channels().begin(), mulliken.spin_channels().end(), 2) !=
+      mulliken.spin_channels().end();
+  if (force_requested &&
+      ((input.spin_density == nullptr) != (input.spin_scalar_shell_potentials == nullptr) ||
+       (has_unrestricted_system && input.spin_density == nullptr) ||
+       (!has_unrestricted_system && input.spin_density != nullptr))) {
+    error = "spin density and magnetization shell potentials are inconsistent with the topology";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
   const bool point_data_required = force_requested && external_enabled && points > 0;
   if ((!external_enabled && (input.point_positions != nullptr || input.point_charges != nullptr ||
                              input.point_hardnesses != nullptr || point_forces != nullptr ||
@@ -465,6 +480,9 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
       !finite_array(input.overlap, static_cast<std::size_t>(matrix)) ||
       !finite_array(input.density, static_cast<std::size_t>(matrix)) ||
       !finite_array(input.energy_weighted_density, static_cast<std::size_t>(matrix)) ||
+      (has_unrestricted_system &&
+       (!finite_array(input.spin_density, static_cast<std::size_t>(matrix)) ||
+        !finite_array(input.spin_scalar_shell_potentials, static_cast<std::size_t>(shells)))) ||
       !finite_array(input.shell_charges, static_cast<std::size_t>(shells)) ||
       !finite_array(input.atomic_charges, static_cast<std::size_t>(atoms)) ||
       !finite_array(input.atomic_dipoles, static_cast<std::size_t>(atoms) * 3u) ||
@@ -497,6 +515,14 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
       mulliken, input.density, input.scalar_shell_potentials, input.atomic_dipole_potentials,
       input.atomic_quadrupole_potentials, workspace.overlap_adjoint, workspace.dipole_adjoint,
       workspace.quadrupole_adjoint, error);
+  if (status == GPUXTB_STATUS_SUCCESS && has_unrestricted_system) {
+    /* Spin polarization is geometry independent at fixed magnetization, but
+     * magnetization itself is a Mulliken overlap population. Its stationary
+     * response therefore contributes through P_alpha-P_beta and v_mag. */
+    status = add_stationary_integral_adjoints(
+        mulliken, input.spin_density, input.spin_scalar_shell_potentials, nullptr, nullptr,
+        workspace.overlap_adjoint, workspace.dipole_adjoint, workspace.quadrupole_adjoint, error);
+  }
   if (status == GPUXTB_STATUS_SUCCESS) {
     status = add_overlap_gradient_cpu(basis, integrals, input.positions, workspace.overlap_adjoint,
                                       workspace.component_gradient, workspace.integral_workspace,

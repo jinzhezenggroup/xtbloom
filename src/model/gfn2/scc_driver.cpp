@@ -21,6 +21,7 @@ struct SccDriverPlanData {
   ES2Plan es2;
   ES3Plan es3;
   AES2Plan aes2;
+  SpinPolarizationPlan spin;
   D4Plan d4;
   EigensolverPlan eigensolver;
   SccMixerPlan mixer;
@@ -40,6 +41,7 @@ struct SccDriverPlanData {
   std::size_t state_es2_energy_offset = 0u;
   std::size_t state_es3_energy_offset = 0u;
   std::size_t state_aes2_energy_offset = 0u;
+  std::size_t state_spin_energy_offset = 0u;
   std::size_t state_d4_energy_offset = 0u;
   std::size_t state_explicit_pc_energy_offset = 0u;
   std::size_t state_periodic_energy_offset = 0u;
@@ -64,6 +66,7 @@ struct SccDriverPlanData {
   std::size_t shell_potential_offset = 0u;
   std::size_t dipole_potential_offset = 0u;
   std::size_t quadrupole_potential_offset = 0u;
+  std::size_t spin_shell_potential_offset = 0u;
   std::size_t raw_qsh_offset = 0u;
   std::size_t raw_qat_offset = 0u;
   std::size_t raw_dipole_offset = 0u;
@@ -72,6 +75,7 @@ struct SccDriverPlanData {
   std::size_t es2_energy_offset = 0u;
   std::size_t es3_energy_offset = 0u;
   std::size_t aes2_energy_offset = 0u;
+  std::size_t spin_energy_offset = 0u;
   std::size_t explicit_pc_energy_offset = 0u;
   std::size_t internal_energy_offset = 0u;
   std::size_t free_energy_offset = 0u;
@@ -184,7 +188,7 @@ bool overlaps_plan_storage(const SccDriverPlanData& data, const AddressRange& ra
     return true;
   }
   const WavefunctionLayout& wavefunction = data.wavefunction;
-  const std::array<const std::vector<std::int64_t>*, 14> integer_vectors{{
+  const std::array<const std::vector<std::int64_t>*, 19> integer_vectors{{
       &wavefunction.atom_offsets,
       &wavefunction.batch_shell_offsets,
       &wavefunction.batch_orbital_offsets,
@@ -199,21 +203,26 @@ bool overlaps_plan_storage(const SccDriverPlanData& data, const AddressRange& ra
       &wavefunction.energy_weighted_density.system_offsets,
       &data.es3.batch_shell_offsets,
       &data.mixer.vector_offsets(),
+      &data.spin.atom_offsets,
+      &data.spin.batch_shell_offsets,
+      &data.spin.atom_shell_offsets,
+      &data.spin.shell_population_offsets,
+      &data.spin.coupling_offsets,
   }};
   for (const std::vector<std::int64_t>* values : integer_vectors) {
     if (overlaps_vector(range, *values)) {
       return true;
     }
   }
-  const std::array<const std::vector<std::int32_t>*, 3> int32_vectors{
+  const std::array<const std::vector<std::int32_t>*, 4> int32_vectors{
       {&wavefunction.atomic_numbers, &wavefunction.unpaired_electrons,
-       &wavefunction.spin_channels}};
+       &wavefunction.spin_channels, &data.spin.spin_channels}};
   for (const std::vector<std::int32_t>* values : int32_vectors) {
     if (overlaps_vector(range, *values)) {
       return true;
     }
   }
-  const std::array<const std::vector<double>*, 8> double_vectors{{
+  const std::array<const std::vector<double>*, 9> double_vectors{{
       &wavefunction.molecular_charges,
       &wavefunction.reference_atom_occupations,
       &wavefunction.reference_shell_occupations,
@@ -222,6 +231,7 @@ bool overlaps_plan_storage(const SccDriverPlanData& data, const AddressRange& ra
       &wavefunction.beta_electron_counts,
       &data.es3.shell_gamma3,
       &data.mulliken.reference_shell_occupations(),
+      &data.spin.coupling_matrices,
   }};
   for (const std::vector<double>* values : double_vectors) {
     if (overlaps_vector(range, *values)) {
@@ -435,6 +445,8 @@ bool exact_state_binding(const SccDriverPlanData& data, const SccDriverState& st
              offset_pointer<double>(state.workspace_base, data.state_es3_energy_offset) &&
          state.aes2_energies ==
              offset_pointer<double>(state.workspace_base, data.state_aes2_energy_offset) &&
+         state.spin_energies ==
+             offset_pointer<double>(state.workspace_base, data.state_spin_energy_offset) &&
          ((!data.d4.sealed() && state.d4_two_body_energies == nullptr) ||
           (data.d4.sealed() &&
            state.d4_two_body_energies ==
@@ -509,6 +521,8 @@ bool exact_workspace_binding(const SccDriverPlanData& data, const SccDriverWorks
              offset_pointer<double>(workspace.workspace_base, data.dipole_potential_offset) &&
          workspace.quadrupole_potentials ==
              offset_pointer<double>(workspace.workspace_base, data.quadrupole_potential_offset) &&
+         workspace.spin_shell_potentials ==
+             offset_pointer<double>(workspace.workspace_base, data.spin_shell_potential_offset) &&
          workspace.raw_qsh ==
              offset_pointer<double>(workspace.workspace_base, data.raw_qsh_offset) &&
          workspace.raw_qat ==
@@ -525,6 +539,8 @@ bool exact_workspace_binding(const SccDriverPlanData& data, const SccDriverWorks
              offset_pointer<double>(workspace.workspace_base, data.es3_energy_offset) &&
          workspace.aes2_energies ==
              offset_pointer<double>(workspace.workspace_base, data.aes2_energy_offset) &&
+         workspace.spin_energies ==
+             offset_pointer<double>(workspace.workspace_base, data.spin_energy_offset) &&
          workspace.explicit_point_charge_energies ==
              offset_pointer<double>(workspace.workspace_base, data.explicit_pc_energy_offset) &&
          workspace.internal_energies ==
@@ -869,6 +885,7 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
       state.es2_energies[system] = nan;
       state.es3_energies[system] = nan;
       state.aes2_energies[system] = nan;
+      state.spin_energies[system] = nan;
       if (state.d4_two_body_energies != nullptr) {
         state.d4_two_body_energies[system] = nan;
       }
@@ -908,6 +925,7 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
     state.es2_energies[system] = workspace.es2_energies[system];
     state.es3_energies[system] = workspace.es3_energies[system];
     state.aes2_energies[system] = workspace.aes2_energies[system];
+    state.spin_energies[system] = workspace.spin_energies[system];
     if (state.d4_two_body_energies != nullptr) {
       state.d4_two_body_energies[system] = workspace.d4_two_body_energies[system];
     }
@@ -1030,12 +1048,6 @@ gpuxtb_status_t make_scc_driver_plan(
     error = "SCC driver components or numerical policy are invalid";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
-  if (std::any_of(wavefunction.spin_channels.begin(), wavefunction.spin_channels.end(),
-                  [](std::int32_t channels) { return channels != 1; })) {
-    error = "SCC driver does not yet support unrestricted spin-polarization potentials";
-    return GPUXTB_STATUS_NOT_SUPPORTED;
-  }
-
   /* Rebuild the canonical GFN2 component metadata from one chemical source
    * of truth. Aggregate extents are insufficient: same-sized molecules can
    * have different elements, electron counts, shell maps, and SCC parameters.
@@ -1050,6 +1062,7 @@ gpuxtb_status_t make_scc_driver_plan(
   AES2Plan expected_aes2;
   EigensolverPlan expected_eigensolver;
   SccMixerPlan expected_mixer;
+  SpinPolarizationPlan expected_spin;
   status = make_basis_plan(wavefunction.batch_size, wavefunction.total_atoms,
                            wavefunction.atom_offsets.data(), wavefunction.atomic_numbers.data(),
                            expected_basis, error);
@@ -1084,6 +1097,10 @@ gpuxtb_status_t make_scc_driver_plan(
     status = make_scc_mixer_plan(expected_wavefunction, mixer.history_size(), mixer.damping(),
                                  mixer.rms_tolerance(), mixer.maximum_tolerance(), expected_mixer,
                                  error);
+  }
+  if (status == GPUXTB_STATUS_SUCCESS) {
+    status = make_spin_polarization_plan(expected_basis, expected_wavefunction, expected_spin,
+                                         error);
   }
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
@@ -1236,6 +1253,7 @@ gpuxtb_status_t make_scc_driver_plan(
     created.es2 = es2;
     created.es3 = es3;
     created.aes2 = aes2;
+    created.spin = std::move(expected_spin);
     if (d4 != nullptr) {
       created.d4 = *d4;
     }
@@ -1267,6 +1285,8 @@ gpuxtb_status_t make_scc_driver_plan(
                         created.state_es3_energy_offset) ||
         !append_segment(batch_double_bytes, alignof(double), cursor,
                         created.state_aes2_energy_offset) ||
+        !append_segment(batch_double_bytes, alignof(double), cursor,
+                        created.state_spin_energy_offset) ||
         !append_segment(d4_state_bytes, alignof(double), cursor, created.state_d4_energy_offset) ||
         !append_segment(batch_double_bytes, alignof(double), cursor,
                         created.state_explicit_pc_energy_offset) ||
@@ -1311,6 +1331,8 @@ gpuxtb_status_t make_scc_driver_plan(
                         created.dipole_potential_offset) ||
         !append_segment(quadrupole_population_bytes, alignof(double), cursor,
                         created.quadrupole_potential_offset) ||
+        !append_segment(shell_population_bytes, alignof(double), cursor,
+                        created.spin_shell_potential_offset) ||
         !append_segment(shell_population_bytes, alignof(double), cursor, created.raw_qsh_offset) ||
         !append_segment(atom_population_bytes, alignof(double), cursor, created.raw_qat_offset) ||
         !append_segment(dipole_population_bytes, alignof(double), cursor,
@@ -1321,6 +1343,7 @@ gpuxtb_status_t make_scc_driver_plan(
         !append_segment(batch_double_bytes, alignof(double), cursor, created.es2_energy_offset) ||
         !append_segment(batch_double_bytes, alignof(double), cursor, created.es3_energy_offset) ||
         !append_segment(batch_double_bytes, alignof(double), cursor, created.aes2_energy_offset) ||
+        !append_segment(batch_double_bytes, alignof(double), cursor, created.spin_energy_offset) ||
         !append_segment(batch_double_bytes, alignof(double), cursor,
                         created.explicit_pc_energy_offset) ||
         !append_segment(batch_double_bytes, alignof(double), cursor,
@@ -1412,6 +1435,7 @@ gpuxtb_status_t bind_scc_driver_state(const SccDriverPlan& plan, void* workspace
   created.es2_energies = offset_pointer<double>(workspace, data.state_es2_energy_offset);
   created.es3_energies = offset_pointer<double>(workspace, data.state_es3_energy_offset);
   created.aes2_energies = offset_pointer<double>(workspace, data.state_aes2_energy_offset);
+  created.spin_energies = offset_pointer<double>(workspace, data.state_spin_energy_offset);
   if (data.d4.sealed()) {
     created.d4_two_body_energies = offset_pointer<double>(workspace, data.state_d4_energy_offset);
   }
@@ -1440,6 +1464,7 @@ gpuxtb_status_t bind_scc_driver_state(const SccDriverPlan& plan, void* workspace
   std::fill_n(created.es2_energies, batch, nan);
   std::fill_n(created.es3_energies, batch, nan);
   std::fill_n(created.aes2_energies, batch, nan);
+  std::fill_n(created.spin_energies, batch, nan);
   if (created.d4_two_body_energies != nullptr) {
     std::fill_n(created.d4_two_body_energies, batch, nan);
   }
@@ -1506,6 +1531,8 @@ gpuxtb_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* works
   created.dipole_potentials = offset_pointer<double>(workspace, data.dipole_potential_offset);
   created.quadrupole_potentials =
       offset_pointer<double>(workspace, data.quadrupole_potential_offset);
+  created.spin_shell_potentials =
+      offset_pointer<double>(workspace, data.spin_shell_potential_offset);
   created.raw_qsh = offset_pointer<double>(workspace, data.raw_qsh_offset);
   created.raw_qat = offset_pointer<double>(workspace, data.raw_qat_offset);
   created.raw_dipoles = offset_pointer<double>(workspace, data.raw_dipole_offset);
@@ -1514,6 +1541,7 @@ gpuxtb_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* works
   created.es2_energies = offset_pointer<double>(workspace, data.es2_energy_offset);
   created.es3_energies = offset_pointer<double>(workspace, data.es3_energy_offset);
   created.aes2_energies = offset_pointer<double>(workspace, data.aes2_energy_offset);
+  created.spin_energies = offset_pointer<double>(workspace, data.spin_energy_offset);
   created.explicit_point_charge_energies =
       offset_pointer<double>(workspace, data.explicit_pc_energy_offset);
   created.internal_energies = offset_pointer<double>(workspace, data.internal_energy_offset);
@@ -1648,6 +1676,7 @@ gpuxtb_status_t initialize_scc_driver_state_cpu(const SccDriverPlan& plan,
   std::fill_n(state.es2_energies, batch, nan);
   std::fill_n(state.es3_energies, batch, nan);
   std::fill_n(state.aes2_energies, batch, nan);
+  std::fill_n(state.spin_energies, batch, nan);
   if (state.d4_two_body_energies != nullptr) {
     std::fill_n(state.d4_two_body_energies, batch, nan);
   }
@@ -1714,6 +1743,7 @@ gpuxtb_status_t restart_scc_driver_system_cpu(const SccDriverPlan& plan, std::in
   state.es2_energies[index] = nan;
   state.es3_energies[index] = nan;
   state.aes2_energies[index] = nan;
+  state.spin_energies[index] = nan;
   if (state.d4_two_body_energies != nullptr) {
     state.d4_two_body_energies[index] = nan;
   }
@@ -2018,6 +2048,14 @@ gpuxtb_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
     return status;
   }
 
+  double spin_energy = 0.0;
+  status = add_spin_polarization_energy_system_cpu(
+      make_spin_polarization_view(data.spin), static_cast<std::int64_t>(system),
+      workspace.raw_qsh, spin_energy, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+
   double d4_energy = 0.0;
   if (data.d4.sealed()) {
     status = evaluate_d4_two_body_system_cpu(
@@ -2069,7 +2107,8 @@ gpuxtb_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
 
   double internal_energy = core_energy;
   if (!add_finite(es2_energy, internal_energy) || !add_finite(es3_energy, internal_energy) ||
-      !add_finite(aes2_energy, internal_energy) || !add_finite(d4_energy, internal_energy) ||
+      !add_finite(aes2_energy, internal_energy) || !add_finite(spin_energy, internal_energy) ||
+      !add_finite(d4_energy, internal_energy) ||
       !add_finite(explicit_pc_energy, internal_energy) ||
       !add_finite(periodic_energy, internal_energy)) {
     error = "SCC driver complete internal energy overflowed";
@@ -2086,6 +2125,7 @@ gpuxtb_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
   workspace.es2_energies[system] = es2_energy;
   workspace.es3_energies[system] = es3_energy;
   workspace.aes2_energies[system] = aes2_energy;
+  workspace.spin_energies[system] = spin_energy;
   if (workspace.d4_two_body_energies != nullptr) {
     workspace.d4_two_body_energies[system] = d4_energy;
   }
@@ -2196,6 +2236,12 @@ gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data
     std::fill_n(workspace.periodic_embedding_energies, batch, nan);
     std::fill_n(workspace.periodic_system_statuses, batch, GPUXTB_STATUS_INVALID_ARGUMENT);
   }
+  status = evaluate_spin_polarization_cpu(
+      make_spin_polarization_view(data.spin), workspace.staged_wavefunction.qsh,
+      workspace.spin_energies, workspace.spin_shell_potentials, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
   status = evaluate_es2_potential_cpu(data.es2, geometry.es2_cache, workspace.shell_charges,
                                       workspace.component_shell_potential, workspace.es2_workspace,
                                       error);
@@ -2240,6 +2286,13 @@ gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data
         error = "SCC driver explicit point-charge potential is not finite";
         return GPUXTB_STATUS_INVALID_ARGUMENT;
       }
+    }
+  }
+  for (std::int64_t element = 0; element < layout.qsh.element_count; ++element) {
+    if (!add_finite(workspace.spin_shell_potentials[static_cast<std::size_t>(element)],
+                    workspace.shell_potentials[static_cast<std::size_t>(element)])) {
+      error = "SCC driver electrostatic+spin shell potential exceeded floating-point range";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
     }
   }
 
@@ -2381,8 +2434,59 @@ gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data
       workspace.quadrupole_potentials, layout.quadrupole.element_count, data.mulliken.identity()};
   const MullikenHamiltonianView hamiltonian{workspace.hamiltonian, layout.density.element_count,
                                             data.mulliken.identity()};
-  return add_mulliken_hamiltonian_cpu(data.mulliken, geometry.integrals, potential, hamiltonian,
-                                      workspace.mulliken_workspace, error);
+  status = add_mulliken_hamiltonian_cpu(data.mulliken, geometry.integrals, potential, hamiltonian,
+                                        workspace.mulliken_workspace, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+
+  /*
+   * Mulliken converts charge/magnetization potentials with a one-half factor.
+   * tblite subsequently doubles its complete converted Hamiltonian, whose core
+   * channel entered that conversion only once. gpuxtb starts both spin channels
+   * from H0, so reproduce the same physical operator as H0 + 2*(Htmp-H0);
+   * doubling Htmp directly would incorrectly double the core Hamiltonian.
+   */
+  for (std::size_t system = 0u; system < batch; ++system) {
+    if (layout.spin_channels[system] != 2) {
+      continue;
+    }
+    const std::int64_t matrix_begin = data.mulliken.matrix_offsets()[system];
+    const std::int64_t matrix_end = data.mulliken.matrix_offsets()[system + 1u];
+    const std::int64_t matrix_elements = matrix_end - matrix_begin;
+    const std::int64_t hamiltonian_base = layout.density.system_offsets[system];
+    for (std::int32_t spin = 0; spin < 2; ++spin) {
+      for (std::int64_t matrix = 0; matrix < matrix_elements; ++matrix) {
+        const double h0 = geometry.h0[static_cast<std::size_t>(matrix_begin + matrix)];
+        const double temporary = workspace.hamiltonian[static_cast<std::size_t>(
+            hamiltonian_base + static_cast<std::int64_t>(spin) * matrix_elements + matrix)];
+        const double physical = std::fma(2.0, temporary - h0, h0);
+        if (!std::isfinite(physical)) {
+          error = "SCC driver unrestricted Hamiltonian scaling overflowed";
+          return GPUXTB_STATUS_INTERNAL_ERROR;
+        }
+      }
+    }
+  }
+  for (std::size_t system = 0u; system < batch; ++system) {
+    if (layout.spin_channels[system] != 2) {
+      continue;
+    }
+    const std::int64_t matrix_begin = data.mulliken.matrix_offsets()[system];
+    const std::int64_t matrix_end = data.mulliken.matrix_offsets()[system + 1u];
+    const std::int64_t matrix_elements = matrix_end - matrix_begin;
+    const std::int64_t hamiltonian_base = layout.density.system_offsets[system];
+    for (std::int32_t spin = 0; spin < 2; ++spin) {
+      for (std::int64_t matrix = 0; matrix < matrix_elements; ++matrix) {
+        const double h0 = geometry.h0[static_cast<std::size_t>(matrix_begin + matrix)];
+        double& target = workspace.hamiltonian[static_cast<std::size_t>(
+            hamiltonian_base + static_cast<std::int64_t>(spin) * matrix_elements + matrix)];
+        target = std::fma(2.0, target - h0, h0);
+      }
+    }
+  }
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
 }
 
 void copy_raw_population_system(const WavefunctionLayout& layout, std::size_t system,

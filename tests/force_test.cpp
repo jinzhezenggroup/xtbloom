@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -91,7 +92,10 @@ struct Fixture {
   ExternalPointChargePlan external;
 
   std::vector<double> density;
+  std::vector<double> population_density;
   std::vector<double> energy_weighted_density;
+  std::vector<double> spin_density;
+  std::vector<double> spin_scalar_shell_potentials;
 
   std::vector<std::byte> integral_workspace;
   std::vector<double> mulliken_scratch;
@@ -168,7 +172,9 @@ struct Fixture {
     point_offsets.push_back(static_cast<std::int64_t>(point_charges.size()));
   }
 
-  bool initialize(const std::vector<int>& requested_kinds, std::string& error) {
+  bool initialize(const std::vector<int>& requested_kinds, std::string& error,
+                  const std::vector<std::int32_t>& requested_spin_channels = {},
+                  const std::vector<std::int32_t>& requested_unpaired_electrons = {}) {
     kinds = requested_kinds;
     atom_offsets = {0};
     point_offsets = {0};
@@ -178,8 +184,16 @@ struct Fixture {
     const std::int64_t batch = static_cast<std::int64_t>(kinds.size());
     const std::int64_t atoms = static_cast<std::int64_t>(atomic_numbers.size());
     std::vector<double> molecular_charges(kinds.size(), 0.0);
-    std::vector<std::int32_t> unpaired(kinds.size(), 0);
-    std::vector<std::int32_t> spins(kinds.size(), 1);
+    std::vector<std::int32_t> unpaired = requested_unpaired_electrons.empty()
+                                             ? std::vector<std::int32_t>(kinds.size(), 0)
+                                             : requested_unpaired_electrons;
+    std::vector<std::int32_t> spins = requested_spin_channels.empty()
+                                          ? std::vector<std::int32_t>(kinds.size(), 1)
+                                          : requested_spin_channels;
+    if (unpaired.size() != kinds.size() || spins.size() != kinds.size()) {
+      error = "force test spin topology does not match its batch size";
+      return false;
+    }
     if (make_basis_plan(batch, atoms, atom_offsets.data(), atomic_numbers.data(), basis, error) !=
             GPUXTB_STATUS_SUCCESS ||
         make_integral_plan(basis, integrals, error) != GPUXTB_STATUS_SUCCESS ||
@@ -245,6 +259,69 @@ struct Fixture {
           energy_weighted_density[static_cast<std::size_t>(matrix_begin + column * orbitals +
                                                            row)] = weighted;
         }
+      }
+    }
+    if (std::find(spins.begin(), spins.end(), 2) != spins.end()) {
+      /* Mixed-spin composer tests use zero canonical slices for restricted
+       * systems and deterministic finite magnetization data for unrestricted
+       * systems. The values need not be self-consistent SCC solutions: this
+       * fixture isolates the stationary overlap-response contraction. */
+      spin_density.assign(matrix, 0.0);
+      spin_scalar_shell_potentials.assign(static_cast<std::size_t>(basis.total_shells), 0.0);
+      for (std::size_t system = 0; system < kinds.size(); ++system) {
+        if (spins[system] != 2) {
+          continue;
+        }
+        const std::int64_t orbital_begin = basis.batch_orbital_offsets[system];
+        const std::int64_t orbital_end = basis.batch_orbital_offsets[system + 1u];
+        const std::int64_t orbitals = orbital_end - orbital_begin;
+        const std::int64_t matrix_begin = integrals.matrix_offsets[system];
+        for (std::int64_t orbital = 0; orbital < orbitals; ++orbital) {
+          spin_density[static_cast<std::size_t>(matrix_begin + orbital * orbitals + orbital)] =
+              0.11 / static_cast<double>(orbital + 1);
+          for (std::int64_t column = orbital + 1; column < orbitals; ++column) {
+            const std::int64_t row_atom =
+                mulliken.orbital_to_atom()[static_cast<std::size_t>(orbital_begin + orbital)];
+            const std::int64_t column_atom =
+                mulliken.orbital_to_atom()[static_cast<std::size_t>(orbital_begin + column)];
+            if (row_atom == column_atom) {
+              continue;
+            }
+            const double coupling =
+                0.003 * static_cast<double>(((orbital + 2) * (column + 1)) % 5 + 1);
+            spin_density[static_cast<std::size_t>(matrix_begin + orbital * orbitals + column)] =
+                coupling;
+            spin_density[static_cast<std::size_t>(matrix_begin + column * orbitals + orbital)] =
+                coupling;
+          }
+        }
+        const std::int64_t shell_begin = basis.batch_shell_offsets[system];
+        const std::int64_t shell_end = basis.batch_shell_offsets[system + 1u];
+        for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
+          spin_scalar_shell_potentials[static_cast<std::size_t>(shell)] =
+              0.025 * static_cast<double>(shell - shell_begin + 1);
+        }
+      }
+    } else {
+      spin_density.clear();
+      spin_scalar_shell_potentials.clear();
+    }
+    population_density.clear();
+    population_density.reserve(static_cast<std::size_t>(mulliken.density_elements()));
+    for (std::size_t system = 0; system < kinds.size(); ++system) {
+      const std::size_t matrix_begin = static_cast<std::size_t>(integrals.matrix_offsets[system]);
+      const std::size_t matrix_end =
+          static_cast<std::size_t>(integrals.matrix_offsets[system + 1u]);
+      if (spins[system] == 1) {
+        population_density.insert(population_density.end(), density.begin() + matrix_begin,
+                                  density.begin() + matrix_end);
+        continue;
+      }
+      for (std::size_t element = matrix_begin; element < matrix_end; ++element) {
+        population_density.push_back(0.5 * (density[element] + spin_density[element]));
+      }
+      for (std::size_t element = matrix_begin; element < matrix_end; ++element) {
+        population_density.push_back(0.5 * (density[element] - spin_density[element]));
       }
     }
 
@@ -368,23 +445,57 @@ struct Fixture {
     const MullikenIntegralView integral_view{
         state.overlap.data(), state.dipole_integrals.data(), state.quadrupole_integrals.data(),
         static_cast<std::int64_t>(matrix), mulliken.identity()};
-    const MullikenDensityView density_view{
-        density.data(), static_cast<std::int64_t>(density.size()), mulliken.identity()};
+    const MullikenDensityView density_view{population_density.data(),
+                                           static_cast<std::int64_t>(population_density.size()),
+                                           mulliken.identity()};
+    std::vector<double> packed_shell_charges(
+        static_cast<std::size_t>(mulliken.shell_population_elements()));
+    std::vector<double> packed_atomic_charges(
+        static_cast<std::size_t>(mulliken.atom_population_elements()));
+    std::vector<double> packed_atomic_dipoles(
+        static_cast<std::size_t>(mulliken.dipole_population_elements()));
+    std::vector<double> packed_atomic_quadrupoles(
+        static_cast<std::size_t>(mulliken.quadrupole_population_elements()));
     const MullikenPopulationView population_view{
-        state.shell_charges.data(),
-        static_cast<std::int64_t>(state.shell_charges.size()),
-        state.atomic_charges.data(),
-        static_cast<std::int64_t>(state.atomic_charges.size()),
-        state.atomic_dipoles.data(),
-        static_cast<std::int64_t>(state.atomic_dipoles.size()),
-        state.atomic_quadrupoles.data(),
-        static_cast<std::int64_t>(state.atomic_quadrupoles.size()),
+        packed_shell_charges.data(),
+        static_cast<std::int64_t>(packed_shell_charges.size()),
+        packed_atomic_charges.data(),
+        static_cast<std::int64_t>(packed_atomic_charges.size()),
+        packed_atomic_dipoles.data(),
+        static_cast<std::int64_t>(packed_atomic_dipoles.size()),
+        packed_atomic_quadrupoles.data(),
+        static_cast<std::int64_t>(packed_atomic_quadrupoles.size()),
         mulliken.identity()};
     const MullikenWorkspace mulliken_workspace{mulliken_scratch.data(),
                                                static_cast<std::int64_t>(mulliken_scratch.size())};
     if (evaluate_mulliken_population_cpu(mulliken, integral_view, density_view, population_view,
                                          mulliken_workspace, error) != GPUXTB_STATUS_SUCCESS) {
       return false;
+    }
+    std::size_t shell_cursor = 0u;
+    std::size_t atom_cursor = 0u;
+    std::size_t dipole_cursor = 0u;
+    std::size_t quadrupole_cursor = 0u;
+    for (std::size_t system = 0; system < kinds.size(); ++system) {
+      const std::size_t shell_begin = static_cast<std::size_t>(basis.batch_shell_offsets[system]);
+      const std::size_t shell_count = static_cast<std::size_t>(
+          basis.batch_shell_offsets[system + 1u] - basis.batch_shell_offsets[system]);
+      const std::size_t atom_begin = static_cast<std::size_t>(atom_offsets[system]);
+      const std::size_t atom_count =
+          static_cast<std::size_t>(atom_offsets[system + 1u] - atom_offsets[system]);
+      std::copy_n(packed_shell_charges.begin() + shell_cursor, shell_count,
+                  state.shell_charges.begin() + shell_begin);
+      std::copy_n(packed_atomic_charges.begin() + atom_cursor, atom_count,
+                  state.atomic_charges.begin() + atom_begin);
+      std::copy_n(packed_atomic_dipoles.begin() + dipole_cursor, atom_count * 3u,
+                  state.atomic_dipoles.begin() + atom_begin * 3u);
+      std::copy_n(packed_atomic_quadrupoles.begin() + quadrupole_cursor, atom_count * 6u,
+                  state.atomic_quadrupoles.begin() + atom_begin * 6u);
+      const std::size_t channels = static_cast<std::size_t>(mulliken.spin_channels()[system]);
+      shell_cursor += channels * shell_count;
+      atom_cursor += channels * atom_count;
+      dipole_cursor += channels * atom_count * 3u;
+      quadrupole_cursor += channels * atom_count * 6u;
     }
 
     std::vector<double> shell_component(shells);
@@ -466,13 +577,8 @@ struct Fixture {
     return true;
   }
 
-  bool compose(const GeometryState& state, std::vector<double>& energies,
-               std::vector<double>& qm_forces, std::vector<double>& point_forces,
-               RestrictedGfn2ComponentGradients components, std::string& error) {
-    energies.assign(kinds.size(), 0.0);
-    qm_forces.assign(atomic_numbers.size() * 3u, 0.0);
-    point_forces.assign(kinds.size() * 3u, 0.0);
-    const RestrictedGfn2StationaryInput input{
+  RestrictedGfn2StationaryInput stationary_input(const GeometryState& state) const {
+    return {
         state.positions.data(),
         state.coordination.data(),
         kGeneration,
@@ -490,7 +596,18 @@ struct Fixture {
         state.point_positions.data(),
         point_charges.data(),
         point_hardnesses.data(),
+        spin_density.empty() ? nullptr : spin_density.data(),
+        spin_scalar_shell_potentials.empty() ? nullptr : spin_scalar_shell_potentials.data(),
     };
+  }
+
+  bool compose(const GeometryState& state, std::vector<double>& energies,
+               std::vector<double>& qm_forces, std::vector<double>& point_forces,
+               RestrictedGfn2ComponentGradients components, std::string& error) {
+    energies.assign(kinds.size(), 0.0);
+    qm_forces.assign(atomic_numbers.size() * 3u, 0.0);
+    point_forces.assign(kinds.size() * 3u, 0.0);
+    const RestrictedGfn2StationaryInput input = stationary_input(state);
     return evaluate_restricted_gfn2_energy_forces_cpu(
                basis, integrals, coordination_plan, repulsion, h0_plan, mulliken, es2, es2_cache,
                aes2, aes2_cache, &d4, &d4_cache, &external, input, energies.data(),
@@ -784,6 +901,83 @@ int test_energy_only_ignores_force_intermediates() {
   return 0;
 }
 
+int test_unrestricted_spin_response_and_alias_atomicity() {
+  Fixture fixture;
+  std::string error;
+  CHECK(fixture.initialize({0, 1}, error, {1, 2}, {0, 2}));
+  GeometryState state;
+  if (!fixture.evaluate(fixture.reference_positions, fixture.reference_point_positions, state,
+                        error)) {
+    std::cerr << "unrestricted composer fixture setup failed: " << error << '\n';
+    return __LINE__;
+  }
+
+  const std::vector<double> physical_spin_density = fixture.spin_density;
+  const std::vector<double> physical_spin_potential = fixture.spin_scalar_shell_potentials;
+  std::fill(fixture.spin_density.begin(), fixture.spin_density.end(), 0.0);
+  std::fill(fixture.spin_scalar_shell_potentials.begin(),
+            fixture.spin_scalar_shell_potentials.end(), 0.0);
+  std::vector<double> zero_spin_energies;
+  std::vector<double> zero_spin_qm_forces;
+  std::vector<double> zero_spin_point_forces;
+  CHECK(fixture.compose(state, zero_spin_energies, zero_spin_qm_forces, zero_spin_point_forces, {},
+                        error));
+
+  fixture.spin_density = physical_spin_density;
+  fixture.spin_scalar_shell_potentials = physical_spin_potential;
+  std::vector<double> spin_energies;
+  std::vector<double> spin_qm_forces;
+  std::vector<double> spin_point_forces;
+  CHECK(fixture.compose(state, spin_energies, spin_qm_forces, spin_point_forces, {}, error));
+  CHECK(spin_energies == zero_spin_energies);
+  CHECK(spin_point_forces == zero_spin_point_forces);
+
+  const std::size_t restricted_coordinates = static_cast<std::size_t>(fixture.atom_offsets[1]) * 3u;
+  for (std::size_t coordinate = 0; coordinate < restricted_coordinates; ++coordinate) {
+    CHECK(spin_qm_forces[coordinate] == zero_spin_qm_forces[coordinate]);
+  }
+  bool unrestricted_force_changed = false;
+  for (std::size_t coordinate = restricted_coordinates; coordinate < spin_qm_forces.size();
+       ++coordinate) {
+    unrestricted_force_changed |=
+        std::abs(spin_qm_forces[coordinate] - zero_spin_qm_forces[coordinate]) > 1.0e-12;
+  }
+  CHECK(unrestricted_force_changed);
+
+  RestrictedGfn2StationaryInput input = fixture.stationary_input(state);
+  input.spin_scalar_shell_potentials = nullptr;
+  std::vector<double> energies(fixture.kinds.size(), 91.0);
+  std::vector<double> forces(state.positions.size(), 92.0);
+  std::vector<double> points(state.point_positions.size(), 93.0);
+  CHECK(evaluate_restricted_gfn2_energy_forces_cpu(
+            fixture.basis, fixture.integrals, fixture.coordination_plan, fixture.repulsion,
+            fixture.h0_plan, fixture.mulliken, fixture.es2, fixture.es2_cache, fixture.aes2,
+            fixture.aes2_cache, &fixture.d4, &fixture.d4_cache, &fixture.external, input,
+            energies.data(), forces.data(), points.data(), {}, fixture.force_workspace,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(energies == std::vector<double>(fixture.kinds.size(), 91.0));
+  CHECK(forces == std::vector<double>(state.positions.size(), 92.0));
+  CHECK(points == std::vector<double>(state.point_positions.size(), 93.0));
+
+  input = fixture.stationary_input(state);
+  const std::size_t alias_elements = std::max(
+      static_cast<std::size_t>(fixture.integrals.total_matrix_elements), state.positions.size());
+  std::vector<double> aliased_spin_and_force(alias_elements, 94.0);
+  input.spin_density = aliased_spin_and_force.data();
+  energies.assign(fixture.kinds.size(), 95.0);
+  points.assign(state.point_positions.size(), 96.0);
+  CHECK(evaluate_restricted_gfn2_energy_forces_cpu(
+            fixture.basis, fixture.integrals, fixture.coordination_plan, fixture.repulsion,
+            fixture.h0_plan, fixture.mulliken, fixture.es2, fixture.es2_cache, fixture.aes2,
+            fixture.aes2_cache, &fixture.d4, &fixture.d4_cache, &fixture.external, input,
+            energies.data(), aliased_spin_and_force.data(), points.data(), {},
+            fixture.force_workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(energies == std::vector<double>(fixture.kinds.size(), 95.0));
+  CHECK(aliased_spin_and_force == std::vector<double>(alias_elements, 94.0));
+  CHECK(points == std::vector<double>(state.point_positions.size(), 96.0));
+  return 0;
+}
+
 int test_validation_and_progressive_diagnostics() {
   Fixture fixture;
   std::string error;
@@ -876,6 +1070,9 @@ int main() {
     return line;
   }
   if (const int line = test_energy_only_ignores_force_intermediates(); line != 0) {
+    return line;
+  }
+  if (const int line = test_unrestricted_spin_response_and_alias_atomicity(); line != 0) {
     return line;
   }
   if (const int line = test_validation_and_progressive_diagnostics(); line != 0) {

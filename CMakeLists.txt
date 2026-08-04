@@ -10,6 +10,7 @@ project(
 include(CheckLanguage)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+find_package(Threads REQUIRED)
 
 set(GPUXTB_ENABLE_CUDA "AUTO" CACHE STRING "Build the CUDA backend: AUTO, ON, or OFF")
 set_property(CACHE GPUXTB_ENABLE_CUDA PROPERTY STRINGS AUTO ON OFF)
@@ -53,6 +54,7 @@ add_library(gpuxtb_gfn2_cpu OBJECT
   src/model/gfn2/repulsion.cpp
   src/model/gfn2/scc_driver.cpp
   src/model/gfn2/scc_mixer.cpp
+  src/model/gfn2/spin.cpp
   src/model/gfn2/wavefunction.cpp
 )
 target_compile_features(gpuxtb_gfn2_cpu PUBLIC cxx_std_17)
@@ -89,6 +91,7 @@ target_include_directories(gpuxtb
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_compile_definitions(gpuxtb PRIVATE GPUXTB_BUILDING_LIBRARY)
+target_link_libraries(gpuxtb PRIVATE Threads::Threads)
 if(CMAKE_DL_LIBS)
   target_link_libraries(gpuxtb PRIVATE ${CMAKE_DL_LIBS})
 endif()
@@ -257,7 +260,10 @@ if(GPUXTB_BUILD_TESTS)
     add_executable(gpuxtb_cpu_public_inference_test
       tests/cpu_public_inference_test.cpp
     )
-    target_link_libraries(gpuxtb_cpu_public_inference_test PRIVATE gpuxtb::gpuxtb)
+    target_link_libraries(gpuxtb_cpu_public_inference_test PRIVATE
+      gpuxtb::gpuxtb
+      Threads::Threads
+    )
     target_compile_features(gpuxtb_cpu_public_inference_test PRIVATE cxx_std_17)
     add_test(NAME gpuxtb.cpu.public_inference COMMAND gpuxtb_cpu_public_inference_test)
     gpuxtb_configure_mkl_runtime_test(
@@ -1581,6 +1587,11 @@ if(GPUXTB_BUILD_TESTS)
   target_link_libraries(gpuxtb_es3_test PRIVATE gpuxtb_gfn2_cpu)
   target_compile_features(gpuxtb_es3_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.es3 COMMAND gpuxtb_es3_test)
+
+  add_executable(gpuxtb_spin_test tests/spin_test.cpp)
+  target_link_libraries(gpuxtb_spin_test PRIVATE gpuxtb_gfn2_cpu)
+  target_compile_features(gpuxtb_spin_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.gfn2.spin COMMAND gpuxtb_spin_test)
 
   add_executable(gpuxtb_es2_test tests/es2_test.cpp)
   target_link_libraries(gpuxtb_es2_test PRIVATE gpuxtb_gfn2_cpu)

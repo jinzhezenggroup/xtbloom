@@ -54,6 +54,7 @@ struct Fixture {
   std::vector<double> positions{0.0, 0.0, 0.0, 1.4, 0.0, 0.0, 0.0, 2.0, 0.0};
   std::vector<double> molecular_charges{0.0, 0.0};
   std::vector<std::int32_t> unpaired_electrons{0, 0};
+  std::vector<std::int32_t> spin_channels;
 
   std::vector<std::int64_t> point_offsets;
   std::vector<double> point_positions;
@@ -117,6 +118,12 @@ struct Fixture {
     batch.point_charge_values = input_buffer(point_values);
     batch.point_charge_gammas = input_buffer(point_gammas);
     result.point_charge_forces = output_buffer(point_forces);
+  }
+
+  void enable_spin_channels(std::vector<std::int32_t> values = {1, 2}) {
+    spin_channels = std::move(values);
+    batch.struct_size = GPUXTB_BATCH_V2_SIZE;
+    batch.spin_channels = input_buffer(spin_channels);
   }
 
   void enable_response() {
@@ -464,6 +471,70 @@ bool test_buffer_descriptors_and_sizes() {
   return true;
 }
 
+bool test_spin_channel_abi_v2() {
+  Fixture legacy;
+  legacy.batch.struct_size = GPUXTB_BATCH_V1_SIZE;
+  legacy.batch.spin_channels = {
+      reinterpret_cast<const void*>(std::uintptr_t{0x10000u}),
+      std::numeric_limits<std::size_t>::max(), static_cast<gpuxtb_memory_space_t>(99), 1};
+  /* ABI-v1 callers do not expose the suffix, so its out-of-range bytes stay unread. */
+  CHECK(validate_compute_descriptors(GPUXTB_BACKEND_CPU, &legacy.batch, &legacy.options,
+                                     &legacy.result)
+            .ok());
+
+  Fixture valid;
+  valid.enable_spin_channels();
+  CHECK(valid.batch.struct_size == GPUXTB_BATCH_V2_SIZE);
+  CHECK(validate_compute_descriptors(GPUXTB_BACKEND_CPU, &valid.batch, &valid.options,
+                                     &valid.result)
+            .ok());
+  valid.batch.spin_channels.size_bytes += 64;
+  CHECK(validate_compute_descriptors(GPUXTB_BACKEND_CPU, &valid.batch, &valid.options,
+                                     &valid.result)
+            .ok());
+  valid.batch.spin_channels.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
+  const DescriptorValidationResult staged_spin = validate_host_topology_semantics(valid.batch);
+  CHECK(staged_spin.status == GPUXTB_STATUS_NOT_SUPPORTED);
+  CHECK(staged_spin.error == "device-resident spin_channels are not implemented yet");
+
+  const std::vector<InvalidCase> cases = {
+      {"spin channel undersize",
+       [](Fixture& f) {
+         f.enable_spin_channels();
+         f.batch.spin_channels.size_bytes = sizeof(std::int32_t);
+       },
+       "spin_channels"},
+      {"spin channel reserved",
+       [](Fixture& f) {
+         f.enable_spin_channels();
+         f.batch.spin_channels.reserved = 1;
+       },
+       "reserved"},
+      {"CPU rejects device spin channels",
+       [](Fixture& f) {
+         f.enable_spin_channels();
+         f.batch.spin_channels.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
+       },
+       "context backend is CPU"},
+      {"CUDA rejects unrestricted descriptor suffix",
+       [](Fixture& f) { f.enable_spin_channels(); }, "CUDA unrestricted spin channels",
+       GPUXTB_STATUS_NOT_SUPPORTED, GPUXTB_BACKEND_CUDA},
+      {"zero spin channels", [](Fixture& f) { f.enable_spin_channels({1, 0}); }, "one or two"},
+      {"three spin channels", [](Fixture& f) { f.enable_spin_channels({3, 1}); }, "one or two"},
+      {"spin channels alias output",
+       [](Fixture& f) {
+         f.enable_spin_channels();
+         f.result.scc_iterations.data = f.spin_channels.data();
+         f.result.scc_iterations.size_bytes = f.spin_channels.size() * sizeof(std::int32_t);
+       },
+       "aliases"},
+  };
+  for (const InvalidCase& test : cases) {
+    CHECK(expect_invalid(test));
+  }
+  return true;
+}
+
 bool test_required_and_optional_outputs() {
   const std::vector<InvalidCase> cases = {
       {"requested energy missing",
@@ -697,6 +768,7 @@ int main() {
       {"headers, counts, and overflow", test_headers_counts_and_overflow},
       {"compute options", test_compute_options},
       {"buffer descriptors and sizes", test_buffer_descriptors_and_sizes},
+      {"ABI-v2 spin channels", test_spin_channel_abi_v2},
       {"required and optional outputs", test_required_and_optional_outputs},
       {"point-charge shapes", test_point_charge_shapes},
       {"host offsets and response packing", test_host_offsets_and_response_packing},
