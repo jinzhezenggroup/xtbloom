@@ -84,6 +84,9 @@ CMAKE_CUDA_ARCHITECTURES = { env = "GPUXTB_CUDA_ARCHITECTURES", default = "80;89
 # import smoke test.
 [tool.cibuildwheel]
 build = ["cp311-*"]
+# Use uv for the isolated build environment (via `build --installer=uv`) and
+# for creating the test environments.
+build-frontend = "build[uv]"
 skip = ["*-win32", "*-manylinux_i686", "*-musllinux*"]
 # CUDA-enabled manylinux images provided by PyPA (quay.io/manylinux_cuda); they
 # ship nvcc/cublas/cudart but not cuSOLVER, so a Linux before-build installs
