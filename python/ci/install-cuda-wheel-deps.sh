@@ -4,69 +4,89 @@
 # compiled inside the container.
 #
 # The quay.io/manylinux_cuda images ship nvcc, headers, cuBLAS, and cuDRT but
-# not cuSOLVER. FindCUDAToolkit therefore cannot create the CUDA::cusolver
-# imported target. We pull the missing .so files from PyPI and drop them into
-# the toolkit's lib directory that CMake already searches, and create the
-# unversioned `lib<name>.so` symlinks that CMake's `find_library(NAMES ...)`
-# relies on (the packages only ship soname-suffixed files, e.g.
-# libcusolver.so.11).
+# not cuSOLVER (libcudart/.hx absent), so FindCUDAToolkit cannot create the
+# CUDA::cusolver target and the compiler cannot find cusolverDn.h. We download
+# the small nvidia-cusolver / nvidia-nvjitlink wheels from PyPI with --no-deps,
+# extract only the needed ELF libraries and headers into the toolkit dirs that
+# CMake and nvcc already search, then delete every downloaded/extracted file so
+# the build container never accumulates gigabytes of nvidia packages.
 #
 # The resulting wheels still exclude these libraries (see the
 # repair-wheel-command in pyproject.toml); at runtime a CUDA-enabled wheel uses
 # the system CUDA driver plus the same PyPI nvidia-* packages.
 set -euo pipefail
 
-python -m pip install --quiet --no-cache-dir nvidia-cusolver-cu12 nvidia-nvjitlink-cu12
+# The container persists across the per-Python-Version before-build calls, so
+# install the deps only once.
+if [ -f /usr/local/cuda/lib64/libcusolver.so ]; then
+  echo "cuSOLVER already installed; skipping"
+  exit 0
+fi
 
-python - <<'PY'
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# --no-deps keeps this to the cuSOLVER/nvJitLink wheels (pull in neither cuBLAS
+# nor cuSPARSE; the image already provides cuBLAS and the linker defers the
+# rest, which we exclude from the wheel anyway).
+python -m pip download --quiet --no-deps --no-cache-dir \
+  nvidia-cusolver-cu12 nvidia-nvjitlink-cu12 nvidia-cusparse-cu12 \
+  -d "$work"/wheels
+
+python - "$work" <<'PY'
 import glob
 import os
 import re
 import shutil
-import site
+import sys
+import zipfile
 
-dest = "/usr/local/cuda/lib64"
-os.makedirs(dest, exist_ok=True)
-
-copied = set()
-for source in glob.glob(os.path.join(site.getsitepackages()[0], "nvidia", "*", "lib", "*.so*")):
-    if os.path.islink(source):
-        continue  # copy the real files; symlinks are recreated below
-    name = os.path.basename(source)
-    if name in copied:
-        continue
-    copied.add(name)
-    shutil.copy2(source, os.path.join(dest, name))
-
-# Provide the unversioned names that CMake's find_library(NAMES <lib>) matches.
-for name in sorted(copied):
-    match = re.match(r"^(lib[\w.-]+)\.so\.\d+", name)
-    if match:
-        link = os.path.join(dest, match.group(1) + ".so")
-        if not os.path.lexists(link):
-            os.symlink(name, link)
-
-# The image also lacks the cuSOLVER headers (cusolverDn.h, cusolver_common.h,
-# ...); copy them into every CUDA include directory on the compile path.
-header_source = os.path.join(site.getsitepackages()[0], "nvidia", "*", "include", "*.h*")
-headers = [path for path in glob.glob(header_source) if path.endswith((".h", ".hpp"))]
+work = sys.argv[1]
+wheels_dir = os.path.join(work, "wheels")
+lib_dir = "/usr/local/cuda/lib64"
 include_dirs = [
     "/usr/local/cuda/include",
     "/usr/local/cuda/targets/x86_64-linux/include",
 ]
-copied_headers = set()
-for include_dir in include_dirs:
-    if not os.path.isdir(include_dir):
-        continue
-    for source in headers:
-        name = os.path.basename(source)
-        if name in copied_headers:
-            continue
-        copied_headers.add(name)
-        shutil.copy2(source, os.path.join(include_dir, name))
+os.makedirs(lib_dir, exist_ok=True)
 
-if not copied:
-    raise SystemExit("no CUDA runtime libraries were installed into " + dest)
-print("installed CUDA runtime libraries:", ", ".join(sorted(copied)))
-print("installed CUDA headers:", ", ".join(sorted(copied_headers)) or "(none found)")
+extract_dir = os.path.join(work, "extract")
+for wheel in glob.glob(os.path.join(wheels_dir, "*.whl")):
+    with zipfile.ZipFile(wheel) as archive:
+        for name in archive.namelist():
+            base = os.path.basename(name)
+            is_library = base.startswith("lib") and ".so" in base
+            is_header = "/include/" in name and (base.endswith(".h") or base.endswith(".hpp"))
+            if is_library or is_header:
+                archive.extract(name, extract_dir)
+
+copied_libs = set()
+for root, _dirs, files in os.walk(extract_dir):
+    for name in files:
+        source = os.path.join(root, name)
+        with open(source, "rb") as handle:
+            magic = handle.read(4)
+        if name.startswith("lib") and ".so" in name and magic == b"\x7fELF":
+            target = os.path.join(lib_dir, name)
+            if name not in copied_libs:
+                copied_libs.add(name)
+                shutil.copy2(source, target)
+        elif name.endswith(".h") or name.endswith(".hpp"):
+            for include_dir in include_dirs:
+                if os.path.isdir(include_dir):
+                    shutil.copy2(source, os.path.join(include_dir, name))
+
+# Provide the unversioned names that CMake's find_library(NAMES <lib>) matches.
+for name in sorted(copied_libs):
+    match = re.match(r"^(lib[\w.-]+)\.so\.\d+", name)
+    if match:
+        link = os.path.join(lib_dir, match.group(1) + ".so")
+        if not os.path.lexists(link):
+            os.symlink(name, link)
+
+if not copied_libs:
+    raise SystemExit("no CUDA runtime libraries were installed into " + lib_dir)
+print("installed CUDA runtime libraries:", ", ".join(sorted(copied_libs)))
 PY
+
+# All temporary downloads and extractions are removed by the EXIT trap above.
