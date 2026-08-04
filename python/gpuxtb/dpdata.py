@@ -1,4 +1,4 @@
-"""dpdata :class:`~dpdata.plugins.dpdata` driver plugin for gpuxtb.
+"""dpdata :class:`~dpdata.driver.Driver` plugin for gpuxtb.
 
 The driver labels a whole :class:`dpdata.System` (all frames at once) through a
 single gpuxtb ragged-batch ``gpuxtb_compute`` call, which is the native
@@ -7,8 +7,8 @@ eV/Angstrom, matching dpdata conventions.
 
 The driver is registered under the key ``"gpuxtb"``:
 ``dpdata.Driver.get_driver("gpuxtb")(...)``. Because the gpuxtb Python build
-declares the ``dpdata.plugins`` entry point, importing ``dpdata`` loads this
-module automatically and registers the driver.
+declares the ``dpdata.plugins`` entry point pointing at this module, importing
+``dpdata`` loads it automatically and registers the driver.
 
 Net charge and spin multiplicity are handled per frame:
 
@@ -26,8 +26,8 @@ import numpy as np
 
 from dpdata.driver import Driver
 
-from ..exceptions import GPUxtbNotSupportedError, GPUxtbValueError
-from ..interface import Structure, BatchCalculator, symbols_to_numbers
+from .exceptions import GPUxtbNotSupportedError, GPUxtbValueError
+from .interface import Structure, BatchCalculator, symbols_to_numbers
 
 # dpdata reports energies in eV and forces in eV/Angstrom, while the gpuxtb C
 # API reports Hartree and Hartree/bohr.

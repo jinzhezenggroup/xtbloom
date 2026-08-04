@@ -27,14 +27,20 @@ pip install ".[test]"       # pytest suite dependencies
 
 ### CUDA wheels
 
-The default wheel is CPU-only for portability. To build a CUDA-enabled wheel,
-set `GPUXTB_ENABLE_CUDA` at build time. The library can be built entirely from
-PyPI-distributed CUDA packages (no preinstalled system CUDA toolkit needed):
+`GPUXTB_ENABLE_CUDA` defaults to `AUTO`: the CUDA backend is compiled in
+whenever a CUDA compiler is present at build time, and a CPU-only wheel is
+produced otherwise. The library can be built entirely from PyPI-distributed
+CUDA packages (no preinstalled system CUDA toolkit needed):
 
 ```console
 pip install cuda-toolkit nvidia-cublas-cu12 nvidia-cusolver-cu12 nvidia-cuda-runtime-cu12
 GPUXTB_ENABLE_CUDA=ON pip install .
 ```
+
+If the resulting wheel is CUDA-enabled it does **not** bundle the CUDA runtime
+libraries; at runtime it needs the system CUDA driver plus the PyPI CUDA
+packages above. CI builds wheels with cibuildwheel in the PyPA CUDA manylinux
+images (`quay.io/manylinux_cuda/manylinux_2_28_*_cuda12_9`).
 
 The public Python interface always uses host buffers on both backends; CUDA
 device-resident memory is a future extension. The current CUDA backend is

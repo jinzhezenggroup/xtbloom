@@ -4,8 +4,8 @@ The Python package wraps the public gpuxtb C ABI through :mod:`ctypes`,
 marshals numpy arrays between Python and the C descriptors, and exposes a
 tblite-like high-level interface (:class:`gpuxtb.interface.Calculator`),
 the native ragged-batch model (:class:`gpuxtb.interface.BatchCalculator`),
-plus optional ASE (:mod:`gpuxtb.ase`) and dpdata
-(:mod:`gpuxtb.plugins.dpdata`) integrations.
+plus optional ASE (:mod:`gpuxtb.ase`) and dpdata (:mod:`gpuxtb.dpdata`)
+integrations.
 
 Atomic units everywhere: bohr, Hartree, Hartree/bohr, elementary charge.
 """

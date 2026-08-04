@@ -1,4 +1,4 @@
-"""Tests for the dpdata driver plugin (``gpuxtb.plugins.dpdata``)."""
+"""Tests for the dpdata driver plugin (``gpuxtb.dpdata``)."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def _case_data_dict(case_id, nframes=1, distort=False):
 def _ensure_driver_registered():
     # The entry point is registered after a normal wheel install; for a source
     # checkout we register the module explicitly, mirroring dpdata's loader.
-    import gpuxtb.plugins.dpdata as _  # noqa: F401
+    import gpuxtb.dpdata as _  # noqa: F401
     from dpdata.driver import Driver
 
     assert "gpuxtb" in Driver.get_drivers()
@@ -49,7 +49,7 @@ def _ensure_driver_registered():
 
 def test_driver_registered():
     driver_class = _ensure_driver_registered()
-    assert driver_class.__module__ == "gpuxtb.plugins.dpdata"
+    assert driver_class.__module__ == "gpuxtb.dpdata"
 
 
 def test_label_energies_match_golden():
