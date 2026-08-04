@@ -101,6 +101,8 @@ enum class Gfn2SccIterationControlCode : std::uint32_t {
   kInvalidProvenance = 2u,
   kCrossPlan = 3u,
   kStaleGeneration = 4u,
+  /* cudaGraphLaunch() failed in the device-resident SCC loop controller. */
+  kDeviceGraphLaunchFailed = 5u,
 };
 
 /*

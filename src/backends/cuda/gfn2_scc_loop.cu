@@ -1,23 +1,23 @@
-#include "backends/cuda/gfn2_scc_loop.cuh"
-
 #include <cuda_runtime.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <new>
 
+#include "backends/cuda/gfn2_scc_loop.cuh"
+
 namespace gpuxtb::detail::cuda {
 namespace {
 
-struct alignas(16) Gfn2SccConditionalLoopDeviceControl {
+struct alignas(16) Gfn2SccDeviceLoopControl {
   std::uint32_t canonical_active_count = 0u;
-  std::uint32_t reserved = 0u;
+  std::uint32_t device_launch_error = 0u;
   std::uint64_t numerical_body_count = 0u;
   std::uint64_t plan_failure_snapshot = 0u;
 };
 
-static_assert(std::is_trivially_copyable_v<Gfn2SccConditionalLoopDeviceControl>);
-static_assert(std::is_standard_layout_v<Gfn2SccConditionalLoopDeviceControl>);
+static_assert(std::is_trivially_copyable_v<Gfn2SccDeviceLoopControl>);
+static_assert(std::is_standard_layout_v<Gfn2SccDeviceLoopControl>);
 
 Gfn2SccLoopLaunchResult reject_loop_binding(Gfn2SccIterationBindingError error) noexcept {
   Gfn2SccLoopLaunchResult result{};
@@ -39,9 +39,8 @@ Gfn2SccLoopLaunchResult validate_loop_plan(const Gfn2SccIterationBinding& bindin
       binding.plan.publication_plan.maximum_iterations != submission_bound) {
     return reject_loop_binding(Gfn2SccIterationBindingError::kInvalidCount);
   }
-  const Gfn2SccIterationBindingDiagnostic diagnostic =
-      validate_gfn2_scc_iteration_binding_cuda(binding.plan, binding.input, binding.state,
-                                                binding.workspace);
+  const Gfn2SccIterationBindingDiagnostic diagnostic = validate_gfn2_scc_iteration_binding_cuda(
+      binding.plan, binding.input, binding.state, binding.workspace);
   if (diagnostic.error != Gfn2SccIterationBindingError::kSuccess) {
     Gfn2SccLoopLaunchResult result{};
     result.iteration.status = Gfn2SccIterationLaunchStatus::kInvalidBinding;
@@ -52,8 +51,7 @@ Gfn2SccLoopLaunchResult validate_loop_plan(const Gfn2SccIterationBinding& bindin
 }
 
 Gfn2SccLoopLaunchResult launch_restricted_scc_loop_impl(
-    const Gfn2SccIterationBinding& binding,
-    const Gfn2GeometryEpochConsumerDevice* geometry,
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice* geometry,
     cudaStream_t stream) noexcept {
   Gfn2SccLoopLaunchResult result = validate_loop_plan(binding);
   if (!result.success()) {
@@ -75,85 +73,131 @@ Gfn2SccLoopLaunchResult launch_restricted_scc_loop_impl(
 
 #if CUDART_VERSION >= 12030
 
-__global__ void reset_conditional_loop_control_kernel(
-    Gfn2SccConditionalLoopDeviceControl* control) {
+__global__ void reset_device_loop_control_kernel(Gfn2SccDeviceLoopControl* control) {
   if (blockIdx.x == 0 && threadIdx.x == 0) {
     control->canonical_active_count = 0u;
+    control->device_launch_error = 0u;
     control->numerical_body_count = 0u;
     control->plan_failure_snapshot = 0u;
   }
 }
 
-__global__ void count_conditional_loop_body_kernel(
-    Gfn2SccConditionalLoopDeviceControl* control) {
+__global__ void count_device_loop_body_kernel(Gfn2SccDeviceLoopControl* control) {
   if (blockIdx.x == 0 && threadIdx.x == 0) {
     ++control->numerical_body_count;
   }
 }
 
-__global__ void snapshot_conditional_loop_failure_kernel(
-    Gfn2SccIterationDeviceLedger ledger, Gfn2SccConditionalLoopDeviceControl* control) {
+__global__ void snapshot_device_loop_failure_kernel(Gfn2SccIterationDeviceLedger ledger,
+                                                    Gfn2SccDeviceLoopControl* control) {
   if (blockIdx.x == 0 && threadIdx.x == 0) {
     control->plan_failure_snapshot = *ledger.plan_failure_record;
   }
 }
 
-/*
- * Count the canonical activity mask and publish that exact count to the WHILE
- * handle. At a numerical-body tail, a plan failure is snapshotted before the
- * next root derivation resets its ledger. Restoring the first record here both
- * preserves the diagnostic and forces the device loop to terminate even when
- * the failed iteration could not advance public state.
- */
-__global__ void publish_conditional_loop_condition_kernel(
-    Gfn2SccIterationDeviceLedger ledger, Gfn2SccConditionalLoopDeviceControl* control,
-    cudaGraphConditionalHandle handle, int restore_snapshotted_failure) {
-  __shared__ std::uint32_t active_count;
-  __shared__ std::uint64_t failure_record;
-  __shared__ int sequence_open;
-  if (threadIdx.x == 0) {
-    active_count = 0u;
-    failure_record = restore_snapshotted_failure != 0 && control->plan_failure_snapshot != 0u
-                         ? control->plan_failure_snapshot
-                         : *ledger.plan_failure_record;
-    sequence_open = failure_record == 0u && *ledger.sequence_active == 1u ? 1 : 0;
+__device__ void close_device_loop_after_launch_failure(Gfn2SccIterationDeviceLedger ledger,
+                                                       Gfn2SccDeviceLoopControl* control,
+                                                       cudaError_t launch_error) {
+  control->device_launch_error = static_cast<std::uint32_t>(launch_error);
+  if (*ledger.plan_failure_record == 0u) {
+    *ledger.plan_failure_record = gfn2_scc_stage_failure_record(
+        Gfn2SccStageId::kActivity,
+        static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kDeviceGraphLaunchFailed));
   }
-  __syncthreads();
+  *ledger.sequence_active = 0u;
+  control->canonical_active_count = 0u;
+  for (std::int64_t system = 0; system < ledger.batch_elements; ++system) {
+    ledger.active_mask[system] = 0u;
+  }
+}
 
-  for (std::int64_t system = threadIdx.x; system < ledger.batch_elements;
-       system += blockDim.x) {
-    if (sequence_open != 0 && ledger.active_mask[system] == 1u) {
-      atomicAdd(&active_count, 1u);
-    } else if (sequence_open == 0) {
+/*
+ * Count canonical activity serially so the Graph controller itself needs no
+ * block-shared scratch. Only this one thread performs the device Graph launch.
+ * A launch error is preserved in both the stable SCC ledger and the controller
+ * diagnostic instead of silently falling through to a partially executed SCC.
+ */
+__global__ void gate_device_loop_kernel(Gfn2SccIterationDeviceLedger ledger,
+                                        Gfn2SccDeviceLoopControl* control, cudaGraphExec_t body) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) {
+    return;
+  }
+  const std::uint64_t failure_record = *ledger.plan_failure_record;
+  const bool sequence_open = failure_record == 0u && *ledger.sequence_active == 1u;
+  std::uint32_t active_count = 0u;
+  for (std::int64_t system = 0; system < ledger.batch_elements; ++system) {
+    if (sequence_open && ledger.active_mask[system] == 1u) {
+      ++active_count;
+    } else if (!sequence_open) {
       ledger.active_mask[system] = 0u;
     }
   }
-  __syncthreads();
-
-  if (threadIdx.x == 0) {
-    if (failure_record != 0u) {
-      *ledger.plan_failure_record = failure_record;
-      *ledger.sequence_active = 0u;
-      active_count = 0u;
-    }
-    control->canonical_active_count = active_count;
-    cudaGraphSetConditional(handle, active_count);
+  control->canonical_active_count = active_count;
+  if (active_count == 0u) {
+    return;
+  }
+  const cudaError_t status = cudaGraphLaunch(body, cudaStreamGraphFireAndForget);
+  if (status != cudaSuccess) {
+    close_device_loop_after_launch_failure(ledger, control, status);
   }
 }
 
-cudaError_t check_kernel_launch() noexcept {
-  return cudaPeekAtLastError();
+/*
+ * The body snapshots a numerical plan failure before next activity derivation
+ * resets the ledger. Restore that record first, then enqueue the currently
+ * running device Graph on its tail stream only when canonical work remains.
+ * Tail self-launch supplies exact device-resident early stop without any
+ * conditional Graph node and therefore avoids conditional-node instrumentation.
+ */
+__global__ void tail_device_loop_kernel(Gfn2SccIterationDeviceLedger ledger,
+                                        Gfn2SccDeviceLoopControl* control) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) {
+    return;
+  }
+  const std::uint64_t failure_record = control->plan_failure_snapshot != 0u
+                                           ? control->plan_failure_snapshot
+                                           : *ledger.plan_failure_record;
+  const bool sequence_open = failure_record == 0u && *ledger.sequence_active == 1u;
+  std::uint32_t active_count = 0u;
+  for (std::int64_t system = 0; system < ledger.batch_elements; ++system) {
+    if (sequence_open && ledger.active_mask[system] == 1u) {
+      ++active_count;
+    } else if (!sequence_open) {
+      ledger.active_mask[system] = 0u;
+    }
+  }
+  if (failure_record != 0u) {
+    *ledger.plan_failure_record = failure_record;
+    *ledger.sequence_active = 0u;
+    active_count = 0u;
+  }
+  control->canonical_active_count = active_count;
+  if (active_count == 0u) {
+    return;
+  }
+  const cudaGraphExec_t current = cudaGetCurrentGraphExec();
+  const cudaError_t status = current == nullptr
+                                 ? cudaErrorInvalidResourceHandle
+                                 : cudaGraphLaunch(current, cudaStreamGraphTailLaunch);
+  if (status != cudaSuccess) {
+    close_device_loop_after_launch_failure(ledger, control, status);
+  }
 }
 
+cudaError_t check_kernel_launch() noexcept { return cudaPeekAtLastError(); }
+
 void finish_or_abort_capture(cudaStream_t stream) noexcept {
+  /* This helper is used only with cudaStreamBeginCapture(), never with
+   * cudaStreamBeginCaptureToGraph(). Therefore any graph returned while
+   * unwinding belongs to this setup path and must be destroyed here. */
   cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
   if (cudaStreamIsCapturing(stream, &capture_status) == cudaSuccess &&
       capture_status != cudaStreamCaptureStatusNone) {
     cudaGraph_t discarded = nullptr;
     (void)cudaStreamEndCapture(stream, &discarded);
-    /* A graph created implicitly by a failed ordinary capture is caller-owned.
-     * begin-capture-to-graph returns the supplied graph and must not be
-     * destroyed separately here. */
+    if (discarded != nullptr) {
+      (void)cudaGraphDestroy(discarded);
+    }
   }
   (void)cudaGetLastError();
 }
@@ -167,12 +211,11 @@ struct Gfn2SccLoopCudaGraphOwner::State {
   Gfn2GeometryEpochConsumerDevice geometry{};
   bool dynamic_geometry = false;
   Gfn2SccLoopGraphFallbackReason fallback_reason = Gfn2SccLoopGraphFallbackReason::kNone;
-  cudaGraph_t graph = nullptr;
-  cudaGraphExec_t executable = nullptr;
-  Gfn2SccConditionalLoopDeviceControl* control = nullptr;
-#if CUDART_VERSION >= 12030
-  cudaGraphConditionalHandle handle = 0u;
-#endif
+  cudaGraph_t root_graph = nullptr;
+  cudaGraphExec_t root_executable = nullptr;
+  cudaGraph_t body_graph = nullptr;
+  cudaGraphExec_t body_executable = nullptr;
+  Gfn2SccDeviceLoopControl* control = nullptr;
 };
 
 namespace {
@@ -181,11 +224,17 @@ void destroy_graph_state(Gfn2SccLoopCudaGraphOwner::State* state) noexcept {
   if (state == nullptr) {
     return;
   }
-  if (state->executable != nullptr) {
-    (void)cudaGraphExecDestroy(state->executable);
+  if (state->root_executable != nullptr) {
+    (void)cudaGraphExecDestroy(state->root_executable);
   }
-  if (state->graph != nullptr) {
-    (void)cudaGraphDestroy(state->graph);
+  if (state->root_graph != nullptr) {
+    (void)cudaGraphDestroy(state->root_graph);
+  }
+  if (state->body_executable != nullptr) {
+    (void)cudaGraphExecDestroy(state->body_executable);
+  }
+  if (state->body_graph != nullptr) {
+    (void)cudaGraphDestroy(state->body_graph);
   }
   if (state->control != nullptr) {
     (void)cudaFree(state->control);
@@ -206,13 +255,21 @@ Gfn2SccLoopGraphBuildResult fallback_graph_build(
     cudaError_t cuda_status = cudaSuccess,
     const Gfn2SccIterationLaunchResult& iteration = {}) noexcept {
   state.fallback_reason = reason;
-  if (state.executable != nullptr) {
-    (void)cudaGraphExecDestroy(state.executable);
-    state.executable = nullptr;
+  if (state.root_executable != nullptr) {
+    (void)cudaGraphExecDestroy(state.root_executable);
+    state.root_executable = nullptr;
   }
-  if (state.graph != nullptr) {
-    (void)cudaGraphDestroy(state.graph);
-    state.graph = nullptr;
+  if (state.root_graph != nullptr) {
+    (void)cudaGraphDestroy(state.root_graph);
+    state.root_graph = nullptr;
+  }
+  if (state.body_executable != nullptr) {
+    (void)cudaGraphExecDestroy(state.body_executable);
+    state.body_executable = nullptr;
+  }
+  if (state.body_graph != nullptr) {
+    (void)cudaGraphDestroy(state.body_graph);
+    state.body_graph = nullptr;
   }
   if (state.control != nullptr) {
     (void)cudaFree(state.control);
@@ -229,8 +286,8 @@ Gfn2SccLoopGraphBuildResult fallback_graph_build(
 
 #if CUDART_VERSION >= 12030
 
-Gfn2SccIterationLaunchResult launch_graph_activity(
-    const Gfn2SccLoopCudaGraphOwner::State& state, cudaStream_t stream) noexcept {
+Gfn2SccIterationLaunchResult launch_graph_activity(const Gfn2SccLoopCudaGraphOwner::State& state,
+                                                   cudaStream_t stream) noexcept {
   return state.dynamic_geometry
              ? launch_gfn2_restricted_scc_activity_cuda(state.binding, state.geometry, stream)
              : launch_gfn2_restricted_scc_activity_cuda(state.binding, stream);
@@ -239,32 +296,80 @@ Gfn2SccIterationLaunchResult launch_graph_activity(
 Gfn2SccIterationLaunchResult launch_graph_numerical_body(
     const Gfn2SccLoopCudaGraphOwner::State& state, cudaStream_t stream) noexcept {
   return state.dynamic_geometry
-             ? launch_gfn2_restricted_scc_numerical_body_cuda(state.binding, state.geometry,
-                                                               stream)
+             ? launch_gfn2_restricted_scc_numerical_body_cuda(state.binding, state.geometry, stream)
              : launch_gfn2_restricted_scc_numerical_body_cuda(state.binding, stream);
 }
 
-Gfn2SccLoopGraphBuildResult build_conditional_graph(
+struct DeviceGraphAuditResult {
+  cudaError_t status = cudaSuccess;
+  bool supported = true;
+};
+
+DeviceGraphAuditResult audit_device_launch_graph(cudaGraph_t graph) noexcept {
+  std::size_t node_count = 0u;
+  cudaError_t status = cudaGraphGetNodes(graph, nullptr, &node_count);
+  if (status != cudaSuccess) {
+    return {status, false};
+  }
+  if (node_count == 0u) {
+    return {};
+  }
+  auto* const nodes = new (std::nothrow) cudaGraphNode_t[node_count];
+  if (nodes == nullptr) {
+    return {cudaErrorMemoryAllocation, false};
+  }
+  status = cudaGraphGetNodes(graph, nodes, &node_count);
+  if (status != cudaSuccess) {
+    delete[] nodes;
+    return {status, false};
+  }
+  DeviceGraphAuditResult result{};
+  for (std::size_t index = 0u; index < node_count; ++index) {
+    cudaGraphNodeType type = cudaGraphNodeTypeEmpty;
+    status = cudaGraphNodeGetType(nodes[index], &type);
+    if (status != cudaSuccess) {
+      result = {status, false};
+      break;
+    }
+    if (type == cudaGraphNodeTypeKernel || type == cudaGraphNodeTypeMemcpy ||
+        type == cudaGraphNodeTypeMemset) {
+      continue;
+    }
+    if (type == cudaGraphNodeTypeGraph) {
+      cudaGraph_t child = nullptr;
+      status = cudaGraphChildGraphNodeGetGraph(nodes[index], &child);
+      if (status != cudaSuccess || child == nullptr) {
+        result = {status == cudaSuccess ? cudaErrorInvalidResourceHandle : status, false};
+        break;
+      }
+      result = audit_device_launch_graph(child);
+      if (!result.supported) {
+        break;
+      }
+      continue;
+    }
+    /* Device-launchable Graphs reject empty, event, external semaphore,
+     * host, allocation/free, and conditional nodes. Audit recursively before
+     * instantiation so fallback identity is deterministic across drivers. */
+    result = {cudaErrorNotSupported, false};
+    break;
+  }
+  delete[] nodes;
+  return result;
+}
+
+Gfn2SccLoopGraphBuildResult build_device_tail_graph(
     Gfn2SccLoopCudaGraphOwner::State& state) noexcept {
   if (state.binding.plan.eigensolver_provider.capture_mode !=
       Gfn2SccIterationProviderCaptureMode::kGraphSupported) {
-    return fallback_graph_build(state,
-                                Gfn2SccLoopGraphFallbackReason::kProviderCaptureUnsupported);
+    return fallback_graph_build(state, Gfn2SccLoopGraphFallbackReason::kProviderCaptureUnsupported);
   }
 
-  cudaError_t status = cudaGraphCreate(&state.graph, 0u);
-  if (status == cudaSuccess) {
-    status = cudaGraphConditionalHandleCreate(&state.handle, state.graph, 0u, 0u);
-  }
+  cudaError_t status =
+      cudaMalloc(reinterpret_cast<void**>(&state.control), sizeof(Gfn2SccDeviceLoopControl));
   if (status != cudaSuccess) {
-    return fallback_graph_build(
-        state, Gfn2SccLoopGraphFallbackReason::kConditionalNodesUnavailable, status);
-  }
-  status = cudaMalloc(reinterpret_cast<void**>(&state.control),
-                      sizeof(Gfn2SccConditionalLoopDeviceControl));
-  if (status != cudaSuccess) {
-    return fallback_graph_build(state,
-                                Gfn2SccLoopGraphFallbackReason::kControlAllocationFailed, status);
+    return fallback_graph_build(state, Gfn2SccLoopGraphFallbackReason::kControlAllocationFailed,
+                                status);
   }
 
   cudaStream_t capture_stream = nullptr;
@@ -283,74 +388,14 @@ Gfn2SccLoopGraphBuildResult build_conditional_graph(
     return fallback_graph_build(state, reason, error, iteration);
   };
 
-  status = cudaStreamBeginCaptureToGraph(capture_stream, state.graph, nullptr, nullptr, 0u,
-                                         cudaStreamCaptureModeThreadLocal);
-  if (status != cudaSuccess) {
-    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kRootCaptureFailed, status);
-  }
-  reset_conditional_loop_control_kernel<<<1, 1, 0, capture_stream>>>(state.control);
-  status = check_kernel_launch();
-  const Gfn2SccIterationLaunchResult root =
-      status == cudaSuccess ? launch_graph_activity(state, capture_stream)
-                            : Gfn2SccIterationLaunchResult{};
-  if (status == cudaSuccess && !root.success()) {
-    if (root.status == Gfn2SccIterationLaunchStatus::kInvalidBinding) {
-      finish_stream();
-      return invalid_graph_binding(root);
-    }
-    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kRootCaptureFailed,
-                            root.cuda_status, root);
-  }
-  if (status == cudaSuccess) {
-    publish_conditional_loop_condition_kernel<<<1, 256, 0, capture_stream>>>(
-        state.binding.workspace.ledger, state.control, state.handle, 0);
-    status = check_kernel_launch();
-  }
-  if (status != cudaSuccess) {
-    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kRootCaptureFailed, status);
-  }
-
-  cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
-  cudaGraph_t captured_graph = nullptr;
-  const cudaGraphNode_t* dependencies = nullptr;
-  std::size_t dependency_count = 0u;
-  status = cudaStreamGetCaptureInfo(capture_stream, &capture_status, nullptr, &captured_graph,
-                                    &dependencies, &dependency_count);
-  if (status != cudaSuccess || capture_status == cudaStreamCaptureStatusNone ||
-      captured_graph != state.graph || dependencies == nullptr || dependency_count == 0u) {
-    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kRootCaptureFailed,
-                            status == cudaSuccess ? cudaErrorStreamCaptureInvalidated : status);
-  }
-
-  cudaGraphNode_t conditional_node = nullptr;
-  cudaGraphNodeParams conditional_params{};
-  conditional_params.type = cudaGraphNodeTypeConditional;
-  conditional_params.conditional.handle = state.handle;
-  conditional_params.conditional.type = cudaGraphCondTypeWhile;
-  conditional_params.conditional.size = 1u;
-  status = cudaGraphAddNode(&conditional_node, state.graph, dependencies, dependency_count,
-                            &conditional_params);
-  if (status == cudaSuccess) {
-    status = cudaStreamUpdateCaptureDependencies(
-        capture_stream, &conditional_node, 1u, cudaStreamSetCaptureDependencies);
-  }
-  if (status != cudaSuccess) {
-    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kRootCaptureFailed, status);
-  }
-  cudaGraph_t ended_graph = nullptr;
-  status = cudaStreamEndCapture(capture_stream, &ended_graph);
-  if (status != cudaSuccess || ended_graph != state.graph) {
-    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kRootCaptureFailed,
-                            status == cudaSuccess ? cudaErrorStreamCaptureInvalidated : status);
-  }
-
-  cudaGraph_t body_graph = conditional_params.conditional.phGraph_out[0];
-  status = cudaStreamBeginCaptureToGraph(capture_stream, body_graph, nullptr, nullptr, 0u,
-                                         cudaStreamCaptureModeThreadLocal);
+  /* Capture one complete numerical iteration as a flat device-launchable
+   * Graph. The final kernel may enqueue this same executable on the tail
+   * stream, which gives exact early stop without conditional nodes. */
+  status = cudaStreamBeginCapture(capture_stream, cudaStreamCaptureModeThreadLocal);
   if (status != cudaSuccess) {
     return capture_fallback(Gfn2SccLoopGraphFallbackReason::kNumericalBodyCaptureFailed, status);
   }
-  count_conditional_loop_body_kernel<<<1, 1, 0, capture_stream>>>(state.control);
+  count_device_loop_body_kernel<<<1, 1, 0, capture_stream>>>(state.control);
   status = check_kernel_launch();
   const Gfn2SccIterationLaunchResult numerical =
       status == cudaSuccess ? launch_graph_numerical_body(state, capture_stream)
@@ -364,13 +409,13 @@ Gfn2SccLoopGraphBuildResult build_conditional_graph(
                             numerical.cuda_status, numerical);
   }
   if (status == cudaSuccess) {
-    snapshot_conditional_loop_failure_kernel<<<1, 1, 0, capture_stream>>>(
-        state.binding.workspace.ledger, state.control);
+    snapshot_device_loop_failure_kernel<<<1, 1, 0, capture_stream>>>(state.binding.workspace.ledger,
+                                                                     state.control);
     status = check_kernel_launch();
   }
-  const Gfn2SccIterationLaunchResult next_root =
-      status == cudaSuccess ? launch_graph_activity(state, capture_stream)
-                            : Gfn2SccIterationLaunchResult{};
+  const Gfn2SccIterationLaunchResult next_root = status == cudaSuccess
+                                                     ? launch_graph_activity(state, capture_stream)
+                                                     : Gfn2SccIterationLaunchResult{};
   if (status == cudaSuccess && !next_root.success()) {
     if (next_root.status == Gfn2SccIterationLaunchStatus::kInvalidBinding) {
       finish_stream();
@@ -380,31 +425,81 @@ Gfn2SccLoopGraphBuildResult build_conditional_graph(
                             next_root.cuda_status, next_root);
   }
   if (status == cudaSuccess) {
-    publish_conditional_loop_condition_kernel<<<1, 256, 0, capture_stream>>>(
-        state.binding.workspace.ledger, state.control, state.handle, 1);
+    tail_device_loop_kernel<<<1, 1, 0, capture_stream>>>(state.binding.workspace.ledger,
+                                                         state.control);
     status = check_kernel_launch();
   }
   if (status != cudaSuccess) {
     return capture_fallback(Gfn2SccLoopGraphFallbackReason::kNumericalBodyCaptureFailed, status);
   }
-  ended_graph = nullptr;
-  status = cudaStreamEndCapture(capture_stream, &ended_graph);
-  if (status != cudaSuccess || ended_graph != body_graph) {
-    return capture_fallback(
-        Gfn2SccLoopGraphFallbackReason::kNumericalBodyCaptureFailed,
-        status == cudaSuccess ? cudaErrorStreamCaptureInvalidated : status);
+  status = cudaStreamEndCapture(capture_stream, &state.body_graph);
+  if (status != cudaSuccess || state.body_graph == nullptr) {
+    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kNumericalBodyCaptureFailed,
+                            status == cudaSuccess ? cudaErrorStreamCaptureInvalidated : status);
+  }
+
+  const DeviceGraphAuditResult audit = audit_device_launch_graph(state.body_graph);
+  if (!audit.supported) {
+    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kDeviceGraphNodeUnsupported,
+                            audit.status);
+  }
+
+  status = cudaGraphInstantiate(&state.body_executable, state.body_graph,
+                                cudaGraphInstantiateFlagDeviceLaunch);
+  if (status != cudaSuccess) {
+    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kDeviceGraphInstantiationFailed,
+                            status);
+  }
+  status = cudaGraphUpload(state.body_executable, capture_stream);
+  if (status == cudaSuccess) {
+    /* build() owns setup ordering. A successful return guarantees that a root
+     * launch on any caller stream cannot race the asynchronous body upload. */
+    status = cudaStreamSynchronize(capture_stream);
+  }
+  if (status != cudaSuccess) {
+    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kDeviceGraphUploadFailed, status);
+  }
+
+  status = cudaStreamBeginCapture(capture_stream, cudaStreamCaptureModeThreadLocal);
+  if (status != cudaSuccess) {
+    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kRootCaptureFailed, status);
+  }
+  reset_device_loop_control_kernel<<<1, 1, 0, capture_stream>>>(state.control);
+  status = check_kernel_launch();
+  const Gfn2SccIterationLaunchResult root = status == cudaSuccess
+                                                ? launch_graph_activity(state, capture_stream)
+                                                : Gfn2SccIterationLaunchResult{};
+  if (status == cudaSuccess && !root.success()) {
+    if (root.status == Gfn2SccIterationLaunchStatus::kInvalidBinding) {
+      finish_stream();
+      return invalid_graph_binding(root);
+    }
+    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kRootCaptureFailed, root.cuda_status,
+                            root);
+  }
+  if (status == cudaSuccess) {
+    gate_device_loop_kernel<<<1, 1, 0, capture_stream>>>(state.binding.workspace.ledger,
+                                                         state.control, state.body_executable);
+    status = check_kernel_launch();
+  }
+  if (status != cudaSuccess) {
+    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kRootCaptureFailed, status);
+  }
+  status = cudaStreamEndCapture(capture_stream, &state.root_graph);
+  if (status != cudaSuccess || state.root_graph == nullptr) {
+    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kRootCaptureFailed,
+                            status == cudaSuccess ? cudaErrorStreamCaptureInvalidated : status);
+  }
+
+  status = cudaGraphInstantiate(&state.root_executable, state.root_graph, 0u);
+  if (status != cudaSuccess) {
+    return capture_fallback(Gfn2SccLoopGraphFallbackReason::kInstantiationFailed, status);
   }
   (void)cudaStreamDestroy(capture_stream);
   capture_stream = nullptr;
 
-  status = cudaGraphInstantiate(&state.executable, state.graph, 0u);
-  if (status != cudaSuccess) {
-    return fallback_graph_build(state, Gfn2SccLoopGraphFallbackReason::kInstantiationFailed,
-                                status);
-  }
-
   Gfn2SccLoopGraphBuildResult result{};
-  result.status = Gfn2SccLoopGraphBuildStatus::kConditionalGraphReady;
+  result.status = Gfn2SccLoopGraphBuildStatus::kDeviceTailGraphReady;
   return result;
 }
 
@@ -412,21 +507,18 @@ Gfn2SccLoopGraphBuildResult build_conditional_graph(
 
 }  // namespace
 
-Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(
-    const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
+Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(const Gfn2SccIterationBinding& binding,
+                                                             cudaStream_t stream) noexcept {
   return launch_restricted_scc_loop_impl(binding, nullptr, stream);
 }
 
 Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(
-    const Gfn2SccIterationBinding& binding,
-    const Gfn2GeometryEpochConsumerDevice& geometry,
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream) noexcept {
   return launch_restricted_scc_loop_impl(binding, &geometry, stream);
 }
 
-Gfn2SccLoopCudaGraphOwner::~Gfn2SccLoopCudaGraphOwner() {
-  reset();
-}
+Gfn2SccLoopCudaGraphOwner::~Gfn2SccLoopCudaGraphOwner() { reset(); }
 
 Gfn2SccLoopGraphBuildResult Gfn2SccLoopCudaGraphOwner::build(
     const Gfn2SccIterationBinding& binding) noexcept {
@@ -464,15 +556,14 @@ Gfn2SccLoopGraphBuildResult Gfn2SccLoopCudaGraphOwner::build_impl(
   state_ = state;
 
 #if CUDART_VERSION >= 12030
-  Gfn2SccLoopGraphBuildResult result = build_conditional_graph(*state);
+  Gfn2SccLoopGraphBuildResult result = build_device_tail_graph(*state);
   if (result.status == Gfn2SccLoopGraphBuildStatus::kInvalidBinding) {
     reset();
   }
   return result;
 #else
-  return fallback_graph_build(
-      *state, Gfn2SccLoopGraphFallbackReason::kConditionalNodesUnavailable,
-      cudaErrorNotSupported);
+  return fallback_graph_build(*state, Gfn2SccLoopGraphFallbackReason::kDeviceGraphLaunchUnavailable,
+                              cudaErrorNotSupported);
 #endif
 }
 
@@ -488,20 +579,19 @@ Gfn2SccLoopLaunchResult Gfn2SccLoopCudaGraphOwner::launch(cudaStream_t stream) c
     result.iteration.cuda_status = capture_query;
     return result;
   }
-  /* CUDA graphs containing conditional nodes cannot themselves become child
-   * graph nodes. Preserve the established whole-pipeline capture contract by
-   * capturing the bounded path when the caller is already recording a graph. */
-  if (state_->executable == nullptr || capture_status != cudaStreamCaptureStatusNone) {
-    Gfn2SccLoopLaunchResult result =
-        launch_restricted_scc_loop_impl(state_->binding,
-                                        state_->dynamic_geometry ? &state_->geometry : nullptr,
-                                        stream);
+  /* Capturing the root Graph would make the outer executable depend on this
+   * owner's body executable and control allocation. Capture the bounded DAG
+   * instead so the outer executable remains valid after owner reset while the
+   * caller-owned binding storage remains alive. */
+  if (state_->root_executable == nullptr || capture_status != cudaStreamCaptureStatusNone) {
+    Gfn2SccLoopLaunchResult result = launch_restricted_scc_loop_impl(
+        state_->binding, state_->dynamic_geometry ? &state_->geometry : nullptr, stream);
     result.execution_mode = Gfn2SccLoopExecutionMode::kBoundedFallback;
     return result;
   }
   Gfn2SccLoopLaunchResult result{};
-  result.execution_mode = Gfn2SccLoopExecutionMode::kConditionalGraph;
-  const cudaError_t status = cudaGraphLaunch(state_->executable, stream);
+  result.execution_mode = Gfn2SccLoopExecutionMode::kDeviceTailGraph;
+  const cudaError_t status = cudaGraphLaunch(state_->root_executable, stream);
   if (status != cudaSuccess) {
     result.iteration.status = Gfn2SccIterationLaunchStatus::kCudaError;
     result.iteration.cuda_status = status;
@@ -516,12 +606,15 @@ void Gfn2SccLoopCudaGraphOwner::reset() noexcept {
   state_ = nullptr;
 }
 
-bool Gfn2SccLoopCudaGraphOwner::ready() const noexcept {
-  return state_ != nullptr;
-}
+bool Gfn2SccLoopCudaGraphOwner::ready() const noexcept { return state_ != nullptr; }
 
 bool Gfn2SccLoopCudaGraphOwner::conditional_graph_ready() const noexcept {
-  return state_ != nullptr && state_->executable != nullptr;
+  return device_tail_graph_ready();
+}
+
+bool Gfn2SccLoopCudaGraphOwner::device_tail_graph_ready() const noexcept {
+  return state_ != nullptr && state_->root_executable != nullptr &&
+         state_->body_executable != nullptr;
 }
 
 Gfn2SccLoopGraphFallbackReason Gfn2SccLoopCudaGraphOwner::fallback_reason() const noexcept {
@@ -529,14 +622,18 @@ Gfn2SccLoopGraphFallbackReason Gfn2SccLoopCudaGraphOwner::fallback_reason() cons
 }
 
 const std::uint32_t* Gfn2SccLoopCudaGraphOwner::canonical_active_count_device() const noexcept {
-  return state_ == nullptr || state_->control == nullptr
-             ? nullptr
-             : &state_->control->canonical_active_count;
+  return state_ == nullptr || state_->control == nullptr ? nullptr
+                                                         : &state_->control->canonical_active_count;
 }
 
 const std::uint64_t* Gfn2SccLoopCudaGraphOwner::numerical_body_count_device() const noexcept {
   return state_ == nullptr || state_->control == nullptr ? nullptr
                                                          : &state_->control->numerical_body_count;
+}
+
+const std::uint32_t* Gfn2SccLoopCudaGraphOwner::device_launch_error_device() const noexcept {
+  return state_ == nullptr || state_->control == nullptr ? nullptr
+                                                         : &state_->control->device_launch_error;
 }
 
 }  // namespace gpuxtb::detail::cuda

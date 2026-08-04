@@ -1671,11 +1671,14 @@ int test_conditional_graph_exact_body_count(std::int64_t batch_size,
                  static_cast<unsigned>(build.iteration.stage));
   }
   CHECK(build.success());
+  CHECK(build.device_tail_graph_ready());
   CHECK(build.conditional_graph_ready());
   CHECK(graph.ready());
+  CHECK(graph.device_tail_graph_ready());
   CHECK(graph.conditional_graph_ready());
   CHECK(graph.canonical_active_count_device() != nullptr);
   CHECK(graph.numerical_body_count_device() != nullptr);
+  CHECK(graph.device_launch_error_device() != nullptr);
 
   const auto run_and_compare = [&]() -> int {
     const Gfn2SccLoopLaunchResult launch = graph.launch(fixture.handles.stream());
@@ -1684,11 +1687,14 @@ int test_conditional_graph_exact_body_count(std::int64_t batch_size,
     CHECK(launch.submitted_graphs == 1u);
     CHECK(launch.submitted_iterations == 0u);
     std::uint32_t terminal_active_count = 1u;
+    std::uint32_t device_launch_error = cudaErrorUnknown;
     std::uint64_t body_count = 0u;
     CHECK(download_value(graph.canonical_active_count_device(), terminal_active_count,
                          fixture.handles.stream()));
     CHECK(
         download_value(graph.numerical_body_count_device(), body_count, fixture.handles.stream()));
+    CHECK(download_value(graph.device_launch_error_device(), device_launch_error,
+                         fixture.handles.stream()));
     CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
 
     std::uint64_t reference_body_count = 0u;
@@ -1697,11 +1703,13 @@ int test_conditional_graph_exact_body_count(std::int64_t batch_size,
     CHECK(reference_body_count <= fixture.host.options().maximum_iterations);
     CHECK(body_count == reference_body_count);
     CHECK(terminal_active_count == 0u);
+    CHECK(device_launch_error == cudaSuccess);
     CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding, fixture.handles.stream()) ==
           0);
 
-    /* A terminal replay must execute no numerical body, proving that the
-     * root count gates the WHILE node rather than merely gating publication. */
+    /* A terminal replay must execute no numerical body, proving that the root
+     * activity gate suppresses the device-tail body rather than merely gating
+     * publication inside an otherwise unconditional iteration. */
     const Gfn2SccLoopLaunchResult terminal = graph.launch(fixture.handles.stream());
     CHECK(terminal.success());
     CHECK(
@@ -1724,6 +1732,56 @@ int test_conditional_graph_exact_body_count(std::int64_t batch_size,
   return 0;
 }
 
+int test_device_tail_owner_whole_pipeline_capture() {
+  constexpr double kTerminalTolerance = 1.0e-8;
+  ProductionFixture fixture;
+  CHECK(fixture.create(false, 8));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  GraphResources pipeline;
+  DeviceAllocation terminal_snapshot_storage;
+  CHECK(terminal_snapshot_storage.allocate(static_cast<std::size_t>(fixture.host.batch_size()) *
+                                           sizeof(double)));
+  auto* const terminal_snapshot = static_cast<double*>(terminal_snapshot_storage.get());
+  {
+    Gfn2SccLoopCudaGraphOwner owner;
+    const Gfn2SccLoopGraphBuildResult build = owner.build(fixture.binding);
+    CHECK(build.device_tail_graph_ready());
+    CHECK(owner.device_tail_graph_ready());
+
+    /* The device-tail Graph references owner control storage. Capture the
+     * bounded DAG so the outer executable remains valid after owner reset. */
+    CUDA_CHECK(cudaStreamBeginCapture(fixture.handles.stream(), cudaStreamCaptureModeThreadLocal));
+    const Gfn2SccLoopLaunchResult captured = owner.launch(fixture.handles.stream());
+    CHECK(captured.success());
+    CHECK(captured.execution_mode == Gfn2SccLoopExecutionMode::kBoundedFallback);
+    CHECK(captured.submitted_graphs == 0u);
+    CHECK(captured.submitted_iterations == fixture.host.options().maximum_iterations);
+    CUDA_CHECK(cudaMemcpyAsync(terminal_snapshot, fixture.binding.state.scc.free_energies,
+                               static_cast<std::size_t>(fixture.host.batch_size()) * sizeof(double),
+                               cudaMemcpyDeviceToDevice, fixture.handles.stream()));
+    CUDA_CHECK(cudaStreamEndCapture(fixture.handles.stream(), pipeline.graph_address()));
+    owner.reset();
+    CHECK(!owner.ready());
+  }
+  CHECK(pipeline.graph() != nullptr);
+  CUDA_CHECK(cudaGraphInstantiate(pipeline.executable_address(), pipeline.graph(), 0u));
+
+  CUDA_CHECK(cudaGraphLaunch(pipeline.executable(), fixture.handles.stream()));
+  std::vector<double> captured_terminal_free_energies;
+  CHECK(download(terminal_snapshot, fixture.host.batch_size(), captured_terminal_free_energies,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  CHECK(run_host_fixed_scc_loop(fixture.host) == 0);
+  CHECK(compare_doubles("captured terminal free energy", captured_terminal_free_energies,
+                        fixture.host.driver_state().free_energies, fixture.host.batch_size(),
+                        kTerminalTolerance));
+  CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding, fixture.handles.stream()) ==
+        0);
+  return 0;
+}
+
 int test_conditional_graph_plan_failure_forces_exit() {
   ProductionFixture fixture;
   CHECK(fixture.create(false, 8));
@@ -1731,9 +1789,9 @@ int test_conditional_graph_plan_failure_forces_exit() {
 
   /* Keep root provenance valid but make the ES2 numerical descriptor stale.
    * The first body therefore records a plan-wide ES2 failure before state
-   * publication. A conditional loop that blindly re-derived activity would
-   * reset that record and spin until the bound; the tail latch must stop at
-   * exactly one body and restore the original diagnostic. */
+   * publication. A device-tail loop that blindly re-derived activity would
+   * reset that record and self-launch until the bound; the failure snapshot
+   * must stop at exactly one body and restore the original diagnostic. */
   Gfn2SccIterationDevicePlan stale_plan = fixture.binding.plan;
   stale_plan.es2_cache.geometry_generation = kGeometryGeneration - 1u;
   Gfn2SccIterationBinding stale_binding{};
@@ -1818,7 +1876,7 @@ int test_conditional_graph_mixed_warm_peer_parity() {
   driver.converged[1] = 1u;
   mixer.converged[1] = 1u;
   /* A forced warm/converged peer must retain a self-consistent convergence
-   * record. The conditional body skips this peer, so seed both public SCC and
+   * record. The device-tail body skips this peer, so seed both public SCC and
    * mixer residual views with values that satisfy the bound tolerances. */
   mixer.residual_rms[1] = 0.0;
   mixer.residual_maximum[1] = 0.0;
@@ -2622,6 +2680,10 @@ int main(int argc, char** argv) {
     }
   }
   status = test_conditional_graph_plan_failure_forces_exit();
+  if (status != 0) {
+    return status;
+  }
+  status = test_device_tail_owner_whole_pipeline_capture();
   if (status != 0) {
     return status;
   }

@@ -10,11 +10,13 @@
 
 namespace gpuxtb::detail::cuda {
 
-inline constexpr std::uint32_t kGfn2SccLoopAbiVersion = 2u;
+inline constexpr std::uint32_t kGfn2SccLoopAbiVersion = 3u;
 
 enum class Gfn2SccLoopExecutionMode : std::uint32_t {
   kBoundedFallback = 0u,
-  kConditionalGraph = 1u,
+  kDeviceTailGraph = 1u,
+  /* Compatibility name retained for runtime identity consumers. */
+  kConditionalGraph = kDeviceTailGraph,
 };
 
 /*
@@ -48,10 +50,16 @@ enum class Gfn2SccLoopGraphFallbackReason : std::uint32_t {
   kRootCaptureFailed = 4u,
   kNumericalBodyCaptureFailed = 5u,
   kInstantiationFailed = 6u,
+  kDeviceGraphLaunchUnavailable = 7u,
+  kDeviceGraphNodeUnsupported = 8u,
+  kDeviceGraphInstantiationFailed = 9u,
+  kDeviceGraphUploadFailed = 10u,
 };
 
 enum class Gfn2SccLoopGraphBuildStatus : std::uint32_t {
-  kConditionalGraphReady = 0u,
+  kDeviceTailGraphReady = 0u,
+  /* Compatibility name retained for existing callers and tests. */
+  kConditionalGraphReady = kDeviceTailGraphReady,
   kBoundedFallbackReady = 1u,
   kInvalidBinding = 2u,
 };
@@ -67,19 +75,24 @@ struct Gfn2SccLoopGraphBuildResult {
            status == Gfn2SccLoopGraphBuildStatus::kBoundedFallbackReady;
   }
 
-  [[nodiscard]] bool conditional_graph_ready() const noexcept {
-    return status == Gfn2SccLoopGraphBuildStatus::kConditionalGraphReady;
+  [[nodiscard]] bool device_tail_graph_ready() const noexcept {
+    return status == Gfn2SccLoopGraphBuildStatus::kDeviceTailGraphReady;
   }
+
+  [[nodiscard]] bool conditional_graph_ready() const noexcept { return device_tail_graph_ready(); }
 };
 
 static_assert(std::is_trivially_copyable_v<Gfn2SccLoopGraphBuildResult>);
 static_assert(std::is_standard_layout_v<Gfn2SccLoopGraphBuildResult>);
 
 /*
- * Fixed-context owner for one reusable conditional SCC Graph. build() is a
- * setup-only operation and may allocate Graph/control resources. launch()
- * performs one graph submission, or uses the sealed bounded fallback when the
- * provider/runtime could not capture the numerical body. Neither path polls
+ * Fixed-context owner for one reusable device-resident SCC loop. build() is a
+ * setup-only operation and may allocate Graph/control resources. The ordinary
+ * root Graph derives activity and launches a pre-uploaded device Graph exactly
+ * once when work exists. The device Graph tail-relaunches itself until the
+ * canonical active count reaches zero. launch() therefore performs one root
+ * submission, or uses the sealed bounded fallback when the provider/runtime
+ * cannot build the device-launchable numerical body. Neither hot path polls
  * device state, transfers per-iteration host data, allocates, or synchronizes.
  *
  * The owner is single-flight with its binding and provider handles. Callers
@@ -88,7 +101,7 @@ static_assert(std::is_standard_layout_v<Gfn2SccLoopGraphBuildResult>);
 class Gfn2SccLoopCudaGraphOwner {
  public:
   /* Opaque implementation record; exposed only so the CUDA translation unit
-   * can build setup helpers without placing CUDA conditional types here. */
+   * can build setup helpers without placing device-Graph handles here. */
   struct State;
 
   Gfn2SccLoopCudaGraphOwner() noexcept = default;
@@ -98,8 +111,7 @@ class Gfn2SccLoopCudaGraphOwner {
   Gfn2SccLoopCudaGraphOwner(Gfn2SccLoopCudaGraphOwner&&) = delete;
   Gfn2SccLoopCudaGraphOwner& operator=(Gfn2SccLoopCudaGraphOwner&&) = delete;
 
-  [[nodiscard]] Gfn2SccLoopGraphBuildResult build(
-      const Gfn2SccIterationBinding& binding) noexcept;
+  [[nodiscard]] Gfn2SccLoopGraphBuildResult build(const Gfn2SccIterationBinding& binding) noexcept;
 
   [[nodiscard]] Gfn2SccLoopGraphBuildResult build(
       const Gfn2SccIterationBinding& binding,
@@ -109,12 +121,14 @@ class Gfn2SccLoopCudaGraphOwner {
 
   void reset() noexcept;
   [[nodiscard]] bool ready() const noexcept;
+  [[nodiscard]] bool device_tail_graph_ready() const noexcept;
   [[nodiscard]] bool conditional_graph_ready() const noexcept;
   [[nodiscard]] Gfn2SccLoopGraphFallbackReason fallback_reason() const noexcept;
 
   /* Setup-owned device counters for testing/profiling after caller ordering. */
   [[nodiscard]] const std::uint32_t* canonical_active_count_device() const noexcept;
   [[nodiscard]] const std::uint64_t* numerical_body_count_device() const noexcept;
+  [[nodiscard]] const std::uint32_t* device_launch_error_device() const noexcept;
 
  private:
   [[nodiscard]] Gfn2SccLoopGraphBuildResult build_impl(
@@ -152,8 +166,7 @@ class Gfn2SccLoopCudaGraphOwner {
 
 /* Replay-safe bounded loop using one immutable device-epoch consumer view. */
 [[nodiscard]] Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(
-    const Gfn2SccIterationBinding& binding,
-    const Gfn2GeometryEpochConsumerDevice& geometry,
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
