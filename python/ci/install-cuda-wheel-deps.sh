@@ -30,7 +30,9 @@ trap 'rm -rf "$work"' EXIT
 # nor cuSPARSE; the image already provides cuBLAS and the linker defers the
 # rest, which we exclude from the wheel anyway).
 python -m pip download --quiet --no-deps --no-cache-dir \
-  nvidia-cusolver-cu12 nvidia-nvjitlink-cu12 nvidia-cusparse-cu12 \
+  nvidia-cusolver-cu12==11.7.5.82 \
+  nvidia-nvjitlink-cu12==12.9.86 \
+  nvidia-cusparse-cu12==12.5.10.65 \
   -d "$work"/wheels
 
 python - "$work" <<'PY'

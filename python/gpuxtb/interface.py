@@ -24,14 +24,16 @@ Charge and spin semantics are implemented directly on top of the C ABI:
 from __future__ import annotations
 
 import ctypes
+import math
+import operator
+import weakref
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, List, Optional, Sequence, Union
 
 import numpy as np
 
 from . import library
 from .exceptions import GPUxtbNotSupportedError, GPUxtbRuntimeError, GPUxtbValueError
-
 
 # --- periodic-table helpers (mirrors tblite.interface) ---------------------------
 
@@ -47,16 +49,56 @@ ELEMENT_SYMBOLS = [
     *["Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd"],
     *["In", "Sn", "Sb", "Te", "I", "Xe"],
     *["Cs", "Ba"],
-    *["La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb"],
+    *[
+        "La",
+        "Ce",
+        "Pr",
+        "Nd",
+        "Pm",
+        "Sm",
+        "Eu",
+        "Gd",
+        "Tb",
+        "Dy",
+        "Ho",
+        "Er",
+        "Tm",
+        "Yb",
+    ],
     *["Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg"],
     *["Tl", "Pb", "Bi", "Po", "At", "Rn"],
     *["Fr", "Ra"],
-    *["Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No"],
+    *[
+        "Ac",
+        "Th",
+        "Pa",
+        "U",
+        "Np",
+        "Pu",
+        "Am",
+        "Cm",
+        "Bk",
+        "Cf",
+        "Es",
+        "Fm",
+        "Md",
+        "No",
+    ],
     *["Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds", "Rg", "Cn"],
     *["Nh", "Fl", "Mc", "Lv", "Ts", "Og"],
 ]
 
 SYMBOL_TO_NUMBER = {symbol: number + 1 for number, symbol in enumerate(ELEMENT_SYMBOLS)}
+
+
+def _as_integer(name: str, value: Any) -> int:
+    """Return an exact integer without silently truncating floats."""
+    if isinstance(value, (bool, np.bool_)):
+        raise GPUxtbValueError(f"{name} must be an integer")
+    try:
+        return int(operator.index(value))
+    except TypeError:
+        raise GPUxtbValueError(f"{name} must be an integer") from None
 
 
 def symbols_to_numbers(symbols: Sequence[str]) -> List[int]:
@@ -66,7 +108,13 @@ def symbols_to_numbers(symbols: Sequence[str]) -> List[int]:
 
 def numbers_to_symbols(numbers: Sequence[int]) -> List[str]:
     """Convert a list of atomic numbers to atomic symbols."""
-    return [ELEMENT_SYMBOLS[int(number) - 1] for number in numbers]
+    symbols = []
+    for value in numbers:
+        number = _as_integer("atomic number", value)
+        if number < 1 or number > len(ELEMENT_SYMBOLS):
+            raise GPUxtbValueError("atomic numbers must lie between 1 and 118")
+        symbols.append(ELEMENT_SYMBOLS[number - 1])
+    return symbols
 
 
 # --- supported methods -------------------------------------------------------------
@@ -76,7 +124,11 @@ _SUPPORTED_METHODS = {
     "GFN2": library.MODEL_GFN2_XTB,
 }
 
-_BACKENDS = {"auto": library.BACKEND_AUTO, "cpu": library.BACKEND_CPU, "cuda": library.BACKEND_CUDA}
+_BACKENDS = {
+    "auto": library.BACKEND_AUTO,
+    "cpu": library.BACKEND_CPU,
+    "cuda": library.BACKEND_CUDA,
+}
 
 CUDA_UNRESTRICTED_SCOPE_REASON = (
     "the CUDA public GFN2 path does not support ABI-v2 unrestricted spin_channels yet"
@@ -95,16 +147,19 @@ def _default_spin_channels(uhf: int) -> int:
 def _resolve_uhf(uhf: Optional[int], multiplicity: Optional[int]) -> int:
     """Resolve the number of unpaired electrons from ``uhf`` and/or ``multiplicity``."""
     if multiplicity is not None:
-        multiplicity = int(multiplicity)
+        multiplicity = _as_integer("multiplicity", multiplicity)
         if multiplicity < 1:
             raise GPUxtbValueError("multiplicity must be a positive integer")
         unpaired = multiplicity - 1
-        if uhf is not None and int(uhf) != unpaired:
+        if uhf is not None and _as_integer("uhf", uhf) != unpaired:
             raise GPUxtbValueError(
                 f"uhf={uhf} is inconsistent with multiplicity={multiplicity}"
             )
         return unpaired
-    return int(uhf) if uhf is not None else 0
+    unpaired = _as_integer("uhf", uhf) if uhf is not None else 0
+    if unpaired < 0:
+        raise GPUxtbValueError("uhf must be nonnegative")
+    return unpaired
 
 
 # --- point charges ------------------------------------------------------------------
@@ -142,6 +197,12 @@ class PointCharge:
             raise GPUxtbValueError("point charge gammas must match the position count")
         if len(positions) == 0:
             raise GPUxtbValueError("point charges must be nonempty")
+        if not (
+            np.isfinite(positions).all()
+            and np.isfinite(charges).all()
+            and np.isfinite(gammas).all()
+        ):
+            raise GPUxtbValueError("point charge inputs must be finite")
         object.__setattr__(self, "positions", np.ascontiguousarray(positions))
         object.__setattr__(self, "charges", np.ascontiguousarray(charges))
         object.__setattr__(self, "gammas", np.ascontiguousarray(gammas))
@@ -168,15 +229,39 @@ class Structure:
         spin_channels: Optional[int] = None,
         point_charges: Optional[PointCharge] = None,
     ):
-        numbers = np.asarray(numbers)
-        if numbers.ndim == 1 and numbers.dtype.kind in "USO":
-            numbers = np.asarray(symbols_to_numbers(numbers), dtype=np.int64)
+        object_numbers = np.asarray(numbers, dtype=object)
+        raw_numbers = np.asarray(numbers)
+        if raw_numbers.ndim != 1 or raw_numbers.size == 0:
+            raise GPUxtbValueError("expected a nonempty one-dimensional numbers array")
+
+        object_symbols = raw_numbers.dtype.kind == "O" and all(
+            isinstance(value, str) for value in raw_numbers
+        )
+        if raw_numbers.dtype.kind in "US" or object_symbols:
+            numbers = np.asarray(symbols_to_numbers(raw_numbers), dtype=np.int64)
         else:
-            numbers = np.asarray(numbers, dtype=np.int64)
+            if raw_numbers.dtype.kind in "bc" or (
+                any(
+                    isinstance(value, (bool, np.bool_))
+                    for value in object_numbers.flat
+                )
+            ):
+                raise GPUxtbValueError("atomic numbers must be exact integers")
+            try:
+                numeric_numbers = np.asarray(raw_numbers, dtype=np.float64)
+            except (TypeError, ValueError, OverflowError):
+                raise GPUxtbValueError(
+                    "atomic numbers must be exact integers"
+                ) from None
+            if not np.isfinite(numeric_numbers).all() or not np.equal(
+                numeric_numbers, np.floor(numeric_numbers)
+            ).all():
+                raise GPUxtbValueError("atomic numbers must be exact integers")
+            if (numeric_numbers < 1).any() or (numeric_numbers > 118).any():
+                raise GPUxtbValueError("atomic numbers must lie between 1 and 118")
+            numbers = np.asarray(numeric_numbers, dtype=np.int64)
         positions = np.asarray(positions, dtype=float)
 
-        if numbers.ndim != 1 or numbers.size == 0:
-            raise GPUxtbValueError("expected a nonempty one-dimensional numbers array")
         if (numbers < 1).any() or (numbers > 118).any():
             raise GPUxtbValueError("atomic numbers must lie between 1 and 118")
         if positions.ndim != 2 or positions.shape[1] != 3:
@@ -187,14 +272,23 @@ class Structure:
             raise GPUxtbValueError("positions must be finite")
 
         unpaired = _resolve_uhf(uhf, multiplicity)
-        if spin_channels is not None and spin_channels not in (1, 2):
-            raise GPUxtbValueError("spin_channels must be 1 (restricted) or 2 (unrestricted)")
+        if not math.isfinite(float(charge)):
+            raise GPUxtbValueError("charge must be finite")
+        resolved_spin = (
+            _default_spin_channels(unpaired)
+            if spin_channels is None
+            else _as_integer("spin_channels", spin_channels)
+        )
+        if resolved_spin not in (1, 2):
+            raise GPUxtbValueError(
+                "spin_channels must be 1 (restricted) or 2 (unrestricted)"
+            )
 
         self._numbers = np.ascontiguousarray(numbers, dtype=np.int32)
         self._positions = np.ascontiguousarray(positions, dtype=np.float64)
         self._charge = float(charge)
         self._uhf = unpaired
-        self._spin_channels = spin_channels if spin_channels is not None else _default_spin_channels(unpaired)
+        self._spin_channels = resolved_spin
         self._point_charges = point_charges
 
     def __len__(self) -> int:
@@ -258,26 +352,55 @@ class Structure:
         spin_channels : optional, int
             Orbital channels (1 restricted / 2 unrestricted).
         """
+        # Validate every candidate before mutating the object.  This keeps a
+        # failed multi-field update transactional instead of leaving, for
+        # example, new coordinates paired with an invalid spin request.
+        next_positions = self._positions
+        next_charge = self._charge
+        next_uhf = self._uhf
+        next_spin_channels = self._spin_channels
+
         if positions is not None:
-            positions = np.asarray(positions, dtype=float)
-            if positions.shape != self._positions.shape:
+            candidate_positions = np.asarray(positions, dtype=float)
+            if candidate_positions.shape != self._positions.shape:
                 raise GPUxtbValueError("updated positions must keep the original shape")
-            if not np.isfinite(positions).all():
+            if not np.isfinite(candidate_positions).all():
                 raise GPUxtbValueError("positions must be finite")
-            self._positions = np.ascontiguousarray(positions, dtype=np.float64)
+            next_positions = np.ascontiguousarray(candidate_positions, dtype=np.float64)
         if charge is not None:
-            self._charge = float(charge)
+            if not math.isfinite(float(charge)):
+                raise GPUxtbValueError("charge must be finite")
+            next_charge = float(charge)
         if uhf is not None or multiplicity is not None:
-            self._uhf = _resolve_uhf(uhf, multiplicity)
+            next_uhf = _resolve_uhf(uhf, multiplicity)
             if spin_channels is None:
-                self._spin_channels = _default_spin_channels(self._uhf)
+                next_spin_channels = _default_spin_channels(next_uhf)
         if spin_channels is not None:
-            if spin_channels not in (1, 2):
-                raise GPUxtbValueError("spin_channels must be 1 (restricted) or 2 (unrestricted)")
-            self._spin_channels = spin_channels
+            next_spin_channels = _as_integer("spin_channels", spin_channels)
+            if next_spin_channels not in (1, 2):
+                raise GPUxtbValueError(
+                    "spin_channels must be 1 (restricted) or 2 (unrestricted)"
+                )
+
+        self._positions = next_positions
+        self._charge = next_charge
+        self._uhf = next_uhf
+        self._spin_channels = next_spin_channels
 
 
 # --- contexts ----------------------------------------------------------------------
+
+
+def _destroy_native_context(library_instance, handle: ctypes.c_void_p) -> None:
+    """Destroy one native context; used by explicit close and finalization."""
+    library_instance.gpuxtb_context_destroy(handle)
+
+
+def _requires_cpu_spin_scope(structures: Sequence[Structure]) -> bool:
+    """Whether the current public CUDA boundary cannot represent this batch."""
+    return any(
+        structure.uhf != 0 or structure.spin_channels != 1 for structure in structures
+    )
 
 
 class Context:
@@ -288,8 +411,6 @@ class Context:
     updates and steady-state calls. Creates and destroys the native context on
     enter/exit.
     """
-
-    _handle: Optional[ctypes.c_void_p] = None
 
     def __init__(
         self,
@@ -303,7 +424,11 @@ class Context:
             except KeyError:
                 raise GPUxtbValueError(f"unknown backend {backend!r}") from None
         else:
-            if int(backend) not in (library.BACKEND_AUTO, library.BACKEND_CPU, library.BACKEND_CUDA):
+            if int(backend) not in (
+                library.BACKEND_AUTO,
+                library.BACKEND_CPU,
+                library.BACKEND_CUDA,
+            ):
                 raise GPUxtbValueError(f"unknown backend {backend!r}")
             self._requested = int(backend)
         self._device_id = -1 if device_id is None else int(device_id)
@@ -312,22 +437,49 @@ class Context:
             raise GPUxtbValueError("cpu_threads must be nonnegative")
         self._handle = None
         self._backend: Optional[int] = None
+        self._finalizer: Optional[weakref.finalize] = None
+        # Keep the caller's AUTO request separate from the backend request used
+        # for the current native context. Unsupported spin temporarily pins
+        # AUTO to CPU, but a later closed-shell update may select CUDA again.
+        self._effective_request = self._requested
+        self._created_request: Optional[int] = None
+
+    def _prepare_for_structures(self, structures: Sequence[Structure]) -> None:
+        """Make AUTO honor Python's CPU fallback for unsupported spin states.
+
+        The C API's AUTO policy prefers CUDA whenever a device is present.  At
+        the current public CUDA boundary that would make the same default
+        open-shell calculation work on a CPU-only host but fail on a GPU host.
+        Pin this calculator context to CPU before submission when its batch
+        requires unrestricted/open-shell semantics.  If a previously closed-
+        shell AUTO calculator already resolved to CUDA, rebuild it once.
+        """
+        desired_request = self._requested
+        if self._requested == library.BACKEND_AUTO and _requires_cpu_spin_scope(
+            structures
+        ):
+            desired_request = library.BACKEND_CPU
+
+        if self._handle is not None and self._created_request != desired_request:
+            self.close()
+        self._effective_request = desired_request
 
     def _create(self) -> None:
         if self._handle is not None:
             return
+        library_instance = library.load_library()
         options = library.ContextOptions()
         library._check_init(
             "gpuxtb_context_options_init",
-            library.load_library().gpuxtb_context_options_init(
+            library_instance.gpuxtb_context_options_init(
                 ctypes.byref(options), ctypes.sizeof(options)
             ),
         )
-        options.backend = self._requested
+        options.backend = self._effective_request
         options.device_id = self._device_id
         options.cpu_threads = self._cpu_threads
         handle = ctypes.c_void_p()
-        status = library.load_library().gpuxtb_context_create(
+        status = library_instance.gpuxtb_context_create(
             ctypes.byref(options), ctypes.byref(handle)
         )
         if status == library.STATUS_BACKEND_UNAVAILABLE:
@@ -341,7 +493,14 @@ class Context:
                 status,
             )
         self._handle = handle
-        self._backend = library.load_library().gpuxtb_context_get_backend(handle)
+        self._backend = library_instance.gpuxtb_context_get_backend(handle)
+        self._created_request = self._effective_request
+        # Keep both the CDLL and the native handle alive in the finalizer so
+        # contexts are reclaimed even when users follow the concise examples
+        # and do not call close() explicitly.
+        self._finalizer = weakref.finalize(
+            self, _destroy_native_context, library_instance, handle
+        )
 
     @property
     def backend(self) -> int:
@@ -357,9 +516,12 @@ class Context:
 
     def close(self) -> None:
         if self._handle is not None:
-            library.load_library().gpuxtb_context_destroy(self._handle)
+            if self._finalizer is not None and self._finalizer.alive:
+                self._finalizer()
             self._handle = None
             self._backend = None
+            self._finalizer = None
+            self._created_request = None
 
     def __enter__(self) -> "Context":
         self._create()
@@ -415,6 +577,7 @@ def _compute_batch(
     flags: int,
 ) -> _ComputedBatch:
     """Populate descriptors and run one synchronous ``gpuxtb_compute`` call."""
+    context._prepare_for_structures(structures)
     context._create()
     backend = context.backend
     _validate_for_backend(structures, backend)
@@ -463,7 +626,11 @@ def _compute_batch(
 
     def bind(descriptor_name, values, ctype, dtype):
         if not values:
-            setattr(batch, descriptor_name, library.ConstBuffer(None, 0, library.MEMORY_HOST, 0))
+            setattr(
+                batch,
+                descriptor_name,
+                library.ConstBuffer(None, 0, library.MEMORY_HOST, 0),
+            )
             return
         owner = np.ascontiguousarray(np.asarray(values, dtype=dtype))
         keepalive.append(owner)
@@ -505,7 +672,9 @@ def _compute_batch(
     options.max_scc_iterations = int(max_scc_iterations)
     options.charge_tolerance = float(charge_tolerance)
     options.energy_tolerance = float(energy_tolerance)
-    options.electronic_temperature = float(electronic_temperature) * library.KELVIN_TO_HARTREE
+    options.electronic_temperature = (
+        float(electronic_temperature) * library.KELVIN_TO_HARTREE
+    )
 
     # --- result buffers --------------------------------------------------------
     result = library.BatchResult()
@@ -520,14 +689,18 @@ def _compute_batch(
     energies = np.empty(nsystems, dtype=np.float64)
     forces = np.empty((total_atoms, 3), dtype=np.float64)
     charges = np.empty(total_atoms, dtype=np.float64)
-    point_charge_forces = np.empty((total_points, 3), dtype=np.float64) if total_points else None
+    point_charge_forces = (
+        np.empty((total_points, 3), dtype=np.float64) if total_points else None
+    )
     scc_iterations = np.empty(nsystems, dtype=np.int32)
     scc_converged = np.empty(nsystems, dtype=np.uint8)
     per_system_status = np.empty(nsystems, dtype=np.int32)
 
     def bind_output(buffer_field, owner, requested):
         if not requested or owner is None:
-            setattr(result, buffer_field, library.Buffer(None, 0, library.MEMORY_HOST, 0))
+            setattr(
+                result, buffer_field, library.Buffer(None, 0, library.MEMORY_HOST, 0)
+            )
             return
         keepalive.append(owner)
         setattr(
@@ -565,7 +738,9 @@ def _compute_batch(
         per_system_status=per_system_status,
         result_flags=int(result.flags),
         atom_offsets=np.asarray(atom_offsets, dtype=np.int64),
-        point_offsets=np.asarray(point_offsets, dtype=np.int64) if total_points else None,
+        point_offsets=np.asarray(point_offsets, dtype=np.int64)
+        if total_points
+        else None,
         keepalive=keepalive,
     )
 
@@ -583,10 +758,13 @@ def _raise_on_failure(computed: _ComputedBatch) -> None:
         if int(status) != library.STATUS_SUCCESS or int(converged) != 1:
             failed.append(
                 f"system {index}: {library.status_string(int(status))}, "
-                f"scc_converged={int(converged)}, iterations={int(computed.scc_iterations[index])}"
+                f"scc_converged={int(converged)}, "
+                f"iterations={int(computed.scc_iterations[index])}"
             )
     if failed:
-        raise GPUxtbRuntimeError("gpuxtb batch inference produced failed systems: " + "; ".join(failed))
+        raise GPUxtbRuntimeError(
+            "gpuxtb batch inference produced failed systems: " + "; ".join(failed)
+        )
 
 
 # --- results ----------------------------------------------------------------------
@@ -599,7 +777,9 @@ class Result:
         "energy": lambda self: self.energy,
         "energies": lambda self: np.asarray([self.energy]),
         "forces": lambda self: self.forces,
-        "gradient": lambda self: self.forces,
+        # The public C ABI returns force = -dE/dR, whereas tblite-style
+        # ``gradient`` means +dE/dR.
+        "gradient": lambda self: -self.forces,
         "charges": lambda self: self.charges,
         "point_charge_forces": lambda self: self.point_charge_forces,
         "scc_iterations": lambda self: self.scc_iterations,
@@ -636,12 +816,14 @@ class Result:
     def get(self, attribute: str) -> Any:
         """Return a requested quantity by name.
 
-        Available keys: ``energy``, ``energies``, ``forces`` (alias
-        ``gradient``), ``charges``, ``scc_iterations``, ``scc_converged``,
-        ``scc_status``, and ``natoms``.
+        Available keys: ``energy``, ``energies``, ``forces``, ``gradient``
+        (the negative of forces), ``charges``, ``scc_iterations``,
+        ``scc_converged``, ``scc_status``, and ``natoms``.
         """
         if attribute not in self._getter:
-            raise GPUxtbValueError(f"attribute {attribute!r} is not available in this result")
+            raise GPUxtbValueError(
+                f"attribute {attribute!r} is not available in this result"
+            )
         return self._getter[attribute](self)
 
     def __getitem__(self, key: str) -> Any:
@@ -654,8 +836,9 @@ class Result:
 class BatchResult:
     """Multi-system results container for :class:`BatchCalculator`."""
 
-    def __init__(self, computed: _ComputedBatch, structures: Sequence[Structure]) -> None:
-        nsystems = len(structures)
+    def __init__(
+        self, computed: _ComputedBatch, structures: Sequence[Structure]
+    ) -> None:
         self.energies = np.array(computed.energies, copy=True)
         self.forces = np.array(computed.forces, copy=True)
         self.charges = np.array(computed.charges, copy=True)
@@ -679,6 +862,14 @@ class BatchResult:
         return len(self._structures)
 
     def __getitem__(self, index: int) -> Result:
+        try:
+            index = operator.index(index)
+        except TypeError:
+            raise TypeError("batch result indices must be integers") from None
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError("batch result index out of range")
         return Result(
             _ComputedBatch(
                 energies=self.energies,
@@ -696,6 +887,29 @@ class BatchResult:
             index=index,
         )
 
+    @property
+    def failed_indices(self) -> np.ndarray:
+        """Indices whose SCC/eigensolver status is not successful."""
+        return np.flatnonzero(
+            (self.per_system_status != library.STATUS_SUCCESS)
+            | (self.scc_converged != 1)
+        )
+
+    def raise_for_status(self) -> None:
+        """Raise a combined exception while retaining peer-local results."""
+        failed = []
+        for index in self.failed_indices:
+            failed.append(
+                f"system {int(index)}: "
+                f"{library.status_string(int(self.per_system_status[index]))}, "
+                f"scc_converged={int(self.scc_converged[index])}, "
+                f"iterations={int(self.scc_iterations[index])}"
+            )
+        if failed:
+            raise GPUxtbRuntimeError(
+                "gpuxtb batch inference produced failed systems: " + "; ".join(failed)
+            )
+
     def get(self, attribute: str) -> Any:
         """Return scalar batch arrays by name (``energies``, ``forces``, ...)."""
         names = {
@@ -708,11 +922,35 @@ class BatchResult:
             "per_system_status": self.per_system_status,
         }
         if attribute not in names:
-            raise GPUxtbValueError(f"attribute {attribute!r} is not available in this result")
+            raise GPUxtbValueError(
+                f"attribute {attribute!r} is not available in this result"
+            )
         return names[attribute]
 
 
 # --- calculators -------------------------------------------------------------------
+
+
+def _validated_compute_setting(attribute: str, value: Any) -> Union[int, float]:
+    """Validate one compute setting and return its normalized scalar value."""
+    if attribute == "max_scc_iterations":
+        candidate = _as_integer(attribute, value)
+        if candidate <= 0:
+            raise GPUxtbValueError("max_scc_iterations must be positive")
+        return candidate
+    if attribute in ("charge_tolerance", "energy_tolerance"):
+        candidate = float(value)
+        if not math.isfinite(candidate) or candidate <= 0.0:
+            raise GPUxtbValueError(f"{attribute} must be finite and positive")
+        return candidate
+    if attribute == "electronic_temperature":
+        candidate = float(value)
+        if not math.isfinite(candidate) or candidate < 0.0:
+            raise GPUxtbValueError(
+                "electronic_temperature must be finite and nonnegative"
+            )
+        return candidate
+    raise GPUxtbValueError(f"unsupported calculator setting {attribute!r}")
 
 
 class _ComputeSettings:
@@ -733,15 +971,21 @@ class _ComputeSettings:
         electronic_temperature: float,
     ) -> None:
         self.model = model
-        self.max_scc_iterations = max_scc_iterations
-        self.charge_tolerance = charge_tolerance
-        self.energy_tolerance = energy_tolerance
-        self.electronic_temperature = electronic_temperature
+        self.set("max_scc_iterations", max_scc_iterations)
+        self.set("charge_tolerance", charge_tolerance)
+        self.set("energy_tolerance", energy_tolerance)
+        self.set("electronic_temperature", electronic_temperature)
+
+    def set(self, attribute: str, value: Any) -> None:
+        """Validate and transactionally update one public compute option."""
+        setattr(self, attribute, _validated_compute_setting(attribute, value))
 
 
 def _resolve_method(method: str) -> int:
     if not method:
-        raise GPUxtbValueError("a method must be provided (only GFN2-xTB is currently supported)")
+        raise GPUxtbValueError(
+            "a method must be provided (only GFN2-xTB is currently supported)"
+        )
     try:
         return _SUPPORTED_METHODS[method]
     except KeyError:
@@ -791,15 +1035,6 @@ class Calculator(Structure):
         energy_tolerance: float = 1.0e-8,
         electronic_temperature: float = 300.0,
     ):
-        if max_scc_iterations < 1:
-            raise GPUxtbValueError("max_scc_iterations must be positive")
-        if charge_tolerance <= 0.0:
-            raise GPUxtbValueError("charge_tolerance must be positive")
-        if energy_tolerance <= 0.0:
-            raise GPUxtbValueError("energy_tolerance must be positive")
-        if electronic_temperature < 0.0:
-            raise GPUxtbValueError("electronic_temperature must be nonnegative")
-
         Structure.__init__(
             self,
             numbers,
@@ -824,6 +1059,7 @@ class Calculator(Structure):
     @property
     def backend(self) -> int:
         """The resolved execution backend of this calculator."""
+        self._context._prepare_for_structures([self])
         return self._context.backend
 
     @property
@@ -854,20 +1090,15 @@ class Calculator(Structure):
         Supported settings are ``max_scc_iterations``, ``charge_tolerance``,
         ``energy_tolerance``, and ``electronic_temperature`` (kelvin).
         """
-        if attribute == "max_scc_iterations":
-            self._settings.max_scc_iterations = int(value)
-        elif attribute == "charge_tolerance":
-            self._settings.charge_tolerance = float(value)
-        elif attribute == "energy_tolerance":
-            self._settings.energy_tolerance = float(value)
-        elif attribute == "electronic_temperature":
-            self._settings.electronic_temperature = float(value)
-        else:
-            raise GPUxtbValueError(f"unsupported calculator setting {attribute!r}")
+        self._settings.set(attribute, value)
 
     def singlepoint(self) -> Result:
         """Perform a single-point calculation and return a :class:`Result`."""
-        flags = library.COMPUTE_ENERGY | library.COMPUTE_FORCES | library.COMPUTE_ATOMIC_CHARGES
+        flags = (
+            library.COMPUTE_ENERGY
+            | library.COMPUTE_FORCES
+            | library.COMPUTE_ATOMIC_CHARGES
+        )
         if self.point_charges is not None:
             flags |= library.COMPUTE_POINT_CHARGE_FORCES
         computed = _compute_batch(
@@ -885,6 +1116,12 @@ class Calculator(Structure):
 
     def close(self) -> None:
         self._context.close()
+
+    def __enter__(self) -> "Calculator":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
 
 
 class BatchCalculator:
@@ -912,10 +1149,10 @@ class BatchCalculator:
         self._structures = list(structures)
         self._settings = _ComputeSettings(
             _resolve_method(method),
-            int(max_scc_iterations),
-            float(charge_tolerance),
-            float(energy_tolerance),
-            float(electronic_temperature),
+            max_scc_iterations,
+            charge_tolerance,
+            energy_tolerance,
+            electronic_temperature,
         )
         self._context = Context(backend, device_id, cpu_threads)
 
@@ -924,23 +1161,25 @@ class BatchCalculator:
 
     @property
     def backend(self) -> int:
+        self._context._prepare_for_structures(self._structures)
         return self._context.backend
 
     def set(self, attribute: str, value: Any) -> None:
-        if attribute == "max_scc_iterations":
-            self._settings.max_scc_iterations = int(value)
-        elif attribute == "charge_tolerance":
-            self._settings.charge_tolerance = float(value)
-        elif attribute == "energy_tolerance":
-            self._settings.energy_tolerance = float(value)
-        elif attribute == "electronic_temperature":
-            self._settings.electronic_temperature = float(value)
-        else:
-            raise GPUxtbValueError(f"unsupported calculator setting {attribute!r}")
+        self._settings.set(attribute, value)
 
-    def compute(self) -> BatchResult:
-        """Run the whole batch and return a :class:`BatchResult`."""
-        flags = library.COMPUTE_ENERGY | library.COMPUTE_FORCES | library.COMPUTE_ATOMIC_CHARGES
+    def compute(self, *, raise_on_failure: bool = False) -> BatchResult:
+        """Run the batch while preserving successful peers.
+
+        By default the result is returned even when individual systems fail;
+        their floating-point slices contain NaNs and diagnostics identify the
+        failed peers.  Set ``raise_on_failure=True`` or call
+        :meth:`BatchResult.raise_for_status` for strict behavior.
+        """
+        flags = (
+            library.COMPUTE_ENERGY
+            | library.COMPUTE_FORCES
+            | library.COMPUTE_ATOMIC_CHARGES
+        )
         if any(structure.point_charges is not None for structure in self._structures):
             flags |= library.COMPUTE_POINT_CHARGE_FORCES
         computed = _compute_batch(
@@ -953,11 +1192,19 @@ class BatchCalculator:
             electronic_temperature=self._settings.electronic_temperature,
             flags=flags,
         )
-        _raise_on_failure(computed)
-        return BatchResult(computed, self._structures)
+        batch_result = BatchResult(computed, self._structures)
+        if raise_on_failure:
+            batch_result.raise_for_status()
+        return batch_result
 
     def close(self) -> None:
         self._context.close()
+
+    def __enter__(self) -> "BatchCalculator":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
 
 
 __all__ = [

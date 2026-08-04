@@ -7,13 +7,11 @@ ground truth for the Python bindings.
 
 from __future__ import annotations
 
+import _cases
 import numpy as np
 import pytest
-
-from gpuxtb import Calculator, PointCharge
+from gpuxtb import Calculator, PointCharge, Structure
 from gpuxtb.exceptions import GPUxtbRuntimeError, GPUxtbValueError
-
-import _cases
 
 # Cases whose goldens are pure molecular (no external point charges).
 MOLECULAR_CASES = [
@@ -26,7 +24,9 @@ MOLECULAR_CASES = [
 
 
 def _assert_matches_golden(result, golden_values, tolerances):
-    assert result.energy == pytest.approx(golden_values["energy_hartree"], abs=tolerances["energy"]["atol"])
+    assert result.energy == pytest.approx(
+        golden_values["energy_hartree"], abs=tolerances["energy"]["atol"]
+    )
     assert result.forces == pytest.approx(
         np.asarray(golden_values["forces_hartree_per_bohr"]).reshape(-1, 3),
         abs=tolerances["forces"]["atol"],
@@ -75,12 +75,15 @@ def test_h2o_singlepoint_smoke():
     assert result.charges.shape == (3,)
     # Mulliken charges are still atomic units for this method.
     assert result.charges.sum() == pytest.approx(0.0, abs=1e-12)
+    assert result["gradient"] == pytest.approx(-result.forces, abs=0.0)
 
 
 def test_update_positions_reuses_calculator():
     case = _cases.case_by_id("ketene")
     numbers, positions, charge, uhf, spin = _cases.structure_inputs(case)
-    calc = Calculator("GFN2-xTB", numbers, positions, charge=charge, uhf=uhf, spin_channels=spin)
+    calc = Calculator(
+        "GFN2-xTB", numbers, positions, charge=charge, uhf=uhf, spin_channels=spin
+    )
     first = calc.singlepoint().energy
     distorted = np.array(positions, copy=True)
     distorted[0, 0] += 0.5
@@ -98,11 +101,40 @@ def test_charge_and_multiplicity_are_consistent():
         Calculator("GFN2-xTB", numbers, positions, charge=charge, uhf=1, multiplicity=1)
 
 
+def test_structure_update_is_transactional():
+    structure = Structure(np.array([1, 1]), np.zeros((2, 3)))
+    original = structure.positions.copy()
+    with pytest.raises(GPUxtbValueError):
+        structure.update(positions=np.ones((2, 3)), spin_channels=3)
+    assert structure.positions == pytest.approx(original, abs=0.0)
+    assert structure.spin_channels == 1
+
+
+@pytest.mark.parametrize(
+    ("setting", "value"),
+    [
+        ("max_scc_iterations", 0),
+        ("max_scc_iterations", 1.5),
+        ("charge_tolerance", float("nan")),
+        ("energy_tolerance", -1.0),
+        ("electronic_temperature", float("inf")),
+    ],
+)
+def test_invalid_compute_settings_are_rejected(setting, value):
+    calc = Calculator("GFN2-xTB", np.array([1, 1]), np.zeros((2, 3)))
+    with pytest.raises(GPUxtbValueError):
+        calc.set(setting, value)
+
+
 def test_open_shell_spin_polarized_differs_from_restricted():
     case = _cases.case_by_id("oh_radical")
     numbers, positions, charge, uhf, _ = _cases.structure_inputs(case)
-    restricted = Calculator("GFN2-xTB", numbers, positions, charge=charge, uhf=uhf, spin_channels=1)
-    unrestricted = Calculator("GFN2-xTB", numbers, positions, charge=charge, uhf=uhf, spin_channels=2)
+    restricted = Calculator(
+        "GFN2-xTB", numbers, positions, charge=charge, uhf=uhf, spin_channels=1
+    )
+    unrestricted = Calculator(
+        "GFN2-xTB", numbers, positions, charge=charge, uhf=uhf, spin_channels=2
+    )
     e_restricted = restricted.singlepoint().energy
     e_unrestricted = unrestricted.singlepoint().energy
     assert e_restricted != pytest.approx(e_unrestricted, abs=1e-5)

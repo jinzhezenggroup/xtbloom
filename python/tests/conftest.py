@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import os
-
-import pytest
+from pathlib import Path
 
 import gpuxtb
+import pytest
 from gpuxtb import library
 
 
@@ -19,12 +18,15 @@ def pytest_configure(config) -> None:
 def _ensure_library():
     """Resolve the gpuxtb shared library once for the whole session.
 
-    If no library can be found, the suite is skipped instead of failing so a
-    source checkout without a built/installed library still reports cleanly.
+    Missing or unloadable native code is a packaging/test failure.  In
+    particular, wheel CI must never turn a misplaced shared library into an
+    all-skipped green job.
     """
     try:
         path = library.library_path()
+        library.load_library()
     except gpuxtb.GPUxtbRuntimeError as exc:
-        pytest.skip(f"gpuxtb shared library unavailable: {exc}")
-    assert path.is_file(), f"resolved library path is not a file: {path}"
+        pytest.fail(f"gpuxtb shared library unavailable: {exc}")
+    if isinstance(path, Path):
+        assert path.is_file(), f"resolved library path is not a file: {path}"
     return path

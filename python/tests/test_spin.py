@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import _cases
 import numpy as np
 import pytest
-
-from gpuxtb import Calculator, Context, Structure
-from gpuxtb.exceptions import GPUxtbNotSupportedError, GPUxtbRuntimeError, GPUxtbValueError
-
-import _cases
+from gpuxtb import Calculator, Context, Structure, library, numbers_to_symbols
+from gpuxtb.exceptions import (
+    GPUxtbNotSupportedError,
+    GPUxtbRuntimeError,
+    GPUxtbValueError,
+)
 
 
 def test_multiplicity_maps_to_unpaired_electrons():
@@ -38,6 +40,18 @@ def test_structure_rejects_invalid_inputs():
         Structure(np.array([1]), np.zeros((1, 3)), multiplicity=0)
     with pytest.raises(GPUxtbValueError):
         Structure(np.array([1]), np.zeros((1, 3)), uhf=1, multiplicity=1)
+    with pytest.raises(GPUxtbValueError, match="exact integers"):
+        Structure(np.array([1.9]), np.zeros((1, 3)))
+    with pytest.raises(GPUxtbValueError, match="exact integers"):
+        Structure(np.array([True]), np.zeros((1, 3)))
+    with pytest.raises(GPUxtbValueError, match="exact integers"):
+        Structure([True, 1], np.zeros((2, 3)))
+
+
+@pytest.mark.parametrize("numbers", [[6.9], [0], [-1], [119], [True]])
+def test_numbers_to_symbols_rejects_invalid_atomic_numbers(numbers):
+    with pytest.raises(GPUxtbValueError):
+        numbers_to_symbols(numbers)
 
 
 def _library_has_cuda() -> bool:
@@ -70,6 +84,39 @@ def test_cuda_open_shell_scope_is_rejected():
     )
     with pytest.raises(GPUxtbNotSupportedError if has_cuda else GPUxtbRuntimeError):
         calc.singlepoint()
+
+
+@pytest.mark.cuda
+def test_auto_routes_unsupported_spin_to_cpu_on_gpu_hosts():
+    if not _library_has_cuda():
+        pytest.skip("CUDA backend is not available on this host")
+
+    radical = _cases.case_by_id("oh_radical")
+    numbers, positions, charge, uhf, spin = _cases.structure_inputs(radical)
+    calc = Calculator(
+        "GFN2-xTB",
+        numbers,
+        positions,
+        charge=charge,
+        uhf=uhf,
+        spin_channels=spin,
+        backend="auto",
+    )
+    assert calc.backend == library.BACKEND_CPU
+    assert np.isfinite(calc.singlepoint().energy)
+
+    closed_case = _cases.case_by_id("ketene")
+    numbers, positions, charge, uhf, spin = _cases.structure_inputs(closed_case)
+    changed = Calculator(
+        "GFN2-xTB", numbers, positions, charge=charge, uhf=uhf, spin_channels=spin
+    )
+    assert changed.backend == library.BACKEND_CUDA
+    changed.update(spin_channels=2)  # unrestricted singlet after CUDA creation
+    assert changed.backend == library.BACKEND_CPU
+    assert np.isfinite(changed.singlepoint().energy)
+    changed.update(spin_channels=1)
+    assert changed.backend == library.BACKEND_CUDA
+    assert np.isfinite(changed.singlepoint().energy)
 
 
 @pytest.mark.cuda

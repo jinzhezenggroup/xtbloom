@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import _cases
 import numpy as np
 import pytest
-
 from gpuxtb import BatchCalculator, Calculator, PointCharge, Structure
-
-import _cases
+from gpuxtb.exceptions import GPUxtbRuntimeError
 
 MOLECULAR_CASES = [
     "ketene",
@@ -41,7 +40,9 @@ def test_batch_single_matches_serial(case_id):
     case = _cases.case_by_id(case_id)
     numbers, positions, charge, uhf, spin = _cases.structure_inputs(case)
 
-    single = Calculator("GFN2-xTB", numbers, positions, charge=charge, uhf=uhf, spin_channels=spin)
+    single = Calculator(
+        "GFN2-xTB", numbers, positions, charge=charge, uhf=uhf, spin_channels=spin
+    )
     serial = single.singlepoint()
 
     batch = BatchCalculator(_make_structures([case_id]))
@@ -66,6 +67,27 @@ def test_batch_matches_goldens_all_molecular_cases():
             np.asarray(golden["forces_hartree_per_bohr"]).reshape(-1, 3),
             abs=tolerances["forces"]["atol"],
         ), case_id
+    assert result[-1].energy == pytest.approx(result[len(result) - 1].energy, abs=0.0)
+    assert result[-1].forces == pytest.approx(result[len(result) - 1].forces, abs=0.0)
+
+
+def test_batch_preserves_healthy_peer_when_another_fails():
+    # h3+ converges in four iterations while NeNaCl does not.  The high-level
+    # batch API must retain the healthy result and expose peer-local status.
+    calculator = BatchCalculator(
+        _make_structures(["h3_plus", "nenacl"]),
+        backend="cpu",
+        max_scc_iterations=4,
+    )
+    result = calculator.compute()
+    assert result.failed_indices.tolist() == [1]
+    assert result.per_system_status[0] == 0
+    assert np.isfinite(result.energies[0])
+    assert np.isnan(result.energies[1])
+    with pytest.raises(GPUxtbRuntimeError):
+        result.raise_for_status()
+    with pytest.raises(GPUxtbRuntimeError):
+        calculator.compute(raise_on_failure=True)
 
 
 def test_batch_mixed_charge_and_spin_diagnostics():
@@ -77,7 +99,9 @@ def test_batch_mixed_charge_and_spin_diagnostics():
     }
     structures = []
     for case_id, (charge, uhf) in charges.items():
-        numbers, positions, _, _, _ = _cases.structure_inputs(_cases.case_by_id(case_id))
+        numbers, positions, _, _, _ = _cases.structure_inputs(
+            _cases.case_by_id(case_id)
+        )
         structures.append(Structure(numbers, positions, charge=charge, uhf=uhf))
     batch = BatchCalculator(structures)
     result = batch.compute()

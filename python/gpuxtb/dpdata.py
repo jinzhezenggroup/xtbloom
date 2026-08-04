@@ -20,14 +20,13 @@ Net charge and spin multiplicity are handled per frame:
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Sequence, Union
+from typing import Dict, Optional, Sequence, Union
 
 import numpy as np
-
 from dpdata.driver import Driver
 
 from .exceptions import GPUxtbNotSupportedError, GPUxtbValueError
-from .interface import Structure, BatchCalculator, symbols_to_numbers
+from .interface import BatchCalculator, Structure, symbols_to_numbers
 
 # dpdata reports energies in eV and forces in eV/Angstrom, while the gpuxtb C
 # API reports Hartree and Hartree/bohr.
@@ -107,7 +106,7 @@ class GPUxtbDriver(Driver):
         dict
             Copy of ``data`` with ``energies`` (eV) and ``forces`` (eV/Angstrom).
         """
-        if data.get("nopbc", True) is not True:
+        if not bool(np.asarray(data.get("nopbc", True)).all()):
             raise GPUxtbNotSupportedError(
                 "the gpuxtb Python driver does not support periodic systems "
                 "(the public C ABI has no lattice input)"
@@ -121,7 +120,9 @@ class GPUxtbDriver(Driver):
         nframes = coords.shape[0]
 
         symbol_map = _SymbolMap(atom_names)
-        numbers = np.array([symbol_map[atom_names[index]] for index in atom_types], dtype=np.int64)
+        numbers = np.array(
+            [symbol_map[atom_names[index]] for index in atom_types], dtype=np.int64
+        )
         positions_bohr = coords / BOHR_TO_ANGSTROM
 
         structures = []
@@ -133,15 +134,21 @@ class GPUxtbDriver(Driver):
                 uhf_value = None
                 multiplicity_value = self.multiplicity
             else:
-                uhf_value = _frame_value(data, "uhf", None, frame, nframes, default=0)
+                uhf_value = _frame_value(
+                    data, "uhf", None, frame, nframes, default=None
+                )
                 multiplicity_value = _frame_value(
                     data, "multiplicity", None, frame, nframes, default=None
                 )
+                if uhf_value is None and multiplicity_value is None:
+                    uhf_value = 0
             structures.append(
                 Structure(
                     numbers,
                     positions_bohr[frame],
-                    charge=_frame_value(data, "charge", self.charge, frame, nframes, default=0.0),
+                    charge=_frame_value(
+                        data, "charge", self.charge, frame, nframes, default=0.0
+                    ),
                     uhf=uhf_value,
                     multiplicity=multiplicity_value,
                     spin_channels=self.spin_channels,
@@ -150,12 +157,17 @@ class GPUxtbDriver(Driver):
 
         calculator = BatchCalculator(structures, self.method, **self.kwargs)
         try:
-            result = calculator.compute()
+            # dpdata has no peer-status channel. Returning the non-strict
+            # batch result would silently publish NaN labels for failed SCC or
+            # eigensolver frames, so labeling must remain all-or-error.
+            result = calculator.compute(raise_on_failure=True)
         finally:
             calculator.close()
 
         labeled = dict(data)
-        labeled["energies"] = np.asarray(result.energies, dtype=np.float64) * HARTREE_TO_EV
+        labeled["energies"] = (
+            np.asarray(result.energies, dtype=np.float64) * HARTREE_TO_EV
+        )
         labeled["forces"] = np.asarray(result.forces, dtype=np.float64).reshape(
             nframes, -1, 3
         ) * (HARTREE_TO_EV / BOHR_TO_ANGSTROM)
@@ -168,8 +180,8 @@ def _frame_value(
     fixed: Optional[Union[int, float]],
     frame: int,
     nframes: int,
-    default: Union[int, float],
-) -> Union[int, float]:
+    default: Optional[Union[int, float]],
+) -> Optional[Union[int, float]]:
     """Return a fixed scalar, a per-frame value, or the default."""
     if fixed is not None:
         return fixed

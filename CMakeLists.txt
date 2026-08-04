@@ -15,6 +15,8 @@ find_package(Threads REQUIRED)
 set(GPUXTB_ENABLE_CUDA "AUTO" CACHE STRING "Build the CUDA backend: AUTO, ON, or OFF")
 set_property(CACHE GPUXTB_ENABLE_CUDA PROPERTY STRINGS AUTO ON OFF)
 option(GPUXTB_BUILD_TESTS "Build gpuxtb tests" ${PROJECT_IS_TOP_LEVEL})
+option(GPUXTB_PYTHON_WHEEL
+  "Install an unversioned single-copy shared library for a Python wheel" OFF)
 set(GPUXTB_MKL_RT_LIBRARY "" CACHE FILEPATH
   "Optional MKL runtime library used to build the CPU eigensolver test"
 )
@@ -99,9 +101,17 @@ set_target_properties(gpuxtb PROPERTIES
   CUDA_VISIBILITY_PRESET hidden
   CXX_VISIBILITY_PRESET hidden
   VISIBILITY_INLINES_HIDDEN YES
-  VERSION ${PROJECT_VERSION}
-  SOVERSION ${PROJECT_VERSION_MAJOR}
 )
+if(NOT GPUXTB_PYTHON_WHEEL)
+  # Native SDK installs retain the normal SONAME chain.  Wheel archives often
+  # dereference those symlinks and would otherwise store the large CUDA shared
+  # object three times, so wheel builds deliberately install one unversioned
+  # library instead.
+  set_target_properties(gpuxtb PROPERTIES
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+  )
+endif()
 if(UNIX AND NOT APPLE)
   target_link_options(gpuxtb PRIVATE
     "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/gpuxtb.map"

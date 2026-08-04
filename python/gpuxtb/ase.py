@@ -22,8 +22,10 @@ except ModuleNotFoundError as e:
 
 from typing import Any, Dict, List, Optional
 
-from .exceptions import GPUxtbValueError, GPUxtbRuntimeError
-from .interface import Calculator
+import numpy as np
+
+from .exceptions import GPUxtbRuntimeError, GPUxtbValueError
+from .interface import Calculator, _resolve_uhf, _validated_compute_setting
 
 
 class GPUxtb(ase.calculators.calculator.Calculator):
@@ -49,7 +51,7 @@ class GPUxtb(ase.calculators.calculator.Calculator):
     ======================== ================= =========================================
     """
 
-    implemented_properties = ["energy", "forces", "charges"]
+    implemented_properties = ["energy", "free_energy", "forces", "charges"]
 
     default_parameters = {
         "method": "GFN2-xTB",
@@ -78,9 +80,22 @@ class GPUxtb(ase.calculators.calculator.Calculator):
             allowed = set(self.default_parameters)
             unknown = set(kwargs) - allowed
             if unknown:
-                raise GPUxtbValueError(f"unknown calculator parameters: {sorted(unknown)}")
+                raise GPUxtbValueError(
+                    f"unknown calculator parameters: {sorted(unknown)}"
+                )
 
         _validate(kwargs)
+        for attribute in (
+            "max_scc_iterations",
+            "charge_tolerance",
+            "energy_tolerance",
+            "electronic_temperature",
+        ):
+            if attribute in kwargs:
+                _validated_compute_setting(attribute, kwargs[attribute])
+        if kwargs.get("multiplicity") is not None:
+            _resolve_uhf(None, kwargs["multiplicity"])
+
         changed = ase.calculators.calculator.Calculator.set(self, **kwargs)
         if not changed:
             return changed
@@ -90,8 +105,7 @@ class GPUxtb(ase.calculators.calculator.Calculator):
         # A structural parameter change requires rebuilding the API calculator;
         # numerical SCC settings are pushed onto an existing one in place.
         if self._xtb is not None and not any(
-            key in changed
-            for key in ("method", "backend", "device_id", "cpu_threads")
+            key in changed for key in ("method", "backend", "device_id", "cpu_threads")
         ):
             if "electronic_temperature" in changed:
                 self._xtb.set(
@@ -104,15 +118,26 @@ class GPUxtb(ase.calculators.calculator.Calculator):
             if "energy_tolerance" in changed:
                 self._xtb.set("energy_tolerance", self.parameters.energy_tolerance)
         else:
-            self._xtb = None
+            self._close_api_calculator()
             self._res = None
         return changed
 
     def reset(self) -> None:
         ase.calculators.calculator.Calculator.reset(self)
         if not self.parameters.cache_api:
-            self._xtb = None
+            self._close_api_calculator()
             self._res = None
+
+    def _close_api_calculator(self) -> None:
+        """Release native worker pools, handles, and caches before replacement."""
+        if self._xtb is not None:
+            self._xtb.close()
+            self._xtb = None
+
+    def close(self) -> None:
+        """Release the cached native calculator explicitly."""
+        self._close_api_calculator()
+        self._res = None
 
     def calculate(
         self,
@@ -126,7 +151,15 @@ class GPUxtb(ase.calculators.calculator.Calculator):
             self, atoms, properties, system_changes
         )
 
-        if self._xtb is None:
+        _validate_ase_atoms(self.atoms)
+        # Atomic numbers are immutable in the native fixed-topology
+        # calculator.  Reusing it after ASE changes the species would silently
+        # evaluate the new coordinates with the old Hamiltonian parameters.
+        needs_rebuild = self._xtb is None or not np.array_equal(
+            self._xtb.numbers, self.atoms.numbers
+        )
+        if needs_rebuild:
+            self._close_api_calculator()
             self._xtb = _create_api_calculator(self.atoms, self.parameters)
         else:
             self._xtb.update(
@@ -144,6 +177,15 @@ class GPUxtb(ase.calculators.calculator.Calculator):
         self.results["free_energy"] = self.results["energy"]
         self.results["forces"] = self._res["forces"] * Hartree / Bohr
         self.results["charges"] = self._res["charges"]
+
+
+def _validate_ase_atoms(atoms) -> None:
+    """Reject periodic ASE inputs that the public molecular ABI cannot model."""
+    if np.any(atoms.pbc):
+        raise ase.calculators.calculator.InputError(
+            "gpuxtb does not support periodic ASE systems; the public C ABI "
+            "has no lattice or periodic-boundary descriptor"
+        )
 
 
 def _create_api_calculator(atoms, parameters) -> Calculator:
@@ -180,7 +222,7 @@ def _get_uhf(atoms, parameters) -> int:
     """Number of unpaired electrons from the multiplicity or initial magmoms."""
     if parameters.multiplicity is None:
         return int(atoms.get_initial_magnetic_moments().sum().round())
-    return int(parameters.multiplicity) - 1
+    return _resolve_uhf(None, parameters.multiplicity)
 
 
 if "gpuxtb" not in ase.calculators.calculator.external_calculators:

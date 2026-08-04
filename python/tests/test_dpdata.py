@@ -23,7 +23,10 @@ def _case_data_dict(case_id, nframes=1, distort=False):
         coords[1, 0, 0] += 0.5
     coords = coords * _BOHR  # bohr -> Angstrom (dpdata convention)
     atom_names = _cases.numbers_to_symbols(sorted(set(int(z) for z in numbers)))
-    type_map = {number: index for index, number in enumerate(sorted(set(int(z) for z in numbers)))}
+    type_map = {
+        number: index
+        for index, number in enumerate(sorted(set(int(z) for z in numbers)))
+    }
     atom_types = np.array([type_map[int(z)] for z in numbers], dtype=np.int64)
     atom_numbs = [int(sum(int(z) == number for z in numbers)) for number in type_map]
     return {
@@ -102,6 +105,31 @@ def test_driver_multiplicity():
         golden["energy_hartree"] * _HARTREE_TO_EV,
         abs=tolerance["energy"]["atol"] * _HARTREE_TO_EV,
     )
+
+
+def test_driver_reads_per_frame_multiplicity_without_forcing_uhf_zero():
+    _ensure_driver_registered()
+    data = _case_data_dict("oh_radical")
+    data["multiplicity"] = np.array([2], dtype=np.int32)
+    system = dpdata.System(data=data)
+    labeled = system.predict(driver="gpuxtb", spin_channels=1)
+    golden = _cases.golden(_cases.case_by_id("oh_radical"))
+    tolerance = _cases.tolerances()
+    assert labeled.data["energies"][0] == pytest.approx(
+        golden["energy_hartree"] * _HARTREE_TO_EV,
+        abs=tolerance["energy"]["atol"] * _HARTREE_TO_EV,
+    )
+
+
+def test_driver_raises_instead_of_publishing_failed_frame_nans():
+    _ensure_driver_registered()
+    from gpuxtb.exceptions import GPUxtbRuntimeError
+
+    system = dpdata.System(data=_case_data_dict("sif5_minus"))
+    with pytest.raises(GPUxtbRuntimeError, match="failed systems"):
+        system.predict(
+            driver="gpuxtb", charge=-1, backend="cpu", max_scc_iterations=1
+        )
 
 
 def test_driver_rejects_periodic():

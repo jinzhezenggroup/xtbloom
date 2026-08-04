@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
-
-from gpuxtb import numbers_to_symbols
+from gpuxtb import numbers_to_symbols  # noqa: F401 - re-exported test helper
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPOSITORY_ROOT / "data" / "conformance" / "manifest.json"
@@ -53,10 +52,28 @@ def _parse_coord(path: Path) -> Tuple[List[int], np.ndarray]:
     numbers: List[int] = []
     positions: List[float] = []
     elements = {
-        "h": 1, "he": 2, "li": 3, "be": 4, "b": 5, "c": 6, "n": 7, "o": 8,
-        "f": 9, "ne": 10, "na": 11, "mg": 12, "al": 13, "si": 14, "p": 15,
-        "s": 16, "cl": 17, "ar": 18, "k": 19, "ca": 20,
-        "br": 35, "i": 53,
+        "h": 1,
+        "he": 2,
+        "li": 3,
+        "be": 4,
+        "b": 5,
+        "c": 6,
+        "n": 7,
+        "o": 8,
+        "f": 9,
+        "ne": 10,
+        "na": 11,
+        "mg": 12,
+        "al": 13,
+        "si": 14,
+        "p": 15,
+        "s": 16,
+        "cl": 17,
+        "ar": 18,
+        "k": 19,
+        "ca": 20,
+        "br": 35,
+        "i": 53,
     }
     in_coord = False
     for raw in path.read_text().splitlines():

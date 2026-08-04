@@ -16,12 +16,13 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import os
+import sys
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
 import numpy as np
 
-from .exceptions import GPUxtbRuntimeError, GPUxtbValueError
+from .exceptions import GPUxtbRuntimeError
 
 # --- ABI constants (kept in sync with include/gpuxtb/gpuxtb.h) ----------------
 
@@ -168,14 +169,23 @@ def _installed_package_library() -> Optional[Path]:
     platform-specific file naming (ELF ``libgpuxtb.so*``, macOS
     ``libgpuxtb.dylib``, Windows ``gpuxtb.dll``).
     """
-    lib_dir = Path(__file__).resolve().parent / "lib"
-    candidates = sorted(
-        lib_dir.glob("libgpuxtb.so*")
-    ) + sorted(lib_dir.glob("libgpuxtb.dylib*")) + sorted(lib_dir.glob("gpuxtb.dll"))
+    package_dir = Path(__file__).resolve().parent
+    candidates: list[Path] = []
+    # CMake installs runtime DLLs into ``bin`` on Windows and shared libraries
+    # into ``lib`` on POSIX platforms.  Search both locations so the binding
+    # follows the platform's standard install layout.
+    for runtime_dir in (
+        package_dir / "lib",
+        package_dir / "lib64",
+        package_dir / "bin",
+    ):
+        candidates.extend(sorted(runtime_dir.glob("libgpuxtb.so*")))
+        candidates.extend(sorted(runtime_dir.glob("libgpuxtb.dylib*")))
+        candidates.extend(sorted(runtime_dir.glob("gpuxtb.dll")))
     return candidates[0] if candidates else None
 
 
-def library_path() -> Path:
+def library_path() -> Union[str, Path]:
     """Return the path to the gpuxtb shared library.
 
     Resolution order:
@@ -196,13 +206,17 @@ def library_path() -> Path:
     bundled = _installed_package_library()
     if bundled is not None:
         candidates.append(bundled)
-    if ctypes.util.find_library("gpuxtb"):
-        candidates.append(ctypes.util.find_library("gpuxtb"))
-
     for candidate in candidates:
         path = Path(candidate)
         if path.is_file():
             return path.resolve()
+
+    # ``find_library`` normally returns a loader name such as
+    # ``libgpuxtb.so.0``, not an absolute filesystem path.  Passing that name
+    # directly to ctypes preserves the documented system-install fallback.
+    system_library = ctypes.util.find_library("gpuxtb")
+    if system_library:
+        return system_library
 
     raise GPUxtbRuntimeError(
         "cannot locate the gpuxtb shared library; set GPUXTB_LIBRARY or build "
@@ -256,6 +270,7 @@ def _configure_library(library: ctypes.CDLL) -> None:
 
 
 _lib: Optional[ctypes.CDLL] = None
+_dll_directory_handles: list = []
 
 
 def _runtime_search_dirs() -> list[Path]:
@@ -274,9 +289,20 @@ def _runtime_search_dirs() -> list[Path]:
         import site
     except Exception:  # pragma: no cover - defensive
         site = None
-    site_packages = getattr(site, "getsitepackages", lambda: [])() if site is not None else []
+    site_packages = (
+        getattr(site, "getsitepackages", lambda: [])() if site is not None else []
+    )
+    user_site = (
+        getattr(site, "getusersitepackages", lambda: None)()
+        if site is not None
+        else None
+    )
+    if user_site and (
+        bool(getattr(site, "ENABLE_USER_SITE", False)) or str(user_site) in sys.path
+    ):
+        site_packages = [*site_packages, user_site]
 
-    for sp in site_packages:
+    for sp in dict.fromkeys(site_packages):
         base = Path(sp)
         mkl_lib = base / "mkl" / "lib"
         if mkl_lib.is_dir():
@@ -297,7 +323,6 @@ def _runtime_search_dirs() -> list[Path]:
 
     for candidate in (
         "/usr/local/cuda/lib64",
-        "/usr/local/cuda/lib64/stubs",
         "/usr/local/cuda/targets/x86_64-linux/lib",
         "/usr/local/lib",
         "/usr/lib/x86_64-linux-gnu",
@@ -309,25 +334,19 @@ def _runtime_search_dirs() -> list[Path]:
     return dirs
 
 
-# Runtime library name prefixes that libgpuxtb depends on, plus the MKL runtime
-# the CPU eigensolver dlopens. ``libcuda`` (the NVIDIA kernel driver) is only
-# preloaded when the loader cannot already resolve a driver via the default
-# search path, so a toolkit stub never shadows a real installed driver.
-_RUNTIME_LIB_PREFIXES = (
-    "libcublas",
-    "libcublasLt",
-    "libcusolver",
-    "libcusparse",
-    "libcudart",
-    "libnvJitLink",
-    "libnvrtc",
-    "libcurand",
-    "libcufft",
-    "libmkl_rt",
-    "libmkl_core",
-    "libmkl_intel_lp64",
-    "libmkl_gnu_thread",
-    "libmkl_sequential",
+# Exact dependency groups in load order.  Prefix-scanning every NVIDIA package
+# can load unused CUDA stacks (and even conflicting major versions), inflating
+# startup time and RSS.  ``libcuda`` is deliberately absent: the NVIDIA kernel
+# driver must always come from the system loader, never a toolkit stub.
+_RUNTIME_LIBRARY_GROUPS = (
+    ("libnvJitLink.so.12",),
+    ("libcudart.so.12",),
+    ("libcublasLt.so.12",),
+    ("libcublas.so.12",),
+    ("libcusparse.so.12",),
+    ("libcusolver.so.11",),
+    # MKL changes its SONAME between releases; load exactly one runtime.
+    ("libmkl_rt.so.4", "libmkl_rt.so.3", "libmkl_rt.so.2", "libmkl_rt.so"),
 )
 
 
@@ -344,28 +363,31 @@ def _preload_runtime_libraries() -> list[str]:
     if os.name == "nt":
         for directory in search_dirs:
             try:
-                os.add_dll_directory(str(directory))
+                # The returned object removes the directory when it is closed;
+                # keep it alive for as long as the native library may be used.
+                _dll_directory_handles.append(os.add_dll_directory(str(directory)))
             except OSError:
                 pass
         return []
 
-    driver_resolvable = bool(ctypes.util.find_library("cuda"))
     loaded: list[str] = []
-    for directory in search_dirs:
-        for candidate in sorted(directory.glob("*.so*")):
-            name = candidate.name
-            depends_on = name.startswith(_RUNTIME_LIB_PREFIXES)
-            is_driver = name.startswith("libcuda.") and driver_resolvable is False
-            if not (depends_on or is_driver):
-                continue
-            if not candidate.is_file():
-                continue
-            try:
-                ctypes.CDLL(str(candidate))
-                loaded.append(name)
-            except OSError:
-                # A broken or unrelated matching file must never block startup.
-                pass
+    for alternatives in _RUNTIME_LIBRARY_GROUPS:
+        group_loaded = False
+        for name in alternatives:
+            for directory in search_dirs:
+                candidate = directory / name
+                if not candidate.is_file():
+                    continue
+                try:
+                    ctypes.CDLL(str(candidate))
+                    loaded.append(name)
+                    group_loaded = True
+                    break
+                except OSError:
+                    # Try the same SONAME in the next known runtime directory.
+                    continue
+            if group_loaded:
+                break
     return loaded
 
 
@@ -397,7 +419,11 @@ def get_library() -> ctypes.CDLL:
 def _decode(value: Optional[Union[bytes, str]]) -> str:
     if value is None:
         return "<null>"
-    return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else str(value)
+    return (
+        value.decode("utf-8", errors="replace")
+        if isinstance(value, bytes)
+        else str(value)
+    )
 
 
 def get_version() -> str:
@@ -453,7 +479,9 @@ def compute_checked(
 # --- Host descriptor helpers ----------------------------------------------------
 
 
-def host_const(values: Optional[Sequence[Union[int, float, bool]]], ctype, dtype) -> ConstBuffer:
+def host_const(
+    values: Optional[Sequence[Union[int, float, bool]]], ctype, dtype
+) -> ConstBuffer:
     """Build a host ``gpuxtb_const_buffer_t`` from a numpy-compatible sequence.
 
     The returned buffer aliases the contiguous numpy array, so the caller must
