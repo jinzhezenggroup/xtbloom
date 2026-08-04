@@ -334,11 +334,17 @@ GPUXTB_API int32_t gpuxtb_context_get_device_id(const gpuxtb_context_t* context)
  * Performs a synchronous batched inference. Host buffers are accepted by both
  * CPU and CUDA backends; CUDA device buffers avoid staging copies on CUDA.
  *
- * The complete request is validated before execution. If this function returns
- * a status other than GPUXTB_STATUS_SUCCESS, result flags and all result buffers
- * are unchanged. Per-system SCC or eigensolver failures are data-level results:
- * the function returns SUCCESS and records them in per_system_status so one bad
- * batch item does not discard successful peers.
+ * The complete request is validated before execution. Any failure detected
+ * before the final caller-output commit begins leaves result flags and all
+ * result buffers unchanged. Once a CUDA caller-output commit has begun, a
+ * later catastrophic failure returns GPUXTB_STATUS_INTERNAL_ERROR and results
+ * may already have been modified. CUDA attempts to restore the caller's current
+ * device on every exit; restoration failure also returns INTERNAL_ERROR and
+ * may leave that device selection changed, independently of whether output
+ * commit began. gpuxtb_get_last_error identifies the failed boundary.
+ * Per-system SCC or eigensolver failures are data-level results: the function
+ * returns SUCCESS and records them in per_system_status so one bad batch item
+ * does not discard successful peers.
  */
 GPUXTB_API gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* batch,
                                           const gpuxtb_compute_options_t* options,

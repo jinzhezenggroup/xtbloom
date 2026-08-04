@@ -32,10 +32,14 @@ energy `F = E_internal - T*S_electronic`, including the Fermi-occupation entropy
 tblite. Forces are `-dF/dR`, which preserves the stationary finite-temperature SCC derivative. At
 zero electronic temperature, `F` reduces to the internal energy.
 
-The public batch call has two failure levels. Descriptor, staging, backend, allocation, and runtime
-failures return a non-success call status and leave every result buffer and result flag unchanged.
-Once the call returns success, all per-system diagnostics are valid even when individual systems
-failed. `per_system_status` is then one of `SUCCESS`, `SCC_NOT_CONVERGED`, or
+The public batch call has two failure levels. Any failure detected before the final caller-output
+commit begins leaves every result buffer and result flag unchanged. Once a CUDA caller-output
+commit has begun, a later catastrophic failure returns `INTERNAL_ERROR` with an explicit diagnostic;
+results may already have been modified because accepted device work cannot be rolled back. CUDA
+attempts to restore the caller's current device on every exit. A restoration failure also returns
+`INTERNAL_ERROR` and may leave that device selection changed, independently of whether output
+commit began. Once the call returns success, all per-system diagnostics are valid even when
+individual systems failed. `per_system_status` is then one of `SUCCESS`, `SCC_NOT_CONVERGED`, or
 `EIGENSOLVER_FAILED`, and `scc_converged` is one exactly for `SUCCESS`. Requested floating-point
 outputs for a failed system are quiet NaNs, committed for the complete system slice rather than as
 partial energy, force, or charge results. Other systems in the ragged batch remain independent.

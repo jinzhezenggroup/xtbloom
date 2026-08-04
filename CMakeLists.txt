@@ -413,6 +413,11 @@ if(GPUXTB_BUILD_TESTS)
       CUDA_STANDARD_REQUIRED YES
     )
     add_test(NAME gpuxtb.cuda.public_api COMMAND gpuxtb_cuda_public_api_test)
+    if(GPUXTB_MKL_RT_LIBRARY)
+      gpuxtb_configure_mkl_runtime_test(
+        gpuxtb_cuda_public_api_test gpuxtb.cuda.public_api
+      )
+    endif()
 
     add_executable(gpuxtb_cuda_public_unrestricted_test
       tests/cuda_public_unrestricted_test.cu
@@ -864,6 +869,11 @@ if(GPUXTB_BUILD_TESTS)
     add_test(NAME gpuxtb.cuda.gfn2_runtime_parity
       COMMAND gpuxtb_cuda_gfn2_runtime_parity_test
     )
+    if(GPUXTB_MKL_RT_LIBRARY)
+      gpuxtb_configure_mkl_runtime_test(
+        gpuxtb_cuda_gfn2_runtime_parity_test gpuxtb.cuda.gfn2_runtime_parity
+      )
+    endif()
 
     add_executable(gpuxtb_cuda_gfn2_runtime_graph_test
       tests/cuda_gfn2_runtime_graph_test.cu
