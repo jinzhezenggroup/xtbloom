@@ -4,9 +4,12 @@
 # compiled inside the container.
 #
 # The quay.io/manylinux_cuda images ship nvcc, headers, cuBLAS, and cuDRT but
-# not libcusolver. FindCUDAToolkit therefore cannot create the CUDA::cusolver
+# not cuSOLVER. FindCUDAToolkit therefore cannot create the CUDA::cusolver
 # imported target. We pull the missing .so files from PyPI and drop them into
-# the toolkit's lib directory that CMake already searches.
+# the toolkit's lib directory that CMake already searches, and create the
+# unversioned `lib<name>.so` symlinks that CMake's `find_library(NAMES ...)`
+# relies on (the packages only ship soname-suffixed files, e.g.
+# libcusolver.so.11).
 #
 # The resulting wheels still exclude these libraries (see the
 # repair-wheel-command in pyproject.toml); at runtime a CUDA-enabled wheel uses
@@ -18,24 +21,32 @@ python -m pip install --quiet --no-cache-dir nvidia-cusolver-cu12 nvidia-nvjitli
 python - <<'PY'
 import glob
 import os
+import re
 import shutil
 import site
 
 dest = "/usr/local/cuda/lib64"
 os.makedirs(dest, exist_ok=True)
 
-pattern = os.path.join(site.getsitepackages()[0], "nvidia", "*", "lib", "*.so*")
-installed = []
-for source in glob.glob(pattern):
+copied = set()
+for source in glob.glob(os.path.join(site.getsitepackages()[0], "nvidia", "*", "lib", "*.so*")):
+    if os.path.islink(source):
+        continue  # copy the real files; symlinks are recreated below
     name = os.path.basename(source)
-    target = os.path.join(dest, name)
-    # The same .so appears under multiple nvidia/*/lib dirs; keep the first.
-    if os.path.isfile(target):
+    if name in copied:
         continue
-    shutil.copy2(source, target)
-    installed.append(name)
+    copied.add(name)
+    shutil.copy2(source, os.path.join(dest, name))
 
-if not installed:
+# Provide the unversioned names that CMake's find_library(NAMES <lib>) matches.
+for name in sorted(copied):
+    match = re.match(r"^(lib[\w.-]+)\.so\.\d+", name)
+    if match:
+        link = os.path.join(dest, match.group(1) + ".so")
+        if not os.path.lexists(link):
+            os.symlink(name, link)
+
+if not copied:
     raise SystemExit("no CUDA runtime libraries were installed into " + dest)
-print("installed CUDA runtime libraries:", ", ".join(sorted(installed)))
+print("installed CUDA runtime libraries:", ", ".join(sorted(copied)))
 PY
