@@ -120,6 +120,9 @@ gpuxtb_status_t gpuxtb_compute_options_init(gpuxtb_compute_options_t* options, s
   options->charge_tolerance = 1.0e-6;
   options->energy_tolerance = 1.0e-8;
   options->electronic_temperature = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+  if (struct_size >= GPUXTB_COMPUTE_OPTIONS_V2_SIZE) {
+    options->scc_start_mode = GPUXTB_SCC_START_FRESH;
+  }
   return GPUXTB_STATUS_SUCCESS;
 }
 

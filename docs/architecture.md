@@ -46,6 +46,16 @@ the failing iteration for an eigensolver error. Input-dependent electron-count a
 errors are validated for the complete batch before execution and are call-level invalid arguments,
 not per-system SCC failures.
 
+The ABI-v2 `scc_start_mode` suffix controls the electronic initial state for one call. `FRESH`
+restores the immutable setup state and is also the meaning of every ABI-v1 or short options
+prefix. CUDA `WARM` strictly consumes the checkpoint from the latest fully converged compatible
+batch call, including across one successful changed-coordinate refresh. It never falls back to a
+fresh solve: a missing checkpoint or any topology, charge, spin, temperature, tolerance,
+iteration-limit, or requested-property change is a call-level invalid argument and leaves caller
+outputs unchanged. CPU contexts report `NOT_SUPPORTED` for `WARM`. High-level Python calculators
+intentionally select `FRESH`; persistent warm policy is exposed only by the low-level C/ctypes
+descriptor for now.
+
 ## Layering
 
 1. The C API validates ABI versions, pointer locations, shapes, and requested outputs.

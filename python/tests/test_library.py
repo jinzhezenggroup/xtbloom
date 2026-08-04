@@ -43,7 +43,9 @@ def test_abi_struct_sizes():
     assert ctypes.sizeof(library.ConstBuffer) == 24
     assert ctypes.sizeof(library.Buffer) == 24
     assert ctypes.sizeof(library.Batch) == 352
-    assert ctypes.sizeof(library.ComputeOptions) == 48
+    assert ctypes.sizeof(library.ComputeOptions) == 56
+    assert library.ComputeOptions.scc_start_mode.offset == 48
+    assert library.ComputeOptions.reserved_v2.offset == 52
     assert ctypes.sizeof(library.BatchResult) == 184
     options = library.ComputeOptions()
     library.load_library().gpuxtb_compute_options_init(
@@ -53,6 +55,9 @@ def test_abi_struct_sizes():
         library.DEFAULT_ELECTRONIC_TEMPERATURE
     )
     assert options.max_scc_iterations == 250
+    assert options.scc_start_mode == library.SCC_START_FRESH
+    assert options.reserved_v2 == 0
+    assert library.SCC_START_WARM == 2
 
 
 def test_unknown_method_rejected():

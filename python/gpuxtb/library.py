@@ -50,6 +50,9 @@ MEMORY_ROCM_DEVICE = 2
 MODEL_GFN1_XTB = 1
 MODEL_GFN2_XTB = 2
 
+SCC_START_FRESH = 1
+SCC_START_WARM = 2
+
 COMPUTE_ENERGY = 1 << 0
 COMPUTE_FORCES = 1 << 1
 COMPUTE_ATOMIC_CHARGES = 1 << 2
@@ -124,7 +127,7 @@ class Batch(ctypes.Structure):
 
 
 class ComputeOptions(ctypes.Structure):
-    """ctypes mirror of ``gpuxtb_compute_options_t`` ABI version 1."""
+    """ctypes mirror of ``gpuxtb_compute_options_t`` through ABI version 2."""
 
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -136,6 +139,8 @@ class ComputeOptions(ctypes.Structure):
         ("charge_tolerance", ctypes.c_double),
         ("energy_tolerance", ctypes.c_double),
         ("electronic_temperature", ctypes.c_double),
+        ("scc_start_mode", ctypes.c_int32),
+        ("reserved_v2", ctypes.c_uint32),
     ]
 
 
@@ -535,6 +540,8 @@ __all__ = [
     "MEMORY_ROCM_DEVICE",
     "MODEL_GFN1_XTB",
     "MODEL_GFN2_XTB",
+    "SCC_START_FRESH",
+    "SCC_START_WARM",
     "COMPUTE_ENERGY",
     "COMPUTE_FORCES",
     "COMPUTE_ATOMIC_CHARGES",

@@ -105,6 +105,10 @@ bool has_spin_channel_suffix(const gpuxtb_batch_t& batch) {
   return batch.struct_size >= GPUXTB_BATCH_V2_SIZE;
 }
 
+bool has_scc_start_mode_suffix(const gpuxtb_compute_options_t& options) {
+  return options.struct_size >= GPUXTB_COMPUTE_OPTIONS_V2_SIZE;
+}
+
 BufferView spin_channel_view(const gpuxtb_batch_t& batch) {
   /* Do not read beyond an ABI-v1 caller's allocation. */
   return has_spin_channel_suffix(batch) ? view(batch.spin_channels)
@@ -342,6 +346,18 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
   }
   if (options->reserved != 0) {
     return invalid("compute options reserved field must be zero");
+  }
+  if (has_scc_start_mode_suffix(*options)) {
+    const std::uint32_t start_mode = raw_enum(options->scc_start_mode);
+    if (start_mode != GPUXTB_SCC_START_FRESH && start_mode != GPUXTB_SCC_START_WARM) {
+      return invalid("scc_start_mode must be GPUXTB_SCC_START_FRESH or GPUXTB_SCC_START_WARM");
+    }
+    if (options->reserved_v2 != 0u) {
+      return invalid("compute options reserved_v2 field must be zero");
+    }
+    if (backend_value == GPUXTB_BACKEND_CPU && start_mode == GPUXTB_SCC_START_WARM) {
+      return unsupported("the CPU backend does not support strict WARM SCC starts");
+    }
   }
   if (result->reserved != 0) {
     return invalid("batch result reserved field must be zero");

@@ -50,6 +50,9 @@ int main() {
   CHECK(gpuxtb_compute_options_init(&compute_options, sizeof(compute_options)) ==
         GPUXTB_STATUS_SUCCESS);
   CHECK(compute_options.electronic_temperature == GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE);
+  CHECK(compute_options.struct_size == GPUXTB_COMPUTE_OPTIONS_V2_SIZE);
+  CHECK(compute_options.scc_start_mode == GPUXTB_SCC_START_FRESH);
+  CHECK(compute_options.reserved_v2 == 0u);
   CHECK(gpuxtb_batch_result_init(&result, sizeof(result)) == GPUXTB_STATUS_SUCCESS);
 
   /* Descriptor errors are reported before entering numerical execution. */
@@ -104,6 +107,49 @@ int main() {
     CHECK(std::isfinite(forces[1]));
     CHECK(std::isfinite(forces[2]));
   }
+
+  /* ABI-v1 callers do not expose the suffix and therefore retain strict FRESH
+   * behavior even if adjacent bytes contain invalid V2 values. */
+  compute_options.struct_size = GPUXTB_COMPUTE_OPTIONS_V1_SIZE;
+  compute_options.scc_start_mode = 0;
+  compute_options.reserved_v2 = UINT32_MAX;
+  const gpuxtb_status_t v1_compute_status =
+      gpuxtb_compute(context.get(), &batch, &compute_options, &result);
+  if (v1_compute_status == GPUXTB_STATUS_BACKEND_UNAVAILABLE) {
+    CHECK(std::strstr(gpuxtb_get_last_error(), "libmkl_rt") != nullptr);
+  } else {
+    CHECK(v1_compute_status == GPUXTB_STATUS_SUCCESS);
+  }
+
+  compute_options.struct_size = GPUXTB_COMPUTE_OPTIONS_V2_SIZE;
+  compute_options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  compute_options.reserved_v2 = 0u;
+  energies[0] = 123.25;
+  forces[0] = -4.0;
+  forces[1] = -5.0;
+  forces[2] = -6.0;
+  atomic_charges[0] = 71.25;
+  point_charge_forces[0] = 81.0;
+  point_charge_forces[1] = 82.0;
+  point_charge_forces[2] = 83.0;
+  scc_iterations[0] = 91;
+  scc_converged[0] = 1u;
+  per_system_status[0] = GPUXTB_STATUS_INTERNAL_ERROR;
+  result.flags = UINT32_C(0xa5a55a5a);
+  CHECK(gpuxtb_compute(context.get(), &batch, &compute_options, &result) ==
+        GPUXTB_STATUS_NOT_SUPPORTED);
+  CHECK(std::strstr(gpuxtb_get_last_error(), "CPU backend") != nullptr);
+  CHECK(energies[0] == 123.25);
+  CHECK(forces[0] == -4.0 && forces[1] == -5.0 && forces[2] == -6.0);
+  CHECK(atomic_charges[0] == 71.25);
+  CHECK(point_charge_forces[0] == 81.0 && point_charge_forces[1] == 82.0 &&
+        point_charge_forces[2] == 83.0);
+  CHECK(scc_iterations[0] == 91);
+  CHECK(scc_converged[0] == 1u);
+  CHECK(per_system_status[0] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(result.flags == UINT32_C(0xa5a55a5a));
+
+  compute_options.scc_start_mode = GPUXTB_SCC_START_FRESH;
 
   compute_options.model = GPUXTB_MODEL_GFN1_XTB;
   CHECK(gpuxtb_compute(context.get(), &batch, &compute_options, &result) ==

@@ -31,6 +31,8 @@ GPUXTB_BACKEND_CUDA = 2
 GPUXTB_MEMORY_HOST = 0
 GPUXTB_MEMORY_CUDA_DEVICE = 1
 GPUXTB_MODEL_GFN2_XTB = 2
+GPUXTB_SCC_START_FRESH = 1
+GPUXTB_SCC_START_WARM = 2
 GPUXTB_COMPUTE_ENERGY = 1 << 0
 GPUXTB_COMPUTE_FORCES = 1 << 1
 GPUXTB_COMPUTE_ATOMIC_CHARGES = 1 << 2
@@ -104,7 +106,7 @@ class Batch(ctypes.Structure):
 
 
 class ComputeOptions(ctypes.Structure):
-    """ctypes mirror of ``gpuxtb_compute_options_t`` ABI version 1."""
+    """ctypes mirror of ``gpuxtb_compute_options_t`` through ABI version 2."""
 
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -116,6 +118,8 @@ class ComputeOptions(ctypes.Structure):
         ("charge_tolerance", ctypes.c_double),
         ("energy_tolerance", ctypes.c_double),
         ("electronic_temperature", ctypes.c_double),
+        ("scc_start_mode", ctypes.c_int32),
+        ("reserved_v2", ctypes.c_uint32),
     ]
 
 
@@ -752,6 +756,9 @@ def run_backend(
         ),
         "gpuxtb_compute_options_init",
     )
+    # Conformance cases must remain independent so reference comparisons never
+    # depend on execution order or an earlier checkpoint.
+    options.scc_start_mode = GPUXTB_SCC_START_FRESH
     options.model = GPUXTB_MODEL_GFN2_XTB
     options.flags = GPUXTB_COMPUTE_ENERGY
     if request_forces:

@@ -604,6 +604,9 @@ def _compute_batch(
             ctypes.byref(options), ctypes.sizeof(options)
         ),
     )
+    # High-level calculators intentionally use reproducible independent SCC
+    # solves; persistent warm-start policy remains a low-level ABI feature.
+    options.scc_start_mode = library.SCC_START_FRESH
     options.model = model
     options.flags = flags
     options.max_scc_iterations = int(max_scc_iterations)

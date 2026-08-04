@@ -1253,9 +1253,8 @@ int test_fresh_warm_inference_and_post_scc_refresh(cudaStream_t stream, std::int
   CHECK(warm.warm_generations[0] == 1u);
   CHECK(same_identity(initial, cache.identity()));
 
-  /* A numerical epoch change invalidates the old warm checkpoint without a
-   * host poll. The peer publishes a terminal failure and fresh mode can then
-   * seed and converge the same committed epoch. */
+  /* One successful numerical refresh may warm-start from the immediately
+   * preceding committed electronic state. */
   batch.positions[0] += 0.019;
   batch.bind();
   CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
@@ -1267,13 +1266,46 @@ int test_fresh_warm_inference_and_post_scc_refresh(cudaStream_t stream, std::int
   CHECK(epoch_two.factors[0] == 2u);
   CHECK(epoch_two.eligible[0] == 1u);
   CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kWarm, error) == GPUXTB_STATUS_SUCCESS);
+  InferenceSnapshot refreshed_warm;
+  CHECK(download_inference_snapshot(cache.identity(), stream, false, refreshed_warm) == 0);
+  CHECK(refreshed_warm.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(refreshed_warm.converged[0] == 1u);
+  CHECK(refreshed_warm.iterations[0] > 0);
+  CHECK(std::isfinite(refreshed_warm.energies[0]));
+  CHECK(refreshed_warm.publication_epoch == 2u);
+  CHECK(refreshed_warm.publication_plan_error ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationPlanError::kSuccess));
+  CHECK(refreshed_warm.publication_system_errors[0] ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationSystemError::kSuccess));
+  CHECK(refreshed_warm.warm_generations[0] == 2u);
+
+  /* The predecessor edge is deliberately only one committed refresh deep.
+   * Two refreshes without an intervening inference must not chain the epoch-2
+   * electronic checkpoint into epoch 4. */
+  batch.positions[0] -= 0.007;
+  batch.bind();
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(reused);
+  RefreshSnapshot epoch_three;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, epoch_three) == 0);
+  CHECK(epoch_three.epoch == 3u);
+  CHECK(epoch_three.committed[0] == 3u);
+  batch.positions[0] += 0.011;
+  batch.bind();
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(reused);
+  RefreshSnapshot epoch_four;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, epoch_four) == 0);
+  CHECK(epoch_four.epoch == 4u);
+  CHECK(epoch_four.committed[0] == 4u);
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kWarm, error) == GPUXTB_STATUS_SUCCESS);
   InferenceSnapshot stale_warm;
   CHECK(download_inference_snapshot(cache.identity(), stream, false, stale_warm) == 0);
   CHECK(stale_warm.statuses[0] == GPUXTB_STATUS_INTERNAL_ERROR);
   CHECK(stale_warm.converged[0] == 0u);
   CHECK(stale_warm.iterations[0] == 0);
   CHECK(std::isnan(stale_warm.energies[0]));
-  CHECK(stale_warm.publication_epoch == 2u);
+  CHECK(stale_warm.publication_epoch == 4u);
   CHECK(stale_warm.publication_plan_error ==
         static_cast<std::uint32_t>(Gfn2InferencePublicationPlanError::kSuccess));
   CHECK(stale_warm.publication_system_errors[0] ==
@@ -1287,26 +1319,26 @@ int test_fresh_warm_inference_and_post_scc_refresh(cudaStream_t stream, std::int
   CHECK(refreshed_fresh.statuses[0] == GPUXTB_STATUS_SUCCESS);
   CHECK(refreshed_fresh.converged[0] == 1u);
   CHECK(std::isfinite(refreshed_fresh.energies[0]));
-  CHECK(refreshed_fresh.publication_epoch == 2u);
+  CHECK(refreshed_fresh.publication_epoch == 4u);
   CHECK(refreshed_fresh.publication_plan_error ==
         static_cast<std::uint32_t>(Gfn2InferencePublicationPlanError::kSuccess));
   CHECK(refreshed_fresh.publication_system_errors[0] ==
         static_cast<std::uint32_t>(Gfn2InferencePublicationSystemError::kSuccess));
-  CHECK(refreshed_fresh.warm_generations[0] == 2u);
+  CHECK(refreshed_fresh.warm_generations[0] == 4u);
 
   /* Regression: SCC convergence leaves its activity ledger terminal. A later
    * refresh must repopulate the factorization mask from refresh eligibility. */
-  batch.positions[0] -= 0.007;
+  batch.positions[0] -= 0.005;
   batch.bind();
   CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
   CHECK(reused);
-  RefreshSnapshot epoch_three;
-  CHECK(download_refresh_snapshot(cache.identity(), stream, epoch_three) == 0);
-  CHECK(epoch_three.epoch == 3u);
-  CHECK(epoch_three.committed[0] == 3u);
-  CHECK(epoch_three.factors[0] == 3u);
-  CHECK(epoch_three.factor_statuses[0] == 0u);
-  CHECK(epoch_three.eligible[0] == 1u);
+  RefreshSnapshot epoch_five;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, epoch_five) == 0);
+  CHECK(epoch_five.epoch == 5u);
+  CHECK(epoch_five.committed[0] == 5u);
+  CHECK(epoch_five.factors[0] == 5u);
+  CHECK(epoch_five.factor_statuses[0] == 0u);
+  CHECK(epoch_five.eligible[0] == 1u);
   CHECK(same_identity(initial, cache.identity()));
   return 0;
 }
@@ -1357,6 +1389,47 @@ int test_failed_inference_consumes_warm_checkpoint(cudaStream_t stream, std::int
   CHECK(download_inference_snapshot(cache.identity(), stream, false, recovered) == 0);
   CHECK(recovered.statuses[0] == GPUXTB_STATUS_SUCCESS);
   CHECK(recovered.warm_generations[0] == 1u);
+  return 0;
+}
+
+int test_failed_refresh_revokes_warm_checkpoint(cudaStream_t stream, std::int32_t device_id) {
+  Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
+  HostSccCase host;
+  std::string error;
+  CHECK(HostSccCase::create(homogeneous_case_options(1, SmallSystemKind::kHe, false, false, false),
+                            host, error) == GPUXTB_STATUS_SUCCESS);
+  PublicHostBatch batch = PublicHostBatch::from_host(host, false);
+  gpuxtb_compute_options_t options = compute_options(false);
+  options.max_scc_iterations = 32;
+  bool reused = true;
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kFresh, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  InferenceSnapshot checkpoint;
+  CHECK(download_inference_snapshot(cache.identity(), stream, false, checkpoint) == 0);
+  CHECK(checkpoint.warm_generations[0] == 1u);
+
+  /* A peer-local preprocessing failure rolls back its numerical publication.
+   * It must also revoke the otherwise consumable electronic checkpoint. */
+  batch.positions[0] = std::numeric_limits<double>::quiet_NaN();
+  batch.bind();
+  Gfn2CudaNumericalInputView numerical{};
+  numerical.positions = batch.descriptor.positions;
+  numerical.point_charge_positions = batch.descriptor.point_charge_positions;
+  numerical.point_charge_values = batch.descriptor.point_charge_values;
+  numerical.point_charge_gammas = batch.descriptor.point_charge_gammas;
+  numerical.atomic_potential_shifts = batch.descriptor.atomic_potential_shifts;
+  numerical.charge_response_matrix = batch.descriptor.charge_response_matrix;
+  numerical.requested_mask = {nullptr, 0u, GPUXTB_MEMORY_HOST, 0u};
+  CHECK(cache.refresh_numerical_async(numerical, error) == GPUXTB_STATUS_SUCCESS);
+  RefreshSnapshot failed_refresh;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, failed_refresh) == 0);
+  CHECK(failed_refresh.epoch == 2u);
+  CHECK(failed_refresh.committed[0] == 1u);
+  CHECK(failed_refresh.eligible[0] == 0u);
+  InferenceSnapshot revoked;
+  CHECK(download_inference_snapshot(cache.identity(), stream, false, revoked) == 0);
+  CHECK(revoked.warm_generations[0] == 0u);
   return 0;
 }
 
@@ -1442,6 +1515,7 @@ int main() {
   }
   if (status == 0) status = test_ragged_runtime_shapes(stream, device_id);
   if (status == 0) status = test_fresh_warm_inference_and_post_scc_refresh(stream, device_id);
+  if (status == 0) status = test_failed_refresh_revokes_warm_checkpoint(stream, device_id);
   if (status == 0) status = test_failed_inference_consumes_warm_checkpoint(stream, device_id);
   if (status == 0) status = test_publication_plan_failure_provenance(stream, device_id);
   if (status == 0) status = test_default_stream_refresh(device_id);
