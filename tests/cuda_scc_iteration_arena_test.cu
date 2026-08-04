@@ -46,6 +46,7 @@ Gfn2SccIterationDevicePlan make_plan() {
   plan.plan_token = kPlanToken;
   plan.topology.plan_token = kPlanToken;
   plan.topology.batch_size = 3;
+  plan.topology.bucket_count = 2;
   plan.topology.total_atoms = 7;
   plan.topology.total_shells = 11;
   plan.topology.total_orbitals = 15;
@@ -138,6 +139,15 @@ int test_query_and_complete_projection_without_arena_writes() {
   CHECK(workspace.eigensolver_workspace.solver_device_workspace ==
         plan.eigensolver_provider.device_workspace);
   CHECK(workspace.eigensolver_workspace.solver_host_workspace == host_workspace.data());
+  CHECK(workspace.eigensolver_workspace.compact_system_elements == plan.topology.batch_size);
+  CHECK(workspace.eigensolver_workspace.compact_source_slot_elements == plan.topology.batch_size);
+  CHECK(workspace.eigensolver_workspace.bucket_activity_elements == plan.topology.bucket_count);
+  CHECK(pointer_in_arena(arena.pointer, requirements.total_bytes,
+                         workspace.eigensolver_workspace.compact_systems));
+  CHECK(pointer_in_arena(arena.pointer, requirements.total_bytes,
+                         workspace.eigensolver_workspace.compact_source_slots));
+  CHECK(pointer_in_arena(arena.pointer, requirements.total_bytes,
+                         workspace.eigensolver_workspace.bucket_activity));
 
   /* The setup pass projects descriptors only; caller initialization owns bytes. */
   std::vector<std::byte> snapshot(requirements.total_bytes);

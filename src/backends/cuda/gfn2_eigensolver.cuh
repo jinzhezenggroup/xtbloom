@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <type_traits>
 
 #include "backends/cuda/gfn2_geometry.cuh"
@@ -107,6 +108,21 @@ struct Gfn2EigensolverDeviceResults {
 };
 
 /*
+ * Device-visible per-bucket compaction telemetry. The three counts are
+ * published by the same ordered Graph launch that performs the solve, so a
+ * profiler or asynchronous diagnostic copy observes one coherent iteration.
+ * Exact-capacity submission keeps submitted_eigensolver_count equal to
+ * active_count; completed_count can be smaller when the provider reports a
+ * failed eigenpair before the back transformation.
+ */
+struct Gfn2EigensolverBucketActivity {
+  std::uint32_t active_count = 0u;
+  std::uint32_t submitted_eigensolver_count = 0u;
+  std::uint32_t submitted_backtransform_count = 0u;
+  std::uint32_t completed_count = 0u;
+};
+
+/*
  * Caller-owned unpublished storage. matrix_scratch_a and matrix_scratch_b each
  * contain total_matrix_elements bucket-packed doubles. eigenvalue_scratch is
  * similarly bucket-packed. Pointer arrays are device arrays consumed by
@@ -140,6 +156,21 @@ struct Gfn2EigensolverDeviceWorkspace {
   void* solver_host_workspace = nullptr;
   std::size_t solver_host_workspace_bytes = 0u;
   std::uint64_t plan_token = 0u;
+
+  /*
+   * Reusable active-set storage for exact-capacity Graph submission. Entries
+   * are bucket-local but addressed through each bucket's system_index_offset.
+   * compact_systems preserves canonical bucket order. compact_source_slots
+   * records the packed matrix slot retained after an eigensolver failure so
+   * the final TRSM and scatter never consume a failed peer. No field is
+   * allocated or rebuilt by the hot path.
+   */
+  std::int32_t* compact_systems = nullptr;
+  std::int64_t compact_system_elements = 0;
+  std::int32_t* compact_source_slots = nullptr;
+  std::int64_t compact_source_slot_elements = 0;
+  Gfn2EigensolverBucketActivity* bucket_activity = nullptr;
+  std::int64_t bucket_activity_elements = 0;
 };
 
 struct Gfn2EigensolverOptions {
@@ -173,8 +204,75 @@ static_assert(std::is_trivially_copyable_v<Gfn2EigensolverOverlapCache>);
 static_assert(std::is_standard_layout_v<Gfn2EigensolverOverlapCache>);
 static_assert(std::is_trivially_copyable_v<Gfn2EigensolverDeviceResults>);
 static_assert(std::is_standard_layout_v<Gfn2EigensolverDeviceResults>);
+static_assert(std::is_trivially_copyable_v<Gfn2EigensolverBucketActivity>);
+static_assert(std::is_standard_layout_v<Gfn2EigensolverBucketActivity>);
 static_assert(std::is_trivially_copyable_v<Gfn2EigensolverDeviceWorkspace>);
 static_assert(std::is_standard_layout_v<Gfn2EigensolverDeviceWorkspace>);
+
+/*
+ * Reusable exact-capacity solve graph. Build is a setup-time operation and may
+ * create CUDA Graph objects and a temporary capture stream. launch() only
+ * enqueues the already-instantiated graph: it allocates, transfers, polls, and
+ * synchronizes nothing. All descriptors, provider handles, pointer targets,
+ * and workspaces supplied at build time must remain alive and at stable
+ * addresses until the owner is destroyed.
+ *
+ * The graph uses one device-selected SWITCH per numerical submission. Body n
+ * calls cuBLAS/cuSOLVER with batchCount exactly n; body zero launches no
+ * provider arithmetic. Bucket order and the within-bucket canonical order are
+ * deterministic for every launch.
+ */
+class Gfn2EigensolverCompactedSolveGraph {
+ public:
+  /* Public only so the translation-unit build helper can construct a graph
+   * transaction without exposing CUDA Graph handles in this header. */
+  struct Impl;
+
+  Gfn2EigensolverCompactedSolveGraph() noexcept;
+  ~Gfn2EigensolverCompactedSolveGraph();
+  Gfn2EigensolverCompactedSolveGraph(Gfn2EigensolverCompactedSolveGraph&&) noexcept;
+  Gfn2EigensolverCompactedSolveGraph& operator=(Gfn2EigensolverCompactedSolveGraph&&) noexcept;
+  Gfn2EigensolverCompactedSolveGraph(const Gfn2EigensolverCompactedSolveGraph&) = delete;
+  Gfn2EigensolverCompactedSolveGraph& operator=(const Gfn2EigensolverCompactedSolveGraph&) = delete;
+
+  [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] Gfn2EigensolverLaunchResult launch(cudaStream_t stream = nullptr) const noexcept;
+
+ private:
+  std::unique_ptr<Impl> impl_;
+
+  friend Gfn2EigensolverLaunchResult build_gfn2_compacted_eigensolver_graph_cuda(
+      const Gfn2EigensolverDeviceBatch&, const Gfn2EigensolverBucket*, std::int64_t,
+      const Gfn2EigensolverOverlapCache&, std::uint64_t, const double*,
+      const Gfn2EigensolverOptions&, cusolverDnHandle_t, cusolverDnParams_t, cublasHandle_t,
+      const Gfn2EigensolverDeviceWorkspace&, const Gfn2EigensolverDeviceResults&, std::uint32_t*,
+      std::uint32_t*, Gfn2EigensolverCompactedSolveGraph&) noexcept;
+  friend Gfn2EigensolverLaunchResult build_gfn2_compacted_eigensolver_graph_cuda(
+      const Gfn2EigensolverDeviceBatch&, const Gfn2EigensolverBucket*, std::int64_t,
+      const Gfn2EigensolverOverlapCache&, const Gfn2GeometryEpochDevice&, const double*,
+      const Gfn2EigensolverOptions&, cusolverDnHandle_t, cusolverDnParams_t, cublasHandle_t,
+      const Gfn2EigensolverDeviceWorkspace&, const Gfn2EigensolverDeviceResults&, std::uint32_t*,
+      std::uint32_t*, Gfn2EigensolverCompactedSolveGraph&) noexcept;
+};
+
+/* Build against a fixed host generation or a replay-advanced device epoch. */
+Gfn2EigensolverLaunchResult build_gfn2_compacted_eigensolver_graph_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
+    std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
+    std::uint64_t geometry_generation, const double* hamiltonians,
+    const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver, cusolverDnParams_t parameters,
+    cublasHandle_t blas, const Gfn2EigensolverDeviceWorkspace& workspace,
+    const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
+    std::uint32_t* device_error, Gfn2EigensolverCompactedSolveGraph& output) noexcept;
+
+Gfn2EigensolverLaunchResult build_gfn2_compacted_eigensolver_graph_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
+    std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
+    const Gfn2GeometryEpochDevice& geometry_epoch, const double* hamiltonians,
+    const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver, cusolverDnParams_t parameters,
+    cublasHandle_t blas, const Gfn2EigensolverDeviceWorkspace& workspace,
+    const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
+    std::uint32_t* device_error, Gfn2EigensolverCompactedSolveGraph& output) noexcept;
 
 /*
  * Setup-time workspace query for the largest bucket requirement. Query every

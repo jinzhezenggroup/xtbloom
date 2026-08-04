@@ -165,12 +165,14 @@ struct IterationWorkspaceFixture {
   PinnedAllocation host_workspace;
 
   bool create(const HostSccCase& host,
-              const gpuxtb::detail::cuda::Gfn2SccSetupEigensolverRequirements& setup) {
+              const gpuxtb::detail::cuda::Gfn2SccSetupEigensolverRequirements& setup,
+              std::int64_t bucket_count) {
     plan.abi_version = gpuxtb::detail::cuda::kGfn2SccIterationAbiVersion;
     plan.enabled_components = gpuxtb::detail::cuda::kGfn2SccPotentialAllComponents;
     plan.plan_token = kPlanToken;
     plan.topology.plan_token = kPlanToken;
     plan.topology.batch_size = host.batch_size();
+    plan.topology.bucket_count = bucket_count;
     plan.topology.total_atoms = host.total_atoms();
     plan.topology.total_shells = host.basis_plan().total_shells;
     plan.topology.total_orbitals = host.wavefunction_layout().total_orbitals;
@@ -361,7 +363,8 @@ struct ProductionFixture {
              .success()) {
       return false;
     }
-    if (!iteration.create(host, setup.requirements()) ||
+    if (!iteration.create(host, setup.requirements(),
+                          static_cast<std::int64_t>(topology.eigensolver_buckets().size())) ||
         !setup_arena.allocate(setup.requirements().setup_device_bytes)) {
       return false;
     }
@@ -373,13 +376,17 @@ struct ProductionFixture {
                         handles.stream) != cudaSuccess) {
       return false;
     }
-    return setup
-        .bind_and_factor_overlap_async(
-            device_topology, iteration.plan, iteration.requirements, iteration.arena.get(),
-            iteration.requirements.total_bytes, iteration.workspace, iteration.host_workspace.get(),
-            iteration.host_workspace.bytes(), setup_arena.get(),
-            setup.requirements().setup_device_bytes, binding, handles.stream)
-        .success();
+    const auto diagnostic = setup.bind_and_factor_overlap_async(
+        device_topology, iteration.plan, iteration.requirements, iteration.arena.get(),
+        iteration.requirements.total_bytes, iteration.workspace, iteration.host_workspace.get(),
+        iteration.host_workspace.bytes(), setup_arena.get(),
+        setup.requirements().setup_device_bytes, binding, handles.stream);
+    if (!diagnostic.success()) {
+      std::fprintf(stderr, "setup eigensolver bind failed: error=%u field=%u index=%lld\n",
+                   static_cast<unsigned>(diagnostic.error), static_cast<unsigned>(diagnostic.field),
+                   static_cast<long long>(diagnostic.index));
+    }
+    return diagnostic.success();
   }
 };
 
@@ -399,6 +406,15 @@ int test_four_system_provider_and_cache() {
   CHECK(fixture.binding.provider.device_workspace ==
         fixture.iteration.workspace.eigensolver_workspace.solver_device_workspace);
   CHECK(fixture.binding.provider.host_workspace == fixture.iteration.host_workspace.get());
+  CHECK(fixture.binding.workspace.compact_systems ==
+        fixture.iteration.workspace.eigensolver_workspace.compact_systems);
+  CHECK(fixture.binding.workspace.compact_source_slots ==
+        fixture.iteration.workspace.eigensolver_workspace.compact_source_slots);
+  CHECK(fixture.binding.workspace.bucket_activity ==
+        fixture.iteration.workspace.eigensolver_workspace.bucket_activity);
+  CHECK(fixture.binding.workspace.compact_system_elements == fixture.host.batch_size());
+  CHECK(fixture.binding.workspace.bucket_activity_elements ==
+        fixture.binding.provider.bucket_count);
   CHECK(fixture.binding.workspace.matrix_scratch_a ==
         fixture.iteration.workspace.eigensolver_workspace.matrix_scratch_a);
   CHECK(fixture.binding.batch.active == fixture.iteration.workspace.ledger.active_mask);

@@ -15,6 +15,7 @@ constexpr std::uint32_t kMandatoryComponents =
 
 struct ArenaShape {
   std::int64_t batch = 0;
+  std::int64_t buckets = 0;
   std::int64_t atoms = 0;
   std::int64_t shells = 0;
   std::int64_t orbitals = 0;
@@ -81,8 +82,9 @@ struct ArenaShape {
   const auto& topology = plan.topology;
   if (plan.abi_version != kGfn2SccIterationAbiVersion || plan.plan_token == 0u ||
       topology.plan_token != plan.plan_token || topology.batch_size <= 0 ||
-      topology.total_atoms <= 0 || topology.total_shells <= 0 || topology.total_orbitals <= 0 ||
-      topology.total_matrix_elements <= 0 || plan.mixer_policy.history_size <= 0 ||
+      topology.bucket_count <= 0 || topology.total_atoms <= 0 || topology.total_shells <= 0 ||
+      topology.total_orbitals <= 0 || topology.total_matrix_elements <= 0 ||
+      plan.mixer_policy.history_size <= 0 ||
       (plan.enabled_components & kMandatoryComponents) != kMandatoryComponents ||
       (plan.enabled_components & ~kGfn2SccPotentialAllComponents) != 0u ||
       plan.geometry_batch.total_pairs < 0 || plan.es2_batch.total_matrix_elements < 0 ||
@@ -98,6 +100,7 @@ struct ArenaShape {
   }
 
   shape.batch = topology.batch_size;
+  shape.buckets = topology.bucket_count;
   shape.atoms = topology.total_atoms;
   shape.shells = topology.total_shells;
   shape.orbitals = topology.total_orbitals;
@@ -232,6 +235,7 @@ void hash_append(std::uint64_t value, std::uint64_t& hash) noexcept {
   std::uint64_t hash = 0x101c0de89abcdef0ULL;
   hash_append(kGfn2SccIterationArenaAbiVersion, hash);
   hash_append(static_cast<std::uint64_t>(shape.batch), hash);
+  hash_append(static_cast<std::uint64_t>(shape.buckets), hash);
   hash_append(static_cast<std::uint64_t>(shape.atoms), hash);
   hash_append(static_cast<std::uint64_t>(shape.shells), hash);
   hash_append(static_cast<std::uint64_t>(shape.orbitals), hash);
@@ -799,6 +803,12 @@ void project_solver_and_wavefunction_workspace(
   eigensolver.solver_host_workspace = plan.eigensolver_provider.host_workspace;
   eigensolver.solver_host_workspace_bytes = shape.provider_host_bytes;
   eigensolver.plan_token = shape.plan_token;
+  eigensolver.compact_systems = cursor.take<std::int32_t>(shape.batch);
+  eigensolver.compact_system_elements = shape.batch;
+  eigensolver.compact_source_slots = cursor.take<std::int32_t>(shape.batch);
+  eigensolver.compact_source_slot_elements = shape.batch;
+  eigensolver.bucket_activity = cursor.take<Gfn2EigensolverBucketActivity>(shape.buckets);
+  eigensolver.bucket_activity_elements = shape.buckets;
 
   workspace.occupations_workspace = {cursor.take<double>(shape.two_orbitals),
                                      shape.two_orbitals,

@@ -2097,7 +2097,7 @@ int test_loop_rejects_inconsistent_plan() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   int device_count = 0;
   const cudaError_t count_status = cudaGetDeviceCount(&device_count);
   if (count_status == cudaErrorNoDevice || count_status == cudaErrorInsufficientDriver ||
@@ -2108,8 +2108,17 @@ int main() {
   CUDA_CHECK(count_status);
   CUDA_CHECK(cudaSetDevice(0));
 #ifdef GPUXTB_SCC_LOOP_BENCHMARK_ONLY
-  return benchmark_conditional_graph_vs_bounded_fallback();
-#else
+  if (argc == 1) {
+    return benchmark_conditional_graph_vs_bounded_fallback();
+  }
+#endif
+  if (argc == 2 && std::strcmp(argv[1], "--benchmark") == 0) {
+    return benchmark_conditional_graph_vs_bounded_fallback();
+  }
+  if (argc != 1) {
+    std::fprintf(stderr, "usage: %s [--benchmark]\n", argv[0]);
+    return 2;
+  }
   int status = test_loop_rejects_inconsistent_plan();
   if (status != 0) {
     return status;
@@ -2179,5 +2188,4 @@ int main() {
     return status;
   }
   return 0;
-#endif
 }

@@ -250,6 +250,12 @@ std::uint64_t binding_provenance_seal(const Gfn2SccSetupEigensolverBinding& bind
   pointer(static_cast<const std::byte*>(binding.workspace.solver_host_workspace));
   count(binding.workspace.solver_host_workspace_bytes);
   count(binding.workspace.plan_token);
+  pointer(binding.workspace.compact_systems);
+  count(binding.workspace.compact_system_elements);
+  pointer(binding.workspace.compact_source_slots);
+  count(binding.workspace.compact_source_slot_elements);
+  pointer(binding.workspace.bucket_activity);
+  count(binding.workspace.bucket_activity_elements);
 
   pointer(binding.overlap_input);
   count(binding.overlap_elements);
@@ -690,6 +696,7 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::bind_and_factor_overl
   const std::int64_t batch = impl_->batch_size;
   const std::int64_t matrices = impl_->total_matrices;
   const std::int64_t orbitals = impl_->total_orbitals;
+  const std::int64_t bucket_count = static_cast<std::int64_t>(impl_->buckets.size());
   const Gfn2EigensolverDeviceWorkspace& eigensolver_workspace =
       iteration_workspace.eigensolver_workspace;
   const bool valid_counts =
@@ -707,6 +714,9 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::bind_and_factor_overl
       eigensolver_workspace.info_b_elements == batch &&
       eigensolver_workspace.eligible_elements == batch &&
       eigensolver_workspace.sequence_active_elements == 1 &&
+      eigensolver_workspace.compact_system_elements == batch &&
+      eigensolver_workspace.compact_source_slot_elements == batch &&
+      eigensolver_workspace.bucket_activity_elements == bucket_count &&
       eigensolver_workspace.solver_device_workspace_bytes ==
           own.provider.solver_device_workspace_bytes &&
       eigensolver_workspace.solver_host_workspace_bytes == own.provider.solver_host_workspace_bytes;
@@ -728,7 +738,7 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::bind_and_factor_overl
                    SetupField::kIterationArena);
   }
 
-  std::array<AddressRange, 10> workspace_ranges{};
+  std::array<AddressRange, 13> workspace_ranges{};
   if (!make_elements_range(iteration_workspace.ledger.active_mask, batch, workspace_ranges[0]) ||
       !make_elements_range(eigensolver_workspace.matrix_scratch_a, matrices, workspace_ranges[1]) ||
       !make_elements_range(eigensolver_workspace.matrix_scratch_b, matrices, workspace_ranges[2]) ||
@@ -740,6 +750,11 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::bind_and_factor_overl
       !make_elements_range(eigensolver_workspace.info_b, batch, workspace_ranges[7]) ||
       !make_elements_range(eigensolver_workspace.eligible, batch, workspace_ranges[8]) ||
       !make_elements_range(eigensolver_workspace.sequence_active, 1, workspace_ranges[9]) ||
+      !make_elements_range(eigensolver_workspace.compact_systems, batch, workspace_ranges[10]) ||
+      !make_elements_range(eigensolver_workspace.compact_source_slots, batch,
+                           workspace_ranges[11]) ||
+      !make_elements_range(eigensolver_workspace.bucket_activity, bucket_count,
+                           workspace_ranges[12]) ||
       !pairwise_disjoint(workspace_ranges)) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidIterationWorkspace,
                    SetupField::kIterationWorkspace);
@@ -1026,6 +1041,10 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
       binding.workspace.info_b_elements == impl_->batch_size &&
       binding.workspace.eligible_elements == impl_->batch_size &&
       binding.workspace.sequence_active_elements == 1 &&
+      binding.workspace.compact_system_elements == impl_->batch_size &&
+      binding.workspace.compact_source_slot_elements == impl_->batch_size &&
+      binding.workspace.bucket_activity_elements ==
+          static_cast<std::int64_t>(impl_->buckets.size()) &&
       same_provider_requirements({binding.workspace.solver_device_workspace_bytes,
                                   binding.workspace.solver_host_workspace_bytes},
                                  own.provider) &&
@@ -1069,7 +1088,7 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
                    SetupField::kOverlap);
   }
 
-  std::array<AddressRange, 19> protected_ranges{};
+  std::array<AddressRange, 22> protected_ranges{};
   if (!make_elements_range(binding.batch.orbital_offsets, binding.batch.orbital_offset_count,
                            protected_ranges[0]) ||
       !make_elements_range(binding.batch.matrix_offsets, binding.batch.matrix_offset_count,
@@ -1107,6 +1126,12 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
       !make_elements_range(binding.setup_system_errors, binding.setup_system_error_elements,
                            protected_ranges[17]) ||
       !make_elements_range(binding.setup_device_error, 1, protected_ranges[18]) ||
+      !make_elements_range(binding.workspace.compact_systems,
+                           binding.workspace.compact_system_elements, protected_ranges[19]) ||
+      !make_elements_range(binding.workspace.compact_source_slots,
+                           binding.workspace.compact_source_slot_elements, protected_ranges[20]) ||
+      !make_elements_range(binding.workspace.bucket_activity,
+                           binding.workspace.bucket_activity_elements, protected_ranges[21]) ||
       !pairwise_disjoint(protected_ranges)) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kInvalidIterationProvenance,
                    SetupField::kOverlapFactorization);

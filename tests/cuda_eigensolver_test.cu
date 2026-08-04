@@ -15,15 +15,20 @@
 
 namespace {
 
+using gpuxtb::detail::cuda::build_gfn2_compacted_eigensolver_graph_cuda;
 using gpuxtb::detail::cuda::factor_gfn2_overlap_cuda;
 using gpuxtb::detail::cuda::Gfn2EigensolverBucket;
+using gpuxtb::detail::cuda::Gfn2EigensolverBucketActivity;
+using gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph;
 using gpuxtb::detail::cuda::Gfn2EigensolverDeviceBatch;
 using gpuxtb::detail::cuda::Gfn2EigensolverDeviceError;
 using gpuxtb::detail::cuda::Gfn2EigensolverDeviceResults;
 using gpuxtb::detail::cuda::Gfn2EigensolverDeviceWorkspace;
+using gpuxtb::detail::cuda::Gfn2EigensolverLaunchStatus;
 using gpuxtb::detail::cuda::Gfn2EigensolverOptions;
 using gpuxtb::detail::cuda::Gfn2EigensolverOverlapCache;
 using gpuxtb::detail::cuda::Gfn2EigensolverWorkspaceRequirements;
+using gpuxtb::detail::cuda::Gfn2GeometryEpochDevice;
 using gpuxtb::detail::cuda::query_gfn2_eigensolver_bucket_workspace_cuda;
 using gpuxtb::detail::cuda::reset_gfn2_eigensolver_device_errors_cuda;
 using gpuxtb::detail::cuda::solve_gfn2_eigensystems_cuda;
@@ -341,6 +346,9 @@ struct DeviceFixture {
   DeviceBuffer<int> info_b;
   DeviceBuffer<std::uint8_t> eligible;
   DeviceBuffer<std::uint32_t> sequence_active;
+  DeviceBuffer<std::int32_t> compact_systems;
+  DeviceBuffer<std::int32_t> compact_source_slots;
+  DeviceBuffer<Gfn2EigensolverBucketActivity> bucket_activity;
   DeviceBuffer<double> cache_factors;
   DeviceBuffer<std::uint64_t> cache_generations;
   DeviceBuffer<std::uint32_t> cache_statuses;
@@ -371,6 +379,9 @@ struct DeviceFixture {
         !info_b.allocate(static_cast<std::size_t>(host.batch_size)) ||
         !eligible.allocate(static_cast<std::size_t>(host.batch_size)) ||
         !sequence_active.allocate(1u) ||
+        !compact_systems.allocate(static_cast<std::size_t>(host.batch_size)) ||
+        !compact_source_slots.allocate(static_cast<std::size_t>(host.batch_size)) ||
+        !bucket_activity.allocate(host.buckets.size()) ||
         !cache_factors.allocate(static_cast<std::size_t>(host.total_matrices)) ||
         !cache_generations.allocate(static_cast<std::size_t>(host.batch_size)) ||
         !cache_statuses.allocate(static_cast<std::size_t>(host.batch_size)) ||
@@ -435,6 +446,12 @@ struct DeviceFixture {
                  solver_host_workspace.get(),
                  solver_host_workspace.size(),
                  batch.plan_token};
+    workspace.compact_systems = compact_systems.get();
+    workspace.compact_system_elements = static_cast<std::int64_t>(compact_systems.size());
+    workspace.compact_source_slots = compact_source_slots.get();
+    workspace.compact_source_slot_elements = static_cast<std::int64_t>(compact_source_slots.size());
+    workspace.bucket_activity = bucket_activity.get();
+    workspace.bucket_activity_elements = static_cast<std::int64_t>(bucket_activity.size());
     cache = {cache_factors.get(),     static_cast<std::int64_t>(cache_factors.size()),
              cache_generations.get(), static_cast<std::int64_t>(cache_generations.size()),
              cache_statuses.get(),    static_cast<std::int64_t>(cache_statuses.size()),
@@ -495,6 +512,282 @@ bool solve(DeviceFixture& fixture, std::uint64_t generation, bool reset_errors =
     return false;
   }
   return cuda_ok(cudaStreamSynchronize(fixture.providers.stream), "solve synchronize");
+}
+
+bool launch_compacted(DeviceFixture& fixture, const Gfn2EigensolverCompactedSolveGraph& graph) {
+  if (!cuda_ok(reset_gfn2_eigensolver_device_errors_cuda(
+                   fixture.host.batch_size, fixture.system_errors.get(), fixture.device_error.get(),
+                   fixture.providers.stream),
+               "reset compacted solve errors")) {
+    return false;
+  }
+  const auto launch = graph.launch(fixture.providers.stream);
+  if (!launch.success()) {
+    std::cerr << "compacted graph launch failed: " << static_cast<unsigned int>(launch.status)
+              << " cuda=" << cudaGetErrorString(launch.cuda_status) << '\n';
+    return false;
+  }
+  return cuda_ok(cudaStreamSynchronize(fixture.providers.stream), "compacted graph synchronize");
+}
+
+bool validate_compacted_launch(DeviceFixture& fixture) {
+  std::vector<std::uint32_t> errors;
+  std::vector<double> eigenvalues;
+  std::vector<double> coefficients;
+  std::vector<Gfn2EigensolverBucketActivity> activity;
+  std::vector<std::int32_t> compact_systems;
+  if (!fixture.system_errors.download(errors) || !fixture.eigenvalues.download(eigenvalues) ||
+      !fixture.coefficients.download(coefficients) || !fixture.bucket_activity.download(activity) ||
+      !fixture.compact_systems.download(compact_systems)) {
+    return false;
+  }
+  for (std::int64_t system = 0; system < fixture.host.batch_size; ++system) {
+    const bool active = fixture.host.active[static_cast<std::size_t>(system)] == 1u;
+    if (active) {
+      if (errors[static_cast<std::size_t>(system)] != 0u ||
+          !validate_system(fixture.host, system, eigenvalues, coefficients)) {
+        return false;
+      }
+    } else if (errors[static_cast<std::size_t>(system)] != 0u ||
+               !system_outputs_equal(fixture.host, system, eigenvalues, coefficients, kSentinel)) {
+      return false;
+    }
+  }
+
+  for (std::size_t bucket_index = 0; bucket_index < fixture.host.buckets.size(); ++bucket_index) {
+    const Gfn2EigensolverBucket& bucket = fixture.host.buckets[bucket_index];
+    std::vector<std::int32_t> expected;
+    for (std::int32_t local = 0; local < bucket.system_count; ++local) {
+      const std::int64_t bucket_slot = bucket.system_index_offset + local;
+      const std::int32_t system =
+          fixture.host.bucket_systems[static_cast<std::size_t>(bucket_slot)];
+      if (fixture.host.active[static_cast<std::size_t>(system)] == 1u) {
+        expected.push_back(system);
+      }
+    }
+    const auto& observed = activity[bucket_index];
+    if (observed.active_count != expected.size() ||
+        observed.submitted_eigensolver_count != expected.size() ||
+        observed.completed_count != expected.size() ||
+        observed.submitted_backtransform_count != expected.size()) {
+      std::cerr << "compaction count mismatch in bucket " << bucket_index
+                << ": expected=" << expected.size() << " active=" << observed.active_count
+                << " eig=" << observed.submitted_eigensolver_count
+                << " complete=" << observed.completed_count
+                << " back=" << observed.submitted_backtransform_count << '\n';
+      return false;
+    }
+    for (std::size_t local = 0; local < expected.size(); ++local) {
+      const std::size_t slot = static_cast<std::size_t>(bucket.system_index_offset) + local;
+      if (compact_systems[slot] != expected[local]) {
+        std::cerr << "unstable compaction order in bucket " << bucket_index << '\n';
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool test_compacted_graph_batch(std::int64_t batch_size, bool mixed_buckets) {
+  DeviceFixture fixture;
+  if (!fixture.create(make_batch(batch_size, mixed_buckets)) || !factor(fixture, 31u)) {
+    return false;
+  }
+  const std::vector<double> clean_hamiltonian = fixture.host.hamiltonian;
+  Gfn2EigensolverCompactedSolveGraph graph;
+  const auto build = build_gfn2_compacted_eigensolver_graph_cuda(
+      fixture.batch, fixture.host.buckets.data(),
+      static_cast<std::int64_t>(fixture.host.buckets.size()), fixture.cache, 31u,
+      fixture.hamiltonian.get(), Gfn2EigensolverOptions{}, fixture.providers.solver,
+      fixture.providers.parameters, fixture.providers.blas, fixture.workspace, fixture.results,
+      fixture.system_errors.get(), fixture.device_error.get(), graph);
+  if (!build.success() || !graph.valid()) {
+    std::cerr << "compacted graph build failed: status=" << static_cast<unsigned int>(build.status)
+              << " cuda=" << cudaGetErrorString(build.cuda_status)
+              << " cublas=" << static_cast<unsigned int>(build.cublas_status)
+              << " cusolver=" << static_cast<unsigned int>(build.cusolver_status) << '\n';
+    return false;
+  }
+
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    fixture.host.active[static_cast<std::size_t>(system)] = system % 3 == 1 ? 0u : 1u;
+  }
+  fixture.host.hamiltonian = clean_hamiltonian;
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    if (fixture.host.active[static_cast<std::size_t>(system)] == 0u) {
+      const std::int64_t begin = fixture.host.matrix_offsets[static_cast<std::size_t>(system)];
+      const std::int64_t end = fixture.host.matrix_offsets[static_cast<std::size_t>(system + 1)];
+      std::fill(fixture.host.hamiltonian.begin() + begin, fixture.host.hamiltonian.begin() + end,
+                std::numeric_limits<double>::quiet_NaN());
+    }
+  }
+  if (!fixture.active.upload(fixture.host.active) ||
+      !fixture.hamiltonian.upload(fixture.host.hamiltonian) || !fixture.fill_outputs(kSentinel) ||
+      !launch_compacted(fixture, graph) || !validate_compacted_launch(fixture)) {
+    return false;
+  }
+
+  /* Replay with a different active set and matrix bytes. The Graph, provider
+   * descriptors, and compact storage remain unchanged. */
+  fixture.host.hamiltonian = clean_hamiltonian;
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    fixture.host.active[static_cast<std::size_t>(system)] = system % 4 == 0 ? 1u : 0u;
+    if (fixture.host.active[static_cast<std::size_t>(system)] == 0u) {
+      const std::int64_t begin = fixture.host.matrix_offsets[static_cast<std::size_t>(system)];
+      const std::int64_t end = fixture.host.matrix_offsets[static_cast<std::size_t>(system + 1)];
+      std::fill(fixture.host.hamiltonian.begin() + begin, fixture.host.hamiltonian.begin() + end,
+                std::numeric_limits<double>::quiet_NaN());
+    }
+  }
+  if (!fixture.active.upload(fixture.host.active) ||
+      !fixture.hamiltonian.upload(fixture.host.hamiltonian) || !fixture.fill_outputs(kSentinel) ||
+      !launch_compacted(fixture, graph) || !validate_compacted_launch(fixture)) {
+    return false;
+  }
+
+  /* Body zero must be a true no-op even when every numerical input is poison. */
+  std::fill(fixture.host.active.begin(), fixture.host.active.end(), 0u);
+  std::fill(fixture.host.hamiltonian.begin(), fixture.host.hamiltonian.end(),
+            std::numeric_limits<double>::quiet_NaN());
+  return fixture.active.upload(fixture.host.active) &&
+         fixture.hamiltonian.upload(fixture.host.hamiltonian) && fixture.fill_outputs(kSentinel) &&
+         launch_compacted(fixture, graph) && validate_compacted_launch(fixture);
+}
+
+bool test_compacted_graph_filters_failed_peer() {
+  constexpr std::int64_t kFailedSystem = 3;
+  DeviceFixture fixture;
+  if (!fixture.create(make_batch(8, false)) || !factor(fixture, 37u)) {
+    return false;
+  }
+  Gfn2EigensolverCompactedSolveGraph graph;
+  const auto build = build_gfn2_compacted_eigensolver_graph_cuda(
+      fixture.batch, fixture.host.buckets.data(),
+      static_cast<std::int64_t>(fixture.host.buckets.size()), fixture.cache, 37u,
+      fixture.hamiltonian.get(), Gfn2EigensolverOptions{}, fixture.providers.solver,
+      fixture.providers.parameters, fixture.providers.blas, fixture.workspace, fixture.results,
+      fixture.system_errors.get(), fixture.device_error.get(), graph);
+  if (!build.success()) {
+    return false;
+  }
+  const std::int64_t begin = fixture.host.matrix_offsets[kFailedSystem];
+  const std::int64_t end = fixture.host.matrix_offsets[kFailedSystem + 1];
+  std::fill(fixture.host.hamiltonian.begin() + begin, fixture.host.hamiltonian.begin() + end,
+            std::numeric_limits<double>::quiet_NaN());
+  if (!fixture.hamiltonian.upload(fixture.host.hamiltonian) || !fixture.fill_outputs(kSentinel) ||
+      !launch_compacted(fixture, graph)) {
+    return false;
+  }
+  std::vector<std::uint32_t> errors;
+  std::vector<double> eigenvalues;
+  std::vector<double> coefficients;
+  std::vector<Gfn2EigensolverBucketActivity> activity;
+  std::vector<std::int32_t> compact;
+  if (!fixture.system_errors.download(errors) || !fixture.eigenvalues.download(eigenvalues) ||
+      !fixture.coefficients.download(coefficients) || !fixture.bucket_activity.download(activity) ||
+      !fixture.compact_systems.download(compact)) {
+    return false;
+  }
+  if (errors[kFailedSystem] !=
+          static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kNonfiniteHamiltonian) ||
+      !system_outputs_equal(fixture.host, kFailedSystem, eigenvalues, coefficients, kSentinel) ||
+      activity.size() != 1u || activity[0].active_count != 7u ||
+      activity[0].submitted_eigensolver_count != 7u || activity[0].completed_count != 7u ||
+      activity[0].submitted_backtransform_count != 7u) {
+    return false;
+  }
+  std::size_t compact_slot = 0u;
+  for (std::int64_t system = 0; system < fixture.host.batch_size; ++system) {
+    if (system == kFailedSystem) {
+      continue;
+    }
+    if (errors[static_cast<std::size_t>(system)] != 0u || compact[compact_slot++] != system ||
+        !validate_system(fixture.host, system, eigenvalues, coefficients)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool test_compacted_graph_device_epoch_and_transactional_rebuild() {
+  DeviceFixture fixture;
+  DeviceBuffer<std::uint64_t> geometry_epoch;
+  if (!fixture.create(make_batch(8, true)) || !geometry_epoch.allocate(1u) ||
+      !factor(fixture, 41u) || !geometry_epoch.upload(std::vector<std::uint64_t>{41u})) {
+    return false;
+  }
+
+  const Gfn2GeometryEpochDevice epoch{geometry_epoch.get(), 1, fixture.batch.plan_token};
+  cudaStream_t solver_stream_before = nullptr;
+  cudaStream_t blas_stream_before = nullptr;
+  cublasPointerMode_t pointer_mode_before = CUBLAS_POINTER_MODE_HOST;
+  cublasMath_t math_mode_before = CUBLAS_DEFAULT_MATH;
+  if (!solver_ok(cusolverDnGetStream(fixture.providers.solver, &solver_stream_before),
+                 "get solver stream before compacted build") ||
+      !blas_ok(cublasGetStream(fixture.providers.blas, &blas_stream_before),
+               "get BLAS stream before compacted build") ||
+      !blas_ok(cublasGetPointerMode(fixture.providers.blas, &pointer_mode_before),
+               "get BLAS pointer mode before compacted build") ||
+      !blas_ok(cublasGetMathMode(fixture.providers.blas, &math_mode_before),
+               "get BLAS math mode before compacted build")) {
+    return false;
+  }
+
+  Gfn2EigensolverCompactedSolveGraph graph;
+  const auto build = build_gfn2_compacted_eigensolver_graph_cuda(
+      fixture.batch, fixture.host.buckets.data(),
+      static_cast<std::int64_t>(fixture.host.buckets.size()), fixture.cache, epoch,
+      fixture.hamiltonian.get(), Gfn2EigensolverOptions{}, fixture.providers.solver,
+      fixture.providers.parameters, fixture.providers.blas, fixture.workspace, fixture.results,
+      fixture.system_errors.get(), fixture.device_error.get(), graph);
+  cudaStream_t solver_stream_after = nullptr;
+  cudaStream_t blas_stream_after = nullptr;
+  cublasPointerMode_t pointer_mode_after = CUBLAS_POINTER_MODE_HOST;
+  cublasMath_t math_mode_after = CUBLAS_DEFAULT_MATH;
+  if (!build.success() || !graph.valid() ||
+      !solver_ok(cusolverDnGetStream(fixture.providers.solver, &solver_stream_after),
+                 "get solver stream after compacted build") ||
+      !blas_ok(cublasGetStream(fixture.providers.blas, &blas_stream_after),
+               "get BLAS stream after compacted build") ||
+      !blas_ok(cublasGetPointerMode(fixture.providers.blas, &pointer_mode_after),
+               "get BLAS pointer mode after compacted build") ||
+      !blas_ok(cublasGetMathMode(fixture.providers.blas, &math_mode_after),
+               "get BLAS math mode after compacted build") ||
+      solver_stream_after != solver_stream_before || blas_stream_after != blas_stream_before ||
+      pointer_mode_after != pointer_mode_before || math_mode_after != math_mode_before) {
+    std::cerr << "compacted graph build did not preserve provider handle state\n";
+    return false;
+  }
+
+  /* A rejected rebuild must not invalidate the previously usable graph. */
+  Gfn2EigensolverDeviceWorkspace undersized = fixture.workspace;
+  undersized.compact_system_elements = fixture.host.batch_size - 1;
+  const auto rejected = build_gfn2_compacted_eigensolver_graph_cuda(
+      fixture.batch, fixture.host.buckets.data(),
+      static_cast<std::int64_t>(fixture.host.buckets.size()), fixture.cache, epoch,
+      fixture.hamiltonian.get(), Gfn2EigensolverOptions{}, fixture.providers.solver,
+      fixture.providers.parameters, fixture.providers.blas, undersized, fixture.results,
+      fixture.system_errors.get(), fixture.device_error.get(), graph);
+  Gfn2EigensolverCompactedSolveGraph empty_graph;
+  if (rejected.status != Gfn2EigensolverLaunchStatus::kInvalidArgument || !graph.valid() ||
+      empty_graph.launch(fixture.providers.stream).status !=
+          Gfn2EigensolverLaunchStatus::kInvalidArgument ||
+      !fixture.fill_outputs(kSentinel) || !launch_compacted(fixture, graph) ||
+      !validate_compacted_launch(fixture)) {
+    return false;
+  }
+
+  /* Replay reads the epoch by stable device address rather than freezing the
+   * build-time scalar. Refactor the cache to a new generation and prove that
+   * the unchanged graph accepts it while observing a changed active mask. */
+  if (!factor(fixture, 42u) || !geometry_epoch.upload(std::vector<std::uint64_t>{42u})) {
+    return false;
+  }
+  for (std::int64_t system = 0; system < fixture.host.batch_size; ++system) {
+    fixture.host.active[static_cast<std::size_t>(system)] = system % 3 == 0 ? 0u : 1u;
+  }
+  return fixture.active.upload(fixture.host.active) && fixture.fill_outputs(kSentinel) &&
+         launch_compacted(fixture, graph) && validate_compacted_launch(fixture);
 }
 
 bool test_batch(std::int64_t batch_size, bool mixed_buckets,
@@ -1027,11 +1320,20 @@ int main() {
       return 1;
     }
   }
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    if (!test_compacted_graph_batch(batch_size, false)) {
+      std::cerr << "compacted graph batch test failed for size " << batch_size << '\n';
+      return 1;
+    }
+  }
   if (!test_batch(8, true) || !test_batch(1, false, 8) || !test_batch(8, false, 16) ||
-      !test_batch(4, false, 32) || !test_cpu_literal_parity() ||
-      !test_inactive_poison_is_skipped() || !test_overlap_and_hamiltonian_validation() ||
-      !test_active_offset_and_singular_failures() || !test_ill_conditioned_peer_isolation() ||
-      !test_cache_generation_staleness() || !test_single_cache_member_peer_isolation() ||
+      !test_batch(4, false, 32) || !test_compacted_graph_batch(8, true) ||
+      !test_compacted_graph_filters_failed_peer() ||
+      !test_compacted_graph_device_epoch_and_transactional_rebuild() ||
+      !test_cpu_literal_parity() || !test_inactive_poison_is_skipped() ||
+      !test_overlap_and_hamiltonian_validation() || !test_active_offset_and_singular_failures() ||
+      !test_ill_conditioned_peer_isolation() || !test_cache_generation_staleness() ||
+      !test_single_cache_member_peer_isolation() ||
       !test_sticky_error_and_invalid_bucket_map_fail_closed() ||
       !test_host_validation_aliases_and_limits() || !test_graph_capture()) {
     return 1;

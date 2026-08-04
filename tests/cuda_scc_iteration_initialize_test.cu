@@ -98,6 +98,7 @@ Gfn2SccIterationDevicePlan make_plan(std::uint32_t components) {
   plan.plan_token = kToken;
   plan.topology.plan_token = kToken;
   plan.topology.batch_size = kBatch;
+  plan.topology.bucket_count = kBatch;
   plan.topology.total_atoms = kAtoms;
   plan.topology.total_shells = kShells;
   plan.topology.total_orbitals = kOrbitals;

@@ -9,7 +9,7 @@
 
 namespace gpuxtb::detail::cuda {
 
-inline constexpr std::uint32_t kGfn2SccIterationArenaAbiVersion = 1u;
+inline constexpr std::uint32_t kGfn2SccIterationArenaAbiVersion = 2u;
 inline constexpr std::size_t kGfn2SccIterationArenaAlignment = 256u;
 
 /* Synchronous setup failure; no allocation, transfer, or device work occurs. */

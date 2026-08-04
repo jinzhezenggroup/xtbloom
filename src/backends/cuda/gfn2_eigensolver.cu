@@ -4,6 +4,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <new>
+#include <utility>
 
 #include "backends/cuda/gfn2_eigensolver.cuh"
 
@@ -277,7 +280,7 @@ bool valid_factor_ranges(const Gfn2EigensolverDeviceBatch& batch, const double* 
                          const Gfn2EigensolverOverlapCache& cache, std::uint32_t* system_errors,
                          std::uint32_t* device_error) noexcept {
   std::array<AddressRange, 6> reads{};
-  std::array<AddressRange, 16> writes{};
+  std::array<AddressRange, 19> writes{};
   return make_range(batch.orbital_offsets, batch.batch_size + 1, sizeof(std::int64_t), &reads[0]) &&
          make_range(batch.matrix_offsets, batch.batch_size + 1, sizeof(std::int64_t), &reads[1]) &&
          make_range(batch.bucket_systems, batch.batch_size, sizeof(std::int32_t), &reads[2]) &&
@@ -308,6 +311,12 @@ bool valid_factor_ranges(const Gfn2EigensolverDeviceBatch& batch, const double* 
          make_range(cache.factor_statuses, batch.batch_size, sizeof(std::uint32_t), &writes[13]) &&
          make_range(system_errors, batch.batch_size, sizeof(std::uint32_t), &writes[14]) &&
          make_range(device_error, 1, sizeof(std::uint32_t), &writes[15]) &&
+         make_range(workspace.compact_systems, workspace.compact_system_elements,
+                    sizeof(std::int32_t), &writes[16]) &&
+         make_range(workspace.compact_source_slots, workspace.compact_source_slot_elements,
+                    sizeof(std::int32_t), &writes[17]) &&
+         make_range(workspace.bucket_activity, workspace.bucket_activity_elements,
+                    sizeof(Gfn2EigensolverBucketActivity), &writes[18]) &&
          pairwise_disjoint(reads) && pairwise_disjoint(writes) && disjoint_sets(reads, writes);
 }
 
@@ -318,7 +327,7 @@ bool valid_solve_ranges(const Gfn2EigensolverDeviceBatch& batch,
                         const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
                         std::uint32_t* device_error) noexcept {
   std::array<AddressRange, 9> reads{};
-  std::array<AddressRange, 15> writes{};
+  std::array<AddressRange, 18> writes{};
   return make_range(batch.orbital_offsets, batch.batch_size + 1, sizeof(std::int64_t), &reads[0]) &&
          make_range(batch.matrix_offsets, batch.batch_size + 1, sizeof(std::int64_t), &reads[1]) &&
          make_range(batch.bucket_systems, batch.batch_size, sizeof(std::int32_t), &reads[2]) &&
@@ -352,7 +361,23 @@ bool valid_solve_ranges(const Gfn2EigensolverDeviceBatch& batch,
                     &writes[12]) &&
          make_range(system_errors, batch.batch_size, sizeof(std::uint32_t), &writes[13]) &&
          make_range(device_error, 1, sizeof(std::uint32_t), &writes[14]) &&
+         make_range(workspace.compact_systems, workspace.compact_system_elements,
+                    sizeof(std::int32_t), &writes[15]) &&
+         make_range(workspace.compact_source_slots, workspace.compact_source_slot_elements,
+                    sizeof(std::int32_t), &writes[16]) &&
+         make_range(workspace.bucket_activity, workspace.bucket_activity_elements,
+                    sizeof(Gfn2EigensolverBucketActivity), &writes[17]) &&
          pairwise_disjoint(reads) && pairwise_disjoint(writes) && disjoint_sets(reads, writes);
+}
+
+bool valid_compaction_workspace(const Gfn2EigensolverDeviceBatch& batch, std::int64_t bucket_count,
+                                const Gfn2EigensolverDeviceWorkspace& workspace) noexcept {
+  return workspace.compact_system_elements >= batch.batch_size &&
+         workspace.compact_source_slot_elements >= batch.batch_size &&
+         workspace.bucket_activity_elements >= bucket_count &&
+         is_aligned(workspace.compact_systems, alignof(std::int32_t)) &&
+         is_aligned(workspace.compact_source_slots, alignof(std::int32_t)) &&
+         is_aligned(workspace.bucket_activity, alignof(Gfn2EigensolverBucketActivity));
 }
 
 __device__ bool system_is_clear(const std::uint32_t* system_errors, std::int64_t system) {
@@ -600,9 +625,9 @@ __global__ void finalize_overlap_bucket_kernel(
 __global__ void prepare_solve_bucket_kernel(
     Gfn2EigensolverDeviceBatch batch, Gfn2EigensolverBucket bucket,
     Gfn2EigensolverOverlapCache cache, std::uint64_t scalar_generation,
-    const std::uint64_t* device_generation,
-    const double* hamiltonians, double symmetry_tolerance, Gfn2EigensolverDeviceWorkspace workspace,
-    std::uint32_t* system_errors, std::uint32_t* device_error) {
+    const std::uint64_t* device_generation, const double* hamiltonians, double symmetry_tolerance,
+    Gfn2EigensolverDeviceWorkspace workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error) {
   const std::int64_t slot = static_cast<std::int64_t>(blockIdx.x);
   const std::int64_t bucket_slot = bucket.system_index_offset + slot;
   const std::int64_t matrix_stride = static_cast<std::int64_t>(bucket.orbital_count) *
@@ -691,6 +716,253 @@ __global__ void prepare_solve_bucket_kernel(
     workspace.matrix_scratch_b[scratch_begin + index] = hamiltonian;
   }
 }
+
+#if CUDART_VERSION >= 12080
+
+/* A single ordered scan is intentional: bucket sizes are modest and this
+ * makes compaction order independent of block scheduling and scan-library
+ * implementation details. Expensive matrix work remains fully parallel. */
+__global__ void compact_solve_bucket_kernel(Gfn2EigensolverDeviceBatch batch,
+                                            Gfn2EigensolverBucket bucket, std::int64_t bucket_index,
+                                            Gfn2EigensolverDeviceWorkspace workspace,
+                                            const std::uint32_t* system_errors,
+                                            cudaGraphConditionalHandle handle) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) {
+    return;
+  }
+  Gfn2EigensolverBucketActivity activity{};
+  for (std::int32_t local = 0; local < bucket.system_count; ++local) {
+    const std::int64_t slot = bucket.system_index_offset + local;
+    workspace.compact_systems[slot] = -1;
+    workspace.compact_source_slots[slot] = -1;
+  }
+  if (atomicAdd(workspace.sequence_active, 0u) != 0u) {
+    for (std::int32_t local = 0; local < bucket.system_count; ++local) {
+      const std::int64_t canonical_slot = bucket.system_index_offset + local;
+      const std::int32_t system = batch.bucket_systems[canonical_slot];
+      if (system >= 0 && system < batch.batch_size && workspace.eligible[canonical_slot] == 1u &&
+          system_is_clear(system_errors, system)) {
+        const std::int64_t compact_slot =
+            bucket.system_index_offset + static_cast<std::int64_t>(activity.active_count);
+        workspace.compact_systems[compact_slot] = system;
+        workspace.compact_source_slots[compact_slot] = local;
+        ++activity.active_count;
+      }
+    }
+  }
+  workspace.bucket_activity[bucket_index] = activity;
+  cudaGraphSetConditional(handle, activity.active_count);
+}
+
+__global__ void gather_compacted_solve_bucket_kernel(
+    Gfn2EigensolverDeviceBatch batch, Gfn2EigensolverBucket bucket, std::int64_t bucket_index,
+    std::uint32_t submission_count, Gfn2EigensolverOverlapCache cache, const double* hamiltonians,
+    Gfn2EigensolverDeviceWorkspace workspace) {
+  const std::int64_t compact_local = static_cast<std::int64_t>(blockIdx.x);
+  if (compact_local >= submission_count) {
+    return;
+  }
+  const std::int64_t compact_slot = bucket.system_index_offset + compact_local;
+  const std::int32_t system = workspace.compact_systems[compact_slot];
+  const std::int32_t source_local = workspace.compact_source_slots[compact_slot];
+  const std::int64_t matrix_stride = static_cast<std::int64_t>(bucket.orbital_count) *
+                                     static_cast<std::int64_t>(bucket.orbital_count);
+  const std::int64_t source_begin =
+      bucket.matrix_scratch_offset + static_cast<std::int64_t>(source_local) * matrix_stride;
+  const std::int64_t destination_begin =
+      bucket.matrix_scratch_offset + compact_local * matrix_stride;
+  const std::int64_t hamiltonian_begin = batch.matrix_offsets[system];
+
+  if (threadIdx.x == 0) {
+    workspace.factor_pointers[compact_slot] = workspace.matrix_scratch_a + destination_begin;
+    workspace.matrix_pointers[compact_slot] = workspace.matrix_scratch_b + destination_begin;
+    if (blockIdx.x == 0) {
+      workspace.bucket_activity[bucket_index].submitted_eigensolver_count = submission_count;
+    }
+  }
+  for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
+    const std::int64_t row = index % bucket.orbital_count;
+    const std::int64_t column = index / bucket.orbital_count;
+    workspace.matrix_scratch_a[destination_begin + index] =
+        cache.cholesky_factors[source_begin + index];
+    const double first = hamiltonians[hamiltonian_begin + row * bucket.orbital_count + column];
+    const double second = hamiltonians[hamiltonian_begin + column * bucket.orbital_count + row];
+    workspace.matrix_scratch_b[destination_begin + index] =
+        row == column ? first : 0.5 * first + 0.5 * second;
+  }
+}
+
+__global__ void validate_compacted_transformed_bucket_kernel(
+    Gfn2EigensolverBucket bucket, std::uint32_t submission_count,
+    Gfn2EigensolverDeviceWorkspace workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error) {
+  const std::int64_t compact_local = static_cast<std::int64_t>(blockIdx.x);
+  if (compact_local >= submission_count || threadIdx.x != 0) {
+    return;
+  }
+  const std::int64_t compact_slot = bucket.system_index_offset + compact_local;
+  const std::int32_t system = workspace.compact_systems[compact_slot];
+  const std::int64_t matrix_stride = static_cast<std::int64_t>(bucket.orbital_count) *
+                                     static_cast<std::int64_t>(bucket.orbital_count);
+  const std::int64_t matrix_begin = bucket.matrix_scratch_offset + compact_local * matrix_stride;
+  if (!system_is_clear(system_errors, system)) {
+    return;
+  }
+  for (std::int64_t index = 0; index < matrix_stride; ++index) {
+    if (!isfinite(workspace.matrix_scratch_b[matrix_begin + index])) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2EigensolverDeviceError::kNonfiniteEigenpair);
+      return;
+    }
+  }
+}
+
+__global__ void symmetrize_compacted_bucket_kernel(Gfn2EigensolverBucket bucket,
+                                                   std::uint32_t submission_count,
+                                                   Gfn2EigensolverDeviceWorkspace workspace,
+                                                   const std::uint32_t* system_errors) {
+  const std::int64_t compact_local = static_cast<std::int64_t>(blockIdx.x);
+  if (compact_local >= submission_count) {
+    return;
+  }
+  const std::int64_t compact_slot = bucket.system_index_offset + compact_local;
+  const std::int32_t system = workspace.compact_systems[compact_slot];
+  const std::int64_t matrix_stride = static_cast<std::int64_t>(bucket.orbital_count) *
+                                     static_cast<std::int64_t>(bucket.orbital_count);
+  const std::int64_t matrix_begin = bucket.matrix_scratch_offset + compact_local * matrix_stride;
+  const bool valid = system_is_clear(system_errors, system);
+  for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
+    const std::int64_t row = index % bucket.orbital_count;
+    const std::int64_t column = index / bucket.orbital_count;
+    if (row < column) {
+      continue;
+    }
+    double value = row == column ? 1.0 : 0.0;
+    if (valid) {
+      const double first =
+          workspace.matrix_scratch_b[matrix_begin + row + column * bucket.orbital_count];
+      const double second =
+          workspace.matrix_scratch_b[matrix_begin + column + row * bucket.orbital_count];
+      value = row == column ? first : 0.5 * first + 0.5 * second;
+    }
+    workspace.matrix_scratch_b[matrix_begin + row + column * bucket.orbital_count] = value;
+    workspace.matrix_scratch_b[matrix_begin + column + row * bucket.orbital_count] = value;
+  }
+}
+
+/* Filter provider failures before the final TRSM. In-place pointer compaction
+ * is safe because every destination index is less than or equal to its source
+ * index, and the scan is serial and stable. */
+__global__ void compact_successful_eigenpairs_kernel(Gfn2EigensolverBucket bucket,
+                                                     std::int64_t bucket_index,
+                                                     Gfn2EigensolverDeviceWorkspace workspace,
+                                                     std::uint32_t* system_errors,
+                                                     std::uint32_t* device_error,
+                                                     cudaGraphConditionalHandle handle) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) {
+    return;
+  }
+  Gfn2EigensolverBucketActivity& activity = workspace.bucket_activity[bucket_index];
+  std::uint32_t completed = 0u;
+  const std::int64_t matrix_stride = static_cast<std::int64_t>(bucket.orbital_count) *
+                                     static_cast<std::int64_t>(bucket.orbital_count);
+  for (std::uint32_t source = 0u; source < activity.active_count; ++source) {
+    const std::int64_t source_slot = bucket.system_index_offset + source;
+    const std::int32_t system = workspace.compact_systems[source_slot];
+    bool healthy = system_is_clear(system_errors, system);
+    if (healthy && workspace.info_a[source_slot] != 0) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2EigensolverDeviceError::kEigensolverFailed);
+      healthy = false;
+    }
+    const std::int64_t matrix_begin =
+        bucket.matrix_scratch_offset + static_cast<std::int64_t>(source) * matrix_stride;
+    const std::int64_t orbital_begin =
+        bucket.orbital_scratch_offset + static_cast<std::int64_t>(source) * bucket.orbital_count;
+    for (std::int32_t orbital = 0; healthy && orbital < bucket.orbital_count; ++orbital) {
+      healthy = isfinite(workspace.eigenvalue_scratch[orbital_begin + orbital]);
+    }
+    for (std::int64_t index = 0; healthy && index < matrix_stride; ++index) {
+      healthy = isfinite(workspace.matrix_scratch_b[matrix_begin + index]);
+    }
+    if (!healthy) {
+      if (system_is_clear(system_errors, system)) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2EigensolverDeviceError::kNonfiniteEigenpair);
+      }
+      continue;
+    }
+    const std::int64_t destination_slot = bucket.system_index_offset + completed;
+    workspace.compact_systems[destination_slot] = system;
+    workspace.compact_source_slots[destination_slot] = static_cast<std::int32_t>(source);
+    workspace.factor_pointers[destination_slot] = workspace.factor_pointers[source_slot];
+    workspace.matrix_pointers[destination_slot] = workspace.matrix_pointers[source_slot];
+    ++completed;
+  }
+  activity.completed_count = completed;
+  cudaGraphSetConditional(handle, completed);
+}
+
+__global__ void mark_backtransform_submission_kernel(std::int64_t bucket_index,
+                                                     std::uint32_t submission_count,
+                                                     Gfn2EigensolverDeviceWorkspace workspace) {
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    workspace.bucket_activity[bucket_index].submitted_backtransform_count = submission_count;
+  }
+}
+
+__global__ void scatter_compacted_eigensystems_kernel(
+    Gfn2EigensolverDeviceBatch batch, Gfn2EigensolverBucket bucket, std::uint32_t submission_count,
+    Gfn2EigensolverDeviceWorkspace workspace, Gfn2EigensolverDeviceResults results,
+    std::uint32_t* system_errors, std::uint32_t* device_error) {
+  const std::int64_t compact_local = static_cast<std::int64_t>(blockIdx.x);
+  if (compact_local >= submission_count) {
+    return;
+  }
+  const std::int64_t compact_slot = bucket.system_index_offset + compact_local;
+  const std::int32_t system = workspace.compact_systems[compact_slot];
+  const std::int32_t source_local = workspace.compact_source_slots[compact_slot];
+  const std::int64_t matrix_stride = static_cast<std::int64_t>(bucket.orbital_count) *
+                                     static_cast<std::int64_t>(bucket.orbital_count);
+  const std::int64_t scratch_matrix_begin =
+      bucket.matrix_scratch_offset + static_cast<std::int64_t>(source_local) * matrix_stride;
+  const std::int64_t scratch_orbital_begin =
+      bucket.orbital_scratch_offset +
+      static_cast<std::int64_t>(source_local) * bucket.orbital_count;
+  const std::int64_t output_matrix_begin = batch.matrix_offsets[system];
+  const std::int64_t output_orbital_begin = batch.orbital_offsets[system];
+
+  __shared__ int publish;
+  if (threadIdx.x == 0) {
+    publish = system_is_clear(system_errors, system) ? 1 : 0;
+    for (std::int32_t orbital = 0; publish != 0 && orbital < bucket.orbital_count; ++orbital) {
+      publish = isfinite(workspace.eigenvalue_scratch[scratch_orbital_begin + orbital]) ? 1 : 0;
+    }
+    for (std::int64_t index = 0; publish != 0 && index < matrix_stride; ++index) {
+      publish = isfinite(workspace.matrix_scratch_b[scratch_matrix_begin + index]) ? 1 : 0;
+    }
+    if (publish == 0 && system_is_clear(system_errors, system)) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2EigensolverDeviceError::kNonfiniteEigenpair);
+    }
+  }
+  __syncthreads();
+  if (publish == 0) {
+    return;
+  }
+  for (std::int32_t orbital = threadIdx.x; orbital < bucket.orbital_count; orbital += blockDim.x) {
+    results.eigenvalues[output_orbital_begin + orbital] =
+        workspace.eigenvalue_scratch[scratch_orbital_begin + orbital];
+  }
+  for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
+    const std::int64_t ao = index / bucket.orbital_count;
+    const std::int64_t orbital = index - ao * bucket.orbital_count;
+    results.coefficients[output_matrix_begin + index] =
+        workspace.matrix_scratch_b[scratch_matrix_begin + ao + orbital * bucket.orbital_count];
+  }
+}
+
+#endif  // CUDART_VERSION >= 12080
 
 __global__ void symmetrize_transformed_bucket_kernel(Gfn2EigensolverDeviceBatch batch,
                                                      Gfn2EigensolverBucket bucket,
@@ -877,7 +1149,527 @@ Gfn2EigensolverLaunchResult triangular_solve(cublasHandle_t blas, cublasSideMode
   return status == CUBLAS_STATUS_SUCCESS ? launch_success() : cublas_failure(status);
 }
 
+#if CUDART_VERSION >= 12080
+
+void finish_or_abort_capture(cudaStream_t stream) noexcept {
+  cudaGraph_t abandoned = nullptr;
+  const cudaError_t status = cudaStreamEndCapture(stream, &abandoned);
+  if (status != cudaSuccess) {
+    (void)cudaGetLastError();
+  }
+  if (abandoned != nullptr) {
+    (void)cudaGraphDestroy(abandoned);
+  }
+}
+
+Gfn2EigensolverLaunchResult insert_switch_after_capture_dependencies(
+    cudaStream_t root_stream, cudaGraph_t root_graph, cudaGraphConditionalHandle handle,
+    std::uint32_t body_count, cudaGraphNode_t& node, cudaGraph_t*& bodies) noexcept {
+  cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+  cudaGraph_t captured_graph = nullptr;
+  const cudaGraphNode_t* dependencies = nullptr;
+  std::size_t dependency_count = 0u;
+  cudaError_t status = cudaStreamGetCaptureInfo(root_stream, &capture_status, nullptr,
+                                                &captured_graph, &dependencies, &dependency_count);
+  if (status != cudaSuccess) {
+    return cuda_failure(status);
+  }
+  if (capture_status == cudaStreamCaptureStatusNone || captured_graph != root_graph ||
+      dependencies == nullptr || dependency_count == 0u || body_count == 0u) {
+    return cuda_failure(cudaErrorStreamCaptureInvalidated);
+  }
+
+  cudaGraphNodeParams parameters{};
+  parameters.type = cudaGraphNodeTypeConditional;
+  parameters.conditional.handle = handle;
+  parameters.conditional.type = cudaGraphCondTypeSwitch;
+  parameters.conditional.size = body_count;
+  status = cudaGraphAddNode(&node, root_graph, dependencies, dependency_count, &parameters);
+  if (status == cudaSuccess) {
+    status = cudaStreamUpdateCaptureDependencies(root_stream, &node, 1u,
+                                                 cudaStreamSetCaptureDependencies);
+  }
+  if (status != cudaSuccess) {
+    return cuda_failure(status);
+  }
+  bodies = parameters.conditional.phGraph_out;
+  return launch_success();
+}
+
+Gfn2EigensolverLaunchResult begin_body_capture(cudaStream_t stream, cudaGraph_t graph) noexcept {
+  const cudaError_t status = cudaStreamBeginCaptureToGraph(stream, graph, nullptr, nullptr, 0u,
+                                                           cudaStreamCaptureModeThreadLocal);
+  return status == cudaSuccess ? launch_success() : cuda_failure(status);
+}
+
+Gfn2EigensolverLaunchResult end_body_capture(cudaStream_t stream, cudaGraph_t expected) noexcept {
+  cudaGraph_t ended = nullptr;
+  const cudaError_t status = cudaStreamEndCapture(stream, &ended);
+  if (status != cudaSuccess) {
+    return cuda_failure(status);
+  }
+  return ended == expected ? launch_success() : cuda_failure(cudaErrorStreamCaptureInvalidated);
+}
+
+Gfn2EigensolverLaunchResult capture_eigensolver_capacity_body(
+    cudaGraph_t body, cudaStream_t capture_stream, std::uint32_t capacity,
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket& bucket,
+    std::int64_t bucket_index, const Gfn2EigensolverOverlapCache& cache, const double* hamiltonians,
+    cusolverDnHandle_t solver, cusolverDnParams_t parameters, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, bool deterministic_debug) noexcept {
+  if (capacity == 0u) {
+    return launch_success();
+  }
+  Gfn2EigensolverLaunchResult result = begin_body_capture(capture_stream, body);
+  if (!result.success()) {
+    return result;
+  }
+  const Gfn2EigensolverBucket submission{bucket.orbital_count, static_cast<std::int32_t>(capacity),
+                                         bucket.system_index_offset, bucket.matrix_scratch_offset,
+                                         bucket.orbital_scratch_offset};
+  gather_compacted_solve_bucket_kernel<<<capacity, kThreadsPerSystem, 0, capture_stream>>>(
+      batch, bucket, bucket_index, capacity, cache, hamiltonians, workspace);
+  result = check_kernel_launch();
+  if (result.success()) {
+    result = configure_blas(blas, capture_stream, deterministic_debug);
+  }
+  if (result.success()) {
+    result = triangular_solve(blas, CUBLAS_SIDE_LEFT, CUBLAS_OP_N, submission,
+                              workspace.factor_pointers + bucket.system_index_offset,
+                              workspace.matrix_pointers + bucket.system_index_offset);
+  }
+  if (result.success()) {
+    result = triangular_solve(blas, CUBLAS_SIDE_RIGHT, CUBLAS_OP_T, submission,
+                              workspace.factor_pointers + bucket.system_index_offset,
+                              workspace.matrix_pointers + bucket.system_index_offset);
+  }
+  if (result.success()) {
+    validate_compacted_transformed_bucket_kernel<<<capacity, 1, 0, capture_stream>>>(
+        bucket, capacity, workspace, system_errors, device_error);
+    result = check_kernel_launch();
+  }
+  if (result.success()) {
+    symmetrize_compacted_bucket_kernel<<<capacity, kThreadsPerSystem, 0, capture_stream>>>(
+        bucket, capacity, workspace, system_errors);
+    result = check_kernel_launch();
+  }
+  if (result.success()) {
+    result = configure_solver(solver, capture_stream);
+  }
+  if (result.success()) {
+    result = symmetric_eigensolve(solver, parameters, CUSOLVER_EIG_MODE_VECTOR, submission,
+                                  workspace.matrix_scratch_b + bucket.matrix_scratch_offset,
+                                  workspace.eigenvalue_scratch + bucket.orbital_scratch_offset,
+                                  workspace, workspace.info_a + bucket.system_index_offset);
+  }
+  if (!result.success()) {
+    finish_or_abort_capture(capture_stream);
+    return result;
+  }
+  return end_body_capture(capture_stream, body);
+}
+
+Gfn2EigensolverLaunchResult capture_backtransform_capacity_body(
+    cudaGraph_t body, cudaStream_t capture_stream, std::uint32_t capacity,
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket& bucket,
+    std::int64_t bucket_index, cublasHandle_t blas, const Gfn2EigensolverDeviceWorkspace& workspace,
+    const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
+    std::uint32_t* device_error, bool deterministic_debug) noexcept {
+  if (capacity == 0u) {
+    return launch_success();
+  }
+  Gfn2EigensolverLaunchResult result = begin_body_capture(capture_stream, body);
+  if (!result.success()) {
+    return result;
+  }
+  const Gfn2EigensolverBucket submission{bucket.orbital_count, static_cast<std::int32_t>(capacity),
+                                         bucket.system_index_offset, bucket.matrix_scratch_offset,
+                                         bucket.orbital_scratch_offset};
+  mark_backtransform_submission_kernel<<<1, 1, 0, capture_stream>>>(bucket_index, capacity,
+                                                                    workspace);
+  result = check_kernel_launch();
+  if (result.success()) {
+    result = configure_blas(blas, capture_stream, deterministic_debug);
+  }
+  if (result.success()) {
+    result = triangular_solve(blas, CUBLAS_SIDE_LEFT, CUBLAS_OP_T, submission,
+                              workspace.factor_pointers + bucket.system_index_offset,
+                              workspace.matrix_pointers + bucket.system_index_offset);
+  }
+  if (result.success()) {
+    scatter_compacted_eigensystems_kernel<<<capacity, kThreadsPerSystem, 0, capture_stream>>>(
+        batch, bucket, capacity, workspace, results, system_errors, device_error);
+    result = check_kernel_launch();
+  }
+  if (!result.success()) {
+    finish_or_abort_capture(capture_stream);
+    return result;
+  }
+  return end_body_capture(capture_stream, body);
+}
+
+#endif  // CUDART_VERSION >= 12080
+
 }  // namespace
+
+struct Gfn2EigensolverCompactedSolveGraph::Impl {
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t executable = nullptr;
+  std::uint64_t plan_token = 0u;
+
+  ~Impl() {
+    if (executable != nullptr) {
+      (void)cudaGraphExecDestroy(executable);
+    }
+    if (graph != nullptr) {
+      (void)cudaGraphDestroy(graph);
+    }
+  }
+};
+
+Gfn2EigensolverCompactedSolveGraph::Gfn2EigensolverCompactedSolveGraph() noexcept = default;
+Gfn2EigensolverCompactedSolveGraph::~Gfn2EigensolverCompactedSolveGraph() = default;
+Gfn2EigensolverCompactedSolveGraph::Gfn2EigensolverCompactedSolveGraph(
+    Gfn2EigensolverCompactedSolveGraph&&) noexcept = default;
+Gfn2EigensolverCompactedSolveGraph& Gfn2EigensolverCompactedSolveGraph::operator=(
+    Gfn2EigensolverCompactedSolveGraph&&) noexcept = default;
+
+bool Gfn2EigensolverCompactedSolveGraph::valid() const noexcept {
+  return impl_ != nullptr && impl_->graph != nullptr && impl_->executable != nullptr &&
+         impl_->plan_token != 0u;
+}
+
+Gfn2EigensolverLaunchResult Gfn2EigensolverCompactedSolveGraph::launch(
+    cudaStream_t stream) const noexcept {
+  if (!valid()) {
+    return invalid_argument();
+  }
+  const cudaError_t status = cudaGraphLaunch(impl_->executable, stream);
+  return status == cudaSuccess ? launch_success() : cuda_failure(status);
+}
+
+#if CUDART_VERSION >= 12080
+
+namespace {
+
+struct ProviderHandleState {
+  cudaStream_t solver_stream = nullptr;
+  cudaStream_t blas_stream = nullptr;
+  cublasPointerMode_t pointer_mode = CUBLAS_POINTER_MODE_HOST;
+  cublasMath_t math_mode = CUBLAS_DEFAULT_MATH;
+};
+
+Gfn2EigensolverLaunchResult save_provider_state(cusolverDnHandle_t solver, cublasHandle_t blas,
+                                                ProviderHandleState& state) noexcept {
+  cusolverStatus_t solver_status = cusolverDnGetStream(solver, &state.solver_stream);
+  if (solver_status != CUSOLVER_STATUS_SUCCESS) {
+    return cusolver_failure(solver_status);
+  }
+  cublasStatus_t blas_status = cublasGetStream(blas, &state.blas_stream);
+  if (blas_status == CUBLAS_STATUS_SUCCESS) {
+    blas_status = cublasGetPointerMode(blas, &state.pointer_mode);
+  }
+  if (blas_status == CUBLAS_STATUS_SUCCESS) {
+    blas_status = cublasGetMathMode(blas, &state.math_mode);
+  }
+  return blas_status == CUBLAS_STATUS_SUCCESS ? launch_success() : cublas_failure(blas_status);
+}
+
+void restore_provider_state(cusolverDnHandle_t solver, cublasHandle_t blas,
+                            const ProviderHandleState& state) noexcept {
+  (void)cusolverDnSetStream(solver, state.solver_stream);
+  (void)cublasSetStream(blas, state.blas_stream);
+  (void)cublasSetPointerMode(blas, state.pointer_mode);
+  (void)cublasSetMathMode(blas, state.math_mode);
+}
+
+Gfn2EigensolverLaunchResult build_compacted_eigensolver_graph_impl(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
+    std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
+    std::uint64_t scalar_generation, const Gfn2GeometryEpochDevice* geometry_epoch,
+    const double* hamiltonians, const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver,
+    cusolverDnParams_t parameters, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, const Gfn2EigensolverDeviceResults& results,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    std::unique_ptr<Gfn2EigensolverCompactedSolveGraph::Impl>& built) noexcept {
+  const bool dynamic_epoch = geometry_epoch != nullptr;
+  if (!valid_bucket_plan(batch, buckets, bucket_count) || !valid_options(options) ||
+      !valid_workspace(batch, workspace) ||
+      !valid_compaction_workspace(batch, bucket_count, workspace) || !valid_cache(batch, cache) ||
+      ((!dynamic_epoch && scalar_generation == 0u) ||
+       (dynamic_epoch &&
+        (scalar_generation != 0u || geometry_epoch->value == nullptr ||
+         geometry_epoch->value_elements != 1 || geometry_epoch->plan_token != batch.plan_token ||
+         !is_aligned(geometry_epoch->value, alignof(std::uint64_t))))) ||
+      solver == nullptr || parameters == nullptr || blas == nullptr ||
+      results.plan_token != batch.plan_token ||
+      results.eigenvalue_elements < batch.total_orbitals ||
+      results.coefficient_elements < batch.total_matrix_elements ||
+      !is_aligned(hamiltonians, alignof(double)) ||
+      !is_aligned(results.eigenvalues, alignof(double)) ||
+      !is_aligned(results.coefficients, alignof(double)) ||
+      !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(device_error, alignof(std::uint32_t)) ||
+      !valid_solve_ranges(batch, cache, hamiltonians,
+                          dynamic_epoch ? geometry_epoch->value : nullptr, workspace, results,
+                          system_errors, device_error)) {
+    return invalid_argument();
+  }
+
+  ProviderHandleState provider_state{};
+  Gfn2EigensolverLaunchResult result = save_provider_state(solver, blas, provider_state);
+  if (!result.success()) {
+    return result;
+  }
+  const auto restore = [&]() noexcept { restore_provider_state(solver, blas, provider_state); };
+
+  std::unique_ptr<Gfn2EigensolverCompactedSolveGraph::Impl> candidate(
+      new (std::nothrow) Gfn2EigensolverCompactedSolveGraph::Impl());
+  if (candidate == nullptr) {
+    restore();
+    return cuda_failure(cudaErrorMemoryAllocation);
+  }
+  cudaError_t cuda_status = cudaGraphCreate(&candidate->graph, 0u);
+  if (cuda_status != cudaSuccess) {
+    restore();
+    return cuda_failure(cuda_status);
+  }
+
+  std::unique_ptr<cudaGraphConditionalHandle[]> eigensolver_handles(
+      new (std::nothrow) cudaGraphConditionalHandle[static_cast<std::size_t>(bucket_count)]{});
+  std::unique_ptr<cudaGraphConditionalHandle[]> backtransform_handles(
+      new (std::nothrow) cudaGraphConditionalHandle[static_cast<std::size_t>(bucket_count)]{});
+  std::unique_ptr<cudaGraph_t*[]> eigensolver_body_sets(
+      new (std::nothrow) cudaGraph_t* [static_cast<std::size_t>(bucket_count)] {});
+  std::unique_ptr<cudaGraph_t*[]> backtransform_body_sets(
+      new (std::nothrow) cudaGraph_t* [static_cast<std::size_t>(bucket_count)] {});
+  if (eigensolver_handles == nullptr || backtransform_handles == nullptr ||
+      eigensolver_body_sets == nullptr || backtransform_body_sets == nullptr) {
+    restore();
+    return cuda_failure(cudaErrorMemoryAllocation);
+  }
+  for (std::int64_t bucket_index = 0; bucket_index < bucket_count; ++bucket_index) {
+    cuda_status = cudaGraphConditionalHandleCreate(
+        &eigensolver_handles[static_cast<std::size_t>(bucket_index)], candidate->graph, 0u, 0u);
+    if (cuda_status == cudaSuccess) {
+      cuda_status = cudaGraphConditionalHandleCreate(
+          &backtransform_handles[static_cast<std::size_t>(bucket_index)], candidate->graph, 0u, 0u);
+    }
+    if (cuda_status != cudaSuccess) {
+      restore();
+      return cuda_failure(cuda_status);
+    }
+  }
+
+  cudaStream_t root_stream = nullptr;
+  cudaStream_t body_stream = nullptr;
+  cuda_status = cudaStreamCreateWithFlags(&root_stream, cudaStreamNonBlocking);
+  if (cuda_status == cudaSuccess) {
+    cuda_status = cudaStreamCreateWithFlags(&body_stream, cudaStreamNonBlocking);
+  }
+  if (cuda_status != cudaSuccess) {
+    if (root_stream != nullptr) {
+      (void)cudaStreamDestroy(root_stream);
+    }
+    restore();
+    return cuda_failure(cuda_status);
+  }
+  bool root_capture_active = false;
+  const auto finish_streams = [&]() noexcept {
+    if (root_capture_active) {
+      finish_or_abort_capture(root_stream);
+      root_capture_active = false;
+    }
+    (void)cudaStreamDestroy(body_stream);
+    (void)cudaStreamDestroy(root_stream);
+    restore();
+  };
+
+  cuda_status = cudaStreamBeginCaptureToGraph(root_stream, candidate->graph, nullptr, nullptr, 0u,
+                                              cudaStreamCaptureModeThreadLocal);
+  if (cuda_status != cudaSuccess) {
+    finish_streams();
+    return cuda_failure(cuda_status);
+  }
+  root_capture_active = true;
+  result = prepare_launch_sequence(batch, workspace, device_error, root_stream);
+  if (!result.success()) {
+    finish_streams();
+    return result;
+  }
+
+  for (std::int64_t bucket_index = 0; bucket_index < bucket_count; ++bucket_index) {
+    const Gfn2EigensolverBucket bucket = buckets[bucket_index];
+    prepare_solve_bucket_kernel<<<static_cast<unsigned int>(bucket.system_count), kThreadsPerSystem,
+                                  0, root_stream>>>(
+        batch, bucket, cache, scalar_generation, dynamic_epoch ? geometry_epoch->value : nullptr,
+        hamiltonians, options.symmetry_tolerance, workspace, system_errors, device_error);
+    result = check_kernel_launch();
+    if (!result.success()) {
+      finish_streams();
+      return result;
+    }
+    compact_solve_bucket_kernel<<<1, 1, 0, root_stream>>>(
+        batch, bucket, bucket_index, workspace, system_errors,
+        eigensolver_handles[static_cast<std::size_t>(bucket_index)]);
+    result = check_kernel_launch();
+    if (!result.success()) {
+      finish_streams();
+      return result;
+    }
+
+    cudaGraphNode_t eigensolver_switch = nullptr;
+    const std::uint32_t capacity_count = static_cast<std::uint32_t>(bucket.system_count) + 1u;
+    result = insert_switch_after_capture_dependencies(
+        root_stream, candidate->graph, eigensolver_handles[static_cast<std::size_t>(bucket_index)],
+        capacity_count, eigensolver_switch,
+        eigensolver_body_sets[static_cast<std::size_t>(bucket_index)]);
+    if (!result.success()) {
+      finish_streams();
+      return result;
+    }
+
+    compact_successful_eigenpairs_kernel<<<1, 1, 0, root_stream>>>(
+        bucket, bucket_index, workspace, system_errors, device_error,
+        backtransform_handles[static_cast<std::size_t>(bucket_index)]);
+    result = check_kernel_launch();
+    if (!result.success()) {
+      finish_streams();
+      return result;
+    }
+    cudaGraphNode_t backtransform_switch = nullptr;
+    result = insert_switch_after_capture_dependencies(
+        root_stream, candidate->graph,
+        backtransform_handles[static_cast<std::size_t>(bucket_index)], capacity_count,
+        backtransform_switch, backtransform_body_sets[static_cast<std::size_t>(bucket_index)]);
+    if (!result.success()) {
+      finish_streams();
+      return result;
+    }
+  }
+
+  cudaGraph_t ended_graph = nullptr;
+  cuda_status = cudaStreamEndCapture(root_stream, &ended_graph);
+  root_capture_active = false;
+  if (cuda_status != cudaSuccess || ended_graph != candidate->graph) {
+    finish_streams();
+    return cuda_failure(cuda_status == cudaSuccess ? cudaErrorStreamCaptureInvalidated
+                                                   : cuda_status);
+  }
+
+  /* Conditional body graphs can only be populated after the root capture has
+   * ended; one thread cannot own nested stream captures. The stored body-array
+   * addresses are CUDA-owned and remain valid for the parent node lifetime. */
+  for (std::int64_t bucket_index = 0; bucket_index < bucket_count; ++bucket_index) {
+    const Gfn2EigensolverBucket bucket = buckets[bucket_index];
+    const std::uint32_t capacity_count = static_cast<std::uint32_t>(bucket.system_count) + 1u;
+    for (std::uint32_t capacity = 1u; capacity < capacity_count; ++capacity) {
+      result = capture_eigensolver_capacity_body(
+          eigensolver_body_sets[static_cast<std::size_t>(bucket_index)][capacity], body_stream,
+          capacity, batch, bucket, bucket_index, cache, hamiltonians, solver, parameters, blas,
+          workspace, system_errors, device_error, options.deterministic_debug);
+      if (!result.success()) {
+        finish_streams();
+        return result;
+      }
+      result = capture_backtransform_capacity_body(
+          backtransform_body_sets[static_cast<std::size_t>(bucket_index)][capacity], body_stream,
+          capacity, batch, bucket, bucket_index, blas, workspace, results, system_errors,
+          device_error, options.deterministic_debug);
+      if (!result.success()) {
+        finish_streams();
+        return result;
+      }
+    }
+  }
+  finish_streams();
+  cuda_status = cudaGraphInstantiate(&candidate->executable, candidate->graph, 0u);
+  if (cuda_status != cudaSuccess) {
+    return cuda_failure(cuda_status);
+  }
+  candidate->plan_token = batch.plan_token;
+  built = std::move(candidate);
+  return launch_success();
+}
+
+}  // namespace
+
+#endif  // CUDART_VERSION >= 12080
+
+Gfn2EigensolverLaunchResult build_gfn2_compacted_eigensolver_graph_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
+    std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
+    std::uint64_t geometry_generation, const double* hamiltonians,
+    const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver, cusolverDnParams_t parameters,
+    cublasHandle_t blas, const Gfn2EigensolverDeviceWorkspace& workspace,
+    const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
+    std::uint32_t* device_error, Gfn2EigensolverCompactedSolveGraph& output) noexcept {
+#if CUDART_VERSION >= 12080
+  std::unique_ptr<Gfn2EigensolverCompactedSolveGraph::Impl> candidate;
+  const Gfn2EigensolverLaunchResult launch = build_compacted_eigensolver_graph_impl(
+      batch, buckets, bucket_count, cache, geometry_generation, nullptr, hamiltonians, options,
+      solver, parameters, blas, workspace, results, system_errors, device_error, candidate);
+  if (launch.success()) {
+    output.impl_ = std::move(candidate);
+  }
+  return launch;
+#else
+  (void)batch;
+  (void)buckets;
+  (void)bucket_count;
+  (void)cache;
+  (void)geometry_generation;
+  (void)hamiltonians;
+  (void)options;
+  (void)solver;
+  (void)parameters;
+  (void)blas;
+  (void)workspace;
+  (void)results;
+  (void)system_errors;
+  (void)device_error;
+  (void)output;
+  return cuda_failure(cudaErrorNotSupported);
+#endif
+}
+
+Gfn2EigensolverLaunchResult build_gfn2_compacted_eigensolver_graph_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
+    std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
+    const Gfn2GeometryEpochDevice& geometry_epoch, const double* hamiltonians,
+    const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver, cusolverDnParams_t parameters,
+    cublasHandle_t blas, const Gfn2EigensolverDeviceWorkspace& workspace,
+    const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
+    std::uint32_t* device_error, Gfn2EigensolverCompactedSolveGraph& output) noexcept {
+#if CUDART_VERSION >= 12080
+  std::unique_ptr<Gfn2EigensolverCompactedSolveGraph::Impl> candidate;
+  const Gfn2EigensolverLaunchResult launch = build_compacted_eigensolver_graph_impl(
+      batch, buckets, bucket_count, cache, 0u, &geometry_epoch, hamiltonians, options, solver,
+      parameters, blas, workspace, results, system_errors, device_error, candidate);
+  if (launch.success()) {
+    output.impl_ = std::move(candidate);
+  }
+  return launch;
+#else
+  (void)batch;
+  (void)buckets;
+  (void)bucket_count;
+  (void)cache;
+  (void)geometry_epoch;
+  (void)hamiltonians;
+  (void)options;
+  (void)solver;
+  (void)parameters;
+  (void)blas;
+  (void)workspace;
+  (void)results;
+  (void)system_errors;
+  (void)device_error;
+  (void)output;
+  return cuda_failure(cudaErrorNotSupported);
+#endif
+}
 
 Gfn2EigensolverLaunchResult query_gfn2_eigensolver_bucket_workspace_cuda(
     cusolverDnHandle_t solver, cusolverDnParams_t parameters, const Gfn2EigensolverBucket& bucket,
@@ -898,18 +1690,23 @@ Gfn2EigensolverLaunchResult query_gfn2_eigensolver_bucket_workspace_cuda(
   }
   std::size_t maximum_device = 0u;
   std::size_t maximum_host = 0u;
+  /* Exact-capacity Graph bodies can submit any count in [1, system_count].
+   * cuSOLVER does not promise monotonic workspace sizes across batch counts,
+   * so setup queries every reachable body and retains the true maximum. */
   for (const cusolverEigMode_t mode : {CUSOLVER_EIG_MODE_NOVECTOR, CUSOLVER_EIG_MODE_VECTOR}) {
-    std::size_t device_bytes = 0u;
-    std::size_t host_bytes = 0u;
-    const cusolverStatus_t status = cusolverDnXsyevBatched_bufferSize(
-        solver, parameters, mode, CUBLAS_FILL_MODE_LOWER, bucket.orbital_count, CUDA_R_64F,
-        device_matrix, bucket.orbital_count, CUDA_R_64F, device_eigenvalues, CUDA_R_64F,
-        &device_bytes, &host_bytes, bucket.system_count);
-    if (status != CUSOLVER_STATUS_SUCCESS) {
-      return cusolver_failure(status);
+    for (int capacity = 1; capacity <= bucket.system_count; ++capacity) {
+      std::size_t device_bytes = 0u;
+      std::size_t host_bytes = 0u;
+      const cusolverStatus_t status = cusolverDnXsyevBatched_bufferSize(
+          solver, parameters, mode, CUBLAS_FILL_MODE_LOWER, bucket.orbital_count, CUDA_R_64F,
+          device_matrix, bucket.orbital_count, CUDA_R_64F, device_eigenvalues, CUDA_R_64F,
+          &device_bytes, &host_bytes, capacity);
+      if (status != CUSOLVER_STATUS_SUCCESS) {
+        return cusolver_failure(status);
+      }
+      maximum_device = std::max(maximum_device, device_bytes);
+      maximum_host = std::max(maximum_host, host_bytes);
     }
-    maximum_device = std::max(maximum_device, device_bytes);
-    maximum_host = std::max(maximum_host, host_bytes);
   }
   requirements.solver_device_workspace_bytes =
       std::max(requirements.solver_device_workspace_bytes, maximum_device);
@@ -1040,11 +1837,10 @@ static Gfn2EigensolverLaunchResult solve_eigensystems_impl(
     const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
     std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
     std::uint64_t scalar_generation, const Gfn2GeometryEpochDevice* geometry_epoch,
-    const double* hamiltonians,
-    const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver, cusolverDnParams_t parameters,
-    cublasHandle_t blas, const Gfn2EigensolverDeviceWorkspace& workspace,
-    const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
-    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+    const double* hamiltonians, const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver,
+    cusolverDnParams_t parameters, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, const Gfn2EigensolverDeviceResults& results,
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
   const bool dynamic_epoch = geometry_epoch != nullptr;
   if (!valid_bucket_plan(batch, buckets, bucket_count) || !valid_options(options) ||
       !valid_workspace(batch, workspace) || !valid_cache(batch, cache) ||
@@ -1087,9 +1883,8 @@ static Gfn2EigensolverLaunchResult solve_eigensystems_impl(
     const std::int64_t info_begin = bucket.system_index_offset;
     prepare_solve_bucket_kernel<<<static_cast<unsigned int>(bucket.system_count), kThreadsPerSystem,
                                   0, stream>>>(
-        batch, bucket, cache, scalar_generation,
-        dynamic_epoch ? geometry_epoch->value : nullptr, hamiltonians, options.symmetry_tolerance,
-        workspace, system_errors, device_error);
+        batch, bucket, cache, scalar_generation, dynamic_epoch ? geometry_epoch->value : nullptr,
+        hamiltonians, options.symmetry_tolerance, workspace, system_errors, device_error);
     result = check_kernel_launch();
     if (!result.success()) {
       return result;
@@ -1146,8 +1941,8 @@ Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
     const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream) noexcept {
   return solve_eigensystems_impl(batch, buckets, bucket_count, cache, geometry_generation, nullptr,
-                                 hamiltonians, options, solver, parameters, blas, workspace, results,
-                                 system_errors, device_error, stream);
+                                 hamiltonians, options, solver, parameters, blas, workspace,
+                                 results, system_errors, device_error, stream);
 }
 
 Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
@@ -1159,8 +1954,8 @@ Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
     const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream) noexcept {
   return solve_eigensystems_impl(batch, buckets, bucket_count, cache, 0u, &geometry_epoch,
-                                 hamiltonians, options, solver, parameters, blas, workspace, results,
-                                 system_errors, device_error, stream);
+                                 hamiltonians, options, solver, parameters, blas, workspace,
+                                 results, system_errors, device_error, stream);
 }
 
 }  // namespace gpuxtb::detail::cuda
