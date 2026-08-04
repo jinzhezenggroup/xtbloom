@@ -429,6 +429,35 @@ static_assert(std::is_standard_layout_v<Gfn2SccIterationBinding>);
     const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream = nullptr) noexcept;
 
+/*
+ * Root phase of one SCC iteration. This derives the canonical active mask from
+ * the published state and current geometry epoch, but launches no numerical
+ * work. Keeping this phase separate lets a conditional Graph decide whether
+ * the reusable numerical body must execute at all.
+ */
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_activity_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
+
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_activity_cuda(
+    const Gfn2SccIterationBinding& binding,
+    const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Numerical body of one SCC iteration. The caller must have enqueued the root
+ * activity phase first on the same ordered stream. The body consumes the
+ * canonical ledger, publishes at most one transition, and never re-derives
+ * activity itself. It is capture-safe when the setup-declared provider mode is
+ * kGraphSupported.
+ */
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_numerical_body_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
+
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_numerical_body_cuda(
+    const Gfn2SccIterationBinding& binding,
+    const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream = nullptr) noexcept;
+
 }  // namespace gpuxtb::detail::cuda
 
 #endif  // GPUXTB_BACKENDS_CUDA_GFN2_SCC_ITERATION_CUH

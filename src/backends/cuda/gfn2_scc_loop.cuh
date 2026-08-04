@@ -10,7 +10,12 @@
 
 namespace gpuxtb::detail::cuda {
 
-inline constexpr std::uint32_t kGfn2SccLoopAbiVersion = 1u;
+inline constexpr std::uint32_t kGfn2SccLoopAbiVersion = 2u;
+
+enum class Gfn2SccLoopExecutionMode : std::uint32_t {
+  kBoundedFallback = 0u,
+  kConditionalGraph = 1u,
+};
 
 /*
  * Synchronous submission result for a bounded SCC loop. submitted_iterations
@@ -20,8 +25,9 @@ inline constexpr std::uint32_t kGfn2SccLoopAbiVersion = 1u;
  */
 struct Gfn2SccLoopLaunchResult {
   std::uint32_t abi_version = kGfn2SccLoopAbiVersion;
-  std::uint32_t reserved = 0u;
+  Gfn2SccLoopExecutionMode execution_mode = Gfn2SccLoopExecutionMode::kBoundedFallback;
   std::uint64_t submitted_iterations = 0u;
+  std::uint64_t submitted_graphs = 0u;
   Gfn2SccIterationLaunchResult iteration{};
 
   [[nodiscard]] bool success() const noexcept {
@@ -32,6 +38,91 @@ struct Gfn2SccLoopLaunchResult {
 
 static_assert(std::is_trivially_copyable_v<Gfn2SccLoopLaunchResult>);
 static_assert(std::is_standard_layout_v<Gfn2SccLoopLaunchResult>);
+
+/* Setup-time reason why the bounded production path was retained. */
+enum class Gfn2SccLoopGraphFallbackReason : std::uint32_t {
+  kNone = 0u,
+  kConditionalNodesUnavailable = 1u,
+  kProviderCaptureUnsupported = 2u,
+  kControlAllocationFailed = 3u,
+  kRootCaptureFailed = 4u,
+  kNumericalBodyCaptureFailed = 5u,
+  kInstantiationFailed = 6u,
+};
+
+enum class Gfn2SccLoopGraphBuildStatus : std::uint32_t {
+  kConditionalGraphReady = 0u,
+  kBoundedFallbackReady = 1u,
+  kInvalidBinding = 2u,
+};
+
+struct Gfn2SccLoopGraphBuildResult {
+  Gfn2SccLoopGraphBuildStatus status = Gfn2SccLoopGraphBuildStatus::kInvalidBinding;
+  Gfn2SccLoopGraphFallbackReason fallback_reason = Gfn2SccLoopGraphFallbackReason::kNone;
+  cudaError_t cuda_status = cudaSuccess;
+  Gfn2SccIterationLaunchResult iteration{};
+
+  [[nodiscard]] bool success() const noexcept {
+    return status == Gfn2SccLoopGraphBuildStatus::kConditionalGraphReady ||
+           status == Gfn2SccLoopGraphBuildStatus::kBoundedFallbackReady;
+  }
+
+  [[nodiscard]] bool conditional_graph_ready() const noexcept {
+    return status == Gfn2SccLoopGraphBuildStatus::kConditionalGraphReady;
+  }
+};
+
+static_assert(std::is_trivially_copyable_v<Gfn2SccLoopGraphBuildResult>);
+static_assert(std::is_standard_layout_v<Gfn2SccLoopGraphBuildResult>);
+
+/*
+ * Fixed-context owner for one reusable conditional SCC Graph. build() is a
+ * setup-only operation and may allocate Graph/control resources. launch()
+ * performs one graph submission, or uses the sealed bounded fallback when the
+ * provider/runtime could not capture the numerical body. Neither path polls
+ * device state, transfers per-iteration host data, allocates, or synchronizes.
+ *
+ * The owner is single-flight with its binding and provider handles. Callers
+ * must order every earlier launch before reset/destruction or rebuilding.
+ */
+class Gfn2SccLoopCudaGraphOwner {
+ public:
+  /* Opaque implementation record; exposed only so the CUDA translation unit
+   * can build setup helpers without placing CUDA conditional types here. */
+  struct State;
+
+  Gfn2SccLoopCudaGraphOwner() noexcept = default;
+  ~Gfn2SccLoopCudaGraphOwner();
+  Gfn2SccLoopCudaGraphOwner(const Gfn2SccLoopCudaGraphOwner&) = delete;
+  Gfn2SccLoopCudaGraphOwner& operator=(const Gfn2SccLoopCudaGraphOwner&) = delete;
+  Gfn2SccLoopCudaGraphOwner(Gfn2SccLoopCudaGraphOwner&&) = delete;
+  Gfn2SccLoopCudaGraphOwner& operator=(Gfn2SccLoopCudaGraphOwner&&) = delete;
+
+  [[nodiscard]] Gfn2SccLoopGraphBuildResult build(
+      const Gfn2SccIterationBinding& binding) noexcept;
+
+  [[nodiscard]] Gfn2SccLoopGraphBuildResult build(
+      const Gfn2SccIterationBinding& binding,
+      const Gfn2GeometryEpochConsumerDevice& geometry) noexcept;
+
+  [[nodiscard]] Gfn2SccLoopLaunchResult launch(cudaStream_t stream = nullptr) const noexcept;
+
+  void reset() noexcept;
+  [[nodiscard]] bool ready() const noexcept;
+  [[nodiscard]] bool conditional_graph_ready() const noexcept;
+  [[nodiscard]] Gfn2SccLoopGraphFallbackReason fallback_reason() const noexcept;
+
+  /* Setup-owned device counters for testing/profiling after caller ordering. */
+  [[nodiscard]] const std::uint32_t* canonical_active_count_device() const noexcept;
+  [[nodiscard]] const std::uint64_t* numerical_body_count_device() const noexcept;
+
+ private:
+  [[nodiscard]] Gfn2SccLoopGraphBuildResult build_impl(
+      const Gfn2SccIterationBinding& binding,
+      const Gfn2GeometryEpochConsumerDevice* geometry) noexcept;
+
+  State* state_ = nullptr;
+};
 
 /*
  * Enqueue the complete configured restricted SCC iteration bound on the caller

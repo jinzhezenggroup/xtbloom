@@ -286,6 +286,9 @@ bool stable_graph_addresses(const Gfn2CudaExecutionIdentity& expected,
          expected.eigensolver_owner == actual.eigensolver_owner &&
          expected.initializer_owner == actual.initializer_owner &&
          expected.scc_binding == actual.scc_binding &&
+         expected.scc_loop_owner == actual.scc_loop_owner &&
+         expected.scc_loop_active_count == actual.scc_loop_active_count &&
+         expected.scc_loop_numerical_body_count == actual.scc_loop_numerical_body_count &&
          expected.energy_force_descriptors == actual.energy_force_descriptors &&
          expected.topology_arena == actual.topology_arena &&
          expected.input_arena == actual.input_arena &&
@@ -427,10 +430,17 @@ int run_complete_graph_case(cudaStream_t stream, std::int32_t device_id, const c
   CHECK(stable.inference_ready == 1u);
   CHECK(stable.force_mode_ready == 1u);
   CHECK(stable.numerical_refresh_ready == 1u);
+  CHECK(stable.scc_conditional_graph_ready == 1u);
+  CHECK(stable.scc_loop_fallback_reason == 0u);
+  CHECK(stable.scc_loop_owner != 0u);
+  CHECK(stable.scc_loop_active_count != 0u);
+  CHECK(stable.scc_loop_numerical_body_count != 0u);
 
   /* Capture the public runtime transaction as one graph. The fresh
-   * device-checkpoint restore, bounded cuSOLVER SCC loop, terminal
-   * energy/force, and internal publication must all become replayable nodes. */
+   * device-checkpoint restore, capture-compatible bounded SCC fallback,
+   * terminal energy/force, and internal publication must all become
+   * replayable nodes. Normal uncaptured inference uses the internal
+   * conditional WHILE Graph verified by the runtime parity matrix. */
   GraphOwner graph;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
   const gpuxtb_status_t refresh_status = cache.refresh_numerical_async(inputs.view, error);

@@ -2480,7 +2480,7 @@ Gfn2SccIterationBindingDiagnostic bind_gfn2_scc_iteration_cuda(
 static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
     const Gfn2SccIterationBinding& binding,
     const Gfn2GeometryEpochConsumerDevice* geometry,
-    cudaStream_t stream) noexcept {
+    cudaStream_t stream, bool derive_activity, bool launch_numerical_body) noexcept {
   const auto& plan = binding.plan;
   const auto& input = binding.input;
   const auto& state = binding.state;
@@ -2507,7 +2507,7 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
     return result;
   }
 
-  if (plan.eigensolver_provider.capture_mode ==
+  if (launch_numerical_body && plan.eigensolver_provider.capture_mode ==
       Gfn2SccIterationProviderCaptureMode::kUncapturedSegmentRequired) {
     cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
     const cudaError_t capture_error = cudaStreamIsCapturing(stream, &capture_status);
@@ -2542,15 +2542,20 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
     return check_cuda(stage_report.stage, normalize_stage(stage_report, workspace.ledger, stream));
   };
 
-  const cudaError_t activity_status =
-      geometry == nullptr
-          ? derive_gfn2_scc_iteration_activity_cuda(plan.activity_policy, input.activity_state,
-                                                    plan.provenance, workspace.ledger, stream)
-          : derive_gfn2_scc_iteration_activity_cuda(plan.activity_policy, input.activity_state,
-                                                    plan.provenance, *geometry, workspace.ledger,
-                                                    stream);
-  if (!check_cuda(Gfn2SccStageId::kActivity, activity_status)) {
-    return failure;
+  if (derive_activity) {
+    const cudaError_t activity_status =
+        geometry == nullptr
+            ? derive_gfn2_scc_iteration_activity_cuda(plan.activity_policy, input.activity_state,
+                                                      plan.provenance, workspace.ledger, stream)
+            : derive_gfn2_scc_iteration_activity_cuda(plan.activity_policy, input.activity_state,
+                                                      plan.provenance, *geometry, workspace.ledger,
+                                                      stream);
+    if (!check_cuda(Gfn2SccStageId::kActivity, activity_status)) {
+      return failure;
+    }
+  }
+  if (!launch_numerical_body) {
+    return {};
   }
 
   const Gfn2SccStageDeviceReport* stage_report = report(Gfn2SccStageId::kMixedGather);
@@ -2982,14 +2987,38 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
 
 Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
     const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
-  return launch_restricted_scc_iteration_impl(binding, nullptr, stream);
+  return launch_restricted_scc_iteration_impl(binding, nullptr, stream, true, true);
 }
 
 Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
     const Gfn2SccIterationBinding& binding,
     const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream) noexcept {
-  return launch_restricted_scc_iteration_impl(binding, &geometry, stream);
+  return launch_restricted_scc_iteration_impl(binding, &geometry, stream, true, true);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_activity_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
+  return launch_restricted_scc_iteration_impl(binding, nullptr, stream, true, false);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_activity_cuda(
+    const Gfn2SccIterationBinding& binding,
+    const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream) noexcept {
+  return launch_restricted_scc_iteration_impl(binding, &geometry, stream, true, false);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_numerical_body_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
+  return launch_restricted_scc_iteration_impl(binding, nullptr, stream, false, true);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_numerical_body_cuda(
+    const Gfn2SccIterationBinding& binding,
+    const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream) noexcept {
+  return launch_restricted_scc_iteration_impl(binding, &geometry, stream, false, true);
 }
 
 }  // namespace gpuxtb::detail::cuda

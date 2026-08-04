@@ -51,6 +51,10 @@ struct Gfn2CudaExecutionIdentity {
   std::uint8_t inference_ready = 0u;
   /* One after an earlier inference has queued a device warm checkpoint. */
   std::uint8_t warm_checkpoint_ready = 0u;
+  /* One when normal inference launches the context-owned conditional SCC Graph. */
+  std::uint8_t scc_conditional_graph_ready = 0u;
+  /* Gfn2SccLoopGraphFallbackReason encoded without exposing CUDA headers. */
+  std::uint32_t scc_loop_fallback_reason = 0u;
 
   std::int64_t batch_size = 0;
   std::int64_t total_atoms = 0;
@@ -66,6 +70,9 @@ struct Gfn2CudaExecutionIdentity {
   std::uintptr_t eigensolver_owner = 0u;
   std::uintptr_t initializer_owner = 0u;
   std::uintptr_t scc_binding = 0u;
+  std::uintptr_t scc_loop_owner = 0u;
+  std::uintptr_t scc_loop_active_count = 0u;
+  std::uintptr_t scc_loop_numerical_body_count = 0u;
   std::uintptr_t energy_force_descriptors = 0u;
 
   std::uintptr_t topology_arena = 0u;

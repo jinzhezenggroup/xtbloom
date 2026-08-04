@@ -337,6 +337,12 @@ bool download(const T* device, std::int64_t elements, std::vector<T>& host, cuda
                                           cudaMemcpyDeviceToHost, stream) == cudaSuccess;
 }
 
+template <typename T>
+bool download_value(const T* device, T& host, cudaStream_t stream) {
+  return device != nullptr &&
+         cudaMemcpyAsync(&host, device, sizeof(T), cudaMemcpyDeviceToHost, stream) == cudaSuccess;
+}
+
 bool near(double first, double second, double tolerance) noexcept {
   const double scale = std::max({1.0, std::abs(first), std::abs(second)});
   return std::abs(first - second) <= tolerance * scale;
@@ -1188,6 +1194,32 @@ int run_host_fixed_scc_loop(HostSccCase& host) {
   return 0;
 }
 
+int run_host_until_globally_terminal(HostSccCase& host, std::uint64_t& body_count) {
+  body_count = 0u;
+  std::string error;
+  for (;;) {
+    bool any_active = false;
+    const auto& state = host.driver_state();
+    for (std::int64_t system = 0; system < host.batch_size(); ++system) {
+      any_active = any_active ||
+                   (state.system_statuses[system] == GPUXTB_STATUS_SUCCESS &&
+                    state.converged[system] == 0u &&
+                    state.iterations[system] < host.options().maximum_iterations);
+    }
+    if (!any_active) {
+      return 0;
+    }
+    const gpuxtb_status_t status = host.run_one_iteration(error);
+    if (status != GPUXTB_STATUS_SUCCESS && status != GPUXTB_STATUS_SCC_NOT_CONVERGED &&
+        status != GPUXTB_STATUS_EIGENSOLVER_FAILED) {
+      std::fprintf(stderr, "CPU conditional reference failed at %llu: status=%d error=%s\n",
+                   static_cast<unsigned long long>(body_count), status, error.c_str());
+      return __LINE__;
+    }
+    ++body_count;
+  }
+}
+
 int compare_graph_loop_cpu_parity(const HostSccCase& host, const Gfn2SccIterationBinding& binding,
                                   cudaStream_t observation_stream) {
   constexpr double kTolerance = 1.0e-8;
@@ -1255,6 +1287,298 @@ int compare_graph_loop_cpu_parity(const HostSccCase& host, const Gfn2SccIteratio
    * Graph acceptance instead gates every published and convergence observable. */
   CHECK(compare_energy_mixer_and_scc_trace(host, binding.input, binding.state, observation_stream,
                                            kTolerance, 0.0) == 0);
+  return 0;
+}
+
+int test_conditional_graph_exact_body_count(std::int64_t batch_size) {
+  ProductionFixture fixture;
+  CHECK(fixture.create(false, batch_size));
+  CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
+        Gfn2SccIterationProviderCaptureMode::kGraphSupported);
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  const HostSccCheckpoint initial = fixture.host.checkpoint();
+
+  Gfn2SccLoopCudaGraphOwner graph;
+  const Gfn2SccLoopGraphBuildResult build = graph.build(fixture.binding);
+  if (!build.success() || !build.conditional_graph_ready()) {
+    std::fprintf(stderr,
+                 "conditional SCC graph build failed: status=%u fallback=%u cuda=%d "
+                 "iteration=%u stage=%u\n",
+                 static_cast<unsigned>(build.status),
+                 static_cast<unsigned>(build.fallback_reason), static_cast<int>(build.cuda_status),
+                 static_cast<unsigned>(build.iteration.status),
+                 static_cast<unsigned>(build.iteration.stage));
+  }
+  CHECK(build.success());
+  CHECK(build.conditional_graph_ready());
+  CHECK(graph.ready());
+  CHECK(graph.conditional_graph_ready());
+  CHECK(graph.canonical_active_count_device() != nullptr);
+  CHECK(graph.numerical_body_count_device() != nullptr);
+
+  const auto run_and_compare = [&]() -> int {
+    const Gfn2SccLoopLaunchResult launch = graph.launch(fixture.handles.stream());
+    CHECK(launch.success());
+    CHECK(launch.execution_mode == Gfn2SccLoopExecutionMode::kConditionalGraph);
+    CHECK(launch.submitted_graphs == 1u);
+    CHECK(launch.submitted_iterations == 0u);
+    std::uint32_t terminal_active_count = 1u;
+    std::uint64_t body_count = 0u;
+    CHECK(download_value(graph.canonical_active_count_device(), terminal_active_count,
+                         fixture.handles.stream()));
+    CHECK(download_value(graph.numerical_body_count_device(), body_count,
+                         fixture.handles.stream()));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+    std::uint64_t reference_body_count = 0u;
+    CHECK(run_host_until_globally_terminal(fixture.host, reference_body_count) == 0);
+    CHECK(reference_body_count > 0u);
+    CHECK(reference_body_count <= fixture.host.options().maximum_iterations);
+    CHECK(body_count == reference_body_count);
+    CHECK(terminal_active_count == 0u);
+    CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding,
+                                        fixture.handles.stream()) == 0);
+
+    /* A terminal replay must execute no numerical body, proving that the
+     * root count gates the WHILE node rather than merely gating publication. */
+    const Gfn2SccLoopLaunchResult terminal = graph.launch(fixture.handles.stream());
+    CHECK(terminal.success());
+    CHECK(download_value(graph.numerical_body_count_device(), body_count,
+                         fixture.handles.stream()));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    CHECK(body_count == 0u);
+    return 0;
+  };
+
+  CHECK(run_and_compare() == 0);
+
+  std::string error;
+  CHECK(fixture.host.restore(initial, error) == GPUXTB_STATUS_SUCCESS);
+  Gfn2SccIterationInitializationReady ready{};
+  CHECK(fixture.initializer
+            .upload_async(fixture.iteration_arena.get(), fixture.iteration_arena.bytes(), ready,
+                          fixture.handles.stream())
+            .success());
+  CHECK(run_and_compare() == 0);
+  return 0;
+}
+
+int test_conditional_graph_plan_failure_forces_exit() {
+  ProductionFixture fixture;
+  CHECK(fixture.create(false, 8));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  /* Keep root provenance valid but make the ES2 numerical descriptor stale.
+   * The first body therefore records a plan-wide ES2 failure before state
+   * publication. A conditional loop that blindly re-derived activity would
+   * reset that record and spin until the bound; the tail latch must stop at
+   * exactly one body and restore the original diagnostic. */
+  Gfn2SccIterationDevicePlan stale_plan = fixture.binding.plan;
+  stale_plan.es2_cache.geometry_generation = kGeometryGeneration - 1u;
+  Gfn2SccIterationBinding stale_binding{};
+  CHECK(bind_gfn2_scc_iteration_cuda(stale_plan, fixture.binding.input, fixture.binding.state,
+                                     fixture.binding.workspace, stale_binding)
+            .error == Gfn2SccIterationBindingError::kSuccess);
+
+  Gfn2SccLoopCudaGraphOwner graph;
+  const Gfn2SccLoopGraphBuildResult build = graph.build(stale_binding);
+  CHECK(build.conditional_graph_ready());
+  CHECK(graph.launch(fixture.handles.stream()).success());
+
+  std::uint64_t body_count = 0u;
+  std::uint64_t plan_failure = 0u;
+  std::uint32_t sequence_active = 1u;
+  std::vector<std::uint64_t> iterations;
+  CHECK(download_value(graph.numerical_body_count_device(), body_count,
+                       fixture.handles.stream()));
+  CHECK(download_value(stale_binding.workspace.ledger.plan_failure_record, plan_failure,
+                       fixture.handles.stream()));
+  CHECK(download_value(stale_binding.workspace.ledger.sequence_active, sequence_active,
+                       fixture.handles.stream()));
+  CHECK(download(stale_binding.state.scc.iterations, stale_binding.state.scc.batch_elements,
+                 iterations, fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  CHECK(body_count == 1u);
+  CHECK(sequence_active == 0u);
+  CHECK(plan_failure ==
+        gfn2_scc_stage_failure_record(
+            Gfn2SccStageId::kES2Potential,
+            static_cast<std::uint32_t>(Gfn2ES2DeviceError::kInvalidCacheMatrix)));
+  CHECK(std::all_of(iterations.begin(), iterations.end(),
+                    [](std::uint64_t value) { return value == 0u; }));
+  return 0;
+}
+
+int test_conditional_owner_bounded_fallback_parity() {
+  ProductionFixture fixture;
+  CHECK(fixture.create(false, 8));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  Gfn2SccIterationDevicePlan fallback_plan = fixture.binding.plan;
+  fallback_plan.eigensolver_provider.capture_mode =
+      Gfn2SccIterationProviderCaptureMode::kUncapturedSegmentRequired;
+  Gfn2SccIterationBinding fallback_binding{};
+  CHECK(bind_gfn2_scc_iteration_cuda(fallback_plan, fixture.binding.input, fixture.binding.state,
+                                     fixture.binding.workspace, fallback_binding)
+            .error == Gfn2SccIterationBindingError::kSuccess);
+
+  Gfn2SccLoopCudaGraphOwner owner;
+  const Gfn2SccLoopGraphBuildResult build = owner.build(fallback_binding);
+  CHECK(build.success());
+  CHECK(!build.conditional_graph_ready());
+  CHECK(build.fallback_reason ==
+        Gfn2SccLoopGraphFallbackReason::kProviderCaptureUnsupported);
+  const Gfn2SccLoopLaunchResult launch = owner.launch(fixture.handles.stream());
+  CHECK(launch.success());
+  CHECK(launch.execution_mode == Gfn2SccLoopExecutionMode::kBoundedFallback);
+  CHECK(launch.submitted_iterations == fixture.host.options().maximum_iterations);
+  CHECK(run_host_fixed_scc_loop(fixture.host) == 0);
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(compare_graph_loop_cpu_parity(fixture.host, fallback_binding,
+                                      fixture.handles.stream()) == 0);
+  return 0;
+}
+
+int test_conditional_graph_mixed_warm_peer_parity() {
+  constexpr std::int64_t kBatch = 8;
+  ProductionFixture fixture;
+  CHECK(fixture.create(false, kBatch));
+  Gfn2SccLoopCudaGraphOwner graph;
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(graph.build(fixture.binding).conditional_graph_ready());
+
+  std::string error;
+  for (int iteration = 0; iteration < 2; ++iteration) {
+    CHECK(launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream())
+              .success());
+    CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+  }
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  auto& driver = fixture.host.driver_state();
+  auto& mixer = fixture.host.mixer_state();
+  driver.converged[1] = 1u;
+  mixer.converged[1] = 1u;
+  driver.system_statuses[2] = GPUXTB_STATUS_INTERNAL_ERROR;
+  mixer.system_statuses[2] = GPUXTB_STATUS_INTERNAL_ERROR;
+  driver.iterations[3] = fixture.host.options().maximum_iterations;
+  driver.system_statuses[3] = GPUXTB_STATUS_SCC_NOT_CONVERGED;
+  mixer.iterations[3] = fixture.host.options().maximum_iterations;
+  mixer.system_statuses[3] = GPUXTB_STATUS_SCC_NOT_CONVERGED;
+
+  CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.scc.iterations, driver.iterations,
+                             kBatch * sizeof(std::uint64_t), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.scc.system_statuses, driver.system_statuses,
+                             kBatch * sizeof(gpuxtb_status_t), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.scc.converged, driver.converged,
+                             kBatch * sizeof(std::uint8_t), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.mixer.iterations, mixer.iterations,
+                             kBatch * sizeof(std::uint64_t), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.mixer.system_statuses, mixer.system_statuses,
+                             kBatch * sizeof(gpuxtb_status_t), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.mixer.residual_converged, mixer.converged,
+                             kBatch * sizeof(std::uint8_t), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
+
+  CHECK(graph.launch(fixture.handles.stream()).success());
+  std::uint64_t body_count = 0u;
+  CHECK(download_value(graph.numerical_body_count_device(), body_count,
+                       fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  std::uint64_t reference_body_count = 0u;
+  CHECK(run_host_until_globally_terminal(fixture.host, reference_body_count) == 0);
+  CHECK(body_count == reference_body_count);
+  CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding,
+                                      fixture.handles.stream()) == 0);
+  CHECK(driver.converged[1] == 1u);
+  CHECK(driver.system_statuses[2] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(driver.iterations[3] == fixture.host.options().maximum_iterations);
+  CHECK(driver.system_statuses[3] == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+  return 0;
+}
+
+int benchmark_conditional_graph_vs_bounded_fallback() {
+  constexpr int kWarmup = 3;
+  constexpr int kSamples = 20;
+  std::puts("batch,mode,mean_ms,min_ms,numerical_body_count");
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    ProductionFixture fixture;
+    CHECK(fixture.create(false, batch_size));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+    Gfn2SccLoopCudaGraphOwner conditional;
+    CHECK(conditional.build(fixture.binding).conditional_graph_ready());
+    Gfn2SccIterationDevicePlan fallback_plan = fixture.binding.plan;
+    fallback_plan.eigensolver_provider.capture_mode =
+        Gfn2SccIterationProviderCaptureMode::kUncapturedSegmentRequired;
+    Gfn2SccIterationBinding fallback_binding{};
+    CHECK(bind_gfn2_scc_iteration_cuda(fallback_plan, fixture.binding.input,
+                                       fixture.binding.state, fixture.binding.workspace,
+                                       fallback_binding)
+              .error == Gfn2SccIterationBindingError::kSuccess);
+    Gfn2SccLoopCudaGraphOwner fallback;
+    CHECK(fallback.build(fallback_binding).success());
+    CHECK(!fallback.conditional_graph_ready());
+
+    cudaEvent_t start = nullptr;
+    cudaEvent_t stop = nullptr;
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
+    const std::vector<std::uint64_t> penultimate(
+        static_cast<std::size_t>(batch_size), fixture.host.options().maximum_iterations - 1u);
+
+    const auto reset_one_remaining = [&]() -> bool {
+      Gfn2SccIterationInitializationReady ready{};
+      if (!fixture.initializer
+               .upload_async(fixture.iteration_arena.get(), fixture.iteration_arena.bytes(), ready,
+                             fixture.handles.stream())
+               .success()) {
+        return false;
+      }
+      return cudaMemcpyAsync(fixture.binding.state.scc.iterations, penultimate.data(),
+                             penultimate.size() * sizeof(std::uint64_t), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()) == cudaSuccess;
+    };
+    const auto measure = [&](const char* mode, const Gfn2SccLoopCudaGraphOwner& owner,
+                             std::uint64_t expected_bodies) -> int {
+      double total_ms = 0.0;
+      float minimum_ms = std::numeric_limits<float>::infinity();
+      for (int sample = -kWarmup; sample < kSamples; ++sample) {
+        CHECK(reset_one_remaining());
+        CUDA_CHECK(cudaEventRecord(start, fixture.handles.stream()));
+        const Gfn2SccLoopLaunchResult launch = owner.launch(fixture.handles.stream());
+        CHECK(launch.success());
+        CUDA_CHECK(cudaEventRecord(stop, fixture.handles.stream()));
+        CUDA_CHECK(cudaEventSynchronize(stop));
+        float elapsed_ms = 0.0F;
+        CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
+        if (sample >= 0) {
+          total_ms += elapsed_ms;
+          minimum_ms = std::min(minimum_ms, elapsed_ms);
+        }
+      }
+      std::printf("%lld,%s,%.6f,%.6f,%llu\n", static_cast<long long>(batch_size), mode,
+                  total_ms / static_cast<double>(kSamples), static_cast<double>(minimum_ms),
+                  static_cast<unsigned long long>(expected_bodies));
+      return 0;
+    };
+
+    CHECK(measure("conditional", conditional, 1u) == 0);
+    std::uint64_t conditional_bodies = 0u;
+    CHECK(download_value(conditional.numerical_body_count_device(), conditional_bodies,
+                         fixture.handles.stream()));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    CHECK(conditional_bodies == 1u);
+    CHECK(measure("bounded_fallback", fallback,
+                  fixture.host.options().maximum_iterations) == 0);
+    CUDA_CHECK(cudaEventDestroy(stop));
+    CUDA_CHECK(cudaEventDestroy(start));
+  }
   return 0;
 }
 
@@ -1783,6 +2107,9 @@ int main() {
   }
   CUDA_CHECK(count_status);
   CUDA_CHECK(cudaSetDevice(0));
+#ifdef GPUXTB_SCC_LOOP_BENCHMARK_ONLY
+  return benchmark_conditional_graph_vs_bounded_fallback();
+#else
   int status = test_loop_rejects_inconsistent_plan();
   if (status != 0) {
     return status;
@@ -1804,6 +2131,24 @@ int main() {
     if (status != 0) {
       return status;
     }
+  }
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    status = test_conditional_graph_exact_body_count(batch_size);
+    if (status != 0) {
+      return status;
+    }
+  }
+  status = test_conditional_graph_plan_failure_forces_exit();
+  if (status != 0) {
+    return status;
+  }
+  status = test_conditional_owner_bounded_fallback_parity();
+  if (status != 0) {
+    return status;
+  }
+  status = test_conditional_graph_mixed_warm_peer_parity();
+  if (status != 0) {
+    return status;
   }
   status = test_production_graph_device_epoch_replay();
   if (status != 0) {
@@ -1834,4 +2179,5 @@ int main() {
     return status;
   }
   return 0;
+#endif
 }

@@ -1296,6 +1296,31 @@ if(GPUXTB_BUILD_TESTS)
       COMMAND gpuxtb_cuda_scc_iteration_production_test
     )
 
+    # Focused #130 benchmark. It reuses the production SCC fixture but runs a
+    # one-remaining-iteration state so the conditional WHILE body count and
+    # latency can be compared directly with the bounded fallback.
+    add_executable(gpuxtb_cuda_scc_loop_benchmark
+      tests/cuda_scc_iteration_production_test.cu
+      tests/support/gfn2_scc_test_case.cpp
+    )
+    target_link_libraries(gpuxtb_cuda_scc_loop_benchmark PRIVATE
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_scc_loop_benchmark PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_scc_loop_benchmark PRIVATE
+      GPUXTB_HAS_CUDA=1
+      GPUXTB_SCC_LOOP_BENCHMARK_ONLY=1
+    )
+    set_target_properties(gpuxtb_cuda_scc_loop_benchmark PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+
     add_executable(gpuxtb_cuda_scc_iteration_failure_matrix_test
       tests/cuda_scc_iteration_failure_matrix_test.cu
       tests/support/gfn2_scc_test_case.cpp

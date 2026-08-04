@@ -268,6 +268,7 @@ struct DeviceResult {
   std::vector<std::uint32_t> publication_system_errors;
   std::uint64_t publication_epoch = 0u;
   std::uint32_t publication_plan_error = 0u;
+  std::uint64_t numerical_body_count = 0u;
 };
 
 int run_public_cpu_reference(gpuxtb_context_t* context, PublicHostBatch& batch,
@@ -316,6 +317,9 @@ int download_device_result(const Gfn2CudaExecutionIdentity& identity, cudaStream
   CHECK(identity.inference_publication_epoch_snapshot != 0u);
   CHECK(identity.inference_publication_system_errors != 0u);
   CHECK(identity.inference_publication_plan_error != 0u);
+  CHECK(identity.scc_conditional_graph_ready == 1u);
+  CHECK(identity.scc_loop_fallback_reason == 0u);
+  CHECK(identity.scc_loop_numerical_body_count != 0u);
 
   CUDA_CHECK(cudaMemcpyAsync(
       result.energies.data(), reinterpret_cast<const void*>(identity.inference_energies),
@@ -354,6 +358,10 @@ int download_device_result(const Gfn2CudaExecutionIdentity& identity, cudaStream
       cudaMemcpyAsync(&result.publication_plan_error,
                       reinterpret_cast<const void*>(identity.inference_publication_plan_error),
                       sizeof(result.publication_plan_error), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaMemcpyAsync(
+      &result.numerical_body_count,
+      reinterpret_cast<const void*>(identity.scc_loop_numerical_body_count),
+      sizeof(result.numerical_body_count), cudaMemcpyDeviceToHost, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   return 0;
 }
@@ -832,6 +840,14 @@ int execute_and_compare(Gfn2CudaExecutionCache& cache, cudaStream_t stream,
   DeviceResult result;
   int line = download_device_result(cache.identity(), stream, result);
   if (line != 0) return line;
+  CHECK(!result.iterations.empty());
+  const std::int32_t maximum_peer_iterations =
+      *std::max_element(result.iterations.begin(), result.iterations.end());
+  CHECK(maximum_peer_iterations > 0);
+  /* Each WHILE body publishes exactly one attempted peer iteration. The loop
+   * therefore stops after the slowest active peer becomes terminal. */
+  CHECK(result.numerical_body_count ==
+        static_cast<std::uint64_t>(maximum_peer_iterations));
   return compare_device_to_reference(result, reference, expected_epoch, options);
 }
 
@@ -865,6 +881,8 @@ int run_matrix_member(gpuxtb_context_t* cpu_context, cudaStream_t stream, std::i
   }
   CHECK(!reused);
   CHECK(cache.identity().batch_size == batch_size);
+  CHECK(cache.identity().scc_conditional_graph_ready == 1u);
+  const Gfn2CudaExecutionIdentity stable_identity = cache.identity();
 
   scenario = std::string(configuration.name) +
              "/batch=" + std::to_string(static_cast<long long>(batch_size)) + "/fresh-initial";
@@ -896,6 +914,12 @@ int run_matrix_member(gpuxtb_context_t* cpu_context, cudaStream_t stream, std::i
     return __LINE__;
   }
   CHECK(reused);
+  const Gfn2CudaExecutionIdentity refreshed_identity = cache.identity();
+  CHECK(refreshed_identity.scc_conditional_graph_ready == 1u);
+  CHECK(refreshed_identity.scc_loop_owner == stable_identity.scc_loop_owner);
+  CHECK(refreshed_identity.scc_loop_active_count == stable_identity.scc_loop_active_count);
+  CHECK(refreshed_identity.scc_loop_numerical_body_count ==
+        stable_identity.scc_loop_numerical_body_count);
 
   scenario = std::string(configuration.name) +
              "/batch=" + std::to_string(static_cast<long long>(batch_size)) + "/fresh-changed";

@@ -1690,6 +1690,10 @@ struct Gfn2CudaExecutionCache::Impl {
     Gfn2SccSetupEigensolverBinding eigensolver_binding{};
     Gfn2SccIterationInitializationReady ready{};
     Gfn2SccIterationBinding scc_binding{};
+    /* Built once after setup validation and replayed by fresh/warm inference.
+     * The owner retains a bounded fallback when conditional capture is not
+     * supported by the selected CUDA/provider stack. */
+    Gfn2SccLoopCudaGraphOwner scc_loop;
     const std::int32_t* atomic_numbers = nullptr;
     EnergyForceBindings energy_force{};
     NumericalRefreshState numerical{};
@@ -4318,6 +4322,20 @@ struct Gfn2CudaExecutionCache::Impl {
 
     status = validate_candidate_setup(*candidate, error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
+    const Gfn2SccLoopGraphBuildResult loop_graph =
+        candidate->scc_loop.build(candidate->scc_binding, candidate->inference.epoch_consumer);
+    if (!loop_graph.success()) {
+      std::ostringstream message;
+      message << "CUDA SCC conditional Graph setup rejected the production binding: status="
+              << static_cast<std::uint32_t>(loop_graph.status)
+              << " iteration_status=" << static_cast<std::uint32_t>(loop_graph.iteration.status)
+              << " stage=" << static_cast<std::uint32_t>(loop_graph.iteration.stage)
+              << " cuda=" << static_cast<int>(loop_graph.cuda_status);
+      error = message.str();
+      return loop_graph.iteration.status == Gfn2SccIterationLaunchStatus::kInvalidBinding
+                 ? GPUXTB_STATUS_INVALID_ARGUMENT
+                 : GPUXTB_STATUS_INTERNAL_ERROR;
+    }
     output = std::move(candidate);
     return GPUXTB_STATUS_SUCCESS;
   }
@@ -4924,11 +4942,11 @@ struct Gfn2CudaExecutionCache::Impl {
       inference.warm_checkpoint_ready = false;
     }
 
-    const Gfn2SccLoopLaunchResult loop = launch_gfn2_restricted_scc_loop_cuda(
-        current.scc_binding, inference.epoch_consumer, stream);
+    const Gfn2SccLoopLaunchResult loop = current.scc_loop.launch(stream);
     if (!loop.success()) {
       std::ostringstream message;
-      message << "CUDA bounded SCC loop submission failed: status="
+      message << "CUDA SCC loop submission failed: mode="
+              << static_cast<std::uint32_t>(loop.execution_mode) << " status="
               << static_cast<std::uint32_t>(loop.iteration.status)
               << " stage=" << static_cast<std::uint32_t>(loop.iteration.stage);
       error = message.str();
@@ -5309,6 +5327,10 @@ struct Gfn2CudaExecutionCache::Impl {
             ? 1u
             : 0u;
     identity.warm_checkpoint_ready = current.inference.warm_checkpoint_ready ? 1u : 0u;
+    identity.scc_conditional_graph_ready =
+        current.scc_loop.conditional_graph_ready() ? 1u : 0u;
+    identity.scc_loop_fallback_reason =
+        static_cast<std::uint32_t>(current.scc_loop.fallback_reason());
     identity.batch_size = current.host.basis.batch_size;
     identity.total_atoms = current.host.basis.total_atoms;
     identity.total_shells = current.host.basis.total_shells;
@@ -5322,6 +5344,11 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.eigensolver_owner = opaque_address(&current.eigensolver_owner);
     identity.initializer_owner = opaque_address(&current.initializer);
     identity.scc_binding = opaque_address(&current.scc_binding);
+    identity.scc_loop_owner = opaque_address(&current.scc_loop);
+    identity.scc_loop_active_count =
+        opaque_address(current.scc_loop.canonical_active_count_device());
+    identity.scc_loop_numerical_body_count =
+        opaque_address(current.scc_loop.numerical_body_count_device());
     identity.energy_force_descriptors = opaque_address(&current.energy_force);
     identity.topology_arena = opaque_address(current.topology_arena.get());
     identity.input_arena = opaque_address(current.input_arena.get());
