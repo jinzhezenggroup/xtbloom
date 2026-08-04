@@ -26,6 +26,22 @@ def test_runtime_search_includes_user_site_packages(monkeypatch, tmp_path):
     assert runtime_dir in library._runtime_search_dirs()
 
 
+def test_runtime_search_and_preload_match_scipy_openblas32(monkeypatch, tmp_path):
+    """Keep runtime discovery aligned with scipy-openblas32's wheel layout."""
+    user_site = tmp_path / "site-packages"
+    runtime_dir = user_site / "scipy_openblas32" / "lib"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(site, "getsitepackages", list)
+    monkeypatch.setattr(site, "getusersitepackages", lambda: str(user_site))
+    monkeypatch.setattr(site, "ENABLE_USER_SITE", True)
+
+    assert runtime_dir in library._runtime_search_dirs()
+    assert any(
+        "libscipy_openblas.so" in alternatives
+        for alternatives in library._RUNTIME_LIBRARY_GROUPS
+    )
+
+
 def test_status_strings():
     assert library.status_string(library.STATUS_SUCCESS) == "success"
     assert (

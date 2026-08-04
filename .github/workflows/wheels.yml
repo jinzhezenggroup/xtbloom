@@ -10,7 +10,7 @@ name: Python wheels
 #   ([tool.cibuildwheel] in pyproject.toml) and runs the full conformance suite
 #   via `test-extras` (deps from the package's `[test]` optional dependency).
 # - Linux aarch64 builds CUDA-enabled on the native ARM runner (no QEMU) and
-#   loads the installed native library as its smoke test.
+#   runs a real CPU inference through the installed wheel and scipy-openblas32.
 # macOS/Windows artifacts are intentionally not published until their CPU
 # eigensolver runtime is functional; an import-only wheel is not a usable
 # scientific package.
@@ -41,7 +41,7 @@ jobs:
             platform_id: manylinux_aarch64
             build: "cp311-manylinux_aarch64"
             variant: cuda
-            tests: smoke
+            tests: cpu
     steps:
       - uses: actions/checkout@v5
       - name: Build wheels
@@ -55,7 +55,7 @@ jobs:
           # library can load and exercise its CPU fallback; production code
           # never searches or preloads stubs.  A real-GPU forced-CUDA test is
           # run separately on the project GPU before merge/release.
-          CIBW_TEST_COMMAND: ${{ matrix.tests == 'full' && 'bash {project}/python/ci/run-wheel-test.sh full {project}' || 'bash {project}/python/ci/run-wheel-test.sh smoke {project}' }}
+          CIBW_TEST_COMMAND: bash {project}/python/ci/run-wheel-test.sh ${{ matrix.tests }} {project}
           CIBW_TEST_EXTRAS: ${{ matrix.tests == 'full' && 'test' || '' }}
         with:
           output-dir: wheelhouse

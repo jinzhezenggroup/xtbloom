@@ -22,6 +22,14 @@
 
 #include "model/gfn2/basis.hpp"
 
+#if defined(GPUXTB_TEST_SCIPY_PREFIXED_BLAS)
+#define LAPACKE_dpotrf_work scipy_LAPACKE_dpotrf_work
+#define LAPACKE_dpocon_work scipy_LAPACKE_dpocon_work
+#define LAPACKE_dsyevd_work scipy_LAPACKE_dsyevd_work
+#define cblas_dtrsm scipy_cblas_dtrsm
+#define cblas_dgemm scipy_cblas_dgemm
+#endif
+
 extern "C" {
 std::int32_t LAPACKE_dpotrf_work(std::int32_t matrix_layout, char uplo, std::int32_t n,
                                  double* matrix, std::int32_t leading_dimension);
@@ -565,12 +573,14 @@ int test_occupations_degeneracy_and_fractional_filling() {
   return 0;
 }
 
-int test_production_mkl_lp64_factory() {
+int test_production_lp64_factory() {
   CpuLinearAlgebraBackend production;
   std::string error;
   CHECK(gpuxtb::detail::gfn2::make_mkl_rt_lp64_backend(production, error) == GPUXTB_STATUS_SUCCESS);
   CHECK(production.ready());
-  CHECK(production.production_mkl());
+  /* Any verified lazily-loaded LP64 backend (MKL or OpenBLAS) qualifies as
+   * production; production_mkl() additionally distinguishes the MKL provider. */
+  CHECK(production.production());
   CHECK(error.empty());
   return 0;
 }
@@ -579,6 +589,11 @@ int run_mkl_ilp64_rejection_child() {
   CpuLinearAlgebraBackend production;
   std::string error;
   const gpuxtb_status_t status = gpuxtb::detail::gfn2::make_mkl_rt_lp64_backend(production, error);
+  if (status == GPUXTB_STATUS_SUCCESS && production.ready() && !production.production_mkl()) {
+    /* An OpenBLAS runtime has no MKL interface layer to force to ILP64, so
+     * there is nothing to reject; accept the vacuous success. */
+    return 0;
+  }
   return status == GPUXTB_STATUS_BACKEND_UNAVAILABLE && !production.ready() &&
                  error.find("ILP64") != std::string::npos
              ? 0
@@ -1266,7 +1281,7 @@ int main(int argc, char** argv) {
   if (const int status = test_mkl_ilp64_rejection_in_fresh_process(); status != 0) {
     return status;
   }
-  if (const int status = test_production_mkl_lp64_factory(); status != 0) {
+  if (const int status = test_production_lp64_factory(); status != 0) {
     return status;
   }
   if (const int status = test_unrestricted_literal_generalized_eigenproblem(); status != 0) {

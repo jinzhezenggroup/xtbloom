@@ -239,6 +239,30 @@ bool load_symbol(void* handle, const char* name, Function& function) {
   return true;
 }
 
+bool load_lapacke_cblas_symbols(void* handle, bool scipy_prefix, LapackDpotrfWork& dpotrf_work,
+                                LapackDpoconWork& dpocon_work, LapackDsyevdWork& dsyevd_work,
+                                CblasDtrsm& dtrsm, CblasDgemm& dgemm) {
+  /* Load one coherent ABI. scipy-openblas32 prefixes every public symbol to
+   * coexist safely with another BLAS; mixing standard and prefixed functions
+   * from the same handle could combine incompatible providers accidentally. */
+  dpotrf_work = nullptr;
+  dpocon_work = nullptr;
+  dsyevd_work = nullptr;
+  dtrsm = nullptr;
+  dgemm = nullptr;
+  if (scipy_prefix) {
+    return load_symbol(handle, "scipy_LAPACKE_dpotrf_work", dpotrf_work) &&
+           load_symbol(handle, "scipy_LAPACKE_dpocon_work", dpocon_work) &&
+           load_symbol(handle, "scipy_LAPACKE_dsyevd_work", dsyevd_work) &&
+           load_symbol(handle, "scipy_cblas_dtrsm", dtrsm) &&
+           load_symbol(handle, "scipy_cblas_dgemm", dgemm);
+  }
+  return load_symbol(handle, "LAPACKE_dpotrf_work", dpotrf_work) &&
+         load_symbol(handle, "LAPACKE_dpocon_work", dpocon_work) &&
+         load_symbol(handle, "LAPACKE_dsyevd_work", dsyevd_work) &&
+         load_symbol(handle, "cblas_dtrsm", dtrsm) && load_symbol(handle, "cblas_dgemm", dgemm);
+}
+
 bool contains_ilp64(const char* value) {
   if (value == nullptr) {
     return false;
@@ -1125,6 +1149,10 @@ bool CpuLinearAlgebraBackend::ready() const noexcept {
          dsyevd_work_ != nullptr && dtrsm_ != nullptr && dgemm_ != nullptr;
 }
 
+bool CpuLinearAlgebraBackend::production() const noexcept {
+  return origin_ == Origin::kMklRtLp64 || origin_ == Origin::kOpenBlasLp64;
+}
+
 bool CpuLinearAlgebraBackend::production_mkl() const noexcept {
   return origin_ == Origin::kMklRtLp64;
 }
@@ -1146,76 +1174,121 @@ gpuxtb_status_t make_internal_test_lp64_backend(
 }
 
 gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::string& error) {
-  struct MklRuntimeState {
+  struct LinalgRuntimeState {
     CpuLinearAlgebraBackend backend;
     gpuxtb_status_t status = GPUXTB_STATUS_BACKEND_UNAVAILABLE;
     const char* message = nullptr;
   };
-  static const MklRuntimeState runtime = [] {
-    MklRuntimeState state;
+  static const LinalgRuntimeState runtime = [] {
+    LinalgRuntimeState state;
 #if defined(_WIN32)
-    /* The CPU eigensolver currently loads MKL through POSIX dlopen; the Windows
-     * port (LoadLibrary/GetProcAddress of mkl_rt.dll) is tracked as a follow-up. */
-    state.message = "MKL runtime loading is not ported to Windows yet";
+    /* The CPU eigensolver currently loads BLAS runtimes through POSIX dlopen;
+     * the Windows port (LoadLibrary/GetProcAddress of mkl_rt.dll) is tracked
+     * as a follow-up. */
+    state.message = "CPU linear-algebra runtime loading is not ported to Windows yet";
     return state;
 #else
-    /* MKL has changed its libmkl_rt soname across releases (.so.2 -> .so.3),
-     * and pip/conda layouts may only ship an unversioned .so symlink. Probe a
-     * couple of known sonames so the loader also resolves an object that the
-     * Python layer preloaded (which registers it under its SONAME). */
-    void* handle = nullptr;
-    for (const char* name : {"libmkl_rt.so.2", "libmkl_rt.so.3", "libmkl_rt.so.4", "libmkl_rt.so"}) {
-      handle = dlopen(name, RTLD_NOW | RTLD_LOCAL);
-      if (handle != nullptr) {
-        break;
-      }
-    }
-    if (handle == nullptr) {
-      state.message = "failed to load an MKL runtime (libmkl_rt.so.{2,3,4} or libmkl_rt.so)";
-      return state;
-    }
+#ifdef GPUXTB_CONFIGURED_CPU_LINALG_RUNTIME
+    constexpr const char* kConfiguredRuntime = GPUXTB_CONFIGURED_CPU_LINALG_RUNTIME;
+#else
+    constexpr const char* kConfiguredRuntime = nullptr;
+#endif
 
     using SetInterfaceLayer = int (*)(int layer);
-    SetInterfaceLayer set_interface = nullptr;
-    LapackDpotrfWork dpotrf_work = nullptr;
-    LapackDpoconWork dpocon_work = nullptr;
-    LapackDsyevdWork dsyevd_work = nullptr;
-    CblasDtrsm dtrsm = nullptr;
-    CblasDgemm dgemm = nullptr;
-    BlasSetNumThreadsLocal set_threads = nullptr;
-    if (!load_symbol(handle, "MKL_Set_Interface_Layer", set_interface) ||
-        !load_symbol(handle, "LAPACKE_dpotrf_work", dpotrf_work) ||
-        !load_symbol(handle, "LAPACKE_dpocon_work", dpocon_work) ||
-        !load_symbol(handle, "LAPACKE_dsyevd_work", dsyevd_work) ||
-        !load_symbol(handle, "cblas_dtrsm", dtrsm) || !load_symbol(handle, "cblas_dgemm", dgemm) ||
-        !load_symbol(handle, "MKL_Set_Num_Threads_Local", set_threads)) {
-      static_cast<void>(dlclose(handle));
-      state.message = "MKL runtime does not expose the required LP64 LAPACKE/CBLAS interface";
+    using OpenBlasGetConfig = const char* (*)();
+    /* dlopen candidates in preference order: the absolute path CMake baked in
+     * (GPUXTB_MKL_RT_LIBRARY / find_package(BLAS) in CMakeLists.txt) first,
+     * then known MKL sonames (which the Python layer may already have
+     * preloaded), then OpenBLAS sonames for platforms without MKL: aarch64
+     * wheels ship a prefixed LP64 libscipy_openblas.so runtime. Skipping a
+     * candidate never fails the factory, so a loaded library that is not a
+     * usable LP64 BLAS just yields the next one. */
+    const char* const runtime_names[] = {
+        kConfiguredRuntime, "libmkl_rt.so.2",       "libmkl_rt.so.3",          "libmkl_rt.so.4",
+        "libmkl_rt.so",     "libscipy_openblas.so", "libscipy_openblas32_.so", "libopenblas.so.0",
+        "libopenblas.so",   "libopenblas.so.3",
+    };
+
+    bool saw_ilp64_mkl = false;
+    for (const char* name : runtime_names) {
+      if (name == nullptr || *name == '\0') {
+        continue;
+      }
+      void* handle = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+      if (handle == nullptr) {
+        continue;
+      }
+      SetInterfaceLayer set_interface = nullptr;
+      LapackDpotrfWork dpotrf_work = nullptr;
+      LapackDpoconWork dpocon_work = nullptr;
+      LapackDsyevdWork dsyevd_work = nullptr;
+      CblasDtrsm dtrsm = nullptr;
+      CblasDgemm dgemm = nullptr;
+      BlasSetNumThreadsLocal set_threads = nullptr;
+      /* MKL exposes a runtime interface layer; OpenBLAS does not, so the
+       * MKL-specific symbols are optional and only MKL goes through that gate.
+       * Load one complete standard or scipy_-prefixed symbol set. */
+      const bool is_mkl = load_symbol(handle, "MKL_Set_Interface_Layer", set_interface);
+      bool scipy_prefix = false;
+      if (!load_lapacke_cblas_symbols(handle, false, dpotrf_work, dpocon_work, dsyevd_work, dtrsm,
+                                      dgemm)) {
+        scipy_prefix = true;
+        if (!load_lapacke_cblas_symbols(handle, true, dpotrf_work, dpocon_work, dsyevd_work, dtrsm,
+                                        dgemm)) {
+          static_cast<void>(dlclose(handle));
+          continue;
+        }
+      }
+      if (!is_mkl) {
+        /* INTERFACE64 OpenBLAS builds may retain unsuffixed function names, so
+         * symbol spelling alone cannot prove the 32-bit LapackInt ABI. Reject
+         * providers that cannot identify themselves or report USE64BITINT. */
+        OpenBlasGetConfig get_config = nullptr;
+        if (!load_symbol(handle, scipy_prefix ? "scipy_openblas_get_config" : "openblas_get_config",
+                         get_config)) {
+          static_cast<void>(dlclose(handle));
+          continue;
+        }
+        const char* config = get_config();
+        if (config == nullptr || std::strstr(config, "USE64BITINT") != nullptr) {
+          static_cast<void>(dlclose(handle));
+          continue;
+        }
+      }
+      if (is_mkl && (contains_ilp64(std::getenv("MKL_INTERFACE_LAYER")) ||
+                     set_interface(kMklInterfaceLp64) != kMklInterfaceLp64)) {
+        static_cast<void>(dlclose(handle));
+        saw_ilp64_mkl = true; /* Never accept an ILP64 MKL; try other runtimes. */
+        continue;
+      }
+      static_cast<void>(load_symbol(handle, "MKL_Set_Num_Threads_Local", set_threads));
+      CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
+          is_mkl ? CpuLinearAlgebraBackend::Origin::kMklRtLp64
+                 : CpuLinearAlgebraBackend::Origin::kOpenBlasLp64,
+          dpotrf_work, dpocon_work, dsyevd_work, dtrsm, dgemm, set_threads);
+      if (!backend_self_test(created)) {
+        static_cast<void>(dlclose(handle));
+        continue;
+      }
+      /* Retain one process-lifetime loader reference so all dispatch pointers stay valid. */
+      state.backend = created;
+      state.status = GPUXTB_STATUS_SUCCESS;
       return state;
     }
-    if (contains_ilp64(std::getenv("MKL_INTERFACE_LAYER")) ||
-        set_interface(kMklInterfaceLp64) != kMklInterfaceLp64) {
-      static_cast<void>(dlclose(handle));
+    if (saw_ilp64_mkl) {
       state.message = "MKL runtime is configured or already initialized for ILP64";
-      return state;
+    } else {
+      state.message =
+          "failed to load libmkl_rt or another LP64 BLAS runtime (libopenblas*.so, "
+          "libscipy_openblas.so, or the CMake-configured path)";
     }
-    CpuLinearAlgebraBackend created =
-        CpuLinearAlgebraAccess::make(CpuLinearAlgebraBackend::Origin::kMklRtLp64, dpotrf_work,
-                                     dpocon_work, dsyevd_work, dtrsm, dgemm, set_threads);
-    if (!backend_self_test(created)) {
-      static_cast<void>(dlclose(handle));
-      state.message = "MKL LP64 column-major backend failed its numerical preflight";
-      return state;
-    }
-    /* Retain one process-lifetime loader reference so all dispatch pointers stay valid. */
-    state.backend = created;
-    state.status = GPUXTB_STATUS_SUCCESS;
     return state;
 #endif
   }();
 
   if (runtime.status != GPUXTB_STATUS_SUCCESS) {
-    error = runtime.message == nullptr ? "MKL LP64 backend initialization failed" : runtime.message;
+    error = runtime.message == nullptr ? "LP64 CPU linear-algebra backend initialization failed"
+                                       : runtime.message;
     return runtime.status;
   }
   backend = runtime.backend;

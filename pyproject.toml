@@ -24,10 +24,13 @@ classifiers = [
 ]
 dependencies = [
   "numpy>=1.20",
-  # The CPU eigensolver dlopens libmkl_rt; ship it automatically on platforms
-  # where the PyPI `mkl` package exists so users never set LD_LIBRARY_PATH.
-  # gpuxtb.library() locates and preloads it on import.
+  # The CPU eigensolver dlopens an LP64 BLAS runtime: libmkl_rt (PyPI `mkl`,
+  # x86_64 only; Intel MKL has no aarch64 builds) or OpenBLAS. Ship MKL on
+  # x86_64 and the LP64 OpenBLAS wheel (the same one numpy uses on aarch64) on
+  # aarch64 so users never set LD_LIBRARY_PATH. gpuxtb.library() locates and
+  # preloads it on import.
   "mkl; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "scipy-openblas32; sys_platform == 'linux' and platform_machine == 'aarch64'",
   # Published Linux wheels are CUDA-enabled, so their DT_NEEDED runtime must
   # be installed by an ordinary ``pip install gpuxtb`` rather than hidden
   # behind an optional extra that leaves the native library unloadable.
@@ -47,6 +50,7 @@ test = [
   "ase",
   "dpdata",
   "mkl; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "scipy-openblas32; sys_platform == 'linux' and platform_machine == 'aarch64'",
 ]
 
 [project.entry-points."dpdata.plugins"]

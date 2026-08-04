@@ -8,6 +8,7 @@ project(
 )
 
 include(CheckLanguage)
+include(CheckLibraryExists)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 find_package(Threads REQUIRED)
@@ -18,7 +19,7 @@ option(GPUXTB_BUILD_TESTS "Build gpuxtb tests" ${PROJECT_IS_TOP_LEVEL})
 option(GPUXTB_PYTHON_WHEEL
   "Install an unversioned single-copy shared library for a Python wheel" OFF)
 set(GPUXTB_MKL_RT_LIBRARY "" CACHE FILEPATH
-  "Optional MKL runtime library used to build the CPU eigensolver test"
+  "Optional shared LP64 BLAS/LAPACK runtime for the CPU eigensolver (e.g. libmkl_rt.so or libopenblas.so). When unset, compatible runtimes are auto-discovered with find_package(BLAS/LAPACK)."
 )
 
 string(TOUPPER "${GPUXTB_ENABLE_CUDA}" GPUXTB_ENABLE_CUDA_NORMALIZED)
@@ -36,6 +37,150 @@ if(NOT GPUXTB_ENABLE_CUDA_NORMALIZED STREQUAL "OFF")
   elseif(GPUXTB_ENABLE_CUDA_NORMALIZED STREQUAL "ON")
     message(FATAL_ERROR "GPUXTB_ENABLE_CUDA=ON, but no CUDA compiler was found")
   endif()
+endif()
+
+# The eigensolver requires one dlopen-able runtime that provides LAPACKE and
+# CBLAS together. FindBLAS/FindLAPACK may also report split reference libraries
+# (for example liblapack.so plus libblas.so), so validate every candidate as a
+# self-contained runtime before baking its path into the library or enabling
+# production-backend tests.
+function(gpuxtb_cpu_linalg_has_symbol_set candidate symbol_prefix result)
+  set(symbol_set_complete ON)
+  foreach(symbol IN ITEMS
+      LAPACKE_dpotrf_work
+      LAPACKE_dpocon_work
+      LAPACKE_dsyevd_work
+      cblas_dtrsm
+      cblas_dgemm
+  )
+    unset(GPUXTB_CPU_LINALG_SYMBOL_FOUND CACHE)
+    check_library_exists(
+      "${candidate}" "${symbol_prefix}${symbol}" ""
+      GPUXTB_CPU_LINALG_SYMBOL_FOUND
+    )
+    if(NOT GPUXTB_CPU_LINALG_SYMBOL_FOUND)
+      set(symbol_set_complete OFF)
+      unset(GPUXTB_CPU_LINALG_SYMBOL_FOUND CACHE)
+      break()
+    endif()
+    unset(GPUXTB_CPU_LINALG_SYMBOL_FOUND CACHE)
+  endforeach()
+  set(${result} ${symbol_set_complete} PARENT_SCOPE)
+endfunction()
+
+function(gpuxtb_validate_cpu_linalg_runtime candidate result symbol_prefix_result)
+  if(NOT EXISTS "${candidate}" OR IS_DIRECTORY "${candidate}")
+    set(${result} OFF PARENT_SCOPE)
+    set(${symbol_prefix_result} "" PARENT_SCOPE)
+    return()
+  endif()
+
+  # check_library_exists can successfully link a static archive, but the
+  # production backend must be able to dlopen the exact configured path.
+  get_filename_component(candidate_realpath "${candidate}" REALPATH)
+  string(TOLOWER "${candidate}" candidate_lower)
+  string(TOLOWER "${candidate_realpath}" candidate_realpath_lower)
+  if(candidate_lower MATCHES "\\.a$" OR candidate_realpath_lower MATCHES "\\.a$")
+    set(${result} OFF PARENT_SCOPE)
+    set(${symbol_prefix_result} "" PARENT_SCOPE)
+    return()
+  endif()
+  # OpenBLAS publishes its integer ABI in the get_config string embedded in
+  # the shared object. Reject INTERFACE64 builds before tests link to them and
+  # call the provider directly with gpuxtb's 32-bit LapackInt declarations.
+  file(STRINGS "${candidate_realpath}" ilp64_markers REGEX "USE64BITINT" LIMIT_COUNT 1)
+  if(ilp64_markers)
+    set(${result} OFF PARENT_SCOPE)
+    set(${symbol_prefix_result} "" PARENT_SCOPE)
+    return()
+  endif()
+
+  gpuxtb_cpu_linalg_has_symbol_set("${candidate}" "" has_standard_symbols)
+  if(has_standard_symbols)
+    set(${result} ON PARENT_SCOPE)
+    set(${symbol_prefix_result} "" PARENT_SCOPE)
+    return()
+  endif()
+
+  # scipy-openblas32 deliberately prefixes its public ABI with ``scipy_`` to
+  # avoid interposing on another BLAS already loaded by NumPy or the host.
+  gpuxtb_cpu_linalg_has_symbol_set("${candidate}" "scipy_" has_scipy_symbols)
+  set(${result} ${has_scipy_symbols} PARENT_SCOPE)
+  if(has_scipy_symbols)
+    set(${symbol_prefix_result} "scipy_" PARENT_SCOPE)
+  else()
+    set(${symbol_prefix_result} "" PARENT_SCOPE)
+  endif()
+endfunction()
+
+# The CPU eigensolver dlopens an LP64 BLAS/LAPACK runtime (MKL on x86_64,
+# OpenBLAS where Intel MKL does not exist, e.g. linux/aarch64). Bake a verified
+# absolute path into the library so a non-system runtime can be found without
+# LD_LIBRARY_PATH. This remains a lazy dlopen: libgpuxtb never gains a hard
+# DT_NEEDED dependency that would make the CUDA backend unloadable when no BLAS
+# is installed.
+set(GPUXTB_CPU_LINALG_RUNTIME "")
+set(GPUXTB_CPU_LINALG_SYMBOL_PREFIX "")
+if(GPUXTB_MKL_RT_LIBRARY)
+  gpuxtb_validate_cpu_linalg_runtime(
+    "${GPUXTB_MKL_RT_LIBRARY}"
+    configured_runtime_is_compatible
+    configured_runtime_symbol_prefix
+  )
+  if(NOT configured_runtime_is_compatible)
+    message(FATAL_ERROR
+      "GPUXTB_MKL_RT_LIBRARY=${GPUXTB_MKL_RT_LIBRARY} does not provide a "
+      "complete LP64 LAPACKE+CBLAS runtime"
+    )
+  endif()
+  set(GPUXTB_CPU_LINALG_RUNTIME "${GPUXTB_MKL_RT_LIBRARY}")
+  set(GPUXTB_CPU_LINALG_SYMBOL_PREFIX "${configured_runtime_symbol_prefix}")
+else()
+  if(DEFINED BLA_SIZEOF_INTEGER)
+    set(GPUXTB_SAVED_BLA_SIZEOF_INTEGER "${BLA_SIZEOF_INTEGER}")
+    set(GPUXTB_HAD_BLA_SIZEOF_INTEGER ON)
+  else()
+    set(GPUXTB_HAD_BLA_SIZEOF_INTEGER OFF)
+  endif()
+  # gpuxtb's public and internal eigensolver ABI uses 32-bit LAPACK integers;
+  # prevent FindBLAS/FindLAPACK from selecting an ILP64 provider automatically.
+  set(BLA_SIZEOF_INTEGER 4)
+  find_package(BLAS QUIET)
+  if(BLAS_FOUND)
+    find_package(LAPACK QUIET)
+  endif()
+  if(GPUXTB_HAD_BLA_SIZEOF_INTEGER)
+    set(BLA_SIZEOF_INTEGER "${GPUXTB_SAVED_BLA_SIZEOF_INTEGER}")
+  else()
+    unset(BLA_SIZEOF_INTEGER)
+  endif()
+  set(GPUXTB_CPU_LINALG_CANDIDATES "")
+  foreach(candidate IN LISTS LAPACK_LIBRARIES BLAS_LIBRARIES)
+    if(NOT IS_ABSOLUTE "${candidate}")
+      continue()
+    endif()
+    string(TOLOWER "${candidate}" candidate_lower)
+    if(candidate_lower MATCHES "intel|mkl_rt|openblas|scipy_openblas")
+      list(APPEND GPUXTB_CPU_LINALG_CANDIDATES "${candidate}")
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES GPUXTB_CPU_LINALG_CANDIDATES)
+  foreach(candidate IN LISTS GPUXTB_CPU_LINALG_CANDIDATES)
+    gpuxtb_validate_cpu_linalg_runtime(
+      "${candidate}" candidate_is_compatible candidate_symbol_prefix
+    )
+    if(candidate_is_compatible)
+      set(GPUXTB_CPU_LINALG_RUNTIME "${candidate}")
+      set(GPUXTB_CPU_LINALG_SYMBOL_PREFIX "${candidate_symbol_prefix}")
+      break()
+    endif()
+    message(STATUS
+      "gpuxtb ignored incomplete CPU linear-algebra runtime: ${candidate}"
+    )
+  endforeach()
+endif()
+if(GPUXTB_CPU_LINALG_RUNTIME)
+  message(STATUS "gpuxtb CPU eigensolver BLAS/LAPACK runtime: ${GPUXTB_CPU_LINALG_RUNTIME}")
 endif()
 
 add_library(gpuxtb_gfn2_cpu OBJECT
@@ -72,6 +217,11 @@ set_target_properties(gpuxtb_gfn2_cpu PROPERTIES
 )
 if(CMAKE_DL_LIBS)
   target_link_libraries(gpuxtb_gfn2_cpu PUBLIC ${CMAKE_DL_LIBS})
+endif()
+if(GPUXTB_CPU_LINALG_RUNTIME)
+  target_compile_definitions(gpuxtb_gfn2_cpu PRIVATE
+    "GPUXTB_CONFIGURED_CPU_LINALG_RUNTIME=\"${GPUXTB_CPU_LINALG_RUNTIME}\""
+  )
 endif()
 
 add_library(gpuxtb
@@ -230,9 +380,9 @@ if(GPUXTB_BUILD_TESTS)
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
 
-  if(GPUXTB_MKL_RT_LIBRARY)
-    get_filename_component(GPUXTB_MKL_RT_DIRECTORY
-      "${GPUXTB_MKL_RT_LIBRARY}" DIRECTORY
+  if(GPUXTB_CPU_LINALG_RUNTIME)
+    get_filename_component(GPUXTB_CPU_LINALG_DIRECTORY
+      "${GPUXTB_CPU_LINALG_RUNTIME}" DIRECTORY
     )
     if(WIN32)
       set(GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE PATH)
@@ -242,17 +392,18 @@ if(GPUXTB_BUILD_TESTS)
       set(GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE LD_LIBRARY_PATH)
     endif()
 
-    function(gpuxtb_configure_mkl_runtime_test target_name test_name)
-      # The production eigensolver opens MKL by soname. Give CTest (including
-      # sanitizer builds) an explicit loader path instead of relying only on
-      # the executable's build RPATH being inherited by dlopen.
+    function(gpuxtb_configure_linalg_runtime_test target_name test_name)
+      # The production eigensolver dlopens the BLAS/LAPACK runtime by path and
+      # soname. Give CTest (including sanitizer builds) an explicit loader path
+      # instead of relying only on the executable's build RPATH being inherited
+      # by dlopen. The MKL env vars are harmless for OpenBLAS runtimes.
       set_target_properties(${target_name} PROPERTIES
-        BUILD_RPATH "${GPUXTB_MKL_RT_DIRECTORY}"
+        BUILD_RPATH "${GPUXTB_CPU_LINALG_DIRECTORY}"
       )
       set_tests_properties(${test_name} PROPERTIES
         ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
         ENVIRONMENT_MODIFICATION
-          "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_MKL_RT_DIRECTORY}"
+          "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_CPU_LINALG_DIRECTORY}"
       )
     endfunction()
   endif()
@@ -269,11 +420,11 @@ if(GPUXTB_BUILD_TESTS)
     target_compile_definitions(gpuxtb_runtime_test PRIVATE GPUXTB_TEST_HAS_CUDA=1)
   endif()
   add_test(NAME gpuxtb.runtime COMMAND gpuxtb_runtime_test)
-  if(GPUXTB_MKL_RT_LIBRARY)
-    gpuxtb_configure_mkl_runtime_test(gpuxtb_runtime_test gpuxtb.runtime)
+  if(GPUXTB_CPU_LINALG_RUNTIME)
+    gpuxtb_configure_linalg_runtime_test(gpuxtb_runtime_test gpuxtb.runtime)
   endif()
 
-  if(GPUXTB_MKL_RT_LIBRARY)
+  if(GPUXTB_CPU_LINALG_RUNTIME)
     add_executable(gpuxtb_cpu_public_inference_test
       tests/cpu_public_inference_test.cpp
     )
@@ -283,7 +434,7 @@ if(GPUXTB_BUILD_TESTS)
     )
     target_compile_features(gpuxtb_cpu_public_inference_test PRIVATE cxx_std_17)
     add_test(NAME gpuxtb.cpu.public_inference COMMAND gpuxtb_cpu_public_inference_test)
-    gpuxtb_configure_mkl_runtime_test(
+    gpuxtb_configure_linalg_runtime_test(
       gpuxtb_cpu_public_inference_test gpuxtb.cpu.public_inference
     )
   endif()
@@ -1693,21 +1844,28 @@ if(GPUXTB_BUILD_TESTS)
   target_compile_features(gpuxtb_scc_driver_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.scc_driver COMMAND gpuxtb_scc_driver_test)
 
-  if(GPUXTB_MKL_RT_LIBRARY)
+  if(GPUXTB_CPU_LINALG_RUNTIME)
     add_executable(gpuxtb_eigensolver_test tests/eigensolver_test.cpp)
     target_link_libraries(gpuxtb_eigensolver_test PRIVATE
       gpuxtb_gfn2_cpu
-      ${GPUXTB_MKL_RT_LIBRARY}
+      ${GPUXTB_CPU_LINALG_RUNTIME}
       Threads::Threads
     )
     target_compile_features(gpuxtb_eigensolver_test PRIVATE cxx_std_17)
+    if(GPUXTB_CPU_LINALG_SYMBOL_PREFIX STREQUAL "scipy_")
+      # The test spies call through to the configured provider directly; use
+      # scipy-openblas32's collision-avoiding ABI names when applicable.
+      target_compile_definitions(
+        gpuxtb_eigensolver_test PRIVATE GPUXTB_TEST_SCIPY_PREFIXED_BLAS=1
+      )
+    endif()
     add_test(NAME gpuxtb.gfn2.eigensolver COMMAND gpuxtb_eigensolver_test)
-    gpuxtb_configure_mkl_runtime_test(
+    gpuxtb_configure_linalg_runtime_test(
       gpuxtb_eigensolver_test gpuxtb.gfn2.eigensolver
     )
   else()
     message(STATUS
-      "gpuxtb eigensolver test: disabled (set GPUXTB_MKL_RT_LIBRARY to enable)"
+      "gpuxtb eigensolver test: disabled (set GPUXTB_MKL_RT_LIBRARY or provide a system BLAS to enable)"
     )
   endif()
 
@@ -1734,7 +1892,7 @@ if(GPUXTB_BUILD_TESTS)
     COMMAND ${Python3_EXECUTABLE} -m unittest discover
             -s tests/conformance -p "test_*.py" -v
   )
-  if(BUILD_SHARED_LIBS AND GPUXTB_MKL_RT_LIBRARY)
+  if(BUILD_SHARED_LIBS AND GPUXTB_CPU_LINALG_RUNTIME)
     add_test(
       NAME gpuxtb.conformance.public_cpu
       COMMAND ${Python3_EXECUTABLE} tools/conformance/gpuxtb_public_api.py
@@ -1745,7 +1903,7 @@ if(GPUXTB_BUILD_TESTS)
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
       ENVIRONMENT_MODIFICATION
-        "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_MKL_RT_DIRECTORY}"
+        "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_CPU_LINALG_DIRECTORY}"
       LABELS "conformance;public-api"
     )
     if(GPUXTB_HAS_CUDA)
@@ -1760,7 +1918,7 @@ if(GPUXTB_BUILD_TESTS)
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
         ENVIRONMENT_MODIFICATION
-          "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_MKL_RT_DIRECTORY}"
+          "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_CPU_LINALG_DIRECTORY}"
         LABELS "conformance;public-api"
         SKIP_RETURN_CODE 77
       )
@@ -1777,7 +1935,7 @@ if(GPUXTB_BUILD_TESTS)
           WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
           ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
           ENVIRONMENT_MODIFICATION
-            "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_MKL_RT_DIRECTORY}"
+            "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_CPU_LINALG_DIRECTORY}"
           LABELS "conformance;public-api"
           SKIP_RETURN_CODE 77
         )
