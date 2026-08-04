@@ -76,3 +76,24 @@ jobs:
             -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/gpuxtb-install"
           cmake --build build-consumer --parallel
           "${PWD}/build-consumer/gpuxtb_install_consumer"
+
+  python-wheel:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install MKL runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libmkl-rt
+      - name: Build and install the Python wheel (scikit-build-core)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "scikit-build-core>=0.9" numpy pytest ase dpdata
+          pip install . --no-build-isolation
+      - name: Run the Python test suite
+        run: |
+          mkl_dir="$(dirname "$(dpkg -L libmkl-rt | awk '/\/libmkl_rt\.so$/ { print; exit }')")"
+          LD_LIBRARY_PATH="${mkl_dir}" python -m pytest python/tests -q

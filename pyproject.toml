@@ -1,0 +1,52 @@
+[build-system]
+requires = ["scikit-build-core>=0.9"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "gpuxtb"
+version = "0.1.0"
+description = "Batched CPU and GPU inference for GFN-xTB through the public C ABI"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "gpuxtb developers" }]
+keywords = ["xtb", "tight-binding", "semiempirical", "qm", "gpu"]
+classifiers = [
+  "Intended Audience :: Science/Research",
+  "Programming Language :: C++",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Chemistry",
+  "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = ["numpy>=1.20"]
+
+[project.optional-dependencies]
+ase = ["ase"]
+dpdata = ["dpdata"]
+cuda = ["cuda-python"]
+test = ["pytest>=7", "pytest-cov", "ase", "dpdata"]
+
+[project.entry-points."dpdata.plugins"]
+gpuxtb = "gpuxtb.plugins.dpdata"
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+cmake.args = [
+  "-DGPUXTB_BUILD_TESTS=OFF",
+  "-DBUILD_SHARED_LIBS=ON",
+]
+wheel.packages = ["python/gpuxtb"]
+wheel.install-dir = "gpuxtb"
+
+# GPUXTB_ENABLE_CUDA can be switched at build time without editing this file,
+# e.g. ``GPUXTB_ENABLE_CUDA=ON pip install .`` (see python/README.md).
+[tool.scikit-build.cmake.define]
+GPUXTB_ENABLE_CUDA = { env = "GPUXTB_ENABLE_CUDA", default = "OFF" }
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
+addopts = "-ra"
