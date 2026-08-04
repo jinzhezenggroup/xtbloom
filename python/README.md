@@ -135,6 +135,29 @@ Batch failures are peer-local: failed slices contain NaNs and are listed by
 Call ``result.raise_for_status()`` (or ``compute(raise_on_failure=True)``) when
 strict all-or-nothing exception behavior is desired.
 
+### Periodic charge response (b + A q)
+
+`ChargeResponse` exposes the periodic QM/MM coupling of the C ABI: per-atom SCC
+potential shifts ``b`` and a symmetric charge-response matrix ``A``, giving the
+shift ``b + A q`` and the variational energy ``q^T b + 0.5 q^T A q`` on the
+atomic-charge channel. Derivatives of ``b``/``A`` with respect to coordinates
+are outside gpuxtb and are not included in forces.
+
+```python
+import numpy as np
+from gpuxtb import Calculator, ChargeResponse
+
+response = ChargeResponse(
+    shifts=np.array([0.003, -0.002]),
+    matrix=np.array([[0.02, 0.001], [0.001, 0.018]]),
+)
+calc = Calculator("GFN2-xTB", numbers=[1, 1], positions=positions, charge_response=response)
+result = calc.singlepoint()
+```
+
+The same object is accepted by ``Structure`` inside ``BatchCalculator``; systems
+without a charge response are treated with zero ``b``/``A``.
+
 ### ASE
 
 ```python
