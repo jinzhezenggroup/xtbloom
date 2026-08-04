@@ -394,6 +394,9 @@ struct Gfn2SccSetupEigensolver::Impl {
   std::int64_t total_shells = 0;
   std::int64_t total_orbitals = 0;
   std::int64_t total_matrices = 0;
+  std::int64_t total_spin_channels = 0;
+  std::int64_t total_spin_orbitals = 0;
+  std::int64_t total_spin_matrices = 0;
   std::uint64_t binding_salt = 0u;
   void* pinned_overlap = nullptr;
 
@@ -420,6 +423,7 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::create(
                    SetupField::kTopology);
   }
   const Gfn2RaggedTopologyView& host_topology = topology.host_topology();
+  const Gfn2WavefunctionLayoutView& host_wavefunction = topology.host_wavefunction_layout();
   if (plan_token == 0u || host_topology.plan_token != plan_token) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kCrossPlan, SetupField::kPlanToken);
   }
@@ -462,17 +466,24 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::create(
     candidate->total_shells = host_topology.total_shells;
     candidate->total_orbitals = host_topology.total_orbitals;
     candidate->total_matrices = host_topology.total_matrix_elements;
+    candidate->total_spin_channels = host_wavefunction.total_spin_channels;
+    candidate->total_spin_orbitals = host_wavefunction.total_spin_orbitals;
+    candidate->total_spin_matrices = host_wavefunction.total_spin_matrix_elements;
 
     std::size_t matrix_bytes = 0u;
-    std::size_t orbital_bytes = 0u;
+    std::size_t query_matrix_bytes = 0u;
+    std::size_t query_orbital_bytes = 0u;
     std::size_t query_orbital_offset = 0u;
     std::size_t query_bytes = 0u;
     if (!checked_multiply(static_cast<std::size_t>(candidate->total_matrices), sizeof(double),
                           matrix_bytes) ||
-        !checked_multiply(static_cast<std::size_t>(candidate->total_orbitals), sizeof(double),
-                          orbital_bytes) ||
-        !align_up(matrix_bytes, kGfn2SccSetupEigensolverArenaAlignment, query_orbital_offset) ||
-        !checked_add(query_orbital_offset, orbital_bytes, query_bytes)) {
+        !checked_multiply(static_cast<std::size_t>(candidate->total_spin_matrices), sizeof(double),
+                          query_matrix_bytes) ||
+        !checked_multiply(static_cast<std::size_t>(candidate->total_spin_orbitals), sizeof(double),
+                          query_orbital_bytes) ||
+        !align_up(query_matrix_bytes, kGfn2SccSetupEigensolverArenaAlignment,
+                  query_orbital_offset) ||
+        !checked_add(query_orbital_offset, query_orbital_bytes, query_bytes)) {
       return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kCountOverflow,
                      SetupField::kWorkspaceQuery);
     }
@@ -493,6 +504,16 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::create(
       query_result = query_gfn2_eigensolver_bucket_workspace_cuda(solver, parameters, bucket,
                                                                   query_matrix, query_eigenvalues,
                                                                   candidate->requirements.provider);
+      if (!query_result.success()) {
+        break;
+      }
+      /* Physical overlap factorization and spin-expanded Hamiltonian solves
+       * share one provider workspace. Mixed batches can have solve_count >
+       * system_count, so both reachable submission capacities must contribute
+       * to the retained maximum. */
+      query_result = query_gfn2_spin_eigensolver_bucket_workspace_cuda(
+          solver, parameters, bucket, query_matrix, query_eigenvalues,
+          candidate->requirements.provider);
       if (!query_result.success()) {
         break;
       }
@@ -604,11 +625,16 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::bind_and_factor_overl
   }
   if (iteration_plan.plan_token != own.plan_token ||
       iteration_plan.topology.plan_token != own.plan_token ||
+      iteration_plan.wavefunction_layout.plan_token != own.plan_token ||
       iteration_plan.topology.batch_size != impl_->batch_size ||
       iteration_plan.topology.total_atoms != impl_->total_atoms ||
       iteration_plan.topology.total_shells != impl_->total_shells ||
       iteration_plan.topology.total_orbitals != impl_->total_orbitals ||
-      iteration_plan.topology.total_matrix_elements != impl_->total_matrices) {
+      iteration_plan.topology.total_matrix_elements != impl_->total_matrices ||
+      iteration_plan.wavefunction_layout.batch_size != impl_->batch_size ||
+      iteration_plan.wavefunction_layout.total_spin_channels != impl_->total_spin_channels ||
+      iteration_plan.wavefunction_layout.total_spin_orbitals != impl_->total_spin_orbitals ||
+      iteration_plan.wavefunction_layout.total_spin_matrix_elements != impl_->total_spin_matrices) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, SetupError::kCrossPlan,
                    SetupField::kIterationArena);
   }
@@ -696,6 +722,9 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::bind_and_factor_overl
   const std::int64_t batch = impl_->batch_size;
   const std::int64_t matrices = impl_->total_matrices;
   const std::int64_t orbitals = impl_->total_orbitals;
+  const std::int64_t spin_channels = impl_->total_spin_channels;
+  const std::int64_t spin_matrices = impl_->total_spin_matrices;
+  const std::int64_t spin_orbitals = impl_->total_spin_orbitals;
   const std::int64_t bucket_count = static_cast<std::int64_t>(impl_->buckets.size());
   const Gfn2EigensolverDeviceWorkspace& eigensolver_workspace =
       iteration_workspace.eigensolver_workspace;
@@ -705,17 +734,17 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::bind_and_factor_overl
       iteration_workspace.ledger.batch_elements == batch &&
       iteration_workspace.ledger.active_mask != nullptr &&
       eigensolver_workspace.plan_token == own.plan_token &&
-      eigensolver_workspace.matrix_a_elements == matrices &&
-      eigensolver_workspace.matrix_b_elements == matrices &&
-      eigensolver_workspace.eigenvalue_elements == orbitals &&
-      eigensolver_workspace.factor_pointer_elements == batch &&
-      eigensolver_workspace.matrix_pointer_elements == batch &&
-      eigensolver_workspace.info_a_elements == batch &&
-      eigensolver_workspace.info_b_elements == batch &&
-      eigensolver_workspace.eligible_elements == batch &&
+      eigensolver_workspace.matrix_a_elements == spin_matrices &&
+      eigensolver_workspace.matrix_b_elements == spin_matrices &&
+      eigensolver_workspace.eigenvalue_elements == spin_orbitals &&
+      eigensolver_workspace.factor_pointer_elements == spin_channels &&
+      eigensolver_workspace.matrix_pointer_elements == spin_channels &&
+      eigensolver_workspace.info_a_elements == spin_channels &&
+      eigensolver_workspace.info_b_elements == spin_channels &&
+      eigensolver_workspace.eligible_elements == spin_channels &&
       eigensolver_workspace.sequence_active_elements == 1 &&
-      eigensolver_workspace.compact_system_elements == batch &&
-      eigensolver_workspace.compact_source_slot_elements == batch &&
+      eigensolver_workspace.compact_system_elements == spin_channels &&
+      eigensolver_workspace.compact_source_slot_elements == spin_channels &&
       eigensolver_workspace.bucket_activity_elements == bucket_count &&
       eigensolver_workspace.solver_device_workspace_bytes ==
           own.provider.solver_device_workspace_bytes &&
@@ -740,18 +769,23 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::bind_and_factor_overl
 
   std::array<AddressRange, 13> workspace_ranges{};
   if (!make_elements_range(iteration_workspace.ledger.active_mask, batch, workspace_ranges[0]) ||
-      !make_elements_range(eigensolver_workspace.matrix_scratch_a, matrices, workspace_ranges[1]) ||
-      !make_elements_range(eigensolver_workspace.matrix_scratch_b, matrices, workspace_ranges[2]) ||
-      !make_elements_range(eigensolver_workspace.eigenvalue_scratch, orbitals,
+      !make_elements_range(eigensolver_workspace.matrix_scratch_a, spin_matrices,
+                           workspace_ranges[1]) ||
+      !make_elements_range(eigensolver_workspace.matrix_scratch_b, spin_matrices,
+                           workspace_ranges[2]) ||
+      !make_elements_range(eigensolver_workspace.eigenvalue_scratch, spin_orbitals,
                            workspace_ranges[3]) ||
-      !make_elements_range(eigensolver_workspace.factor_pointers, batch, workspace_ranges[4]) ||
-      !make_elements_range(eigensolver_workspace.matrix_pointers, batch, workspace_ranges[5]) ||
-      !make_elements_range(eigensolver_workspace.info_a, batch, workspace_ranges[6]) ||
-      !make_elements_range(eigensolver_workspace.info_b, batch, workspace_ranges[7]) ||
-      !make_elements_range(eigensolver_workspace.eligible, batch, workspace_ranges[8]) ||
+      !make_elements_range(eigensolver_workspace.factor_pointers, spin_channels,
+                           workspace_ranges[4]) ||
+      !make_elements_range(eigensolver_workspace.matrix_pointers, spin_channels,
+                           workspace_ranges[5]) ||
+      !make_elements_range(eigensolver_workspace.info_a, spin_channels, workspace_ranges[6]) ||
+      !make_elements_range(eigensolver_workspace.info_b, spin_channels, workspace_ranges[7]) ||
+      !make_elements_range(eigensolver_workspace.eligible, spin_channels, workspace_ranges[8]) ||
       !make_elements_range(eigensolver_workspace.sequence_active, 1, workspace_ranges[9]) ||
-      !make_elements_range(eigensolver_workspace.compact_systems, batch, workspace_ranges[10]) ||
-      !make_elements_range(eigensolver_workspace.compact_source_slots, batch,
+      !make_elements_range(eigensolver_workspace.compact_systems, spin_channels,
+                           workspace_ranges[10]) ||
+      !make_elements_range(eigensolver_workspace.compact_source_slots, spin_channels,
                            workspace_ranges[11]) ||
       !make_elements_range(eigensolver_workspace.bucket_activity, bucket_count,
                            workspace_ranges[12]) ||
@@ -1032,17 +1066,17 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
       binding.cache.status_elements == expected_cache.status_elements &&
       binding.cache.plan_token == own.plan_token &&
       binding.workspace.plan_token == own.plan_token &&
-      binding.workspace.matrix_a_elements == impl_->total_matrices &&
-      binding.workspace.matrix_b_elements == impl_->total_matrices &&
-      binding.workspace.eigenvalue_elements == impl_->total_orbitals &&
-      binding.workspace.factor_pointer_elements == impl_->batch_size &&
-      binding.workspace.matrix_pointer_elements == impl_->batch_size &&
-      binding.workspace.info_a_elements == impl_->batch_size &&
-      binding.workspace.info_b_elements == impl_->batch_size &&
-      binding.workspace.eligible_elements == impl_->batch_size &&
+      binding.workspace.matrix_a_elements == impl_->total_spin_matrices &&
+      binding.workspace.matrix_b_elements == impl_->total_spin_matrices &&
+      binding.workspace.eigenvalue_elements == impl_->total_spin_orbitals &&
+      binding.workspace.factor_pointer_elements == impl_->total_spin_channels &&
+      binding.workspace.matrix_pointer_elements == impl_->total_spin_channels &&
+      binding.workspace.info_a_elements == impl_->total_spin_channels &&
+      binding.workspace.info_b_elements == impl_->total_spin_channels &&
+      binding.workspace.eligible_elements == impl_->total_spin_channels &&
       binding.workspace.sequence_active_elements == 1 &&
-      binding.workspace.compact_system_elements == impl_->batch_size &&
-      binding.workspace.compact_source_slot_elements == impl_->batch_size &&
+      binding.workspace.compact_system_elements == impl_->total_spin_channels &&
+      binding.workspace.compact_source_slot_elements == impl_->total_spin_channels &&
       binding.workspace.bucket_activity_elements ==
           static_cast<std::int64_t>(impl_->buckets.size()) &&
       same_provider_requirements({binding.workspace.solver_device_workspace_bytes,

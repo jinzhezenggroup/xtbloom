@@ -163,8 +163,9 @@ struct Gfn2SccSetupInputsRequirements {
 
 /*
  * Move-only setup owner for production SCC plan/input leaves. create() copies
- * all host numerical data and plan arrays into one pinned packed image. bind()
- * projects the supplied device topology into a complete non-provider plan
+ * all host numerical data and plan arrays, including the GFN2 atom-local spin
+ * couplings, into one pinned packed image. bind() projects the supplied device
+ * topology and wavefunction descriptors into a complete non-provider plan
  * seed, enqueues one asynchronous image upload on the caller stream, and
  * publishes plan/input only after CUDA accepted the transfer. The eigensolver
  * provider, overlap cache, and active ledger pointers remain canonical zero;
@@ -191,7 +192,8 @@ class Gfn2SccSetupInputs {
   [[nodiscard]] Gfn2SccSetupInputsRequirements requirements() const noexcept;
 
   [[nodiscard]] Gfn2SccSetupInputsDiagnostic bind_device_arena_and_upload_async(
-      const Gfn2RaggedTopologyView& device_topology, void* device_arena,
+      const Gfn2RaggedTopologyView& device_topology,
+      const Gfn2WavefunctionLayoutView& device_wavefunction, void* device_arena,
       std::size_t device_arena_bytes, Gfn2SccIterationDevicePlan& plan_seed,
       Gfn2SccIterationDeviceInput& input_seed, cudaStream_t stream = nullptr) const noexcept;
 

@@ -68,7 +68,8 @@ __global__ void capture_sequence_kernel(const std::uint32_t* device_error,
 }
 
 __device__ bool is_energy_plan_error(std::uint32_t error) {
-  return error == static_cast<std::uint32_t>(Gfn2SccEnergyDeviceError::kInvalidOffsets);
+  return error == static_cast<std::uint32_t>(Gfn2SccEnergyDeviceError::kInvalidOffsets) ||
+         error == static_cast<std::uint32_t>(Gfn2SccEnergyDeviceError::kInvalidSpinLayout);
 }
 
 /* The canonical SCC entry validates only members authorized by the ledger.
@@ -115,6 +116,53 @@ __global__ void canonical_energy_topology_preflight_kernel(Gfn2SccEnergyDeviceBa
     }
     if (!valid) {
       record_error(device_error, Gfn2SccEnergyDeviceError::kInvalidOffsets);
+      atomicExch(workspace.sequence_active, 0u);
+    }
+  }
+}
+
+/* Validate only active mixed-spin partitions. Inactive metadata remains
+ * intentionally unread so conditional SCC replay can retain poisoned slots. */
+__global__ void canonical_spin_energy_topology_preflight_kernel(
+    Gfn2SccEnergyDeviceBatch batch, Gfn2WavefunctionLayoutView layout,
+    Gfn2SccIterationDeviceActivity activity, Gfn2SccEnergyDeviceWorkspace workspace,
+    std::uint32_t* device_error) {
+  __shared__ int sequence_open;
+  __shared__ int any_active;
+  if (threadIdx.x == 0) {
+    sequence_open =
+        atomicAdd(const_cast<std::uint32_t*>(activity.sequence_active), 0u) == 1u ? 1 : 0;
+    any_active = 0;
+    *workspace.sequence_active =
+        sequence_open != 0 && !is_energy_plan_error(atomicAdd(device_error, 0u)) ? 1u : 0u;
+  }
+  __syncthreads();
+  if (sequence_open == 0 || atomicAdd(workspace.sequence_active, 0u) != 1u) return;
+  for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
+    if (activity.active_mask[system] == 1u) atomicExch(&any_active, 1);
+  }
+  __syncthreads();
+  if (any_active == 0 || atomicAdd(workspace.sequence_active, 0u) != 1u) return;
+  for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
+    if (activity.active_mask[system] != 1u) continue;
+    const std::int64_t physical_begin = batch.matrix_offsets[system];
+    const std::int64_t physical_end = batch.matrix_offsets[system + 1];
+    const std::int64_t spin_begin = layout.spin_matrix_offsets[system];
+    const std::int64_t spin_end = layout.spin_matrix_offsets[system + 1];
+    const std::int32_t channels = layout.spin_channels[system];
+    const std::int64_t matrix_elements = physical_end - physical_begin;
+    bool valid = physical_begin >= 0 && physical_begin < physical_end &&
+                 physical_end <= batch.total_matrix_elements && spin_begin >= 0 &&
+                 spin_begin <= spin_end && spin_end <= layout.total_spin_matrix_elements &&
+                 (channels == 1 || channels == 2) &&
+                 spin_end - spin_begin == static_cast<std::int64_t>(channels) * matrix_elements;
+    if (valid && system == 0) valid = physical_begin == 0 && spin_begin == 0;
+    if (valid && system + 1 == batch.batch_size) {
+      valid = physical_end == batch.total_matrix_elements &&
+              spin_end == layout.total_spin_matrix_elements;
+    }
+    if (!valid) {
+      record_error(device_error, Gfn2SccEnergyDeviceError::kInvalidSpinLayout);
       atomicExch(workspace.sequence_active, 0u);
     }
   }
@@ -245,6 +293,61 @@ __global__ void reduce_electronic_energy_kernel(Gfn2SccEnergyDeviceBatch batch,
       }
     }
   }
+}
+
+__global__ void reduce_spin_electronic_energy_kernel(
+    Gfn2SccEnergyDeviceBatch batch, Gfn2WavefunctionLayoutView layout, const double* density,
+    const double* h0, const double* entropies, double electronic_temperature,
+    Gfn2SccIterationDeviceActivity activity, Gfn2SccEnergyDeviceWorkspace workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  /* The CPU oracle accumulates spin-major matrices with one continuous FMA
+   * chain. Preserve that order exactly; batch systems still execute in
+   * parallel, and this scalar reduction is not a provider bottleneck. */
+  if (threadIdx.x != 0 ||
+      requested_energy_member(activity, workspace, system_errors, system, device_error) == 0) {
+    return;
+  }
+  const std::int64_t physical_begin = batch.matrix_offsets[system];
+  const std::int64_t matrix_elements = batch.matrix_offsets[system + 1] - physical_begin;
+  const std::int64_t spin_begin = layout.spin_matrix_offsets[system];
+  const std::int64_t spin_end = layout.spin_matrix_offsets[system + 1];
+  double core_energy = 0.0;
+  for (std::int64_t element = spin_begin; element < spin_end; ++element) {
+    const double density_value = density[element];
+    const double h0_value = h0[physical_begin + (element - spin_begin) % matrix_elements];
+    if (!isfinite(density_value)) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2SccEnergyDeviceError::kNonfiniteDensity);
+      return;
+    }
+    if (!isfinite(h0_value)) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2SccEnergyDeviceError::kNonfiniteH0);
+      return;
+    }
+    const double updated = fma(h0_value, density_value, core_energy);
+    if (!isfinite(updated)) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2SccEnergyDeviceError::kNonfiniteCoreArithmetic);
+      return;
+    }
+    core_energy = updated;
+  }
+  const double entropy = entropies[system];
+  if (!isfinite(entropy)) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2SccEnergyDeviceError::kNonfiniteEntropy);
+    return;
+  }
+  const double free_energy = fma(-electronic_temperature, entropy, core_energy);
+  if (!isfinite(free_energy)) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2SccEnergyDeviceError::kNonfiniteFreeEnergy);
+    return;
+  }
+  workspace.core_energy_scratch[system] = core_energy;
+  workspace.electronic_free_energy_scratch[system] = free_energy;
 }
 
 template <typename Activity>
@@ -413,6 +516,57 @@ bool validate_canonical_launch(const Gfn2SccEnergyDeviceBatch& batch, const doub
   return true;
 }
 
+bool validate_spin_canonical_launch(const Gfn2SccEnergyDeviceBatch& batch,
+                                    const Gfn2WavefunctionLayoutView& layout, const double* density,
+                                    std::int64_t density_elements, const double* h0,
+                                    const double* entropies, double electronic_temperature,
+                                    const Gfn2SccIterationDeviceActivity& activity,
+                                    double* core_energies, double* electronic_free_energies,
+                                    const Gfn2SccEnergyDeviceWorkspace& workspace,
+                                    std::uint32_t* system_errors,
+                                    std::uint32_t* device_error) noexcept {
+  if (layout.memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
+      layout.plan_token != batch.plan_token || layout.batch_size != batch.batch_size ||
+      layout.total_spin_matrix_elements <= 0 ||
+      density_elements != layout.total_spin_matrix_elements ||
+      layout.spin_channel_count != batch.batch_size ||
+      layout.spin_matrix_offset_count != batch.batch_size + 1 ||
+      !is_aligned(layout.spin_channels, alignof(std::int32_t)) ||
+      !is_aligned(layout.spin_matrix_offsets, alignof(std::int64_t)) ||
+      !is_aligned(density, alignof(double)) ||
+      !validate_canonical_launch(batch, h0, h0, entropies, electronic_temperature, activity,
+                                 core_energies, electronic_free_energies, workspace, system_errors,
+                                 device_error)) {
+    return false;
+  }
+
+  AddressRange density_range;
+  AddressRange layout_reads[2];
+  AddressRange writes[7];
+  if (!make_range(density, density_elements, sizeof(*density), &density_range) ||
+      !make_range(layout.spin_channels, layout.spin_channel_count, sizeof(*layout.spin_channels),
+                  &layout_reads[0]) ||
+      !make_range(layout.spin_matrix_offsets, layout.spin_matrix_offset_count,
+                  sizeof(*layout.spin_matrix_offsets), &layout_reads[1]) ||
+      !make_range(core_energies, batch.batch_size, sizeof(double), &writes[0]) ||
+      !make_range(electronic_free_energies, batch.batch_size, sizeof(double), &writes[1]) ||
+      !make_range(workspace.core_energy_scratch, batch.batch_size, sizeof(double), &writes[2]) ||
+      !make_range(workspace.electronic_free_energy_scratch, batch.batch_size, sizeof(double),
+                  &writes[3]) ||
+      !make_range(workspace.sequence_active, 1, sizeof(std::uint32_t), &writes[4]) ||
+      !make_range(system_errors, batch.batch_size, sizeof(std::uint32_t), &writes[5]) ||
+      !make_range(device_error, 1, sizeof(std::uint32_t), &writes[6])) {
+    return false;
+  }
+  for (const AddressRange& write : writes) {
+    if (ranges_overlap(write, density_range) || ranges_overlap(write, layout_reads[0]) ||
+        ranges_overlap(write, layout_reads[1])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 cudaError_t reset_gfn2_scc_energy_device_errors_cuda(std::int64_t batch_size,
@@ -472,6 +626,35 @@ cudaError_t evaluate_gfn2_scc_electronic_energy_cuda(
       static_cast<unsigned int>((batch.batch_size + kThreadsPerBlock - 1) / kThreadsPerBlock);
   publish_electronic_energy_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
       batch, active_systems, core_energies, electronic_free_energies, workspace, system_errors);
+  return cudaGetLastError();
+}
+
+cudaError_t evaluate_gfn2_scc_electronic_energy_spin_cuda(
+    const Gfn2SccEnergyDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const double* density, std::int64_t density_elements, const double* h0, const double* entropies,
+    double electronic_temperature, const Gfn2SccIterationDeviceActivity& activity,
+    double* core_energies, double* electronic_free_energies,
+    const Gfn2SccEnergyDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  if (!validate_spin_canonical_launch(
+          batch, layout, density, density_elements, h0, entropies, electronic_temperature, activity,
+          core_energies, electronic_free_energies, workspace, system_errors, device_error)) {
+    return cudaErrorInvalidValue;
+  }
+  canonical_spin_energy_topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+      batch, layout, activity, workspace, device_error);
+  cudaError_t status = cudaGetLastError();
+  if (status != cudaSuccess) return status;
+  reduce_spin_electronic_energy_kernel<<<static_cast<unsigned int>(batch.batch_size),
+                                         kThreadsPerBlock, 0, stream>>>(
+      batch, layout, density, h0, entropies, electronic_temperature, activity, workspace,
+      system_errors, device_error);
+  status = cudaGetLastError();
+  if (status != cudaSuccess) return status;
+  const unsigned int blocks =
+      static_cast<unsigned int>((batch.batch_size + kThreadsPerBlock - 1) / kThreadsPerBlock);
+  publish_electronic_energy_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+      batch, activity, core_energies, electronic_free_energies, workspace, system_errors);
   return cudaGetLastError();
 }
 

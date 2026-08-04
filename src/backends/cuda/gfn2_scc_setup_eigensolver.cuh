@@ -167,11 +167,13 @@ class Gfn2SccSetupEigensolver {
   /*
    * Bind this owner's persistent setup arena, validate that iteration_workspace
    * is a #101 projection from iteration_arena/iteration_requirements (including
-   * its canonical activity ledger, plan token, layout fingerprint, segment
-   * bounds, provider offset, alignment, and disjoint ranges), upload the overlap
-   * on stream, and enqueue reusable Cholesky factor construction. The published
-   * hot-path batch always aliases iteration_workspace.ledger.active_mask; a
-   * private all-active setup batch is used only while factoring the overlap.
+   * spin-channel matrix/eigenvalue capacities, its canonical activity ledger,
+   * plan token, layout fingerprint, segment bounds, provider offset, alignment,
+   * and disjoint ranges), upload the physical overlap on stream, and enqueue
+   * reusable Cholesky factor construction. The published hot-path batch remains
+   * physical-topology based and aliases iteration_workspace.ledger.active_mask;
+   * WavefunctionLayout expands the shared factors over spin channels at solve
+   * time. A private all-active setup batch is used only while factoring overlap.
    *
    * provider_host_workspace is caller-owned pinned host memory and is the same
    * pointer published into workspace/provider. No allocation, descriptor

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/common/gfn2_plan_schema.hpp"
 #include "backends/cuda/gfn2_scc.cuh"
 #include "backends/cuda/gfn2_scc_iteration_control.cuh"
 
@@ -131,6 +132,17 @@ cudaError_t initialize_gfn2_scc_mixer_cuda(const Gfn2SccDeviceBatch& batch,
                                            cudaStream_t stream = nullptr) noexcept;
 
 /*
+ * Mixed one/two-channel initialization. layout expands each system vector to
+ * include both charge and magnetization qsh/dipole/quadrupole channels while
+ * preserving the established restricted entry point above.
+ */
+cudaError_t initialize_gfn2_scc_mixer_cuda(
+    const Gfn2SccDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2SccMixerDevicePolicy& policy, const Gfn2SccDeviceConstMultipoles& initial,
+    const Gfn2SccMixerDeviceState& state, const Gfn2SccMixerDeviceWorkspace& workspace,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
  * Restart one initialized member from its supplied public multipoles.
  *
  * The target's raw values are validated before any persistent byte changes.
@@ -139,6 +151,14 @@ cudaError_t initialize_gfn2_scc_mixer_cuda(const Gfn2SccDeviceBatch& batch,
  */
 cudaError_t restart_gfn2_scc_mixer_system_cuda(
     const Gfn2SccDeviceBatch& batch, const Gfn2SccMixerDevicePolicy& policy, std::int64_t system,
+    const Gfn2SccDeviceConstMultipoles& current_public, const Gfn2SccMixerDeviceState& state,
+    const Gfn2SccMixerDeviceWorkspace& workspace, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
+
+/* Restart one mixed-spin member using the nspin-expanded layout. */
+cudaError_t restart_gfn2_scc_mixer_system_cuda(
+    const Gfn2SccDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2SccMixerDevicePolicy& policy, std::int64_t system,
     const Gfn2SccDeviceConstMultipoles& current_public, const Gfn2SccMixerDeviceState& state,
     const Gfn2SccMixerDeviceWorkspace& workspace, std::uint32_t* device_error,
     cudaStream_t stream = nullptr) noexcept;
@@ -174,6 +194,18 @@ cudaError_t mix_gfn2_scc_broyden_cuda(
     const Gfn2SccDeviceMultipoles& next_mixed, const Gfn2SccMixerDeviceState& state,
     const Gfn2SccMixerDeviceWorkspace& workspace, std::uint32_t* device_error,
     cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Mixed-spin Broyden transition. Charge and magnetization channels are one
+ * complete vector, so every unrestricted multipole component participates in
+ * the same finite-memory update and convergence diagnostics.
+ */
+cudaError_t mix_gfn2_scc_broyden_cuda(
+    const Gfn2SccDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2SccMixerDevicePolicy& policy, const Gfn2SccIterationDeviceActivity& activity,
+    const Gfn2SccDeviceConstMultipoles& raw, const Gfn2SccDeviceMultipoles& next_mixed,
+    const Gfn2SccMixerDeviceState& state, const Gfn2SccMixerDeviceWorkspace& workspace,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 

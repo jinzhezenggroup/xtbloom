@@ -62,7 +62,7 @@ static_assert(std::is_standard_layout_v<Gfn2SccIterationProjectedDescriptors>);
     Gfn2SccIterationReportStorageRequirements& requirements) noexcept;
 
 /*
- * Generate the canonical 19--24 reports and every exact alias derivable from
+ * Generate the canonical 21--26 reports and every exact alias derivable from
  * already-bound plan/state/workspace leaves. No allocation, transfer, CUDA API,
  * or arena-offset reconstruction occurs. On failure projected is cleared.
  * The result is intentionally not launchable until the complete #96 validator

@@ -50,13 +50,17 @@ enum class Gfn2SccStageId : std::uint32_t {
   kD4RawEnergy = 27u,
   kExplicitPointChargeRawEnergy = 28u,
   kPeriodicRawEnergy = 29u,
+  // Spin stages are appended so all restricted-stage identities above remain
+  // stable for persisted diagnostics and existing Graph/report consumers.
+  kSpinPotential = 30u,
+  kSpinRawEnergy = 31u,
 };
 
 /* True for every enumerator, including the non-executable kNone sentinel. */
 [[nodiscard]] inline __host__ __device__ constexpr bool gfn2_scc_stage_id_in_domain(
     Gfn2SccStageId stage) noexcept {
   return static_cast<std::uint32_t>(stage) <=
-         static_cast<std::uint32_t>(Gfn2SccStageId::kPeriodicRawEnergy);
+         static_cast<std::uint32_t>(Gfn2SccStageId::kSpinRawEnergy);
 }
 
 /* Stage reports and cache owners must name one of the executable stages. */
@@ -261,8 +265,8 @@ cudaError_t derive_gfn2_scc_iteration_activity_cuda(
 cudaError_t derive_gfn2_scc_iteration_activity_cuda(
     const Gfn2SccIterationDevicePolicy& policy, const Gfn2SccIterationDeviceStateInput& state,
     const Gfn2SccIterationDeviceProvenance& provenance,
-    const Gfn2GeometryEpochConsumerDevice& geometry,
-    const Gfn2SccIterationDeviceLedger& ledger, cudaStream_t stream = nullptr) noexcept;
+    const Gfn2GeometryEpochConsumerDevice& geometry, const Gfn2SccIterationDeviceLedger& ledger,
+    cudaStream_t stream = nullptr) noexcept;
 
 /*
  * Fold one completed stage into the canonical ledger. Plan classification has

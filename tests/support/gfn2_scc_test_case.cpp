@@ -332,9 +332,13 @@ bool HostSccCase::Impl::append_system(SmallSystemKind kind, std::int64_t system)
       return false;
   }
   atom_offsets.push_back(static_cast<std::int64_t>(atomic_numbers.size()));
-  molecular_charges.push_back(0.0);
-  unpaired_electrons.push_back(0);
-  spin_channels.push_back(1);
+  const std::size_t electronic_index = static_cast<std::size_t>(system);
+  molecular_charges.push_back(
+      options.molecular_charges.empty() ? 0.0 : options.molecular_charges[electronic_index]);
+  unpaired_electrons.push_back(
+      options.unpaired_electrons.empty() ? 0 : options.unpaired_electrons[electronic_index]);
+  spin_channels.push_back(options.spin_channels.empty() ? 1
+                                                        : options.spin_channels[electronic_index]);
   return true;
 }
 
@@ -350,6 +354,15 @@ gpuxtb_status_t HostSccCase::Impl::build(std::string& error) {
   }
   if (options.geometry_generation == 0u) {
     error = "host SCC fixture geometry generation must be nonzero";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const auto valid_optional_batch = [&](std::size_t elements) {
+    return elements == 0u || elements == options.systems.size();
+  };
+  if (!valid_optional_batch(options.molecular_charges.size()) ||
+      !valid_optional_batch(options.unpaired_electrons.size()) ||
+      !valid_optional_batch(options.spin_channels.size())) {
+    error = "host SCC fixture electronic vectors must be empty or match systems.size()";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
 

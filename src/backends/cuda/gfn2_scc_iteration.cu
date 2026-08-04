@@ -143,6 +143,30 @@ bool same_pointer(const T* first, const U* second) noexcept {
   return static_cast<const void*>(first) == static_cast<const void*>(second);
 }
 
+bool same_wavefunction_layout(const Gfn2WavefunctionLayoutView& first,
+                              const Gfn2WavefunctionLayoutView& second) noexcept {
+  return first.memory_space == second.memory_space && first.plan_token == second.plan_token &&
+         first.layout_fingerprint == second.layout_fingerprint &&
+         first.batch_size == second.batch_size &&
+         first.total_spin_channels == second.total_spin_channels &&
+         first.total_spin_orbitals == second.total_spin_orbitals &&
+         first.total_spin_matrix_elements == second.total_spin_matrix_elements &&
+         first.total_spin_shells == second.total_spin_shells &&
+         first.total_spin_atoms == second.total_spin_atoms &&
+         first.spin_channel_count == second.spin_channel_count &&
+         first.spin_channel_offset_count == second.spin_channel_offset_count &&
+         first.spin_orbital_offset_count == second.spin_orbital_offset_count &&
+         first.spin_matrix_offset_count == second.spin_matrix_offset_count &&
+         first.spin_shell_offset_count == second.spin_shell_offset_count &&
+         first.spin_atom_offset_count == second.spin_atom_offset_count &&
+         first.spin_channels == second.spin_channels &&
+         first.spin_channel_offsets == second.spin_channel_offsets &&
+         first.spin_orbital_offsets == second.spin_orbital_offsets &&
+         first.spin_matrix_offsets == second.spin_matrix_offsets &&
+         first.spin_shell_offsets == second.spin_shell_offsets &&
+         first.spin_atom_offsets == second.spin_atom_offsets;
+}
+
 bool same_eigenpairs(const Gfn2EigensolverDeviceResults& first,
                      const Gfn2EigensolverDeviceResults& second) noexcept {
   return first.eigenvalues == second.eigenvalues &&
@@ -177,6 +201,15 @@ bool same_density(const Gfn2DensityDeviceResults& first,
          first.density_trace_elements == second.density_trace_elements &&
          first.weighted_density_traces == second.weighted_density_traces &&
          first.weighted_density_trace_elements == second.weighted_density_trace_elements &&
+         first.channel_band_energies == second.channel_band_energies &&
+         first.channel_band_energy_elements == second.channel_band_energy_elements &&
+         first.channel_occupation_sums == second.channel_occupation_sums &&
+         first.channel_occupation_sum_elements == second.channel_occupation_sum_elements &&
+         first.channel_density_traces == second.channel_density_traces &&
+         first.channel_density_trace_elements == second.channel_density_trace_elements &&
+         first.channel_weighted_density_traces == second.channel_weighted_density_traces &&
+         first.channel_weighted_density_trace_elements ==
+             second.channel_weighted_density_trace_elements &&
          first.plan_token == second.plan_token;
 }
 
@@ -212,6 +245,7 @@ bool same_free_energy_diagnostics(const Gfn2SccFreeEnergyDeviceDiagnostics& firs
          first.es2 == second.es2 && first.es2_elements == second.es2_elements &&
          first.es3 == second.es3 && first.es3_elements == second.es3_elements &&
          first.aes2 == second.aes2 && first.aes2_elements == second.aes2_elements &&
+         first.spin == second.spin && first.spin_elements == second.spin_elements &&
          first.d4_two_body == second.d4_two_body &&
          first.d4_two_body_elements == second.d4_two_body_elements &&
          first.explicit_point_charge == second.explicit_point_charge &&
@@ -293,6 +327,7 @@ bool validate_plan_tokens(const Gfn2SccIterationDevicePlan& plan,
 #define GPUXTB_CHECK_TOKEN(value, field) \
   if (!validator.token((value), token, (field))) return false
   GPUXTB_CHECK_TOKEN(plan.topology.plan_token, BindingField::kTopology);
+  GPUXTB_CHECK_TOKEN(plan.wavefunction_layout.plan_token, BindingField::kSpin);
   GPUXTB_CHECK_TOKEN(plan.activity_policy.plan_token, BindingField::kActivity);
   GPUXTB_CHECK_TOKEN(plan.state_policy.plan_token, BindingField::kStatePublication);
   GPUXTB_CHECK_TOKEN(plan.mixer_policy.plan_token, BindingField::kMixer);
@@ -301,6 +336,7 @@ bool validate_plan_tokens(const Gfn2SccIterationDevicePlan& plan,
   GPUXTB_CHECK_TOKEN(plan.geometry_cache.plan_token, BindingField::kGeometry);
   GPUXTB_CHECK_TOKEN(plan.scc_batch.plan_token, BindingField::kStatePublication);
   GPUXTB_CHECK_TOKEN(plan.potential_batch.plan_token, BindingField::kPotential);
+  GPUXTB_CHECK_TOKEN(plan.spin_batch.plan_token, BindingField::kSpin);
   GPUXTB_CHECK_TOKEN(plan.es2_batch.plan_token, BindingField::kES2);
   GPUXTB_CHECK_TOKEN(plan.es2_cache.plan_token, BindingField::kES2);
   GPUXTB_CHECK_TOKEN(plan.es3_batch.plan_token, BindingField::kES3);
@@ -335,6 +371,8 @@ bool validate_plan_tokens(const Gfn2SccIterationDevicePlan& plan,
   GPUXTB_CHECK_TOKEN(input.plan_token, BindingField::kPlan);
   GPUXTB_CHECK_TOKEN(input.activity_state.plan_token, BindingField::kActivity);
   GPUXTB_CHECK_TOKEN(input.mixed_fields.plan_token, BindingField::kPotential);
+  GPUXTB_CHECK_TOKEN(input.mixed_spin.plan_token, BindingField::kSpin);
+  GPUXTB_CHECK_TOKEN(input.raw_spin.plan_token, BindingField::kSpin);
   GPUXTB_CHECK_TOKEN(input.hamiltonian.plan_token, BindingField::kHamiltonian);
   GPUXTB_CHECK_TOKEN(input.density.plan_token, BindingField::kDensity);
   GPUXTB_CHECK_TOKEN(input.mulliken.plan_token, BindingField::kMulliken);
@@ -368,6 +406,7 @@ bool validate_plan_tokens(const Gfn2SccIterationDevicePlan& plan,
                      BindingField::kClassicalEnergy);
   GPUXTB_CHECK_TOKEN(workspace.free_energy_activity.plan_token, BindingField::kFreeEnergy);
   GPUXTB_CHECK_TOKEN(workspace.mixed_topology.plan_token, BindingField::kPotential);
+  GPUXTB_CHECK_TOKEN(workspace.physical_topology.plan_token, BindingField::kPotential);
   GPUXTB_CHECK_TOKEN(workspace.components.plan_token, BindingField::kPotential);
   GPUXTB_CHECK_TOKEN(workspace.potential_components.plan_token, BindingField::kPotential);
   GPUXTB_CHECK_TOKEN(workspace.complete_potentials.plan_token, BindingField::kPotential);
@@ -398,6 +437,8 @@ bool validate_plan_tokens(const Gfn2SccIterationDevicePlan& plan,
   GPUXTB_CHECK_TOKEN(workspace.occupations_workspace.plan_token, BindingField::kOccupations);
   GPUXTB_CHECK_TOKEN(workspace.density_workspace.plan_token, BindingField::kDensity);
   GPUXTB_CHECK_TOKEN(workspace.mulliken_workspace.plan_token, BindingField::kMulliken);
+  GPUXTB_CHECK_TOKEN(workspace.spin_output.plan_token, BindingField::kSpin);
+  GPUXTB_CHECK_TOKEN(workspace.spin_workspace.plan_token, BindingField::kSpin);
   GPUXTB_CHECK_TOKEN(workspace.electronic_energy_workspace.plan_token,
                      BindingField::kElectronicEnergy);
   GPUXTB_CHECK_TOKEN(workspace.classical_energy_workspace.plan_token,
@@ -433,6 +474,11 @@ bool validate_top_level_shape(const Gfn2SccIterationDevicePlan& plan, Validator&
   if (topology.error != Gfn2PlanSchemaError::kSuccess) {
     return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology, topology.index);
   }
+  const Gfn2PlanSchemaDiagnostic wavefunction = validate_gfn2_wavefunction_layout_binding(
+      plan.topology, plan.wavefunction_layout, Gfn2PlanMemorySpace::kCudaDevice);
+  if (wavefunction.error != Gfn2PlanSchemaError::kSuccess) {
+    return validator.fail(BindingError::kInvalidTopology, BindingField::kSpin, wavefunction.index);
+  }
   if (!checked_multiply(plan.topology.total_atoms, 3, dipoles) ||
       !checked_multiply(plan.topology.total_atoms, 6, quadrupoles) ||
       !checked_multiply(plan.topology.batch_size, 2, two_batch) ||
@@ -440,21 +486,22 @@ bool validate_top_level_shape(const Gfn2SccIterationDevicePlan& plan, Validator&
     return validator.fail(BindingError::kInvalidCount, BindingField::kTopology);
   }
   std::int64_t atom_multipoles = 0;
-  if (!checked_multiply(plan.topology.total_atoms, 9, atom_multipoles) ||
-      !checked_add(plan.topology.total_shells, atom_multipoles, mixer_vector)) {
+  if (!checked_multiply(plan.wavefunction_layout.total_spin_atoms, 9, atom_multipoles) ||
+      !checked_add(plan.wavefunction_layout.total_spin_shells, atom_multipoles, mixer_vector)) {
     return validator.fail(BindingError::kInvalidCount, BindingField::kMixer);
   }
   return true;
 }
 
 bool validate_plan_shapes(const Gfn2SccIterationDevicePlan& plan, Validator& validator,
-                          std::int64_t dipoles, std::int64_t quadrupoles,
-                          std::int64_t two_batch) noexcept {
+                          std::int64_t dipoles, std::int64_t quadrupoles, std::int64_t two_batch,
+                          std::int64_t mixer_vector) noexcept {
   const std::int64_t batch = plan.topology.batch_size;
   const std::int64_t atoms = plan.topology.total_atoms;
   const std::int64_t shells = plan.topology.total_shells;
   const std::int64_t orbitals = plan.topology.total_orbitals;
   const std::int64_t matrices = plan.topology.total_matrix_elements;
+  const auto& wavefunction = plan.wavefunction_layout;
   const auto exact = [&](std::int64_t actual, std::int64_t expected, BindingField field,
                          std::int64_t index = -1) {
     return validator.exact_count(actual, expected, field, index);
@@ -486,6 +533,11 @@ bool validate_plan_shapes(const Gfn2SccIterationDevicePlan& plan, Validator& val
       !exact(plan.potential_batch.batch_size, batch, BindingField::kPotential) ||
       !exact(plan.potential_batch.total_atoms, atoms, BindingField::kPotential) ||
       !exact(plan.potential_batch.total_shells, shells, BindingField::kPotential) ||
+      !exact(plan.spin_batch.batch_size, batch, BindingField::kSpin) ||
+      !exact(plan.spin_batch.total_atoms, atoms, BindingField::kSpin) ||
+      !exact(plan.spin_batch.total_shells, shells, BindingField::kSpin) ||
+      !exact(plan.spin_batch.shell_population_elements, wavefunction.total_spin_shells,
+             BindingField::kSpin) ||
       !exact(plan.hamiltonian_batch.batch_size, batch, BindingField::kHamiltonian) ||
       !exact(plan.hamiltonian_batch.total_atoms, atoms, BindingField::kHamiltonian) ||
       !exact(plan.hamiltonian_batch.total_shells, shells, BindingField::kHamiltonian) ||
@@ -526,7 +578,7 @@ bool validate_plan_shapes(const Gfn2SccIterationDevicePlan& plan, Validator& val
       plan.free_energy_batch.electronic_temperature < 0.0) {
     return validator.fail(BindingError::kInvalidCount, BindingField::kFreeEnergy);
   }
-  if (plan.publication_plan.total_mixer_vector_elements != shells + 9 * atoms ||
+  if (plan.publication_plan.total_mixer_vector_elements != mixer_vector ||
       plan.publication_plan.history_size != plan.mixer_policy.history_size ||
       plan.publication_plan.maximum_iterations != plan.activity_policy.maximum_iterations ||
       plan.publication_plan.residual_rms_tolerance != plan.mixer_policy.rms_tolerance ||
@@ -540,7 +592,9 @@ bool validate_plan_shapes(const Gfn2SccIterationDevicePlan& plan, Validator& val
       plan.publication_plan.shell_offsets != plan.topology.batch_shell_offsets ||
       plan.publication_plan.orbital_offsets != plan.topology.batch_orbital_offsets ||
       plan.publication_plan.matrix_offsets != plan.topology.matrix_offsets ||
-      plan.publication_plan.shell_to_atom != plan.topology.shell_to_atom) {
+      plan.publication_plan.shell_to_atom != plan.topology.shell_to_atom ||
+      !same_wavefunction_layout(plan.publication_plan.wavefunction_layout,
+                                plan.wavefunction_layout)) {
     return validator.fail(BindingError::kInvalidZeroCopyView, BindingField::kStatePublication);
   }
   if (!exact(plan.es2_batch.batch_size, batch, BindingField::kES2) ||
@@ -663,6 +717,31 @@ bool validate_plan_pointer_shapes(const Gfn2SccIterationDevicePlan& plan,
                BindingField::kPotential, 5) ||
       !aligned(potential.shell_to_atom, shells, sizeof(std::int64_t), alignof(std::int64_t),
                BindingField::kPotential, 6)) {
+    return false;
+  }
+
+  const auto& spin = plan.spin_batch;
+  if (!exact(spin.atom_offset_count, batch + 1, BindingField::kSpin, 0) ||
+      !exact(spin.batch_shell_offset_count, batch + 1, BindingField::kSpin, 1) ||
+      !exact(spin.atom_shell_offset_count, atoms + 1, BindingField::kSpin, 2) ||
+      !exact(spin.shell_population_offset_count, batch + 1, BindingField::kSpin, 3) ||
+      !exact(spin.spin_channel_count, batch, BindingField::kSpin, 4) ||
+      !exact(spin.coupling_offset_count, atoms + 1, BindingField::kSpin, 5) ||
+      spin.coupling_matrix_count <= 0 ||
+      !aligned(spin.atom_offsets, spin.atom_offset_count, sizeof(std::int64_t),
+               alignof(std::int64_t), BindingField::kSpin, 0) ||
+      !aligned(spin.batch_shell_offsets, spin.batch_shell_offset_count, sizeof(std::int64_t),
+               alignof(std::int64_t), BindingField::kSpin, 1) ||
+      !aligned(spin.atom_shell_offsets, spin.atom_shell_offset_count, sizeof(std::int64_t),
+               alignof(std::int64_t), BindingField::kSpin, 2) ||
+      !aligned(spin.shell_population_offsets, spin.shell_population_offset_count,
+               sizeof(std::int64_t), alignof(std::int64_t), BindingField::kSpin, 3) ||
+      !aligned(spin.spin_channels, spin.spin_channel_count, sizeof(std::int32_t),
+               alignof(std::int32_t), BindingField::kSpin, 4) ||
+      !aligned(spin.coupling_offsets, spin.coupling_offset_count, sizeof(std::int64_t),
+               alignof(std::int64_t), BindingField::kSpin, 5) ||
+      !aligned(spin.coupling_matrices, spin.coupling_matrix_count, sizeof(double), alignof(double),
+               BindingField::kSpin, 6)) {
     return false;
   }
 
@@ -921,47 +1000,69 @@ bool validate_provider(const Gfn2SccIterationDevicePlan& plan,
   std::int64_t system_cursor = 0;
   std::int64_t matrix_cursor = 0;
   std::int64_t orbital_cursor = 0;
+  std::int64_t solve_cursor = 0;
+  std::int64_t spin_matrix_cursor = 0;
+  std::int64_t spin_orbital_cursor = 0;
   for (std::int64_t index = 0; index < provider.bucket_count; ++index) {
     const Gfn2EigensolverBucket& bucket = provider.buckets[index];
     if (bucket.orbital_count <= 0 || bucket.system_count <= 0 ||
         bucket.system_index_offset != system_cursor ||
         bucket.matrix_scratch_offset != matrix_cursor ||
-        bucket.orbital_scratch_offset != orbital_cursor) {
+        bucket.orbital_scratch_offset != orbital_cursor || bucket.solve_count <= 0 ||
+        bucket.solve_index_offset != solve_cursor ||
+        bucket.spin_matrix_scratch_offset != spin_matrix_cursor ||
+        bucket.spin_orbital_scratch_offset != spin_orbital_cursor) {
       return validator.fail(BindingError::kInvalidBucket, BindingField::kEigensolver, index);
     }
     std::int64_t matrix_per_system = 0;
     std::int64_t bucket_matrices = 0;
     std::int64_t bucket_orbitals = 0;
+    std::int64_t bucket_spin_matrices = 0;
+    std::int64_t bucket_spin_orbitals = 0;
     if (!checked_multiply(bucket.orbital_count, bucket.orbital_count, matrix_per_system) ||
         !checked_multiply(matrix_per_system, bucket.system_count, bucket_matrices) ||
         !checked_multiply(bucket.orbital_count, bucket.system_count, bucket_orbitals) ||
+        !checked_multiply(matrix_per_system, bucket.solve_count, bucket_spin_matrices) ||
+        !checked_multiply(bucket.orbital_count, bucket.solve_count, bucket_spin_orbitals) ||
         !checked_add(system_cursor, bucket.system_count, system_cursor) ||
         !checked_add(matrix_cursor, bucket_matrices, matrix_cursor) ||
-        !checked_add(orbital_cursor, bucket_orbitals, orbital_cursor)) {
+        !checked_add(orbital_cursor, bucket_orbitals, orbital_cursor) ||
+        !checked_add(solve_cursor, bucket.solve_count, solve_cursor) ||
+        !checked_add(spin_matrix_cursor, bucket_spin_matrices, spin_matrix_cursor) ||
+        !checked_add(spin_orbital_cursor, bucket_spin_orbitals, spin_orbital_cursor)) {
       return validator.fail(BindingError::kInvalidBucket, BindingField::kEigensolver, index);
     }
   }
   if (system_cursor != plan.topology.batch_size ||
       matrix_cursor != plan.topology.total_matrix_elements ||
       orbital_cursor != plan.topology.total_orbitals ||
+      solve_cursor != plan.wavefunction_layout.total_spin_channels ||
+      spin_matrix_cursor != plan.wavefunction_layout.total_spin_matrix_elements ||
+      spin_orbital_cursor != plan.wavefunction_layout.total_spin_orbitals ||
       plan.eigensolver_batch.bucket_system_count != system_cursor) {
     return validator.fail(BindingError::kInvalidBucket, BindingField::kEigensolver);
   }
-  if (!validator.capacity(solver_workspace.matrix_a_elements, matrix_cursor,
+  if (!validator.capacity(solver_workspace.matrix_a_elements, spin_matrix_cursor,
                           BindingField::kEigensolver) ||
-      !validator.capacity(solver_workspace.matrix_b_elements, matrix_cursor,
+      !validator.capacity(solver_workspace.matrix_b_elements, spin_matrix_cursor,
                           BindingField::kEigensolver) ||
-      !validator.capacity(solver_workspace.eigenvalue_elements, orbital_cursor,
+      !validator.capacity(solver_workspace.eigenvalue_elements, spin_orbital_cursor,
                           BindingField::kEigensolver) ||
-      !validator.capacity(solver_workspace.factor_pointer_elements, system_cursor,
+      !validator.capacity(solver_workspace.factor_pointer_elements, solve_cursor,
                           BindingField::kEigensolver) ||
-      !validator.capacity(solver_workspace.matrix_pointer_elements, system_cursor,
+      !validator.capacity(solver_workspace.matrix_pointer_elements, solve_cursor,
                           BindingField::kEigensolver) ||
-      !validator.capacity(solver_workspace.info_a_elements, system_cursor,
+      !validator.capacity(solver_workspace.info_a_elements, solve_cursor,
                           BindingField::kEigensolver) ||
-      !validator.capacity(solver_workspace.info_b_elements, system_cursor,
+      !validator.capacity(solver_workspace.info_b_elements, solve_cursor,
                           BindingField::kEigensolver) ||
-      !validator.capacity(solver_workspace.eligible_elements, system_cursor,
+      !validator.capacity(solver_workspace.eligible_elements, solve_cursor,
+                          BindingField::kEigensolver) ||
+      !validator.capacity(solver_workspace.compact_system_elements, solve_cursor,
+                          BindingField::kEigensolver) ||
+      !validator.capacity(solver_workspace.compact_source_slot_elements, solve_cursor,
+                          BindingField::kEigensolver) ||
+      !validator.capacity(solver_workspace.bucket_activity_elements, provider.bucket_count,
                           BindingField::kEigensolver) ||
       !validator.exact_count(solver_workspace.sequence_active_elements, 1,
                              BindingField::kEigensolver)) {
@@ -983,6 +1084,10 @@ bool validate_stage_reports(const Gfn2SccIterationDevicePlan& plan,
     switch (stage) {
       case Gfn2SccStageId::kMixedGather:
         spec.mask = 0xfcu;
+        return true;
+      case Gfn2SccStageId::kSpinPotential:
+      case Gfn2SccStageId::kSpinRawEnergy:
+        spec.mask = kGfn2SpinDevicePeerErrorMask;
         return true;
       case Gfn2SccStageId::kES2Potential:
         spec.role = Gfn2SccStageDeviceCodeRole::kPlanOnly;
@@ -1038,7 +1143,7 @@ bool validate_stage_reports(const Gfn2SccIterationDevicePlan& plan,
         spec.mask = 0xfcu;
         return true;
       case Gfn2SccStageId::kFreeEnergy:
-        spec.mask = 0xffeu;
+        spec.mask = 0x1ffeu;
         return true;
       case Gfn2SccStageId::kMixer:
         spec.format = Gfn2SccStageCodeFormat::kGpuxtbStatus;
@@ -1092,8 +1197,8 @@ bool validate_stage_reports(const Gfn2SccIterationDevicePlan& plan,
   const std::int64_t batch = plan.topology.batch_size;
   std::uint64_t seen = 0u;
   std::uint64_t expected = 0u;
-  for (std::uint32_t raw = 1u;
-       raw <= static_cast<std::uint32_t>(Gfn2SccStageId::kPeriodicRawEnergy); ++raw) {
+  for (std::uint32_t raw = 1u; raw <= static_cast<std::uint32_t>(Gfn2SccStageId::kSpinRawEnergy);
+       ++raw) {
     ReportSpec spec{};
     if (spec_for(static_cast<Gfn2SccStageId>(raw), spec))
       expected |= std::uint64_t{1} << (raw - 1u);
@@ -1195,6 +1300,10 @@ bool validate_stage_reports(const Gfn2SccIterationDevicePlan& plan,
       case Gfn2SccStageId::kMulliken:
         expected_sequence = workspace.mulliken_workspace.sequence_active;
         break;
+      case Gfn2SccStageId::kSpinPotential:
+      case Gfn2SccStageId::kSpinRawEnergy:
+        expected_sequence = workspace.spin_workspace.sequence_active;
+        break;
       case Gfn2SccStageId::kClassicalEnergy:
         expected_sequence = workspace.classical_energy_workspace.sequence_active;
         break;
@@ -1233,6 +1342,7 @@ bool validate_zero_copy_views(const Gfn2SccIterationDevicePlan& plan,
                               const Gfn2SccIterationDeviceState& state,
                               const Gfn2SccIterationDeviceWorkspace& workspace,
                               Validator& validator) noexcept {
+  const bool mixed_spin = plan.wavefunction_layout.total_spin_channels != plan.topology.batch_size;
   const auto equal = [&](bool condition, BindingField field, std::int64_t index = -1) {
     return condition || validator.fail(BindingError::kInvalidZeroCopyView, field, index);
   };
@@ -1258,7 +1368,8 @@ bool validate_zero_copy_views(const Gfn2SccIterationDevicePlan& plan,
   }
   if (!equal(input.mixed_fields.qsh == state.scc.current_inputs.shell_charges &&
                  input.mixed_fields.dipoles == state.scc.current_inputs.atomic_dipoles &&
-                 input.mixed_fields.quadrupoles == state.scc.current_inputs.atomic_quadrupoles,
+                 input.mixed_fields.quadrupoles == state.scc.current_inputs.atomic_quadrupoles &&
+                 input.mixed_spin.shell_populations == input.mixed_fields.qsh,
              BindingField::kPotential)) {
     return false;
   }
@@ -1285,10 +1396,12 @@ bool validate_zero_copy_views(const Gfn2SccIterationDevicePlan& plan,
              BindingField::kPotential)) {
     return false;
   }
+  const double* expected_shell_potential =
+      mixed_spin ? workspace.complete_potentials.shell : workspace.scalar_bridge.shell_scalar;
   if (!equal(
           workspace.scalar_bridge.fields.shell == workspace.complete_potentials.shell &&
               workspace.scalar_bridge.fields.atomic == workspace.complete_potentials.atomic &&
-              input.hamiltonian.shell_scalar_potentials == workspace.scalar_bridge.shell_scalar &&
+              input.hamiltonian.shell_scalar_potentials == expected_shell_potential &&
               input.hamiltonian.atomic_dipole_potentials == workspace.complete_potentials.dipole &&
               input.hamiltonian.atomic_quadrupole_potentials ==
                   workspace.complete_potentials.quadrupole &&
@@ -1317,11 +1430,13 @@ bool validate_zero_copy_views(const Gfn2SccIterationDevicePlan& plan,
              BindingField::kElectronicEnergy)) {
     return false;
   }
-  if (!equal(
-          input.raw_multipoles.shell_charges == workspace.staged_raw_population.qsh &&
-              input.raw_multipoles.atomic_dipoles == workspace.staged_raw_population.dipole &&
-              input.raw_multipoles.atomic_quadrupoles == workspace.staged_raw_population.quadrupole,
-          BindingField::kMulliken)) {
+  if (!equal(input.raw_multipoles.shell_charges == workspace.staged_raw_population.qsh &&
+                 input.raw_multipoles.atomic_dipoles == workspace.staged_raw_population.dipole &&
+                 input.raw_multipoles.atomic_quadrupoles ==
+                     workspace.staged_raw_population.quadrupole &&
+                 input.raw_spin.shell_populations == workspace.staged_raw_population.qsh &&
+                 workspace.spin_output.spin_energies == workspace.staged_spin_energies,
+             BindingField::kMulliken)) {
     return false;
   }
 
@@ -1336,7 +1451,7 @@ bool validate_zero_copy_views(const Gfn2SccIterationDevicePlan& plan,
       !equal(free.core == storage.core_energy &&
                  free.entropy == workspace.staged_occupations.entropies &&
                  free.es2 == storage.es2_energy && free.es3 == storage.es3_energy &&
-                 free.aes2 == storage.aes2_energy &&
+                 free.aes2 == storage.aes2_energy && free.spin == workspace.staged_spin_energies &&
                  free.d4_two_body == storage.d4_two_body_energy &&
                  free.explicit_point_charge == storage.explicit_point_charge_energy &&
                  free.periodic_embedding == storage.periodic_embedding_energy &&
@@ -1355,6 +1470,7 @@ bool validate_zero_copy_views(const Gfn2SccIterationDevicePlan& plan,
           state.free_energy.es2 == state.classical_energy.es2 &&
               state.free_energy.es3 == state.classical_energy.es3 &&
               state.free_energy.aes2 == state.classical_energy.aes2 &&
+              state.free_energy.spin == state.spin_energies &&
               state.free_energy.d4_two_body == state.classical_energy.d4_two_body &&
               state.free_energy.explicit_point_charge ==
                   state.classical_energy.explicit_point_charge &&
@@ -1362,6 +1478,7 @@ bool validate_zero_copy_views(const Gfn2SccIterationDevicePlan& plan,
               workspace.staged_free_energy.es2 == workspace.staged_classical_energy.es2 &&
               workspace.staged_free_energy.es3 == workspace.staged_classical_energy.es3 &&
               workspace.staged_free_energy.aes2 == workspace.staged_classical_energy.aes2 &&
+              workspace.staged_free_energy.spin == workspace.staged_spin_energies &&
               workspace.staged_free_energy.d4_two_body ==
                   workspace.staged_classical_energy.d4_two_body &&
               workspace.staged_free_energy.explicit_point_charge ==
@@ -1379,6 +1496,8 @@ bool validate_zero_copy_views(const Gfn2SccIterationDevicePlan& plan,
                  same_population(public_view.wavefunction.population, state.raw_population) &&
                  same_classical_diagnostics(public_view.energy.classical, state.classical_energy) &&
                  same_free_energy_diagnostics(public_view.energy.free_energy, state.free_energy) &&
+                 public_view.energy.spin_energies == state.spin_energies &&
+                 public_view.energy.spin_energy_elements == state.spin_energy_elements &&
                  same_mixer_state(public_view.mixer, state.mixer) &&
                  same_multipoles(public_view.published, state.published) &&
                  same_scc_state(public_view.scc, state.scc),
@@ -1397,6 +1516,8 @@ bool validate_zero_copy_views(const Gfn2SccIterationDevicePlan& plan,
                                             workspace.staged_classical_energy) &&
                  same_free_energy_diagnostics(staged_view.energy.free_energy,
                                               workspace.staged_free_energy) &&
+                 staged_view.energy.spin_energies == workspace.staged_spin_energies &&
+                 staged_view.energy.spin_energy_elements == workspace.staged_spin_energy_elements &&
                  same_mixer_state(staged_view.mixer, workspace.staged_mixer) &&
                  same_const_multipoles(staged_view.next_mixed, workspace.next_mixed),
              BindingField::kStatePublication)) {
@@ -1420,10 +1541,19 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
                            std::int64_t two_orbitals, std::int64_t mixer_vector,
                            Validator& validator) noexcept {
   const std::int64_t batch = plan.topology.batch_size;
-  const std::int64_t atoms = plan.topology.total_atoms;
   const std::int64_t shells = plan.topology.total_shells;
-  const std::int64_t orbitals = plan.topology.total_orbitals;
   const std::int64_t matrices = plan.topology.total_matrix_elements;
+  const std::int64_t spin_shells = plan.wavefunction_layout.total_spin_shells;
+  const std::int64_t spin_atoms = plan.wavefunction_layout.total_spin_atoms;
+  const std::int64_t spin_orbitals = plan.wavefunction_layout.total_spin_orbitals;
+  const std::int64_t spin_matrices = plan.wavefunction_layout.total_spin_matrix_elements;
+  const bool mixed_spin = plan.wavefunction_layout.total_spin_channels != plan.topology.batch_size;
+  std::int64_t spin_dipoles = 0;
+  std::int64_t spin_quadrupoles = 0;
+  if (!checked_multiply(spin_atoms, 3, spin_dipoles) ||
+      !checked_multiply(spin_atoms, 6, spin_quadrupoles)) {
+    return validator.fail(BindingError::kInvalidCount, BindingField::kSpin);
+  }
   std::uint32_t group = 1u;
   const auto exact = [&](std::int64_t actual, std::int64_t expected, BindingField field,
                          std::int64_t index = -1) {
@@ -1467,36 +1597,41 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
     return false;
   }
 
-  if (!exact(input.mixed_fields.qsh_elements, shells, BindingField::kPotential) ||
-      !exact(input.mixed_fields.dipole_elements, dipoles, BindingField::kPotential) ||
-      !exact(input.mixed_fields.quadrupole_elements, quadrupoles, BindingField::kPotential) ||
+  if (!exact(input.mixed_fields.qsh_elements, spin_shells, BindingField::kPotential) ||
+      !exact(input.mixed_fields.dipole_elements, spin_dipoles, BindingField::kPotential) ||
+      !exact(input.mixed_fields.quadrupole_elements, spin_quadrupoles, BindingField::kPotential) ||
+      !exact(input.mixed_spin.shell_population_elements, spin_shells, BindingField::kSpin) ||
+      !exact(input.raw_spin.shell_population_elements, spin_shells, BindingField::kSpin) ||
       !exact(input.hamiltonian.h0_elements, matrices, BindingField::kHamiltonian) ||
       !exact(input.hamiltonian.overlap_elements, matrices, BindingField::kHamiltonian) ||
       !exact(input.hamiltonian.dipole_integral_elements, 3 * matrices,
              BindingField::kHamiltonian) ||
       !exact(input.hamiltonian.quadrupole_integral_elements, 6 * matrices,
              BindingField::kHamiltonian) ||
-      !exact(input.hamiltonian.shell_scalar_elements, shells, BindingField::kHamiltonian) ||
-      !exact(input.hamiltonian.atomic_dipole_elements, dipoles, BindingField::kHamiltonian) ||
-      !exact(input.hamiltonian.atomic_quadrupole_elements, quadrupoles,
+      !exact(input.hamiltonian.shell_scalar_elements, mixed_spin ? spin_shells : shells,
              BindingField::kHamiltonian) ||
-      !exact(input.eigensolver_hamiltonian_elements, matrices, BindingField::kEigensolver) ||
-      !exact(input.occupation_eigenvalue_elements, orbitals, BindingField::kOccupations) ||
-      !exact(input.density.coefficient_elements, matrices, BindingField::kDensity) ||
-      !exact(input.density.eigenvalue_elements, orbitals, BindingField::kDensity) ||
+      !exact(input.hamiltonian.atomic_dipole_elements, mixed_spin ? spin_dipoles : dipoles,
+             BindingField::kHamiltonian) ||
+      !exact(input.hamiltonian.atomic_quadrupole_elements,
+             mixed_spin ? spin_quadrupoles : quadrupoles, BindingField::kHamiltonian) ||
+      !exact(input.eigensolver_hamiltonian_elements, spin_matrices, BindingField::kEigensolver) ||
+      !exact(input.occupation_eigenvalue_elements, spin_orbitals, BindingField::kOccupations) ||
+      !exact(input.density.coefficient_elements, spin_matrices, BindingField::kDensity) ||
+      !exact(input.density.eigenvalue_elements, spin_orbitals, BindingField::kDensity) ||
       !exact(input.density.occupation_elements, two_orbitals, BindingField::kDensity) ||
       !exact(input.density.active_elements, batch, BindingField::kDensity) ||
-      !exact(input.mulliken.density_elements, matrices, BindingField::kMulliken) ||
+      !exact(input.mulliken.density_elements, spin_matrices, BindingField::kMulliken) ||
       !exact(input.mulliken.overlap_elements, matrices, BindingField::kMulliken) ||
       !exact(input.mulliken.dipole_integral_elements, 3 * matrices, BindingField::kMulliken) ||
       !exact(input.mulliken.quadrupole_integral_elements, 6 * matrices, BindingField::kMulliken) ||
-      !exact(input.electronic_energy.density_elements, matrices, BindingField::kElectronicEnergy) ||
+      !exact(input.electronic_energy.density_elements, spin_matrices,
+             BindingField::kElectronicEnergy) ||
       !exact(input.electronic_energy.h0_elements, matrices, BindingField::kElectronicEnergy) ||
       !exact(input.electronic_energy.entropy_elements, batch, BindingField::kElectronicEnergy) ||
       !exact(input.complete_free_energy_elements, batch, BindingField::kFreeEnergy) ||
-      !exact(input.raw_multipoles.shell_elements, shells, BindingField::kMulliken) ||
-      !exact(input.raw_multipoles.dipole_elements, dipoles, BindingField::kMulliken) ||
-      !exact(input.raw_multipoles.quadrupole_elements, quadrupoles, BindingField::kMulliken)) {
+      !exact(input.raw_multipoles.shell_elements, spin_shells, BindingField::kMulliken) ||
+      !exact(input.raw_multipoles.dipole_elements, spin_dipoles, BindingField::kMulliken) ||
+      !exact(input.raw_multipoles.quadrupole_elements, spin_quadrupoles, BindingField::kMulliken)) {
     return false;
   }
 
@@ -1518,10 +1653,10 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
 
   const auto validate_eigenpairs = [&](const Gfn2EigensolverDeviceResults& results,
                                        BindingField field) {
-    return exact(results.eigenvalue_elements, orbitals, field) &&
-           exact(results.coefficient_elements, matrices, field) &&
-           write(results.eigenvalues, orbitals, sizeof(double), alignof(double), field, 0) &&
-           write(results.coefficients, matrices, sizeof(double), alignof(double), field, 1);
+    return exact(results.eigenvalue_elements, spin_orbitals, field) &&
+           exact(results.coefficient_elements, spin_matrices, field) &&
+           write(results.eigenvalues, spin_orbitals, sizeof(double), alignof(double), field, 0) &&
+           write(results.coefficients, spin_matrices, sizeof(double), alignof(double), field, 1);
   };
   const auto validate_occupations = [&](const Gfn2OccupationsDeviceResults& results,
                                         BindingField field) {
@@ -1536,36 +1671,55 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
            write(results.entropies, batch, sizeof(double), alignof(double), field, 3);
   };
   const auto validate_density = [&](const Gfn2DensityDeviceResults& results, BindingField field) {
-    return exact(results.density_elements, matrices, field) &&
-           exact(results.weighted_density_elements, matrices, field) &&
+    return exact(results.density_elements, spin_matrices, field) &&
+           exact(results.weighted_density_elements, spin_matrices, field) &&
            exact(results.band_energy_elements, batch, field) &&
            exact(results.occupation_sum_elements, batch, field) &&
            exact(results.density_trace_elements, batch, field) &&
            exact(results.weighted_density_trace_elements, batch, field) &&
-           write(results.density, matrices, sizeof(double), alignof(double), field, 0) &&
-           write(results.energy_weighted_density, matrices, sizeof(double), alignof(double), field,
-                 1) &&
+           exact(results.channel_band_energy_elements, plan.wavefunction_layout.total_spin_channels,
+                 field) &&
+           exact(results.channel_occupation_sum_elements,
+                 plan.wavefunction_layout.total_spin_channels, field) &&
+           exact(results.channel_density_trace_elements,
+                 plan.wavefunction_layout.total_spin_channels, field) &&
+           exact(results.channel_weighted_density_trace_elements,
+                 plan.wavefunction_layout.total_spin_channels, field) &&
+           write(results.density, spin_matrices, sizeof(double), alignof(double), field, 0) &&
+           write(results.energy_weighted_density, spin_matrices, sizeof(double), alignof(double),
+                 field, 1) &&
            write(results.band_energies, batch, sizeof(double), alignof(double), field, 2) &&
            write(results.occupation_sums, batch, sizeof(double), alignof(double), field, 3) &&
            write(results.density_traces, batch, sizeof(double), alignof(double), field, 4) &&
-           write(results.weighted_density_traces, batch, sizeof(double), alignof(double), field, 5);
+           write(results.weighted_density_traces, batch, sizeof(double), alignof(double), field,
+                 5) &&
+           write(results.channel_band_energies, plan.wavefunction_layout.total_spin_channels,
+                 sizeof(double), alignof(double), field, 6) &&
+           write(results.channel_occupation_sums, plan.wavefunction_layout.total_spin_channels,
+                 sizeof(double), alignof(double), field, 7) &&
+           write(results.channel_density_traces, plan.wavefunction_layout.total_spin_channels,
+                 sizeof(double), alignof(double), field, 8) &&
+           write(results.channel_weighted_density_traces,
+                 plan.wavefunction_layout.total_spin_channels, sizeof(double), alignof(double),
+                 field, 9);
   };
   const auto validate_population = [&](const Gfn2MullikenDevicePopulation& population,
                                        BindingField field, bool include_public_alias) {
-    if (!exact(population.qsh_elements, shells, field) ||
-        !exact(population.qat_elements, atoms, field) ||
-        !exact(population.dipole_elements, dipoles, field) ||
-        !exact(population.quadrupole_elements, quadrupoles, field)) {
+    if (!exact(population.qsh_elements, spin_shells, field) ||
+        !exact(population.qat_elements, spin_atoms, field) ||
+        !exact(population.dipole_elements, spin_dipoles, field) ||
+        !exact(population.quadrupole_elements, spin_quadrupoles, field)) {
       return false;
     }
     if (include_public_alias) {
       /* qsh/d/Q are registered through state.published below. */
-      return write(population.qat, atoms, sizeof(double), alignof(double), field, 1);
+      return write(population.qat, spin_atoms, sizeof(double), alignof(double), field, 1);
     }
-    return write(population.qsh, shells, sizeof(double), alignof(double), field, 0) &&
-           write(population.qat, atoms, sizeof(double), alignof(double), field, 1) &&
-           write(population.dipole, dipoles, sizeof(double), alignof(double), field, 2) &&
-           write(population.quadrupole, quadrupoles, sizeof(double), alignof(double), field, 3);
+    return write(population.qsh, spin_shells, sizeof(double), alignof(double), field, 0) &&
+           write(population.qat, spin_atoms, sizeof(double), alignof(double), field, 1) &&
+           write(population.dipole, spin_dipoles, sizeof(double), alignof(double), field, 2) &&
+           write(population.quadrupole, spin_quadrupoles, sizeof(double), alignof(double), field,
+                 3);
   };
   if (!validate_eigenpairs(state.eigenpairs, BindingField::kStatePublication) ||
       !validate_occupations(state.occupations, BindingField::kStatePublication) ||
@@ -1577,19 +1731,28 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
       !validate_population(workspace.staged_raw_population, BindingField::kMulliken, false)) {
     return false;
   }
+  if (!exact(state.spin_energy_elements, batch, BindingField::kStatePublication) ||
+      !exact(workspace.staged_spin_energy_elements, batch, BindingField::kSpin) ||
+      !exact(workspace.spin_output.spin_energy_elements, batch, BindingField::kSpin) ||
+      !exact(workspace.spin_output.shell_potential_elements, spin_shells, BindingField::kSpin) ||
+      !write(workspace.spin_output.shell_potentials, spin_shells, sizeof(double), alignof(double),
+             BindingField::kSpin, 0)) {
+    return false;
+  }
 
   const auto validate_multipoles = [&](const Gfn2SccDeviceMultipoles& multipoles,
                                        BindingField field, bool register_ranges) {
-    if (!exact(multipoles.shell_elements, shells, field) ||
-        !exact(multipoles.dipole_elements, dipoles, field) ||
-        !exact(multipoles.quadrupole_elements, quadrupoles, field)) {
+    if (!exact(multipoles.shell_elements, spin_shells, field) ||
+        !exact(multipoles.dipole_elements, spin_dipoles, field) ||
+        !exact(multipoles.quadrupole_elements, spin_quadrupoles, field)) {
       return false;
     }
-    return !register_ranges ||
-           (write(multipoles.shell_charges, shells, sizeof(double), alignof(double), field, 0) &&
-            write(multipoles.atomic_dipoles, dipoles, sizeof(double), alignof(double), field, 1) &&
-            write(multipoles.atomic_quadrupoles, quadrupoles, sizeof(double), alignof(double),
-                  field, 2));
+    return !register_ranges || (write(multipoles.shell_charges, spin_shells, sizeof(double),
+                                      alignof(double), field, 0) &&
+                                write(multipoles.atomic_dipoles, spin_dipoles, sizeof(double),
+                                      alignof(double), field, 1) &&
+                                write(multipoles.atomic_quadrupoles, spin_quadrupoles,
+                                      sizeof(double), alignof(double), field, 2));
   };
   if (!validate_multipoles(state.published, BindingField::kStatePublication, true) ||
       !validate_multipoles(state.scc.current_inputs, BindingField::kStatePublication, true) ||
@@ -1662,7 +1825,15 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
   const std::int64_t batch = plan.topology.batch_size;
   const std::int64_t atoms = plan.topology.total_atoms;
   const std::int64_t shells = plan.topology.total_shells;
-  const std::int64_t matrices = plan.topology.total_matrix_elements;
+  const std::int64_t spin_shells = plan.wavefunction_layout.total_spin_shells;
+  const std::int64_t spin_atoms = plan.wavefunction_layout.total_spin_atoms;
+  const std::int64_t spin_matrices = plan.wavefunction_layout.total_spin_matrix_elements;
+  std::int64_t spin_dipoles = 0;
+  std::int64_t spin_quadrupoles = 0;
+  if (!checked_multiply(spin_atoms, 3, spin_dipoles) ||
+      !checked_multiply(spin_atoms, 6, spin_quadrupoles)) {
+    return validator.fail(BindingError::kInvalidCount, BindingField::kPotential);
+  }
   std::uint32_t group = 1000u;
   const auto exact = [&](std::int64_t actual, std::int64_t expected, BindingField field,
                          std::int64_t index = -1) {
@@ -1757,32 +1928,49 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
     return false;
   }
 
-  if (!exact(workspace.mixed_topology.shell_elements, shells, BindingField::kPotential) ||
-      !exact(workspace.mixed_topology.atom_elements, atoms, BindingField::kPotential) ||
-      !exact(workspace.mixed_topology.dipole_elements, dipoles, BindingField::kPotential) ||
-      !exact(workspace.mixed_topology.quadrupole_elements, quadrupoles, BindingField::kPotential) ||
-      !write(workspace.mixed_topology.atomic_charges, atoms, sizeof(double), alignof(double),
-             BindingField::kPotential, 10) ||
-      !exact(workspace.complete_potentials.shell_elements, shells, BindingField::kPotential) ||
-      !exact(workspace.complete_potentials.atom_elements, atoms, BindingField::kPotential) ||
-      !exact(workspace.complete_potentials.dipole_elements, dipoles, BindingField::kPotential) ||
-      !exact(workspace.complete_potentials.quadrupole_elements, quadrupoles,
+  if (!exact(workspace.mixed_topology.shell_elements, spin_shells, BindingField::kPotential) ||
+      !exact(workspace.mixed_topology.atom_elements, spin_atoms, BindingField::kPotential) ||
+      !exact(workspace.mixed_topology.dipole_elements, spin_dipoles, BindingField::kPotential) ||
+      !exact(workspace.mixed_topology.quadrupole_elements, spin_quadrupoles,
              BindingField::kPotential) ||
-      !write(workspace.complete_potentials.shell, shells, sizeof(double), alignof(double),
+      !write(workspace.mixed_topology.atomic_charges, spin_atoms, sizeof(double), alignof(double),
+             BindingField::kPotential, 10) ||
+      !exact(workspace.physical_topology.shell_elements, shells, BindingField::kPotential) ||
+      !exact(workspace.physical_topology.atom_elements, atoms, BindingField::kPotential) ||
+      !exact(workspace.physical_topology.dipole_elements, dipoles, BindingField::kPotential) ||
+      !exact(workspace.physical_topology.quadrupole_elements, quadrupoles,
+             BindingField::kPotential) ||
+      !write(workspace.physical_topology.shell_charges, shells, sizeof(double), alignof(double),
+             BindingField::kPotential, 15) ||
+      !write(workspace.physical_topology.atomic_charges, atoms, sizeof(double), alignof(double),
+             BindingField::kPotential, 16) ||
+      !write(workspace.physical_topology.atomic_dipoles, dipoles, sizeof(double), alignof(double),
+             BindingField::kPotential, 17) ||
+      !write(workspace.physical_topology.atomic_quadrupoles, quadrupoles, sizeof(double),
+             alignof(double), BindingField::kPotential, 18) ||
+      !exact(workspace.complete_potentials.shell_elements, spin_shells, BindingField::kPotential) ||
+      !exact(workspace.complete_potentials.atom_elements, spin_atoms, BindingField::kPotential) ||
+      !exact(workspace.complete_potentials.dipole_elements, spin_dipoles,
+             BindingField::kPotential) ||
+      !exact(workspace.complete_potentials.quadrupole_elements, spin_quadrupoles,
+             BindingField::kPotential) ||
+      !write(workspace.complete_potentials.shell, spin_shells, sizeof(double), alignof(double),
              BindingField::kPotential, 11) ||
-      !write(workspace.complete_potentials.atomic, atoms, sizeof(double), alignof(double),
+      !write(workspace.complete_potentials.atomic, spin_atoms, sizeof(double), alignof(double),
              BindingField::kPotential, 12) ||
-      !write(workspace.complete_potentials.dipole, dipoles, sizeof(double), alignof(double),
+      !write(workspace.complete_potentials.dipole, spin_dipoles, sizeof(double), alignof(double),
              BindingField::kPotential, 13) ||
-      !write(workspace.complete_potentials.quadrupole, quadrupoles, sizeof(double), alignof(double),
-             BindingField::kPotential, 14) ||
-      !exact(workspace.scalar_bridge.fields.shell_elements, shells, BindingField::kScalarBridge) ||
-      !exact(workspace.scalar_bridge.fields.atom_elements, atoms, BindingField::kScalarBridge) ||
+      !write(workspace.complete_potentials.quadrupole, spin_quadrupoles, sizeof(double),
+             alignof(double), BindingField::kPotential, 14) ||
+      !exact(workspace.scalar_bridge.fields.shell_elements, spin_shells,
+             BindingField::kScalarBridge) ||
+      !exact(workspace.scalar_bridge.fields.atom_elements, spin_atoms,
+             BindingField::kScalarBridge) ||
       !exact(workspace.scalar_bridge.shell_elements, shells, BindingField::kScalarBridge) ||
       !write(workspace.scalar_bridge.shell_scalar, shells, sizeof(double), alignof(double),
              BindingField::kScalarBridge, 0) ||
-      !exact(workspace.hamiltonian.elements, matrices, BindingField::kHamiltonian) ||
-      !write(workspace.hamiltonian.matrix, matrices, sizeof(double), alignof(double),
+      !exact(workspace.hamiltonian.elements, spin_matrices, BindingField::kHamiltonian) ||
+      !write(workspace.hamiltonian.matrix, spin_matrices, sizeof(double), alignof(double),
              BindingField::kHamiltonian, 0)) {
     return false;
   }
@@ -1822,12 +2010,14 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
            check(values.es2, values.es2_elements, Gfn2SccPotentialComponent::kES2, 2) &&
            check(values.es3, values.es3_elements, Gfn2SccPotentialComponent::kES3, 3) &&
            check(values.aes2, values.aes2_elements, Gfn2SccPotentialComponent::kAES2, 4) &&
+           exact(values.spin_elements, batch, BindingField::kFreeEnergy, 5) &&
+           values.spin != nullptr &&
            check(values.d4_two_body, values.d4_two_body_elements,
-                 Gfn2SccPotentialComponent::kD4TwoBody, 5) &&
+                 Gfn2SccPotentialComponent::kD4TwoBody, 6) &&
            check(values.explicit_point_charge, values.explicit_point_charge_elements,
-                 Gfn2SccPotentialComponent::kExplicitPointCharge, 6) &&
+                 Gfn2SccPotentialComponent::kExplicitPointCharge, 7) &&
            check(values.periodic_embedding, values.periodic_embedding_elements,
-                 Gfn2SccPotentialComponent::kPeriodicEmbedding, 7);
+                 Gfn2SccPotentialComponent::kPeriodicEmbedding, 8);
   };
   if (!validate_free_input(input.free_energy)) {
     return false;
@@ -1859,11 +2049,12 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
   };
   const auto validate_free_diagnostics = [&](const Gfn2SccFreeEnergyDeviceDiagnostics& d,
                                              BindingField field, bool staged) {
-    const std::array<std::pair<double*, std::int64_t>, 10> fields{{
+    const std::array<std::pair<double*, std::int64_t>, 11> fields{{
         {d.core, d.core_elements},
         {d.es2, d.es2_elements},
         {d.es3, d.es3_elements},
         {d.aes2, d.aes2_elements},
+        {d.spin, d.spin_elements},
         {d.d4_two_body, d.d4_two_body_elements},
         {d.explicit_point_charge, d.explicit_point_charge_elements},
         {d.periodic_embedding, d.periodic_embedding_elements},
@@ -1878,7 +2069,7 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
       /* #99 deliberately reuses the staged occupation entropy as the
        * complete free-energy entropy diagnostic. The free-energy primitive
        * reads it into scratch before publishing the identical value. */
-      if (staged && index == 7u) {
+      if (staged && index == 8u) {
         if (fields[index].first != workspace.staged_occupations.entropies) {
           return validator.fail(BindingError::kInvalidZeroCopyView, BindingField::kStatePublication,
                                 7);
@@ -1900,7 +2091,6 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
     return false;
   }
 
-  (void)matrices;
   return true;
 }
 
@@ -1912,8 +2102,17 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
   const std::int64_t batch = plan.topology.batch_size;
   const std::int64_t atoms = plan.topology.total_atoms;
   const std::int64_t shells = plan.topology.total_shells;
-  const std::int64_t orbitals = plan.topology.total_orbitals;
-  const std::int64_t matrices = plan.topology.total_matrix_elements;
+  const std::int64_t spin_channels = plan.wavefunction_layout.total_spin_channels;
+  const std::int64_t spin_shells = plan.wavefunction_layout.total_spin_shells;
+  const std::int64_t spin_atoms = plan.wavefunction_layout.total_spin_atoms;
+  const std::int64_t spin_orbitals = plan.wavefunction_layout.total_spin_orbitals;
+  const std::int64_t spin_matrices = plan.wavefunction_layout.total_spin_matrix_elements;
+  std::int64_t spin_dipoles = 0;
+  std::int64_t spin_quadrupoles = 0;
+  if (!checked_multiply(spin_atoms, 3, spin_dipoles) ||
+      !checked_multiply(spin_atoms, 6, spin_quadrupoles)) {
+    return validator.fail(BindingError::kInvalidCount, BindingField::kSpin);
+  }
   std::uint32_t group = 2000u;
   const auto exact = [&](std::int64_t actual, std::int64_t expected, BindingField field,
                          std::int64_t index = -1) {
@@ -2092,16 +2291,16 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
   }
 
   if (!scratch(workspace.potential_workspace.shell_scratch,
-               workspace.potential_workspace.shell_elements, shells, sizeof(double),
+               workspace.potential_workspace.shell_elements, spin_shells, sizeof(double),
                alignof(double), BindingField::kPotential, 20) ||
       !scratch(workspace.potential_workspace.atom_scratch,
-               workspace.potential_workspace.atom_elements, atoms, sizeof(double), alignof(double),
-               BindingField::kPotential, 21) ||
+               workspace.potential_workspace.atom_elements, spin_atoms, sizeof(double),
+               alignof(double), BindingField::kPotential, 21) ||
       !scratch(workspace.potential_workspace.dipole_scratch,
-               workspace.potential_workspace.dipole_elements, dipoles, sizeof(double),
+               workspace.potential_workspace.dipole_elements, spin_dipoles, sizeof(double),
                alignof(double), BindingField::kPotential, 22) ||
       !scratch(workspace.potential_workspace.quadrupole_scratch,
-               workspace.potential_workspace.quadrupole_elements, quadrupoles, sizeof(double),
+               workspace.potential_workspace.quadrupole_elements, spin_quadrupoles, sizeof(double),
                alignof(double), BindingField::kPotential, 23) ||
       !scratch(workspace.potential_workspace.sequence_active,
                workspace.potential_workspace.sequence_elements, 1, sizeof(std::uint32_t),
@@ -2113,7 +2312,7 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
                workspace.scalar_bridge.workspace.sequence_elements, 1, sizeof(std::uint32_t),
                alignof(std::uint32_t), BindingField::kScalarBridge, 21) ||
       !scratch(workspace.hamiltonian_workspace.matrix_scratch,
-               workspace.hamiltonian_workspace.matrix_elements, matrices, sizeof(double),
+               workspace.hamiltonian_workspace.matrix_elements, spin_matrices, sizeof(double),
                alignof(double), BindingField::kHamiltonian, 20) ||
       !scratch(workspace.hamiltonian_workspace.sequence_active,
                workspace.hamiltonian_workspace.sequence_elements, 1, sizeof(std::uint32_t),
@@ -2122,24 +2321,31 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
   }
 
   const auto& eig = workspace.eigensolver_workspace;
-  if (!scratch(eig.matrix_scratch_a, eig.matrix_a_elements, matrices, sizeof(double),
+  if (!scratch(eig.matrix_scratch_a, eig.matrix_a_elements, spin_matrices, sizeof(double),
                alignof(double), BindingField::kEigensolver, 20) ||
-      !scratch(eig.matrix_scratch_b, eig.matrix_b_elements, matrices, sizeof(double),
+      !scratch(eig.matrix_scratch_b, eig.matrix_b_elements, spin_matrices, sizeof(double),
                alignof(double), BindingField::kEigensolver, 21) ||
-      !scratch(eig.eigenvalue_scratch, eig.eigenvalue_elements, orbitals, sizeof(double),
+      !scratch(eig.eigenvalue_scratch, eig.eigenvalue_elements, spin_orbitals, sizeof(double),
                alignof(double), BindingField::kEigensolver, 22) ||
-      !scratch(eig.factor_pointers, eig.factor_pointer_elements, batch, sizeof(double*),
+      !scratch(eig.factor_pointers, eig.factor_pointer_elements, spin_channels, sizeof(double*),
                alignof(double*), BindingField::kEigensolver, 23) ||
-      !scratch(eig.matrix_pointers, eig.matrix_pointer_elements, batch, sizeof(double*),
+      !scratch(eig.matrix_pointers, eig.matrix_pointer_elements, spin_channels, sizeof(double*),
                alignof(double*), BindingField::kEigensolver, 24) ||
-      !scratch(eig.info_a, eig.info_a_elements, batch, sizeof(int), alignof(int),
+      !scratch(eig.info_a, eig.info_a_elements, spin_channels, sizeof(int), alignof(int),
                BindingField::kEigensolver, 25) ||
-      !scratch(eig.info_b, eig.info_b_elements, batch, sizeof(int), alignof(int),
+      !scratch(eig.info_b, eig.info_b_elements, spin_channels, sizeof(int), alignof(int),
                BindingField::kEigensolver, 26) ||
-      !scratch(eig.eligible, eig.eligible_elements, batch, sizeof(std::uint8_t),
+      !scratch(eig.eligible, eig.eligible_elements, spin_channels, sizeof(std::uint8_t),
                alignof(std::uint8_t), BindingField::kEigensolver, 27) ||
       !scratch(eig.sequence_active, eig.sequence_active_elements, 1, sizeof(std::uint32_t),
-               alignof(std::uint32_t), BindingField::kEigensolver, 28)) {
+               alignof(std::uint32_t), BindingField::kEigensolver, 28) ||
+      !scratch(eig.compact_systems, eig.compact_system_elements, spin_channels,
+               sizeof(std::int32_t), alignof(std::int32_t), BindingField::kEigensolver, 30) ||
+      !scratch(eig.compact_source_slots, eig.compact_source_slot_elements, spin_channels,
+               sizeof(std::int32_t), alignof(std::int32_t), BindingField::kEigensolver, 31) ||
+      !scratch(eig.bucket_activity, eig.bucket_activity_elements,
+               plan.eigensolver_provider.bucket_count, sizeof(Gfn2EigensolverBucketActivity),
+               alignof(Gfn2EigensolverBucketActivity), BindingField::kEigensolver, 32)) {
     return false;
   }
   if (plan.eigensolver_provider.device_workspace_bytes != 0u &&
@@ -2165,14 +2371,14 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
   }
 
   const auto& density = workspace.density_workspace;
-  if (!scratch(density.density_scratch, density.density_elements, matrices, sizeof(double),
+  if (!scratch(density.density_scratch, density.density_elements, spin_matrices, sizeof(double),
                alignof(double), BindingField::kDensity, 20) ||
-      !scratch(density.weighted_density_scratch, density.weighted_density_elements, matrices,
+      !scratch(density.weighted_density_scratch, density.weighted_density_elements, spin_matrices,
                sizeof(double), alignof(double), BindingField::kDensity, 21) ||
-      !scratch(density.weights, density.weight_elements, orbitals, sizeof(double), alignof(double),
-               BindingField::kDensity, 22) ||
-      !scratch(density.energy_weights, density.energy_weight_elements, orbitals, sizeof(double),
-               alignof(double), BindingField::kDensity, 23) ||
+      !scratch(density.weights, density.weight_elements, spin_orbitals, sizeof(double),
+               alignof(double), BindingField::kDensity, 22) ||
+      !scratch(density.energy_weights, density.energy_weight_elements, spin_orbitals,
+               sizeof(double), alignof(double), BindingField::kDensity, 23) ||
       !scratch(density.band_energy_scratch, density.band_energy_elements, batch, sizeof(double),
                alignof(double), BindingField::kDensity, 24) ||
       !scratch(density.occupation_sum_scratch, density.occupation_sum_elements, batch,
@@ -2182,21 +2388,40 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
       !scratch(density.weighted_density_trace_scratch, density.weighted_density_trace_elements,
                batch, sizeof(double), alignof(double), BindingField::kDensity, 27) ||
       !scratch(density.sequence_active, density.sequence_active_elements, 1, sizeof(std::uint32_t),
-               alignof(std::uint32_t), BindingField::kDensity, 28)) {
+               alignof(std::uint32_t), BindingField::kDensity, 28) ||
+      !scratch(density.channel_band_energy_scratch, density.channel_band_energy_elements,
+               spin_channels, sizeof(double), alignof(double), BindingField::kDensity, 29) ||
+      !scratch(density.channel_occupation_sum_scratch, density.channel_occupation_sum_elements,
+               spin_channels, sizeof(double), alignof(double), BindingField::kDensity, 30) ||
+      !scratch(density.channel_density_trace_scratch, density.channel_density_trace_elements,
+               spin_channels, sizeof(double), alignof(double), BindingField::kDensity, 31) ||
+      !scratch(density.channel_weighted_density_trace_scratch,
+               density.channel_weighted_density_trace_elements, spin_channels, sizeof(double),
+               alignof(double), BindingField::kDensity, 32)) {
     return false;
   }
 
   const auto& mulliken = workspace.mulliken_workspace;
-  if (!scratch(mulliken.qsh_scratch, mulliken.qsh_elements, shells, sizeof(double), alignof(double),
-               BindingField::kMulliken, 20) ||
-      !scratch(mulliken.qat_scratch, mulliken.qat_elements, atoms, sizeof(double), alignof(double),
-               BindingField::kMulliken, 21) ||
-      !scratch(mulliken.dipole_scratch, mulliken.dipole_elements, dipoles, sizeof(double),
+  if (!scratch(mulliken.qsh_scratch, mulliken.qsh_elements, spin_shells, sizeof(double),
+               alignof(double), BindingField::kMulliken, 20) ||
+      !scratch(mulliken.qat_scratch, mulliken.qat_elements, spin_atoms, sizeof(double),
+               alignof(double), BindingField::kMulliken, 21) ||
+      !scratch(mulliken.dipole_scratch, mulliken.dipole_elements, spin_dipoles, sizeof(double),
                alignof(double), BindingField::kMulliken, 22) ||
-      !scratch(mulliken.quadrupole_scratch, mulliken.quadrupole_elements, quadrupoles,
+      !scratch(mulliken.quadrupole_scratch, mulliken.quadrupole_elements, spin_quadrupoles,
                sizeof(double), alignof(double), BindingField::kMulliken, 23) ||
       !scratch(mulliken.sequence_active, mulliken.sequence_elements, 1, sizeof(std::uint32_t),
                alignof(std::uint32_t), BindingField::kMulliken, 24)) {
+    return false;
+  }
+
+  if (!scratch(workspace.spin_workspace.energy_scratch, workspace.spin_workspace.energy_elements,
+               batch, sizeof(double), alignof(double), BindingField::kSpin, 20) ||
+      !scratch(workspace.spin_workspace.potential_scratch,
+               workspace.spin_workspace.potential_elements, spin_shells, sizeof(double),
+               alignof(double), BindingField::kSpin, 21) ||
+      !scratch(workspace.spin_workspace.sequence_active, workspace.spin_workspace.sequence_elements,
+               1, sizeof(std::uint32_t), alignof(std::uint32_t), BindingField::kSpin, 22)) {
     return false;
   }
 
@@ -2266,7 +2491,7 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
     return false;
   }
   const auto& publication = workspace.publication_workspace;
-  if (!validator.exact_count(publication.mixed_atomic_charge_elements, atoms,
+  if (!validator.exact_count(publication.mixed_atomic_charge_elements, spin_atoms,
                              BindingField::kStatePublication, 24) ||
       !validator.exact_count(publication.batch_elements, batch, BindingField::kStatePublication,
                              25) ||
@@ -2379,7 +2604,8 @@ __device__ void copy_device_range(const T* source, T* destination, std::int64_t 
  * transaction is essential after a failed publication or replay: staged
  * scratch may be dirty while the public history is still authoritative.
  */
-__global__ void stage_active_mixer_kernel(Gfn2SccPublicationDevicePlan plan,
+__global__ void stage_active_mixer_kernel(Gfn2WavefunctionLayoutView wavefunction_layout,
+                                          std::int64_t history_size,
                                           Gfn2SccIterationDeviceActivity activity,
                                           Gfn2SccMixerDeviceState source,
                                           Gfn2SccMixerDeviceState destination) {
@@ -2387,13 +2613,19 @@ __global__ void stage_active_mixer_kernel(Gfn2SccPublicationDevicePlan plan,
   if (*activity.sequence_active != 1u || activity.active_mask[system] != 1u) {
     return;
   }
-  const std::int64_t vector_begin = plan.shell_offsets[system] + 9 * plan.atom_offsets[system];
-  const std::int64_t vector_end =
-      plan.shell_offsets[system + 1] + 9 * plan.atom_offsets[system + 1];
-  const std::int64_t history_begin = vector_begin * plan.history_size;
-  const std::int64_t history_end = vector_end * plan.history_size;
-  const std::int64_t omega_begin = system * plan.history_size;
-  const std::int64_t omega_end = omega_begin + plan.history_size;
+  /* Mixer vectors contain every charge/magnetization qsh, dipole, and
+   * quadrupole channel. Physical topology offsets are therefore insufficient
+   * for a mixed-spin batch: use the canonical nspin-expanded partitions.
+   * Restricted layouts carry identical physical and spin-aware offsets, so
+   * this preserves the historical byte ranges exactly. */
+  const std::int64_t vector_begin = wavefunction_layout.spin_shell_offsets[system] +
+                                    9 * wavefunction_layout.spin_atom_offsets[system];
+  const std::int64_t vector_end = wavefunction_layout.spin_shell_offsets[system + 1] +
+                                  9 * wavefunction_layout.spin_atom_offsets[system + 1];
+  const std::int64_t history_begin = vector_begin * history_size;
+  const std::int64_t history_end = vector_end * history_size;
+  const std::int64_t omega_begin = system * history_size;
+  const std::int64_t omega_end = omega_begin + history_size;
 
   copy_device_range(source.current_inputs, destination.current_inputs, vector_begin, vector_end);
   copy_device_range(source.previous_inputs, destination.previous_inputs, vector_begin, vector_end);
@@ -2417,8 +2649,9 @@ __global__ void stage_active_mixer_kernel(Gfn2SccPublicationDevicePlan plan,
 cudaError_t stage_active_mixer(const Gfn2SccIterationBinding& binding,
                                cudaStream_t stream) noexcept {
   stage_active_mixer_kernel<<<static_cast<unsigned int>(binding.plan.topology.batch_size), 256, 0,
-                              stream>>>(binding.plan.publication_plan, binding.workspace.activity,
-                                        binding.state.mixer, binding.workspace.staged_mixer);
+                              stream>>>(
+      binding.plan.wavefunction_layout, binding.plan.mixer_policy.history_size,
+      binding.workspace.activity, binding.state.mixer, binding.workspace.staged_mixer);
   return cudaPeekAtLastError();
 }
 
@@ -2443,7 +2676,7 @@ Gfn2SccIterationBindingDiagnostic validate_gfn2_scc_iteration_binding_cuda(
   if (!validate_top_level_shape(plan, validator, dipoles, quadrupoles, two_batch, two_orbitals,
                                 mixer_vector) ||
       !validate_plan_tokens(plan, input, state, workspace, validator) ||
-      !validate_plan_shapes(plan, validator, dipoles, quadrupoles, two_batch) ||
+      !validate_plan_shapes(plan, validator, dipoles, quadrupoles, two_batch, mixer_vector) ||
       !validate_plan_pointer_shapes(plan, validator) ||
       !validate_optional_plan_canonicalization(plan, validator) ||
       !validate_provider(plan, workspace, validator) ||
@@ -2477,14 +2710,14 @@ Gfn2SccIterationBindingDiagnostic bind_gfn2_scc_iteration_cuda(
   return diagnostic;
 }
 
-static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
-    const Gfn2SccIterationBinding& binding,
-    const Gfn2GeometryEpochConsumerDevice* geometry,
+static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice* geometry,
     cudaStream_t stream, bool derive_activity, bool launch_numerical_body) noexcept {
   const auto& plan = binding.plan;
   const auto& input = binding.input;
   const auto& state = binding.state;
   const auto& workspace = binding.workspace;
+  const bool mixed_spin = plan.wavefunction_layout.total_spin_channels != plan.topology.batch_size;
   if (plan.abi_version != kGfn2SccIterationAbiVersion || plan.plan_token == 0u ||
       input.plan_token != plan.plan_token || state.plan_token != plan.plan_token ||
       workspace.plan_token != plan.plan_token) {
@@ -2497,8 +2730,7 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
        geometry->epoch.value == nullptr || geometry->committed_generations == nullptr ||
        geometry->eligible_mask == nullptr ||
        reinterpret_cast<std::uintptr_t>(geometry->epoch.value) % alignof(std::uint64_t) != 0u ||
-       reinterpret_cast<std::uintptr_t>(geometry->committed_generations) %
-               alignof(std::uint64_t) !=
+       reinterpret_cast<std::uintptr_t>(geometry->committed_generations) % alignof(std::uint64_t) !=
            0u ||
        reinterpret_cast<std::uintptr_t>(geometry->eligible_mask) % alignof(std::uint8_t) != 0u)) {
     Gfn2SccIterationLaunchResult result = invalid_launch_binding(Gfn2SccStageId::kActivity);
@@ -2507,8 +2739,9 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
     return result;
   }
 
-  if (launch_numerical_body && plan.eigensolver_provider.capture_mode ==
-      Gfn2SccIterationProviderCaptureMode::kUncapturedSegmentRequired) {
+  if (launch_numerical_body &&
+      plan.eigensolver_provider.capture_mode ==
+          Gfn2SccIterationProviderCaptureMode::kUncapturedSegmentRequired) {
     cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
     const cudaError_t capture_error = cudaStreamIsCapturing(stream, &capture_status);
     if (capture_error != cudaSuccess) {
@@ -2564,12 +2797,27 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
                   reset_gfn2_scc_potential_device_errors_cuda(
                       plan.topology.batch_size, mutable_system_codes(*stage_report),
                       mutable_device_error(*stage_report), stream)) ||
-      !check_cuda(
-          stage_report->stage,
-          reduce_gfn2_scc_mixed_atomic_charges_cuda(
-              plan.potential_batch, input.mixed_fields, workspace.activity,
-              workspace.mixed_topology, workspace.potential_workspace,
-              mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream)) ||
+      !check_cuda(stage_report->stage,
+                  reduce_gfn2_scc_spin_atomic_charges_cuda(
+                      plan.potential_batch, plan.wavefunction_layout, input.mixed_fields,
+                      workspace.activity, workspace.mixed_topology, workspace.physical_topology,
+                      workspace.potential_workspace, mutable_system_codes(*stage_report),
+                      mutable_device_error(*stage_report), stream)) ||
+      !finish_stage(*stage_report)) {
+    return failure;
+  }
+
+  stage_report = report(Gfn2SccStageId::kSpinPotential);
+  if (!begin_stage(stage_report) ||
+      !check_cuda(stage_report->stage,
+                  reset_gfn2_spin_device_errors_cuda(
+                      plan.topology.batch_size, mutable_system_codes(*stage_report),
+                      mutable_device_error(*stage_report), stream)) ||
+      !check_cuda(stage_report->stage,
+                  evaluate_gfn2_spin_polarization_cuda(
+                      plan.spin_batch, input.mixed_spin, workspace.activity, workspace.spin_output,
+                      workspace.spin_workspace, mutable_system_codes(*stage_report),
+                      mutable_device_error(*stage_report), stream)) ||
       !finish_stage(*stage_report)) {
     return failure;
   }
@@ -2584,7 +2832,7 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
           stage_report->stage,
           evaluate_gfn2_es2_scc_potential_cuda(
               plan.es2_batch, plan.es2_cache, plan.geometry_generation, workspace.activity,
-              workspace.mixed_topology.shell_charges, workspace.components.es2_shell_potential,
+              workspace.physical_topology.shell_charges, workspace.components.es2_shell_potential,
               workspace.es2_workspace, mutable_system_codes(*stage_report),
               mutable_device_error(*stage_report), stream)) ||
       !finish_stage(*stage_report)) {
@@ -2599,7 +2847,7 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
                                                  mutable_device_error(*stage_report), stream)) ||
       !check_cuda(stage_report->stage,
                   evaluate_gfn2_es3_scc_potential_cuda(
-                      plan.es3_batch, workspace.activity, workspace.mixed_topology.shell_charges,
+                      plan.es3_batch, workspace.activity, workspace.physical_topology.shell_charges,
                       workspace.components.es3_shell_potential, mutable_system_codes(*stage_report),
                       mutable_device_error(*stage_report), stream)) ||
       !finish_stage(*stage_report)) {
@@ -2616,8 +2864,9 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
           stage_report->stage,
           evaluate_gfn2_aes2_scc_potential_cuda(
               plan.aes2_batch, plan.aes2_cache, plan.geometry_generation, workspace.activity,
-              workspace.mixed_topology.atomic_charges, workspace.mixed_topology.atomic_dipoles,
-              workspace.mixed_topology.atomic_quadrupoles,
+              workspace.physical_topology.atomic_charges,
+              workspace.physical_topology.atomic_dipoles,
+              workspace.physical_topology.atomic_quadrupoles,
               workspace.components.aes2_atomic_potential,
               workspace.components.aes2_dipole_potential,
               workspace.components.aes2_quadrupole_potential, workspace.aes2_workspace,
@@ -2636,7 +2885,7 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
         !check_cuda(stage_report->stage,
                     evaluate_gfn2_d4_scc_potential_cuda(
                         plan.d4_batch, plan.d4_parameters, plan.d4_cache, plan.geometry_generation,
-                        workspace.mixed_topology.atomic_charges, workspace.activity,
+                        workspace.physical_topology.atomic_charges, workspace.activity,
                         workspace.components.d4_atomic_potential, workspace.d4_workspace,
                         mutable_device_error(*stage_report), stream)) ||
         !finish_stage(*stage_report)) {
@@ -2654,7 +2903,7 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
         !check_cuda(stage_report->stage,
                     evaluate_gfn2_periodic_embedding_scc_potential_cuda(
                         plan.periodic_batch, plan.geometry_generation,
-                        workspace.mixed_topology.atomic_charges, workspace.activity,
+                        workspace.physical_topology.atomic_charges, workspace.activity,
                         workspace.components.periodic_atomic_potential,
                         workspace.periodic_workspace, mutable_system_codes(*stage_report),
                         mutable_device_error(*stage_report), stream)) ||
@@ -2668,14 +2917,23 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
       !check_cuda(stage_report->stage,
                   reset_gfn2_scc_potential_device_errors_cuda(
                       plan.topology.batch_size, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream)) ||
-      !check_cuda(
-          stage_report->stage,
-          compose_gfn2_scc_potentials_cuda(
-              plan.potential_batch, workspace.potential_components, workspace.activity,
-              workspace.complete_potentials, workspace.potential_workspace,
-              mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream)) ||
-      !finish_stage(*stage_report)) {
+                      mutable_device_error(*stage_report), stream))) {
+    return failure;
+  }
+  const cudaError_t compose_status =
+      mixed_spin
+          ? compose_gfn2_scc_spin_potentials_cuda(
+                plan.potential_batch, plan.wavefunction_layout, workspace.potential_components,
+                {workspace.spin_output.shell_potentials,
+                 workspace.spin_output.shell_potential_elements, plan.plan_token},
+                workspace.potential_activity, workspace.complete_potentials,
+                workspace.potential_workspace, mutable_system_codes(*stage_report),
+                mutable_device_error(*stage_report), stream)
+          : compose_gfn2_scc_potentials_cuda(
+                plan.potential_batch, workspace.potential_components, workspace.activity,
+                workspace.complete_potentials, workspace.potential_workspace,
+                mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream);
+  if (!check_cuda(stage_report->stage, compose_status) || !finish_stage(*stage_report)) {
     return failure;
   }
 
@@ -2685,14 +2943,29 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
                   reset_gfn2_scc_bridge_device_errors_cuda(
                       plan.topology.batch_size, mutable_system_codes(*stage_report),
                       mutable_device_error(*stage_report),
-                      workspace.scalar_bridge.workspace.sequence_active, stream)) ||
+                      workspace.scalar_bridge.workspace.sequence_active, stream))) {
+    return failure;
+  }
+  if (!mixed_spin &&
       !check_cuda(stage_report->stage,
                   collect_gfn2_scc_shell_scalar_potential_cuda(
                       plan.scalar_bridge_batch, workspace.scalar_bridge.fields, workspace.activity,
                       workspace.scalar_bridge.shell_scalar, workspace.scalar_bridge.shell_elements,
                       workspace.scalar_bridge.workspace, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream)) ||
-      !finish_stage(*stage_report)) {
+                      mutable_device_error(*stage_report), stream))) {
+    return failure;
+  }
+  /* The mixed composer already applied the scalar bridge. Preserve the
+   * canonical sequence latch for report normalization without collecting a
+   * second time (which would double-add the atomic scalar potential). */
+  if (mixed_spin &&
+      !check_cuda(stage_report->stage,
+                  cudaMemcpyAsync(workspace.scalar_bridge.workspace.sequence_active,
+                                  workspace.ledger.sequence_active, sizeof(std::uint32_t),
+                                  cudaMemcpyDeviceToDevice, stream))) {
+    return failure;
+  }
+  if (!finish_stage(*stage_report)) {
     return failure;
   }
 
@@ -2701,14 +2974,21 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
       !check_cuda(stage_report->stage,
                   reset_gfn2_hamiltonian_device_errors_cuda(
                       plan.topology.batch_size, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream)) ||
-      !check_cuda(
-          stage_report->stage,
-          assemble_gfn2_hamiltonian_cuda(
-              plan.hamiltonian_batch, input.hamiltonian, workspace.hamiltonian_activity,
-              workspace.hamiltonian, workspace.hamiltonian_workspace,
-              mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream)) ||
-      !finish_stage(*stage_report)) {
+                      mutable_device_error(*stage_report), stream))) {
+    return failure;
+  }
+  const cudaError_t hamiltonian_status =
+      mixed_spin
+          ? assemble_gfn2_spin_hamiltonian_cuda(
+                plan.hamiltonian_batch, plan.wavefunction_layout, input.hamiltonian,
+                workspace.hamiltonian_activity, workspace.hamiltonian,
+                workspace.hamiltonian_workspace, mutable_system_codes(*stage_report),
+                mutable_device_error(*stage_report), stream)
+          : assemble_gfn2_hamiltonian_cuda(
+                plan.hamiltonian_batch, input.hamiltonian, workspace.hamiltonian_activity,
+                workspace.hamiltonian, workspace.hamiltonian_workspace,
+                mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream);
+  if (!check_cuda(stage_report->stage, hamiltonian_status) || !finish_stage(*stage_report)) {
     return failure;
   }
 
@@ -2722,16 +3002,16 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
   }
   const Gfn2EigensolverLaunchResult eigensolver =
       geometry == nullptr
-          ? solve_gfn2_eigensystems_cuda(
-                plan.eigensolver_batch, plan.eigensolver_provider.buckets,
+          ? solve_gfn2_spin_eigensystems_cuda(
+                plan.eigensolver_batch, plan.wavefunction_layout, plan.eigensolver_provider.buckets,
                 plan.eigensolver_provider.bucket_count, plan.overlap_cache,
-                plan.geometry_generation, input.eigensolver_hamiltonians,
-                plan.eigensolver_options, plan.eigensolver_provider.solver,
-                plan.eigensolver_provider.parameters, plan.eigensolver_provider.blas,
-                workspace.eigensolver_workspace, workspace.staged_eigenpairs,
-                mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream)
-          : solve_gfn2_eigensystems_cuda(
-                plan.eigensolver_batch, plan.eigensolver_provider.buckets,
+                plan.geometry_generation, input.eigensolver_hamiltonians, plan.eigensolver_options,
+                plan.eigensolver_provider.solver, plan.eigensolver_provider.parameters,
+                plan.eigensolver_provider.blas, workspace.eigensolver_workspace,
+                workspace.staged_eigenpairs, mutable_system_codes(*stage_report),
+                mutable_device_error(*stage_report), stream)
+          : solve_gfn2_spin_eigensystems_cuda(
+                plan.eigensolver_batch, plan.wavefunction_layout, plan.eigensolver_provider.buckets,
                 plan.eigensolver_provider.bucket_count, plan.overlap_cache, geometry->epoch,
                 input.eigensolver_hamiltonians, plan.eigensolver_options,
                 plan.eigensolver_provider.solver, plan.eigensolver_provider.parameters,
@@ -2751,12 +3031,13 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
                   reset_gfn2_occupations_device_errors_cuda(
                       plan.topology.batch_size, mutable_system_codes(*stage_report),
                       mutable_device_error(*stage_report), stream)) ||
-      !check_cuda(stage_report->stage,
-                  evaluate_gfn2_restricted_occupations_cuda(
-                      plan.occupations_batch, input.occupation_eigenvalues,
-                      input.occupation_eigenvalue_elements, workspace.staged_occupations,
-                      workspace.occupations_workspace, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream)) ||
+      !check_cuda(
+          stage_report->stage,
+          evaluate_gfn2_occupations_cuda(
+              plan.occupations_batch, plan.wavefunction_layout, input.occupation_eigenvalues,
+              input.occupation_eigenvalue_elements, workspace.staged_occupations,
+              workspace.occupations_workspace, mutable_system_codes(*stage_report),
+              mutable_device_error(*stage_report), stream)) ||
       !finish_stage(*stage_report)) {
     return failure;
   }
@@ -2768,10 +3049,11 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
                       plan.topology.batch_size, mutable_system_codes(*stage_report),
                       mutable_device_error(*stage_report), stream)) ||
       !check_cuda(stage_report->stage,
-                  evaluate_gfn2_restricted_density_cuda(
-                      plan.density_batch, input.density, workspace.staged_density,
-                      workspace.density_workspace, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream)) ||
+                  evaluate_gfn2_spin_density_cuda(plan.density_batch, plan.wavefunction_layout,
+                                                  input.density, workspace.staged_density,
+                                                  workspace.density_workspace,
+                                                  mutable_system_codes(*stage_report),
+                                                  mutable_device_error(*stage_report), stream)) ||
       !finish_stage(*stage_report)) {
     return failure;
   }
@@ -2782,12 +3064,64 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
                   reset_gfn2_mulliken_device_errors_cuda(
                       plan.topology.batch_size, mutable_system_codes(*stage_report),
                       mutable_device_error(*stage_report), stream)) ||
+      !check_cuda(stage_report->stage,
+                  evaluate_gfn2_mulliken_population_spin_cuda(
+                      plan.mulliken_batch, plan.wavefunction_layout, input.mulliken,
+                      workspace.mulliken_activity, workspace.staged_raw_population,
+                      workspace.mulliken_workspace, mutable_system_codes(*stage_report),
+                      mutable_device_error(*stage_report), stream)) ||
+      !finish_stage(*stage_report)) {
+    return failure;
+  }
+
+  /* Classical SCC kernels still consume one dense physical charge channel.
+   * Reuse the stable mixed-gather stage after Mulliken normalization so failed
+   * peers remain inactive while successful unrestricted peers are projected
+   * out of the spin-ragged population layout. */
+  const Gfn2SccPotentialDeviceMixedFields raw_mixed_fields{input.raw_multipoles.shell_charges,
+                                                           input.raw_multipoles.shell_elements,
+                                                           input.raw_multipoles.atomic_dipoles,
+                                                           input.raw_multipoles.dipole_elements,
+                                                           input.raw_multipoles.atomic_quadrupoles,
+                                                           input.raw_multipoles.quadrupole_elements,
+                                                           plan.plan_token};
+  const Gfn2SccPotentialDeviceTopologyMultipoles raw_spin_topology{
+      workspace.staged_raw_population.qsh,
+      workspace.staged_raw_population.qsh_elements,
+      workspace.staged_raw_population.qat,
+      workspace.staged_raw_population.qat_elements,
+      workspace.staged_raw_population.dipole,
+      workspace.staged_raw_population.dipole_elements,
+      workspace.staged_raw_population.quadrupole,
+      workspace.staged_raw_population.quadrupole_elements,
+      plan.plan_token};
+  stage_report = report(Gfn2SccStageId::kMixedGather);
+  if (!begin_stage(stage_report) ||
+      !check_cuda(stage_report->stage,
+                  reset_gfn2_scc_potential_device_errors_cuda(
+                      plan.topology.batch_size, mutable_system_codes(*stage_report),
+                      mutable_device_error(*stage_report), stream)) ||
       !check_cuda(
           stage_report->stage,
-          evaluate_gfn2_mulliken_population_cuda(
-              plan.mulliken_batch, input.mulliken, workspace.mulliken_activity,
-              workspace.staged_raw_population, workspace.mulliken_workspace,
+          reduce_gfn2_scc_spin_atomic_charges_cuda(
+              plan.potential_batch, plan.wavefunction_layout, raw_mixed_fields, workspace.activity,
+              raw_spin_topology, workspace.physical_topology, workspace.potential_workspace,
               mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream)) ||
+      !finish_stage(*stage_report)) {
+    return failure;
+  }
+
+  stage_report = report(Gfn2SccStageId::kSpinRawEnergy);
+  if (!begin_stage(stage_report) ||
+      !check_cuda(stage_report->stage,
+                  reset_gfn2_spin_device_errors_cuda(
+                      plan.topology.batch_size, mutable_system_codes(*stage_report),
+                      mutable_device_error(*stage_report), stream)) ||
+      !check_cuda(stage_report->stage,
+                  evaluate_gfn2_spin_polarization_cuda(
+                      plan.spin_batch, input.raw_spin, workspace.activity, workspace.spin_output,
+                      workspace.spin_workspace, mutable_system_codes(*stage_report),
+                      mutable_device_error(*stage_report), stream)) ||
       !finish_stage(*stage_report)) {
     return failure;
   }
@@ -2801,7 +3135,7 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
       !check_cuda(stage_report->stage,
                   evaluate_gfn2_es2_scc_energy_cuda(
                       plan.es2_batch, plan.es2_cache, plan.geometry_generation, workspace.activity,
-                      input.raw_multipoles.shell_charges, workspace.components.es2_energy,
+                      workspace.physical_topology.shell_charges, workspace.components.es2_energy,
                       workspace.es2_workspace, mutable_system_codes(*stage_report),
                       mutable_device_error(*stage_report), stream)) ||
       !finish_stage(*stage_report)) {
@@ -2816,7 +3150,7 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
                                                  mutable_device_error(*stage_report), stream)) ||
       !check_cuda(stage_report->stage,
                   evaluate_gfn2_es3_scc_energy_cuda(
-                      plan.es3_batch, workspace.activity, input.raw_multipoles.shell_charges,
+                      plan.es3_batch, workspace.activity, workspace.physical_topology.shell_charges,
                       workspace.components.es3_energy, mutable_system_codes(*stage_report),
                       mutable_device_error(*stage_report), stream)) ||
       !finish_stage(*stage_report)) {
@@ -2833,8 +3167,9 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
           stage_report->stage,
           evaluate_gfn2_aes2_scc_energy_cuda(
               plan.aes2_batch, plan.aes2_cache, plan.geometry_generation, workspace.activity,
-              workspace.staged_raw_population.qat, input.raw_multipoles.atomic_dipoles,
-              input.raw_multipoles.atomic_quadrupoles, workspace.components.aes2_energy,
+              workspace.physical_topology.atomic_charges,
+              workspace.physical_topology.atomic_dipoles,
+              workspace.physical_topology.atomic_quadrupoles, workspace.components.aes2_energy,
               workspace.aes2_workspace, mutable_system_codes(*stage_report),
               mutable_device_error(*stage_report), stream)) ||
       !finish_stage(*stage_report)) {
@@ -2851,7 +3186,7 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
         !check_cuda(stage_report->stage,
                     evaluate_gfn2_d4_scc_energy_cuda(
                         plan.d4_batch, plan.d4_parameters, plan.d4_cache, plan.geometry_generation,
-                        workspace.staged_raw_population.qat, workspace.activity,
+                        workspace.physical_topology.atomic_charges, workspace.activity,
                         workspace.components.d4_two_body_energy, workspace.d4_workspace,
                         mutable_device_error(*stage_report), stream)) ||
         !finish_stage(*stage_report)) {
@@ -2870,7 +3205,7 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
                     evaluate_gfn2_external_point_charge_scc_energy_cuda(
                         plan.explicit_point_charge_batch, workspace.activity,
                         plan.explicit_point_charge_cache, plan.geometry_generation,
-                        input.raw_multipoles.shell_charges,
+                        workspace.physical_topology.shell_charges,
                         workspace.components.explicit_point_charge_energy,
                         mutable_system_codes(*stage_report), mutable_device_error(*stage_report),
                         stream)) ||
@@ -2886,13 +3221,13 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
                     reset_gfn2_periodic_embedding_scc_device_errors_cuda(
                         plan.topology.batch_size, mutable_system_codes(*stage_report),
                         mutable_device_error(*stage_report), stream)) ||
-        !check_cuda(
-            stage_report->stage,
-            evaluate_gfn2_periodic_embedding_scc_energy_cuda(
-                plan.periodic_batch, plan.geometry_generation, workspace.staged_raw_population.qat,
-                workspace.activity, workspace.components.periodic_embedding_energy,
-                workspace.periodic_workspace, mutable_system_codes(*stage_report),
-                mutable_device_error(*stage_report), stream)) ||
+        !check_cuda(stage_report->stage,
+                    evaluate_gfn2_periodic_embedding_scc_energy_cuda(
+                        plan.periodic_batch, plan.geometry_generation,
+                        workspace.physical_topology.atomic_charges, workspace.activity,
+                        workspace.components.periodic_embedding_energy,
+                        workspace.periodic_workspace, mutable_system_codes(*stage_report),
+                        mutable_device_error(*stage_report), stream)) ||
         !finish_stage(*stage_report)) {
       return failure;
     }
@@ -2921,8 +3256,9 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
                       plan.topology.batch_size, mutable_system_codes(*stage_report),
                       mutable_device_error(*stage_report), stream)) ||
       !check_cuda(stage_report->stage,
-                  evaluate_gfn2_scc_electronic_energy_cuda(
-                      plan.electronic_energy_batch, input.electronic_energy.density,
+                  evaluate_gfn2_scc_electronic_energy_spin_cuda(
+                      plan.electronic_energy_batch, plan.wavefunction_layout,
+                      input.electronic_energy.density, input.electronic_energy.density_elements,
                       input.electronic_energy.h0, input.electronic_energy.entropies,
                       plan.free_energy_batch.electronic_temperature, workspace.activity,
                       workspace.components.core_energy, workspace.components.electronic_free_energy,
@@ -2954,11 +3290,12 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
       !check_cuda(stage_report->stage,
                   cudaMemsetAsync(workspace.mixer_device_error, 0,
                                   sizeof(*workspace.mixer_device_error), stream)) ||
-      !check_cuda(stage_report->stage,
-                  mix_gfn2_scc_broyden_cuda(plan.scc_batch, plan.mixer_policy, workspace.activity,
-                                            input.raw_multipoles, workspace.next_mixed,
-                                            workspace.staged_mixer, workspace.mixer_workspace,
-                                            workspace.mixer_device_error, stream)) ||
+      !check_cuda(
+          stage_report->stage,
+          mix_gfn2_scc_broyden_cuda(plan.scc_batch, plan.wavefunction_layout, plan.mixer_policy,
+                                    workspace.activity, input.raw_multipoles, workspace.next_mixed,
+                                    workspace.staged_mixer, workspace.mixer_workspace,
+                                    workspace.mixer_device_error, stream)) ||
       !finish_stage(*stage_report)) {
     return failure;
   }
@@ -2985,40 +3322,70 @@ static Gfn2SccIterationLaunchResult launch_restricted_scc_iteration_impl(
   return {};
 }
 
-Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
+Gfn2SccIterationLaunchResult launch_gfn2_scc_iteration_cuda(const Gfn2SccIterationBinding& binding,
+                                                            cudaStream_t stream) noexcept {
+  return launch_scc_iteration_impl(binding, nullptr, stream, true, true);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_scc_iteration_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream) noexcept {
+  return launch_scc_iteration_impl(binding, &geometry, stream, true, true);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_scc_activity_cuda(const Gfn2SccIterationBinding& binding,
+                                                           cudaStream_t stream) noexcept {
+  return launch_scc_iteration_impl(binding, nullptr, stream, true, false);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_scc_activity_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream) noexcept {
+  return launch_scc_iteration_impl(binding, &geometry, stream, true, false);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_scc_numerical_body_cuda(
     const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
-  return launch_restricted_scc_iteration_impl(binding, nullptr, stream, true, true);
+  return launch_scc_iteration_impl(binding, nullptr, stream, false, true);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_scc_numerical_body_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream) noexcept {
+  return launch_scc_iteration_impl(binding, &geometry, stream, false, true);
 }
 
 Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
-    const Gfn2SccIterationBinding& binding,
-    const Gfn2GeometryEpochConsumerDevice& geometry,
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
+  return launch_gfn2_scc_iteration_cuda(binding, stream);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream) noexcept {
-  return launch_restricted_scc_iteration_impl(binding, &geometry, stream, true, true);
+  return launch_gfn2_scc_iteration_cuda(binding, geometry, stream);
 }
 
 Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_activity_cuda(
     const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
-  return launch_restricted_scc_iteration_impl(binding, nullptr, stream, true, false);
+  return launch_gfn2_scc_activity_cuda(binding, stream);
 }
 
 Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_activity_cuda(
-    const Gfn2SccIterationBinding& binding,
-    const Gfn2GeometryEpochConsumerDevice& geometry,
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream) noexcept {
-  return launch_restricted_scc_iteration_impl(binding, &geometry, stream, true, false);
+  return launch_gfn2_scc_activity_cuda(binding, geometry, stream);
 }
 
 Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_numerical_body_cuda(
     const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
-  return launch_restricted_scc_iteration_impl(binding, nullptr, stream, false, true);
+  return launch_gfn2_scc_numerical_body_cuda(binding, stream);
 }
 
 Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_numerical_body_cuda(
-    const Gfn2SccIterationBinding& binding,
-    const Gfn2GeometryEpochConsumerDevice& geometry,
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream) noexcept {
-  return launch_restricted_scc_iteration_impl(binding, &geometry, stream, false, true);
+  return launch_gfn2_scc_numerical_body_cuda(binding, geometry, stream);
 }
 
 }  // namespace gpuxtb::detail::cuda

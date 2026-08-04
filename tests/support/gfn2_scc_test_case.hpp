@@ -16,7 +16,7 @@
 
 namespace gpuxtb::test::gfn2 {
 
-/* Small, closed-shell systems supported by the reusable SCC test fixture. */
+/* Small system geometries supported by the reusable SCC test fixture. */
 enum class SmallSystemKind {
   kH2,
   kHe,
@@ -32,6 +32,13 @@ enum class SmallSystemKind {
  */
 struct HostSccCaseOptions {
   std::vector<SmallSystemKind> systems{SmallSystemKind::kH2};
+  /* Optional per-system electronic structure. Empty vectors select the
+   * historical neutral, paired, restricted defaults. A nonempty vector must
+   * have exactly systems.size() entries so the CPU oracle and uploaded CUDA
+   * plans are constructed from one canonical electronic specification. */
+  std::vector<double> molecular_charges;
+  std::vector<std::int32_t> unpaired_electrons;
+  std::vector<std::int32_t> spin_channels;
   bool enable_d4 = false;
   bool enable_periodic_embedding = false;
   bool enable_explicit_point_charges = false;

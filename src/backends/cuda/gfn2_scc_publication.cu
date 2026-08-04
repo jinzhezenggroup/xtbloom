@@ -111,6 +111,35 @@ bool disjoint_sets(const RangeSet<FirstCapacity>& first,
 
 bool same_pointer(const void* first, const void* second) noexcept { return first == second; }
 
+bool valid_layout_binding(const Gfn2SccPublicationDevicePlan& plan) noexcept {
+  const auto& layout = plan.wavefunction_layout;
+  return layout.memory_space == Gfn2PlanMemorySpace::kCudaDevice &&
+         layout.plan_token == plan.plan_token && layout.batch_size == plan.batch_size &&
+         layout.total_spin_channels >= plan.batch_size &&
+         layout.total_spin_channels <= 2 * plan.batch_size &&
+         layout.total_spin_orbitals >= plan.total_orbitals &&
+         layout.total_spin_orbitals - plan.total_orbitals <= plan.total_orbitals &&
+         layout.total_spin_matrix_elements >= plan.total_matrix_elements &&
+         layout.total_spin_matrix_elements - plan.total_matrix_elements <=
+             plan.total_matrix_elements &&
+         layout.total_spin_shells >= plan.total_shells &&
+         layout.total_spin_shells - plan.total_shells <= plan.total_shells &&
+         layout.total_spin_atoms >= plan.total_atoms &&
+         layout.total_spin_atoms - plan.total_atoms <= plan.total_atoms &&
+         layout.spin_channel_count == plan.batch_size &&
+         layout.spin_channel_offset_count == plan.batch_size + 1 &&
+         layout.spin_orbital_offset_count == plan.batch_size + 1 &&
+         layout.spin_matrix_offset_count == plan.batch_size + 1 &&
+         layout.spin_shell_offset_count == plan.batch_size + 1 &&
+         layout.spin_atom_offset_count == plan.batch_size + 1 &&
+         is_aligned(layout.spin_channels, alignof(std::int32_t)) &&
+         is_aligned(layout.spin_channel_offsets, alignof(std::int64_t)) &&
+         is_aligned(layout.spin_orbital_offsets, alignof(std::int64_t)) &&
+         is_aligned(layout.spin_matrix_offsets, alignof(std::int64_t)) &&
+         is_aligned(layout.spin_shell_offsets, alignof(std::int64_t)) &&
+         is_aligned(layout.spin_atom_offsets, alignof(std::int64_t));
+}
+
 bool valid_plan(const Gfn2SccPublicationDevicePlan& plan, std::int64_t* dipoles,
                 std::int64_t* quadrupoles, std::int64_t* two_orbitals, std::int64_t* two_batch,
                 std::int64_t* history_elements, std::int64_t* omega_elements) noexcept {
@@ -125,16 +154,19 @@ bool valid_plan(const Gfn2SccPublicationDevicePlan& plan, std::int64_t* dipoles,
          plan.shell_offset_count == plan.batch_size + 1 &&
          plan.orbital_offset_count == plan.batch_size + 1 &&
          plan.matrix_offset_count == plan.batch_size + 1 &&
-         plan.shell_to_atom_count == plan.total_shells &&
+         plan.shell_to_atom_count == plan.total_shells && valid_layout_binding(plan) &&
          is_aligned(plan.atom_offsets, alignof(std::int64_t)) &&
          is_aligned(plan.shell_offsets, alignof(std::int64_t)) &&
          is_aligned(plan.orbital_offsets, alignof(std::int64_t)) &&
          is_aligned(plan.matrix_offsets, alignof(std::int64_t)) &&
          is_aligned(plan.shell_to_atom, alignof(std::int64_t)) &&
-         checked_multiply(plan.total_atoms, kDipoleComponents, dipoles) &&
-         checked_multiply(plan.total_atoms, kQuadrupoleComponents, quadrupoles) &&
-         checked_multiply(plan.total_atoms, kMultipoleAtomComponents, &atom_components) &&
-         checked_add(plan.total_shells, atom_components, &expected_vector) &&
+         checked_multiply(plan.wavefunction_layout.total_spin_atoms, kDipoleComponents, dipoles) &&
+         checked_multiply(plan.wavefunction_layout.total_spin_atoms, kQuadrupoleComponents,
+                          quadrupoles) &&
+         checked_multiply(plan.wavefunction_layout.total_spin_atoms, kMultipoleAtomComponents,
+                          &atom_components) &&
+         checked_add(plan.wavefunction_layout.total_spin_shells, atom_components,
+                     &expected_vector) &&
          expected_vector == plan.total_mixer_vector_elements &&
          checked_multiply(plan.total_orbitals, 2, two_orbitals) &&
          checked_multiply(plan.batch_size, 2, two_batch) &&
@@ -145,8 +177,8 @@ bool valid_plan(const Gfn2SccPublicationDevicePlan& plan, std::int64_t* dipoles,
 bool valid_eigenpairs(const Gfn2EigensolverDeviceResults& values,
                       const Gfn2SccPublicationDevicePlan& plan) noexcept {
   return values.plan_token == plan.plan_token &&
-         values.eigenvalue_elements == plan.total_orbitals &&
-         values.coefficient_elements == plan.total_matrix_elements &&
+         values.eigenvalue_elements == plan.wavefunction_layout.total_spin_orbitals &&
+         values.coefficient_elements == plan.wavefunction_layout.total_spin_matrix_elements &&
          is_aligned(values.eigenvalues, alignof(double)) &&
          is_aligned(values.coefficients, alignof(double));
 }
@@ -166,27 +198,38 @@ bool valid_occupations(const Gfn2OccupationsDeviceResults& values,
 bool valid_density(const Gfn2DensityDeviceResults& values,
                    const Gfn2SccPublicationDevicePlan& plan) noexcept {
   return values.plan_token == plan.plan_token &&
-         values.density_elements == plan.total_matrix_elements &&
-         values.weighted_density_elements == plan.total_matrix_elements &&
+         values.density_elements == plan.wavefunction_layout.total_spin_matrix_elements &&
+         values.weighted_density_elements == plan.wavefunction_layout.total_spin_matrix_elements &&
          values.band_energy_elements == plan.batch_size &&
          values.occupation_sum_elements == plan.batch_size &&
          values.density_trace_elements == plan.batch_size &&
          values.weighted_density_trace_elements == plan.batch_size &&
+         values.channel_band_energy_elements == plan.wavefunction_layout.total_spin_channels &&
+         values.channel_occupation_sum_elements == plan.wavefunction_layout.total_spin_channels &&
+         values.channel_density_trace_elements == plan.wavefunction_layout.total_spin_channels &&
+         values.channel_weighted_density_trace_elements ==
+             plan.wavefunction_layout.total_spin_channels &&
          is_aligned(values.density, alignof(double)) &&
          is_aligned(values.energy_weighted_density, alignof(double)) &&
          is_aligned(values.band_energies, alignof(double)) &&
          is_aligned(values.occupation_sums, alignof(double)) &&
          is_aligned(values.density_traces, alignof(double)) &&
-         is_aligned(values.weighted_density_traces, alignof(double));
+         is_aligned(values.weighted_density_traces, alignof(double)) &&
+         is_aligned(values.channel_band_energies, alignof(double)) &&
+         is_aligned(values.channel_occupation_sums, alignof(double)) &&
+         is_aligned(values.channel_density_traces, alignof(double)) &&
+         is_aligned(values.channel_weighted_density_traces, alignof(double));
 }
 
 bool valid_population(const Gfn2MullikenDevicePopulation& values,
                       const Gfn2SccPublicationDevicePlan& plan, std::int64_t dipoles,
                       std::int64_t quadrupoles) noexcept {
-  return values.plan_token == plan.plan_token && values.qsh_elements == plan.total_shells &&
-         values.qat_elements == plan.total_atoms && values.dipole_elements == dipoles &&
-         values.quadrupole_elements == quadrupoles && is_aligned(values.qsh, alignof(double)) &&
-         is_aligned(values.qat, alignof(double)) && is_aligned(values.dipole, alignof(double)) &&
+  return values.plan_token == plan.plan_token &&
+         values.qsh_elements == plan.wavefunction_layout.total_spin_shells &&
+         values.qat_elements == plan.wavefunction_layout.total_spin_atoms &&
+         values.dipole_elements == dipoles && values.quadrupole_elements == quadrupoles &&
+         is_aligned(values.qsh, alignof(double)) && is_aligned(values.qat, alignof(double)) &&
+         is_aligned(values.dipole, alignof(double)) &&
          is_aligned(values.quadrupole, alignof(double));
 }
 
@@ -224,11 +267,12 @@ bool valid_classical(const Gfn2SccClassicalEnergyDeviceDiagnostics& values,
 
 bool valid_free_energy(const Gfn2SccFreeEnergyDeviceDiagnostics& values,
                        const Gfn2SccPublicationDevicePlan& plan) noexcept {
-  const std::array<std::pair<double*, std::int64_t>, 10> fields{{
+  const std::array<std::pair<double*, std::int64_t>, 11> fields{{
       {values.core, values.core_elements},
       {values.es2, values.es2_elements},
       {values.es3, values.es3_elements},
       {values.aes2, values.aes2_elements},
+      {values.spin, values.spin_elements},
       {values.d4_two_body, values.d4_two_body_elements},
       {values.explicit_point_charge, values.explicit_point_charge_elements},
       {values.periodic_embedding, values.periodic_embedding_elements},
@@ -251,6 +295,9 @@ bool valid_energy(const Gfn2SccPublicationDeviceEnergyTrace& values,
                   const Gfn2SccPublicationDevicePlan& plan) noexcept {
   return values.plan_token == plan.plan_token && valid_classical(values.classical, plan) &&
          valid_free_energy(values.free_energy, plan) &&
+         values.spin_energy_elements == plan.batch_size &&
+         is_aligned(values.spin_energies, alignof(double)) &&
+         same_pointer(values.spin_energies, values.free_energy.spin) &&
          same_pointer(values.classical.es2, values.free_energy.es2) &&
          same_pointer(values.classical.es3, values.free_energy.es3) &&
          same_pointer(values.classical.aes2, values.free_energy.aes2) &&
@@ -284,7 +331,8 @@ bool valid_mixer(const Gfn2SccMixerDeviceState& values, const Gfn2SccPublication
 bool valid_const_multipoles(const Gfn2SccDeviceConstMultipoles& values,
                             const Gfn2SccPublicationDevicePlan& plan, std::int64_t dipoles,
                             std::int64_t quadrupoles) noexcept {
-  return values.plan_token == plan.plan_token && values.shell_elements == plan.total_shells &&
+  return values.plan_token == plan.plan_token &&
+         values.shell_elements == plan.wavefunction_layout.total_spin_shells &&
          values.dipole_elements == dipoles && values.quadrupole_elements == quadrupoles &&
          is_aligned(values.shell_charges, alignof(double)) &&
          is_aligned(values.atomic_dipoles, alignof(double)) &&
@@ -294,7 +342,8 @@ bool valid_const_multipoles(const Gfn2SccDeviceConstMultipoles& values,
 bool valid_multipoles(const Gfn2SccDeviceMultipoles& values,
                       const Gfn2SccPublicationDevicePlan& plan, std::int64_t dipoles,
                       std::int64_t quadrupoles) noexcept {
-  return values.plan_token == plan.plan_token && values.shell_elements == plan.total_shells &&
+  return values.plan_token == plan.plan_token &&
+         values.shell_elements == plan.wavefunction_layout.total_spin_shells &&
          values.dipole_elements == dipoles && values.quadrupole_elements == quadrupoles &&
          is_aligned(values.shell_charges, alignof(double)) &&
          is_aligned(values.atomic_dipoles, alignof(double)) &&
@@ -369,7 +418,7 @@ bool valid_ledger(const Gfn2SccIterationDeviceLedger& ledger,
 bool valid_workspace(const Gfn2SccPublicationDeviceWorkspace& workspace,
                      const Gfn2SccPublicationDevicePlan& plan) noexcept {
   return workspace.plan_token == plan.plan_token &&
-         workspace.mixed_atomic_charge_elements == plan.total_atoms &&
+         workspace.mixed_atomic_charge_elements == plan.wavefunction_layout.total_spin_atoms &&
          workspace.batch_elements == plan.batch_size &&
          workspace.system_error_elements == plan.batch_size &&
          workspace.device_error_elements == 1 && workspace.sequence_elements == 1 &&
@@ -390,23 +439,35 @@ bool append_wavefunction_ranges(RangeSet<Capacity>* set,
                                 const Gfn2SccPublicationDevicePlan& plan, std::int64_t dipoles,
                                 std::int64_t quadrupoles, std::int64_t two_orbitals,
                                 std::int64_t two_batch) noexcept {
-  return append_range(set, values.eigenpairs.eigenvalues, plan.total_orbitals, sizeof(double)) &&
-         append_range(set, values.eigenpairs.coefficients, plan.total_matrix_elements,
-                      sizeof(double)) &&
+  return append_range(set, values.eigenpairs.eigenvalues,
+                      plan.wavefunction_layout.total_spin_orbitals, sizeof(double)) &&
+         append_range(set, values.eigenpairs.coefficients,
+                      plan.wavefunction_layout.total_spin_matrix_elements, sizeof(double)) &&
          append_range(set, values.occupations.occupations, two_orbitals, sizeof(double)) &&
          append_range(set, values.occupations.chemical_potentials, two_batch, sizeof(double)) &&
          append_range(set, values.occupations.electron_sums, two_batch, sizeof(double)) &&
          append_range(set, values.occupations.entropies, plan.batch_size, sizeof(double)) &&
-         append_range(set, values.density.density, plan.total_matrix_elements, sizeof(double)) &&
-         append_range(set, values.density.energy_weighted_density, plan.total_matrix_elements,
-                      sizeof(double)) &&
+         append_range(set, values.density.density,
+                      plan.wavefunction_layout.total_spin_matrix_elements, sizeof(double)) &&
+         append_range(set, values.density.energy_weighted_density,
+                      plan.wavefunction_layout.total_spin_matrix_elements, sizeof(double)) &&
          append_range(set, values.density.band_energies, plan.batch_size, sizeof(double)) &&
          append_range(set, values.density.occupation_sums, plan.batch_size, sizeof(double)) &&
          append_range(set, values.density.density_traces, plan.batch_size, sizeof(double)) &&
          append_range(set, values.density.weighted_density_traces, plan.batch_size,
                       sizeof(double)) &&
-         append_range(set, values.population.qsh, plan.total_shells, sizeof(double)) &&
-         append_range(set, values.population.qat, plan.total_atoms, sizeof(double)) &&
+         append_range(set, values.density.channel_band_energies,
+                      plan.wavefunction_layout.total_spin_channels, sizeof(double)) &&
+         append_range(set, values.density.channel_occupation_sums,
+                      plan.wavefunction_layout.total_spin_channels, sizeof(double)) &&
+         append_range(set, values.density.channel_density_traces,
+                      plan.wavefunction_layout.total_spin_channels, sizeof(double)) &&
+         append_range(set, values.density.channel_weighted_density_traces,
+                      plan.wavefunction_layout.total_spin_channels, sizeof(double)) &&
+         append_range(set, values.population.qsh, plan.wavefunction_layout.total_spin_shells,
+                      sizeof(double)) &&
+         append_range(set, values.population.qat, plan.wavefunction_layout.total_spin_atoms,
+                      sizeof(double)) &&
          append_range(set, values.population.dipole, dipoles, sizeof(double)) &&
          append_range(set, values.population.quadrupole, quadrupoles, sizeof(double));
 }
@@ -421,6 +482,7 @@ bool append_energy_ranges(RangeSet<Capacity>* set,
          append_range(set, free.es2, plan.batch_size, sizeof(double)) &&
          append_range(set, free.es3, plan.batch_size, sizeof(double)) &&
          append_range(set, free.aes2, plan.batch_size, sizeof(double)) &&
+         append_range(set, values.spin_energies, plan.batch_size, sizeof(double)) &&
          append_range(set, free.d4_two_body, plan.batch_size, sizeof(double)) &&
          append_range(set, free.explicit_point_charge, plan.batch_size, sizeof(double)) &&
          append_range(set, free.periodic_embedding, plan.batch_size, sizeof(double)) &&
@@ -463,7 +525,7 @@ bool transaction_ranges_are_valid(const Gfn2SccPublicationDevicePlan& plan,
                                   std::int64_t history_elements,
                                   std::int64_t omega_elements) noexcept {
   RangeSet<48> staged_reads;
-  RangeSet<56> public_writes;
+  RangeSet<64> public_writes;
   RangeSet<9> scratch_writes;
   RangeSet<5> control_reads;
 
@@ -482,8 +544,8 @@ bool transaction_ranges_are_valid(const Gfn2SccPublicationDevicePlan& plan,
       /* #96 binds staged free-energy entropy directly to occupation entropy. */
       !append_energy_ranges(&staged_reads, staged.energy, plan, true) ||
       !append_mixer_ranges(&staged_reads, staged.mixer, plan, history_elements, omega_elements) ||
-      !append_range(&staged_reads, staged.next_mixed.shell_charges, plan.total_shells,
-                    sizeof(double)) ||
+      !append_range(&staged_reads, staged.next_mixed.shell_charges,
+                    plan.wavefunction_layout.total_spin_shells, sizeof(double)) ||
       !append_range(&staged_reads, staged.next_mixed.atomic_dipoles, dipoles, sizeof(double)) ||
       !append_range(&staged_reads, staged.next_mixed.atomic_quadrupoles, quadrupoles,
                     sizeof(double))) {
@@ -492,9 +554,9 @@ bool transaction_ranges_are_valid(const Gfn2SccPublicationDevicePlan& plan,
 
   /* qsh/d/Q publication ranges are registered once through published. */
   if (!append_range(&public_writes, public_state.wavefunction.eigenpairs.eigenvalues,
-                    plan.total_orbitals, sizeof(double)) ||
+                    plan.wavefunction_layout.total_spin_orbitals, sizeof(double)) ||
       !append_range(&public_writes, public_state.wavefunction.eigenpairs.coefficients,
-                    plan.total_matrix_elements, sizeof(double)) ||
+                    plan.wavefunction_layout.total_spin_matrix_elements, sizeof(double)) ||
       !append_range(&public_writes, public_state.wavefunction.occupations.occupations, two_orbitals,
                     sizeof(double)) ||
       !append_range(&public_writes, public_state.wavefunction.occupations.chemical_potentials,
@@ -504,9 +566,9 @@ bool transaction_ranges_are_valid(const Gfn2SccPublicationDevicePlan& plan,
       !append_range(&public_writes, public_state.wavefunction.occupations.entropies,
                     plan.batch_size, sizeof(double)) ||
       !append_range(&public_writes, public_state.wavefunction.density.density,
-                    plan.total_matrix_elements, sizeof(double)) ||
+                    plan.wavefunction_layout.total_spin_matrix_elements, sizeof(double)) ||
       !append_range(&public_writes, public_state.wavefunction.density.energy_weighted_density,
-                    plan.total_matrix_elements, sizeof(double)) ||
+                    plan.wavefunction_layout.total_spin_matrix_elements, sizeof(double)) ||
       !append_range(&public_writes, public_state.wavefunction.density.band_energies,
                     plan.batch_size, sizeof(double)) ||
       !append_range(&public_writes, public_state.wavefunction.density.occupation_sums,
@@ -515,10 +577,19 @@ bool transaction_ranges_are_valid(const Gfn2SccPublicationDevicePlan& plan,
                     plan.batch_size, sizeof(double)) ||
       !append_range(&public_writes, public_state.wavefunction.density.weighted_density_traces,
                     plan.batch_size, sizeof(double)) ||
-      !append_range(&public_writes, public_state.wavefunction.population.qat, plan.total_atoms,
-                    sizeof(double)) ||
-      !append_range(&public_writes, public_state.published.shell_charges, plan.total_shells,
-                    sizeof(double)) ||
+      !append_range(&public_writes, public_state.wavefunction.density.channel_band_energies,
+                    plan.wavefunction_layout.total_spin_channels, sizeof(double)) ||
+      !append_range(&public_writes, public_state.wavefunction.density.channel_occupation_sums,
+                    plan.wavefunction_layout.total_spin_channels, sizeof(double)) ||
+      !append_range(&public_writes, public_state.wavefunction.density.channel_density_traces,
+                    plan.wavefunction_layout.total_spin_channels, sizeof(double)) ||
+      !append_range(&public_writes,
+                    public_state.wavefunction.density.channel_weighted_density_traces,
+                    plan.wavefunction_layout.total_spin_channels, sizeof(double)) ||
+      !append_range(&public_writes, public_state.wavefunction.population.qat,
+                    plan.wavefunction_layout.total_spin_atoms, sizeof(double)) ||
+      !append_range(&public_writes, public_state.published.shell_charges,
+                    plan.wavefunction_layout.total_spin_shells, sizeof(double)) ||
       !append_range(&public_writes, public_state.published.atomic_dipoles, dipoles,
                     sizeof(double)) ||
       !append_range(&public_writes, public_state.published.atomic_quadrupoles, quadrupoles,
@@ -527,7 +598,7 @@ bool transaction_ranges_are_valid(const Gfn2SccPublicationDevicePlan& plan,
       !append_mixer_ranges(&public_writes, public_state.mixer, plan, history_elements,
                            omega_elements) ||
       !append_range(&public_writes, public_state.scc.current_inputs.shell_charges,
-                    plan.total_shells, sizeof(double)) ||
+                    plan.wavefunction_layout.total_spin_shells, sizeof(double)) ||
       !append_range(&public_writes, public_state.scc.current_inputs.atomic_dipoles, dipoles,
                     sizeof(double)) ||
       !append_range(&public_writes, public_state.scc.current_inputs.atomic_quadrupoles, quadrupoles,
@@ -549,8 +620,8 @@ bool transaction_ranges_are_valid(const Gfn2SccPublicationDevicePlan& plan,
     return false;
   }
 
-  if (!append_range(&scratch_writes, workspace.mixed_atomic_charges, plan.total_atoms,
-                    sizeof(double)) ||
+  if (!append_range(&scratch_writes, workspace.mixed_atomic_charges,
+                    plan.wavefunction_layout.total_spin_atoms, sizeof(double)) ||
       !append_range(&scratch_writes, workspace.previous_free_energies, plan.batch_size,
                     sizeof(double)) ||
       !append_range(&scratch_writes, workspace.free_energy_changes, plan.batch_size,
@@ -666,20 +737,59 @@ __global__ void publication_topology_preflight_kernel(Gfn2SccPublicationDevicePl
     const std::int64_t orbital_end = plan.orbital_offsets[system + 1];
     const std::int64_t matrix_begin = plan.matrix_offsets[system];
     const std::int64_t matrix_end = plan.matrix_offsets[system + 1];
+    const std::int32_t spin_channels = plan.wavefunction_layout.spin_channels[system];
+    const std::int64_t spin_channel_begin = plan.wavefunction_layout.spin_channel_offsets[system];
+    const std::int64_t spin_channel_end = plan.wavefunction_layout.spin_channel_offsets[system + 1];
+    const std::int64_t spin_orbital_begin = plan.wavefunction_layout.spin_orbital_offsets[system];
+    const std::int64_t spin_orbital_end = plan.wavefunction_layout.spin_orbital_offsets[system + 1];
+    const std::int64_t spin_matrix_begin = plan.wavefunction_layout.spin_matrix_offsets[system];
+    const std::int64_t spin_matrix_end = plan.wavefunction_layout.spin_matrix_offsets[system + 1];
+    const std::int64_t spin_shell_begin = plan.wavefunction_layout.spin_shell_offsets[system];
+    const std::int64_t spin_shell_end = plan.wavefunction_layout.spin_shell_offsets[system + 1];
+    const std::int64_t spin_atom_begin = plan.wavefunction_layout.spin_atom_offsets[system];
+    const std::int64_t spin_atom_end = plan.wavefunction_layout.spin_atom_offsets[system + 1];
     bool valid = valid_closed_range(atom_begin, atom_end, plan.total_atoms, false) &&
                  valid_closed_range(shell_begin, shell_end, plan.total_shells, false) &&
                  valid_closed_range(orbital_begin, orbital_end, plan.total_orbitals, false) &&
-                 valid_closed_range(matrix_begin, matrix_end, plan.total_matrix_elements, false);
+                 valid_closed_range(matrix_begin, matrix_end, plan.total_matrix_elements, false) &&
+                 (spin_channels == 1 || spin_channels == 2) &&
+                 valid_closed_range(spin_channel_begin, spin_channel_end,
+                                    plan.wavefunction_layout.total_spin_channels, false) &&
+                 valid_closed_range(spin_orbital_begin, spin_orbital_end,
+                                    plan.wavefunction_layout.total_spin_orbitals, false) &&
+                 valid_closed_range(spin_matrix_begin, spin_matrix_end,
+                                    plan.wavefunction_layout.total_spin_matrix_elements, false) &&
+                 valid_closed_range(spin_shell_begin, spin_shell_end,
+                                    plan.wavefunction_layout.total_spin_shells, false) &&
+                 valid_closed_range(spin_atom_begin, spin_atom_end,
+                                    plan.wavefunction_layout.total_spin_atoms, false);
     if (valid) {
       const std::int64_t orbitals = orbital_end - orbital_begin;
-      valid = orbitals <= INT64_MAX / orbitals && matrix_end - matrix_begin == orbitals * orbitals;
+      const std::int64_t shells = shell_end - shell_begin;
+      const std::int64_t atoms = atom_end - atom_begin;
+      const std::int64_t matrices = matrix_end - matrix_begin;
+      valid = orbitals <= INT64_MAX / orbitals && matrices == orbitals * orbitals &&
+              orbitals <= INT64_MAX / spin_channels && matrices <= INT64_MAX / spin_channels &&
+              shells <= INT64_MAX / spin_channels && atoms <= INT64_MAX / spin_channels &&
+              spin_channel_end - spin_channel_begin == spin_channels &&
+              spin_orbital_end - spin_orbital_begin == spin_channels * orbitals &&
+              spin_matrix_end - spin_matrix_begin == spin_channels * matrices &&
+              spin_shell_end - spin_shell_begin == spin_channels * shells &&
+              spin_atom_end - spin_atom_begin == spin_channels * atoms;
     }
     if (valid && system == 0) {
-      valid = atom_begin == 0 && shell_begin == 0 && orbital_begin == 0 && matrix_begin == 0;
+      valid = atom_begin == 0 && shell_begin == 0 && orbital_begin == 0 && matrix_begin == 0 &&
+              spin_channel_begin == 0 && spin_orbital_begin == 0 && spin_matrix_begin == 0 &&
+              spin_shell_begin == 0 && spin_atom_begin == 0;
     }
     if (valid && system + 1 == plan.batch_size) {
       valid = atom_end == plan.total_atoms && shell_end == plan.total_shells &&
-              orbital_end == plan.total_orbitals && matrix_end == plan.total_matrix_elements;
+              orbital_end == plan.total_orbitals && matrix_end == plan.total_matrix_elements &&
+              spin_channel_end == plan.wavefunction_layout.total_spin_channels &&
+              spin_orbital_end == plan.wavefunction_layout.total_spin_orbitals &&
+              spin_matrix_end == plan.wavefunction_layout.total_spin_matrix_elements &&
+              spin_shell_end == plan.wavefunction_layout.total_spin_shells &&
+              spin_atom_end == plan.wavefunction_layout.total_spin_atoms;
     }
     if (valid) {
       for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
@@ -738,12 +848,17 @@ __global__ void publication_numerical_preflight_kernel(
   const std::int64_t atom_end = plan.atom_offsets[system + 1];
   const std::int64_t shell_begin = plan.shell_offsets[system];
   const std::int64_t shell_end = plan.shell_offsets[system + 1];
-  const std::int64_t dipole_begin = atom_begin * kDipoleComponents;
-  const std::int64_t dipole_end = atom_end * kDipoleComponents;
-  const std::int64_t quadrupole_begin = atom_begin * kQuadrupoleComponents;
-  const std::int64_t quadrupole_end = atom_end * kQuadrupoleComponents;
+  const std::int64_t spin_shell_begin = plan.wavefunction_layout.spin_shell_offsets[system];
+  const std::int64_t spin_shell_end = plan.wavefunction_layout.spin_shell_offsets[system + 1];
+  const std::int64_t spin_atom_begin = plan.wavefunction_layout.spin_atom_offsets[system];
+  const std::int64_t spin_atom_end = plan.wavefunction_layout.spin_atom_offsets[system + 1];
+  const std::int64_t dipole_begin = spin_atom_begin * kDipoleComponents;
+  const std::int64_t dipole_end = spin_atom_end * kDipoleComponents;
+  const std::int64_t quadrupole_begin = spin_atom_begin * kQuadrupoleComponents;
+  const std::int64_t quadrupole_end = spin_atom_end * kQuadrupoleComponents;
 
-  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+  for (std::int64_t atom = spin_atom_begin + threadIdx.x; atom < spin_atom_end;
+       atom += blockDim.x) {
     workspace.mixed_atomic_charges[atom] = 0.0;
     const double raw_charge = staged.wavefunction.population.qat[atom];
     if (!isfinite(raw_charge)) {
@@ -752,7 +867,8 @@ __global__ void publication_numerical_preflight_kernel(
     }
   }
 
-  for (std::int64_t shell = shell_begin + threadIdx.x; shell < shell_end; shell += blockDim.x) {
+  for (std::int64_t shell = spin_shell_begin + threadIdx.x; shell < spin_shell_end;
+       shell += blockDim.x) {
     const double mixed = staged.next_mixed.shell_charges[shell];
     const double raw = staged.wavefunction.population.qsh[shell];
     if (!isfinite(mixed)) {
@@ -833,8 +949,15 @@ __global__ void publication_numerical_preflight_kernel(
 
   /* Preserve the CPU shell accumulation order for exact overflow behavior. */
   if (threadIdx.x == 0) {
-    for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
-      const std::int64_t atom = plan.shell_to_atom[shell];
+    const std::int64_t physical_shells = shell_end - shell_begin;
+    const std::int64_t physical_atoms = atom_end - atom_begin;
+    for (std::int64_t shell = spin_shell_begin; shell < spin_shell_end; ++shell) {
+      const std::int64_t local = shell - spin_shell_begin;
+      const std::int64_t channel = local / physical_shells;
+      const std::int64_t physical_shell = shell_begin + local % physical_shells;
+      const std::int64_t physical_atom = plan.shell_to_atom[physical_shell];
+      const std::int64_t atom =
+          spin_atom_begin + channel * physical_atoms + (physical_atom - atom_begin);
       const double updated =
           workspace.mixed_atomic_charges[atom] + staged.next_mixed.shell_charges[shell];
       if (!isfinite(updated)) {
@@ -874,6 +997,7 @@ __device__ bool peer_failure_counts_attempt(std::uint64_t failure_record) {
     case Gfn2SccStageId::kD4RawEnergy:
     case Gfn2SccStageId::kExplicitPointChargeRawEnergy:
     case Gfn2SccStageId::kPeriodicRawEnergy:
+    case Gfn2SccStageId::kSpinRawEnergy:
       return true;
     default:
       return false;
@@ -888,6 +1012,7 @@ __device__ void publish_peer_failure_trace(std::int64_t system, std::uint64_t fa
   public_state.energy.free_energy.es2[system] = nan;
   public_state.energy.free_energy.es3[system] = nan;
   public_state.energy.free_energy.aes2[system] = nan;
+  public_state.energy.spin_energies[system] = nan;
   public_state.energy.free_energy.d4_two_body[system] = nan;
   public_state.energy.free_energy.explicit_point_charge[system] = nan;
   public_state.energy.free_energy.periodic_embedding[system] = nan;
@@ -939,22 +1064,26 @@ __global__ void publication_commit_kernel(Gfn2SccPublicationDevicePlan plan,
     return;
   }
 
-  const std::int64_t atom_begin = plan.atom_offsets[system];
-  const std::int64_t atom_end = plan.atom_offsets[system + 1];
-  const std::int64_t shell_begin = plan.shell_offsets[system];
-  const std::int64_t shell_end = plan.shell_offsets[system + 1];
-  const std::int64_t orbital_begin = plan.orbital_offsets[system];
-  const std::int64_t orbital_end = plan.orbital_offsets[system + 1];
-  const std::int64_t matrix_begin = plan.matrix_offsets[system];
-  const std::int64_t matrix_end = plan.matrix_offsets[system + 1];
-  const std::int64_t dipole_begin = atom_begin * kDipoleComponents;
-  const std::int64_t dipole_end = atom_end * kDipoleComponents;
-  const std::int64_t quadrupole_begin = atom_begin * kQuadrupoleComponents;
-  const std::int64_t quadrupole_end = atom_end * kQuadrupoleComponents;
-  const std::int64_t occupation_begin = 2 * orbital_begin;
-  const std::int64_t occupation_end = 2 * orbital_end;
-  const std::int64_t vector_begin = shell_begin + kMultipoleAtomComponents * atom_begin;
-  const std::int64_t vector_end = shell_end + kMultipoleAtomComponents * atom_end;
+  const std::int64_t physical_orbital_begin = plan.orbital_offsets[system];
+  const std::int64_t physical_orbital_end = plan.orbital_offsets[system + 1];
+  const std::int64_t spin_channel_begin = plan.wavefunction_layout.spin_channel_offsets[system];
+  const std::int64_t spin_channel_end = plan.wavefunction_layout.spin_channel_offsets[system + 1];
+  const std::int64_t orbital_begin = plan.wavefunction_layout.spin_orbital_offsets[system];
+  const std::int64_t orbital_end = plan.wavefunction_layout.spin_orbital_offsets[system + 1];
+  const std::int64_t matrix_begin = plan.wavefunction_layout.spin_matrix_offsets[system];
+  const std::int64_t matrix_end = plan.wavefunction_layout.spin_matrix_offsets[system + 1];
+  const std::int64_t shell_begin = plan.wavefunction_layout.spin_shell_offsets[system];
+  const std::int64_t shell_end = plan.wavefunction_layout.spin_shell_offsets[system + 1];
+  const std::int64_t spin_atom_begin = plan.wavefunction_layout.spin_atom_offsets[system];
+  const std::int64_t spin_atom_end = plan.wavefunction_layout.spin_atom_offsets[system + 1];
+  const std::int64_t dipole_begin = spin_atom_begin * kDipoleComponents;
+  const std::int64_t dipole_end = spin_atom_end * kDipoleComponents;
+  const std::int64_t quadrupole_begin = spin_atom_begin * kQuadrupoleComponents;
+  const std::int64_t quadrupole_end = spin_atom_end * kQuadrupoleComponents;
+  const std::int64_t occupation_begin = 2 * physical_orbital_begin;
+  const std::int64_t occupation_end = 2 * physical_orbital_end;
+  const std::int64_t vector_begin = shell_begin + kMultipoleAtomComponents * spin_atom_begin;
+  const std::int64_t vector_end = shell_end + kMultipoleAtomComponents * spin_atom_end;
   const std::int64_t history_begin = vector_begin * plan.history_size;
   const std::int64_t history_end = vector_end * plan.history_size;
   const std::int64_t omega_begin = system * plan.history_size;
@@ -978,7 +1107,8 @@ __global__ void publication_commit_kernel(Gfn2SccPublicationDevicePlan plan,
                                                       : staged.next_mixed.shell_charges[shell];
     public_state.scc.current_inputs.shell_charges[shell] = staged.next_mixed.shell_charges[shell];
   }
-  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+  for (std::int64_t atom = spin_atom_begin + threadIdx.x; atom < spin_atom_end;
+       atom += blockDim.x) {
     public_state.wavefunction.population.qat[atom] =
         converged ? staged.wavefunction.population.qat[atom] : workspace.mixed_atomic_charges[atom];
   }
@@ -1008,6 +1138,18 @@ __global__ void publication_commit_kernel(Gfn2SccPublicationDevicePlan plan,
   copy_range(staged.mixer.df_history, public_state.mixer.df_history, history_begin, history_end);
   copy_range(staged.mixer.u_history, public_state.mixer.u_history, history_begin, history_end);
   copy_range(staged.mixer.omega, public_state.mixer.omega, omega_begin, omega_end);
+  copy_range(staged.wavefunction.density.channel_band_energies,
+             public_state.wavefunction.density.channel_band_energies, spin_channel_begin,
+             spin_channel_end);
+  copy_range(staged.wavefunction.density.channel_occupation_sums,
+             public_state.wavefunction.density.channel_occupation_sums, spin_channel_begin,
+             spin_channel_end);
+  copy_range(staged.wavefunction.density.channel_density_traces,
+             public_state.wavefunction.density.channel_density_traces, spin_channel_begin,
+             spin_channel_end);
+  copy_range(staged.wavefunction.density.channel_weighted_density_traces,
+             public_state.wavefunction.density.channel_weighted_density_traces, spin_channel_begin,
+             spin_channel_end);
   __syncthreads();
 
   if (threadIdx.x == 0) {
@@ -1036,6 +1178,7 @@ __global__ void publication_commit_kernel(Gfn2SccPublicationDevicePlan plan,
     public_state.energy.free_energy.es2[system] = staged.energy.free_energy.es2[system];
     public_state.energy.free_energy.es3[system] = staged.energy.free_energy.es3[system];
     public_state.energy.free_energy.aes2[system] = staged.energy.free_energy.aes2[system];
+    public_state.energy.spin_energies[system] = staged.energy.spin_energies[system];
     public_state.energy.free_energy.d4_two_body[system] =
         staged.energy.free_energy.d4_two_body[system];
     public_state.energy.free_energy.explicit_point_charge[system] =

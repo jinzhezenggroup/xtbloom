@@ -27,7 +27,10 @@
 
 namespace {
 
+using gpuxtb::detail::Gfn2PlanMemorySpace;
+using gpuxtb::detail::Gfn2WavefunctionLayoutView;
 using gpuxtb::detail::cuda::assemble_gfn2_hamiltonian_cuda;
+using gpuxtb::detail::cuda::assemble_gfn2_spin_hamiltonian_cuda;
 using gpuxtb::detail::cuda::Gfn2HamiltonianDeviceActivity;
 using gpuxtb::detail::cuda::Gfn2HamiltonianDeviceBatch;
 using gpuxtb::detail::cuda::Gfn2HamiltonianDeviceError;
@@ -125,6 +128,18 @@ struct HostCase {
   std::vector<double> dipole_potential;
   std::vector<double> quadrupole_potential;
   std::vector<std::uint8_t> active;
+};
+
+struct HostSpinHamiltonianCase {
+  std::vector<std::int32_t> channels;
+  std::vector<std::int64_t> channel_offsets{0};
+  std::vector<std::int64_t> orbital_offsets{0};
+  std::vector<std::int64_t> matrix_offsets{0};
+  std::vector<std::int64_t> shell_offsets{0};
+  std::vector<std::int64_t> atom_offsets{0};
+  std::vector<double> shell_scalar;
+  std::vector<double> dipole_potential;
+  std::vector<double> quadrupole_potential;
 };
 
 HostCase make_case(std::size_t batch_size) {
@@ -256,6 +271,93 @@ std::vector<double> evaluate_cpu(const HostCase& data, double sentinel = kSentin
   return result;
 }
 
+std::vector<double> evaluate_spin_cpu(const HostCase& host, const HostSpinHamiltonianCase& spin) {
+  HostCase alpha = host;
+  HostCase beta = host;
+  for (std::size_t system = 0; system < static_cast<std::size_t>(host.batch_size); ++system) {
+    const std::int64_t shells =
+        host.batch_shell_offsets[system + 1u] - host.batch_shell_offsets[system];
+    const std::int64_t atoms = host.atom_offsets[system + 1u] - host.atom_offsets[system];
+    for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
+      const std::int64_t physical_shell = host.batch_shell_offsets[system] + local_shell;
+      const double charge =
+          spin.shell_scalar[static_cast<std::size_t>(spin.shell_offsets[system] + local_shell)];
+      double alpha_value = charge;
+      double beta_value = charge;
+      if (spin.channels[system] == 2) {
+        const double magnetization = spin.shell_scalar[static_cast<std::size_t>(
+            spin.shell_offsets[system] + shells + local_shell)];
+        alpha_value = 0.5 * charge + 0.5 * magnetization;
+        beta_value = 0.5 * charge - 0.5 * magnetization;
+      }
+      alpha.shell_scalar[static_cast<std::size_t>(physical_shell)] = alpha_value;
+      beta.shell_scalar[static_cast<std::size_t>(physical_shell)] = beta_value;
+    }
+    for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
+      const std::int64_t physical_atom = host.atom_offsets[system] + local_atom;
+      const std::int64_t charge_atom = spin.atom_offsets[system] + local_atom;
+      for (int component = 0; component < 3; ++component) {
+        const double charge =
+            spin.dipole_potential[static_cast<std::size_t>(3 * charge_atom + component)];
+        double alpha_value = charge;
+        double beta_value = charge;
+        if (spin.channels[system] == 2) {
+          const std::int64_t magnetization_atom = spin.atom_offsets[system] + atoms + local_atom;
+          const double magnetization =
+              spin.dipole_potential[static_cast<std::size_t>(3 * magnetization_atom + component)];
+          alpha_value = 0.5 * charge + 0.5 * magnetization;
+          beta_value = 0.5 * charge - 0.5 * magnetization;
+        }
+        alpha.dipole_potential[static_cast<std::size_t>(3 * physical_atom + component)] =
+            alpha_value;
+        beta.dipole_potential[static_cast<std::size_t>(3 * physical_atom + component)] = beta_value;
+      }
+      for (int component = 0; component < 6; ++component) {
+        const double charge =
+            spin.quadrupole_potential[static_cast<std::size_t>(6 * charge_atom + component)];
+        double alpha_value = charge;
+        double beta_value = charge;
+        if (spin.channels[system] == 2) {
+          const std::int64_t magnetization_atom = spin.atom_offsets[system] + atoms + local_atom;
+          const double magnetization = spin.quadrupole_potential[static_cast<std::size_t>(
+              6 * magnetization_atom + component)];
+          alpha_value = 0.5 * charge + 0.5 * magnetization;
+          beta_value = 0.5 * charge - 0.5 * magnetization;
+        }
+        alpha.quadrupole_potential[static_cast<std::size_t>(6 * physical_atom + component)] =
+            alpha_value;
+        beta.quadrupole_potential[static_cast<std::size_t>(6 * physical_atom + component)] =
+            beta_value;
+      }
+    }
+  }
+
+  const std::vector<double> alpha_tmp = evaluate_cpu(alpha);
+  const std::vector<double> beta_tmp = evaluate_cpu(beta);
+  std::vector<double> result(static_cast<std::size_t>(spin.matrix_offsets.back()), kSentinel);
+  for (std::size_t system = 0; system < static_cast<std::size_t>(host.batch_size); ++system) {
+    if (host.active[system] == 0u) {
+      continue;
+    }
+    const std::int64_t physical_begin = host.matrix_offsets[system];
+    const std::int64_t elements = host.matrix_offsets[system + 1u] - physical_begin;
+    for (int channel = 0; channel < spin.channels[system]; ++channel) {
+      const std::vector<double>& temporary = channel == 0 ? alpha_tmp : beta_tmp;
+      const std::int64_t output_begin = spin.matrix_offsets[system] + channel * elements;
+      for (std::int64_t local = 0; local < elements; ++local) {
+        double value = temporary[static_cast<std::size_t>(physical_begin + local)];
+        if (spin.channels[system] == 2) {
+          const double h0 = host.h0[static_cast<std::size_t>(physical_begin + local)];
+          const double delta = value - h0;
+          value = h0 + 2.0 * delta;
+        }
+        result[static_cast<std::size_t>(output_begin + local)] = value;
+      }
+    }
+  }
+  return result;
+}
+
 struct DeviceFixture {
   DeviceBuffer<std::int64_t> atom_offsets;
   DeviceBuffer<std::int64_t> batch_shell_offsets;
@@ -380,6 +482,183 @@ struct DeviceFixture {
             kPlanToken};
   }
 };
+
+HostSpinHamiltonianCase make_spin_hamiltonian_case(const HostCase& host) {
+  HostSpinHamiltonianCase spin;
+  for (std::size_t system = 0; system < static_cast<std::size_t>(host.batch_size); ++system) {
+    const std::int32_t channels = system % 2u == 0u ? 1 : 2;
+    const std::int64_t orbitals =
+        host.batch_orbital_offsets[system + 1u] - host.batch_orbital_offsets[system];
+    const std::int64_t matrices = orbitals * orbitals;
+    const std::int64_t shells =
+        host.batch_shell_offsets[system + 1u] - host.batch_shell_offsets[system];
+    const std::int64_t atoms = host.atom_offsets[system + 1u] - host.atom_offsets[system];
+    spin.channels.push_back(channels);
+    spin.channel_offsets.push_back(spin.channel_offsets.back() + channels);
+    spin.orbital_offsets.push_back(spin.orbital_offsets.back() + channels * orbitals);
+    spin.matrix_offsets.push_back(spin.matrix_offsets.back() + channels * matrices);
+    spin.shell_offsets.push_back(spin.shell_offsets.back() + channels * shells);
+    spin.atom_offsets.push_back(spin.atom_offsets.back() + channels * atoms);
+  }
+  spin.shell_scalar.resize(static_cast<std::size_t>(spin.shell_offsets.back()));
+  spin.dipole_potential.resize(static_cast<std::size_t>(3 * spin.atom_offsets.back()));
+  spin.quadrupole_potential.resize(static_cast<std::size_t>(6 * spin.atom_offsets.back()));
+  for (std::size_t system = 0; system < static_cast<std::size_t>(host.batch_size); ++system) {
+    const std::int64_t shells =
+        host.batch_shell_offsets[system + 1u] - host.batch_shell_offsets[system];
+    const std::int64_t atoms = host.atom_offsets[system + 1u] - host.atom_offsets[system];
+    for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
+      const std::int64_t physical_shell = host.batch_shell_offsets[system] + local_shell;
+      spin.shell_scalar[static_cast<std::size_t>(spin.shell_offsets[system] + local_shell)] =
+          host.shell_scalar[static_cast<std::size_t>(physical_shell)];
+      if (spin.channels[system] == 2) {
+        spin.shell_scalar[static_cast<std::size_t>(spin.shell_offsets[system] + shells +
+                                                   local_shell)] =
+            0.043 * static_cast<double>(
+                        1 + (system * 13u + static_cast<std::size_t>(local_shell) * 5u) % 29u) -
+            0.24;
+      }
+    }
+    for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
+      const std::int64_t physical_atom = host.atom_offsets[system] + local_atom;
+      const std::int64_t charge_atom = spin.atom_offsets[system] + local_atom;
+      for (int component = 0; component < 3; ++component) {
+        spin.dipole_potential[static_cast<std::size_t>(3 * charge_atom + component)] =
+            host.dipole_potential[static_cast<std::size_t>(3 * physical_atom + component)];
+      }
+      for (int component = 0; component < 6; ++component) {
+        spin.quadrupole_potential[static_cast<std::size_t>(6 * charge_atom + component)] =
+            host.quadrupole_potential[static_cast<std::size_t>(6 * physical_atom + component)];
+      }
+      if (spin.channels[system] == 2) {
+        const std::int64_t magnetization_atom = spin.atom_offsets[system] + atoms + local_atom;
+        for (int component = 0; component < 3; ++component) {
+          spin.dipole_potential[static_cast<std::size_t>(3 * magnetization_atom + component)] =
+              0.017 * static_cast<double>(1 + (system * 7u + local_atom * 3 + component) % 19) -
+              0.12;
+        }
+        for (int component = 0; component < 6; ++component) {
+          spin.quadrupole_potential[static_cast<std::size_t>(6 * magnetization_atom + component)] =
+              0.009 * static_cast<double>(1 + (system * 11u + local_atom * 5 + component) % 23) -
+              0.08;
+        }
+      }
+    }
+  }
+  return spin;
+}
+
+struct SpinHamiltonianFixture {
+  DeviceBuffer<std::int32_t> channels;
+  DeviceBuffer<std::int64_t> channel_offsets;
+  DeviceBuffer<std::int64_t> orbital_offsets;
+  DeviceBuffer<std::int64_t> matrix_offsets;
+  DeviceBuffer<std::int64_t> shell_offsets;
+  DeviceBuffer<std::int64_t> atom_offsets;
+  DeviceBuffer<double> shell_scalar;
+  DeviceBuffer<double> dipole_potential;
+  DeviceBuffer<double> quadrupole_potential;
+  DeviceBuffer<double> output;
+  DeviceBuffer<double> scratch;
+  DeviceBuffer<std::uint32_t> sequence_active;
+
+  cudaError_t initialize(const HostSpinHamiltonianCase& host, cudaStream_t stream = nullptr) {
+    cudaError_t status = upload(channels, host.channels, stream);
+#define UPLOAD_SPIN(field, source)          \
+  if (status == cudaSuccess) {              \
+    status = upload(field, source, stream); \
+  }
+    UPLOAD_SPIN(channel_offsets, host.channel_offsets)
+    UPLOAD_SPIN(orbital_offsets, host.orbital_offsets)
+    UPLOAD_SPIN(matrix_offsets, host.matrix_offsets)
+    UPLOAD_SPIN(shell_offsets, host.shell_offsets)
+    UPLOAD_SPIN(atom_offsets, host.atom_offsets)
+    UPLOAD_SPIN(shell_scalar, host.shell_scalar)
+    UPLOAD_SPIN(dipole_potential, host.dipole_potential)
+    UPLOAD_SPIN(quadrupole_potential, host.quadrupole_potential)
+#undef UPLOAD_SPIN
+    if (status == cudaSuccess) {
+      status = output.allocate(static_cast<std::size_t>(host.matrix_offsets.back()));
+    }
+    if (status == cudaSuccess) {
+      status = scratch.allocate(static_cast<std::size_t>(host.matrix_offsets.back()));
+    }
+    if (status == cudaSuccess) {
+      status = sequence_active.allocate(1u);
+    }
+    return status == cudaSuccess
+               ? output.fill(kSentinel, static_cast<std::size_t>(host.matrix_offsets.back()),
+                             stream)
+               : status;
+  }
+
+  Gfn2WavefunctionLayoutView layout(const HostCase& physical,
+                                    const HostSpinHamiltonianCase& host) const {
+    return {Gfn2PlanMemorySpace::kCudaDevice,
+            kPlanToken,
+            0x51cc0deULL,
+            physical.batch_size,
+            host.channel_offsets.back(),
+            host.orbital_offsets.back(),
+            host.matrix_offsets.back(),
+            host.shell_offsets.back(),
+            host.atom_offsets.back(),
+            static_cast<std::int64_t>(host.channels.size()),
+            static_cast<std::int64_t>(host.channel_offsets.size()),
+            static_cast<std::int64_t>(host.orbital_offsets.size()),
+            static_cast<std::int64_t>(host.matrix_offsets.size()),
+            static_cast<std::int64_t>(host.shell_offsets.size()),
+            static_cast<std::int64_t>(host.atom_offsets.size()),
+            channels.get(),
+            channel_offsets.get(),
+            orbital_offsets.get(),
+            matrix_offsets.get(),
+            shell_offsets.get(),
+            atom_offsets.get()};
+  }
+
+  Gfn2HamiltonianDeviceInput input(const DeviceFixture& physical, const HostCase& physical_host,
+                                   const HostSpinHamiltonianCase& host) const {
+    return {physical.h0.get(),
+            static_cast<std::int64_t>(physical_host.h0.size()),
+            physical.overlap.get(),
+            static_cast<std::int64_t>(physical_host.overlap.size()),
+            physical.dipole_integrals.get(),
+            static_cast<std::int64_t>(physical_host.dipole_integrals.size()),
+            physical.quadrupole_integrals.get(),
+            static_cast<std::int64_t>(physical_host.quadrupole_integrals.size()),
+            shell_scalar.get(),
+            static_cast<std::int64_t>(host.shell_scalar.size()),
+            dipole_potential.get(),
+            static_cast<std::int64_t>(host.dipole_potential.size()),
+            quadrupole_potential.get(),
+            static_cast<std::int64_t>(host.quadrupole_potential.size()),
+            kPlanToken};
+  }
+
+  Gfn2HamiltonianDeviceOutput result(const HostSpinHamiltonianCase& host) {
+    return {output.get(), host.matrix_offsets.back(), kPlanToken};
+  }
+
+  Gfn2HamiltonianDeviceWorkspace workspace(const HostSpinHamiltonianCase& host) {
+    return {scratch.get(), host.matrix_offsets.back(), sequence_active.get(), 1, kPlanToken};
+  }
+};
+
+cudaError_t launch_spin_hamiltonian(DeviceFixture& physical, SpinHamiltonianFixture& spin_device,
+                                    const HostCase& host, const HostSpinHamiltonianCase& spin_host,
+                                    cudaStream_t stream = nullptr) {
+  cudaError_t status = reset_gfn2_hamiltonian_device_errors_cuda(
+      host.batch_size, physical.system_errors.get(), physical.device_error.get(), stream);
+  if (status == cudaSuccess) {
+    status = assemble_gfn2_spin_hamiltonian_cuda(
+        physical.batch(host), spin_device.layout(host, spin_host),
+        spin_device.input(physical, host, spin_host), physical.activity(host),
+        spin_device.result(spin_host), spin_device.workspace(spin_host),
+        physical.system_errors.get(), physical.device_error.get(), stream);
+  }
+  return status;
+}
 
 cudaError_t launch(DeviceFixture& device, const HostCase& host, cudaStream_t stream = nullptr) {
   const auto batch = device.batch(host);
@@ -821,6 +1100,183 @@ int test_sticky_alias_token_and_alignment() {
   return 0;
 }
 
+int run_spin_hamiltonian_parity(std::size_t batch_size, bool graph) {
+  HostCase host = make_case(batch_size);
+  HostSpinHamiltonianCase spin_host = make_spin_hamiltonian_case(host);
+  /* Model the vat contribution already collected by the mixed-spin potential
+   * composer. This distinctive atom-owned scalar must reach both alpha and
+   * beta Hamiltonians through the complete charge-channel shell field. */
+  for (std::size_t system = 0; system < batch_size; ++system) {
+    const std::int64_t shells =
+        host.batch_shell_offsets[system + 1u] - host.batch_shell_offsets[system];
+    for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
+      const std::int64_t physical_shell = host.batch_shell_offsets[system] + local_shell;
+      const std::int64_t atom = host.shell_to_atom[static_cast<std::size_t>(physical_shell)];
+      spin_host
+          .shell_scalar[static_cast<std::size_t>(spin_host.shell_offsets[system] + local_shell)] +=
+          0.071 * static_cast<double>(1 + atom % 5);
+    }
+  }
+
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture physical;
+  SpinHamiltonianFixture spin_device;
+  CUDA_CHECK(physical.initialize(host, stream));
+  CUDA_CHECK(spin_device.initialize(spin_host, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  /* The restricted slices of the new entry point must be bit-for-bit equal
+   * to the legacy entry point when both consume the same complete scalar. */
+  HostCase legacy_host = host;
+  for (std::size_t system = 0; system < batch_size; system += 2u) {
+    for (std::int64_t shell = host.batch_shell_offsets[system];
+         shell < host.batch_shell_offsets[system + 1u]; ++shell) {
+      legacy_host.shell_scalar[static_cast<std::size_t>(shell)] =
+          spin_host.shell_scalar[static_cast<std::size_t>(spin_host.shell_offsets[system] + shell -
+                                                          host.batch_shell_offsets[system])];
+    }
+  }
+  CUDA_CHECK(physical.shell_scalar.copy_from(legacy_host.shell_scalar.data(),
+                                             legacy_host.shell_scalar.size(), stream));
+  CUDA_CHECK(launch(physical, legacy_host, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  std::vector<double> legacy(host.h0.size());
+  CUDA_CHECK(physical.output.copy_to(legacy.data(), legacy.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  if (graph) {
+    cudaGraph_t captured = nullptr;
+    cudaGraphExec_t executable = nullptr;
+    CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+    CUDA_CHECK(launch_spin_hamiltonian(physical, spin_device, host, spin_host, stream));
+    CUDA_CHECK(cudaStreamEndCapture(stream, &captured));
+    CUDA_CHECK(cudaGraphInstantiate(&executable, captured, nullptr, nullptr, 0));
+    CUDA_CHECK(cudaGraphLaunch(executable, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    const std::size_t system = 1u;
+    const std::int64_t shells =
+        host.batch_shell_offsets[system + 1u] - host.batch_shell_offsets[system];
+    spin_host.shell_scalar[static_cast<std::size_t>(spin_host.shell_offsets[system] + shells)] +=
+        0.1875;
+    CUDA_CHECK(spin_device.shell_scalar.copy_from(spin_host.shell_scalar.data(),
+                                                  spin_host.shell_scalar.size(), stream));
+    CUDA_CHECK(cudaGraphLaunch(executable, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CUDA_CHECK(cudaGraphExecDestroy(executable));
+    CUDA_CHECK(cudaGraphDestroy(captured));
+  } else {
+    CUDA_CHECK(launch_spin_hamiltonian(physical, spin_device, host, spin_host, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+  }
+
+  const std::vector<double> expected = evaluate_spin_cpu(host, spin_host);
+  std::vector<double> actual(expected.size());
+  std::vector<std::uint32_t> errors(batch_size);
+  std::uint32_t diagnostic = 99u;
+  CUDA_CHECK(spin_device.output.copy_to(actual.data(), actual.size(), stream));
+  CUDA_CHECK(physical.system_errors.copy_to(errors.data(), errors.size(), stream));
+  CUDA_CHECK(physical.device_error.copy_to(&diagnostic, 1u, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  for (std::size_t index = 0; index < actual.size(); ++index) {
+    CHECK(near(actual[index], expected[index]));
+  }
+  for (std::size_t system = 0; system < batch_size; system += 2u) {
+    const std::int64_t physical_begin = host.matrix_offsets[system];
+    const std::int64_t elements = host.matrix_offsets[system + 1u] - physical_begin;
+    const std::int64_t spin_begin = spin_host.matrix_offsets[system];
+    for (std::int64_t local = 0; local < elements; ++local) {
+      CHECK(actual[static_cast<std::size_t>(spin_begin + local)] ==
+            legacy[static_cast<std::size_t>(physical_begin + local)]);
+    }
+  }
+  CHECK(std::all_of(errors.begin(), errors.end(), [](std::uint32_t value) { return value == 0u; }));
+  CHECK(diagnostic == 0u);
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
+int test_spin_hamiltonian_failure_and_alias_contracts() {
+  HostCase host = make_case(8u);
+  HostSpinHamiltonianCase spin_host = make_spin_hamiltonian_case(host);
+  constexpr std::size_t failed = 3u;
+  const std::int64_t shells =
+      host.batch_shell_offsets[failed + 1u] - host.batch_shell_offsets[failed];
+  spin_host.shell_scalar[static_cast<std::size_t>(spin_host.shell_offsets[failed] + shells)] =
+      std::numeric_limits<double>::quiet_NaN();
+  DeviceFixture physical;
+  SpinHamiltonianFixture spin_device;
+  CUDA_CHECK(physical.initialize(host));
+  CUDA_CHECK(spin_device.initialize(spin_host));
+  CUDA_CHECK(launch_spin_hamiltonian(physical, spin_device, host, spin_host));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  std::vector<double> actual(static_cast<std::size_t>(spin_host.matrix_offsets.back()));
+  std::vector<std::uint32_t> errors(8u);
+  CUDA_CHECK(spin_device.output.copy_to(actual.data(), actual.size()));
+  CUDA_CHECK(physical.system_errors.copy_to(errors.data(), errors.size()));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(errors[failed] ==
+        static_cast<std::uint32_t>(Gfn2HamiltonianDeviceError::kNonfinitePotential));
+  for (std::int64_t element = spin_host.matrix_offsets[failed];
+       element < spin_host.matrix_offsets[failed + 1u]; ++element) {
+    CHECK(actual[static_cast<std::size_t>(element)] == kSentinel);
+  }
+  CHECK(actual[static_cast<std::size_t>(spin_host.matrix_offsets[1])] != kSentinel);
+
+  auto layout = spin_device.layout(host, spin_host);
+  auto input = spin_device.input(physical, host, spin_host);
+  const auto activity = physical.activity(host);
+  auto output = spin_device.result(spin_host);
+  auto workspace = spin_device.workspace(spin_host);
+  const auto batch = physical.batch(host);
+  auto wrong_layout = layout;
+  wrong_layout.memory_space = Gfn2PlanMemorySpace::kHost;
+  CHECK(assemble_gfn2_spin_hamiltonian_cuda(batch, wrong_layout, input, activity, output, workspace,
+                                            physical.system_errors.get(),
+                                            physical.device_error.get()) == cudaErrorInvalidValue);
+  auto alias_output = output;
+  alias_output.matrix = const_cast<double*>(input.shell_scalar_potentials);
+  CHECK(assemble_gfn2_spin_hamiltonian_cuda(batch, layout, input, activity, alias_output, workspace,
+                                            physical.system_errors.get(),
+                                            physical.device_error.get()) == cudaErrorInvalidValue);
+  auto partial_workspace = workspace;
+  partial_workspace.matrix_scratch = output.matrix + 1;
+  CHECK(assemble_gfn2_spin_hamiltonian_cuda(batch, layout, input, activity, output,
+                                            partial_workspace, physical.system_errors.get(),
+                                            physical.device_error.get()) == cudaErrorInvalidValue);
+  auto alias_layout = layout;
+  alias_layout.spin_matrix_offsets = reinterpret_cast<const std::int64_t*>(output.matrix);
+  CHECK(assemble_gfn2_spin_hamiltonian_cuda(batch, alias_layout, input, activity, output, workspace,
+                                            physical.system_errors.get(),
+                                            physical.device_error.get()) == cudaErrorInvalidValue);
+
+  HostCase inactive_host = make_case(1u);
+  inactive_host.active[0] = 0u;
+  HostSpinHamiltonianCase inactive_spin = make_spin_hamiltonian_case(inactive_host);
+  DeviceFixture inactive_physical;
+  SpinHamiltonianFixture inactive_device;
+  CUDA_CHECK(inactive_physical.initialize(inactive_host));
+  CUDA_CHECK(inactive_device.initialize(inactive_spin));
+  const std::int32_t hostile_channel = std::numeric_limits<std::int32_t>::min();
+  const std::int64_t hostile_offset = std::numeric_limits<std::int64_t>::min();
+  CUDA_CHECK(inactive_device.channels.copy_from(&hostile_channel, 1u));
+  CUDA_CHECK(inactive_device.matrix_offsets.copy_from(&hostile_offset, 1u));
+  CUDA_CHECK(
+      launch_spin_hamiltonian(inactive_physical, inactive_device, inactive_host, inactive_spin));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  std::vector<double> inactive_output(
+      static_cast<std::size_t>(inactive_spin.matrix_offsets.back()));
+  std::uint32_t inactive_error = 99u;
+  CUDA_CHECK(inactive_device.output.copy_to(inactive_output.data(), inactive_output.size()));
+  CUDA_CHECK(inactive_physical.system_errors.copy_to(&inactive_error, 1u));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(inactive_error == 0u);
+  CHECK(std::all_of(inactive_output.begin(), inactive_output.end(),
+                    [](double value) { return value == kSentinel; }));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -839,10 +1295,21 @@ int main() {
     std::fprintf(stderr, "CUDA Hamiltonian Graph test failed at line %d\n", status);
     return status;
   }
-  const std::array<int (*)(), 6> tests{
+  for (const std::size_t batch_size : std::array<std::size_t, 4>{{1u, 8u, 32u, 128u}}) {
+    if (const int status = run_spin_hamiltonian_parity(batch_size, false); status != 0) {
+      std::fprintf(stderr, "CUDA spin Hamiltonian batch-%zu parity failed at line %d\n", batch_size,
+                   status);
+      return status;
+    }
+  }
+  if (const int status = run_spin_hamiltonian_parity(8u, true); status != 0) {
+    std::fprintf(stderr, "CUDA spin Hamiltonian Graph test failed at line %d\n", status);
+    return status;
+  }
+  const std::array<int (*)(), 7> tests{
       {test_inactive_skip_and_peer_isolation, test_all_inactive_hostile_topology,
        test_hostile_offsets, test_arithmetic_overflow_is_transactional, test_invalid_active_mask,
-       test_sticky_alias_token_and_alignment}};
+       test_sticky_alias_token_and_alignment, test_spin_hamiltonian_failure_and_alias_contracts}};
   for (const auto test : tests) {
     const int status = test();
     if (status != 0) {

@@ -102,6 +102,18 @@ bool product(std::int64_t first, std::int64_t second, std::int64_t& result) noex
   return true;
 }
 
+std::uint64_t mix_hash(std::uint64_t value) noexcept {
+  value ^= value >> 30u;
+  value *= 0xbf58476d1ce4e5b9ULL;
+  value ^= value >> 27u;
+  value *= 0x94d049bb133111ebULL;
+  return value ^ (value >> 31u);
+}
+
+void hash_append(std::uint64_t value, std::uint64_t& hash) noexcept {
+  hash = mix_hash(hash ^ mix_hash(value + 0x9e3779b97f4a7c15ULL));
+}
+
 bool triangle(std::int64_t value, std::int64_t& result) noexcept {
   if (value < 0 || (value > 1 && value > std::numeric_limits<std::int64_t>::max() / (value - 1))) {
     return false;
@@ -192,6 +204,53 @@ Gfn2PlanSchemaDiagnostic validate_no_topology_alias(const Gfn2RaggedTopologyView
 }
 
 }  // namespace
+
+std::uint64_t gfn2_wavefunction_layout_fingerprint_host(
+    const Gfn2WavefunctionLayoutView& layout) noexcept {
+  std::int64_t offset_count = 0;
+  if (layout.memory_space != Gfn2PlanMemorySpace::kHost || layout.plan_token == 0u ||
+      layout.batch_size <= 0 || !add_one(layout.batch_size, offset_count) ||
+      layout.spin_channel_count != layout.batch_size ||
+      layout.spin_channel_offset_count != offset_count ||
+      layout.spin_orbital_offset_count != offset_count ||
+      layout.spin_matrix_offset_count != offset_count ||
+      layout.spin_shell_offset_count != offset_count ||
+      layout.spin_atom_offset_count != offset_count || layout.spin_channels == nullptr ||
+      layout.spin_channel_offsets == nullptr || layout.spin_orbital_offsets == nullptr ||
+      layout.spin_matrix_offsets == nullptr || layout.spin_shell_offsets == nullptr ||
+      layout.spin_atom_offsets == nullptr) {
+    return 0u;
+  }
+
+  std::uint64_t hash = 0x6a09e667f3bcc909ULL;
+  hash_append(1u, hash);  // Fingerprint schema version.
+  hash_append(layout.plan_token, hash);
+  hash_append(static_cast<std::uint64_t>(layout.batch_size), hash);
+  hash_append(static_cast<std::uint64_t>(layout.total_spin_channels), hash);
+  hash_append(static_cast<std::uint64_t>(layout.total_spin_orbitals), hash);
+  hash_append(static_cast<std::uint64_t>(layout.total_spin_matrix_elements), hash);
+  hash_append(static_cast<std::uint64_t>(layout.total_spin_shells), hash);
+  hash_append(static_cast<std::uint64_t>(layout.total_spin_atoms), hash);
+
+  for (std::int64_t system = 0; system < layout.batch_size; ++system) {
+    hash_append(static_cast<std::uint32_t>(layout.spin_channels[system]), hash);
+  }
+  const auto append_offsets = [&hash, &layout](const std::int64_t* offsets,
+                                               std::uint64_t field_tag) noexcept {
+    hash_append(field_tag, hash);
+    /* batch_size == INT64_MAX was rejected above, so incrementing index is
+     * defined through the final batch endpoint. */
+    for (std::int64_t index = 0; index < layout.batch_size + 1; ++index) {
+      hash_append(static_cast<std::uint64_t>(offsets[index]), hash);
+    }
+  };
+  append_offsets(layout.spin_channel_offsets, 1u);
+  append_offsets(layout.spin_orbital_offsets, 2u);
+  append_offsets(layout.spin_matrix_offsets, 3u);
+  append_offsets(layout.spin_shell_offsets, 4u);
+  append_offsets(layout.spin_atom_offsets, 5u);
+  return hash == 0u ? 1u : hash;
+}
 
 Gfn2PlanSchemaDiagnostic validate_gfn2_topology_binding(
     const Gfn2RaggedTopologyView& topology, Gfn2PlanMemorySpace expected_memory_space) noexcept {
@@ -540,6 +599,10 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_wavefunction_layout_binding(
   if (layout.plan_token == 0u) {
     return failure(Gfn2PlanSchemaError::kInvalidPlanToken, Gfn2PlanSchemaField::kSpinChannels);
   }
+  if (layout.layout_fingerprint == 0u) {
+    return failure(Gfn2PlanSchemaError::kInvalidLayoutFingerprint,
+                   Gfn2PlanSchemaField::kWavefunctionLayoutFingerprint);
+  }
   if (layout.plan_token != topology.plan_token || layout.batch_size != topology.batch_size) {
     return failure(Gfn2PlanSchemaError::kCrossPlan, Gfn2PlanSchemaField::kSpinChannels);
   }
@@ -677,6 +740,10 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_wavefunction_layout_host(
       return failure(Gfn2PlanSchemaError::kInvalidWavefunctionExtent,
                      Gfn2PlanSchemaField::kSpinAtomOffsets, system);
     }
+  }
+  if (gfn2_wavefunction_layout_fingerprint_host(layout) != layout.layout_fingerprint) {
+    return failure(Gfn2PlanSchemaError::kInvalidLayoutFingerprint,
+                   Gfn2PlanSchemaField::kWavefunctionLayoutFingerprint);
   }
   return success();
 }

@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/common/gfn2_plan_schema.hpp"
+
 namespace gpuxtb::detail::cuda {
 
 inline constexpr std::int64_t kGfn2HamiltonianDipoleComponents = 3;
@@ -22,6 +24,8 @@ enum class Gfn2HamiltonianDeviceError : std::uint32_t {
   kNonfiniteMultipoleIntegral = 6u,
   kNonfinitePotential = 7u,
   kNonfiniteAssemblyArithmetic = 8u,
+  kInvalidSpinLayout = 9u,
+  kNonfiniteSpinConversion = 10u,
 };
 
 /*
@@ -140,6 +144,27 @@ cudaError_t assemble_gfn2_hamiltonian_cuda(
     const Gfn2HamiltonianDeviceActivity& activity, const Gfn2HamiltonianDeviceOutput& output,
     const Gfn2HamiltonianDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Assemble a mixed restricted/unrestricted batch using the canonical
+ * WavefunctionLayout projection. Potential arrays use system-major
+ * charge/magnetization packing in spin_shell_offsets/spin_atom_offsets.
+ * Restricted members retain the legacy arithmetic exactly. For two-channel
+ * members, charge/magnetization potentials are converted half-before-add:
+ *
+ *   V_alpha = 0.5 V_charge + 0.5 V_magnetization
+ *   V_beta  = 0.5 V_charge - 0.5 V_magnetization.
+ *
+ * Each channel first forms Htmp with the legacy assembler, then publishes the
+ * literal CPU-compatible expression H = H0 + 2*(Htmp-H0). A failure in either
+ * channel suppresses both channel matrices for that physical system.
+ */
+cudaError_t assemble_gfn2_spin_hamiltonian_cuda(
+    const Gfn2HamiltonianDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2HamiltonianDeviceInput& input, const Gfn2HamiltonianDeviceActivity& activity,
+    const Gfn2HamiltonianDeviceOutput& output, const Gfn2HamiltonianDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 

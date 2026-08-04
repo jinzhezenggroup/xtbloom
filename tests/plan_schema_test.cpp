@@ -205,6 +205,7 @@ struct HostWavefunctionLayout {
     view.spin_matrix_offsets = pointer_or_null(spin_matrix_offsets);
     view.spin_shell_offsets = pointer_or_null(spin_shell_offsets);
     view.spin_atom_offsets = pointer_or_null(spin_atom_offsets);
+    view.layout_fingerprint = gfn2_wavefunction_layout_fingerprint_host(view);
   }
 };
 
@@ -414,6 +415,11 @@ int test_wavefunction_layout() {
 
   HostTopology topology = make_topology(8);
   HostWavefunctionLayout layout = make_wavefunction_layout(topology);
+  layout.view.layout_fingerprint ^= 1u;
+  CHECK(validate_gfn2_wavefunction_layout_host(topology.view, layout.view).error ==
+        Gfn2PlanSchemaError::kInvalidLayoutFingerprint);
+
+  layout = make_wavefunction_layout(topology);
   layout.spin_channels[3] = 3;
   CHECK(validate_gfn2_wavefunction_layout_host(topology.view, layout.view).error ==
         Gfn2PlanSchemaError::kInvalidSpinChannels);
@@ -441,6 +447,11 @@ int test_wavefunction_layout() {
   CHECK(validate_gfn2_wavefunction_layout_binding(topology.view, layout.view,
                                                   Gfn2PlanMemorySpace::kHost)
             .field == Gfn2PlanSchemaField::kSpinMatrixOffsets);
+
+  Gfn2WavefunctionLayoutView overflowing{};
+  overflowing.plan_token = kPlanToken;
+  overflowing.batch_size = std::numeric_limits<std::int64_t>::max();
+  CHECK(gfn2_wavefunction_layout_fingerprint_host(overflowing) == 0u);
   return 0;
 }
 

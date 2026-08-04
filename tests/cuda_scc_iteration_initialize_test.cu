@@ -92,6 +92,12 @@ constexpr std::int64_t kMixerVector = 31;
 constexpr std::int64_t kHistory = 2;
 
 Gfn2SccIterationDevicePlan make_plan(std::uint32_t components) {
+  static const std::array<std::int32_t, kBatch> kSpinChannels{1, 1};
+  static const std::array<std::int64_t, kBatch + 1> kSpinChannelOffsets{0, 1, 2};
+  static const std::array<std::int64_t, kBatch + 1> kSpinOrbitalOffsets{0, 3, 5};
+  static const std::array<std::int64_t, kBatch + 1> kSpinMatrixOffsets{0, 9, 13};
+  static const std::array<std::int64_t, kBatch + 1> kSpinShellOffsets{0, 3, 4};
+  static const std::array<std::int64_t, kBatch + 1> kSpinAtomOffsets{0, 2, 3};
   Gfn2SccIterationDevicePlan plan{};
   plan.abi_version = kGfn2SccIterationAbiVersion;
   plan.enabled_components = components;
@@ -103,6 +109,34 @@ Gfn2SccIterationDevicePlan make_plan(std::uint32_t components) {
   plan.topology.total_shells = kShells;
   plan.topology.total_orbitals = kOrbitals;
   plan.topology.total_matrix_elements = kMatrices;
+  plan.wavefunction_layout.memory_space = Gfn2PlanMemorySpace::kHost;
+  plan.wavefunction_layout.plan_token = kToken;
+  plan.wavefunction_layout.batch_size = kBatch;
+  plan.wavefunction_layout.total_spin_channels = kBatch;
+  plan.wavefunction_layout.total_spin_orbitals = kOrbitals;
+  plan.wavefunction_layout.total_spin_matrix_elements = kMatrices;
+  plan.wavefunction_layout.total_spin_shells = kShells;
+  plan.wavefunction_layout.total_spin_atoms = kAtoms;
+  plan.wavefunction_layout.spin_channel_count = kBatch;
+  plan.wavefunction_layout.spin_channel_offset_count = kBatch + 1;
+  plan.wavefunction_layout.spin_orbital_offset_count = kBatch + 1;
+  plan.wavefunction_layout.spin_matrix_offset_count = kBatch + 1;
+  plan.wavefunction_layout.spin_shell_offset_count = kBatch + 1;
+  plan.wavefunction_layout.spin_atom_offset_count = kBatch + 1;
+  plan.wavefunction_layout.spin_channels = kSpinChannels.data();
+  plan.wavefunction_layout.spin_channel_offsets = kSpinChannelOffsets.data();
+  plan.wavefunction_layout.spin_orbital_offsets = kSpinOrbitalOffsets.data();
+  plan.wavefunction_layout.spin_matrix_offsets = kSpinMatrixOffsets.data();
+  plan.wavefunction_layout.spin_shell_offsets = kSpinShellOffsets.data();
+  plan.wavefunction_layout.spin_atom_offsets = kSpinAtomOffsets.data();
+  plan.wavefunction_layout.layout_fingerprint =
+      gfn2_wavefunction_layout_fingerprint_host(plan.wavefunction_layout);
+  plan.wavefunction_layout.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  plan.spin_batch.batch_size = kBatch;
+  plan.spin_batch.total_atoms = kAtoms;
+  plan.spin_batch.total_shells = kShells;
+  plan.spin_batch.shell_population_elements = kShells;
+  plan.spin_batch.plan_token = kToken;
   plan.mixer_policy.history_size = kHistory;
   plan.state_policy.maximum_iterations = 8u;
   plan.geometry_batch.total_pairs = 2;
@@ -130,6 +164,15 @@ struct BoundArena {
     valid = diagnostic.success();
   }
 
+  explicit BoundArena(const Gfn2SccIterationDevicePlan& source)
+      : plan(source), allocation(query_bytes(plan, requirements)) {
+    if (allocation.pointer == nullptr || requirements.total_bytes == 0u) return;
+    const auto diagnostic = bind_gfn2_scc_iteration_arena_cuda(
+        plan, plan.eigensolver_provider.requirements, requirements, allocation.pointer,
+        requirements.total_bytes, nullptr, 0u, state, workspace, reports);
+    valid = diagnostic.success();
+  }
+
   static std::size_t query_bytes(const Gfn2SccIterationDevicePlan& plan,
                                  Gfn2SccIterationArenaRequirements& requirements) {
     const auto diagnostic = query_gfn2_scc_iteration_arena_requirements_cuda(
@@ -137,6 +180,99 @@ struct BoundArena {
     return diagnostic.success() ? requirements.total_bytes : 1u;
   }
 };
+
+Gfn2SccIterationDevicePlan make_equal_system_mixed_plan() {
+  /* These arrays are intentionally separate mutable objects. The schema
+   * rejects aliases, so a compiler must not fold equal-valued test metadata
+   * into one address. */
+  static std::array<std::int32_t, 2> kSpinChannels{1, 2};
+  static std::array<std::int64_t, 3> kSpinChannelOffsets{0, 1, 3};
+  static std::array<std::int64_t, 3> kSpinOrbitalOffsets{0, 1, 3};
+  static std::array<std::int64_t, 3> kSpinMatrixOffsets{0, 1, 3};
+  static std::array<std::int64_t, 3> kSpinShellOffsets{0, 1, 3};
+  static std::array<std::int64_t, 3> kSpinAtomOffsets{0, 1, 3};
+  static std::array<std::int64_t, 3> kAtomOffsets{0, 1, 2};
+  static std::array<std::int64_t, 3> kShellOffsets{0, 1, 2};
+  static std::array<std::int64_t, 3> kOrbitalOffsets{0, 1, 2};
+  static std::array<std::int64_t, 3> kMatrixOffsets{0, 1, 2};
+  static std::array<std::int64_t, 3> kAtomShellOffsets{0, 1, 2};
+  static std::array<std::int64_t, 3> kShellOrbitalOffsets{0, 1, 2};
+  static std::array<std::int64_t, 2> kShellToAtom{0, 1};
+  static std::array<std::int64_t, 2> kOrbitalToShell{0, 1};
+  static std::array<std::int64_t, 2> kOrbitalToAtom{0, 1};
+  static std::array<std::int64_t, 2> kBucketOffsets{0, 2};
+  static std::array<std::int32_t, 2> kBucketSystems{0, 1};
+  static std::array<std::int32_t, 1> kBucketOrbitalCounts{1};
+  Gfn2SccIterationDevicePlan plan{};
+  plan.abi_version = kGfn2SccIterationAbiVersion;
+  plan.enabled_components = static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
+                            static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
+                            static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2);
+  plan.plan_token = kToken;
+  plan.topology.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  plan.topology.plan_token = kToken;
+  plan.topology.batch_size = 2;
+  plan.topology.bucket_count = 1;
+  plan.topology.total_atoms = 2;
+  plan.topology.total_shells = 2;
+  plan.topology.total_orbitals = 2;
+  plan.topology.total_matrix_elements = 2;
+  plan.topology.atom_offset_count = 3;
+  plan.topology.batch_shell_offset_count = 3;
+  plan.topology.batch_orbital_offset_count = 3;
+  plan.topology.matrix_offset_count = 3;
+  plan.topology.atom_shell_offset_count = 3;
+  plan.topology.shell_orbital_offset_count = 3;
+  plan.topology.shell_to_atom_count = 2;
+  plan.topology.orbital_to_shell_count = 2;
+  plan.topology.orbital_to_atom_count = 2;
+  plan.topology.bucket_offset_count = 2;
+  plan.topology.bucket_system_count = 2;
+  plan.topology.bucket_orbital_count = 1;
+  plan.topology.atom_offsets = kAtomOffsets.data();
+  plan.topology.batch_shell_offsets = kShellOffsets.data();
+  plan.topology.batch_orbital_offsets = kOrbitalOffsets.data();
+  plan.topology.matrix_offsets = kMatrixOffsets.data();
+  plan.topology.atom_shell_offsets = kAtomShellOffsets.data();
+  plan.topology.shell_orbital_offsets = kShellOrbitalOffsets.data();
+  plan.topology.shell_to_atom = kShellToAtom.data();
+  plan.topology.orbital_to_shell = kOrbitalToShell.data();
+  plan.topology.orbital_to_atom = kOrbitalToAtom.data();
+  plan.topology.bucket_offsets = kBucketOffsets.data();
+  plan.topology.bucket_systems = kBucketSystems.data();
+  plan.topology.bucket_orbital_counts = kBucketOrbitalCounts.data();
+  plan.wavefunction_layout.memory_space = Gfn2PlanMemorySpace::kHost;
+  plan.wavefunction_layout.plan_token = kToken;
+  plan.wavefunction_layout.batch_size = 2;
+  plan.wavefunction_layout.total_spin_channels = 3;
+  plan.wavefunction_layout.total_spin_orbitals = 3;
+  plan.wavefunction_layout.total_spin_matrix_elements = 3;
+  plan.wavefunction_layout.total_spin_shells = 3;
+  plan.wavefunction_layout.total_spin_atoms = 3;
+  plan.wavefunction_layout.spin_channel_count = 2;
+  plan.wavefunction_layout.spin_channel_offset_count = 3;
+  plan.wavefunction_layout.spin_orbital_offset_count = 3;
+  plan.wavefunction_layout.spin_matrix_offset_count = 3;
+  plan.wavefunction_layout.spin_shell_offset_count = 3;
+  plan.wavefunction_layout.spin_atom_offset_count = 3;
+  plan.wavefunction_layout.spin_channels = kSpinChannels.data();
+  plan.wavefunction_layout.spin_channel_offsets = kSpinChannelOffsets.data();
+  plan.wavefunction_layout.spin_orbital_offsets = kSpinOrbitalOffsets.data();
+  plan.wavefunction_layout.spin_matrix_offsets = kSpinMatrixOffsets.data();
+  plan.wavefunction_layout.spin_shell_offsets = kSpinShellOffsets.data();
+  plan.wavefunction_layout.spin_atom_offsets = kSpinAtomOffsets.data();
+  plan.wavefunction_layout.layout_fingerprint =
+      gfn2_wavefunction_layout_fingerprint_host(plan.wavefunction_layout);
+  plan.wavefunction_layout.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  plan.spin_batch.batch_size = 2;
+  plan.spin_batch.total_atoms = 2;
+  plan.spin_batch.total_shells = 2;
+  plan.spin_batch.shell_population_elements = 3;
+  plan.spin_batch.plan_token = kToken;
+  plan.mixer_policy.history_size = 2;
+  plan.state_policy.maximum_iterations = 8u;
+  return plan;
+}
 
 struct FreshData {
   std::vector<std::int64_t> atom_offsets{0, 2, 3};
@@ -260,6 +396,103 @@ int test_fresh_initialization_and_stream_ready_publication() {
   const auto report_errors = copy_from_device(arena.reports.system_errors,
                                               arena.reports.system_error_elements, stream.value);
   for (const std::uint32_t value : report_errors) CHECK(value == 0u);
+  return 0;
+}
+
+int test_mixed_layout_seal_rejects_same_totals_swapped_channels() {
+  BoundArena arena(make_equal_system_mixed_plan());
+  CHECK(arena.valid);
+  CHECK(validate_gfn2_wavefunction_layout_binding(
+            arena.plan.topology, arena.plan.wavefunction_layout, Gfn2PlanMemorySpace::kCudaDevice)
+            .error == Gfn2PlanSchemaError::kSuccess);
+
+  const std::vector<std::int64_t> physical_offsets{0, 1, 2};
+  const std::vector<std::int32_t> sealed_channels{1, 2};
+  const std::vector<std::int64_t> sealed_offsets{0, 1, 3};
+  const std::vector<std::int32_t> swapped_channels{2, 1};
+  const std::vector<std::int64_t> swapped_offsets{0, 2, 3};
+  const std::vector<double> qsh{0.1, -0.1, 0.0};
+  const std::vector<double> qat{0.2, -0.2, 0.0};
+  const std::vector<double> dipoles(9, 0.0);
+  const std::vector<double> quadrupoles(18, 0.0);
+
+  const auto make_layout = [](const std::vector<std::int32_t>& channels,
+                              const std::vector<std::int64_t>& offsets) {
+    Gfn2WavefunctionLayoutView layout{};
+    layout.plan_token = kToken;
+    layout.batch_size = 2;
+    layout.total_spin_channels = 3;
+    layout.total_spin_orbitals = 3;
+    layout.total_spin_matrix_elements = 3;
+    layout.total_spin_shells = 3;
+    layout.total_spin_atoms = 3;
+    layout.spin_channel_count = 2;
+    layout.spin_channel_offset_count = 3;
+    layout.spin_orbital_offset_count = 3;
+    layout.spin_matrix_offset_count = 3;
+    layout.spin_shell_offset_count = 3;
+    layout.spin_atom_offset_count = 3;
+    layout.spin_channels = channels.data();
+    layout.spin_channel_offsets = offsets.data();
+    layout.spin_orbital_offsets = offsets.data();
+    layout.spin_matrix_offsets = offsets.data();
+    layout.spin_shell_offsets = offsets.data();
+    layout.spin_atom_offsets = offsets.data();
+    layout.layout_fingerprint = gfn2_wavefunction_layout_fingerprint_host(layout);
+    return layout;
+  };
+
+  Gfn2SccIterationHostInitialization host{};
+  host.mode = Gfn2SccIterationInitializationMode::kFresh;
+  host.plan_token = kToken;
+  host.initialization_generation = 17u;
+  host.topology = {host_view(physical_offsets), host_view(physical_offsets), kToken};
+  host.wavefunction.plan_token = kToken;
+  host.wavefunction.population = {host_view(qsh), host_view(qat), host_view(dipoles),
+                                  host_view(quadrupoles), kToken};
+  host.wavefunction_layout = make_layout(sealed_channels, sealed_offsets);
+  CHECK(host.wavefunction_layout.layout_fingerprint ==
+        arena.plan.wavefunction_layout.layout_fingerprint);
+
+  Gfn2SccIterationInitializer initializer;
+  CHECK(Gfn2SccIterationInitializer::create(arena.plan, arena.requirements,
+                                            arena.allocation.pointer,
+                                            arena.requirements.total_bytes, arena.state,
+                                            arena.workspace, arena.reports, host, initializer)
+            .success());
+  CHECK(initializer.initialization_generation() == 17u);
+
+  host.initialization_generation = 18u;
+  host.wavefunction_layout = make_layout(swapped_channels, swapped_offsets);
+  CHECK(host.wavefunction_layout.total_spin_channels ==
+        arena.plan.wavefunction_layout.total_spin_channels);
+  CHECK(host.wavefunction_layout.total_spin_orbitals ==
+        arena.plan.wavefunction_layout.total_spin_orbitals);
+  CHECK(host.wavefunction_layout.total_spin_matrix_elements ==
+        arena.plan.wavefunction_layout.total_spin_matrix_elements);
+  CHECK(host.wavefunction_layout.total_spin_shells ==
+        arena.plan.wavefunction_layout.total_spin_shells);
+  CHECK(host.wavefunction_layout.total_spin_atoms ==
+        arena.plan.wavefunction_layout.total_spin_atoms);
+  CHECK(host.wavefunction_layout.layout_fingerprint !=
+        arena.plan.wavefunction_layout.layout_fingerprint);
+  const auto diagnostic = Gfn2SccIterationInitializer::create(
+      arena.plan, arena.requirements, arena.allocation.pointer, arena.requirements.total_bytes,
+      arena.state, arena.workspace, arena.reports, host, initializer);
+  CHECK(diagnostic.error == Gfn2SccIterationInitializationError::kInvalidExtent);
+  CHECK(diagnostic.field == Gfn2SccIterationInitializationField::kWavefunction);
+  CHECK(initializer.initialization_generation() == 17u);
+
+  /* A stale descriptor may retain the device plan's scalar seal after its
+   * host arrays are replaced. Recomputing the host seal must still reject it. */
+  host.initialization_generation = 19u;
+  host.wavefunction_layout.layout_fingerprint = arena.plan.wavefunction_layout.layout_fingerprint;
+  const auto spoofed_diagnostic = Gfn2SccIterationInitializer::create(
+      arena.plan, arena.requirements, arena.allocation.pointer, arena.requirements.total_bytes,
+      arena.state, arena.workspace, arena.reports, host, initializer);
+  CHECK(spoofed_diagnostic.error == Gfn2SccIterationInitializationError::kInvalidExtent);
+  CHECK(spoofed_diagnostic.field == Gfn2SccIterationInitializationField::kWavefunction);
+  CHECK(initializer.initialization_generation() == 17u);
   return 0;
 }
 
@@ -695,8 +928,9 @@ int test_failed_upload_clears_ready_and_submits_no_partial_copy() {
 }  // namespace
 
 int main() {
-  const std::array<int (*)(), 7> tests{{
+  const std::array<int (*)(), 8> tests{{
       test_fresh_initialization_and_stream_ready_publication,
+      test_mixed_layout_seal_rejects_same_totals_swapped_channels,
       test_device_checkpoint_repeated_restore_and_graph_replay,
       test_queued_restore_is_drained_before_checkpoint_destruction,
       test_warm_checkpoint_round_trip,

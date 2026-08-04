@@ -327,6 +327,33 @@ Gfn2SccIterationHostInitialization fresh_initialization(const HostSccCase& host)
   return result;
 }
 
+Gfn2SccIterationHostInitialization fresh_initialization(
+    const Gfn2WavefunctionLayoutView& host_layout,
+    const gpuxtb::detail::gfn2::WavefunctionLayout& layout,
+    const gpuxtb::detail::gfn2::WavefunctionView& wavefunction) noexcept {
+  Gfn2SccIterationHostInitialization result{};
+  result.mode = Gfn2SccIterationInitializationMode::kFresh;
+  result.plan_token = kPlanToken;
+  result.initialization_generation = kInitializationGeneration;
+  result.topology = {
+      initialization_view(layout.atom_offsets.data(),
+                          static_cast<std::int64_t>(layout.atom_offsets.size())),
+      initialization_view(layout.batch_shell_offsets.data(),
+                          static_cast<std::int64_t>(layout.batch_shell_offsets.size())),
+      kPlanToken};
+  result.wavefunction.plan_token = kPlanToken;
+  result.wavefunction.population = {
+      initialization_view(wavefunction.qsh, layout.qsh.element_count),
+      initialization_view(wavefunction.qat, layout.qat.element_count),
+      initialization_view(wavefunction.dipole, layout.dipole.element_count),
+      initialization_view(wavefunction.quadrupole, layout.quadrupole.element_count), kPlanToken};
+  /* Mixed-spin initialization must use the setup owner's independent host
+   * metadata. The corresponding descriptor in plan_seed points at device
+   * memory and must never be dereferenced while packing the host image. */
+  result.wavefunction_layout = host_layout;
+  return result;
+}
+
 template <typename T>
 bool download(const T* device, std::int64_t elements, std::vector<T>& host, cudaStream_t stream) {
   if (elements < 0) {
@@ -341,6 +368,16 @@ template <typename T>
 bool download_value(const T* device, T& host, cudaStream_t stream) {
   return device != nullptr &&
          cudaMemcpyAsync(&host, device, sizeof(T), cudaMemcpyDeviceToHost, stream) == cudaSuccess;
+}
+
+template <typename T>
+bool upload_fill(T* device, std::int64_t elements, T value) {
+  if (device == nullptr || elements < 0) {
+    return false;
+  }
+  std::vector<T> host(static_cast<std::size_t>(elements), value);
+  return elements == 0 || cudaMemcpy(device, host.data(), host.size() * sizeof(T),
+                                     cudaMemcpyHostToDevice) == cudaSuccess;
 }
 
 bool near(double first, double second, double tolerance) noexcept {
@@ -373,17 +410,21 @@ bool compare_coefficients(const HostSccCase& host, std::vector<double> actual, d
     const std::int64_t orbital_begin = layout.batch_orbital_offsets[system];
     const std::int64_t orbital_end = layout.batch_orbital_offsets[system + 1];
     const std::int64_t n = orbital_end - orbital_begin;
-    const std::int64_t matrix_begin = layout.coefficients.system_offsets[system];
-    for (std::int64_t orbital = 0; orbital < n; ++orbital) {
-      double dot = 0.0;
-      for (std::int64_t row = 0; row < n; ++row) {
-        const std::int64_t index = matrix_begin + row * n + orbital;
-        dot += actual[static_cast<std::size_t>(index)] * expected[index];
-      }
-      if (dot < 0.0) {
+    const std::int64_t system_matrix_begin = layout.coefficients.system_offsets[system];
+    const std::int64_t matrix_elements = n * n;
+    for (std::int32_t spin = 0; spin < host.spin_channels()[system]; ++spin) {
+      const std::int64_t matrix_begin = system_matrix_begin + spin * matrix_elements;
+      for (std::int64_t orbital = 0; orbital < n; ++orbital) {
+        double dot = 0.0;
         for (std::int64_t row = 0; row < n; ++row) {
           const std::int64_t index = matrix_begin + row * n + orbital;
-          actual[static_cast<std::size_t>(index)] = -actual[static_cast<std::size_t>(index)];
+          dot += actual[static_cast<std::size_t>(index)] * expected[index];
+        }
+        if (dot < 0.0) {
+          for (std::int64_t row = 0; row < n; ++row) {
+            const std::int64_t index = matrix_begin + row * n + orbital;
+            actual[static_cast<std::size_t>(index)] = -actual[static_cast<std::size_t>(index)];
+          }
         }
       }
     }
@@ -504,6 +545,10 @@ int compare_energy_mixer_and_scc_trace(const HostSccCase& host,
   CHECK(state.free_energy.periodic_embedding_elements ==
         state.classical_energy.periodic_embedding_elements);
   CHECK(state.free_energy.entropy_elements == batch);
+  CHECK(state.spin_energies != nullptr);
+  CHECK(state.spin_energy_elements == batch);
+  CHECK(state.free_energy.spin == state.spin_energies);
+  CHECK(state.free_energy.spin_elements == state.spin_energy_elements);
   CHECK(state.free_energy.internal_energy_elements == batch);
   CHECK(state.free_energy.free_energy_elements == batch);
   CHECK(state.mixer.total_vector_elements == mixer_vector);
@@ -566,6 +611,7 @@ int compare_energy_mixer_and_scc_trace(const HostSccCase& host,
   std::vector<double> periodic_embedding;
   std::vector<double> classical_total;
   std::vector<double> entropy;
+  std::vector<double> spin;
   std::vector<double> internal_energy;
   std::vector<double> free_energy;
   std::vector<double> current_inputs;
@@ -599,6 +645,7 @@ int compare_energy_mixer_and_scc_trace(const HostSccCase& host,
   CHECK(download(state.classical_energy.periodic_embedding, batch, periodic_embedding, stream));
   CHECK(download(state.classical_energy.classical_total, batch, classical_total, stream));
   CHECK(download(state.free_energy.entropy, batch, entropy, stream));
+  CHECK(download(state.spin_energies, batch, spin, stream));
   CHECK(download(state.free_energy.internal_energy, batch, internal_energy, stream));
   CHECK(download(state.free_energy.free_energy, batch, free_energy, stream));
 
@@ -668,6 +715,7 @@ int compare_energy_mixer_and_scc_trace(const HostSccCase& host,
   CHECK(compare_doubles("classical total energy", classical_total, expected_classical_total.data(),
                         batch, kTolerance));
   CHECK(compare_doubles("entropy", entropy, cpu_energy.entropies, batch, kTolerance));
+  CHECK(compare_doubles("spin energy", spin, cpu_energy.spin_energies, batch, kTolerance));
   CHECK(compare_doubles("internal energy", internal_energy, cpu_energy.internal_energies, batch,
                         kTolerance));
   CHECK(compare_doubles("free energy", free_energy, cpu_energy.free_energies, batch, kTolerance));
@@ -733,6 +781,7 @@ struct ProductionFixture {
   DeviceAllocation eigensolver_setup_arena;
   PinnedAllocation provider_host_workspace;
   Gfn2RaggedTopologyView device_topology{};
+  Gfn2WavefunctionLayoutView device_wavefunction{};
   Gfn2SccIterationDevicePlan plan_seed{};
   Gfn2SccIterationDeviceInput input_seed{};
   Gfn2SccIterationArenaRequirements arena_requirements{};
@@ -742,9 +791,12 @@ struct ProductionFixture {
   Gfn2SccSetupEigensolverBinding eigensolver_binding{};
   Gfn2SccIterationInitializationReady ready{};
   Gfn2SccIterationBinding binding{};
-
-  bool create(bool optional_components, std::int64_t batch_size = 4) {
+  bool create(bool optional_components, std::int64_t batch_size = 4, bool unrestricted_spin = false,
+              bool mixed_spin_batch = false) {
     if (batch_size <= 0) {
+      return false;
+    }
+    if (unrestricted_spin && mixed_spin_batch) {
       return false;
     }
     HostSccCaseOptions options{};
@@ -752,8 +804,32 @@ struct ProductionFixture {
                                                       SmallSystemKind::kLiH, SmallSystemKind::kCH2};
     options.systems.clear();
     options.systems.reserve(static_cast<std::size_t>(batch_size));
-    for (std::int64_t system = 0; system < batch_size; ++system) {
-      options.systems.push_back(kSystems[static_cast<std::size_t>(system) % kSystems.size()]);
+    if (mixed_spin_batch) {
+      options.molecular_charges.reserve(static_cast<std::size_t>(batch_size));
+      options.unpaired_electrons.reserve(static_cast<std::size_t>(batch_size));
+      options.spin_channels.reserve(static_cast<std::size_t>(batch_size));
+      for (std::int64_t system = 0; system < batch_size; ++system) {
+        /* A one-peer mixed-mode fixture must still exercise the unrestricted
+         * descriptor path; larger batches alternate both spin policies. */
+        const bool doublet = batch_size == 1 || system % 2 != 0;
+        options.systems.push_back(
+            doublet ? SmallSystemKind::kHe
+                    : kSystems[static_cast<std::size_t>(system / 2) % kSystems.size()]);
+        options.molecular_charges.push_back(doublet ? 1.0 : 0.0);
+        options.unpaired_electrons.push_back(doublet ? 1 : 0);
+        options.spin_channels.push_back(doublet ? 2 : 1);
+      }
+    } else {
+      for (std::int64_t system = 0; system < batch_size; ++system) {
+        options.systems.push_back(
+            unrestricted_spin ? SmallSystemKind::kHe
+                              : kSystems[static_cast<std::size_t>(system) % kSystems.size()]);
+      }
+    }
+    if (unrestricted_spin) {
+      options.molecular_charges.assign(static_cast<std::size_t>(batch_size), 1.0);
+      options.unpaired_electrons.assign(static_cast<std::size_t>(batch_size), 1);
+      options.spin_channels.assign(static_cast<std::size_t>(batch_size), 2);
     }
     options.geometry_generation = kGeometryGeneration;
     options.maximum_iterations = 8u;
@@ -782,7 +858,8 @@ struct ProductionFixture {
       return false;
     }
     topology_diagnostic = topology_owner.bind_device_arena_and_upload_async(
-        topology_arena.get(), topology_arena.bytes(), device_topology, handles.stream());
+        topology_arena.get(), topology_arena.bytes(), device_topology, device_wavefunction,
+        handles.stream());
     if (!topology_diagnostic.success()) {
       std::fprintf(stderr, "production SCC topology upload failed: error=%u field=%u\n",
                    static_cast<unsigned>(topology_diagnostic.error),
@@ -804,8 +881,8 @@ struct ProductionFixture {
       return false;
     }
     input_diagnostic = inputs_owner.bind_device_arena_and_upload_async(
-        device_topology, input_arena.get(), input_arena.bytes(), plan_seed, input_seed,
-        handles.stream());
+        device_topology, device_wavefunction, input_arena.get(), input_arena.bytes(), plan_seed,
+        input_seed, handles.stream());
     if (!input_diagnostic.success()) {
       std::fprintf(stderr, "production SCC immutable-input upload failed: error=%u field=%u\n",
                    static_cast<unsigned>(input_diagnostic.error),
@@ -865,7 +942,12 @@ struct ProductionFixture {
     plan_seed.overlap_cache = eigensolver_binding.cache;
     plan_seed.eigensolver_options = eigensolver_binding.options;
 
-    const Gfn2SccIterationHostInitialization host_initialization = fresh_initialization(host);
+    const bool spin_aware_initialization = unrestricted_spin || mixed_spin_batch;
+    const Gfn2SccIterationHostInitialization host_initialization =
+        spin_aware_initialization
+            ? fresh_initialization(topology_owner.host_wavefunction_layout(),
+                                   host.wavefunction_layout(), host.wavefunction())
+            : fresh_initialization(host);
     auto initialization_diagnostic = Gfn2SccIterationInitializer::create(
         plan_seed, arena_requirements, iteration_arena.get(), iteration_arena.bytes(), state_seed,
         workspace_seed, report_storage, host_initialization, initializer);
@@ -902,12 +984,256 @@ struct ProductionFixture {
   }
 };
 
-int test_four_system_production_iteration_cpu_parity(bool optional_components) {
+bool finite_changed_slice(const std::vector<double>& values, std::int64_t begin, std::int64_t end,
+                          double sentinel) {
+  if (begin < 0 || begin > end || end > static_cast<std::int64_t>(values.size())) {
+    return false;
+  }
+  for (std::int64_t index = begin; index < end; ++index) {
+    const double value = values[static_cast<std::size_t>(index)];
+    if (!std::isfinite(value) || value == sentinel) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool sentinel_slice(const std::vector<double>& values, std::int64_t begin, std::int64_t end,
+                    double sentinel) {
+  if (begin < 0 || begin > end || end > static_cast<std::int64_t>(values.size())) {
+    return false;
+  }
+  for (std::int64_t index = begin; index < end; ++index) {
+    if (values[static_cast<std::size_t>(index)] != sentinel) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/* Full-DAG integration smoke for two He+ doublets. This is not a
+ * numerical oracle: primitive-level tests own exact arithmetic parity. It
+ * proves that the production setup, arena, binding, provider, transaction,
+ * and publication paths agree on one real nspin=2 descriptor graph. */
+int test_unrestricted_mixed_production_iteration_smoke() {
+  constexpr double kSentinel = -777.125;
   ProductionFixture fixture;
-  CHECK(fixture.create(optional_components));
+  CHECK(fixture.create(false, 2, true));
+  const auto& layout = fixture.host.wavefunction_layout();
+  CHECK(fixture.binding.plan.wavefunction_layout.total_spin_channels == 4);
+  CHECK(fixture.binding.plan.wavefunction_layout.total_spin_orbitals ==
+        layout.eigenvalues.element_count);
+  CHECK(fixture.binding.plan.wavefunction_layout.total_spin_matrix_elements ==
+        layout.coefficients.element_count);
+  CHECK(fixture.binding.plan.wavefunction_layout.total_spin_shells == layout.qsh.element_count);
+  CHECK(fixture.binding.plan.wavefunction_layout.total_spin_atoms == layout.qat.element_count);
+  CHECK(fixture.binding.state.occupations.occupation_elements == layout.occupations.element_count);
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  auto& state = fixture.binding.state;
+  auto& workspace = fixture.binding.workspace;
+  CHECK(upload_fill(workspace.hamiltonian.matrix, workspace.hamiltonian.elements, kSentinel));
+  CHECK(upload_fill(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements, kSentinel));
+  CHECK(
+      upload_fill(state.eigenpairs.coefficients, state.eigenpairs.coefficient_elements, kSentinel));
+  CHECK(
+      upload_fill(state.occupations.occupations, state.occupations.occupation_elements, kSentinel));
+  CHECK(upload_fill(state.density.density, state.density.density_elements, kSentinel));
+  CHECK(upload_fill(state.density.energy_weighted_density, state.density.weighted_density_elements,
+                    kSentinel));
+  CHECK(upload_fill(state.density.channel_band_energies, state.density.channel_band_energy_elements,
+                    kSentinel));
+  CHECK(upload_fill(state.density.channel_occupation_sums,
+                    state.density.channel_occupation_sum_elements, kSentinel));
+  CHECK(upload_fill(state.raw_population.qsh, state.raw_population.qsh_elements, kSentinel));
+  CHECK(upload_fill(state.raw_population.qat, state.raw_population.qat_elements, kSentinel));
+  CHECK(upload_fill(state.raw_population.dipole, state.raw_population.dipole_elements, kSentinel));
+  CHECK(upload_fill(state.raw_population.quadrupole, state.raw_population.quadrupole_elements,
+                    kSentinel));
+  CHECK(upload_fill(state.spin_energies, state.spin_energy_elements, kSentinel));
+  CHECK(upload_fill(state.free_energy.core, state.free_energy.core_elements, kSentinel));
+  CHECK(upload_fill(state.free_energy.entropy, state.free_energy.entropy_elements, kSentinel));
+  CHECK(upload_fill(state.free_energy.internal_energy, state.free_energy.internal_energy_elements,
+                    kSentinel));
+  CHECK(upload_fill(state.free_energy.free_energy, state.free_energy.free_energy_elements,
+                    kSentinel));
+  CHECK(upload_fill(state.scc.free_energies, state.scc.batch_elements, kSentinel));
+  CHECK(upload_fill(state.scc.previous_free_energies, state.scc.batch_elements, kSentinel));
+  CHECK(upload_fill(state.scc.free_energy_changes, state.scc.batch_elements, kSentinel));
+  CHECK(upload_fill(state.scc.residual_rms, state.scc.batch_elements, kSentinel));
+
+  const std::array<std::uint64_t, 2> iterations{{0u, 0u}};
+  const std::array<gpuxtb_status_t, 2> statuses{{GPUXTB_STATUS_SUCCESS, GPUXTB_STATUS_SUCCESS}};
+  const std::array<std::uint8_t, 2> converged{{0u, 1u}};
+  CUDA_CHECK(cudaMemcpy(state.scc.iterations, iterations.data(), sizeof(iterations),
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(state.scc.system_statuses, statuses.data(), sizeof(statuses),
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(
+      cudaMemcpy(state.scc.converged, converged.data(), sizeof(converged), cudaMemcpyHostToDevice));
+
+  const auto binding_diagnostic = validate_gfn2_scc_iteration_binding_cuda(
+      fixture.binding.plan, fixture.binding.input, state, workspace);
+  CHECK(binding_diagnostic.error == Gfn2SccIterationBindingError::kSuccess);
+  const Gfn2SccIterationLaunchResult launch =
+      launch_gfn2_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
+  if (!launch.success()) {
+    std::fprintf(stderr,
+                 "unrestricted production launch failed: status=%u stage=%u binding_error=%u "
+                 "binding_field=%u cuda=%d cublas=%d cusolver=%d\n",
+                 static_cast<unsigned>(launch.status), static_cast<unsigned>(launch.stage),
+                 static_cast<unsigned>(launch.binding.error),
+                 static_cast<unsigned>(launch.binding.field), static_cast<int>(launch.cuda_status),
+                 static_cast<int>(launch.cublas_status), static_cast<int>(launch.cusolver_status));
+  }
+  CHECK(launch.success());
+
+  std::vector<double> hamiltonian;
+  std::vector<double> eigenvalues;
+  std::vector<double> coefficients;
+  std::vector<double> occupations;
+  std::vector<double> density;
+  std::vector<double> weighted_density;
+  std::vector<double> channel_band_energies;
+  std::vector<double> channel_occupation_sums;
+  std::vector<double> qsh;
+  std::vector<double> staged_raw_qsh;
+  std::vector<double> qat;
+  std::vector<double> dipole;
+  std::vector<double> quadrupole;
+  std::vector<double> spin_energies;
+  std::vector<double> free_spin;
+  std::vector<double> free_energies;
+  std::vector<double> scc_free_energies;
+  std::vector<std::uint64_t> scc_iterations;
+  std::vector<std::uint8_t> active_mask;
+  CHECK(download(workspace.hamiltonian.matrix, workspace.hamiltonian.elements, hamiltonian,
+                 fixture.handles.stream()));
+  CHECK(download(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements, eigenvalues,
+                 fixture.handles.stream()));
+  CHECK(download(state.eigenpairs.coefficients, state.eigenpairs.coefficient_elements, coefficients,
+                 fixture.handles.stream()));
+  CHECK(download(state.occupations.occupations, state.occupations.occupation_elements, occupations,
+                 fixture.handles.stream()));
+  CHECK(download(state.density.density, state.density.density_elements, density,
+                 fixture.handles.stream()));
+  CHECK(download(state.density.energy_weighted_density, state.density.weighted_density_elements,
+                 weighted_density, fixture.handles.stream()));
+  CHECK(download(state.density.channel_band_energies, state.density.channel_band_energy_elements,
+                 channel_band_energies, fixture.handles.stream()));
+  CHECK(download(state.density.channel_occupation_sums,
+                 state.density.channel_occupation_sum_elements, channel_occupation_sums,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.qsh, state.raw_population.qsh_elements, qsh,
+                 fixture.handles.stream()));
+  CHECK(download(workspace.staged_raw_population.qsh, workspace.staged_raw_population.qsh_elements,
+                 staged_raw_qsh, fixture.handles.stream()));
+  CHECK(download(state.raw_population.qat, state.raw_population.qat_elements, qat,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.dipole, state.raw_population.dipole_elements, dipole,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.quadrupole, state.raw_population.quadrupole_elements,
+                 quadrupole, fixture.handles.stream()));
+  CHECK(download(state.spin_energies, state.spin_energy_elements, spin_energies,
+                 fixture.handles.stream()));
+  CHECK(download(state.free_energy.spin, state.free_energy.spin_elements, free_spin,
+                 fixture.handles.stream()));
+  CHECK(download(state.free_energy.free_energy, state.free_energy.free_energy_elements,
+                 free_energies, fixture.handles.stream()));
+  CHECK(download(state.scc.free_energies, state.scc.batch_elements, scc_free_energies,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.iterations, state.scc.batch_elements, scc_iterations,
+                 fixture.handles.stream()));
+  CHECK(download(workspace.ledger.active_mask, workspace.ledger.batch_elements, active_mask,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  const auto active_slice_changed = [&](const std::vector<double>& values, const auto& field) {
+    return finite_changed_slice(values, field.system_offsets[0], field.system_offsets[1],
+                                kSentinel);
+  };
+  const auto inactive_slice_is_sentinel = [&](const std::vector<double>& values,
+                                              const auto& field) {
+    return sentinel_slice(values, field.system_offsets[1], field.system_offsets[2], kSentinel);
+  };
+
+  CHECK(active_slice_changed(hamiltonian, layout.coefficients));
+  CHECK(inactive_slice_is_sentinel(hamiltonian, layout.coefficients));
+  CHECK(active_slice_changed(eigenvalues, layout.eigenvalues));
+  CHECK(inactive_slice_is_sentinel(eigenvalues, layout.eigenvalues));
+  CHECK(active_slice_changed(coefficients, layout.coefficients));
+  CHECK(inactive_slice_is_sentinel(coefficients, layout.coefficients));
+  CHECK(active_slice_changed(occupations, layout.occupations));
+  CHECK(inactive_slice_is_sentinel(occupations, layout.occupations));
+  const std::int64_t active_orbitals =
+      layout.batch_orbital_offsets[1] - layout.batch_orbital_offsets[0];
+  CHECK(occupations[static_cast<std::size_t>(layout.occupations.system_offsets[0])] > 0.5);
+  CHECK(occupations[static_cast<std::size_t>(layout.occupations.system_offsets[0] +
+                                             active_orbitals)] < 0.5);
+  CHECK(active_slice_changed(density, layout.density));
+  CHECK(inactive_slice_is_sentinel(density, layout.density));
+  CHECK(active_slice_changed(weighted_density, layout.energy_weighted_density));
+  CHECK(inactive_slice_is_sentinel(weighted_density, layout.energy_weighted_density));
+  CHECK(active_slice_changed(qsh, layout.qsh));
+  CHECK(inactive_slice_is_sentinel(qsh, layout.qsh));
+  CHECK(active_slice_changed(qat, layout.qat));
+  CHECK(inactive_slice_is_sentinel(qat, layout.qat));
+  CHECK(active_slice_changed(dipole, layout.dipole));
+  CHECK(inactive_slice_is_sentinel(dipole, layout.dipole));
+  CHECK(active_slice_changed(quadrupole, layout.quadrupole));
+  CHECK(inactive_slice_is_sentinel(quadrupole, layout.quadrupole));
+  const std::int64_t active_shells = layout.batch_shell_offsets[1] - layout.batch_shell_offsets[0];
+  const std::int64_t magnetization_begin = layout.qsh.system_offsets[0] + active_shells;
+  const std::int64_t magnetization_end = layout.qsh.system_offsets[1];
+  double magnetization_sum = 0.0;
+  for (std::int64_t shell = magnetization_begin; shell < magnetization_end; ++shell) {
+    CHECK(std::isfinite(staged_raw_qsh[static_cast<std::size_t>(shell)]));
+    magnetization_sum += staged_raw_qsh[static_cast<std::size_t>(shell)];
+  }
+  /* The public qsh is the damped next mixed state until convergence. The
+   * staged Mulliken population retains the raw one-electron spin invariant. */
+  CHECK(std::abs(std::abs(magnetization_sum) - 1.0) < 1.0e-10);
+  const auto& spin_layout = fixture.topology_owner.host_wavefunction_layout();
+  CHECK(finite_changed_slice(channel_band_energies, spin_layout.spin_channel_offsets[0],
+                             spin_layout.spin_channel_offsets[1], kSentinel));
+  CHECK(sentinel_slice(channel_band_energies, spin_layout.spin_channel_offsets[1],
+                       spin_layout.spin_channel_offsets[2], kSentinel));
+  CHECK(finite_changed_slice(channel_occupation_sums, spin_layout.spin_channel_offsets[0],
+                             spin_layout.spin_channel_offsets[1], kSentinel));
+  CHECK(sentinel_slice(channel_occupation_sums, spin_layout.spin_channel_offsets[1],
+                       spin_layout.spin_channel_offsets[2], kSentinel));
+  CHECK(std::isfinite(spin_energies[0]) && spin_energies[0] != kSentinel);
+  CHECK(spin_energies[1] == kSentinel);
+  CHECK(free_spin == spin_energies);
+  CHECK(std::isfinite(free_energies[0]) && free_energies[0] != kSentinel);
+  CHECK(free_energies[1] == kSentinel);
+  CHECK(std::isfinite(scc_free_energies[0]) && scc_free_energies[0] != kSentinel);
+  CHECK(scc_free_energies[1] == kSentinel);
+  CHECK(scc_iterations[0] == 1u);
+  CHECK(scc_iterations[1] == 0u);
+  CHECK(active_mask == std::vector<std::uint8_t>({1u, 0u}));
+  return 0;
+}
+
+int test_production_iteration_cpu_parity(bool optional_components, std::int64_t batch_size = 4,
+                                         bool unrestricted_spin = false, bool one_step_only = false,
+                                         bool mixed_spin_batch = false) {
+  ProductionFixture fixture;
+  CHECK(fixture.create(optional_components, batch_size, unrestricted_spin, mixed_spin_batch));
+
+  /* The first transition is only comparable when fresh initialization packs
+   * every ragged system into the same mixer vector used by the CPU oracle. */
+  std::vector<double> initial_mixer_inputs;
+  CHECK(download(fixture.binding.state.mixer.current_inputs,
+                 fixture.binding.state.mixer.total_vector_elements, initial_mixer_inputs,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(compare_doubles("initial mixer current inputs", initial_mixer_inputs,
+                        fixture.host.mixer_state().current_inputs,
+                        fixture.host.mixer_plan().total_vector_elements(), 0.0));
 
   const Gfn2SccIterationLaunchResult launch =
-      launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
+      launch_gfn2_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
   if (!launch.success()) {
     std::fprintf(stderr,
                  "production SCC launch failed: status=%u stage=%u binding_error=%u "
@@ -989,6 +1315,15 @@ int test_four_system_production_iteration_cpu_parity(bool optional_components) {
       download(state.scc.converged, state.scc.batch_elements, converged, fixture.handles.stream()));
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
 
+  for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
+    CHECK(iterations[static_cast<std::size_t>(system)] ==
+          fixture.host.driver_state().iterations[system]);
+    CHECK(statuses[static_cast<std::size_t>(system)] ==
+          fixture.host.driver_state().system_statuses[system]);
+    CHECK(converged[static_cast<std::size_t>(system)] ==
+          fixture.host.driver_state().converged[system]);
+  }
+
   CHECK(compare_doubles("eigenvalues", eigenvalues, fixture.host.wavefunction().eigenvalues,
                         layout.eigenvalues.element_count, 3.0e-9));
   CHECK(compare_coefficients(fixture.host, coefficients, 3.0e-8));
@@ -999,6 +1334,25 @@ int test_four_system_production_iteration_cpu_parity(bool optional_components) {
   CHECK(compare_doubles("energy-weighted density", weighted_density,
                         fixture.host.wavefunction().energy_weighted_density,
                         layout.energy_weighted_density.element_count, 3.0e-9));
+  for (std::int64_t system = 0; system < layout.batch_size; ++system) {
+    for (std::int64_t index = layout.qsh.system_offsets[system];
+         index < layout.qsh.system_offsets[system + 1]; ++index) {
+      if (!near(public_qsh[static_cast<std::size_t>(index)], fixture.host.wavefunction().qsh[index],
+                3.0e-9)) {
+        std::fprintf(stderr,
+                     "public qsh system=%lld nspin=%d range=[%lld,%lld) converged=%u "
+                     "cuda=%.17g cpu=%.17g raw_cuda=%.17g raw_cpu=%.17g\n",
+                     static_cast<long long>(system), fixture.host.spin_channels()[system],
+                     static_cast<long long>(layout.qsh.system_offsets[system]),
+                     static_cast<long long>(layout.qsh.system_offsets[system + 1]),
+                     static_cast<unsigned>(converged[static_cast<std::size_t>(system)]),
+                     public_qsh[static_cast<std::size_t>(index)],
+                     fixture.host.wavefunction().qsh[index],
+                     raw_qsh[static_cast<std::size_t>(index)],
+                     fixture.host.driver_workspace().raw_qsh[index]);
+      }
+    }
+  }
   CHECK(compare_doubles("public qsh", public_qsh, fixture.host.wavefunction().qsh,
                         layout.qsh.element_count, 3.0e-9));
   CHECK(compare_doubles("public qat", public_qat, fixture.host.wavefunction().qat,
@@ -1024,22 +1378,18 @@ int test_four_system_production_iteration_cpu_parity(bool optional_components) {
                         fixture.host.mixer_state().current_inputs,
                         fixture.host.mixer_plan().total_vector_elements(), 3.0e-9));
 
-  for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
-    CHECK(iterations[static_cast<std::size_t>(system)] ==
-          fixture.host.driver_state().iterations[system]);
-    CHECK(statuses[static_cast<std::size_t>(system)] ==
-          fixture.host.driver_state().system_statuses[system]);
-    CHECK(converged[static_cast<std::size_t>(system)] ==
-          fixture.host.driver_state().converged[system]);
-  }
   CHECK(compare_energy_mixer_and_scc_trace(fixture.host, fixture.binding.input, state,
                                            fixture.handles.stream()) == 0);
+
+  if (one_step_only) {
+    return 0;
+  }
 
   /* Reuse the exact same production binding for a second iteration. This is
    * the steady-state contract consumed by Graph replay and proves that no
    * setup owner or descriptor must be rebuilt between SCC launches. */
   const Gfn2SccIterationLaunchResult repeat_launch =
-      launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
+      launch_gfn2_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
   CHECK(repeat_launch.success());
   CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
 
@@ -1075,6 +1425,18 @@ int test_four_system_production_iteration_cpu_parity(bool optional_components) {
   }
   CHECK(compare_energy_mixer_and_scc_trace(fixture.host, fixture.binding.input, state,
                                            fixture.handles.stream()) == 0);
+  return 0;
+}
+
+int test_mixed_spin_batch_one_step_cpu_parity() {
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    const int status = test_production_iteration_cpu_parity(false, batch_size, false, true, true);
+    if (status != 0) {
+      std::fprintf(stderr, "mixed-spin one-step CPU parity failed for B=%lld\n",
+                   static_cast<long long>(batch_size));
+      return status;
+    }
+  }
   return 0;
 }
 
@@ -1201,10 +1563,9 @@ int run_host_until_globally_terminal(HostSccCase& host, std::uint64_t& body_coun
     bool any_active = false;
     const auto& state = host.driver_state();
     for (std::int64_t system = 0; system < host.batch_size(); ++system) {
-      any_active = any_active ||
-                   (state.system_statuses[system] == GPUXTB_STATUS_SUCCESS &&
-                    state.converged[system] == 0u &&
-                    state.iterations[system] < host.options().maximum_iterations);
+      any_active = any_active || (state.system_statuses[system] == GPUXTB_STATUS_SUCCESS &&
+                                  state.converged[system] == 0u &&
+                                  state.iterations[system] < host.options().maximum_iterations);
     }
     if (!any_active) {
       return 0;
@@ -1290,9 +1651,10 @@ int compare_graph_loop_cpu_parity(const HostSccCase& host, const Gfn2SccIteratio
   return 0;
 }
 
-int test_conditional_graph_exact_body_count(std::int64_t batch_size) {
+int test_conditional_graph_exact_body_count(std::int64_t batch_size,
+                                            bool mixed_spin_batch = false) {
   ProductionFixture fixture;
-  CHECK(fixture.create(false, batch_size));
+  CHECK(fixture.create(false, batch_size, false, mixed_spin_batch));
   CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
         Gfn2SccIterationProviderCaptureMode::kGraphSupported);
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
@@ -1304,9 +1666,8 @@ int test_conditional_graph_exact_body_count(std::int64_t batch_size) {
     std::fprintf(stderr,
                  "conditional SCC graph build failed: status=%u fallback=%u cuda=%d "
                  "iteration=%u stage=%u\n",
-                 static_cast<unsigned>(build.status),
-                 static_cast<unsigned>(build.fallback_reason), static_cast<int>(build.cuda_status),
-                 static_cast<unsigned>(build.iteration.status),
+                 static_cast<unsigned>(build.status), static_cast<unsigned>(build.fallback_reason),
+                 static_cast<int>(build.cuda_status), static_cast<unsigned>(build.iteration.status),
                  static_cast<unsigned>(build.iteration.stage));
   }
   CHECK(build.success());
@@ -1326,8 +1687,8 @@ int test_conditional_graph_exact_body_count(std::int64_t batch_size) {
     std::uint64_t body_count = 0u;
     CHECK(download_value(graph.canonical_active_count_device(), terminal_active_count,
                          fixture.handles.stream()));
-    CHECK(download_value(graph.numerical_body_count_device(), body_count,
-                         fixture.handles.stream()));
+    CHECK(
+        download_value(graph.numerical_body_count_device(), body_count, fixture.handles.stream()));
     CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
 
     std::uint64_t reference_body_count = 0u;
@@ -1336,15 +1697,15 @@ int test_conditional_graph_exact_body_count(std::int64_t batch_size) {
     CHECK(reference_body_count <= fixture.host.options().maximum_iterations);
     CHECK(body_count == reference_body_count);
     CHECK(terminal_active_count == 0u);
-    CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding,
-                                        fixture.handles.stream()) == 0);
+    CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding, fixture.handles.stream()) ==
+          0);
 
     /* A terminal replay must execute no numerical body, proving that the
      * root count gates the WHILE node rather than merely gating publication. */
     const Gfn2SccLoopLaunchResult terminal = graph.launch(fixture.handles.stream());
     CHECK(terminal.success());
-    CHECK(download_value(graph.numerical_body_count_device(), body_count,
-                         fixture.handles.stream()));
+    CHECK(
+        download_value(graph.numerical_body_count_device(), body_count, fixture.handles.stream()));
     CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
     CHECK(body_count == 0u);
     return 0;
@@ -1389,8 +1750,7 @@ int test_conditional_graph_plan_failure_forces_exit() {
   std::uint64_t plan_failure = 0u;
   std::uint32_t sequence_active = 1u;
   std::vector<std::uint64_t> iterations;
-  CHECK(download_value(graph.numerical_body_count_device(), body_count,
-                       fixture.handles.stream()));
+  CHECK(download_value(graph.numerical_body_count_device(), body_count, fixture.handles.stream()));
   CHECK(download_value(stale_binding.workspace.ledger.plan_failure_record, plan_failure,
                        fixture.handles.stream()));
   CHECK(download_value(stale_binding.workspace.ledger.sequence_active, sequence_active,
@@ -1401,18 +1761,17 @@ int test_conditional_graph_plan_failure_forces_exit() {
 
   CHECK(body_count == 1u);
   CHECK(sequence_active == 0u);
-  CHECK(plan_failure ==
-        gfn2_scc_stage_failure_record(
-            Gfn2SccStageId::kES2Potential,
-            static_cast<std::uint32_t>(Gfn2ES2DeviceError::kInvalidCacheMatrix)));
+  CHECK(plan_failure == gfn2_scc_stage_failure_record(
+                            Gfn2SccStageId::kES2Potential,
+                            static_cast<std::uint32_t>(Gfn2ES2DeviceError::kInvalidCacheMatrix)));
   CHECK(std::all_of(iterations.begin(), iterations.end(),
                     [](std::uint64_t value) { return value == 0u; }));
   return 0;
 }
 
-int test_conditional_owner_bounded_fallback_parity() {
+int test_conditional_owner_bounded_fallback_parity(bool mixed_spin_batch = false) {
   ProductionFixture fixture;
-  CHECK(fixture.create(false, 8));
+  CHECK(fixture.create(false, 8, false, mixed_spin_batch));
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
   Gfn2SccIterationDevicePlan fallback_plan = fixture.binding.plan;
   fallback_plan.eigensolver_provider.capture_mode =
@@ -1426,23 +1785,22 @@ int test_conditional_owner_bounded_fallback_parity() {
   const Gfn2SccLoopGraphBuildResult build = owner.build(fallback_binding);
   CHECK(build.success());
   CHECK(!build.conditional_graph_ready());
-  CHECK(build.fallback_reason ==
-        Gfn2SccLoopGraphFallbackReason::kProviderCaptureUnsupported);
+  CHECK(build.fallback_reason == Gfn2SccLoopGraphFallbackReason::kProviderCaptureUnsupported);
   const Gfn2SccLoopLaunchResult launch = owner.launch(fixture.handles.stream());
   CHECK(launch.success());
   CHECK(launch.execution_mode == Gfn2SccLoopExecutionMode::kBoundedFallback);
   CHECK(launch.submitted_iterations == fixture.host.options().maximum_iterations);
   CHECK(run_host_fixed_scc_loop(fixture.host) == 0);
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
-  CHECK(compare_graph_loop_cpu_parity(fixture.host, fallback_binding,
-                                      fixture.handles.stream()) == 0);
+  CHECK(compare_graph_loop_cpu_parity(fixture.host, fallback_binding, fixture.handles.stream()) ==
+        0);
   return 0;
 }
 
 int test_conditional_graph_mixed_warm_peer_parity() {
   constexpr std::int64_t kBatch = 8;
   ProductionFixture fixture;
-  CHECK(fixture.create(false, kBatch));
+  CHECK(fixture.create(false, kBatch, false, true));
   Gfn2SccLoopCudaGraphOwner graph;
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
   CHECK(graph.build(fixture.binding).conditional_graph_ready());
@@ -1459,6 +1817,11 @@ int test_conditional_graph_mixed_warm_peer_parity() {
   auto& mixer = fixture.host.mixer_state();
   driver.converged[1] = 1u;
   mixer.converged[1] = 1u;
+  /* A forced warm/converged peer must retain a self-consistent convergence
+   * record. The conditional body skips this peer, so seed both public SCC and
+   * mixer residual views with values that satisfy the bound tolerances. */
+  mixer.residual_rms[1] = 0.0;
+  mixer.residual_maximum[1] = 0.0;
   driver.system_statuses[2] = GPUXTB_STATUS_INTERNAL_ERROR;
   mixer.system_statuses[2] = GPUXTB_STATUS_INTERNAL_ERROR;
   driver.iterations[3] = fixture.host.options().maximum_iterations;
@@ -1484,17 +1847,25 @@ int test_conditional_graph_mixed_warm_peer_parity() {
   CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.mixer.residual_converged, mixer.converged,
                              kBatch * sizeof(std::uint8_t), cudaMemcpyHostToDevice,
                              fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.mixer.residual_rms, mixer.residual_rms,
+                             kBatch * sizeof(double), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.mixer.residual_maximum, mixer.residual_maximum,
+                             kBatch * sizeof(double), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.scc.residual_rms, mixer.residual_rms,
+                             kBatch * sizeof(double), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
 
   CHECK(graph.launch(fixture.handles.stream()).success());
   std::uint64_t body_count = 0u;
-  CHECK(download_value(graph.numerical_body_count_device(), body_count,
-                       fixture.handles.stream()));
+  CHECK(download_value(graph.numerical_body_count_device(), body_count, fixture.handles.stream()));
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
   std::uint64_t reference_body_count = 0u;
   CHECK(run_host_until_globally_terminal(fixture.host, reference_body_count) == 0);
   CHECK(body_count == reference_body_count);
-  CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding,
-                                      fixture.handles.stream()) == 0);
+  CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding, fixture.handles.stream()) ==
+        0);
   CHECK(driver.converged[1] == 1u);
   CHECK(driver.system_statuses[2] == GPUXTB_STATUS_INTERNAL_ERROR);
   CHECK(driver.iterations[3] == fixture.host.options().maximum_iterations);
@@ -1517,9 +1888,8 @@ int benchmark_conditional_graph_vs_bounded_fallback() {
     fallback_plan.eigensolver_provider.capture_mode =
         Gfn2SccIterationProviderCaptureMode::kUncapturedSegmentRequired;
     Gfn2SccIterationBinding fallback_binding{};
-    CHECK(bind_gfn2_scc_iteration_cuda(fallback_plan, fixture.binding.input,
-                                       fixture.binding.state, fixture.binding.workspace,
-                                       fallback_binding)
+    CHECK(bind_gfn2_scc_iteration_cuda(fallback_plan, fixture.binding.input, fixture.binding.state,
+                                       fixture.binding.workspace, fallback_binding)
               .error == Gfn2SccIterationBindingError::kSuccess);
     Gfn2SccLoopCudaGraphOwner fallback;
     CHECK(fallback.build(fallback_binding).success());
@@ -1529,8 +1899,8 @@ int benchmark_conditional_graph_vs_bounded_fallback() {
     cudaEvent_t stop = nullptr;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
-    const std::vector<std::uint64_t> penultimate(
-        static_cast<std::size_t>(batch_size), fixture.host.options().maximum_iterations - 1u);
+    const std::vector<std::uint64_t> penultimate(static_cast<std::size_t>(batch_size),
+                                                 fixture.host.options().maximum_iterations - 1u);
 
     const auto reset_one_remaining = [&]() -> bool {
       Gfn2SccIterationInitializationReady ready{};
@@ -1574,8 +1944,7 @@ int benchmark_conditional_graph_vs_bounded_fallback() {
                          fixture.handles.stream()));
     CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
     CHECK(conditional_bodies == 1u);
-    CHECK(measure("bounded_fallback", fallback,
-                  fixture.host.options().maximum_iterations) == 0);
+    CHECK(measure("bounded_fallback", fallback, fixture.host.options().maximum_iterations) == 0);
     CUDA_CHECK(cudaEventDestroy(stop));
     CUDA_CHECK(cudaEventDestroy(start));
   }
@@ -1585,10 +1954,14 @@ int benchmark_conditional_graph_vs_bounded_fallback() {
 std::vector<double> changed_core_hamiltonian(const HostSccCase& host) {
   std::vector<double> changed = host.h0();
   const auto& layout = host.wavefunction_layout();
+  const auto& matrix_offsets = host.h0_plan().matrix_offsets;
   for (std::int64_t system = 0; system < layout.batch_size; ++system) {
     const std::int64_t n =
         layout.batch_orbital_offsets[system + 1] - layout.batch_orbital_offsets[system];
-    const std::int64_t matrix_begin = layout.coefficients.system_offsets[system];
+    /* H0 has one physical matrix per system even when the wavefunction owns
+     * separate alpha/beta coefficient matrices. Use the H0 plan offsets so a
+     * changed-input replay never mistakes spin-expanded state for input. */
+    const std::int64_t matrix_begin = matrix_offsets[static_cast<std::size_t>(system)];
     for (std::int64_t row = 0; row < n; ++row) {
       for (std::int64_t column = row; column < n; ++column) {
         const double shift = 2.5e-4 * static_cast<double>(system + 1) +
@@ -1603,9 +1976,10 @@ std::vector<double> changed_core_hamiltonian(const HostSccCase& host) {
   return changed;
 }
 
-int test_production_graph_changed_input_replay(std::int64_t batch_size) {
+int test_production_graph_changed_input_replay(std::int64_t batch_size,
+                                               bool mixed_spin_batch = false) {
   ProductionFixture fixture;
-  CHECK(fixture.create(false, batch_size));
+  CHECK(fixture.create(false, batch_size, false, mixed_spin_batch));
   CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
         Gfn2SccIterationProviderCaptureMode::kGraphSupported);
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
@@ -1685,8 +2059,7 @@ int test_production_graph_device_epoch_replay() {
                  fixture.binding.plan.provenance.cache_binding_count, provenance,
                  fixture.handles.stream()));
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
-  const std::uint64_t* const committed =
-      fixture.binding.plan.geometry_cache.geometry_generations;
+  const std::uint64_t* const committed = fixture.binding.plan.geometry_cache.geometry_generations;
   for (auto& record : provenance) {
     record.provenance.generation_scope = Gfn2GenerationScope::kPerSystem;
     record.provenance.geometry_generation = 0u;
@@ -1694,8 +2067,7 @@ int test_production_graph_device_epoch_replay() {
     record.provenance.system_geometry_generations = committed;
   }
   CUDA_CHECK(cudaMemcpyAsync(
-      const_cast<Gfn2SccCacheProvenanceBinding*>(
-          fixture.binding.plan.provenance.cache_bindings),
+      const_cast<Gfn2SccCacheProvenanceBinding*>(fixture.binding.plan.provenance.cache_bindings),
       provenance.data(), provenance.size() * sizeof(Gfn2SccCacheProvenanceBinding),
       cudaMemcpyHostToDevice, fixture.handles.stream()));
 
@@ -1705,14 +2077,13 @@ int test_production_graph_device_epoch_replay() {
   CHECK(eligible_storage.allocate(static_cast<std::size_t>(batch_size) * sizeof(std::uint8_t)));
   auto* const epoch = static_cast<std::uint64_t*>(epoch_storage.get());
   auto* const eligible = static_cast<std::uint8_t*>(eligible_storage.get());
-  std::vector<std::uint64_t> generations(static_cast<std::size_t>(batch_size),
-                                         kGeometryGeneration);
+  std::vector<std::uint64_t> generations(static_cast<std::size_t>(batch_size), kGeometryGeneration);
   std::vector<std::uint8_t> eligibility(static_cast<std::size_t>(batch_size), 1u);
-  CUDA_CHECK(cudaMemcpyAsync(epoch, &generations[0], sizeof(std::uint64_t),
-                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(epoch, &generations[0], sizeof(std::uint64_t), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
   CUDA_CHECK(cudaMemcpyAsync(const_cast<std::uint64_t*>(committed), generations.data(),
-                             generations.size() * sizeof(std::uint64_t),
-                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+                             generations.size() * sizeof(std::uint64_t), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
   CUDA_CHECK(cudaMemcpyAsync(eligible, eligibility.data(), eligibility.size(),
                              cudaMemcpyHostToDevice, fixture.handles.stream()));
   const Gfn2GeometryEpochConsumerDevice consumer{
@@ -1720,9 +2091,8 @@ int test_production_graph_device_epoch_replay() {
 
   GraphResources graph;
   CUDA_CHECK(cudaStreamBeginCapture(fixture.handles.stream(), cudaStreamCaptureModeThreadLocal));
-  const Gfn2SccIterationLaunchResult captured =
-      launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, consumer,
-                                                fixture.handles.stream());
+  const Gfn2SccIterationLaunchResult captured = launch_gfn2_restricted_scc_iteration_cuda(
+      fixture.binding, consumer, fixture.handles.stream());
   CHECK(captured.success());
   CUDA_CHECK(cudaStreamEndCapture(fixture.handles.stream(), graph.graph_address()));
   CUDA_CHECK(cudaGraphInstantiate(graph.executable_address(), graph.graph(), nullptr, nullptr, 0u));
@@ -1743,17 +2113,17 @@ int test_production_graph_device_epoch_replay() {
   generations.assign(static_cast<std::size_t>(batch_size), next_generation);
   generations[1] = kGeometryGeneration;
   eligibility[2] = 0u;
-  CUDA_CHECK(cudaMemcpyAsync(epoch, &next_generation, sizeof(std::uint64_t),
-                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(epoch, &next_generation, sizeof(std::uint64_t), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
   CUDA_CHECK(cudaMemcpyAsync(const_cast<std::uint64_t*>(committed), generations.data(),
-                             generations.size() * sizeof(std::uint64_t),
-                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+                             generations.size() * sizeof(std::uint64_t), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
   std::vector<std::uint64_t> factor_generations(static_cast<std::size_t>(batch_size),
                                                 next_generation);
-  CUDA_CHECK(cudaMemcpyAsync(
-      fixture.binding.plan.overlap_cache.geometry_generations, factor_generations.data(),
-      factor_generations.size() * sizeof(std::uint64_t), cudaMemcpyHostToDevice,
-      fixture.handles.stream()));
+  CUDA_CHECK(cudaMemcpyAsync(fixture.binding.plan.overlap_cache.geometry_generations,
+                             factor_generations.data(),
+                             factor_generations.size() * sizeof(std::uint64_t),
+                             cudaMemcpyHostToDevice, fixture.handles.stream()));
   CUDA_CHECK(cudaMemcpyAsync(eligible, eligibility.data(), eligibility.size(),
                              cudaMemcpyHostToDevice, fixture.handles.stream()));
   CUDA_CHECK(cudaGraphLaunch(graph.executable(), fixture.handles.stream()));
@@ -1771,10 +2141,10 @@ int test_production_graph_device_epoch_replay() {
   CHECK(iterations[2] == 0u);
   for (const std::size_t system : {1u, 2u}) {
     CHECK(pending_statuses[system] == GPUXTB_STATUS_INTERNAL_ERROR);
-    CHECK(failures[system] == gfn2_scc_stage_failure_record(
-                                  Gfn2SccStageId::kGeometry,
-                                  static_cast<std::uint32_t>(
-                                      Gfn2SccIterationControlCode::kStaleGeneration)));
+    CHECK(failures[system] ==
+          gfn2_scc_stage_failure_record(
+              Gfn2SccStageId::kGeometry,
+              static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kStaleGeneration)));
   }
 
   CHECK(fixture.initializer
@@ -1784,8 +2154,8 @@ int test_production_graph_device_epoch_replay() {
   generations.assign(static_cast<std::size_t>(batch_size), next_generation);
   eligibility.assign(static_cast<std::size_t>(batch_size), 1u);
   CUDA_CHECK(cudaMemcpyAsync(const_cast<std::uint64_t*>(committed), generations.data(),
-                             generations.size() * sizeof(std::uint64_t),
-                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+                             generations.size() * sizeof(std::uint64_t), cudaMemcpyHostToDevice,
+                             fixture.handles.stream()));
   CUDA_CHECK(cudaMemcpyAsync(eligible, eligibility.data(), eligibility.size(),
                              cudaMemcpyHostToDevice, fixture.handles.stream()));
   CUDA_CHECK(cudaGraphLaunch(graph.executable(), fixture.handles.stream()));
@@ -1799,9 +2169,10 @@ int test_production_graph_device_epoch_replay() {
 
 int test_production_loop_cpu_parity(std::int64_t batch_size, bool optional_components,
                                     bool use_default_stream, bool use_ordered_stream = false,
-                                    std::uint64_t resumed_iterations = 0u) {
+                                    std::uint64_t resumed_iterations = 0u,
+                                    bool mixed_spin_batch = false) {
   ProductionFixture fixture;
-  CHECK(fixture.create(optional_components, batch_size));
+  CHECK(fixture.create(optional_components, batch_size, false, mixed_spin_batch));
   CHECK(fixture.host.batch_size() == batch_size);
   CHECK(!(use_default_stream && use_ordered_stream));
 
@@ -2068,6 +2439,75 @@ int test_production_loop_cpu_parity(std::int64_t batch_size, bool optional_compo
   return 0;
 }
 
+/* Exercise allocation-free, non-Graph loop modes independently from Graph
+ * tooling. The B=1 case gates the unrestricted one-peer extent; larger
+ * batches alternate restricted and unrestricted systems. */
+int test_mixed_spin_bounded_acceptance() {
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    const int status = test_production_loop_cpu_parity(batch_size, false, false, false, 0u, true);
+    if (status != 0) {
+      std::fprintf(stderr, "mixed-spin fixed-loop CPU parity failed for B=%lld\n",
+                   static_cast<long long>(batch_size));
+      return status;
+    }
+  }
+
+  int status = test_conditional_owner_bounded_fallback_parity(true);
+  if (status != 0) {
+    std::fprintf(stderr, "mixed-spin bounded fallback parity failed for B=8\n");
+    return status;
+  }
+
+  /* The fixed-loop matrix above already covers the fixture/provider stream.
+   * These two calls gate the remaining public stream-ordering contracts. */
+  status = test_production_loop_cpu_parity(8, false, true, false, 0u, true);
+  if (status != 0) {
+    std::fprintf(stderr, "mixed-spin default-stream parity failed for B=8\n");
+    return status;
+  }
+  status = test_production_loop_cpu_parity(8, false, false, true, 0u, true);
+  if (status != 0) {
+    std::fprintf(stderr, "mixed-spin event-ordered stream parity failed for B=8\n");
+    return status;
+  }
+  return 0;
+}
+
+int test_mixed_spin_conditional_acceptance() {
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    const int status = test_conditional_graph_exact_body_count(batch_size, true);
+    if (status != 0) {
+      std::fprintf(stderr, "mixed-spin conditional Graph parity failed for B=%lld\n",
+                   static_cast<long long>(batch_size));
+      return status;
+    }
+  }
+  return test_conditional_graph_mixed_warm_peer_parity();
+}
+
+/* Combine the isolated paths with changed-input captured-Graph replay for the
+ * complete issue acceptance entry point. */
+int test_mixed_spin_multi_step_and_graph_acceptance() {
+  int status = test_mixed_spin_bounded_acceptance();
+  if (status != 0) {
+    return status;
+  }
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    status = test_production_graph_changed_input_replay(batch_size, true);
+    if (status != 0) {
+      std::fprintf(stderr, "mixed-spin changed-input Graph replay failed for B=%lld\n",
+                   static_cast<long long>(batch_size));
+      return status;
+    }
+  }
+  return test_mixed_spin_conditional_acceptance();
+}
+
+int run_mixed_spin_acceptance() {
+  const int one_step = test_mixed_spin_batch_one_step_cpu_parity();
+  return one_step == 0 ? test_mixed_spin_multi_step_and_graph_acceptance() : one_step;
+}
+
 int test_loop_rejects_inconsistent_plan() {
   Gfn2SccIterationBinding binding{};
   binding.plan.plan_token = 7u;
@@ -2115,19 +2555,53 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::strcmp(argv[1], "--benchmark") == 0) {
     return benchmark_conditional_graph_vs_bounded_fallback();
   }
+  if (argc == 2 && std::strcmp(argv[1], "--unrestricted-smoke") == 0) {
+    return test_unrestricted_mixed_production_iteration_smoke();
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--unrestricted-parity") == 0) {
+    return test_production_iteration_cpu_parity(false, 1, true, true);
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--mixed-parity") == 0) {
+    return test_mixed_spin_batch_one_step_cpu_parity();
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--mixed-acceptance") == 0) {
+    return run_mixed_spin_acceptance();
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--mixed-bounded") == 0) {
+    return test_mixed_spin_bounded_acceptance();
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--mixed-conditional") == 0) {
+    return test_mixed_spin_conditional_acceptance();
+  }
   if (argc != 1) {
-    std::fprintf(stderr, "usage: %s [--benchmark]\n", argv[0]);
+    std::fprintf(stderr,
+                 "usage: %s "
+                 "[--benchmark|--unrestricted-smoke|--unrestricted-parity|--mixed-parity|"
+                 "--mixed-acceptance|--mixed-bounded|--mixed-conditional]\n",
+                 argv[0]);
     return 2;
   }
   int status = test_loop_rejects_inconsistent_plan();
   if (status != 0) {
     return status;
   }
-  status = test_four_system_production_iteration_cpu_parity(false);
+  status = test_unrestricted_mixed_production_iteration_smoke();
   if (status != 0) {
     return status;
   }
-  status = test_four_system_production_iteration_cpu_parity(true);
+  status = test_production_iteration_cpu_parity(false, 1, true, true);
+  if (status != 0) {
+    return status;
+  }
+  status = test_mixed_spin_batch_one_step_cpu_parity();
+  if (status != 0) {
+    return status;
+  }
+  status = test_production_iteration_cpu_parity(false);
+  if (status != 0) {
+    return status;
+  }
+  status = test_production_iteration_cpu_parity(true);
   if (status != 0) {
     return status;
   }
@@ -2155,7 +2629,7 @@ int main(int argc, char** argv) {
   if (status != 0) {
     return status;
   }
-  status = test_conditional_graph_mixed_warm_peer_parity();
+  status = test_mixed_spin_multi_step_and_graph_acceptance();
   if (status != 0) {
     return status;
   }

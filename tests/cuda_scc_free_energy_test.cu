@@ -154,15 +154,21 @@ struct HostCase {
           (enabled_components & bit(Gfn2SccClassicalEnergyComponent::kExplicitPointCharge)) != 0u,
           (enabled_components & bit(Gfn2SccClassicalEnergyComponent::kPeriodicEmbedding)) != 0u};
       expected[0][system] = inputs[0][system];
-      expected[7][system] = inputs[1][system];
+      expected[8][system] = inputs[1][system];
       double internal = inputs[0][system];
+      constexpr std::array<std::size_t, 6> input_indices{{2u, 3u, 4u, 6u, 7u, 8u}};
+      constexpr std::array<std::size_t, 6> output_indices{{1u, 2u, 3u, 5u, 6u, 7u}};
       for (std::size_t component = 0; component < enabled.size(); ++component) {
-        const double value = enabled[component] ? inputs[component + 2u][system] : 0.0;
-        expected[component + 1u][system] = value;
+        const double value = enabled[component] ? inputs[input_indices[component]][system] : 0.0;
+        expected[output_indices[component]][system] = value;
         internal = cpu_add(internal, value);
+        if (component == 2u) {
+          expected[4][system] = inputs[5][system];
+          internal = cpu_add(internal, inputs[5][system]);
+        }
       }
-      expected[8][system] = internal;
-      expected[9][system] = std::fma(-temperature, inputs[1][system], internal);
+      expected[9][system] = internal;
+      expected[10][system] = std::fma(-temperature, inputs[1][system], internal);
     }
   }
 };
@@ -183,6 +189,7 @@ HostCase make_case(std::size_t batch_size) {
     host.inputs[5][system] = -3.0 * scale;
     host.inputs[6][system] = 13.0 * scale;
     host.inputs[7][system] = -2.0 * scale;
+    host.inputs[8][system] = 17.0 * scale;
   }
   host.recompute();
   return host;
@@ -228,29 +235,56 @@ struct DeviceCase {
       return (enabled_components & bit(component)) != 0u;
     };
     batch = {count, enabled_components, temperature, kPlanToken};
-    input = {
-        inputs[0].get(),
-        count,
-        inputs[1].get(),
-        count,
-        enabled(Gfn2SccClassicalEnergyComponent::kES2) ? inputs[2].get() : nullptr,
-        enabled(Gfn2SccClassicalEnergyComponent::kES2) ? count : 0,
-        enabled(Gfn2SccClassicalEnergyComponent::kES3) ? inputs[3].get() : nullptr,
-        enabled(Gfn2SccClassicalEnergyComponent::kES3) ? count : 0,
-        enabled(Gfn2SccClassicalEnergyComponent::kAES2) ? inputs[4].get() : nullptr,
-        enabled(Gfn2SccClassicalEnergyComponent::kAES2) ? count : 0,
-        enabled(Gfn2SccClassicalEnergyComponent::kD4TwoBody) ? inputs[5].get() : nullptr,
-        enabled(Gfn2SccClassicalEnergyComponent::kD4TwoBody) ? count : 0,
-        enabled(Gfn2SccClassicalEnergyComponent::kExplicitPointCharge) ? inputs[6].get() : nullptr,
-        enabled(Gfn2SccClassicalEnergyComponent::kExplicitPointCharge) ? count : 0,
-        enabled(Gfn2SccClassicalEnergyComponent::kPeriodicEmbedding) ? inputs[7].get() : nullptr,
-        enabled(Gfn2SccClassicalEnergyComponent::kPeriodicEmbedding) ? count : 0,
-        kPlanToken};
+    input = {};
+    input.core = inputs[0].get();
+    input.core_elements = count;
+    input.entropy = inputs[1].get();
+    input.entropy_elements = count;
+    input.es2 = enabled(Gfn2SccClassicalEnergyComponent::kES2) ? inputs[2].get() : nullptr;
+    input.es2_elements = enabled(Gfn2SccClassicalEnergyComponent::kES2) ? count : 0;
+    input.es3 = enabled(Gfn2SccClassicalEnergyComponent::kES3) ? inputs[3].get() : nullptr;
+    input.es3_elements = enabled(Gfn2SccClassicalEnergyComponent::kES3) ? count : 0;
+    input.aes2 = enabled(Gfn2SccClassicalEnergyComponent::kAES2) ? inputs[4].get() : nullptr;
+    input.aes2_elements = enabled(Gfn2SccClassicalEnergyComponent::kAES2) ? count : 0;
+    input.spin = inputs[5].get();
+    input.spin_elements = count;
+    input.d4_two_body =
+        enabled(Gfn2SccClassicalEnergyComponent::kD4TwoBody) ? inputs[6].get() : nullptr;
+    input.d4_two_body_elements = enabled(Gfn2SccClassicalEnergyComponent::kD4TwoBody) ? count : 0;
+    input.explicit_point_charge =
+        enabled(Gfn2SccClassicalEnergyComponent::kExplicitPointCharge) ? inputs[7].get() : nullptr;
+    input.explicit_point_charge_elements =
+        enabled(Gfn2SccClassicalEnergyComponent::kExplicitPointCharge) ? count : 0;
+    input.periodic_embedding =
+        enabled(Gfn2SccClassicalEnergyComponent::kPeriodicEmbedding) ? inputs[8].get() : nullptr;
+    input.periodic_embedding_elements =
+        enabled(Gfn2SccClassicalEnergyComponent::kPeriodicEmbedding) ? count : 0;
+    input.plan_token = kPlanToken;
     activity = {use_activity ? active.get() : nullptr, use_activity ? count : 0, kPlanToken};
-    diagnostics = {outputs[0].get(), count, outputs[1].get(), count, outputs[2].get(), count,
-                   outputs[3].get(), count, outputs[4].get(), count, outputs[5].get(), count,
-                   outputs[6].get(), count, outputs[7].get(), count, outputs[8].get(), count,
-                   outputs[9].get(), count, kPlanToken};
+    diagnostics = {};
+    diagnostics.core = outputs[0].get();
+    diagnostics.core_elements = count;
+    diagnostics.es2 = outputs[1].get();
+    diagnostics.es2_elements = count;
+    diagnostics.es3 = outputs[2].get();
+    diagnostics.es3_elements = count;
+    diagnostics.aes2 = outputs[3].get();
+    diagnostics.aes2_elements = count;
+    diagnostics.spin = outputs[4].get();
+    diagnostics.spin_elements = count;
+    diagnostics.d4_two_body = outputs[5].get();
+    diagnostics.d4_two_body_elements = count;
+    diagnostics.explicit_point_charge = outputs[6].get();
+    diagnostics.explicit_point_charge_elements = count;
+    diagnostics.periodic_embedding = outputs[7].get();
+    diagnostics.periodic_embedding_elements = count;
+    diagnostics.entropy = outputs[8].get();
+    diagnostics.entropy_elements = count;
+    diagnostics.internal_energy = outputs[9].get();
+    diagnostics.internal_energy_elements = count;
+    diagnostics.free_energy = outputs[10].get();
+    diagnostics.free_energy_elements = count;
+    diagnostics.plan_token = kPlanToken;
     workspace = {scratch.get(), static_cast<std::int64_t>(scratch.size()), sequence_active.get(), 1,
                  kPlanToken};
   }
@@ -328,7 +362,8 @@ int test_batch_parity_custom_stream_and_disabled_terms() {
   for (std::size_t component = 0; component < output.size(); ++component) {
     CHECK(output[component] == disabled.expected[component]);
   }
-  CHECK(output[2][0] == 0.0 && output[4][0] == 0.0 && output[5][0] == 0.0 && output[6][0] == 0.0);
+  CHECK(output[2][0] == 0.0 && output[5][0] == 0.0 && output[6][0] == 0.0 && output[7][0] == 0.0);
+  CHECK(output[4][0] == disabled.inputs[5][0]);
   return 0;
 }
 
@@ -355,7 +390,7 @@ int test_exact_cpu_association_and_subtotal_counterexamples() {
     classical_total = cpu_add(classical_total, host.inputs[component][0]);
   }
   const double subtotal_internal = cpu_add(host.inputs[0][0], classical_total);
-  CHECK(host.expected[8][0] == 1.0);
+  CHECK(host.expected[9][0] == 1.0);
   CHECK(reordered == 0.0 && subtotal_internal == 0.0);
 
   double second_classical_total = 0.0;
@@ -364,16 +399,16 @@ int test_exact_cpu_association_and_subtotal_counterexamples() {
   }
   const double electronic_free = std::fma(-host.temperature, host.inputs[1][1], host.inputs[0][1]);
   const double tempting_shortcut = cpu_add(electronic_free, second_classical_total);
-  CHECK(host.expected[8][1] == 2.0 && host.expected[9][1] == 1.0);
-  CHECK(tempting_shortcut == 2.0 && tempting_shortcut != host.expected[9][1]);
+  CHECK(host.expected[9][1] == 2.0 && host.expected[10][1] == 1.0);
+  CHECK(tempting_shortcut == 2.0 && tempting_shortcut != host.expected[10][1]);
 
   DeviceCase device(host);
   CHECK(launch(device) == 0);
   std::array<std::vector<double>, kGfn2SccFreeEnergyDiagnosticComponents> output;
   CHECK(download_outputs(device, output) == 0);
-  CHECK(output[8][0] == 1.0);
-  CHECK(output[8][1] == 2.0);
-  CHECK(output[9][1] == 1.0);
+  CHECK(output[9][0] == 1.0);
+  CHECK(output[9][1] == 2.0);
+  CHECK(output[10][1] == 1.0);
   return 0;
 }
 
@@ -394,9 +429,9 @@ int test_final_fma_rounding_counterexample() {
 
   const double unfused_product = cpu_multiply(-host.temperature, host.inputs[1][0]);
   const double unfused_free_energy = cpu_add(unfused_product, host.inputs[0][0]);
-  CHECK(host.expected[9][0] == -0x1.eac58b06286d3p+4);
+  CHECK(host.expected[10][0] == -0x1.eac58b06286d3p+4);
   CHECK(unfused_free_energy == -0x1.eac58b06286d4p+4);
-  CHECK(std::nextafter(host.expected[9][0], -std::numeric_limits<double>::infinity()) ==
+  CHECK(std::nextafter(host.expected[10][0], -std::numeric_limits<double>::infinity()) ==
         unfused_free_energy);
 
   DeviceCase device(host);
@@ -404,9 +439,9 @@ int test_final_fma_rounding_counterexample() {
   CHECK(launch(device) == 0);
   std::array<std::vector<double>, kGfn2SccFreeEnergyDiagnosticComponents> output;
   CHECK(download_outputs(device, output) == 0);
-  CHECK(output[8][0] == host.inputs[0][0]);
-  CHECK(output[9][0] == host.expected[9][0]);
-  CHECK(output[9][0] != unfused_free_energy);
+  CHECK(output[9][0] == host.inputs[0][0]);
+  CHECK(output[10][0] == host.expected[10][0]);
+  CHECK(output[10][0] != unfused_free_energy);
   return 0;
 }
 
@@ -468,11 +503,11 @@ int test_existing_cuda_stage_output_binding() {
                                                           count,
                                                           device.inputs[4].get(),
                                                           count,
-                                                          device.inputs[5].get(),
-                                                          count,
                                                           device.inputs[6].get(),
                                                           count,
                                                           device.inputs[7].get(),
+                                                          count,
+                                                          device.inputs[8].get(),
                                                           count,
                                                           kPlanToken};
   const Gfn2SccClassicalEnergyDeviceActivity classical_activity{device.active.get(), count,
@@ -522,13 +557,14 @@ int test_existing_cuda_stage_output_binding() {
 }
 
 int test_nonfinite_peer_isolation_inactive_and_upstream_system_error() {
-  HostCase host = make_case(12u);
+  HostCase host = make_case(13u);
   const std::array<Gfn2SccFreeEnergyDeviceError, kGfn2SccFreeEnergyInputComponents> errors{
       Gfn2SccFreeEnergyDeviceError::kNonfiniteCore,
       Gfn2SccFreeEnergyDeviceError::kNonfiniteEntropy,
       Gfn2SccFreeEnergyDeviceError::kNonfiniteES2,
       Gfn2SccFreeEnergyDeviceError::kNonfiniteES3,
       Gfn2SccFreeEnergyDeviceError::kNonfiniteAES2,
+      Gfn2SccFreeEnergyDeviceError::kNonfiniteSpin,
       Gfn2SccFreeEnergyDeviceError::kNonfiniteD4TwoBody,
       Gfn2SccFreeEnergyDeviceError::kNonfiniteExplicitPointCharge,
       Gfn2SccFreeEnergyDeviceError::kNonfinitePeriodicEmbedding};
@@ -536,11 +572,11 @@ int test_nonfinite_peer_isolation_inactive_and_upstream_system_error() {
     host.inputs[input][input] = input % 2u == 0u ? std::numeric_limits<double>::quiet_NaN()
                                                  : std::numeric_limits<double>::infinity();
   }
-  host.active[8] = 0u;
+  host.active[9] = 0u;
   for (auto& input : host.inputs) {
-    input[8] = std::numeric_limits<double>::quiet_NaN();
+    input[9] = std::numeric_limits<double>::quiet_NaN();
   }
-  host.active[9] = 2u;
+  host.active[10] = 2u;
   host.recompute();
 
   DeviceCase device(host);
@@ -549,7 +585,7 @@ int test_nonfinite_peer_isolation_inactive_and_upstream_system_error() {
                                                       device.system_errors.get(),
                                                       device.device_error.get()) == cudaSuccess);
   std::vector<std::uint32_t> upstream_errors(host.active.size(), 0u);
-  upstream_errors[10] = 0x77u;
+  upstream_errors[11] = 0x77u;
   CHECK(cudaMemcpy(device.system_errors.get(), upstream_errors.data(),
                    upstream_errors.size() * sizeof(std::uint32_t),
                    cudaMemcpyHostToDevice) == cudaSuccess);
@@ -561,20 +597,25 @@ int test_nonfinite_peer_isolation_inactive_and_upstream_system_error() {
   CHECK(device.system_errors.download(actual_errors) == cudaSuccess);
   CHECK(cudaDeviceSynchronize() == cudaSuccess);
   for (std::size_t system = 0; system < errors.size(); ++system) {
+    if (actual_errors[system] != static_cast<std::uint32_t>(errors[system])) {
+      std::fprintf(stderr, "free-energy system %zu: expected error %u, observed %u\n", system,
+                   static_cast<unsigned int>(errors[system]),
+                   static_cast<unsigned int>(actual_errors[system]));
+    }
     CHECK(actual_errors[system] == static_cast<std::uint32_t>(errors[system]));
     for (const auto& values : output) {
       CHECK(values[system] == kSentinel);
     }
   }
-  CHECK(actual_errors[8] == 0u);
-  CHECK(actual_errors[9] ==
+  CHECK(actual_errors[9] == 0u);
+  CHECK(actual_errors[10] ==
         static_cast<std::uint32_t>(Gfn2SccFreeEnergyDeviceError::kInvalidActiveMask));
-  CHECK(actual_errors[10] == 0x77u);
+  CHECK(actual_errors[11] == 0x77u);
   for (const auto& values : output) {
-    CHECK(values[8] == kSentinel && values[9] == kSentinel && values[10] == kSentinel);
+    CHECK(values[9] == kSentinel && values[10] == kSentinel && values[11] == kSentinel);
   }
   for (std::size_t component = 0; component < output.size(); ++component) {
-    CHECK(output[component][11] == host.expected[component][11]);
+    CHECK(output[component][12] == host.expected[component][12]);
   }
   return 0;
 }
@@ -771,7 +812,7 @@ int test_hostile_metadata_alias_token_misalignment_and_reset() {
   return 0;
 }
 
-int test_staged_occupation_entropy_exact_alias_and_overlap_rejection() {
+int test_staged_spin_entropy_exact_alias_and_overlap_rejection() {
   HostCase host = make_case(8u);
   DeviceCase device(host);
 
@@ -780,6 +821,7 @@ int test_staged_occupation_entropy_exact_alias_and_overlap_rejection() {
    * of that input/output pair is therefore both intentional and safe: the
    * composition kernel snapshots the input in unpublished scratch before the
    * publication kernel writes the identical value back. */
+  device.diagnostics.spin = const_cast<double*>(device.input.spin);
   device.diagnostics.entropy = const_cast<double*>(device.input.entropy);
   CHECK(device.fill_outputs(kSentinel) == cudaSuccess);
   CHECK(launch(device) == 0);
@@ -787,7 +829,7 @@ int test_staged_occupation_entropy_exact_alias_and_overlap_rejection() {
   std::array<std::vector<double>, kGfn2SccFreeEnergyDiagnosticComponents> output;
   CHECK(download_outputs(device, output) == 0);
   for (std::size_t component = 0; component < output.size(); ++component) {
-    if (component == 7u) {
+    if (component == 4u || component == 8u) {
       CHECK(std::all_of(output[component].begin(), output[component].end(),
                         [](double value) { return value == kSentinel; }));
     } else {
@@ -795,9 +837,12 @@ int test_staged_occupation_entropy_exact_alias_and_overlap_rejection() {
     }
   }
   std::vector<double> aliased_entropy;
+  std::vector<double> aliased_spin;
+  CHECK(device.inputs[5].download(aliased_spin) == cudaSuccess);
   CHECK(device.inputs[1].download(aliased_entropy) == cudaSuccess);
   CHECK(cudaDeviceSynchronize() == cudaSuccess);
-  CHECK(aliased_entropy == host.expected[7]);
+  CHECK(aliased_spin == host.expected[4]);
+  CHECK(aliased_entropy == host.expected[8]);
 
   HostCase overlap_host = make_case(2u);
   DeviceCase overlap_device(overlap_host);
@@ -879,7 +924,7 @@ int main() {
        test_nonfinite_peer_isolation_inactive_and_upstream_system_error,
        test_intermediate_and_final_fma_overflow_and_sticky_plan_error,
        test_hostile_metadata_alias_token_misalignment_and_reset,
-       test_staged_occupation_entropy_exact_alias_and_overlap_rejection, test_cuda_graph_replay}};
+       test_staged_spin_entropy_exact_alias_and_overlap_rejection, test_cuda_graph_replay}};
   for (const auto test : tests) {
     const int status = test();
     if (status != 0) {

@@ -189,8 +189,9 @@ bool staged_matches_public(const Arena<T>& staged_arena, const T* staged_pointer
 }
 
 struct Fixture {
-  explicit Fixture(std::int64_t requested_batch, bool complex_case = false)
-      : batch(requested_batch), complex(complex_case) {
+  explicit Fixture(std::int64_t requested_batch, bool complex_case = false,
+                   bool mixed_spin_case = false)
+      : batch(requested_batch), complex(complex_case), mixed_spin(mixed_spin_case) {
     build_topology();
     allocate_storage();
     bind_descriptors();
@@ -199,10 +200,16 @@ struct Fixture {
 
   std::int64_t batch = 0;
   bool complex = false;
+  bool mixed_spin = false;
   std::int64_t atoms = 0;
   std::int64_t shells = 0;
   std::int64_t orbitals = 0;
   std::int64_t matrices = 0;
+  std::int64_t spin_channels_total = 0;
+  std::int64_t spin_atoms = 0;
+  std::int64_t spin_shells = 0;
+  std::int64_t spin_orbitals = 0;
+  std::int64_t spin_matrices = 0;
   std::int64_t vector_elements = 0;
   std::int64_t history_elements = 0;
   std::int64_t omega_elements = 0;
@@ -213,11 +220,23 @@ struct Fixture {
   std::vector<std::int64_t> orbital_offsets_host;
   std::vector<std::int64_t> matrix_offsets_host;
   std::vector<std::int64_t> shell_to_atom_host;
+  std::vector<std::int32_t> spin_channels_host;
+  std::vector<std::int64_t> spin_channel_offsets_host;
+  std::vector<std::int64_t> spin_atom_offsets_host;
+  std::vector<std::int64_t> spin_shell_offsets_host;
+  std::vector<std::int64_t> spin_orbital_offsets_host;
+  std::vector<std::int64_t> spin_matrix_offsets_host;
   DeviceBuffer<std::int64_t> atom_offsets;
   DeviceBuffer<std::int64_t> shell_offsets;
   DeviceBuffer<std::int64_t> orbital_offsets;
   DeviceBuffer<std::int64_t> matrix_offsets;
   DeviceBuffer<std::int64_t> shell_to_atom;
+  DeviceBuffer<std::int32_t> spin_channels;
+  DeviceBuffer<std::int64_t> spin_channel_offsets;
+  DeviceBuffer<std::int64_t> spin_atom_offsets;
+  DeviceBuffer<std::int64_t> spin_shell_offsets;
+  DeviceBuffer<std::int64_t> spin_orbital_offsets;
+  DeviceBuffer<std::int64_t> spin_matrix_offsets;
 
   Arena<double> staged_d;
   Arena<std::uint64_t> staged_u64;
@@ -279,7 +298,40 @@ struct Fixture {
     shells = shell_offsets_host.back();
     orbitals = orbital_offsets_host.back();
     matrices = matrix_offsets_host.back();
-    vector_elements = shells + 9 * atoms;
+    spin_channels_host.assign(static_cast<std::size_t>(batch), 1);
+    spin_channel_offsets_host.assign(static_cast<std::size_t>(batch + 1), 0);
+    spin_atom_offsets_host.assign(static_cast<std::size_t>(batch + 1), 0);
+    spin_shell_offsets_host.assign(static_cast<std::size_t>(batch + 1), 0);
+    spin_orbital_offsets_host.assign(static_cast<std::size_t>(batch + 1), 0);
+    spin_matrix_offsets_host.assign(static_cast<std::size_t>(batch + 1), 0);
+    for (std::int64_t system = 0; system < batch; ++system) {
+      const std::int32_t channels = mixed_spin && (system & 1) == 0 ? 2 : 1;
+      spin_channels_host[static_cast<std::size_t>(system)] = channels;
+      spin_channel_offsets_host[static_cast<std::size_t>(system + 1)] =
+          spin_channel_offsets_host[static_cast<std::size_t>(system)] + channels;
+      spin_atom_offsets_host[static_cast<std::size_t>(system + 1)] =
+          spin_atom_offsets_host[static_cast<std::size_t>(system)] +
+          channels * (atom_offsets_host[static_cast<std::size_t>(system + 1)] -
+                      atom_offsets_host[static_cast<std::size_t>(system)]);
+      spin_shell_offsets_host[static_cast<std::size_t>(system + 1)] =
+          spin_shell_offsets_host[static_cast<std::size_t>(system)] +
+          channels * (shell_offsets_host[static_cast<std::size_t>(system + 1)] -
+                      shell_offsets_host[static_cast<std::size_t>(system)]);
+      spin_orbital_offsets_host[static_cast<std::size_t>(system + 1)] =
+          spin_orbital_offsets_host[static_cast<std::size_t>(system)] +
+          channels * (orbital_offsets_host[static_cast<std::size_t>(system + 1)] -
+                      orbital_offsets_host[static_cast<std::size_t>(system)]);
+      spin_matrix_offsets_host[static_cast<std::size_t>(system + 1)] =
+          spin_matrix_offsets_host[static_cast<std::size_t>(system)] +
+          channels * (matrix_offsets_host[static_cast<std::size_t>(system + 1)] -
+                      matrix_offsets_host[static_cast<std::size_t>(system)]);
+    }
+    spin_channels_total = spin_channel_offsets_host.back();
+    spin_atoms = spin_atom_offsets_host.back();
+    spin_shells = spin_shell_offsets_host.back();
+    spin_orbitals = spin_orbital_offsets_host.back();
+    spin_matrices = spin_matrix_offsets_host.back();
+    vector_elements = spin_shells + 9 * spin_atoms;
     history_elements = vector_elements * history_size;
     omega_elements = batch * history_size;
 
@@ -298,8 +350,8 @@ struct Fixture {
 
   void allocate_storage() {
     const std::size_t scale =
-        static_cast<std::size_t>(batch + atoms + shells + orbitals + matrices + vector_elements +
-                                 history_elements + omega_elements);
+        static_cast<std::size_t>(batch + spin_atoms + spin_shells + spin_orbitals + spin_matrices +
+                                 vector_elements + history_elements + omega_elements);
     const std::size_t double_capacity = 4096u + 64u * scale;
     staged_d.allocate(double_capacity);
     public_d.allocate(double_capacity, kPublicSentinel);
@@ -315,12 +367,18 @@ struct Fixture {
     orbital_offsets.allocate(orbital_offsets_host.size());
     matrix_offsets.allocate(matrix_offsets_host.size());
     shell_to_atom.allocate(shell_to_atom_host.size());
+    spin_channels.allocate(spin_channels_host.size());
+    spin_channel_offsets.allocate(spin_channel_offsets_host.size());
+    spin_atom_offsets.allocate(spin_atom_offsets_host.size());
+    spin_shell_offsets.allocate(spin_shell_offsets_host.size());
+    spin_orbital_offsets.allocate(spin_orbital_offsets_host.size());
+    spin_matrix_offsets.allocate(spin_matrix_offsets_host.size());
     active_mask.allocate(static_cast<std::size_t>(batch));
     pending_statuses.allocate(static_cast<std::size_t>(batch));
     failure_records.allocate(static_cast<std::size_t>(batch));
     plan_failure.allocate(1u);
     canonical_sequence.allocate(1u);
-    mixed_qat.allocate(static_cast<std::size_t>(atoms));
+    mixed_qat.allocate(static_cast<std::size_t>(spin_atoms));
     old_energies.allocate(static_cast<std::size_t>(batch));
     energy_changes.allocate(static_cast<std::size_t>(batch));
     next_iterations.allocate(static_cast<std::size_t>(batch));
@@ -332,8 +390,9 @@ struct Fixture {
   }
 
   void bind_wavefunction(Gfn2SccPublicationDeviceWavefunction& value, Arena<double>& arena) {
-    value.eigenpairs = {arena.take(static_cast<std::size_t>(orbitals)), orbitals,
-                        arena.take(static_cast<std::size_t>(matrices)), matrices, kPlanToken};
+    value.eigenpairs = {arena.take(static_cast<std::size_t>(spin_orbitals)), spin_orbitals,
+                        arena.take(static_cast<std::size_t>(spin_matrices)), spin_matrices,
+                        kPlanToken};
     value.occupations = {arena.take(static_cast<std::size_t>(2 * orbitals)),
                          2 * orbitals,
                          arena.take(static_cast<std::size_t>(2 * batch)),
@@ -343,27 +402,38 @@ struct Fixture {
                          arena.take(static_cast<std::size_t>(batch)),
                          batch,
                          kPlanToken};
-    value.density = {arena.take(static_cast<std::size_t>(matrices)),
-                     matrices,
-                     arena.take(static_cast<std::size_t>(matrices)),
-                     matrices,
-                     arena.take(static_cast<std::size_t>(batch)),
-                     batch,
-                     arena.take(static_cast<std::size_t>(batch)),
-                     batch,
-                     arena.take(static_cast<std::size_t>(batch)),
-                     batch,
-                     arena.take(static_cast<std::size_t>(batch)),
-                     batch,
-                     kPlanToken};
-    value.population = {arena.take(static_cast<std::size_t>(shells)),
-                        shells,
-                        arena.take(static_cast<std::size_t>(atoms)),
-                        atoms,
-                        arena.take(static_cast<std::size_t>(3 * atoms)),
-                        3 * atoms,
-                        arena.take(static_cast<std::size_t>(6 * atoms)),
-                        6 * atoms,
+    value.density.density = arena.take(static_cast<std::size_t>(spin_matrices));
+    value.density.density_elements = spin_matrices;
+    value.density.energy_weighted_density = arena.take(static_cast<std::size_t>(spin_matrices));
+    value.density.weighted_density_elements = spin_matrices;
+    value.density.band_energies = arena.take(static_cast<std::size_t>(batch));
+    value.density.band_energy_elements = batch;
+    value.density.occupation_sums = arena.take(static_cast<std::size_t>(batch));
+    value.density.occupation_sum_elements = batch;
+    value.density.density_traces = arena.take(static_cast<std::size_t>(batch));
+    value.density.density_trace_elements = batch;
+    value.density.weighted_density_traces = arena.take(static_cast<std::size_t>(batch));
+    value.density.weighted_density_trace_elements = batch;
+    value.density.channel_band_energies = arena.take(static_cast<std::size_t>(spin_channels_total));
+    value.density.channel_band_energy_elements = spin_channels_total;
+    value.density.channel_occupation_sums =
+        arena.take(static_cast<std::size_t>(spin_channels_total));
+    value.density.channel_occupation_sum_elements = spin_channels_total;
+    value.density.channel_density_traces =
+        arena.take(static_cast<std::size_t>(spin_channels_total));
+    value.density.channel_density_trace_elements = spin_channels_total;
+    value.density.channel_weighted_density_traces =
+        arena.take(static_cast<std::size_t>(spin_channels_total));
+    value.density.channel_weighted_density_trace_elements = spin_channels_total;
+    value.density.plan_token = kPlanToken;
+    value.population = {arena.take(static_cast<std::size_t>(spin_shells)),
+                        spin_shells,
+                        arena.take(static_cast<std::size_t>(spin_atoms)),
+                        spin_atoms,
+                        arena.take(static_cast<std::size_t>(3 * spin_atoms)),
+                        3 * spin_atoms,
+                        arena.take(static_cast<std::size_t>(6 * spin_atoms)),
+                        6 * spin_atoms,
                         kPlanToken};
     value.plan_token = kPlanToken;
   }
@@ -379,6 +449,8 @@ struct Fixture {
     free.es3_elements = batch;
     free.aes2 = arena.take(static_cast<std::size_t>(batch));
     free.aes2_elements = batch;
+    free.spin = arena.take(static_cast<std::size_t>(batch));
+    free.spin_elements = batch;
     free.d4_two_body = arena.take(static_cast<std::size_t>(batch));
     free.d4_two_body_elements = batch;
     free.explicit_point_charge = arena.take(static_cast<std::size_t>(batch));
@@ -393,6 +465,8 @@ struct Fixture {
     free.free_energy = arena.take(static_cast<std::size_t>(batch));
     free.free_energy_elements = batch;
     free.plan_token = kPlanToken;
+    value.spin_energies = free.spin;
+    value.spin_energy_elements = batch;
     value.classical = {free.es2,
                        batch,
                        free.es3,
@@ -435,12 +509,12 @@ struct Fixture {
   }
 
   Gfn2SccDeviceMultipoles bind_multipoles(Arena<double>& arena) {
-    return {arena.take(static_cast<std::size_t>(shells)),
-            shells,
-            arena.take(static_cast<std::size_t>(3 * atoms)),
-            3 * atoms,
-            arena.take(static_cast<std::size_t>(6 * atoms)),
-            6 * atoms,
+    return {arena.take(static_cast<std::size_t>(spin_shells)),
+            spin_shells,
+            arena.take(static_cast<std::size_t>(3 * spin_atoms)),
+            3 * spin_atoms,
+            arena.take(static_cast<std::size_t>(6 * spin_atoms)),
+            6 * spin_atoms,
             kPlanToken};
   }
 
@@ -462,6 +536,27 @@ struct Fixture {
     plan.orbital_offsets = orbital_offsets.get();
     plan.matrix_offsets = matrix_offsets.get();
     plan.shell_to_atom = shell_to_atom.get();
+    plan.wavefunction_layout.memory_space = gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice;
+    plan.wavefunction_layout.plan_token = kPlanToken;
+    plan.wavefunction_layout.layout_fingerprint = 0x51cc0deULL;
+    plan.wavefunction_layout.batch_size = batch;
+    plan.wavefunction_layout.total_spin_channels = spin_channels_total;
+    plan.wavefunction_layout.total_spin_orbitals = spin_orbitals;
+    plan.wavefunction_layout.total_spin_matrix_elements = spin_matrices;
+    plan.wavefunction_layout.total_spin_shells = spin_shells;
+    plan.wavefunction_layout.total_spin_atoms = spin_atoms;
+    plan.wavefunction_layout.spin_channel_count = batch;
+    plan.wavefunction_layout.spin_channel_offset_count = batch + 1;
+    plan.wavefunction_layout.spin_orbital_offset_count = batch + 1;
+    plan.wavefunction_layout.spin_matrix_offset_count = batch + 1;
+    plan.wavefunction_layout.spin_shell_offset_count = batch + 1;
+    plan.wavefunction_layout.spin_atom_offset_count = batch + 1;
+    plan.wavefunction_layout.spin_channels = spin_channels.get();
+    plan.wavefunction_layout.spin_channel_offsets = spin_channel_offsets.get();
+    plan.wavefunction_layout.spin_orbital_offsets = spin_orbital_offsets.get();
+    plan.wavefunction_layout.spin_matrix_offsets = spin_matrix_offsets.get();
+    plan.wavefunction_layout.spin_shell_offsets = spin_shell_offsets.get();
+    plan.wavefunction_layout.spin_atom_offsets = spin_atom_offsets.get();
     plan.maximum_iterations = 5u;
     plan.residual_rms_tolerance = 0.1;
     plan.energy_tolerance = 0.1;
@@ -494,11 +589,11 @@ struct Fixture {
     bind_energy(public_state.energy, public_d);
     bind_mixer(public_state.mixer, public_d, public_u64, public_status, public_u8);
     public_state.published = {public_state.wavefunction.population.qsh,
-                              shells,
+                              spin_shells,
                               public_state.wavefunction.population.dipole,
-                              3 * atoms,
+                              3 * spin_atoms,
                               public_state.wavefunction.population.quadrupole,
-                              6 * atoms,
+                              6 * spin_atoms,
                               kPlanToken};
     public_state.scc.current_inputs = bind_multipoles(public_d);
     public_state.scc.free_energies = public_d.take(static_cast<std::size_t>(batch));
@@ -513,7 +608,7 @@ struct Fixture {
     public_state.plan_token = kPlanToken;
 
     workspace = {mixed_qat.get(),
-                 atoms,
+                 spin_atoms,
                  old_energies.get(),
                  energy_changes.get(),
                  next_iterations.get(),
@@ -553,23 +648,23 @@ struct Fixture {
     std::fill(staged_u8.host.begin(), staged_u8.host.end(), 1u);
     std::fill(public_u8.host.begin(), public_u8.host.end(), 0u);
 
-    for (std::int64_t shell = 0; shell < shells; ++shell) {
+    for (std::int64_t shell = 0; shell < spin_shells; ++shell) {
       staged_d.at(staged.wavefunction.population.qsh, static_cast<std::size_t>(shell)) =
           0.01 * static_cast<double>(shell + 1);
       staged_d.at(staged.next_mixed.shell_charges, static_cast<std::size_t>(shell)) =
           0.02 * static_cast<double>(shell + 1);
     }
-    for (std::int64_t atom = 0; atom < atoms; ++atom) {
+    for (std::int64_t atom = 0; atom < spin_atoms; ++atom) {
       staged_d.at(staged.wavefunction.population.qat, static_cast<std::size_t>(atom)) =
           -0.03 * static_cast<double>(atom + 1);
     }
-    for (std::int64_t element = 0; element < 3 * atoms; ++element) {
+    for (std::int64_t element = 0; element < 3 * spin_atoms; ++element) {
       staged_d.at(staged.wavefunction.population.dipole, static_cast<std::size_t>(element)) =
           0.04 * static_cast<double>(element + 1);
       staged_d.at(staged.next_mixed.atomic_dipoles, static_cast<std::size_t>(element)) =
           0.05 * static_cast<double>(element + 1);
     }
-    for (std::int64_t element = 0; element < 6 * atoms; ++element) {
+    for (std::int64_t element = 0; element < 6 * spin_atoms; ++element) {
       staged_d.at(staged.wavefunction.population.quadrupole, static_cast<std::size_t>(element)) =
           0.006 * static_cast<double>(element + 1);
       staged_d.at(staged.next_mixed.atomic_quadrupoles, static_cast<std::size_t>(element)) =
@@ -640,6 +735,18 @@ struct Fixture {
     status = matrix_offsets.upload(matrix_offsets_host, stream);
     if (status != cudaSuccess) return status;
     status = shell_to_atom.upload(shell_to_atom_host, stream);
+    if (status != cudaSuccess) return status;
+    status = spin_channels.upload(spin_channels_host, stream);
+    if (status != cudaSuccess) return status;
+    status = spin_channel_offsets.upload(spin_channel_offsets_host, stream);
+    if (status != cudaSuccess) return status;
+    status = spin_atom_offsets.upload(spin_atom_offsets_host, stream);
+    if (status != cudaSuccess) return status;
+    status = spin_shell_offsets.upload(spin_shell_offsets_host, stream);
+    if (status != cudaSuccess) return status;
+    status = spin_orbital_offsets.upload(spin_orbital_offsets_host, stream);
+    if (status != cudaSuccess) return status;
+    status = spin_matrix_offsets.upload(spin_matrix_offsets_host, stream);
     if (status != cudaSuccess) return status;
     status = staged_d.upload(stream);
     if (status != cudaSuccess) return status;
@@ -874,6 +981,7 @@ int test_ragged_transaction_and_peer_failure() {
       fixture.public_state.energy.free_energy.es2,
       fixture.public_state.energy.free_energy.es3,
       fixture.public_state.energy.free_energy.aes2,
+      fixture.public_state.energy.spin_energies,
       fixture.public_state.energy.free_energy.d4_two_body,
       fixture.public_state.energy.free_energy.explicit_point_charge,
       fixture.public_state.energy.free_energy.periodic_embedding,
@@ -1057,23 +1165,106 @@ int test_canonical_prior_failure_publication() {
   return 0;
 }
 
+int test_mixed_spin_transaction() {
+  Fixture fixture(4, false, true);
+  CHECK(fixture.public_state.energy.spin_energies == fixture.public_state.energy.free_energy.spin);
+  CHECK(fixture.staged.energy.spin_energies == fixture.staged.energy.free_energy.spin);
+  CUDA_CHECK(fixture.upload());
+  CUDA_CHECK(fixture.enqueue());
+  PublicSnapshot after;
+  CUDA_CHECK(fixture.snapshot(after));
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  for (std::int64_t system = 0; system < fixture.batch; ++system) {
+    const std::int64_t orbital_begin = fixture.spin_orbital_offsets_host[system];
+    const std::int64_t orbital_end = fixture.spin_orbital_offsets_host[system + 1];
+    const std::int64_t matrix_begin = fixture.spin_matrix_offsets_host[system];
+    const std::int64_t matrix_end = fixture.spin_matrix_offsets_host[system + 1];
+    const std::int64_t channel_begin = fixture.spin_channel_offsets_host[system];
+    const std::int64_t channel_end = fixture.spin_channel_offsets_host[system + 1];
+    const std::int64_t shell_begin = fixture.spin_shell_offsets_host[system];
+    const std::int64_t shell_end = fixture.spin_shell_offsets_host[system + 1];
+    const std::int64_t atom_begin = fixture.spin_atom_offsets_host[system];
+    const std::int64_t atom_end = fixture.spin_atom_offsets_host[system + 1];
+    const std::int64_t vector_begin = shell_begin + 9 * atom_begin;
+    const std::int64_t vector_end = shell_end + 9 * atom_end;
+
+    CHECK(staged_matches_public(
+        fixture.staged_d, fixture.staged.wavefunction.eigenpairs.eigenvalues, fixture.public_d,
+        fixture.public_state.wavefunction.eigenpairs.eigenvalues, after.doubles, orbital_begin,
+        orbital_end));
+    CHECK(staged_matches_public(
+        fixture.staged_d, fixture.staged.wavefunction.eigenpairs.coefficients, fixture.public_d,
+        fixture.public_state.wavefunction.eigenpairs.coefficients, after.doubles, matrix_begin,
+        matrix_end));
+    CHECK(staged_matches_public(fixture.staged_d, fixture.staged.wavefunction.density.density,
+                                fixture.public_d, fixture.public_state.wavefunction.density.density,
+                                after.doubles, matrix_begin, matrix_end));
+    CHECK(staged_matches_public(
+        fixture.staged_d, fixture.staged.wavefunction.density.channel_band_energies,
+        fixture.public_d, fixture.public_state.wavefunction.density.channel_band_energies,
+        after.doubles, channel_begin, channel_end));
+    CHECK(staged_matches_public(fixture.staged_d, fixture.staged.next_mixed.shell_charges,
+                                fixture.public_d, fixture.public_state.published.shell_charges,
+                                after.doubles, shell_begin, shell_end));
+    CHECK(staged_matches_public(fixture.staged_d, fixture.staged.mixer.current_inputs,
+                                fixture.public_d, fixture.public_state.mixer.current_inputs,
+                                after.doubles, vector_begin, vector_end));
+
+    const std::int64_t physical_shell_begin = fixture.shell_offsets_host[system];
+    const std::int64_t physical_shells =
+        fixture.shell_offsets_host[system + 1] - physical_shell_begin;
+    const std::int64_t physical_atom_begin = fixture.atom_offsets_host[system];
+    const std::int64_t physical_atoms = fixture.atom_offsets_host[system + 1] - physical_atom_begin;
+    for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+      const std::int64_t local_atom = atom - atom_begin;
+      const std::int64_t channel = local_atom / physical_atoms;
+      const std::int64_t physical_atom = physical_atom_begin + local_atom % physical_atoms;
+      double expected = 0.0;
+      for (std::int64_t local_shell = 0; local_shell < physical_shells; ++local_shell) {
+        const std::int64_t physical_shell = physical_shell_begin + local_shell;
+        if (fixture.shell_to_atom_host[static_cast<std::size_t>(physical_shell)] == physical_atom) {
+          expected += fixture.staged_d.at(
+              fixture.staged.next_mixed.shell_charges,
+              static_cast<std::size_t>(shell_begin + channel * physical_shells + local_shell));
+        }
+      }
+      const std::size_t output =
+          fixture.public_d.offset(fixture.public_state.wavefunction.population.qat) +
+          static_cast<std::size_t>(atom);
+      CHECK(byte_equal(expected, after.doubles[output]));
+    }
+
+    const std::size_t spin_energy =
+        fixture.public_d.offset(fixture.public_state.energy.spin_energies) +
+        static_cast<std::size_t>(system);
+    CHECK(byte_equal(
+        fixture.staged_d.at(fixture.staged.energy.spin_energies, static_cast<std::size_t>(system)),
+        after.doubles[spin_energy]));
+  }
+  return 0;
+}
+
 int test_batch_sizes() {
-  for (const std::int64_t batch : {1, 8, 32, 128}) {
-    Fixture fixture(batch);
-    CUDA_CHECK(fixture.upload());
-    CUDA_CHECK(fixture.enqueue());
-    PublicSnapshot after;
-    std::vector<std::uint32_t> errors;
-    CUDA_CHECK(fixture.snapshot(after));
-    CUDA_CHECK(fixture.system_errors.download(errors));
-    CUDA_CHECK(cudaDeviceSynchronize());
-    CHECK(
-        std::all_of(errors.begin(), errors.end(), [](std::uint32_t value) { return value == 0u; }));
-    for (std::int64_t system = 0; system < batch; ++system) {
-      CHECK(after.uint64s[fixture.public_u64.offset(fixture.public_state.scc.iterations) +
-                          static_cast<std::size_t>(system)] == 1u);
-      CHECK(after.statuses[fixture.public_status.offset(fixture.public_state.scc.system_statuses) +
+  for (const bool mixed_spin : {false, true}) {
+    for (const std::int64_t batch : {1, 8, 32, 128}) {
+      Fixture fixture(batch, false, mixed_spin);
+      CUDA_CHECK(fixture.upload());
+      CUDA_CHECK(fixture.enqueue());
+      PublicSnapshot after;
+      std::vector<std::uint32_t> errors;
+      CUDA_CHECK(fixture.snapshot(after));
+      CUDA_CHECK(fixture.system_errors.download(errors));
+      CUDA_CHECK(cudaDeviceSynchronize());
+      CHECK(std::all_of(errors.begin(), errors.end(),
+                        [](std::uint32_t value) { return value == 0u; }));
+      for (std::int64_t system = 0; system < batch; ++system) {
+        CHECK(after.uint64s[fixture.public_u64.offset(fixture.public_state.scc.iterations) +
+                            static_cast<std::size_t>(system)] == 1u);
+        CHECK(
+            after.statuses[fixture.public_status.offset(fixture.public_state.scc.system_statuses) +
                            static_cast<std::size_t>(system)] == GPUXTB_STATUS_SUCCESS);
+      }
     }
   }
   return 0;
@@ -1144,6 +1335,8 @@ int main() {
   status = test_canonical_prior_failure_publication();
   if (status != 0) return status;
   status = test_strict_convergence_and_iteration_zero_seed();
+  if (status != 0) return status;
+  status = test_mixed_spin_transaction();
   if (status != 0) return status;
   status = test_batch_sizes();
   if (status != 0) return status;

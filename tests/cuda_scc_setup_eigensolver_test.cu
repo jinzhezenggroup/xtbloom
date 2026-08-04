@@ -165,6 +165,7 @@ struct IterationWorkspaceFixture {
   PinnedAllocation host_workspace;
 
   bool create(const HostSccCase& host,
+              const gpuxtb::detail::Gfn2WavefunctionLayoutView& wavefunction,
               const gpuxtb::detail::cuda::Gfn2SccSetupEigensolverRequirements& setup,
               std::int64_t bucket_count) {
     plan.abi_version = gpuxtb::detail::cuda::kGfn2SccIterationAbiVersion;
@@ -177,6 +178,15 @@ struct IterationWorkspaceFixture {
     plan.topology.total_shells = host.basis_plan().total_shells;
     plan.topology.total_orbitals = host.wavefunction_layout().total_orbitals;
     plan.topology.total_matrix_elements = host.integral_plan().total_matrix_elements;
+    plan.wavefunction_layout = wavefunction;
+    /* Arena sizing only consumes the immutable shape here; device upload and
+     * numerical launch are owned by the setup-topology fixture below. */
+    plan.wavefunction_layout.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+    plan.spin_batch.batch_size = host.batch_size();
+    plan.spin_batch.total_atoms = host.total_atoms();
+    plan.spin_batch.total_shells = host.basis_plan().total_shells;
+    plan.spin_batch.shell_population_elements = wavefunction.total_spin_shells;
+    plan.spin_batch.plan_token = kPlanToken;
     plan.mixer_policy.history_size = 3;
     plan.geometry_batch.total_pairs = 0;
     plan.es2_batch.total_matrix_elements = 0;
@@ -363,7 +373,7 @@ struct ProductionFixture {
              .success()) {
       return false;
     }
-    if (!iteration.create(host, setup.requirements(),
+    if (!iteration.create(host, topology.host_wavefunction_layout(), setup.requirements(),
                           static_cast<std::int64_t>(topology.eigensolver_buckets().size())) ||
         !setup_arena.allocate(setup.requirements().setup_device_bytes)) {
       return false;

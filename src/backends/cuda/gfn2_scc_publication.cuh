@@ -41,11 +41,11 @@ enum class Gfn2SccPublicationDeviceError : std::uint32_t {
 inline constexpr std::uint64_t kGfn2SccPublicationPeerErrorMask = 0x1f8u;
 
 /*
- * Immutable restricted publication topology. All offsets are zero-based
- * half-open partitions. shell_to_atom contains global atom indices. The mixer
- * vector for one system is qsh followed by 3 dipole and 6 quadrupole values per
- * atom, so its global interval is
- * [shell_begin + 9*atom_begin, shell_end + 9*atom_end).
+ * Immutable mixed-spin publication topology. Physical offsets remain the
+ * authority for occupations and shell-to-atom metadata. wavefunction_layout
+ * supplies the nspin-expanded eigenpair, density, population, and mixer
+ * partitions. The mixer vector for one system is the complete charge and
+ * magnetization qsh followed by their 3 dipole and 6 quadrupole values.
  */
 struct Gfn2SccPublicationDevicePlan {
   std::int64_t batch_size = 0;
@@ -67,6 +67,8 @@ struct Gfn2SccPublicationDevicePlan {
   const std::int64_t* orbital_offsets = nullptr;
   const std::int64_t* matrix_offsets = nullptr;
   const std::int64_t* shell_to_atom = nullptr;
+
+  Gfn2WavefunctionLayoutView wavefunction_layout{};
 
   std::uint64_t maximum_iterations = 0u;
   double residual_rms_tolerance = 0.0;
@@ -91,6 +93,9 @@ struct Gfn2SccPublicationDeviceWavefunction {
 struct Gfn2SccPublicationDeviceEnergyTrace {
   Gfn2SccClassicalEnergyDeviceDiagnostics classical{};
   Gfn2SccFreeEnergyDeviceDiagnostics free_energy{};
+  /* Raw density-derived spin polarization, committed with the energy trace. */
+  double* spin_energies = nullptr;
+  std::int64_t spin_energy_elements = 0;
   std::uint64_t plan_token = 0u;
 };
 

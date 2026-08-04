@@ -6,6 +6,8 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#include <numeric>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -177,6 +179,24 @@ bool same_shape(const Gfn2RaggedTopologyView& first,
          first.bucket_orbital_count == second.bucket_orbital_count;
 }
 
+bool same_wavefunction_shape(const Gfn2WavefunctionLayoutView& expected,
+                             const Gfn2WavefunctionLayoutView& candidate) noexcept {
+  return expected.plan_token == candidate.plan_token &&
+         expected.layout_fingerprint == candidate.layout_fingerprint &&
+         expected.batch_size == candidate.batch_size &&
+         expected.total_spin_channels == candidate.total_spin_channels &&
+         expected.total_spin_orbitals == candidate.total_spin_orbitals &&
+         expected.total_spin_matrix_elements == candidate.total_spin_matrix_elements &&
+         expected.total_spin_shells == candidate.total_spin_shells &&
+         expected.total_spin_atoms == candidate.total_spin_atoms &&
+         expected.spin_channel_count == candidate.spin_channel_count &&
+         expected.spin_channel_offset_count == candidate.spin_channel_offset_count &&
+         expected.spin_orbital_offset_count == candidate.spin_orbital_offset_count &&
+         expected.spin_matrix_offset_count == candidate.spin_matrix_offset_count &&
+         expected.spin_shell_offset_count == candidate.spin_shell_offset_count &&
+         expected.spin_atom_offset_count == candidate.spin_atom_offset_count;
+}
+
 std::int64_t maximum_partition(const std::int64_t* offsets, std::int64_t partitions) noexcept {
   std::int64_t maximum = 0;
   for (std::int64_t index = 0; index < partitions; ++index) {
@@ -197,6 +217,8 @@ struct Gfn2SccSetupInputs::Impl {
     Segment overlap;
     Segment dipole_integrals;
     Segment quadrupole_integrals;
+    Segment spin_coupling_offsets;
+    Segment spin_coupling_matrices;
     Segment qsh_offsets;
     Segment qat_offsets;
     Segment dipole_offsets;
@@ -257,6 +279,9 @@ struct Gfn2SccSetupInputs::Impl {
   std::uint32_t enabled_components = 0u;
   Gfn2EigensolverOptions eigensolver_options{};
   Gfn2RaggedTopologyView host_topology{};
+  Gfn2WavefunctionLayoutView host_wavefunction{};
+  std::int64_t spin_coupling_matrix_count = 0;
+  std::int64_t mixer_vector_elements = 0;
   bool d4_enabled = false;
   bool point_enabled = false;
   bool periodic_enabled = false;
@@ -299,6 +324,9 @@ struct Gfn2SccSetupInputs::Impl {
            append_segment<double>(total_matrix_elements, cursor, layout.overlap) &&
            append_segment<double>(matrix3, cursor, layout.dipole_integrals) &&
            append_segment<double>(matrix6, cursor, layout.quadrupole_integrals) &&
+           append_segment<std::int64_t>(total_atoms + 1, cursor, layout.spin_coupling_offsets) &&
+           append_segment<double>(spin_coupling_matrix_count, cursor,
+                                  layout.spin_coupling_matrices) &&
            append_segment<std::int64_t>(batch_offsets, cursor, layout.qsh_offsets) &&
            append_segment<std::int64_t>(batch_offsets, cursor, layout.qat_offsets) &&
            append_segment<std::int64_t>(batch_offsets, cursor, layout.dipole_offsets) &&
@@ -599,6 +627,17 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
   }
 
   try {
+    /* Spin constants are chemistry- and shell-order-dependent. Build them
+     * from the same sealed basis/wavefunction pair instead of accepting a
+     * second caller-provided topology authority. */
+    gfn2::SpinPolarizationPlan spin;
+    std::string spin_error;
+    const gpuxtb_status_t spin_status =
+        gfn2::make_spin_polarization_plan(basis, wavefunction, spin, spin_error);
+    if (spin_status != GPUXTB_STATUS_SUCCESS) {
+      return failure(spin_status, Error::kInvalidSource, Field::kRequiredPlans);
+    }
+
     std::unique_ptr<Impl> candidate(new (std::nothrow) Impl());
     if (candidate == nullptr) {
       return failure(GPUXTB_STATUS_ALLOCATION_FAILED, Error::kAllocationFailed, Field::kArena);
@@ -624,6 +663,54 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     candidate->electronic_temperature = driver.electronic_temperature();
     candidate->eigensolver_options = sources.eigensolver_options;
     candidate->host_topology = host_topology;
+    candidate->host_wavefunction.memory_space = Gfn2PlanMemorySpace::kHost;
+    candidate->host_wavefunction.plan_token = plan_token;
+    candidate->host_wavefunction.batch_size = batch;
+    candidate->host_wavefunction.total_spin_channels = std::accumulate(
+        wavefunction.spin_channels.begin(), wavefunction.spin_channels.end(), std::int64_t{0});
+    candidate->host_wavefunction.total_spin_orbitals = wavefunction.eigenvalues.element_count;
+    candidate->host_wavefunction.total_spin_matrix_elements = wavefunction.density.element_count;
+    candidate->host_wavefunction.total_spin_shells = wavefunction.qsh.element_count;
+    candidate->host_wavefunction.total_spin_atoms = wavefunction.qat.element_count;
+    candidate->host_wavefunction.spin_channel_count = batch;
+    candidate->host_wavefunction.spin_channel_offset_count = batch + 1;
+    candidate->host_wavefunction.spin_orbital_offset_count = batch + 1;
+    candidate->host_wavefunction.spin_matrix_offset_count = batch + 1;
+    candidate->host_wavefunction.spin_shell_offset_count = batch + 1;
+    candidate->host_wavefunction.spin_atom_offset_count = batch + 1;
+    std::vector<std::int64_t> spin_channel_offsets(static_cast<std::size_t>(batch) + 1u, 0);
+    for (std::int64_t system = 0; system < batch; ++system) {
+      const std::int32_t channels = wavefunction.spin_channels[static_cast<std::size_t>(system)];
+      if ((channels != 1 && channels != 2) ||
+          spin_channel_offsets[static_cast<std::size_t>(system)] >
+              std::numeric_limits<std::int64_t>::max() - channels) {
+        return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kRequiredPlans,
+                       system);
+      }
+      spin_channel_offsets[static_cast<std::size_t>(system + 1)] =
+          spin_channel_offsets[static_cast<std::size_t>(system)] + channels;
+    }
+    Gfn2WavefunctionLayoutView fingerprint_view = candidate->host_wavefunction;
+    fingerprint_view.spin_channels = wavefunction.spin_channels.data();
+    fingerprint_view.spin_channel_offsets = spin_channel_offsets.data();
+    fingerprint_view.spin_orbital_offsets = wavefunction.eigenvalues.system_offsets.data();
+    fingerprint_view.spin_matrix_offsets = wavefunction.density.system_offsets.data();
+    fingerprint_view.spin_shell_offsets = wavefunction.qsh.system_offsets.data();
+    fingerprint_view.spin_atom_offsets = wavefunction.qat.system_offsets.data();
+    candidate->host_wavefunction.layout_fingerprint =
+        gfn2_wavefunction_layout_fingerprint_host(fingerprint_view);
+    if (candidate->host_wavefunction.layout_fingerprint == 0u) {
+      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kRequiredPlans);
+    }
+    candidate->spin_coupling_matrix_count = spin.coupling_offsets.back();
+    std::int64_t spin_atom_multipoles = 0;
+    if (!checked_multiply(candidate->host_wavefunction.total_spin_atoms, 9, spin_atom_multipoles) ||
+        candidate->host_wavefunction.total_spin_shells >
+            std::numeric_limits<std::int64_t>::max() - spin_atom_multipoles) {
+      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kRequiredPlans);
+    }
+    candidate->mixer_vector_elements =
+        candidate->host_wavefunction.total_spin_shells + spin_atom_multipoles;
     candidate->d4_enabled = d4_enabled;
     candidate->point_enabled = point_enabled;
     candidate->periodic_enabled = periodic_enabled;
@@ -666,14 +753,21 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     std::memset(image, 0, candidate->layout.total_bytes);
 
     Gfn2SccSetupHostArray<std::int64_t> pair_offsets{aes2.pair_offsets().data(), batch + 1};
-    Gfn2SccSetupHostArray<std::int64_t> qsh_offsets{wavefunction.qsh.system_offsets.data(),
-                                                    batch + 1};
-    Gfn2SccSetupHostArray<std::int64_t> qat_offsets{wavefunction.qat.system_offsets.data(),
-                                                    batch + 1};
-    Gfn2SccSetupHostArray<std::int64_t> dipole_offsets{wavefunction.dipole.system_offsets.data(),
-                                                       batch + 1};
-    Gfn2SccSetupHostArray<std::int64_t> quadrupole_offsets{
-        wavefunction.quadrupole.system_offsets.data(), batch + 1};
+    Gfn2SccSetupHostArray<std::int64_t> qsh_offsets{basis.batch_shell_offsets.data(), batch + 1};
+    Gfn2SccSetupHostArray<std::int64_t> qat_offsets{basis.atom_offsets.data(), batch + 1};
+    std::vector<std::int64_t> physical_dipole_offsets(static_cast<std::size_t>(batch) + 1u);
+    std::vector<std::int64_t> physical_quadrupole_offsets(static_cast<std::size_t>(batch) + 1u);
+    for (std::int64_t system = 0; system <= batch; ++system) {
+      if (!checked_multiply(basis.atom_offsets[static_cast<std::size_t>(system)], 3,
+                            physical_dipole_offsets[static_cast<std::size_t>(system)]) ||
+          !checked_multiply(basis.atom_offsets[static_cast<std::size_t>(system)], 6,
+                            physical_quadrupole_offsets[static_cast<std::size_t>(system)])) {
+        return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kHamiltonian);
+      }
+    }
+    Gfn2SccSetupHostArray<std::int64_t> dipole_offsets{physical_dipole_offsets.data(), batch + 1};
+    Gfn2SccSetupHostArray<std::int64_t> quadrupole_offsets{physical_quadrupole_offsets.data(),
+                                                           batch + 1};
     Gfn2SccSetupHostArray<double> es2_hardness{es2.shell_hardness().data(), shells};
     Gfn2SccSetupHostArray<std::int64_t> es2_matrix_offsets{es2.matrix_offsets().data(), batch + 1};
     Gfn2SccSetupHostArray<double> es3_gamma{es3.shell_gamma3.data(), shells};
@@ -701,6 +795,8 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     pack_array(image, candidate->layout.overlap, sources.overlap);
     pack_array(image, candidate->layout.dipole_integrals, sources.dipole_integrals);
     pack_array(image, candidate->layout.quadrupole_integrals, sources.quadrupole_integrals);
+    pack_vector(image, candidate->layout.spin_coupling_offsets, spin.coupling_offsets);
+    pack_vector(image, candidate->layout.spin_coupling_matrices, spin.coupling_matrices);
     pack_array(image, candidate->layout.qsh_offsets, qsh_offsets);
     pack_array(image, candidate->layout.qat_offsets, qat_offsets);
     pack_array(image, candidate->layout.dipole_offsets, dipole_offsets);
@@ -775,7 +871,8 @@ Gfn2SccSetupInputsRequirements Gfn2SccSetupInputs::requirements() const noexcept
 }
 
 Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_async(
-    const Gfn2RaggedTopologyView& device_topology, void* device_arena,
+    const Gfn2RaggedTopologyView& device_topology,
+    const Gfn2WavefunctionLayoutView& device_wavefunction, void* device_arena,
     std::size_t device_arena_bytes, Gfn2SccIterationDevicePlan& plan_seed,
     Gfn2SccIterationDeviceInput& input_seed, cudaStream_t stream) const noexcept {
   using Error = Gfn2SccSetupInputsError;
@@ -788,6 +885,14 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
           Gfn2PlanSchemaError::kSuccess ||
       !same_shape(impl_->host_topology, device_topology)) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kTopology);
+  }
+  if (validate_gfn2_wavefunction_layout_binding(device_topology, device_wavefunction,
+                                                Gfn2PlanMemorySpace::kCudaDevice)
+              .error != Gfn2PlanSchemaError::kSuccess ||
+      !same_wavefunction_shape(impl_->host_wavefunction, device_wavefunction)) {
+    /* Publication, mixer, and all spin-aware leaves must share the descriptor
+     * transaction published by the topology owner. */
+    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans);
   }
   const std::size_t required = impl_->layout.total_bytes;
   if (device_arena == nullptr) {
@@ -835,6 +940,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
   candidate.plan_token = token;
   candidate.geometry_generation = impl_->geometry_generation;
   candidate.topology = device_topology;
+  candidate.wavefunction_layout = device_wavefunction;
   candidate.activity_policy = {batch, impl_->maximum_iterations, token};
   candidate.state_policy = {impl_->maximum_iterations, impl_->residual_tolerance,
                             impl_->energy_tolerance, token};
@@ -868,6 +974,26 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
                          token,
                          device_topology.batch_shell_offsets,
                          device_topology.atom_offsets};
+  candidate.spin_batch = {
+      batch,
+      atoms,
+      shells,
+      device_wavefunction.total_spin_shells,
+      batch + 1,
+      batch + 1,
+      atoms + 1,
+      batch + 1,
+      batch,
+      atoms + 1,
+      impl_->spin_coupling_matrix_count,
+      token,
+      device_topology.atom_offsets,
+      device_topology.batch_shell_offsets,
+      device_topology.atom_shell_offsets,
+      device_wavefunction.spin_shell_offsets,
+      device_wavefunction.spin_channels,
+      cptr(impl_->layout.spin_coupling_offsets, static_cast<std::int64_t*>(nullptr)),
+      cptr(impl_->layout.spin_coupling_matrices, static_cast<double*>(nullptr))};
   candidate.potential_batch = {
       batch,
       atoms,
@@ -1093,7 +1219,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
                                 shells,
                                 orbitals,
                                 matrices,
-                                shells + 9 * atoms,
+                                impl_->mixer_vector_elements,
                                 impl_->mixer_history,
                                 batch + 1,
                                 batch + 1,
@@ -1105,6 +1231,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
                                 device_topology.batch_orbital_offsets,
                                 device_topology.matrix_offsets,
                                 device_topology.shell_to_atom,
+                                device_wavefunction,
                                 impl_->maximum_iterations,
                                 impl_->residual_tolerance,
                                 impl_->energy_tolerance,

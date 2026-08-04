@@ -49,6 +49,7 @@ enum class Gfn2PlanSchemaError : std::uint32_t {
   kInvalidActiveMask = 17u,
   kInvalidSpinChannels = 18u,
   kInvalidWavefunctionExtent = 19u,
+  kInvalidLayoutFingerprint = 20u,
 };
 
 /* Identifies the first field involved in a setup failure. */
@@ -78,6 +79,7 @@ enum class Gfn2PlanSchemaField : std::uint32_t {
   kSpinMatrixOffsets = 22u,
   kSpinShellOffsets = 23u,
   kSpinAtomOffsets = 24u,
+  kWavefunctionLayoutFingerprint = 25u,
 };
 
 struct Gfn2PlanSchemaDiagnostic {
@@ -163,6 +165,10 @@ struct Gfn2RaggedTopologyView {
 struct Gfn2WavefunctionLayoutView {
   Gfn2PlanMemorySpace memory_space = Gfn2PlanMemorySpace::kHost;
   std::uint64_t plan_token = 0u;
+  /* Setup-only seal over the complete ordered spin packing. The scalar is
+   * copied unchanged into device descriptors, so consumers can prove layout
+   * identity without reading device metadata back to the host. */
+  std::uint64_t layout_fingerprint = 0u;
 
   std::int64_t batch_size = 0;
   std::int64_t total_spin_channels = 0;
@@ -185,6 +191,13 @@ struct Gfn2WavefunctionLayoutView {
   const std::int64_t* spin_shell_offsets = nullptr;
   const std::int64_t* spin_atom_offsets = nullptr;
 };
+
+/* Recompute the order-sensitive seal for a fully populated host descriptor.
+ * The fingerprint intentionally excludes pointer values, memory_space, and
+ * its own stored fingerprint so the same immutable arrays have one identity
+ * in host, CUDA, and future HIP descriptors. Zero denotes an invalid input. */
+[[nodiscard]] std::uint64_t gfn2_wavefunction_layout_fingerprint_host(
+    const Gfn2WavefunctionLayoutView& layout) noexcept;
 
 /*
  * Provenance for a geometry-derived cache.  Batch-scoped caches store one

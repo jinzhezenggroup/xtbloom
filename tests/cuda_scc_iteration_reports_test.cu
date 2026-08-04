@@ -92,19 +92,29 @@ struct Fixture {
   }
 
   Gfn2DensityDeviceResults density() noexcept {
-    return {ptr<double>(kMatrices),
-            kMatrices,
-            ptr<double>(kMatrices),
-            kMatrices,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            kToken};
+    Gfn2DensityDeviceResults result{};
+    result.density = ptr<double>(kMatrices);
+    result.density_elements = kMatrices;
+    result.energy_weighted_density = ptr<double>(kMatrices);
+    result.weighted_density_elements = kMatrices;
+    result.band_energies = ptr<double>(kBatch);
+    result.band_energy_elements = kBatch;
+    result.occupation_sums = ptr<double>(kBatch);
+    result.occupation_sum_elements = kBatch;
+    result.density_traces = ptr<double>(kBatch);
+    result.density_trace_elements = kBatch;
+    result.weighted_density_traces = ptr<double>(kBatch);
+    result.weighted_density_trace_elements = kBatch;
+    result.plan_token = kToken;
+    result.channel_band_energies = ptr<double>(kBatch);
+    result.channel_band_energy_elements = kBatch;
+    result.channel_occupation_sums = ptr<double>(kBatch);
+    result.channel_occupation_sum_elements = kBatch;
+    result.channel_density_traces = ptr<double>(kBatch);
+    result.channel_density_trace_elements = kBatch;
+    result.channel_weighted_density_traces = ptr<double>(kBatch);
+    result.channel_weighted_density_trace_elements = kBatch;
+    return result;
   }
 
   Gfn2MullikenDevicePopulation population() noexcept {
@@ -144,27 +154,32 @@ struct Fixture {
   }
 
   Gfn2SccFreeEnergyDeviceDiagnostics free_energy() noexcept {
-    return {ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            kToken};
+    Gfn2SccFreeEnergyDeviceDiagnostics result{};
+    const auto take = [&]() { return ptr<double>(kBatch); };
+    result.core = take();
+    result.core_elements = kBatch;
+    result.es2 = take();
+    result.es2_elements = kBatch;
+    result.es3 = take();
+    result.es3_elements = kBatch;
+    result.aes2 = take();
+    result.aes2_elements = kBatch;
+    result.spin = take();
+    result.spin_elements = kBatch;
+    result.d4_two_body = take();
+    result.d4_two_body_elements = kBatch;
+    result.explicit_point_charge = take();
+    result.explicit_point_charge_elements = kBatch;
+    result.periodic_embedding = take();
+    result.periodic_embedding_elements = kBatch;
+    result.entropy = take();
+    result.entropy_elements = kBatch;
+    result.internal_energy = take();
+    result.internal_energy_elements = kBatch;
+    result.free_energy = take();
+    result.free_energy_elements = kBatch;
+    result.plan_token = kToken;
+    return result;
   }
 
   void make_report_owners() noexcept {
@@ -188,6 +203,8 @@ struct Fixture {
     workspace.occupations_workspace.sequence_active = ptr<std::uint32_t>(1);
     workspace.density_workspace.sequence_active = ptr<std::uint32_t>(1);
     workspace.mulliken_workspace.sequence_active = ptr<std::uint32_t>(1);
+    workspace.spin_workspace.sequence_active = ptr<std::uint32_t>(1);
+    workspace.spin_workspace.sequence_elements = 1;
     workspace.classical_energy_workspace.sequence_active = ptr<std::uint32_t>(1);
     workspace.electronic_energy_workspace.sequence_active = ptr<std::uint32_t>(1);
     workspace.free_energy_workspace.sequence_active = ptr<std::uint32_t>(1);
@@ -212,6 +229,8 @@ struct Fixture {
     state.occupations = occupations();
     state.density = density();
     state.raw_population = population();
+    state.spin_energies = ptr<double>(kBatch);
+    state.spin_energy_elements = kBatch;
     state.classical_energy = classical();
     state.free_energy = free_energy();
     state.scc.current_inputs = multipoles();
@@ -224,9 +243,13 @@ struct Fixture {
     workspace.staged_occupations = occupations();
     workspace.staged_density = density();
     workspace.staged_raw_population = population();
+    workspace.staged_spin_energies = ptr<double>(kBatch);
+    workspace.staged_spin_energy_elements = kBatch;
     workspace.staged_classical_energy = classical();
     workspace.staged_free_energy = free_energy();
     workspace.next_mixed = multipoles();
+    workspace.spin_output.shell_potentials = ptr<double>(kShells);
+    workspace.spin_output.shell_potential_elements = kShells;
     workspace.mixed_topology.atomic_charges = ptr<double>(kAtoms);
     workspace.mixed_topology.atom_elements = kAtoms;
 
@@ -293,6 +316,32 @@ struct Fixture {
   Fixture() noexcept {
     plan.plan_token = kToken;
     plan.topology.batch_size = kBatch;
+    plan.wavefunction_layout.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+    plan.wavefunction_layout.plan_token = kToken;
+    plan.wavefunction_layout.layout_fingerprint = 0x51cc0deULL;
+    plan.wavefunction_layout.batch_size = kBatch;
+    plan.wavefunction_layout.total_spin_channels = kBatch;
+    plan.wavefunction_layout.total_spin_orbitals = kOrbitals;
+    plan.wavefunction_layout.total_spin_matrix_elements = kMatrices;
+    plan.wavefunction_layout.total_spin_shells = kShells;
+    plan.wavefunction_layout.total_spin_atoms = kAtoms;
+    plan.wavefunction_layout.spin_channel_count = kBatch;
+    plan.wavefunction_layout.spin_channel_offset_count = kBatch + 1;
+    plan.wavefunction_layout.spin_orbital_offset_count = kBatch + 1;
+    plan.wavefunction_layout.spin_matrix_offset_count = kBatch + 1;
+    plan.wavefunction_layout.spin_shell_offset_count = kBatch + 1;
+    plan.wavefunction_layout.spin_atom_offset_count = kBatch + 1;
+    plan.wavefunction_layout.spin_channels = ptr<std::int32_t>(kBatch);
+    plan.wavefunction_layout.spin_channel_offsets = ptr<std::int64_t>(kBatch + 1);
+    plan.wavefunction_layout.spin_orbital_offsets = ptr<std::int64_t>(kBatch + 1);
+    plan.wavefunction_layout.spin_matrix_offsets = ptr<std::int64_t>(kBatch + 1);
+    plan.wavefunction_layout.spin_shell_offsets = ptr<std::int64_t>(kBatch + 1);
+    plan.wavefunction_layout.spin_atom_offsets = ptr<std::int64_t>(kBatch + 1);
+    plan.spin_batch.batch_size = kBatch;
+    plan.spin_batch.total_atoms = kAtoms;
+    plan.spin_batch.total_shells = kShells;
+    plan.spin_batch.shell_population_elements = kShells;
+    plan.spin_batch.plan_token = kToken;
     plan.enabled_components = kGfn2SccPotentialAllComponents;
     make_report_owners();
     make_projection_leaves();
@@ -311,33 +360,33 @@ int test_storage_requirements_are_exact_and_fail_closed() {
   Gfn2SccIterationReportStorageRequirements requirements{};
   auto diagnostic = query_gfn2_scc_iteration_report_storage_cuda(kMandatory, 7, requirements);
   CHECK(diagnostic.error == Gfn2SccIterationBindingError::kSuccess);
-  CHECK(requirements.report_count == 19);
-  CHECK(requirements.system_error_elements == 19 * 7);
-  CHECK(requirements.device_error_elements == 19);
-  CHECK(requirements.sequence_latch_elements == 19);
+  CHECK(requirements.report_count == 21);
+  CHECK(requirements.system_error_elements == 21 * 7);
+  CHECK(requirements.device_error_elements == 21);
+  CHECK(requirements.sequence_latch_elements == 21);
 
   diagnostic = query_gfn2_scc_iteration_report_storage_cuda(
       kMandatory | bit(Gfn2SccPotentialComponent::kD4TwoBody), 7, requirements);
   CHECK(diagnostic.error == Gfn2SccIterationBindingError::kSuccess);
-  CHECK(requirements.report_count == 21);
+  CHECK(requirements.report_count == 23);
   diagnostic = query_gfn2_scc_iteration_report_storage_cuda(
       kMandatory | bit(Gfn2SccPotentialComponent::kExplicitPointCharge), 7, requirements);
   CHECK(diagnostic.error == Gfn2SccIterationBindingError::kSuccess);
-  CHECK(requirements.report_count == 20);
+  CHECK(requirements.report_count == 22);
   diagnostic = query_gfn2_scc_iteration_report_storage_cuda(
       kMandatory | bit(Gfn2SccPotentialComponent::kPeriodicEmbedding), 7, requirements);
   CHECK(diagnostic.error == Gfn2SccIterationBindingError::kSuccess);
-  CHECK(requirements.report_count == 21);
+  CHECK(requirements.report_count == 23);
   diagnostic =
       query_gfn2_scc_iteration_report_storage_cuda(kGfn2SccPotentialAllComponents, 7, requirements);
   CHECK(diagnostic.error == Gfn2SccIterationBindingError::kSuccess);
-  CHECK(requirements.report_count == 24);
+  CHECK(requirements.report_count == 26);
 
   diagnostic = query_gfn2_scc_iteration_report_storage_cuda(0u, 7, requirements);
   CHECK(diagnostic.error == Gfn2SccIterationBindingError::kInvalidCount);
   CHECK(requirements.report_count == 0);
   diagnostic = query_gfn2_scc_iteration_report_storage_cuda(
-      kMandatory, std::numeric_limits<std::int64_t>::max() / 19 + 1, requirements);
+      kMandatory, std::numeric_limits<std::int64_t>::max() / 21 + 1, requirements);
   CHECK(diagnostic.error == Gfn2SccIterationBindingError::kAddressOverflow);
   CHECK(requirements.system_error_elements == 0);
   return 0;
@@ -350,8 +399,9 @@ int test_canonical_stage_factory_and_diagnostic_owners() {
       fixture.storage, fixture.plan, fixture.input, fixture.state, fixture.workspace, projected);
   CHECK(diagnostic.error == Gfn2SccIterationBindingError::kSuccess);
 
-  constexpr std::array<Gfn2SccStageId, 24> expected{{
+  constexpr std::array<Gfn2SccStageId, 26> expected{{
       Gfn2SccStageId::kMixedGather,
+      Gfn2SccStageId::kSpinPotential,
       Gfn2SccStageId::kES2Potential,
       Gfn2SccStageId::kES3Potential,
       Gfn2SccStageId::kAES2Potential,
@@ -364,6 +414,7 @@ int test_canonical_stage_factory_and_diagnostic_owners() {
       Gfn2SccStageId::kOccupations,
       Gfn2SccStageId::kDensity,
       Gfn2SccStageId::kMulliken,
+      Gfn2SccStageId::kSpinRawEnergy,
       Gfn2SccStageId::kES2RawEnergy,
       Gfn2SccStageId::kES3RawEnergy,
       Gfn2SccStageId::kAES2RawEnergy,
@@ -391,8 +442,12 @@ int test_canonical_stage_factory_and_diagnostic_owners() {
   const auto* mixer = find_report(projected.plan, Gfn2SccStageId::kMixer);
   const auto* publication = find_report(projected.plan, Gfn2SccStageId::kStatePublication);
   const auto* eigensolver = find_report(projected.plan, Gfn2SccStageId::kEigensolver);
+  const auto* spin_potential = find_report(projected.plan, Gfn2SccStageId::kSpinPotential);
+  const auto* spin_energy = find_report(projected.plan, Gfn2SccStageId::kSpinRawEnergy);
+  const auto* free_energy = find_report(projected.plan, Gfn2SccStageId::kFreeEnergy);
   CHECK(d4_potential != nullptr && d4_energy != nullptr && periodic != nullptr &&
-        mixer != nullptr && publication != nullptr && eigensolver != nullptr);
+        mixer != nullptr && publication != nullptr && eigensolver != nullptr &&
+        spin_potential != nullptr && spin_energy != nullptr && free_energy != nullptr);
   CHECK(d4_potential->system_codes == fixture.workspace.d4_workspace.system_errors);
   CHECK(d4_energy->system_codes == fixture.workspace.d4_workspace.system_errors);
   CHECK(periodic->stage_sequence_active == fixture.workspace.periodic_workspace.sequence_active);
@@ -405,6 +460,11 @@ int test_canonical_stage_factory_and_diagnostic_owners() {
         fixture.workspace.publication_workspace.sequence_active);
   CHECK(eigensolver->peer_failure_status == GPUXTB_STATUS_EIGENSOLVER_FAILED);
   CHECK(eigensolver->peer_error_mask == 0x3e06u);
+  CHECK(spin_potential->peer_error_mask == kGfn2SpinDevicePeerErrorMask);
+  CHECK(spin_energy->peer_error_mask == kGfn2SpinDevicePeerErrorMask);
+  CHECK(spin_potential->stage_sequence_active == fixture.workspace.spin_workspace.sequence_active);
+  CHECK(spin_energy->stage_sequence_active == fixture.workspace.spin_workspace.sequence_active);
+  CHECK(free_energy->peer_error_mask == 0x1ffeu);
   return 0;
 }
 
@@ -424,6 +484,7 @@ int test_zero_copy_projection_rebuilds_all_dataflow_edges() {
   CHECK(workspace.activity.sequence_active == workspace.ledger.sequence_active);
   CHECK(input.activity_state.iterations == state.scc.iterations);
   CHECK(input.mixed_fields.qsh == state.scc.current_inputs.shell_charges);
+  CHECK(input.mixed_spin.shell_populations == state.scc.current_inputs.shell_charges);
   CHECK(workspace.mixed_topology.atomic_dipoles == state.scc.current_inputs.atomic_dipoles);
 
   CHECK(workspace.potential_components.es2_shell == workspace.components.es2_shell_potential);
@@ -439,15 +500,22 @@ int test_zero_copy_projection_rebuilds_all_dataflow_edges() {
   CHECK(input.electronic_energy.entropies == workspace.staged_occupations.entropies);
   CHECK(input.classical_energy.d4_two_body == workspace.components.d4_two_body_energy);
   CHECK(input.free_energy.periodic_embedding == workspace.components.periodic_embedding_energy);
+  CHECK(input.free_energy.spin == workspace.staged_spin_energies);
   CHECK(input.raw_multipoles.shell_charges == workspace.staged_raw_population.qsh);
+  CHECK(input.raw_spin.shell_populations == workspace.staged_raw_population.qsh);
   CHECK(input.complete_free_energies == workspace.staged_free_energy.free_energy);
 
   CHECK(state.published.shell_charges == state.raw_population.qsh);
   CHECK(state.free_energy.es2 == state.classical_energy.es2);
+  CHECK(state.free_energy.spin == state.spin_energies);
+  CHECK(state.publication.energy.spin_energies == state.spin_energies);
   CHECK(state.publication.wavefunction.population.qat == state.raw_population.qat);
   CHECK(state.publication.scc.iterations == state.scc.iterations);
   CHECK(workspace.staged_free_energy.entropy == workspace.staged_occupations.entropies);
   CHECK(workspace.staged_free_energy.es3 == workspace.staged_classical_energy.es3);
+  CHECK(workspace.staged_free_energy.spin == workspace.staged_spin_energies);
+  CHECK(workspace.staged_publication.energy.spin_energies == workspace.staged_spin_energies);
+  CHECK(workspace.spin_output.spin_energies == workspace.staged_spin_energies);
   CHECK(workspace.staged_publication.wavefunction.density.density ==
         workspace.staged_density.density);
   CHECK(workspace.staged_publication.next_mixed.atomic_quadrupoles ==

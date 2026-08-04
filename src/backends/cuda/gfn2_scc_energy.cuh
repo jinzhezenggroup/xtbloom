@@ -20,6 +20,7 @@ enum class Gfn2SccEnergyDeviceError : std::uint32_t {
   kNonfiniteEntropy = 5u,
   kNonfiniteCoreArithmetic = 6u,
   kNonfiniteFreeEnergy = 7u,
+  kInvalidSpinLayout = 8u,
 };
 
 /*
@@ -91,6 +92,20 @@ cudaError_t evaluate_gfn2_scc_electronic_energy_cuda(
     double* electronic_free_energies, const Gfn2SccEnergyDeviceWorkspace& workspace,
     std::uint32_t* system_errors, std::uint32_t* device_error,
     cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Mixed-spin overload. Density matrices use WavefunctionLayout's system-major
+ * spin packing, while H0 remains one physical matrix per system. Restricted
+ * members therefore preserve the legacy contraction exactly; unrestricted
+ * members accumulate alpha then beta Tr(P_sigma H0) in deterministic order.
+ */
+cudaError_t evaluate_gfn2_scc_electronic_energy_spin_cuda(
+    const Gfn2SccEnergyDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const double* density, std::int64_t density_elements, const double* h0, const double* entropies,
+    double electronic_temperature, const Gfn2SccIterationDeviceActivity& activity,
+    double* core_energies, double* electronic_free_energies,
+    const Gfn2SccEnergyDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 

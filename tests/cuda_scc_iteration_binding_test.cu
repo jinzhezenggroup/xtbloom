@@ -53,11 +53,19 @@ struct Fixture {
   static constexpr std::int64_t kMatrices = 1;
   static constexpr std::int64_t kDipoles = 3;
   static constexpr std::int64_t kQuadrupoles = 6;
-  static constexpr std::int64_t kMixerVector = 10;
+  /* Exercise the expanded unrestricted layout, not only the legacy one-channel shape. */
+  static constexpr std::int64_t kSpinChannels = 2;
+  static constexpr std::int64_t kSpinAtoms = 2 * kAtoms;
+  static constexpr std::int64_t kSpinShells = 2 * kShells;
+  static constexpr std::int64_t kSpinOrbitals = 2 * kOrbitals;
+  static constexpr std::int64_t kSpinMatrices = 2 * kMatrices;
+  static constexpr std::int64_t kSpinDipoles = 3 * kSpinAtoms;
+  static constexpr std::int64_t kSpinQuadrupoles = 6 * kSpinAtoms;
+  static constexpr std::int64_t kMixerVector = kSpinShells + 9 * kSpinAtoms;
   static constexpr std::int64_t kHistory = 2;
 
   FakeDeviceArena device;
-  std::array<Gfn2EigensolverBucket, 1> buckets{{{1, 1, 0, 0, 0}}};
+  std::array<Gfn2EigensolverBucket, 1> buckets{};
   Gfn2SccIterationDevicePlan plan{};
   Gfn2SccIterationDeviceInput input{};
   Gfn2SccIterationDeviceState state{};
@@ -69,13 +77,18 @@ struct Fixture {
   }
 
   Gfn2SccDeviceMultipoles multipoles() {
-    return {
-        ptr<double>(kShells), kShells, ptr<double>(kDipoles), kDipoles, ptr<double>(kQuadrupoles),
-        kQuadrupoles,         kToken};
+    return {ptr<double>(kSpinShells),
+            kSpinShells,
+            ptr<double>(kSpinDipoles),
+            kSpinDipoles,
+            ptr<double>(kSpinQuadrupoles),
+            kSpinQuadrupoles,
+            kToken};
   }
 
   Gfn2EigensolverDeviceResults eigenpairs() {
-    return {ptr<double>(kOrbitals), kOrbitals, ptr<double>(kMatrices), kMatrices, kToken};
+    return {ptr<double>(kSpinOrbitals), kSpinOrbitals, ptr<double>(kSpinMatrices), kSpinMatrices,
+            kToken};
   }
 
   Gfn2OccupationsDeviceResults occupations() {
@@ -91,10 +104,10 @@ struct Fixture {
   }
 
   Gfn2DensityDeviceResults density() {
-    return {ptr<double>(kMatrices),
-            kMatrices,
-            ptr<double>(kMatrices),
-            kMatrices,
+    return {ptr<double>(kSpinMatrices),
+            kSpinMatrices,
+            ptr<double>(kSpinMatrices),
+            kSpinMatrices,
             ptr<double>(kBatch),
             kBatch,
             ptr<double>(kBatch),
@@ -103,18 +116,26 @@ struct Fixture {
             kBatch,
             ptr<double>(kBatch),
             kBatch,
-            kToken};
+            kToken,
+            ptr<double>(kSpinChannels),
+            kSpinChannels,
+            ptr<double>(kSpinChannels),
+            kSpinChannels,
+            ptr<double>(kSpinChannels),
+            kSpinChannels,
+            ptr<double>(kSpinChannels),
+            kSpinChannels};
   }
 
   Gfn2MullikenDevicePopulation population() {
-    return {ptr<double>(kShells),
-            kShells,
-            ptr<double>(kAtoms),
-            kAtoms,
-            ptr<double>(kDipoles),
-            kDipoles,
-            ptr<double>(kQuadrupoles),
-            kQuadrupoles,
+    return {ptr<double>(kSpinShells),
+            kSpinShells,
+            ptr<double>(kSpinAtoms),
+            kSpinAtoms,
+            ptr<double>(kSpinDipoles),
+            kSpinDipoles,
+            ptr<double>(kSpinQuadrupoles),
+            kSpinQuadrupoles,
             kToken};
   }
 
@@ -160,7 +181,7 @@ struct Fixture {
   }
 
   Gfn2SccFreeEnergyDeviceDiagnostics free_diagnostics(
-      const Gfn2SccClassicalEnergyDeviceDiagnostics& classical) {
+      const Gfn2SccClassicalEnergyDeviceDiagnostics& classical, double* spin_energies) {
     Gfn2SccFreeEnergyDeviceDiagnostics result{};
     result.core = ptr<double>(kBatch);
     result.core_elements = kBatch;
@@ -170,6 +191,9 @@ struct Fixture {
     result.es3_elements = kBatch;
     result.aes2 = classical.aes2;
     result.aes2_elements = kBatch;
+    /* The spin stage and the complete free-energy trace intentionally share storage. */
+    result.spin = spin_energies;
+    result.spin_elements = kBatch;
     result.d4_two_body = classical.d4_two_body;
     result.d4_two_body_elements = kBatch;
     result.explicit_point_charge = classical.explicit_point_charge;
@@ -231,6 +255,30 @@ struct Fixture {
                               static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2);
     plan.plan_token = kToken;
     plan.geometry_generation = 7u;
+
+    auto& layout = plan.wavefunction_layout;
+    layout.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+    layout.plan_token = kToken;
+    layout.layout_fingerprint = 0x51cc0deULL;
+    layout.batch_size = kBatch;
+    layout.total_spin_channels = kSpinChannels;
+    layout.total_spin_orbitals = kSpinOrbitals;
+    layout.total_spin_matrix_elements = kSpinMatrices;
+    layout.total_spin_shells = kSpinShells;
+    layout.total_spin_atoms = kSpinAtoms;
+    layout.spin_channel_count = kBatch;
+    layout.spin_channel_offset_count = kBatch + 1;
+    layout.spin_orbital_offset_count = kBatch + 1;
+    layout.spin_matrix_offset_count = kBatch + 1;
+    layout.spin_shell_offset_count = kBatch + 1;
+    layout.spin_atom_offset_count = kBatch + 1;
+    layout.spin_channels = ptr<std::int32_t>(kBatch);
+    layout.spin_channel_offsets = ptr<std::int64_t>(kBatch + 1);
+    layout.spin_orbital_offsets = ptr<std::int64_t>(kBatch + 1);
+    layout.spin_matrix_offsets = ptr<std::int64_t>(kBatch + 1);
+    layout.spin_shell_offsets = ptr<std::int64_t>(kBatch + 1);
+    layout.spin_atom_offsets = ptr<std::int64_t>(kBatch + 1);
+
     plan.activity_policy = {kBatch, 50u, kToken};
     plan.state_policy = {50u, 1.0e-6, 1.0e-8, kToken};
     plan.mixer_policy = {kHistory, 0.4, 1.0e-6, 1.0e-4, kToken};
@@ -258,6 +306,27 @@ struct Fixture {
                       kToken,
                       plan.topology.batch_shell_offsets,
                       plan.topology.atom_offsets};
+
+    auto& spin = plan.spin_batch;
+    spin.batch_size = kBatch;
+    spin.total_atoms = kAtoms;
+    spin.total_shells = kShells;
+    spin.shell_population_elements = kSpinShells;
+    spin.atom_offset_count = kBatch + 1;
+    spin.batch_shell_offset_count = kBatch + 1;
+    spin.atom_shell_offset_count = kAtoms + 1;
+    spin.shell_population_offset_count = kBatch + 1;
+    spin.spin_channel_count = kBatch;
+    spin.coupling_offset_count = kAtoms + 1;
+    spin.coupling_matrix_count = kShells * kShells;
+    spin.plan_token = kToken;
+    spin.atom_offsets = plan.topology.atom_offsets;
+    spin.batch_shell_offsets = plan.topology.batch_shell_offsets;
+    spin.atom_shell_offsets = plan.topology.atom_shell_offsets;
+    spin.shell_population_offsets = layout.spin_shell_offsets;
+    spin.spin_channels = layout.spin_channels;
+    spin.coupling_offsets = ptr<std::int64_t>(kAtoms + 1);
+    spin.coupling_matrices = ptr<double>(spin.coupling_matrix_count);
 
     auto& potential = plan.potential_batch;
     potential.batch_size = kBatch;
@@ -380,6 +449,17 @@ struct Fixture {
     plan.eigensolver_provider.capture_mode = Gfn2SccIterationProviderCaptureMode::kGraphSupported;
     plan.eigensolver_provider.plan_token = kToken;
 
+    auto& bucket = buckets[0];
+    bucket.orbital_count = static_cast<std::int32_t>(kOrbitals);
+    bucket.system_count = static_cast<std::int32_t>(kBatch);
+    bucket.system_index_offset = 0;
+    bucket.matrix_scratch_offset = 0;
+    bucket.orbital_scratch_offset = 0;
+    bucket.solve_count = static_cast<std::int32_t>(kSpinChannels);
+    bucket.solve_index_offset = 0;
+    bucket.spin_matrix_scratch_offset = 0;
+    bucket.spin_orbital_scratch_offset = 0;
+
     plan.occupations_batch = {kBatch,
                               kOrbitals,
                               2,
@@ -425,27 +505,29 @@ struct Fixture {
     plan.electronic_energy_batch = {kBatch, kMatrices, 2, kToken, plan.topology.matrix_offsets};
     plan.classical_energy_batch = {kBatch, plan.enabled_components, kToken};
     plan.free_energy_batch = {kBatch, plan.enabled_components, 0.01, kToken};
-    plan.publication_plan = {kBatch,
-                             kAtoms,
-                             kShells,
-                             kOrbitals,
-                             kMatrices,
-                             kMixerVector,
-                             kHistory,
-                             2,
-                             2,
-                             2,
-                             2,
-                             kShells,
-                             plan.topology.atom_offsets,
-                             plan.topology.batch_shell_offsets,
-                             plan.topology.batch_orbital_offsets,
-                             plan.topology.matrix_offsets,
-                             plan.topology.shell_to_atom,
-                             plan.activity_policy.maximum_iterations,
-                             plan.mixer_policy.rms_tolerance,
-                             plan.state_policy.energy_tolerance,
-                             kToken};
+    auto& publication = plan.publication_plan;
+    publication.batch_size = kBatch;
+    publication.total_atoms = kAtoms;
+    publication.total_shells = kShells;
+    publication.total_orbitals = kOrbitals;
+    publication.total_matrix_elements = kMatrices;
+    publication.total_mixer_vector_elements = kMixerVector;
+    publication.history_size = kHistory;
+    publication.atom_offset_count = kBatch + 1;
+    publication.shell_offset_count = kBatch + 1;
+    publication.orbital_offset_count = kBatch + 1;
+    publication.matrix_offset_count = kBatch + 1;
+    publication.shell_to_atom_count = kShells;
+    publication.atom_offsets = plan.topology.atom_offsets;
+    publication.shell_offsets = plan.topology.batch_shell_offsets;
+    publication.orbital_offsets = plan.topology.batch_orbital_offsets;
+    publication.matrix_offsets = plan.topology.matrix_offsets;
+    publication.shell_to_atom = plan.topology.shell_to_atom;
+    publication.wavefunction_layout = plan.wavefunction_layout;
+    publication.maximum_iterations = plan.activity_policy.maximum_iterations;
+    publication.residual_rms_tolerance = plan.mixer_policy.rms_tolerance;
+    publication.energy_tolerance = plan.state_policy.energy_tolerance;
+    publication.plan_token = kToken;
   }
 
   void make_state_and_workspace() {
@@ -454,15 +536,17 @@ struct Fixture {
     state.occupations = occupations();
     state.density = density();
     state.raw_population = population();
+    state.spin_energies = ptr<double>(kBatch);
+    state.spin_energy_elements = kBatch;
     state.classical_energy = classical_diagnostics();
-    state.free_energy = free_diagnostics(state.classical_energy);
+    state.free_energy = free_diagnostics(state.classical_energy, state.spin_energies);
     state.mixer = mixer();
     state.published = {state.raw_population.qsh,
-                       kShells,
+                       kSpinShells,
                        state.raw_population.dipole,
-                       kDipoles,
+                       kSpinDipoles,
                        state.raw_population.quadrupole,
-                       kQuadrupoles,
+                       kSpinQuadrupoles,
                        kToken};
     state.scc.current_inputs = multipoles();
     state.scc.free_energies = ptr<double>(kBatch);
@@ -476,7 +560,11 @@ struct Fixture {
     state.scc.plan_token = kToken;
     state.publication.wavefunction = {state.eigenpairs, state.occupations, state.density,
                                       state.raw_population, kToken};
-    state.publication.energy = {state.classical_energy, state.free_energy, kToken};
+    state.publication.energy.classical = state.classical_energy;
+    state.publication.energy.free_energy = state.free_energy;
+    state.publication.energy.spin_energies = state.spin_energies;
+    state.publication.energy.spin_energy_elements = kBatch;
+    state.publication.energy.plan_token = kToken;
     state.publication.mixer = state.mixer;
     state.publication.published = state.published;
     state.publication.scc = state.scc;
@@ -505,16 +593,22 @@ struct Fixture {
     workspace.staged_occupations = occupations();
     workspace.staged_density = density();
     workspace.staged_raw_population = population();
+    workspace.staged_spin_energies = ptr<double>(kBatch);
+    workspace.staged_spin_energy_elements = kBatch;
     workspace.staged_classical_energy = classical_diagnostics();
-    workspace.staged_free_energy = free_diagnostics(workspace.staged_classical_energy);
+    workspace.staged_free_energy =
+        free_diagnostics(workspace.staged_classical_energy, workspace.staged_spin_energies);
     workspace.staged_free_energy.entropy = workspace.staged_occupations.entropies;
     workspace.staged_mixer = mixer();
     workspace.next_mixed = multipoles();
     workspace.staged_publication.wavefunction = {
         workspace.staged_eigenpairs, workspace.staged_occupations, workspace.staged_density,
         workspace.staged_raw_population, kToken};
-    workspace.staged_publication.energy = {workspace.staged_classical_energy,
-                                           workspace.staged_free_energy, kToken};
+    workspace.staged_publication.energy.classical = workspace.staged_classical_energy;
+    workspace.staged_publication.energy.free_energy = workspace.staged_free_energy;
+    workspace.staged_publication.energy.spin_energies = workspace.staged_spin_energies;
+    workspace.staged_publication.energy.spin_energy_elements = kBatch;
+    workspace.staged_publication.energy.plan_token = kToken;
     workspace.staged_publication.mixer = workspace.staged_mixer;
     workspace.staged_publication.next_mixed = {workspace.next_mixed.shell_charges,
                                                workspace.next_mixed.shell_elements,
@@ -526,14 +620,23 @@ struct Fixture {
     workspace.staged_publication.plan_token = kToken;
 
     workspace.mixed_topology = {state.scc.current_inputs.shell_charges,
-                                kShells,
-                                ptr<double>(kAtoms),
-                                kAtoms,
+                                kSpinShells,
+                                ptr<double>(kSpinAtoms),
+                                kSpinAtoms,
                                 state.scc.current_inputs.atomic_dipoles,
-                                kDipoles,
+                                kSpinDipoles,
                                 state.scc.current_inputs.atomic_quadrupoles,
-                                kQuadrupoles,
+                                kSpinQuadrupoles,
                                 kToken};
+    workspace.physical_topology = {ptr<double>(kShells),
+                                   kShells,
+                                   ptr<double>(kAtoms),
+                                   kAtoms,
+                                   ptr<double>(kDipoles),
+                                   kDipoles,
+                                   ptr<double>(kQuadrupoles),
+                                   kQuadrupoles,
+                                   kToken};
     auto& storage = workspace.components;
     storage.es2_shell_potential = ptr<double>(kShells);
     storage.es2_shell_elements = kShells;
@@ -568,23 +671,24 @@ struct Fixture {
     workspace.potential_components.aes2_quadrupole = storage.aes2_quadrupole_potential;
     workspace.potential_components.aes2_quadrupole_elements = kQuadrupoles;
     workspace.potential_components.plan_token = kToken;
-    workspace.complete_potentials = {ptr<double>(kShells),
-                                     kShells,
-                                     ptr<double>(kAtoms),
-                                     kAtoms,
-                                     ptr<double>(kDipoles),
-                                     kDipoles,
-                                     ptr<double>(kQuadrupoles),
-                                     kQuadrupoles,
+    workspace.complete_potentials = {ptr<double>(kSpinShells),
+                                     kSpinShells,
+                                     ptr<double>(kSpinAtoms),
+                                     kSpinAtoms,
+                                     ptr<double>(kSpinDipoles),
+                                     kSpinDipoles,
+                                     ptr<double>(kSpinQuadrupoles),
+                                     kSpinQuadrupoles,
                                      kToken};
-    workspace.scalar_bridge.fields = {workspace.complete_potentials.shell, kShells,
-                                      workspace.complete_potentials.atomic, kAtoms, kToken};
+    /* The stable stage observes complete spin fields but keeps restricted output scratch. */
+    workspace.scalar_bridge.fields = {workspace.complete_potentials.shell, kSpinShells,
+                                      workspace.complete_potentials.atomic, kSpinAtoms, kToken};
     workspace.scalar_bridge.shell_scalar = ptr<double>(kShells);
     workspace.scalar_bridge.shell_elements = kShells;
     workspace.scalar_bridge.workspace = {ptr<double>(kShells), kShells, ptr<std::uint32_t>(1), 1,
                                          kToken};
     workspace.scalar_bridge.plan_token = kToken;
-    workspace.hamiltonian = {ptr<double>(kMatrices), kMatrices, kToken};
+    workspace.hamiltonian = {ptr<double>(kSpinMatrices), kSpinMatrices, kToken};
 
     workspace.geometry_workspace = {nullptr,
                                     0,
@@ -609,37 +713,37 @@ struct Fixture {
                                 kAtoms,
                                 ptr<std::uint32_t>(1),
                                 1};
-    workspace.potential_workspace = {ptr<double>(kShells),
-                                     kShells,
-                                     ptr<double>(kAtoms),
-                                     kAtoms,
-                                     ptr<double>(kDipoles),
-                                     kDipoles,
-                                     ptr<double>(kQuadrupoles),
-                                     kQuadrupoles,
+    workspace.potential_workspace = {ptr<double>(kSpinShells),
+                                     kSpinShells,
+                                     ptr<double>(kSpinAtoms),
+                                     kSpinAtoms,
+                                     ptr<double>(kSpinDipoles),
+                                     kSpinDipoles,
+                                     ptr<double>(kSpinQuadrupoles),
+                                     kSpinQuadrupoles,
                                      ptr<std::uint32_t>(1),
                                      1,
                                      kToken};
-    workspace.hamiltonian_workspace = {ptr<double>(kMatrices), kMatrices, ptr<std::uint32_t>(1), 1,
-                                       kToken};
+    workspace.hamiltonian_workspace = {ptr<double>(kSpinMatrices), kSpinMatrices,
+                                       ptr<std::uint32_t>(1), 1, kToken};
 
     auto& eig = workspace.eigensolver_workspace;
-    eig.matrix_scratch_a = ptr<double>(kMatrices);
-    eig.matrix_a_elements = kMatrices;
-    eig.matrix_scratch_b = ptr<double>(kMatrices);
-    eig.matrix_b_elements = kMatrices;
-    eig.eigenvalue_scratch = ptr<double>(kOrbitals);
-    eig.eigenvalue_elements = kOrbitals;
-    eig.factor_pointers = ptr<double*>(kBatch);
-    eig.factor_pointer_elements = kBatch;
-    eig.matrix_pointers = ptr<double*>(kBatch);
-    eig.matrix_pointer_elements = kBatch;
-    eig.info_a = ptr<int>(kBatch);
-    eig.info_a_elements = kBatch;
-    eig.info_b = ptr<int>(kBatch);
-    eig.info_b_elements = kBatch;
-    eig.eligible = ptr<std::uint8_t>(kBatch);
-    eig.eligible_elements = kBatch;
+    eig.matrix_scratch_a = ptr<double>(kSpinMatrices);
+    eig.matrix_a_elements = kSpinMatrices;
+    eig.matrix_scratch_b = ptr<double>(kSpinMatrices);
+    eig.matrix_b_elements = kSpinMatrices;
+    eig.eigenvalue_scratch = ptr<double>(kSpinOrbitals);
+    eig.eigenvalue_elements = kSpinOrbitals;
+    eig.factor_pointers = ptr<double*>(kSpinChannels);
+    eig.factor_pointer_elements = kSpinChannels;
+    eig.matrix_pointers = ptr<double*>(kSpinChannels);
+    eig.matrix_pointer_elements = kSpinChannels;
+    eig.info_a = ptr<int>(kSpinChannels);
+    eig.info_a_elements = kSpinChannels;
+    eig.info_b = ptr<int>(kSpinChannels);
+    eig.info_b_elements = kSpinChannels;
+    eig.eligible = ptr<std::uint8_t>(kSpinChannels);
+    eig.eligible_elements = kSpinChannels;
     eig.sequence_active = ptr<std::uint32_t>(1);
     eig.sequence_active_elements = 1;
     eig.solver_device_workspace = plan.eigensolver_provider.device_workspace;
@@ -647,6 +751,12 @@ struct Fixture {
     eig.solver_host_workspace = plan.eigensolver_provider.host_workspace;
     eig.solver_host_workspace_bytes = plan.eigensolver_provider.host_workspace_bytes;
     eig.plan_token = kToken;
+    eig.compact_systems = ptr<std::int32_t>(kSpinChannels);
+    eig.compact_system_elements = kSpinChannels;
+    eig.compact_source_slots = ptr<std::int32_t>(kSpinChannels);
+    eig.compact_source_slot_elements = kSpinChannels;
+    eig.bucket_activity = ptr<Gfn2EigensolverBucketActivity>(1);
+    eig.bucket_activity_elements = 1;
 
     workspace.occupations_workspace = {ptr<double>(2 * kOrbitals),
                                        2 * kOrbitals,
@@ -659,14 +769,14 @@ struct Fixture {
                                        ptr<std::uint32_t>(1),
                                        1,
                                        kToken};
-    workspace.density_workspace = {ptr<double>(kMatrices),
-                                   kMatrices,
-                                   ptr<double>(kMatrices),
-                                   kMatrices,
-                                   ptr<double>(kOrbitals),
-                                   kOrbitals,
-                                   ptr<double>(kOrbitals),
-                                   kOrbitals,
+    workspace.density_workspace = {ptr<double>(kSpinMatrices),
+                                   kSpinMatrices,
+                                   ptr<double>(kSpinMatrices),
+                                   kSpinMatrices,
+                                   ptr<double>(kSpinOrbitals),
+                                   kSpinOrbitals,
+                                   ptr<double>(kSpinOrbitals),
+                                   kSpinOrbitals,
                                    ptr<double>(kBatch),
                                    kBatch,
                                    ptr<double>(kBatch),
@@ -677,18 +787,38 @@ struct Fixture {
                                    kBatch,
                                    ptr<std::uint32_t>(1),
                                    1,
-                                   kToken};
-    workspace.mulliken_workspace = {ptr<double>(kShells),
-                                    kShells,
-                                    ptr<double>(kAtoms),
-                                    kAtoms,
-                                    ptr<double>(kDipoles),
-                                    kDipoles,
-                                    ptr<double>(kQuadrupoles),
-                                    kQuadrupoles,
+                                   kToken,
+                                   ptr<double>(kSpinChannels),
+                                   kSpinChannels,
+                                   ptr<double>(kSpinChannels),
+                                   kSpinChannels,
+                                   ptr<double>(kSpinChannels),
+                                   kSpinChannels,
+                                   ptr<double>(kSpinChannels),
+                                   kSpinChannels};
+    workspace.mulliken_workspace = {ptr<double>(kSpinShells),
+                                    kSpinShells,
+                                    ptr<double>(kSpinAtoms),
+                                    kSpinAtoms,
+                                    ptr<double>(kSpinDipoles),
+                                    kSpinDipoles,
+                                    ptr<double>(kSpinQuadrupoles),
+                                    kSpinQuadrupoles,
                                     ptr<std::uint32_t>(1),
                                     1,
                                     kToken};
+    workspace.spin_output.spin_energies = workspace.staged_spin_energies;
+    workspace.spin_output.spin_energy_elements = kBatch;
+    workspace.spin_output.shell_potentials = ptr<double>(kSpinShells);
+    workspace.spin_output.shell_potential_elements = kSpinShells;
+    workspace.spin_output.plan_token = kToken;
+    workspace.spin_workspace.energy_scratch = ptr<double>(kBatch);
+    workspace.spin_workspace.energy_elements = kBatch;
+    workspace.spin_workspace.potential_scratch = ptr<double>(kSpinShells);
+    workspace.spin_workspace.potential_elements = kSpinShells;
+    workspace.spin_workspace.sequence_active = ptr<std::uint32_t>(1);
+    workspace.spin_workspace.sequence_elements = 1;
+    workspace.spin_workspace.plan_token = kToken;
     workspace.electronic_energy_workspace = {
         ptr<double>(kBatch), ptr<double>(kBatch), ptr<std::uint32_t>(1), kBatch, 1, kToken};
     workspace.classical_energy_workspace = {
@@ -718,7 +848,7 @@ struct Fixture {
     workspace.publication_workspace.sequence_active = ptr<std::uint32_t>(1);
     workspace.publication_workspace.sequence_elements = 1;
     workspace.publication_workspace.mixed_atomic_charges = workspace.mixed_topology.atomic_charges;
-    workspace.publication_workspace.mixed_atomic_charge_elements = kAtoms;
+    workspace.publication_workspace.mixed_atomic_charge_elements = kSpinAtoms;
     workspace.publication_workspace.previous_free_energies = ptr<double>(kBatch);
     workspace.publication_workspace.free_energy_changes = ptr<double>(kBatch);
     workspace.publication_workspace.next_iterations = ptr<std::uint64_t>(kBatch);
@@ -733,12 +863,13 @@ struct Fixture {
     input.activity_state = {state.scc.iterations, state.scc.system_statuses, state.scc.converged,
                             kBatch, kToken};
     input.mixed_fields = {state.scc.current_inputs.shell_charges,
-                          kShells,
+                          kSpinShells,
                           state.scc.current_inputs.atomic_dipoles,
-                          kDipoles,
+                          kSpinDipoles,
                           state.scc.current_inputs.atomic_quadrupoles,
-                          kQuadrupoles,
+                          kSpinQuadrupoles,
                           kToken};
+    input.mixed_spin = {input.mixed_fields.qsh, kSpinShells, kToken};
     input.hamiltonian = {ptr<double>(kMatrices),
                          kMatrices,
                          ptr<double>(kMatrices),
@@ -747,28 +878,28 @@ struct Fixture {
                          3 * kMatrices,
                          ptr<double>(6 * kMatrices),
                          6 * kMatrices,
-                         workspace.scalar_bridge.shell_scalar,
-                         kShells,
+                         workspace.complete_potentials.shell,
+                         kSpinShells,
                          workspace.complete_potentials.dipole,
-                         kDipoles,
+                         kSpinDipoles,
                          workspace.complete_potentials.quadrupole,
-                         kQuadrupoles,
+                         kSpinQuadrupoles,
                          kToken};
     input.eigensolver_hamiltonians = workspace.hamiltonian.matrix;
-    input.eigensolver_hamiltonian_elements = kMatrices;
+    input.eigensolver_hamiltonian_elements = kSpinMatrices;
     input.occupation_eigenvalues = workspace.staged_eigenpairs.eigenvalues;
-    input.occupation_eigenvalue_elements = kOrbitals;
+    input.occupation_eigenvalue_elements = kSpinOrbitals;
     input.density = {workspace.staged_eigenpairs.coefficients,
-                     kMatrices,
+                     kSpinMatrices,
                      workspace.staged_eigenpairs.eigenvalues,
-                     kOrbitals,
+                     kSpinOrbitals,
                      workspace.staged_occupations.occupations,
                      2 * kOrbitals,
                      workspace.ledger.active_mask,
                      kBatch,
                      kToken};
     input.mulliken = {workspace.staged_density.density,
-                      kMatrices,
+                      kSpinMatrices,
                       input.hamiltonian.overlap,
                       kMatrices,
                       input.hamiltonian.dipole_integrals,
@@ -777,7 +908,7 @@ struct Fixture {
                       6 * kMatrices,
                       kToken};
     input.electronic_energy = {workspace.staged_density.density,
-                               kMatrices,
+                               kSpinMatrices,
                                input.hamiltonian.h0,
                                kMatrices,
                                workspace.staged_occupations.entropies,
@@ -806,6 +937,8 @@ struct Fixture {
                          kBatch,
                          workspace.components.aes2_energy,
                          kBatch,
+                         workspace.staged_spin_energies,
+                         kBatch,
                          nullptr,
                          0,
                          nullptr,
@@ -814,12 +947,13 @@ struct Fixture {
                          0,
                          kToken};
     input.raw_multipoles = {workspace.staged_raw_population.qsh,
-                            kShells,
+                            kSpinShells,
                             workspace.staged_raw_population.dipole,
-                            kDipoles,
+                            kSpinDipoles,
                             workspace.staged_raw_population.quadrupole,
-                            kQuadrupoles,
+                            kSpinQuadrupoles,
                             kToken};
+    input.raw_spin = {workspace.staged_raw_population.qsh, kSpinShells, kToken};
     input.complete_free_energies = workspace.staged_free_energy.free_energy;
     input.complete_free_energy_elements = kBatch;
   }
@@ -828,10 +962,11 @@ struct Fixture {
     constexpr std::array<Gfn2SccStageId, kGfn2SccIterationBaseStageReportCount> stages{{
         Gfn2SccStageId::kMixedGather,      Gfn2SccStageId::kES2Potential,
         Gfn2SccStageId::kES3Potential,     Gfn2SccStageId::kAES2Potential,
-        Gfn2SccStageId::kPotentialCompose, Gfn2SccStageId::kScalarBridge,
-        Gfn2SccStageId::kHamiltonian,      Gfn2SccStageId::kEigensolver,
-        Gfn2SccStageId::kOccupations,      Gfn2SccStageId::kDensity,
-        Gfn2SccStageId::kMulliken,         Gfn2SccStageId::kES2RawEnergy,
+        Gfn2SccStageId::kSpinPotential,    Gfn2SccStageId::kPotentialCompose,
+        Gfn2SccStageId::kScalarBridge,     Gfn2SccStageId::kHamiltonian,
+        Gfn2SccStageId::kEigensolver,      Gfn2SccStageId::kOccupations,
+        Gfn2SccStageId::kDensity,          Gfn2SccStageId::kMulliken,
+        Gfn2SccStageId::kSpinRawEnergy,    Gfn2SccStageId::kES2RawEnergy,
         Gfn2SccStageId::kES3RawEnergy,     Gfn2SccStageId::kAES2RawEnergy,
         Gfn2SccStageId::kClassicalEnergy,  Gfn2SccStageId::kElectronicEnergy,
         Gfn2SccStageId::kFreeEnergy,       Gfn2SccStageId::kMixer,
@@ -865,6 +1000,11 @@ struct Fixture {
         case Gfn2SccStageId::kAES2Potential:
           report.device_code_role = Gfn2SccStageDeviceCodeRole::kPlanOnly;
           report.peer_error_mask = 0x706u;
+          break;
+        case Gfn2SccStageId::kSpinPotential:
+        case Gfn2SccStageId::kSpinRawEnergy:
+          report.peer_error_mask = kGfn2SpinDevicePeerErrorMask;
+          report.stage_sequence_active = workspace.spin_workspace.sequence_active;
           break;
         case Gfn2SccStageId::kPotentialCompose:
           report.peer_error_mask = 0xff0cu;
@@ -919,7 +1059,7 @@ struct Fixture {
           report.stage_sequence_active = workspace.electronic_energy_workspace.sequence_active;
           break;
         case Gfn2SccStageId::kFreeEnergy:
-          report.peer_error_mask = 0xffeu;
+          report.peer_error_mask = 0x1ffeu;
           report.stage_sequence_active = workspace.free_energy_workspace.sequence_active;
           break;
         case Gfn2SccStageId::kMixer:
@@ -1031,6 +1171,60 @@ int test_capacity_alignment_alias_and_bucket_rejection() {
   return 0;
 }
 
+int test_unrestricted_layout_and_spin_projection_rejection() {
+  {
+    Fixture fixture;
+    fixture.plan.wavefunction_layout.memory_space = Gfn2PlanMemorySpace::kHost;
+    fixture.plan.publication_plan.wavefunction_layout.memory_space = Gfn2PlanMemorySpace::kHost;
+    const auto diagnostic = validate_gfn2_scc_iteration_binding_cuda(
+        fixture.plan, fixture.input, fixture.state, fixture.workspace);
+    CHECK(diagnostic.error == Gfn2SccIterationBindingError::kInvalidTopology);
+    CHECK(diagnostic.field == Gfn2SccIterationBindingField::kSpin);
+  }
+  {
+    Fixture fixture;
+    fixture.workspace.staged_density.channel_band_energy_elements = 0;
+    fixture.workspace.staged_publication.wavefunction.density.channel_band_energy_elements = 0;
+    const auto diagnostic = validate_gfn2_scc_iteration_binding_cuda(
+        fixture.plan, fixture.input, fixture.state, fixture.workspace);
+    CHECK(diagnostic.error == Gfn2SccIterationBindingError::kInvalidCount);
+    CHECK(diagnostic.field == Gfn2SccIterationBindingField::kDensity);
+  }
+  {
+    Fixture fixture;
+    /* Publication must carry the exact setup-time seal, not merely the same
+     * device pointers and aggregate extents. */
+    fixture.plan.publication_plan.wavefunction_layout.layout_fingerprint ^= 1u;
+    const auto diagnostic = validate_gfn2_scc_iteration_binding_cuda(
+        fixture.plan, fixture.input, fixture.state, fixture.workspace);
+    CHECK(diagnostic.error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+    CHECK(diagnostic.field == Gfn2SccIterationBindingField::kStatePublication);
+  }
+  {
+    Fixture fixture;
+    fixture.input.raw_spin.shell_populations = fixture.input.mixed_spin.shell_populations;
+    const auto diagnostic = validate_gfn2_scc_iteration_binding_cuda(
+        fixture.plan, fixture.input, fixture.state, fixture.workspace);
+    CHECK(diagnostic.error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+    CHECK(diagnostic.field == Gfn2SccIterationBindingField::kMulliken);
+  }
+  {
+    Fixture fixture;
+    for (std::int64_t index = 0; index < fixture.plan.report_count; ++index) {
+      auto& report = fixture.plan.reports[index];
+      if (report.stage == Gfn2SccStageId::kSpinPotential) {
+        report.stage_sequence_active = fixture.workspace.potential_workspace.sequence_active;
+        break;
+      }
+    }
+    const auto diagnostic = validate_gfn2_scc_iteration_binding_cuda(
+        fixture.plan, fixture.input, fixture.state, fixture.workspace);
+    CHECK(diagnostic.error == Gfn2SccIterationBindingError::kInvalidStageReport);
+    CHECK(diagnostic.field == Gfn2SccIterationBindingField::kStageReports);
+  }
+  return 0;
+}
+
 int test_optional_canonical_null_and_report_extension_capacity() {
   Fixture fixture;
   CHECK(validate_gfn2_scc_iteration_binding_cuda(fixture.plan, fixture.input, fixture.state,
@@ -1089,8 +1283,9 @@ int test_launch_result_preserves_provider_domains() {
 }  // namespace
 
 int main() {
-  const std::array<int (*)(), 5> tests{{test_valid_binding_and_fail_closed_copy,
+  const std::array<int (*)(), 6> tests{{test_valid_binding_and_fail_closed_copy,
                                         test_capacity_alignment_alias_and_bucket_rejection,
+                                        test_unrestricted_layout_and_spin_projection_rejection,
                                         test_optional_canonical_null_and_report_extension_capacity,
                                         test_convergence_policy_has_one_rms_authority,
                                         test_launch_result_preserves_provider_domains}};

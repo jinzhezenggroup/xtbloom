@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -265,6 +266,32 @@ Gfn2SccIterationHostInitialization fresh_initialization(const HostSccCase& host)
   return result;
 }
 
+Gfn2SccIterationHostInitialization fresh_initialization(
+    const Gfn2WavefunctionLayoutView& host_layout,
+    const gpuxtb::detail::gfn2::WavefunctionLayout& layout,
+    const gpuxtb::detail::gfn2::WavefunctionView& wavefunction) noexcept {
+  Gfn2SccIterationHostInitialization result{};
+  result.mode = Gfn2SccIterationInitializationMode::kFresh;
+  result.plan_token = kPlanToken;
+  result.initialization_generation = kInitializationGeneration;
+  result.topology = {
+      initialization_view(layout.atom_offsets.data(),
+                          static_cast<std::int64_t>(layout.atom_offsets.size())),
+      initialization_view(layout.batch_shell_offsets.data(),
+                          static_cast<std::int64_t>(layout.batch_shell_offsets.size())),
+      kPlanToken};
+  result.wavefunction.plan_token = kPlanToken;
+  result.wavefunction.population = {
+      initialization_view(wavefunction.qsh, layout.qsh.element_count),
+      initialization_view(wavefunction.qat, layout.qat.element_count),
+      initialization_view(wavefunction.dipole, layout.dipole.element_count),
+      initialization_view(wavefunction.quadrupole, layout.quadrupole.element_count), kPlanToken};
+  /* Mixed-spin initialization consumes host-owned metadata. The device view
+   * in plan_seed has the same schema but is never legal to dereference here. */
+  result.wavefunction_layout = host_layout;
+  return result;
+}
+
 template <typename T>
 bool download(const T* device, std::int64_t elements, std::vector<T>& host, cudaStream_t stream) {
   if (elements < 0) {
@@ -318,6 +345,7 @@ struct ProductionFixture {
   DeviceAllocation eigensolver_setup_arena;
   PinnedAllocation provider_host_workspace;
   Gfn2RaggedTopologyView device_topology{};
+  Gfn2WavefunctionLayoutView device_wavefunction{};
   Gfn2SccIterationDevicePlan plan_seed{};
   Gfn2SccIterationDeviceInput input_seed{};
   Gfn2SccIterationArenaRequirements arena_requirements{};
@@ -328,10 +356,31 @@ struct ProductionFixture {
   Gfn2SccIterationInitializationReady ready{};
   Gfn2SccIterationBinding binding{};
 
-  bool create(bool optional_components, std::uint64_t maximum_iterations = 8u) {
+  bool create(bool optional_components, std::uint64_t maximum_iterations = 8u,
+              std::int64_t batch_size = 4, bool unrestricted_spin = false,
+              SmallSystemKind unrestricted_system = SmallSystemKind::kHe,
+              double unrestricted_charge = 1.0, std::int32_t unrestricted_unpaired_electrons = 1) {
+    if (batch_size <= 0) {
+      return false;
+    }
     HostSccCaseOptions options{};
-    options.systems = {SmallSystemKind::kH2, SmallSystemKind::kHe, SmallSystemKind::kLiH,
-                       SmallSystemKind::kCH2};
+    constexpr SmallSystemKind kRestrictedSystems[]{SmallSystemKind::kH2, SmallSystemKind::kHe,
+                                                   SmallSystemKind::kLiH, SmallSystemKind::kCH2};
+    options.systems.clear();
+    options.systems.reserve(static_cast<std::size_t>(batch_size));
+    for (std::int64_t system = 0; system < batch_size; ++system) {
+      options.systems.push_back(
+          unrestricted_spin
+              ? unrestricted_system
+              : kRestrictedSystems[static_cast<std::size_t>(system) %
+                                   (sizeof(kRestrictedSystems) / sizeof(kRestrictedSystems[0]))]);
+    }
+    if (unrestricted_spin) {
+      options.molecular_charges.assign(static_cast<std::size_t>(batch_size), unrestricted_charge);
+      options.unpaired_electrons.assign(static_cast<std::size_t>(batch_size),
+                                        unrestricted_unpaired_electrons);
+      options.spin_channels.assign(static_cast<std::size_t>(batch_size), 2);
+    }
     options.geometry_generation = kGeometryGeneration;
     options.maximum_iterations = maximum_iterations;
     options.mixer_history = 3;
@@ -359,7 +408,8 @@ struct ProductionFixture {
       return false;
     }
     topology_diagnostic = topology_owner.bind_device_arena_and_upload_async(
-        topology_arena.get(), topology_arena.bytes(), device_topology, handles.stream());
+        topology_arena.get(), topology_arena.bytes(), device_topology, device_wavefunction,
+        handles.stream());
     if (!topology_diagnostic.success()) {
       std::fprintf(stderr, "production SCC topology upload failed: error=%u field=%u\n",
                    static_cast<unsigned>(topology_diagnostic.error),
@@ -381,8 +431,8 @@ struct ProductionFixture {
       return false;
     }
     input_diagnostic = inputs_owner.bind_device_arena_and_upload_async(
-        device_topology, input_arena.get(), input_arena.bytes(), plan_seed, input_seed,
-        handles.stream());
+        device_topology, device_wavefunction, input_arena.get(), input_arena.bytes(), plan_seed,
+        input_seed, handles.stream());
     if (!input_diagnostic.success()) {
       std::fprintf(stderr, "production SCC immutable-input upload failed: error=%u field=%u\n",
                    static_cast<unsigned>(input_diagnostic.error),
@@ -442,7 +492,10 @@ struct ProductionFixture {
     plan_seed.overlap_cache = eigensolver_binding.cache;
     plan_seed.eigensolver_options = eigensolver_binding.options;
 
-    const Gfn2SccIterationHostInitialization host_initialization = fresh_initialization(host);
+    const Gfn2SccIterationHostInitialization host_initialization =
+        unrestricted_spin ? fresh_initialization(topology_owner.host_wavefunction_layout(),
+                                                 host.wavefunction_layout(), host.wavefunction())
+                          : fresh_initialization(host);
     auto initialization_diagnostic = Gfn2SccIterationInitializer::create(
         plan_seed, arena_requirements, iteration_arena.get(), iteration_arena.bytes(), state_seed,
         workspace_seed, report_storage, host_initialization, initializer);
@@ -494,6 +547,36 @@ bool download_value(const T* device, T& host, cudaStream_t stream) {
 
 std::uint64_t failure_record(Gfn2SccStageId stage, std::uint32_t code) {
   return gfn2_scc_stage_failure_record(stage, code);
+}
+
+template <typename T>
+bool system_slice_is_byte_stable(const std::vector<T>& before, const std::vector<T>& after,
+                                 const std::vector<std::int64_t>& offsets, std::int64_t system) {
+  if (system < 0 || system + 1 >= static_cast<std::int64_t>(offsets.size()) ||
+      before.size() != after.size()) {
+    return false;
+  }
+  const std::int64_t begin = offsets[static_cast<std::size_t>(system)];
+  const std::int64_t end = offsets[static_cast<std::size_t>(system + 1)];
+  if (begin < 0 || begin > end || end > static_cast<std::int64_t>(before.size())) {
+    return false;
+  }
+  return std::memcmp(before.data() + begin, after.data() + begin,
+                     static_cast<std::size_t>(end - begin) * sizeof(T)) == 0;
+}
+
+bool system_slice_is_finite(const std::vector<double>& values,
+                            const std::vector<std::int64_t>& offsets, std::int64_t system) {
+  if (system < 0 || system + 1 >= static_cast<std::int64_t>(offsets.size())) {
+    return false;
+  }
+  const std::int64_t begin = offsets[static_cast<std::size_t>(system)];
+  const std::int64_t end = offsets[static_cast<std::size_t>(system + 1)];
+  if (begin < 0 || begin >= end || end > static_cast<std::int64_t>(values.size())) {
+    return false;
+  }
+  return std::all_of(values.begin() + begin, values.begin() + end,
+                     [](double value) { return std::isfinite(value); });
 }
 
 int test_terminal_peer_cpu_parity() {
@@ -790,6 +873,138 @@ int test_early_middle_and_late_peer_failures() {
   return 0;
 }
 
+int test_spin_stage_peer_failures_are_transactional() {
+  constexpr std::int64_t kTarget = 0;
+  constexpr std::int64_t kHealthy = 1;
+
+  struct Snapshot {
+    std::vector<double> qsh;
+    std::vector<double> eigenvalues;
+    std::vector<double> free_energies;
+  };
+  const auto capture = [](ProductionFixture& fixture, Snapshot& snapshot) {
+    return download(fixture.binding.state.raw_population.qsh,
+                    fixture.binding.state.raw_population.qsh_elements, snapshot.qsh,
+                    fixture.handles.stream()) &&
+           download(fixture.binding.state.eigenpairs.eigenvalues,
+                    fixture.binding.state.eigenpairs.eigenvalue_elements, snapshot.eigenvalues,
+                    fixture.handles.stream()) &&
+           download(fixture.binding.state.scc.free_energies,
+                    fixture.binding.state.scc.batch_elements, snapshot.free_energies,
+                    fixture.handles.stream());
+  };
+  const auto verify = [&](ProductionFixture& fixture, const Snapshot& before,
+                          Gfn2SccStageId expected_stage, std::uint32_t expected_code,
+                          std::uint64_t target_iterations) {
+    const auto& layout = fixture.host.wavefunction_layout();
+    Snapshot after;
+    std::vector<std::uint64_t> iterations;
+    std::vector<gpuxtb_status_t> statuses;
+    std::vector<std::uint64_t> failures;
+    std::uint64_t plan_failure = 1u;
+    CHECK(capture(fixture, after));
+    CHECK(download(fixture.binding.state.scc.iterations, fixture.host.batch_size(), iterations,
+                   fixture.handles.stream()));
+    CHECK(download(fixture.binding.state.scc.system_statuses, fixture.host.batch_size(), statuses,
+                   fixture.handles.stream()));
+    CHECK(download(fixture.binding.workspace.ledger.system_failure_records,
+                   fixture.host.batch_size(), failures, fixture.handles.stream()));
+    CHECK(download_value(fixture.binding.workspace.ledger.plan_failure_record, plan_failure,
+                         fixture.handles.stream()));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+    CHECK(iterations[kTarget] == target_iterations);
+    CHECK(statuses[kTarget] == GPUXTB_STATUS_INTERNAL_ERROR);
+    CHECK(failures[kTarget] == failure_record(expected_stage, expected_code));
+    CHECK(system_slice_is_byte_stable(before.qsh, after.qsh, layout.qsh.system_offsets, kTarget));
+    CHECK(system_slice_is_byte_stable(before.eigenvalues, after.eigenvalues,
+                                      layout.eigenvalues.system_offsets, kTarget));
+    /* Failure publication updates only the canonical trace/status fields; a
+     * fresh mixed-spin energy trace is already represented by quiet NaN. */
+    CHECK(std::isnan(after.free_energies[kTarget]));
+
+    CHECK(iterations[kHealthy] == 1u);
+    CHECK(statuses[kHealthy] == GPUXTB_STATUS_SUCCESS);
+    CHECK(failures[kHealthy] == 0u);
+    CHECK(system_slice_is_finite(after.qsh, layout.qsh.system_offsets, kHealthy));
+    CHECK(system_slice_is_finite(after.eigenvalues, layout.eigenvalues.system_offsets, kHealthy));
+    CHECK(!system_slice_is_byte_stable(before.eigenvalues, after.eigenvalues,
+                                       layout.eigenvalues.system_offsets, kHealthy));
+    CHECK(plan_failure == 0u);
+    return 0;
+  };
+
+  /* Coupling data is not consumed by MixedGather. A peer-local NaN therefore
+   * reaches the first spin stage and proves exact SpinPotential attribution. */
+  {
+    ProductionFixture fixture;
+    CHECK(fixture.create(false, 8u, 2, true, SmallSystemKind::kCH2, 0.0, 2));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+    Snapshot before;
+    CHECK(capture(fixture, before));
+    std::vector<std::int64_t> coupling_offsets;
+    CHECK(download(fixture.binding.plan.spin_batch.coupling_offsets,
+                   fixture.binding.plan.spin_batch.coupling_offset_count, coupling_offsets,
+                   fixture.handles.stream()));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    const std::int64_t atom_begin = fixture.host.atom_offsets()[kTarget];
+    const std::int64_t coupling = coupling_offsets[static_cast<std::size_t>(atom_begin)];
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    CHECK(upload(&nan,
+                 const_cast<double*>(fixture.binding.plan.spin_batch.coupling_matrices) + coupling,
+                 1, fixture.handles.stream()));
+
+    CHECK(launch_gfn2_scc_iteration_cuda(fixture.binding, fixture.handles.stream()).success());
+    CHECK(verify(fixture, before, Gfn2SccStageId::kSpinPotential,
+                 static_cast<std::uint32_t>(Gfn2SpinDeviceError::kInvalidCoupling), 0u) == 0);
+  }
+
+  /* Zero mixed magnetization makes DBL_MAX coupling harmless in
+   * SpinPotential. Mulliken then reconstructs the neutral CH2 triplet's
+   * two-electron raw magnetization, so the same finite W overflows only in
+   * SpinRawEnergy. The healthy peer retains its production coupling data. */
+  {
+    ProductionFixture fixture;
+    CHECK(fixture.create(false, 8u, 2, true, SmallSystemKind::kCH2, 0.0, 2));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+    const auto& layout = fixture.host.wavefunction_layout();
+    const std::int64_t physical_shell_begin = layout.batch_shell_offsets[kTarget];
+    const std::int64_t physical_shell_end = layout.batch_shell_offsets[kTarget + 1];
+    const std::int64_t shell_count = physical_shell_end - physical_shell_begin;
+    const std::int64_t magnetization_begin = layout.qsh.system_offsets[kTarget] + shell_count;
+    std::vector<double> zero_magnetization(static_cast<std::size_t>(shell_count), 0.0);
+    CHECK(upload(zero_magnetization.data(),
+                 fixture.binding.state.scc.current_inputs.shell_charges + magnetization_begin,
+                 shell_count, fixture.handles.stream()));
+
+    std::vector<std::int64_t> coupling_offsets;
+    CHECK(download(fixture.binding.plan.spin_batch.coupling_offsets,
+                   fixture.binding.plan.spin_batch.coupling_offset_count, coupling_offsets,
+                   fixture.handles.stream()));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    const std::int64_t atom_begin = fixture.host.atom_offsets()[kTarget];
+    const std::int64_t atom_end = fixture.host.atom_offsets()[kTarget + 1];
+    const std::int64_t coupling_begin = coupling_offsets[static_cast<std::size_t>(atom_begin)];
+    const std::int64_t coupling_end = coupling_offsets[static_cast<std::size_t>(atom_end)];
+    std::vector<double> extreme_coupling(static_cast<std::size_t>(coupling_end - coupling_begin),
+                                         std::numeric_limits<double>::max());
+    CHECK(upload(
+        extreme_coupling.data(),
+        const_cast<double*>(fixture.binding.plan.spin_batch.coupling_matrices) + coupling_begin,
+        coupling_end - coupling_begin, fixture.handles.stream()));
+
+    Snapshot before;
+    CHECK(capture(fixture, before));
+    CHECK(launch_gfn2_scc_iteration_cuda(fixture.binding, fixture.handles.stream()).success());
+    CHECK(verify(fixture, before, Gfn2SccStageId::kSpinRawEnergy,
+                 static_cast<std::uint32_t>(Gfn2SpinDeviceError::kNonfinitePotentialArithmetic),
+                 1u) == 0);
+  }
+  return 0;
+}
+
 int test_graph_replay_peer_failure() {
   ProductionFixture fixture;
   CHECK(fixture.create(false));
@@ -988,6 +1203,10 @@ int main() {
     return status;
   }
   status = test_early_middle_and_late_peer_failures();
+  if (status != 0) {
+    return status;
+  }
+  status = test_spin_stage_peer_failures_are_transactional();
   if (status != 0) {
     return status;
   }

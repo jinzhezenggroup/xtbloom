@@ -12,7 +12,8 @@
 
 namespace gpuxtb::detail::cuda {
 
-inline constexpr std::uint32_t kGfn2SccIterationInitializationAbiVersion = 1u;
+/* ABI v3 requires an exact setup-sealed spin layout for mixed-spin restores. */
+inline constexpr std::uint32_t kGfn2SccIterationInitializationAbiVersion = 3u;
 
 enum class Gfn2SccIterationInitializationMode : std::uint32_t {
   kFresh = 1u,
@@ -88,9 +89,12 @@ struct Gfn2SccIterationHostPopulationView {
 };
 
 /*
- * Complete restricted public wavefunction checkpoint. Fresh initialization
- * requires only population and leaves every other field canonically empty;
- * warm initialization requires every field at its exact packed extent.
+ * Complete public wavefunction checkpoint. Fresh initialization requires only
+ * population and leaves every other field canonically empty; warm
+ * initialization requires every field at its exact packed extent. The four
+ * channel diagnostics were appended in ABI v2 because aggregate batch totals
+ * cannot reconstruct an unrestricted checkpoint. ABI v3 additionally seals
+ * the exact per-system spin packing through wavefunction_layout.
  */
 struct Gfn2SccIterationHostWavefunctionView {
   Gfn2SccIterationHostArrayView<double> eigenvalues{};
@@ -107,6 +111,10 @@ struct Gfn2SccIterationHostWavefunctionView {
   Gfn2SccIterationHostArrayView<double> weighted_density_traces{};
   Gfn2SccIterationHostPopulationView population{};
   std::uint64_t plan_token = 0u;
+  Gfn2SccIterationHostArrayView<double> channel_band_energies{};
+  Gfn2SccIterationHostArrayView<double> channel_occupation_sums{};
+  Gfn2SccIterationHostArrayView<double> channel_density_traces{};
+  Gfn2SccIterationHostArrayView<double> channel_weighted_density_traces{};
 };
 
 /* Complete CPU-driver-compatible component and free-energy trace. */
@@ -123,6 +131,9 @@ struct Gfn2SccIterationHostEnergyView {
   Gfn2SccIterationHostArrayView<double> free_energy{};
   Gfn2SccIterationHostArrayView<double> classical_total{};
   std::uint64_t plan_token = 0u;
+  /* One spin-polarization energy per physical system. Restricted checkpoints
+   * may leave this empty and are restored as exact +0.0. */
+  Gfn2SccIterationHostArrayView<double> spin{};
 };
 
 /* Exact persistent modified-Broyden checkpoint used only for warm starts. */
@@ -171,6 +182,11 @@ struct Gfn2SccIterationHostInitialization {
   Gfn2SccIterationHostEnergyView energy{};
   Gfn2SccIterationHostMixerView mixer{};
   Gfn2SccIterationHostTraceView scc{};
+  /* Host-memory mirror of the production WavefunctionLayout. It is mandatory
+   * when any system has two spin channels. Restricted ABI-v1-style callers may
+   * leave it empty; the initializer then projects an exact one-channel layout
+   * from topology.atom_offsets/shell_offsets. */
+  Gfn2WavefunctionLayoutView wavefunction_layout{};
 };
 
 /*

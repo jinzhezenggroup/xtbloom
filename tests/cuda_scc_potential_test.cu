@@ -22,7 +22,10 @@
 
 namespace {
 
+using gpuxtb::detail::Gfn2PlanMemorySpace;
+using gpuxtb::detail::Gfn2WavefunctionLayoutView;
 using gpuxtb::detail::cuda::compose_gfn2_scc_potentials_cuda;
+using gpuxtb::detail::cuda::compose_gfn2_scc_spin_potentials_cuda;
 using gpuxtb::detail::cuda::gather_gfn2_scc_mixed_multipoles_cuda;
 using gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity;
 using gpuxtb::detail::cuda::Gfn2SccPotentialComponent;
@@ -32,6 +35,7 @@ using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceComponents;
 using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceError;
 using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields;
 using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceResults;
+using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceSpinComponent;
 using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceTopologyMultipoles;
 using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace;
 using gpuxtb::detail::cuda::kGfn2SccPotentialAllComponents;
@@ -536,6 +540,175 @@ struct DeviceFixture {
             kPlanToken};
   }
 };
+
+struct HostSpinPotentialCase {
+  std::vector<std::int32_t> channels;
+  std::vector<std::int64_t> channel_offsets{0};
+  std::vector<std::int64_t> shell_offsets{0};
+  std::vector<std::int64_t> atom_offsets{0};
+  std::vector<double> spin_shell;
+};
+
+HostSpinPotentialCase make_spin_case(const HostCase& host) {
+  HostSpinPotentialCase spin;
+  spin.channels.reserve(static_cast<std::size_t>(host.batch_size));
+  for (std::size_t system = 0; system < static_cast<std::size_t>(host.batch_size); ++system) {
+    const std::int32_t channels = system % 2u == 0u ? 1 : 2;
+    const std::int64_t shells = host.shell_offsets[system + 1u] - host.shell_offsets[system];
+    const std::int64_t atoms = host.atom_offsets[system + 1u] - host.atom_offsets[system];
+    spin.channels.push_back(channels);
+    spin.channel_offsets.push_back(spin.channel_offsets.back() + channels);
+    spin.shell_offsets.push_back(spin.shell_offsets.back() + channels * shells);
+    spin.atom_offsets.push_back(spin.atom_offsets.back() + channels * atoms);
+  }
+  spin.spin_shell.assign(static_cast<std::size_t>(spin.shell_offsets.back()),
+                         std::numeric_limits<double>::quiet_NaN());
+  for (std::size_t system = 0; system < static_cast<std::size_t>(host.batch_size); ++system) {
+    if (spin.channels[system] != 2) {
+      continue;
+    }
+    const std::int64_t shells = host.shell_offsets[system + 1u] - host.shell_offsets[system];
+    for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
+      spin.spin_shell[static_cast<std::size_t>(spin.shell_offsets[system] + shells + local_shell)] =
+          0.037 * static_cast<double>(1 + (system * 11u + static_cast<std::size_t>(local_shell)) %
+                                              23u) -
+          0.21;
+    }
+  }
+  return spin;
+}
+
+struct SpinPotentialFixture {
+  DeviceBuffer<std::int32_t> channels;
+  DeviceBuffer<std::int64_t> channel_offsets;
+  DeviceBuffer<std::int64_t> shell_offsets;
+  DeviceBuffer<std::int64_t> atom_offsets;
+  DeviceBuffer<double> spin_shell;
+  DeviceBuffer<double> result_shell;
+  DeviceBuffer<double> result_atom;
+  DeviceBuffer<double> result_dipole;
+  DeviceBuffer<double> result_quadrupole;
+  DeviceBuffer<double> scratch_shell;
+  DeviceBuffer<double> scratch_atom;
+  DeviceBuffer<double> scratch_dipole;
+  DeviceBuffer<double> scratch_quadrupole;
+  DeviceBuffer<std::uint32_t> sequence_active;
+
+  cudaError_t initialize(const HostSpinPotentialCase& host, cudaStream_t stream = nullptr) {
+    cudaError_t status = upload(channels, host.channels, stream);
+#define UPLOAD_SPIN(field, source)          \
+  if (status == cudaSuccess) {              \
+    status = upload(field, source, stream); \
+  }
+    UPLOAD_SPIN(channel_offsets, host.channel_offsets)
+    UPLOAD_SPIN(shell_offsets, host.shell_offsets)
+    UPLOAD_SPIN(atom_offsets, host.atom_offsets)
+    UPLOAD_SPIN(spin_shell, host.spin_shell)
+#undef UPLOAD_SPIN
+    const std::size_t shells = host.spin_shell.size();
+    const std::size_t atoms = static_cast<std::size_t>(host.atom_offsets.back());
+#define ALLOCATE_SPIN(field, count) \
+  if (status == cudaSuccess) {      \
+    status = field.allocate(count); \
+  }
+    ALLOCATE_SPIN(result_shell, shells)
+    ALLOCATE_SPIN(result_atom, atoms)
+    ALLOCATE_SPIN(result_dipole, 3u * atoms)
+    ALLOCATE_SPIN(result_quadrupole, 6u * atoms)
+    ALLOCATE_SPIN(scratch_shell, shells)
+    ALLOCATE_SPIN(scratch_atom, atoms)
+    ALLOCATE_SPIN(scratch_dipole, 3u * atoms)
+    ALLOCATE_SPIN(scratch_quadrupole, 6u * atoms)
+    ALLOCATE_SPIN(sequence_active, 1u)
+#undef ALLOCATE_SPIN
+    return status == cudaSuccess ? reset(host, stream) : status;
+  }
+
+  cudaError_t reset(const HostSpinPotentialCase& host, cudaStream_t stream = nullptr) {
+    cudaError_t status = result_shell.fill(kSentinel, host.spin_shell.size(), stream);
+#define FILL_SPIN(field, count)                                              \
+  if (status == cudaSuccess) {                                               \
+    status = field.fill(kSentinel, static_cast<std::size_t>(count), stream); \
+  }
+    FILL_SPIN(result_atom, host.atom_offsets.back())
+    FILL_SPIN(result_dipole, 3 * host.atom_offsets.back())
+    FILL_SPIN(result_quadrupole, 6 * host.atom_offsets.back())
+#undef FILL_SPIN
+    return status;
+  }
+
+  Gfn2WavefunctionLayoutView layout(const HostCase& physical,
+                                    const HostSpinPotentialCase& host) const {
+    return {Gfn2PlanMemorySpace::kCudaDevice,
+            kPlanToken,
+            0x51cc0deULL,
+            physical.batch_size,
+            host.channel_offsets.back(),
+            0,
+            0,
+            host.shell_offsets.back(),
+            host.atom_offsets.back(),
+            static_cast<std::int64_t>(host.channels.size()),
+            static_cast<std::int64_t>(host.channel_offsets.size()),
+            0,
+            0,
+            static_cast<std::int64_t>(host.shell_offsets.size()),
+            static_cast<std::int64_t>(host.atom_offsets.size()),
+            channels.get(),
+            channel_offsets.get(),
+            nullptr,
+            nullptr,
+            shell_offsets.get(),
+            atom_offsets.get()};
+  }
+
+  Gfn2SccPotentialDeviceSpinComponent spin(const HostSpinPotentialCase& host) const {
+    return {spin_shell.get(), static_cast<std::int64_t>(host.spin_shell.size()), kPlanToken};
+  }
+
+  Gfn2SccPotentialDeviceResults results(const HostSpinPotentialCase& host) {
+    const std::int64_t atoms = host.atom_offsets.back();
+    return {result_shell.get(),
+            static_cast<std::int64_t>(host.spin_shell.size()),
+            result_atom.get(),
+            atoms,
+            result_dipole.get(),
+            3 * atoms,
+            result_quadrupole.get(),
+            6 * atoms,
+            kPlanToken};
+  }
+
+  Gfn2SccPotentialDeviceWorkspace workspace(const HostSpinPotentialCase& host) {
+    const std::int64_t atoms = host.atom_offsets.back();
+    return {scratch_shell.get(),
+            static_cast<std::int64_t>(host.spin_shell.size()),
+            scratch_atom.get(),
+            atoms,
+            scratch_dipole.get(),
+            3 * atoms,
+            scratch_quadrupole.get(),
+            6 * atoms,
+            sequence_active.get(),
+            1,
+            kPlanToken};
+  }
+};
+
+cudaError_t launch_spin_potential(DeviceFixture& physical, SpinPotentialFixture& spin_device,
+                                  const HostCase& host, const HostSpinPotentialCase& spin_host,
+                                  std::uint32_t mask, cudaStream_t stream = nullptr) {
+  cudaError_t status = reset_gfn2_scc_potential_device_errors_cuda(
+      host.batch_size, physical.system_errors.get(), physical.device_error.get(), stream);
+  if (status == cudaSuccess) {
+    status = compose_gfn2_scc_spin_potentials_cuda(
+        physical.batch(host), spin_device.layout(host, spin_host), physical.components(host, mask),
+        spin_device.spin(spin_host), physical.activity(host), spin_device.results(spin_host),
+        spin_device.workspace(spin_host), physical.system_errors.get(), physical.device_error.get(),
+        stream);
+  }
+  return status;
+}
 
 cudaError_t launch_sequence(DeviceFixture& device, const HostCase& host, std::uint32_t mask,
                             cudaStream_t stream = nullptr) {
@@ -1367,6 +1540,199 @@ int test_canonical_zero_copy_reduction_and_compose() {
   return 0;
 }
 
+int run_spin_potential_parity(std::size_t batch_size, bool graph) {
+  HostCase host = make_case(batch_size);
+  const HostSpinPotentialCase spin_host = make_spin_case(host);
+  const ComposeResult raw = compose_reference(host, kGfn2SccPotentialAllComponents);
+  DeviceFixture physical;
+  SpinPotentialFixture spin_device;
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  CUDA_CHECK(physical.initialize(host, stream));
+  CUDA_CHECK(spin_device.initialize(spin_host, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  if (graph) {
+    cudaGraph_t captured = nullptr;
+    cudaGraphExec_t executable = nullptr;
+    CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+    CUDA_CHECK(launch_spin_potential(physical, spin_device, host, spin_host,
+                                     kGfn2SccPotentialAllComponents, stream));
+    CUDA_CHECK(cudaStreamEndCapture(stream, &captured));
+    CUDA_CHECK(cudaGraphInstantiate(&executable, captured, nullptr, nullptr, 0));
+    CUDA_CHECK(cudaGraphLaunch(executable, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    /* Graph replay must read current device values rather than capture the
+     * numerical spin field. Change one unrestricted magnetization entry. */
+    std::vector<double> changed = spin_host.spin_shell;
+    const std::size_t system = batch_size > 1u ? 1u : 0u;
+    if (spin_host.channels[system] == 2 &&
+        spin_host.shell_offsets[system + 1u] > spin_host.shell_offsets[system]) {
+      const std::int64_t shells = host.shell_offsets[system + 1u] - host.shell_offsets[system];
+      changed[static_cast<std::size_t>(spin_host.shell_offsets[system] + shells)] += 0.125;
+      CUDA_CHECK(spin_device.spin_shell.copy_from(changed.data(), changed.size(), stream));
+      CUDA_CHECK(cudaGraphLaunch(executable, stream));
+      CUDA_CHECK(cudaStreamSynchronize(stream));
+    }
+    CUDA_CHECK(cudaGraphExecDestroy(executable));
+    CUDA_CHECK(cudaGraphDestroy(captured));
+  } else {
+    CUDA_CHECK(launch_spin_potential(physical, spin_device, host, spin_host,
+                                     kGfn2SccPotentialAllComponents, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+  }
+
+  std::vector<double> shell(spin_host.spin_shell.size());
+  std::vector<double> atom(static_cast<std::size_t>(spin_host.atom_offsets.back()));
+  std::vector<double> dipole(3u * atom.size());
+  std::vector<double> quadrupole(6u * atom.size());
+  std::vector<std::uint32_t> errors(batch_size);
+  std::uint32_t diagnostic = 99u;
+  CUDA_CHECK(spin_device.result_shell.copy_to(shell.data(), shell.size(), stream));
+  CUDA_CHECK(spin_device.result_atom.copy_to(atom.data(), atom.size(), stream));
+  CUDA_CHECK(spin_device.result_dipole.copy_to(dipole.data(), dipole.size(), stream));
+  CUDA_CHECK(spin_device.result_quadrupole.copy_to(quadrupole.data(), quadrupole.size(), stream));
+  CUDA_CHECK(physical.system_errors.copy_to(errors.data(), errors.size(), stream));
+  CUDA_CHECK(physical.device_error.copy_to(&diagnostic, 1u, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  for (std::size_t system = 0; system < batch_size; ++system) {
+    const std::int64_t shells = host.shell_offsets[system + 1u] - host.shell_offsets[system];
+    const std::int64_t atoms = host.atom_offsets[system + 1u] - host.atom_offsets[system];
+    for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
+      const std::int64_t physical_shell = host.shell_offsets[system] + local_shell;
+      const std::int64_t physical_atom =
+          host.shell_to_atom[static_cast<std::size_t>(physical_shell)];
+      const double complete =
+          raw.shell[static_cast<std::size_t>(host.qsh_offsets[system] + local_shell)] +
+          raw.atom[static_cast<std::size_t>(host.qat_offsets[system] + physical_atom -
+                                            host.atom_offsets[system])];
+      CHECK(near(shell[static_cast<std::size_t>(spin_host.shell_offsets[system] + local_shell)],
+                 complete));
+      if (spin_host.channels[system] == 2) {
+        const std::size_t magnetization =
+            static_cast<std::size_t>(spin_host.shell_offsets[system] + shells + local_shell);
+        double expected = spin_host.spin_shell[magnetization];
+        if (graph && system == 1u && local_shell == 0) {
+          expected += 0.125;
+        }
+        CHECK(near(shell[magnetization], expected));
+      }
+    }
+    for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
+      const std::int64_t physical_atom = host.atom_offsets[system] + local_atom;
+      const std::int64_t charge_atom = spin_host.atom_offsets[system] + local_atom;
+      CHECK(near(atom[static_cast<std::size_t>(charge_atom)],
+                 raw.atom[static_cast<std::size_t>(host.qat_offsets[system] + local_atom)]));
+      for (int component = 0; component < 3; ++component) {
+        CHECK(near(dipole[static_cast<std::size_t>(3 * charge_atom + component)],
+                   raw.dipole[static_cast<std::size_t>(3 * physical_atom + component)]));
+      }
+      for (int component = 0; component < 6; ++component) {
+        CHECK(near(quadrupole[static_cast<std::size_t>(6 * charge_atom + component)],
+                   raw.quadrupole[static_cast<std::size_t>(6 * physical_atom + component)]));
+      }
+      if (spin_host.channels[system] == 2) {
+        const std::int64_t magnetization_atom = spin_host.atom_offsets[system] + atoms + local_atom;
+        CHECK(atom[static_cast<std::size_t>(magnetization_atom)] == 0.0);
+        for (int component = 0; component < 3; ++component) {
+          CHECK(dipole[static_cast<std::size_t>(3 * magnetization_atom + component)] == 0.0);
+        }
+        for (int component = 0; component < 6; ++component) {
+          CHECK(quadrupole[static_cast<std::size_t>(6 * magnetization_atom + component)] == 0.0);
+        }
+      }
+    }
+  }
+  CHECK(std::all_of(errors.begin(), errors.end(), [](std::uint32_t value) { return value == 0u; }));
+  CHECK(diagnostic == 0u);
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
+int test_spin_potential_failure_and_alias_contracts() {
+  HostCase host = make_case(8u);
+  constexpr std::size_t inactive = 3u;
+  constexpr std::size_t nonfinite = 5u;
+  host.active[inactive] = 0u;
+  HostSpinPotentialCase spin_host = make_spin_case(host);
+  CHECK(spin_host.channels[inactive] == 2);
+  CHECK(spin_host.channels[nonfinite] == 2);
+  const std::int64_t inactive_shells =
+      host.shell_offsets[inactive + 1u] - host.shell_offsets[inactive];
+  const std::int64_t nonfinite_shells =
+      host.shell_offsets[nonfinite + 1u] - host.shell_offsets[nonfinite];
+  if (inactive_shells != 0) {
+    spin_host
+        .spin_shell[static_cast<std::size_t>(spin_host.shell_offsets[inactive] + inactive_shells)] =
+        std::numeric_limits<double>::infinity();
+  }
+  if (nonfinite_shells != 0) {
+    spin_host.spin_shell[static_cast<std::size_t>(spin_host.shell_offsets[nonfinite] +
+                                                  nonfinite_shells)] =
+        std::numeric_limits<double>::quiet_NaN();
+  }
+  DeviceFixture physical;
+  SpinPotentialFixture spin_device;
+  CUDA_CHECK(physical.initialize(host));
+  CUDA_CHECK(spin_device.initialize(spin_host));
+  CUDA_CHECK(launch_spin_potential(physical, spin_device, host, spin_host,
+                                   kGfn2SccPotentialAllComponents));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  std::vector<double> shell(spin_host.spin_shell.size());
+  std::vector<std::uint32_t> errors(8u);
+  CUDA_CHECK(spin_device.result_shell.copy_to(shell.data(), shell.size()));
+  CUDA_CHECK(physical.system_errors.copy_to(errors.data(), errors.size()));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(errors[inactive] == 0u);
+  CHECK(errors[nonfinite] ==
+        static_cast<std::uint32_t>(Gfn2SccPotentialDeviceError::kNonfiniteSpinPotential));
+  for (std::int64_t index = spin_host.shell_offsets[inactive];
+       index < spin_host.shell_offsets[inactive + 1u]; ++index) {
+    CHECK(shell[static_cast<std::size_t>(index)] == kSentinel);
+  }
+  for (std::int64_t index = spin_host.shell_offsets[nonfinite];
+       index < spin_host.shell_offsets[nonfinite + 1u]; ++index) {
+    CHECK(shell[static_cast<std::size_t>(index)] == kSentinel);
+  }
+  CHECK(shell[static_cast<std::size_t>(spin_host.shell_offsets[1])] != kSentinel);
+
+  auto layout = spin_device.layout(host, spin_host);
+  auto spin = spin_device.spin(spin_host);
+  auto results = spin_device.results(spin_host);
+  auto workspace = spin_device.workspace(spin_host);
+  const auto batch = physical.batch(host);
+  const auto components = physical.components(host, kGfn2SccPotentialAllComponents);
+  const auto activity = physical.activity(host);
+  auto wrong_layout = layout;
+  wrong_layout.memory_space = Gfn2PlanMemorySpace::kHost;
+  CHECK(compose_gfn2_scc_spin_potentials_cuda(
+            batch, wrong_layout, components, spin, activity, results, workspace,
+            physical.system_errors.get(), physical.device_error.get()) == cudaErrorInvalidValue);
+  auto short_spin = spin;
+  --short_spin.shell_elements;
+  CHECK(compose_gfn2_scc_spin_potentials_cuda(
+            batch, layout, components, short_spin, activity, results, workspace,
+            physical.system_errors.get(), physical.device_error.get()) == cudaErrorInvalidValue);
+  auto alias_result = results;
+  alias_result.shell = const_cast<double*>(spin.shell);
+  CHECK(compose_gfn2_scc_spin_potentials_cuda(
+            batch, layout, components, spin, activity, alias_result, workspace,
+            physical.system_errors.get(), physical.device_error.get()) == cudaErrorInvalidValue);
+  auto partial_workspace = workspace;
+  partial_workspace.shell_scratch = results.shell + 1;
+  CHECK(compose_gfn2_scc_spin_potentials_cuda(
+            batch, layout, components, spin, activity, results, partial_workspace,
+            physical.system_errors.get(), physical.device_error.get()) == cudaErrorInvalidValue);
+  auto alias_layout = layout;
+  alias_layout.spin_shell_offsets = reinterpret_cast<const std::int64_t*>(results.shell);
+  CHECK(compose_gfn2_scc_spin_potentials_cuda(
+            batch, alias_layout, components, spin, activity, results, workspace,
+            physical.system_errors.get(), physical.device_error.get()) == cudaErrorInvalidValue);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -1380,7 +1746,18 @@ int main() {
     std::fprintf(stderr, "CUDA SCC potential Graph failed at line %d\n", status);
     return status;
   }
-  const std::array<int (*)(), 12> tests{{
+  for (const std::size_t batch_size : {1u, 8u, 32u, 128u}) {
+    if (const int status = run_spin_potential_parity(batch_size, false); status != 0) {
+      std::fprintf(stderr, "CUDA spin SCC potential batch-%zu failed at line %d\n", batch_size,
+                   status);
+      return status;
+    }
+  }
+  if (const int status = run_spin_potential_parity(8u, true); status != 0) {
+    std::fprintf(stderr, "CUDA spin SCC potential Graph failed at line %d\n", status);
+    return status;
+  }
+  const std::array<int (*)(), 13> tests{{
       test_disabled_null_zero,
       test_one_hot_component_wiring,
       test_inactive_poison_and_bad_mapping_peer_isolation,
@@ -1393,6 +1770,7 @@ int main() {
       test_invalid_active_mask_peer_isolation,
       test_alias_token_misalignment_and_reset_validation,
       test_canonical_zero_copy_reduction_and_compose,
+      test_spin_potential_failure_and_alias_contracts,
   }};
   for (const auto test : tests) {
     const int status = test();

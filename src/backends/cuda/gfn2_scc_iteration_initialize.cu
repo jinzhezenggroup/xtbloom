@@ -62,12 +62,17 @@ bool checked_add(std::int64_t first, std::int64_t second, std::int64_t& result) 
 
 struct Shape {
   std::int64_t batch = 0;
-  std::int64_t atoms = 0;
-  std::int64_t shells = 0;
-  std::int64_t orbitals = 0;
-  std::int64_t matrices = 0;
-  std::int64_t dipoles = 0;
-  std::int64_t quadrupoles = 0;
+  std::int64_t physical_atoms = 0;
+  std::int64_t physical_shells = 0;
+  std::int64_t physical_orbitals = 0;
+  std::int64_t physical_matrices = 0;
+  std::int64_t spin_channels = 0;
+  std::int64_t spin_atoms = 0;
+  std::int64_t spin_shells = 0;
+  std::int64_t spin_orbitals = 0;
+  std::int64_t spin_matrices = 0;
+  std::int64_t spin_dipoles = 0;
+  std::int64_t spin_quadrupoles = 0;
   std::int64_t two_batch = 0;
   std::int64_t two_orbitals = 0;
   std::int64_t mixer_vector = 0;
@@ -76,6 +81,7 @@ struct Shape {
   std::int64_t omega_elements = 0;
   std::uint32_t components = 0u;
   std::uint64_t token = 0u;
+  std::uint64_t layout_fingerprint = 0u;
 };
 
 bool derive_shape(const Gfn2SccIterationDevicePlan& plan, Shape& shape) noexcept {
@@ -84,25 +90,47 @@ bool derive_shape(const Gfn2SccIterationDevicePlan& plan, Shape& shape) noexcept
       plan.topology.plan_token != plan.plan_token || plan.topology.batch_size <= 0 ||
       plan.topology.total_atoms <= 0 || plan.topology.total_shells <= 0 ||
       plan.topology.total_orbitals <= 0 || plan.topology.total_matrix_elements <= 0 ||
+      plan.wavefunction_layout.memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
+      plan.wavefunction_layout.plan_token != plan.plan_token ||
+      plan.wavefunction_layout.layout_fingerprint == 0u ||
+      plan.wavefunction_layout.batch_size != plan.topology.batch_size ||
       plan.mixer_policy.history_size <= 0 ||
       (plan.enabled_components & kMandatoryComponents) != kMandatoryComponents ||
       (plan.enabled_components & ~kGfn2SccPotentialAllComponents) != 0u) {
     return false;
   }
+  const auto valid_spin_extent = [](std::int64_t physical, std::int64_t spin) noexcept {
+    return spin >= physical && spin - physical <= physical;
+  };
+  if (!valid_spin_extent(plan.topology.batch_size, plan.wavefunction_layout.total_spin_channels) ||
+      !valid_spin_extent(plan.topology.total_atoms, plan.wavefunction_layout.total_spin_atoms) ||
+      !valid_spin_extent(plan.topology.total_shells, plan.wavefunction_layout.total_spin_shells) ||
+      !valid_spin_extent(plan.topology.total_orbitals,
+                         plan.wavefunction_layout.total_spin_orbitals) ||
+      !valid_spin_extent(plan.topology.total_matrix_elements,
+                         plan.wavefunction_layout.total_spin_matrix_elements)) {
+    return false;
+  }
   shape.batch = plan.topology.batch_size;
-  shape.atoms = plan.topology.total_atoms;
-  shape.shells = plan.topology.total_shells;
-  shape.orbitals = plan.topology.total_orbitals;
-  shape.matrices = plan.topology.total_matrix_elements;
+  shape.physical_atoms = plan.topology.total_atoms;
+  shape.physical_shells = plan.topology.total_shells;
+  shape.physical_orbitals = plan.topology.total_orbitals;
+  shape.physical_matrices = plan.topology.total_matrix_elements;
+  shape.spin_channels = plan.wavefunction_layout.total_spin_channels;
+  shape.spin_atoms = plan.wavefunction_layout.total_spin_atoms;
+  shape.spin_shells = plan.wavefunction_layout.total_spin_shells;
+  shape.spin_orbitals = plan.wavefunction_layout.total_spin_orbitals;
+  shape.spin_matrices = plan.wavefunction_layout.total_spin_matrix_elements;
   shape.history = plan.mixer_policy.history_size;
   shape.components = plan.enabled_components;
   shape.token = plan.plan_token;
-  return checked_multiply(shape.atoms, 3, shape.dipoles) &&
-         checked_multiply(shape.atoms, 6, shape.quadrupoles) &&
+  shape.layout_fingerprint = plan.wavefunction_layout.layout_fingerprint;
+  return checked_multiply(shape.spin_atoms, 3, shape.spin_dipoles) &&
+         checked_multiply(shape.spin_atoms, 6, shape.spin_quadrupoles) &&
          checked_multiply(shape.batch, 2, shape.two_batch) &&
-         checked_multiply(shape.orbitals, 2, shape.two_orbitals) &&
-         checked_multiply(shape.atoms, 9, shape.mixer_vector) &&
-         checked_add(shape.shells, shape.mixer_vector, shape.mixer_vector) &&
+         checked_multiply(shape.physical_orbitals, 2, shape.two_orbitals) &&
+         checked_multiply(shape.spin_atoms, 9, shape.mixer_vector) &&
+         checked_add(shape.spin_shells, shape.mixer_vector, shape.mixer_vector) &&
          checked_multiply(shape.mixer_vector, shape.history, shape.history_elements) &&
          checked_multiply(shape.batch, shape.history, shape.omega_elements);
 }
@@ -162,20 +190,121 @@ bool valid_offsets(const Gfn2SccIterationHostArrayView<std::int64_t>& offsets,
   return true;
 }
 
+bool empty_host_wavefunction_layout(const Gfn2WavefunctionLayoutView& layout) noexcept {
+  return layout.memory_space == Gfn2PlanMemorySpace::kHost && layout.plan_token == 0u &&
+         layout.layout_fingerprint == 0u && layout.batch_size == 0 &&
+         layout.total_spin_channels == 0 && layout.total_spin_orbitals == 0 &&
+         layout.total_spin_matrix_elements == 0 && layout.total_spin_shells == 0 &&
+         layout.total_spin_atoms == 0 && layout.spin_channel_count == 0 &&
+         layout.spin_channel_offset_count == 0 && layout.spin_orbital_offset_count == 0 &&
+         layout.spin_matrix_offset_count == 0 && layout.spin_shell_offset_count == 0 &&
+         layout.spin_atom_offset_count == 0 && layout.spin_channels == nullptr &&
+         layout.spin_channel_offsets == nullptr && layout.spin_orbital_offsets == nullptr &&
+         layout.spin_matrix_offsets == nullptr && layout.spin_shell_offsets == nullptr &&
+         layout.spin_atom_offsets == nullptr;
+}
+
+bool validate_host_wavefunction_layout(const Shape& shape,
+                                       const Gfn2SccIterationHostInitialization& host) noexcept {
+  const auto& layout = host.wavefunction_layout;
+  if (empty_host_wavefunction_layout(layout)) {
+    return shape.spin_channels == shape.batch && shape.spin_atoms == shape.physical_atoms &&
+           shape.spin_shells == shape.physical_shells &&
+           shape.spin_orbitals == shape.physical_orbitals &&
+           shape.spin_matrices == shape.physical_matrices;
+  }
+  std::int64_t offset_count = 0;
+  if (!checked_add(shape.batch, 1, offset_count)) return false;
+  if (layout.memory_space != Gfn2PlanMemorySpace::kHost || layout.plan_token != shape.token ||
+      layout.batch_size != shape.batch || layout.total_spin_channels != shape.spin_channels ||
+      layout.total_spin_orbitals != shape.spin_orbitals ||
+      layout.total_spin_matrix_elements != shape.spin_matrices ||
+      layout.total_spin_shells != shape.spin_shells ||
+      layout.total_spin_atoms != shape.spin_atoms || layout.spin_channel_count != shape.batch ||
+      layout.spin_channel_offset_count != offset_count ||
+      layout.spin_orbital_offset_count != offset_count ||
+      layout.spin_matrix_offset_count != offset_count ||
+      layout.spin_shell_offset_count != offset_count ||
+      layout.spin_atom_offset_count != offset_count || layout.spin_channels == nullptr ||
+      layout.spin_channel_offsets == nullptr || layout.spin_orbital_offsets == nullptr ||
+      layout.spin_matrix_offsets == nullptr || layout.spin_shell_offsets == nullptr ||
+      layout.spin_atom_offsets == nullptr || layout.spin_channel_offsets[0] != 0 ||
+      layout.spin_orbital_offsets[0] != 0 || layout.spin_matrix_offsets[0] != 0 ||
+      layout.spin_shell_offsets[0] != 0 || layout.spin_atom_offsets[0] != 0 ||
+      layout.spin_channel_offsets[shape.batch] != shape.spin_channels ||
+      layout.spin_orbital_offsets[shape.batch] != shape.spin_orbitals ||
+      layout.spin_matrix_offsets[shape.batch] != shape.spin_matrices ||
+      layout.spin_shell_offsets[shape.batch] != shape.spin_shells ||
+      layout.spin_atom_offsets[shape.batch] != shape.spin_atoms) {
+    return false;
+  }
+  for (std::int64_t system = 0; system < shape.batch; ++system) {
+    const std::int32_t channels = layout.spin_channels[system];
+    const std::int64_t physical_atoms =
+        host.topology.atom_offsets.data[system + 1] - host.topology.atom_offsets.data[system];
+    const std::int64_t physical_shells =
+        host.topology.shell_offsets.data[system + 1] - host.topology.shell_offsets.data[system];
+    const std::int64_t channel_span =
+        layout.spin_channel_offsets[system + 1] - layout.spin_channel_offsets[system];
+    const std::int64_t atom_span =
+        layout.spin_atom_offsets[system + 1] - layout.spin_atom_offsets[system];
+    const std::int64_t shell_span =
+        layout.spin_shell_offsets[system + 1] - layout.spin_shell_offsets[system];
+    const std::int64_t orbital_span =
+        layout.spin_orbital_offsets[system + 1] - layout.spin_orbital_offsets[system];
+    const std::int64_t matrix_span =
+        layout.spin_matrix_offsets[system + 1] - layout.spin_matrix_offsets[system];
+    std::int64_t expected_atoms = 0;
+    std::int64_t expected_shells = 0;
+    if ((channels != 1 && channels != 2) || channel_span != channels || atom_span <= 0 ||
+        shell_span <= 0 || orbital_span <= 0 || matrix_span <= 0 ||
+        !checked_multiply(physical_atoms, channels, expected_atoms) ||
+        !checked_multiply(physical_shells, channels, expected_shells) ||
+        atom_span != expected_atoms || shell_span != expected_shells ||
+        orbital_span % channels != 0 || matrix_span % channels != 0) {
+      return false;
+    }
+    const std::int64_t channel_orbitals = orbital_span / channels;
+    std::int64_t expected_matrix = 0;
+    if (!checked_multiply(channel_orbitals, channel_orbitals, expected_matrix) ||
+        matrix_span / channels != expected_matrix) {
+      return false;
+    }
+  }
+  return layout.layout_fingerprint == shape.layout_fingerprint &&
+         gfn2_wavefunction_layout_fingerprint_host(layout) == shape.layout_fingerprint;
+}
+
+std::int64_t spin_atom_offset(const Gfn2SccIterationHostInitialization& host,
+                              std::int64_t system) noexcept {
+  return empty_host_wavefunction_layout(host.wavefunction_layout)
+             ? host.topology.atom_offsets.data[system]
+             : host.wavefunction_layout.spin_atom_offsets[system];
+}
+
+std::int64_t spin_shell_offset(const Gfn2SccIterationHostInitialization& host,
+                               std::int64_t system) noexcept {
+  return empty_host_wavefunction_layout(host.wavefunction_layout)
+             ? host.topology.shell_offsets.data[system]
+             : host.wavefunction_layout.spin_shell_offsets[system];
+}
+
 bool warm_only_wavefunction_empty(const Gfn2SccIterationHostWavefunctionView& value) noexcept {
   return empty(value.eigenvalues) && empty(value.coefficients) && empty(value.occupations) &&
          empty(value.chemical_potentials) && empty(value.electron_sums) &&
          empty(value.occupation_entropies) && empty(value.density) &&
          empty(value.energy_weighted_density) && empty(value.band_energies) &&
          empty(value.occupation_sums) && empty(value.density_traces) &&
-         empty(value.weighted_density_traces);
+         empty(value.weighted_density_traces) && empty(value.channel_band_energies) &&
+         empty(value.channel_occupation_sums) && empty(value.channel_density_traces) &&
+         empty(value.channel_weighted_density_traces);
 }
 
 bool energy_empty(const Gfn2SccIterationHostEnergyView& value) noexcept {
   return empty(value.core) && empty(value.es2) && empty(value.es3) && empty(value.aes2) &&
          empty(value.d4_two_body) && empty(value.explicit_point_charge) &&
          empty(value.periodic_embedding) && empty(value.entropy) && empty(value.internal_energy) &&
-         empty(value.free_energy) && empty(value.classical_total);
+         empty(value.free_energy) && empty(value.classical_total) && empty(value.spin);
 }
 
 bool mixer_empty(const Gfn2SccIterationHostMixerView& value) noexcept {
@@ -209,15 +338,18 @@ Diagnostic validate_common_host(const Shape& shape,
         host.scc.plan_token != shape.token))) {
     return fail(Error::kCrossPlan, Field::kPlan);
   }
-  if (!valid_offsets(host.topology.atom_offsets, shape.batch, shape.atoms) ||
-      !valid_offsets(host.topology.shell_offsets, shape.batch, shape.shells)) {
+  if (!valid_offsets(host.topology.atom_offsets, shape.batch, shape.physical_atoms) ||
+      !valid_offsets(host.topology.shell_offsets, shape.batch, shape.physical_shells)) {
     return fail(Error::kInvalidExtent, Field::kTopology);
   }
+  if (!validate_host_wavefunction_layout(shape, host)) {
+    return fail(Error::kInvalidExtent, Field::kWavefunction);
+  }
   const auto& population = host.wavefunction.population;
-  if (!exact_host(population.shell_charges, shape.shells) ||
-      !exact_host(population.atomic_charges, shape.atoms) ||
-      !exact_host(population.atomic_dipoles, shape.dipoles) ||
-      !exact_host(population.atomic_quadrupoles, shape.quadrupoles)) {
+  if (!exact_host(population.shell_charges, shape.spin_shells) ||
+      !exact_host(population.atomic_charges, shape.spin_atoms) ||
+      !exact_host(population.atomic_dipoles, shape.spin_dipoles) ||
+      !exact_host(population.atomic_quadrupoles, shape.spin_quadrupoles)) {
     return fail(Error::kInvalidExtent, Field::kPopulation);
   }
   if (!finite_array(population.shell_charges) || !finite_array(population.atomic_charges) ||
@@ -241,18 +373,27 @@ Diagnostic validate_fresh(const Shape& shape,
 Diagnostic validate_warm_extents(const Shape& shape,
                                  const Gfn2SccIterationHostInitialization& host) noexcept {
   const auto& wave = host.wavefunction;
-  if (!exact_host(wave.eigenvalues, shape.orbitals) ||
-      !exact_host(wave.coefficients, shape.matrices) ||
+  const bool mixed_spin = shape.spin_channels != shape.batch;
+  const auto channel_diagnostic = [&](const Gfn2SccIterationHostArrayView<double>& values) {
+    return mixed_spin ? exact_host(values, shape.spin_channels)
+                      : (empty(values) || exact_host(values, shape.spin_channels));
+  };
+  if (!exact_host(wave.eigenvalues, shape.spin_orbitals) ||
+      !exact_host(wave.coefficients, shape.spin_matrices) ||
       !exact_host(wave.occupations, shape.two_orbitals) ||
       !exact_host(wave.chemical_potentials, shape.two_batch) ||
       !exact_host(wave.electron_sums, shape.two_batch) ||
       !exact_host(wave.occupation_entropies, shape.batch) ||
-      !exact_host(wave.density, shape.matrices) ||
-      !exact_host(wave.energy_weighted_density, shape.matrices) ||
+      !exact_host(wave.density, shape.spin_matrices) ||
+      !exact_host(wave.energy_weighted_density, shape.spin_matrices) ||
       !exact_host(wave.band_energies, shape.batch) ||
       !exact_host(wave.occupation_sums, shape.batch) ||
       !exact_host(wave.density_traces, shape.batch) ||
-      !exact_host(wave.weighted_density_traces, shape.batch)) {
+      !exact_host(wave.weighted_density_traces, shape.batch) ||
+      !channel_diagnostic(wave.channel_band_energies) ||
+      !channel_diagnostic(wave.channel_occupation_sums) ||
+      !channel_diagnostic(wave.channel_density_traces) ||
+      !channel_diagnostic(wave.channel_weighted_density_traces)) {
     return fail(Error::kInvalidExtent, Field::kWavefunction);
   }
   const auto finite_wave =
@@ -261,7 +402,12 @@ Diagnostic validate_warm_extents(const Shape& shape,
       finite_array(wave.electron_sums) && finite_array(wave.occupation_entropies) &&
       finite_array(wave.density) && finite_array(wave.energy_weighted_density) &&
       finite_array(wave.band_energies) && finite_array(wave.occupation_sums) &&
-      finite_array(wave.density_traces) && finite_array(wave.weighted_density_traces);
+      finite_array(wave.density_traces) && finite_array(wave.weighted_density_traces) &&
+      (empty(wave.channel_band_energies) || finite_array(wave.channel_band_energies)) &&
+      (empty(wave.channel_occupation_sums) || finite_array(wave.channel_occupation_sums)) &&
+      (empty(wave.channel_density_traces) || finite_array(wave.channel_density_traces)) &&
+      (empty(wave.channel_weighted_density_traces) ||
+       finite_array(wave.channel_weighted_density_traces));
   if (!finite_wave) return fail(Error::kNonfiniteValue, Field::kWavefunction);
 
   const auto& energy = host.energy;
@@ -277,7 +423,9 @@ Diagnostic validate_warm_extents(const Shape& shape,
       !exact_host(energy.entropy, shape.batch) ||
       !exact_host(energy.internal_energy, shape.batch) ||
       !exact_host(energy.free_energy, shape.batch) ||
-      !exact_host(energy.classical_total, shape.batch)) {
+      !exact_host(energy.classical_total, shape.batch) ||
+      (mixed_spin ? !exact_host(energy.spin, shape.batch)
+                  : !(empty(energy.spin) || exact_host(energy.spin, shape.batch)))) {
     return fail(Error::kInvalidExtent, Field::kEnergy);
   }
   if (!finite_array(energy.core) || !finite_array(energy.es2) || !finite_array(energy.es3) ||
@@ -289,7 +437,8 @@ Diagnostic validate_warm_extents(const Shape& shape,
       (enabled(shape, Gfn2SccPotentialComponent::kPeriodicEmbedding) &&
        !finite_array(energy.periodic_embedding)) ||
       !finite_array(energy.entropy) || !finite_array(energy.internal_energy) ||
-      !finite_array(energy.free_energy) || !finite_array(energy.classical_total)) {
+      !finite_array(energy.free_energy) || !finite_array(energy.classical_total) ||
+      (!empty(energy.spin) && !finite_array(energy.spin))) {
     return fail(Error::kNonfiniteValue, Field::kEnergy);
   }
 
@@ -317,9 +466,9 @@ Diagnostic validate_warm_extents(const Shape& shape,
   }
 
   const auto& scc = host.scc;
-  if (!exact_host(scc.current_shell_charges, shape.shells) ||
-      !exact_host(scc.current_atomic_dipoles, shape.dipoles) ||
-      !exact_host(scc.current_atomic_quadrupoles, shape.quadrupoles) ||
+  if (!exact_host(scc.current_shell_charges, shape.spin_shells) ||
+      !exact_host(scc.current_atomic_dipoles, shape.spin_dipoles) ||
+      !exact_host(scc.current_atomic_quadrupoles, shape.spin_quadrupoles) ||
       !exact_host(scc.free_energies, shape.batch) ||
       !exact_host(scc.previous_free_energies, shape.batch) ||
       !exact_host(scc.free_energy_changes, shape.batch) ||
@@ -367,10 +516,10 @@ Diagnostic validate_warm_invariants(const Shape& shape,
       return fail(Error::kInvalidWarmState, Field::kSccTrace, system);
     }
 
-    const std::int64_t atom_begin = host.topology.atom_offsets.data[system];
-    const std::int64_t atom_end = host.topology.atom_offsets.data[system + 1];
-    const std::int64_t shell_begin = host.topology.shell_offsets.data[system];
-    const std::int64_t shell_end = host.topology.shell_offsets.data[system + 1];
+    const std::int64_t atom_begin = spin_atom_offset(host, system);
+    const std::int64_t atom_end = spin_atom_offset(host, system + 1);
+    const std::int64_t shell_begin = spin_shell_offset(host, system);
+    const std::int64_t shell_end = spin_shell_offset(host, system + 1);
     const std::int64_t atoms = atom_end - atom_begin;
     const std::int64_t shells = shell_end - shell_begin;
     const std::int64_t vector_begin = shell_begin + 9 * atom_begin;
@@ -508,9 +657,9 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
   const auto& wave = host.wavefunction;
   const auto& population = wave.population;
   if (!builder.target(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements,
-                      shape.orbitals, Field::kWavefunction, 0, diagnostic) ||
+                      shape.spin_orbitals, Field::kWavefunction, 0, diagnostic) ||
       !builder.target(state.eigenpairs.coefficients, state.eigenpairs.coefficient_elements,
-                      shape.matrices, Field::kWavefunction, 1, diagnostic) ||
+                      shape.spin_matrices, Field::kWavefunction, 1, diagnostic) ||
       !builder.target(state.occupations.occupations, state.occupations.occupation_elements,
                       shape.two_orbitals, Field::kWavefunction, 2, diagnostic) ||
       !builder.target(state.occupations.chemical_potentials,
@@ -520,11 +669,11 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
                       shape.two_batch, Field::kWavefunction, 4, diagnostic) ||
       !builder.target(state.occupations.entropies, state.occupations.entropy_elements, shape.batch,
                       Field::kWavefunction, 5, diagnostic) ||
-      !builder.target(state.density.density, state.density.density_elements, shape.matrices,
+      !builder.target(state.density.density, state.density.density_elements, shape.spin_matrices,
                       Field::kWavefunction, 6, diagnostic) ||
       !builder.target(state.density.energy_weighted_density,
-                      state.density.weighted_density_elements, shape.matrices, Field::kWavefunction,
-                      7, diagnostic) ||
+                      state.density.weighted_density_elements, shape.spin_matrices,
+                      Field::kWavefunction, 7, diagnostic) ||
       !builder.target(state.density.band_energies, state.density.band_energy_elements, shape.batch,
                       Field::kWavefunction, 8, diagnostic) ||
       !builder.target(state.density.occupation_sums, state.density.occupation_sum_elements,
@@ -534,23 +683,39 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
       !builder.target(state.density.weighted_density_traces,
                       state.density.weighted_density_trace_elements, shape.batch,
                       Field::kWavefunction, 11, diagnostic) ||
+      !builder.target(state.density.channel_band_energies,
+                      state.density.channel_band_energy_elements, shape.spin_channels,
+                      Field::kWavefunction, 12, diagnostic) ||
+      !builder.target(state.density.channel_occupation_sums,
+                      state.density.channel_occupation_sum_elements, shape.spin_channels,
+                      Field::kWavefunction, 13, diagnostic) ||
+      !builder.target(state.density.channel_density_traces,
+                      state.density.channel_density_trace_elements, shape.spin_channels,
+                      Field::kWavefunction, 14, diagnostic) ||
+      !builder.target(state.density.channel_weighted_density_traces,
+                      state.density.channel_weighted_density_trace_elements, shape.spin_channels,
+                      Field::kWavefunction, 15, diagnostic) ||
       !builder.copy(state.raw_population.qsh, state.raw_population.qsh_elements,
-                    population.shell_charges, shape.shells, Field::kPopulation, 0, diagnostic) ||
+                    population.shell_charges, shape.spin_shells, Field::kPopulation, 0,
+                    diagnostic) ||
       !builder.copy(state.raw_population.qat, state.raw_population.qat_elements,
-                    population.atomic_charges, shape.atoms, Field::kPopulation, 1, diagnostic) ||
+                    population.atomic_charges, shape.spin_atoms, Field::kPopulation, 1,
+                    diagnostic) ||
       !builder.copy(state.raw_population.dipole, state.raw_population.dipole_elements,
-                    population.atomic_dipoles, shape.dipoles, Field::kPopulation, 2, diagnostic) ||
+                    population.atomic_dipoles, shape.spin_dipoles, Field::kPopulation, 2,
+                    diagnostic) ||
       !builder.copy(state.raw_population.quadrupole, state.raw_population.quadrupole_elements,
-                    population.atomic_quadrupoles, shape.quadrupoles, Field::kPopulation, 3,
+                    population.atomic_quadrupoles, shape.spin_quadrupoles, Field::kPopulation, 3,
                     diagnostic)) {
     return diagnostic;
   }
 
   if (host.mode == Mode::kWarm) {
     if (!builder.copy(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements,
-                      wave.eigenvalues, shape.orbitals, Field::kWavefunction, 0, diagnostic) ||
+                      wave.eigenvalues, shape.spin_orbitals, Field::kWavefunction, 0, diagnostic) ||
         !builder.copy(state.eigenpairs.coefficients, state.eigenpairs.coefficient_elements,
-                      wave.coefficients, shape.matrices, Field::kWavefunction, 1, diagnostic) ||
+                      wave.coefficients, shape.spin_matrices, Field::kWavefunction, 1,
+                      diagnostic) ||
         !builder.copy(state.occupations.occupations, state.occupations.occupation_elements,
                       wave.occupations, shape.two_orbitals, Field::kWavefunction, 2, diagnostic) ||
         !builder.copy(state.occupations.chemical_potentials,
@@ -562,10 +727,10 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
                       wave.occupation_entropies, shape.batch, Field::kWavefunction, 5,
                       diagnostic) ||
         !builder.copy(state.density.density, state.density.density_elements, wave.density,
-                      shape.matrices, Field::kWavefunction, 6, diagnostic) ||
+                      shape.spin_matrices, Field::kWavefunction, 6, diagnostic) ||
         !builder.copy(state.density.energy_weighted_density,
                       state.density.weighted_density_elements, wave.energy_weighted_density,
-                      shape.matrices, Field::kWavefunction, 7, diagnostic) ||
+                      shape.spin_matrices, Field::kWavefunction, 7, diagnostic) ||
         !builder.copy(state.density.band_energies, state.density.band_energy_elements,
                       wave.band_energies, shape.batch, Field::kWavefunction, 8, diagnostic) ||
         !builder.copy(state.density.occupation_sums, state.density.occupation_sum_elements,
@@ -575,6 +740,28 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
         !builder.copy(state.density.weighted_density_traces,
                       state.density.weighted_density_trace_elements, wave.weighted_density_traces,
                       shape.batch, Field::kWavefunction, 11, diagnostic)) {
+      return diagnostic;
+    }
+    const auto copy_channel = [&](double* destination, std::int64_t actual,
+                                  const Gfn2SccIterationHostArrayView<double>& channel,
+                                  const Gfn2SccIterationHostArrayView<double>& restricted,
+                                  std::int64_t index) {
+      const auto& source = empty(channel) ? restricted : channel;
+      return builder.copy(destination, actual, source, shape.spin_channels, Field::kWavefunction,
+                          index, diagnostic);
+    };
+    if (!copy_channel(state.density.channel_band_energies,
+                      state.density.channel_band_energy_elements, wave.channel_band_energies,
+                      wave.band_energies, 12) ||
+        !copy_channel(state.density.channel_occupation_sums,
+                      state.density.channel_occupation_sum_elements, wave.channel_occupation_sums,
+                      wave.occupation_sums, 13) ||
+        !copy_channel(state.density.channel_density_traces,
+                      state.density.channel_density_trace_elements, wave.channel_density_traces,
+                      wave.density_traces, 14) ||
+        !copy_channel(state.density.channel_weighted_density_traces,
+                      state.density.channel_weighted_density_trace_elements,
+                      wave.channel_weighted_density_traces, wave.weighted_density_traces, 15)) {
       return diagnostic;
     }
   } else {
@@ -594,9 +781,26 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
                       shape.batch, nan, Field::kWavefunction, 10, diagnostic) ||
         !builder.fill(state.density.weighted_density_traces,
                       state.density.weighted_density_trace_elements, shape.batch, nan,
-                      Field::kWavefunction, 11, diagnostic)) {
+                      Field::kWavefunction, 11, diagnostic) ||
+        !builder.fill(state.density.channel_band_energies,
+                      state.density.channel_band_energy_elements, shape.spin_channels, nan,
+                      Field::kWavefunction, 12, diagnostic) ||
+        !builder.fill(state.density.channel_occupation_sums,
+                      state.density.channel_occupation_sum_elements, shape.spin_channels, nan,
+                      Field::kWavefunction, 13, diagnostic) ||
+        !builder.fill(state.density.channel_density_traces,
+                      state.density.channel_density_trace_elements, shape.spin_channels, nan,
+                      Field::kWavefunction, 14, diagnostic) ||
+        !builder.fill(state.density.channel_weighted_density_traces,
+                      state.density.channel_weighted_density_trace_elements, shape.spin_channels,
+                      nan, Field::kWavefunction, 15, diagnostic)) {
       return diagnostic;
     }
+  }
+
+  if (!builder.target(state.spin_energies, state.spin_energy_elements, shape.batch, Field::kEnergy,
+                      11, diagnostic)) {
+    return diagnostic;
   }
 
   const auto copy_energy = [&](double* destination, std::int64_t actual,
@@ -611,7 +815,12 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
   };
   const auto& energy = host.energy;
   if (host.mode == Mode::kWarm) {
-    if (!copy_energy(state.free_energy.core, state.free_energy.core_elements, energy.core, 0) ||
+    if ((empty(energy.spin)
+             ? !builder.fill(state.spin_energies, state.spin_energy_elements, shape.batch, 0.0,
+                             Field::kEnergy, 11, diagnostic)
+             : !builder.copy(state.spin_energies, state.spin_energy_elements, energy.spin,
+                             shape.batch, Field::kEnergy, 11, diagnostic)) ||
+        !copy_energy(state.free_energy.core, state.free_energy.core_elements, energy.core, 0) ||
         !copy_energy(state.free_energy.es2, state.free_energy.es2_elements, energy.es2, 1) ||
         !copy_energy(state.free_energy.es3, state.free_energy.es3_elements, energy.es3, 2) ||
         !copy_energy(state.free_energy.aes2, state.free_energy.aes2_elements, energy.aes2, 3) ||
@@ -653,7 +862,10 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
     }
   } else {
     const double nan = std::numeric_limits<double>::quiet_NaN();
-    if (!fill_energy(state.free_energy.core, state.free_energy.core_elements, nan, 0) ||
+    if (!builder.fill(state.spin_energies, state.spin_energy_elements, shape.batch,
+                      shape.spin_channels == shape.batch ? 0.0 : nan, Field::kEnergy, 11,
+                      diagnostic) ||
+        !fill_energy(state.free_energy.core, state.free_energy.core_elements, nan, 0) ||
         !fill_energy(state.free_energy.es2, state.free_energy.es2_elements, nan, 1) ||
         !fill_energy(state.free_energy.es3, state.free_energy.es3_elements, nan, 2) ||
         !fill_energy(state.free_energy.aes2, state.free_energy.aes2_elements, nan, 3) ||
@@ -747,10 +959,10 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
     }
     if (builder.writes_image()) {
       for (std::int64_t system = 0; system < shape.batch; ++system) {
-        const std::int64_t atom_begin = host.topology.atom_offsets.data[system];
-        const std::int64_t atom_end = host.topology.atom_offsets.data[system + 1];
-        const std::int64_t shell_begin = host.topology.shell_offsets.data[system];
-        const std::int64_t shell_end = host.topology.shell_offsets.data[system + 1];
+        const std::int64_t atom_begin = spin_atom_offset(host, system);
+        const std::int64_t atom_end = spin_atom_offset(host, system + 1);
+        const std::int64_t shell_begin = spin_shell_offset(host, system);
+        const std::int64_t shell_end = spin_shell_offset(host, system + 1);
         const std::int64_t atoms = atom_end - atom_begin;
         const std::int64_t shells = shell_end - shell_begin;
         const std::int64_t vector_begin = shell_begin + 9 * atom_begin;
@@ -767,13 +979,13 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
 
   const auto& scc = host.scc;
   if (!builder.target(state.scc.current_inputs.shell_charges,
-                      state.scc.current_inputs.shell_elements, shape.shells, Field::kSccTrace, 0,
-                      diagnostic) ||
+                      state.scc.current_inputs.shell_elements, shape.spin_shells, Field::kSccTrace,
+                      0, diagnostic) ||
       !builder.target(state.scc.current_inputs.atomic_dipoles,
-                      state.scc.current_inputs.dipole_elements, shape.dipoles, Field::kSccTrace, 1,
-                      diagnostic) ||
+                      state.scc.current_inputs.dipole_elements, shape.spin_dipoles,
+                      Field::kSccTrace, 1, diagnostic) ||
       !builder.target(state.scc.current_inputs.atomic_quadrupoles,
-                      state.scc.current_inputs.quadrupole_elements, shape.quadrupoles,
+                      state.scc.current_inputs.quadrupole_elements, shape.spin_quadrupoles,
                       Field::kSccTrace, 2, diagnostic) ||
       !builder.target(state.scc.free_energies, state.scc.batch_elements, shape.batch,
                       Field::kSccTrace, 3, diagnostic) ||
@@ -794,13 +1006,13 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
   if (host.mode == Mode::kWarm) {
     if (!builder.copy(state.scc.current_inputs.shell_charges,
                       state.scc.current_inputs.shell_elements, scc.current_shell_charges,
-                      shape.shells, Field::kSccTrace, 0, diagnostic) ||
+                      shape.spin_shells, Field::kSccTrace, 0, diagnostic) ||
         !builder.copy(state.scc.current_inputs.atomic_dipoles,
                       state.scc.current_inputs.dipole_elements, scc.current_atomic_dipoles,
-                      shape.dipoles, Field::kSccTrace, 1, diagnostic) ||
+                      shape.spin_dipoles, Field::kSccTrace, 1, diagnostic) ||
         !builder.copy(state.scc.current_inputs.atomic_quadrupoles,
                       state.scc.current_inputs.quadrupole_elements, scc.current_atomic_quadrupoles,
-                      shape.quadrupoles, Field::kSccTrace, 2, diagnostic) ||
+                      shape.spin_quadrupoles, Field::kSccTrace, 2, diagnostic) ||
         !builder.copy(state.scc.free_energies, state.scc.batch_elements, scc.free_energies,
                       shape.batch, Field::kSccTrace, 3, diagnostic) ||
         !builder.copy(state.scc.previous_free_energies, state.scc.batch_elements,
@@ -821,13 +1033,13 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
     const double nan = std::numeric_limits<double>::quiet_NaN();
     if (!builder.copy(state.scc.current_inputs.shell_charges,
                       state.scc.current_inputs.shell_elements, population.shell_charges,
-                      shape.shells, Field::kSccTrace, 0, diagnostic) ||
+                      shape.spin_shells, Field::kSccTrace, 0, diagnostic) ||
         !builder.copy(state.scc.current_inputs.atomic_dipoles,
                       state.scc.current_inputs.dipole_elements, population.atomic_dipoles,
-                      shape.dipoles, Field::kSccTrace, 1, diagnostic) ||
+                      shape.spin_dipoles, Field::kSccTrace, 1, diagnostic) ||
         !builder.copy(state.scc.current_inputs.atomic_quadrupoles,
                       state.scc.current_inputs.quadrupole_elements, population.atomic_quadrupoles,
-                      shape.quadrupoles, Field::kSccTrace, 2, diagnostic) ||
+                      shape.spin_quadrupoles, Field::kSccTrace, 2, diagnostic) ||
         !builder.fill(state.scc.free_energies, state.scc.batch_elements, shape.batch, nan,
                       Field::kSccTrace, 3, diagnostic) ||
         !builder.fill(state.scc.previous_free_energies, state.scc.batch_elements, shape.batch, nan,

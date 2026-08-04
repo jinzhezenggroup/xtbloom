@@ -9,7 +9,7 @@
 
 namespace gpuxtb::detail::cuda {
 
-inline constexpr std::uint32_t kGfn2SccIterationArenaAbiVersion = 2u;
+inline constexpr std::uint32_t kGfn2SccIterationArenaAbiVersion = 4u;
 inline constexpr std::size_t kGfn2SccIterationArenaAlignment = 256u;
 
 /* Synchronous setup failure; no allocation, transfer, or device work occurs. */
@@ -91,7 +91,9 @@ static_assert(std::is_standard_layout_v<Gfn2SccIterationArenaRequirements>);
  * disjoint. Exact aliases exist only as descriptor projections: published
  * qsh/d/Q reuse raw population, staged free-energy entropy reuses staged
  * occupation entropy, component views reuse their producer storage, and the
- * publication views reuse the public/staged descriptors.
+ * publication views reuse the public/staged descriptors. The physical charge
+ * channel projection is separate from the spin-ragged SCC multipoles so
+ * legacy component kernels never index across a magnetization slice.
  *
  * provider_host_workspace remains caller-owned host storage outside the
  * device arena. arena, that host workspace, plan storage, and provider handles

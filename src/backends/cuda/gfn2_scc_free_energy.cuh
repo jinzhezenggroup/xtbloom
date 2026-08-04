@@ -10,8 +10,8 @@
 
 namespace gpuxtb::detail::cuda {
 
-inline constexpr std::int64_t kGfn2SccFreeEnergyInputComponents = 8;
-inline constexpr std::int64_t kGfn2SccFreeEnergyDiagnosticComponents = 10;
+inline constexpr std::int64_t kGfn2SccFreeEnergyInputComponents = 9;
+inline constexpr std::int64_t kGfn2SccFreeEnergyDiagnosticComponents = 11;
 
 /* First asynchronous peer-local semantic or arithmetic failure. */
 enum class Gfn2SccFreeEnergyDeviceError : std::uint32_t {
@@ -27,6 +27,8 @@ enum class Gfn2SccFreeEnergyDeviceError : std::uint32_t {
   kNonfinitePeriodicEmbedding = 9u,
   kNonfiniteInternalArithmetic = 10u,
   kNonfiniteFreeEnergyArithmetic = 11u,
+  /* Appended to preserve every pre-existing stage-local diagnostic value. */
+  kNonfiniteSpin = 12u,
 };
 
 /*
@@ -58,6 +60,8 @@ struct Gfn2SccFreeEnergyDeviceInput {
   std::int64_t es3_elements = 0;
   const double* aes2 = nullptr;
   std::int64_t aes2_elements = 0;
+  const double* spin = nullptr;
+  std::int64_t spin_elements = 0;
   const double* d4_two_body = nullptr;
   std::int64_t d4_two_body_elements = 0;
   const double* explicit_point_charge = nullptr;
@@ -91,6 +95,8 @@ struct Gfn2SccFreeEnergyDeviceDiagnostics {
   std::int64_t es3_elements = 0;
   double* aes2 = nullptr;
   std::int64_t aes2_elements = 0;
+  double* spin = nullptr;
+  std::int64_t spin_elements = 0;
   double* d4_two_body = nullptr;
   std::int64_t d4_two_body_elements = 0;
   double* explicit_point_charge = nullptr;
@@ -108,8 +114,9 @@ struct Gfn2SccFreeEnergyDeviceDiagnostics {
 
 /*
  * Caller-owned unpublished storage. diagnostic_scratch is component-major in
- * public diagnostic order [core, ES2, ES3, AES2, D4-2body, explicit-PC,
- * periodic, entropy, internal, free] and requires 10*batch_size doubles.
+ * public diagnostic order [core, ES2, ES3, AES2, spin, D4-2body,
+ * explicit-PC, periodic, entropy, internal, free] and requires
+ * 11*batch_size doubles.
  * sequence_active snapshots a clean incoming sticky diagnostic before any
  * peer-local failure can update device_error.
  */
@@ -139,8 +146,8 @@ cudaError_t reset_gfn2_scc_free_energy_device_errors_cuda(std::int64_t batch_siz
                                                           cudaStream_t stream = nullptr) noexcept;
 
 /*
- * Compose complete restricted SCC energies in the exact CPU driver order:
- * core, ES2, ES3, AES2, D4 two-body, explicit point charge, periodic
+ * Compose complete mixed-spin SCC energies in the exact CPU driver order:
+ * core, ES2, ES3, AES2, spin, D4 two-body, explicit point charge, periodic
  * embedding, followed by one fma(-temperature, entropy, internal_energy).
  * Every input and intermediate is finite-preflighted before transactional
  * publication. This intentionally does not consume electronic_free_energy or
@@ -149,10 +156,11 @@ cudaError_t reset_gfn2_scc_free_energy_device_errors_cuda(std::int64_t batch_siz
  * The launcher allocates, transfers, and synchronizes nothing; it uses only
  * stream, supports CUDA Graph capture/replay, and isolates numerical failures
  * per system. Every writable range must be disjoint from all readable ranges
- * and from every other writable range, except diagnostics.entropy may exactly
- * alias input.entropy. That zero-copy edge is safe because the reduction reads
- * entropy into unpublished scratch before the later publication kernel writes
- * the identical value.
+ * and from every other writable range, except diagnostics.spin/input.spin and
+ * diagnostics.entropy/input.entropy may exactly alias their matching arrays.
+ * Both zero-copy edges are safe because the reduction snapshots every input in
+ * unpublished scratch before the later publication kernel writes the identical
+ * values.
  */
 cudaError_t compose_gfn2_scc_free_energy_cuda(const Gfn2SccFreeEnergyDeviceBatch& batch,
                                               const Gfn2SccFreeEnergyDeviceInput& input,

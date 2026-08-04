@@ -30,6 +30,8 @@
 
 namespace {
 
+using gpuxtb::detail::Gfn2PlanMemorySpace;
+using gpuxtb::detail::Gfn2WavefunctionLayoutView;
 using gpuxtb::detail::cuda::Gfn2SccDeviceBatch;
 using gpuxtb::detail::cuda::Gfn2SccDeviceConstMultipoles;
 using gpuxtb::detail::cuda::Gfn2SccDeviceMultipoles;
@@ -285,6 +287,12 @@ struct MultipoleSnapshot {
 struct DeviceFixture {
   DeviceBuffer<std::int64_t> shell_offsets;
   DeviceBuffer<std::int64_t> atom_offsets;
+  DeviceBuffer<std::int32_t> spin_channels;
+  DeviceBuffer<std::int64_t> spin_channel_offsets;
+  DeviceBuffer<std::int64_t> spin_orbital_offsets;
+  DeviceBuffer<std::int64_t> spin_matrix_offsets;
+  DeviceBuffer<std::int64_t> spin_shell_offsets;
+  DeviceBuffer<std::int64_t> spin_atom_offsets;
   DeviceBuffer<double> raw_shell;
   DeviceBuffer<double> raw_dipole;
   DeviceBuffer<double> raw_quadrupole;
@@ -316,6 +324,7 @@ struct DeviceFixture {
   DeviceBuffer<std::uint32_t> error;
 
   Gfn2SccDeviceBatch batch;
+  Gfn2WavefunctionLayoutView layout;
   Gfn2SccMixerDevicePolicy policy;
   Gfn2SccDeviceConstMultipoles raw;
   Gfn2SccDeviceMultipoles output;
@@ -323,10 +332,40 @@ struct DeviceFixture {
   Gfn2SccMixerDeviceState state;
   Gfn2SccMixerDeviceWorkspace workspace;
 
-  cudaError_t setup(const CpuFixture& cpu, cudaStream_t stream = nullptr) {
+  cudaError_t setup(const CpuFixture& cpu, cudaStream_t stream = nullptr, bool mixed_spin = false) {
     const std::size_t batch_size = static_cast<std::size_t>(cpu.layout.batch_size);
-    const std::size_t shells = static_cast<std::size_t>(cpu.layout.total_shells);
-    const std::size_t atoms = static_cast<std::size_t>(cpu.layout.total_atoms);
+    const std::size_t physical_shells = static_cast<std::size_t>(cpu.layout.total_shells);
+    const std::size_t physical_atoms = static_cast<std::size_t>(cpu.layout.total_atoms);
+    std::vector<std::int32_t> spin_channels_host(batch_size, 1);
+    std::vector<std::int64_t> spin_channel_offsets_host(batch_size + 1u, 0);
+    std::vector<std::int64_t> spin_orbital_offsets_host(batch_size + 1u, 0);
+    std::vector<std::int64_t> spin_matrix_offsets_host(batch_size + 1u, 0);
+    std::vector<std::int64_t> spin_shell_offsets_host(batch_size + 1u, 0);
+    std::vector<std::int64_t> spin_atom_offsets_host(batch_size + 1u, 0);
+    for (std::size_t system = 0u; system < batch_size; ++system) {
+      const std::int32_t channels = mixed_spin && system % 2u == 0u ? 2 : 1;
+      spin_channels_host[system] = channels;
+      spin_channel_offsets_host[system + 1u] = spin_channel_offsets_host[system] + channels;
+      spin_orbital_offsets_host[system + 1u] =
+          spin_orbital_offsets_host[system] +
+          channels * (cpu.layout.batch_orbital_offsets[system + 1u] -
+                      cpu.layout.batch_orbital_offsets[system]);
+      const std::int64_t orbitals =
+          cpu.layout.batch_orbital_offsets[system + 1u] - cpu.layout.batch_orbital_offsets[system];
+      spin_matrix_offsets_host[system + 1u] =
+          spin_matrix_offsets_host[system] + channels * orbitals * orbitals;
+      spin_shell_offsets_host[system + 1u] =
+          spin_shell_offsets_host[system] +
+          channels * (cpu.layout.batch_shell_offsets[system + 1u] -
+                      cpu.layout.batch_shell_offsets[system]);
+      spin_atom_offsets_host[system + 1u] =
+          spin_atom_offsets_host[system] +
+          channels * (cpu.layout.atom_offsets[system + 1u] - cpu.layout.atom_offsets[system]);
+    }
+    const std::size_t shells =
+        mixed_spin ? static_cast<std::size_t>(spin_shell_offsets_host.back()) : physical_shells;
+    const std::size_t atoms =
+        mixed_spin ? static_cast<std::size_t>(spin_atom_offsets_host.back()) : physical_atoms;
     const std::size_t vectors = shells + atoms * 9u;
     const std::size_t history = vectors * static_cast<std::size_t>(kHistorySize);
     const std::size_t omega_count = batch_size * static_cast<std::size_t>(kHistorySize);
@@ -369,10 +408,26 @@ struct DeviceFixture {
         return allocation;
       }
     }
+    if (mixed_spin) {
+      const std::array<cudaError_t, 6> spin_allocations{{
+          spin_channels.allocate(batch_size),
+          spin_channel_offsets.allocate(batch_size + 1u),
+          spin_orbital_offsets.allocate(batch_size + 1u),
+          spin_matrix_offsets.allocate(batch_size + 1u),
+          spin_shell_offsets.allocate(batch_size + 1u),
+          spin_atom_offsets.allocate(batch_size + 1u),
+      }};
+      for (cudaError_t allocation : spin_allocations) {
+        if (allocation != cudaSuccess) return allocation;
+      }
+    }
 
+    /* The SCC batch always describes the physical topology.  Spin-expanded
+     * multipole extents belong exclusively to the wavefunction layout; using
+     * them here would make the physical offset endpoints fail validation. */
     batch = {static_cast<std::int64_t>(batch_size),
-             static_cast<std::int64_t>(shells),
-             static_cast<std::int64_t>(atoms),
+             static_cast<std::int64_t>(physical_shells),
+             static_cast<std::int64_t>(physical_atoms),
              static_cast<std::int64_t>(batch_size + 1u),
              static_cast<std::int64_t>(batch_size + 1u),
              kPlanToken,
@@ -380,6 +435,29 @@ struct DeviceFixture {
              atom_offsets.get()};
     policy = {cpu.plan.history_size(), cpu.plan.damping(), cpu.plan.rms_tolerance(),
               cpu.plan.maximum_tolerance(), kPlanToken};
+    layout = {};
+    if (mixed_spin) {
+      layout.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+      layout.plan_token = kPlanToken;
+      layout.batch_size = static_cast<std::int64_t>(batch_size);
+      layout.total_spin_channels = spin_channel_offsets_host.back();
+      layout.total_spin_orbitals = spin_orbital_offsets_host.back();
+      layout.total_spin_matrix_elements = spin_matrix_offsets_host.back();
+      layout.total_spin_shells = spin_shell_offsets_host.back();
+      layout.total_spin_atoms = spin_atom_offsets_host.back();
+      layout.spin_channel_count = static_cast<std::int64_t>(batch_size);
+      layout.spin_channel_offset_count = static_cast<std::int64_t>(batch_size + 1u);
+      layout.spin_orbital_offset_count = static_cast<std::int64_t>(batch_size + 1u);
+      layout.spin_matrix_offset_count = static_cast<std::int64_t>(batch_size + 1u);
+      layout.spin_shell_offset_count = static_cast<std::int64_t>(batch_size + 1u);
+      layout.spin_atom_offset_count = static_cast<std::int64_t>(batch_size + 1u);
+      layout.spin_channels = spin_channels.get();
+      layout.spin_channel_offsets = spin_channel_offsets.get();
+      layout.spin_orbital_offsets = spin_orbital_offsets.get();
+      layout.spin_matrix_offsets = spin_matrix_offsets.get();
+      layout.spin_shell_offsets = spin_shell_offsets.get();
+      layout.spin_atom_offsets = spin_atom_offsets.get();
+    }
     raw = {raw_shell.get(),
            static_cast<std::int64_t>(shells),
            raw_dipole.get(),
@@ -431,8 +509,52 @@ struct DeviceFixture {
     if (status == cudaSuccess) {
       status = atom_offsets.copy_from(cpu.layout.atom_offsets.data(), batch_size + 1u, stream);
     }
-    if (status == cudaSuccess) {
+    if (status == cudaSuccess && mixed_spin) {
+      status = spin_channels.copy_from(spin_channels_host.data(), batch_size, stream);
+    }
+    if (status == cudaSuccess && mixed_spin) {
+      status =
+          spin_channel_offsets.copy_from(spin_channel_offsets_host.data(), batch_size + 1u, stream);
+    }
+    if (status == cudaSuccess && mixed_spin) {
+      status =
+          spin_orbital_offsets.copy_from(spin_orbital_offsets_host.data(), batch_size + 1u, stream);
+    }
+    if (status == cudaSuccess && mixed_spin) {
+      status =
+          spin_matrix_offsets.copy_from(spin_matrix_offsets_host.data(), batch_size + 1u, stream);
+    }
+    if (status == cudaSuccess && mixed_spin) {
+      status =
+          spin_shell_offsets.copy_from(spin_shell_offsets_host.data(), batch_size + 1u, stream);
+    }
+    if (status == cudaSuccess && mixed_spin) {
+      status = spin_atom_offsets.copy_from(spin_atom_offsets_host.data(), batch_size + 1u, stream);
+    }
+    if (status == cudaSuccess && !mixed_spin) {
       status = copy_raw(cpu, stream);
+    }
+    if (status == cudaSuccess && mixed_spin) {
+      std::vector<double> initial_shell(shells, 0.0);
+      std::vector<double> initial_dipole(atoms * 3u, 0.0);
+      std::vector<double> initial_quadrupole(atoms * 6u, 0.0);
+      for (std::size_t index = 0u; index < initial_shell.size(); ++index) {
+        initial_shell[index] = 0.001 * static_cast<double>(index + 1u);
+      }
+      for (std::size_t index = 0u; index < initial_dipole.size(); ++index) {
+        initial_dipole[index] = -0.0007 * static_cast<double>(index + 1u);
+      }
+      for (std::size_t index = 0u; index < initial_quadrupole.size(); ++index) {
+        initial_quadrupole[index] = 0.0003 * static_cast<double>(index + 1u);
+      }
+      status = raw_shell.copy_from(initial_shell.data(), initial_shell.size(), stream);
+      if (status == cudaSuccess) {
+        status = raw_dipole.copy_from(initial_dipole.data(), initial_dipole.size(), stream);
+      }
+      if (status == cudaSuccess) {
+        status =
+            raw_quadrupole.copy_from(initial_quadrupole.data(), initial_quadrupole.size(), stream);
+      }
     }
     if (status == cudaSuccess) {
       status = set_all_active(stream);
@@ -614,9 +736,14 @@ bool near_arrays(const double* first, const double* second, std::size_t count,
 
 int initialize_device(DeviceFixture& device, cudaStream_t stream = nullptr) {
   CUDA_CHECK(device.reset_error(stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::initialize_gfn2_scc_mixer_cuda(
-      device.batch, device.policy, device.raw, device.state, device.workspace, device.error.get(),
-      stream));
+  const cudaError_t status = device.layout.spin_channels == nullptr
+                                 ? gpuxtb::detail::cuda::initialize_gfn2_scc_mixer_cuda(
+                                       device.batch, device.policy, device.raw, device.state,
+                                       device.workspace, device.error.get(), stream)
+                                 : gpuxtb::detail::cuda::initialize_gfn2_scc_mixer_cuda(
+                                       device.batch, device.layout, device.policy, device.raw,
+                                       device.state, device.workspace, device.error.get(), stream);
+  CUDA_CHECK(status);
   CUDA_CHECK(cudaStreamSynchronize(stream));
   std::uint32_t error = 99u;
   CUDA_CHECK(device.error.copy_to(&error, 1u));
@@ -1532,6 +1659,67 @@ int test_custom_stream_and_graph_replay() {
   return 0;
 }
 
+int test_mixed_spin_full_vector_batches() {
+  for (const std::size_t batch_size : {1u, 8u, 32u, 128u}) {
+    CpuFixture cpu;
+    std::string error;
+    CHECK(make_cpu_fixture(batch_size, cpu, error));
+    DeviceFixture device;
+    CUDA_CHECK(device.setup(cpu, nullptr, true));
+
+    MultipoleSnapshot initial;
+    CUDA_CHECK(device.snapshot_raw(initial));
+    CHECK(initialize_device(device) == 0);
+
+    MultipoleSnapshot raw = initial;
+    for (std::size_t index = 0u; index < raw.shell.size(); ++index) {
+      raw.shell[index] += 0.00011 * static_cast<double>(index + 1u);
+    }
+    for (std::size_t index = 0u; index < raw.dipole.size(); ++index) {
+      raw.dipole[index] -= 0.00007 * static_cast<double>(index + 1u);
+    }
+    for (std::size_t index = 0u; index < raw.quadrupole.size(); ++index) {
+      raw.quadrupole[index] += 0.00003 * static_cast<double>(index + 1u);
+    }
+    CUDA_CHECK(device.raw_shell.copy_from(raw.shell.data(), raw.shell.size()));
+    CUDA_CHECK(device.raw_dipole.copy_from(raw.dipole.data(), raw.dipole.size()));
+    CUDA_CHECK(device.raw_quadrupole.copy_from(raw.quadrupole.data(), raw.quadrupole.size()));
+    CUDA_CHECK(device.fill_output(-911.0));
+    CUDA_CHECK(device.reset_error());
+    CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+        device.batch, device.layout, device.policy, device.activity, device.raw, device.output,
+        device.state, device.workspace, device.error.get()));
+
+    MultipoleSnapshot output;
+    StateSnapshot state;
+    CUDA_CHECK(device.snapshot_output(output));
+    CUDA_CHECK(device.snapshot(state));
+    for (std::size_t index = 0u; index < output.shell.size(); ++index) {
+      CHECK(near(
+          output.shell[index],
+          initial.shell[index] + device.policy.damping * (raw.shell[index] - initial.shell[index]),
+          1.0e-15, 1.0e-15));
+    }
+    for (std::size_t index = 0u; index < output.dipole.size(); ++index) {
+      CHECK(near(output.dipole[index],
+                 initial.dipole[index] +
+                     device.policy.damping * (raw.dipole[index] - initial.dipole[index]),
+                 1.0e-15, 1.0e-15));
+    }
+    for (std::size_t index = 0u; index < output.quadrupole.size(); ++index) {
+      CHECK(near(output.quadrupole[index],
+                 initial.quadrupole[index] +
+                     device.policy.damping * (raw.quadrupole[index] - initial.quadrupole[index]),
+                 1.0e-15, 1.0e-15));
+    }
+    CHECK(std::all_of(state.iterations.begin(), state.iterations.end(),
+                      [](std::uint64_t value) { return value == 1u; }));
+    CHECK(std::all_of(state.statuses.begin(), state.statuses.end(),
+                      [](gpuxtb_status_t value) { return value == GPUXTB_STATUS_SUCCESS; }));
+  }
+  return 0;
+}
+
 int test_host_validation() {
   CpuFixture cpu;
   std::string error;
@@ -1620,6 +1808,9 @@ int main() {
     return status;
   }
   if (const int status = test_custom_stream_and_graph_replay(); status != 0) {
+    return status;
+  }
+  if (const int status = test_mixed_spin_full_vector_batches(); status != 0) {
     return status;
   }
   return test_host_validation();

@@ -28,64 +28,96 @@ __device__ void record_error(std::uint32_t* device_error, Gfn2SccMixerDeviceErro
             static_cast<std::uint32_t>(error));
 }
 
-__device__ std::int64_t system_vector_begin(const Gfn2SccDeviceBatch& batch, std::int64_t system) {
-  return batch.shell_offsets[system] + kMultipoleComponentsPerAtom * batch.atom_offsets[system];
+__device__ bool has_spin_layout(const Gfn2WavefunctionLayoutView& layout) {
+  return layout.spin_channels != nullptr;
 }
 
-__device__ std::int64_t system_dimension(const Gfn2SccDeviceBatch& batch, std::int64_t system) {
-  return (batch.shell_offsets[system + 1] - batch.shell_offsets[system]) +
-         kMultipoleComponentsPerAtom *
-             (batch.atom_offsets[system + 1] - batch.atom_offsets[system]);
+__device__ std::int64_t shell_begin(const Gfn2SccDeviceBatch& batch,
+                                    const Gfn2WavefunctionLayoutView& layout, std::int64_t system) {
+  return has_spin_layout(layout) ? layout.spin_shell_offsets[system] : batch.shell_offsets[system];
+}
+
+__device__ std::int64_t atom_begin(const Gfn2SccDeviceBatch& batch,
+                                   const Gfn2WavefunctionLayoutView& layout, std::int64_t system) {
+  return has_spin_layout(layout) ? layout.spin_atom_offsets[system] : batch.atom_offsets[system];
+}
+
+__device__ std::int64_t system_vector_begin(const Gfn2SccDeviceBatch& batch,
+                                            const Gfn2WavefunctionLayoutView& layout,
+                                            std::int64_t system) {
+  return shell_begin(batch, layout, system) +
+         kMultipoleComponentsPerAtom * atom_begin(batch, layout, system);
+}
+
+__device__ std::int64_t system_dimension(const Gfn2SccDeviceBatch& batch,
+                                         const Gfn2WavefunctionLayoutView& layout,
+                                         std::int64_t system) {
+  const std::int64_t shells =
+      shell_begin(batch, layout, system + 1) - shell_begin(batch, layout, system);
+  return shells + kMultipoleComponentsPerAtom *
+                      (atom_begin(batch, layout, system + 1) - atom_begin(batch, layout, system));
 }
 
 __device__ double load_component(const Gfn2SccDeviceBatch& batch,
+                                 const Gfn2WavefunctionLayoutView& layout,
                                  const Gfn2SccDeviceConstMultipoles& multipoles,
                                  std::int64_t system, std::int64_t component) {
-  const std::int64_t shell_begin = batch.shell_offsets[system];
-  const std::int64_t shell_count = batch.shell_offsets[system + 1] - shell_begin;
+  const std::int64_t shell_offset = shell_begin(batch, layout, system);
+  const std::int64_t shell_count = shell_begin(batch, layout, system + 1) - shell_offset;
   if (component < shell_count) {
-    return multipoles.shell_charges[shell_begin + component];
+    return multipoles.shell_charges[shell_offset + component];
   }
   component -= shell_count;
-  const std::int64_t atom_begin = batch.atom_offsets[system];
-  const std::int64_t atom_count = batch.atom_offsets[system + 1] - atom_begin;
+  const std::int64_t atom_offset = atom_begin(batch, layout, system);
+  const std::int64_t atom_count = atom_begin(batch, layout, system + 1) - atom_offset;
   const std::int64_t dipole_count = atom_count * kDipoleComponents;
   if (component < dipole_count) {
-    return multipoles.atomic_dipoles[atom_begin * kDipoleComponents + component];
+    return multipoles.atomic_dipoles[atom_offset * kDipoleComponents + component];
   }
   component -= dipole_count;
-  return multipoles.atomic_quadrupoles[atom_begin * kQuadrupoleComponents + component];
+  return multipoles.atomic_quadrupoles[atom_offset * kQuadrupoleComponents + component];
 }
 
 __device__ void store_component(const Gfn2SccDeviceBatch& batch,
+                                const Gfn2WavefunctionLayoutView& layout,
                                 const Gfn2SccDeviceMultipoles& multipoles, std::int64_t system,
                                 std::int64_t component, double value) {
-  const std::int64_t shell_begin = batch.shell_offsets[system];
-  const std::int64_t shell_count = batch.shell_offsets[system + 1] - shell_begin;
+  const std::int64_t shell_offset = shell_begin(batch, layout, system);
+  const std::int64_t shell_count = shell_begin(batch, layout, system + 1) - shell_offset;
   if (component < shell_count) {
-    multipoles.shell_charges[shell_begin + component] = value;
+    multipoles.shell_charges[shell_offset + component] = value;
     return;
   }
   component -= shell_count;
-  const std::int64_t atom_begin = batch.atom_offsets[system];
-  const std::int64_t atom_count = batch.atom_offsets[system + 1] - atom_begin;
+  const std::int64_t atom_offset = atom_begin(batch, layout, system);
+  const std::int64_t atom_count = atom_begin(batch, layout, system + 1) - atom_offset;
   const std::int64_t dipole_count = atom_count * kDipoleComponents;
   if (component < dipole_count) {
-    multipoles.atomic_dipoles[atom_begin * kDipoleComponents + component] = value;
+    multipoles.atomic_dipoles[atom_offset * kDipoleComponents + component] = value;
     return;
   }
   component -= dipole_count;
-  multipoles.atomic_quadrupoles[atom_begin * kQuadrupoleComponents + component] = value;
+  multipoles.atomic_quadrupoles[atom_offset * kQuadrupoleComponents + component] = value;
 }
 
-__global__ void topology_preflight_kernel(Gfn2SccDeviceBatch batch, std::uint32_t* device_error) {
+__global__ void topology_preflight_kernel(Gfn2SccDeviceBatch batch,
+                                          Gfn2WavefunctionLayoutView layout,
+                                          std::uint32_t* device_error) {
   if (atomicAdd(device_error, 0u) !=
       static_cast<std::uint32_t>(Gfn2SccMixerDeviceError::kSuccess)) {
     return;
   }
-  if (threadIdx.x == 0 && (batch.shell_offsets[0] != 0 || batch.atom_offsets[0] != 0 ||
-                           batch.shell_offsets[batch.batch_size] != batch.total_shells ||
-                           batch.atom_offsets[batch.batch_size] != batch.total_atoms)) {
+  const bool spin_layout = has_spin_layout(layout);
+  if (threadIdx.x == 0 &&
+      (batch.shell_offsets[0] != 0 || batch.atom_offsets[0] != 0 ||
+       batch.shell_offsets[batch.batch_size] != batch.total_shells ||
+       batch.atom_offsets[batch.batch_size] != batch.total_atoms ||
+       (spin_layout &&
+        (layout.spin_shell_offsets[0] != 0 || layout.spin_atom_offsets[0] != 0 ||
+         layout.spin_channel_offsets[0] != 0 ||
+         layout.spin_shell_offsets[batch.batch_size] != layout.total_spin_shells ||
+         layout.spin_atom_offsets[batch.batch_size] != layout.total_spin_atoms ||
+         layout.spin_channel_offsets[batch.batch_size] != layout.total_spin_channels)))) {
     record_error(device_error, Gfn2SccMixerDeviceError::kInvalidOffsets);
   }
   for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
@@ -93,14 +125,32 @@ __global__ void topology_preflight_kernel(Gfn2SccDeviceBatch batch, std::uint32_
     const std::int64_t shell_end = batch.shell_offsets[system + 1];
     const std::int64_t atom_begin = batch.atom_offsets[system];
     const std::int64_t atom_end = batch.atom_offsets[system + 1];
-    if (shell_begin < 0 || shell_begin >= shell_end || shell_end > batch.total_shells ||
-        atom_begin < 0 || atom_begin >= atom_end || atom_end > batch.total_atoms) {
+    bool invalid = shell_begin < 0 || shell_begin >= shell_end || shell_end > batch.total_shells ||
+                   atom_begin < 0 || atom_begin >= atom_end || atom_end > batch.total_atoms;
+    if (!invalid && spin_layout) {
+      const std::int32_t channels = layout.spin_channels[system];
+      const std::int64_t spin_channel_begin = layout.spin_channel_offsets[system];
+      const std::int64_t spin_channel_end = layout.spin_channel_offsets[system + 1];
+      const std::int64_t spin_shell_begin = layout.spin_shell_offsets[system];
+      const std::int64_t spin_shell_end = layout.spin_shell_offsets[system + 1];
+      const std::int64_t spin_atom_begin = layout.spin_atom_offsets[system];
+      const std::int64_t spin_atom_end = layout.spin_atom_offsets[system + 1];
+      invalid = (channels != 1 && channels != 2) || spin_channel_begin < 0 ||
+                spin_channel_end - spin_channel_begin != channels ||
+                spin_channel_end > layout.total_spin_channels || spin_shell_begin < 0 ||
+                spin_shell_end - spin_shell_begin != channels * (shell_end - shell_begin) ||
+                spin_shell_end > layout.total_spin_shells || spin_atom_begin < 0 ||
+                spin_atom_end - spin_atom_begin != channels * (atom_end - atom_begin) ||
+                spin_atom_end > layout.total_spin_atoms;
+    }
+    if (invalid) {
       record_error(device_error, Gfn2SccMixerDeviceError::kInvalidOffsets);
     }
   }
 }
 
 __global__ void initial_values_preflight_kernel(Gfn2SccDeviceBatch batch,
+                                                Gfn2WavefunctionLayoutView layout,
                                                 Gfn2SccDeviceConstMultipoles initial,
                                                 std::uint32_t* device_error) {
   if (atomicAdd(device_error, 0u) !=
@@ -108,9 +158,9 @@ __global__ void initial_values_preflight_kernel(Gfn2SccDeviceBatch batch,
     return;
   }
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
-  const std::int64_t dimension = system_dimension(batch, system);
+  const std::int64_t dimension = system_dimension(batch, layout, system);
   for (std::int64_t component = threadIdx.x; component < dimension; component += blockDim.x) {
-    if (!isfinite(load_component(batch, initial, system, component))) {
+    if (!isfinite(load_component(batch, layout, initial, system, component))) {
       record_error(device_error, Gfn2SccMixerDeviceError::kNonfiniteInitialMultipole);
     }
   }
@@ -175,6 +225,7 @@ __global__ void prepare_active_mixer_statuses_kernel(Gfn2SccIterationDeviceActiv
  * and closes this mixer stage before the numerical kernel can inspect it.
  */
 __global__ void active_topology_preflight_kernel(Gfn2SccDeviceBatch batch,
+                                                 Gfn2WavefunctionLayoutView layout,
                                                  Gfn2SccIterationDeviceActivity activity,
                                                  Gfn2SccMixerDeviceWorkspace workspace,
                                                  std::uint32_t* device_error) {
@@ -188,6 +239,10 @@ __global__ void active_topology_preflight_kernel(Gfn2SccDeviceBatch batch,
   bool have_previous_active = false;
   std::int64_t previous_shell_end = 0;
   std::int64_t previous_atom_end = 0;
+  std::int64_t previous_spin_shell_end = 0;
+  std::int64_t previous_spin_atom_end = 0;
+  std::int64_t previous_spin_channel_end = 0;
+  const bool spin_layout = has_spin_layout(layout);
   for (std::int64_t system = 0; system < batch.batch_size; ++system) {
     const std::uint8_t active = activity.active_mask[system];
     if (active > 1u) {
@@ -204,15 +259,44 @@ __global__ void active_topology_preflight_kernel(Gfn2SccDeviceBatch batch,
     const std::int64_t shell_end = batch.shell_offsets[system + 1];
     const std::int64_t atom_begin = batch.atom_offsets[system];
     const std::int64_t atom_end = batch.atom_offsets[system + 1];
-    const bool invalid_local = shell_begin < 0 || shell_begin >= shell_end ||
-                               shell_end > batch.total_shells || atom_begin < 0 ||
-                               atom_begin >= atom_end || atom_end > batch.total_atoms;
-    const bool invalid_endpoint =
-        (system == 0 && (shell_begin != 0 || atom_begin != 0)) ||
-        (system == batch.batch_size - 1 &&
-         (shell_end != batch.total_shells || atom_end != batch.total_atoms));
-    const bool overlaps_previous = have_previous_active && (shell_begin < previous_shell_end ||
-                                                            atom_begin < previous_atom_end);
+    bool invalid_local = shell_begin < 0 || shell_begin >= shell_end ||
+                         shell_end > batch.total_shells || atom_begin < 0 ||
+                         atom_begin >= atom_end || atom_end > batch.total_atoms;
+    bool invalid_endpoint = (system == 0 && (shell_begin != 0 || atom_begin != 0)) ||
+                            (system == batch.batch_size - 1 &&
+                             (shell_end != batch.total_shells || atom_end != batch.total_atoms));
+    bool overlaps_previous = have_previous_active &&
+                             (shell_begin < previous_shell_end || atom_begin < previous_atom_end);
+    std::int64_t spin_shell_end = 0;
+    std::int64_t spin_atom_end = 0;
+    std::int64_t spin_channel_end = 0;
+    if (!invalid_local && spin_layout) {
+      const std::int32_t channels = layout.spin_channels[system];
+      const std::int64_t spin_shell_begin = layout.spin_shell_offsets[system];
+      spin_shell_end = layout.spin_shell_offsets[system + 1];
+      const std::int64_t spin_atom_begin = layout.spin_atom_offsets[system];
+      spin_atom_end = layout.spin_atom_offsets[system + 1];
+      const std::int64_t spin_channel_begin = layout.spin_channel_offsets[system];
+      spin_channel_end = layout.spin_channel_offsets[system + 1];
+      invalid_local = (channels != 1 && channels != 2) || spin_shell_begin < 0 ||
+                      spin_shell_end - spin_shell_begin != channels * (shell_end - shell_begin) ||
+                      spin_shell_end > layout.total_spin_shells || spin_atom_begin < 0 ||
+                      spin_atom_end - spin_atom_begin != channels * (atom_end - atom_begin) ||
+                      spin_atom_end > layout.total_spin_atoms || spin_channel_begin < 0 ||
+                      spin_channel_end - spin_channel_begin != channels ||
+                      spin_channel_end > layout.total_spin_channels;
+      invalid_endpoint =
+          invalid_endpoint ||
+          (system == 0 &&
+           (spin_shell_begin != 0 || spin_atom_begin != 0 || spin_channel_begin != 0)) ||
+          (system == batch.batch_size - 1 && (spin_shell_end != layout.total_spin_shells ||
+                                              spin_atom_end != layout.total_spin_atoms ||
+                                              spin_channel_end != layout.total_spin_channels));
+      overlaps_previous = overlaps_previous || (have_previous_active &&
+                                                (spin_shell_begin < previous_spin_shell_end ||
+                                                 spin_atom_begin < previous_spin_atom_end ||
+                                                 spin_channel_begin < previous_spin_channel_end));
+    }
     if (invalid_local || invalid_endpoint || overlaps_previous) {
       record_error(device_error, Gfn2SccMixerDeviceError::kInvalidOffsets);
       atomicExch(workspace.sequence_active, 0u);
@@ -221,10 +305,14 @@ __global__ void active_topology_preflight_kernel(Gfn2SccDeviceBatch batch,
     have_previous_active = true;
     previous_shell_end = shell_end;
     previous_atom_end = atom_end;
+    previous_spin_shell_end = spin_shell_end;
+    previous_spin_atom_end = spin_atom_end;
+    previous_spin_channel_end = spin_channel_end;
   }
 }
 
-__global__ void initialize_state_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDevicePolicy policy,
+__global__ void initialize_state_kernel(Gfn2SccDeviceBatch batch, Gfn2WavefunctionLayoutView layout,
+                                        Gfn2SccMixerDevicePolicy policy,
                                         Gfn2SccDeviceConstMultipoles initial,
                                         Gfn2SccMixerDeviceState state,
                                         Gfn2SccMixerDeviceWorkspace workspace) {
@@ -232,13 +320,13 @@ __global__ void initialize_state_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDe
     return;
   }
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
-  const std::int64_t vector_begin = system_vector_begin(batch, system);
-  const std::int64_t dimension = system_dimension(batch, system);
+  const std::int64_t vector_begin = system_vector_begin(batch, layout, system);
+  const std::int64_t dimension = system_dimension(batch, layout, system);
   const std::int64_t history_begin = vector_begin * policy.history_size;
   const std::int64_t history_count = dimension * policy.history_size;
   for (std::int64_t component = threadIdx.x; component < dimension; component += blockDim.x) {
     state.current_inputs[vector_begin + component] =
-        load_component(batch, initial, system, component);
+        load_component(batch, layout, initial, system, component);
     state.previous_inputs[vector_begin + component] = 0.0;
     state.previous_residuals[vector_begin + component] = 0.0;
   }
@@ -260,8 +348,8 @@ __global__ void initialize_state_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDe
   }
 }
 
-__global__ void restart_system_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDevicePolicy policy,
-                                      std::int64_t system,
+__global__ void restart_system_kernel(Gfn2SccDeviceBatch batch, Gfn2WavefunctionLayoutView layout,
+                                      Gfn2SccMixerDevicePolicy policy, std::int64_t system,
                                       Gfn2SccDeviceConstMultipoles current_public,
                                       Gfn2SccMixerDeviceState state,
                                       Gfn2SccMixerDeviceWorkspace workspace,
@@ -282,9 +370,9 @@ __global__ void restart_system_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDevi
     return;
   }
 
-  const std::int64_t dimension = system_dimension(batch, system);
+  const std::int64_t dimension = system_dimension(batch, layout, system);
   for (std::int64_t component = threadIdx.x; component < dimension; component += blockDim.x) {
-    if (!isfinite(load_component(batch, current_public, system, component))) {
+    if (!isfinite(load_component(batch, layout, current_public, system, component))) {
       record_error(device_error, Gfn2SccMixerDeviceError::kNonfiniteRestartMultipole);
       atomicExch(&valid, 0);
     }
@@ -294,12 +382,12 @@ __global__ void restart_system_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDevi
     return;
   }
 
-  const std::int64_t vector_begin = system_vector_begin(batch, system);
+  const std::int64_t vector_begin = system_vector_begin(batch, layout, system);
   const std::int64_t history_begin = vector_begin * policy.history_size;
   const std::int64_t history_count = dimension * policy.history_size;
   for (std::int64_t component = threadIdx.x; component < dimension; component += blockDim.x) {
     state.current_inputs[vector_begin + component] =
-        load_component(batch, current_public, system, component);
+        load_component(batch, layout, current_public, system, component);
     state.previous_inputs[vector_begin + component] = 0.0;
     state.previous_residuals[vector_begin + component] = 0.0;
   }
@@ -377,13 +465,11 @@ __device__ void record_numeric_failure(Gfn2SccMixerDeviceState state, std::int64
   state.system_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
 }
 
-__global__ void mix_broyden_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDevicePolicy policy,
-                                   Gfn2SccIterationDeviceActivity activity,
-                                   Gfn2SccDeviceConstMultipoles raw,
-                                   Gfn2SccDeviceMultipoles next_mixed,
-                                   Gfn2SccMixerDeviceState state,
-                                   Gfn2SccMixerDeviceWorkspace workspace,
-                                   std::uint32_t* device_error) {
+__global__ void mix_broyden_kernel(
+    Gfn2SccDeviceBatch batch, Gfn2WavefunctionLayoutView layout, Gfn2SccMixerDevicePolicy policy,
+    Gfn2SccIterationDeviceActivity activity, Gfn2SccDeviceConstMultipoles raw,
+    Gfn2SccDeviceMultipoles next_mixed, Gfn2SccMixerDeviceState state,
+    Gfn2SccMixerDeviceWorkspace workspace, std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   __shared__ int active;
   __shared__ int valid;
@@ -425,14 +511,14 @@ __global__ void mix_broyden_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDeviceP
     return;
   }
 
-  const std::int64_t vector_begin = system_vector_begin(batch, system);
-  const std::int64_t dimension = system_dimension(batch, system);
+  const std::int64_t vector_begin = system_vector_begin(batch, layout, system);
+  const std::int64_t dimension = system_dimension(batch, layout, system);
   const std::int64_t history_begin = vector_begin * policy.history_size;
   const std::int64_t beta_begin = system * policy.history_size * policy.history_size;
   const std::int64_t coefficient_begin = system * policy.history_size;
 
   for (std::int64_t component = threadIdx.x; component < dimension; component += blockDim.x) {
-    const double raw_value = load_component(batch, raw, system, component);
+    const double raw_value = load_component(batch, layout, raw, system, component);
     const double current_value = state.current_inputs[vector_begin + component];
     const double residual = raw_value - current_value;
     workspace.residual[vector_begin + component] = residual;
@@ -734,7 +820,7 @@ __global__ void mix_broyden_kernel(Gfn2SccDeviceBatch batch, Gfn2SccMixerDeviceP
     state.previous_inputs[index] = state.current_inputs[index];
     state.previous_residuals[index] = workspace.residual[index];
     state.current_inputs[index] = mixed_value;
-    store_component(batch, next_mixed, system, component, mixed_value);
+    store_component(batch, layout, next_mixed, system, component, mixed_value);
   }
   __syncthreads();
   if (threadIdx.x == 0) {
@@ -815,6 +901,8 @@ bool pairwise_disjoint(const std::array<AddressRange, Count>& ranges) noexcept {
 }
 
 struct ValidatedDimensions {
+  std::int64_t shell_elements = 0;
+  std::int64_t atom_elements = 0;
   std::int64_t dipole_elements = 0;
   std::int64_t quadrupole_elements = 0;
   std::int64_t vector_elements = 0;
@@ -824,10 +912,42 @@ struct ValidatedDimensions {
   std::int64_t coefficient_elements = 0;
 };
 
-bool validate_dimensions(const Gfn2SccDeviceBatch& batch, const Gfn2SccMixerDevicePolicy& policy,
+bool valid_layout_binding(const Gfn2SccDeviceBatch& batch,
+                          const Gfn2WavefunctionLayoutView& layout) noexcept {
+  if (layout.spin_channels == nullptr) {
+    return layout.batch_size == 0 && layout.plan_token == 0u;
+  }
+  return layout.memory_space == Gfn2PlanMemorySpace::kCudaDevice &&
+         layout.plan_token == batch.plan_token && layout.batch_size == batch.batch_size &&
+         layout.total_spin_channels >= batch.batch_size &&
+         layout.total_spin_channels <= 2 * batch.batch_size && layout.total_spin_orbitals > 0 &&
+         layout.total_spin_matrix_elements > 0 && layout.total_spin_shells >= batch.total_shells &&
+         layout.total_spin_shells - batch.total_shells <= batch.total_shells &&
+         layout.total_spin_atoms >= batch.total_atoms &&
+         layout.total_spin_atoms - batch.total_atoms <= batch.total_atoms &&
+         layout.spin_channel_count == batch.batch_size &&
+         layout.spin_channel_offset_count == batch.batch_size + 1 &&
+         layout.spin_orbital_offset_count == batch.batch_size + 1 &&
+         layout.spin_matrix_offset_count == batch.batch_size + 1 &&
+         layout.spin_shell_offset_count == batch.batch_size + 1 &&
+         layout.spin_atom_offset_count == batch.batch_size + 1 &&
+         is_aligned(layout.spin_channels, alignof(std::int32_t)) &&
+         is_aligned(layout.spin_channel_offsets, alignof(std::int64_t)) &&
+         is_aligned(layout.spin_orbital_offsets, alignof(std::int64_t)) &&
+         is_aligned(layout.spin_matrix_offsets, alignof(std::int64_t)) &&
+         is_aligned(layout.spin_shell_offsets, alignof(std::int64_t)) &&
+         is_aligned(layout.spin_atom_offsets, alignof(std::int64_t));
+}
+
+bool validate_dimensions(const Gfn2SccDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+                         const Gfn2SccMixerDevicePolicy& policy,
                          ValidatedDimensions* dimensions) noexcept {
   std::int64_t atomic_components = 0;
   std::int64_t history_squared = 0;
+  dimensions->shell_elements =
+      layout.spin_channels == nullptr ? batch.total_shells : layout.total_spin_shells;
+  dimensions->atom_elements =
+      layout.spin_channels == nullptr ? batch.total_atoms : layout.total_spin_atoms;
   return batch.batch_size > 0 && batch.batch_size <= std::numeric_limits<int>::max() &&
          batch.total_shells > 0 && batch.total_atoms > 0 &&
          batch.batch_size != std::numeric_limits<std::int64_t>::max() &&
@@ -837,11 +957,14 @@ bool validate_dimensions(const Gfn2SccDeviceBatch& batch, const Gfn2SccMixerDevi
          std::isfinite(policy.damping) && policy.damping > 0.0 && policy.damping <= 1.0 &&
          std::isfinite(policy.rms_tolerance) && policy.rms_tolerance > 0.0 &&
          std::isfinite(policy.maximum_tolerance) && policy.maximum_tolerance > 0.0 &&
-         checked_multiply(batch.total_atoms, kDipoleComponents, &dimensions->dipole_elements) &&
-         checked_multiply(batch.total_atoms, kQuadrupoleComponents,
+         valid_layout_binding(batch, layout) &&
+         checked_multiply(dimensions->atom_elements, kDipoleComponents,
+                          &dimensions->dipole_elements) &&
+         checked_multiply(dimensions->atom_elements, kQuadrupoleComponents,
                           &dimensions->quadrupole_elements) &&
-         checked_multiply(batch.total_atoms, kMultipoleComponentsPerAtom, &atomic_components) &&
-         checked_add(batch.total_shells, &atomic_components) &&
+         checked_multiply(dimensions->atom_elements, kMultipoleComponentsPerAtom,
+                          &atomic_components) &&
+         checked_add(dimensions->shell_elements, &atomic_components) &&
          (dimensions->vector_elements = atomic_components, true) &&
          checked_multiply(dimensions->vector_elements, policy.history_size,
                           &dimensions->history_elements) &&
@@ -854,7 +977,7 @@ bool validate_dimensions(const Gfn2SccDeviceBatch& batch, const Gfn2SccMixerDevi
 bool valid_const_multipoles(const Gfn2SccDeviceConstMultipoles& view,
                             const Gfn2SccDeviceBatch& batch,
                             const ValidatedDimensions& dimensions) noexcept {
-  return view.plan_token == batch.plan_token && view.shell_elements == batch.total_shells &&
+  return view.plan_token == batch.plan_token && view.shell_elements == dimensions.shell_elements &&
          view.dipole_elements == dimensions.dipole_elements &&
          view.quadrupole_elements == dimensions.quadrupole_elements &&
          is_aligned(view.shell_charges, alignof(double)) &&
@@ -864,7 +987,7 @@ bool valid_const_multipoles(const Gfn2SccDeviceConstMultipoles& view,
 
 bool valid_multipoles(const Gfn2SccDeviceMultipoles& view, const Gfn2SccDeviceBatch& batch,
                       const ValidatedDimensions& dimensions) noexcept {
-  return view.plan_token == batch.plan_token && view.shell_elements == batch.total_shells &&
+  return view.plan_token == batch.plan_token && view.shell_elements == dimensions.shell_elements &&
          view.dipole_elements == dimensions.dipole_elements &&
          view.quadrupole_elements == dimensions.quadrupole_elements &&
          is_aligned(view.shell_charges, alignof(double)) &&
@@ -916,24 +1039,26 @@ bool valid_workspace(const Gfn2SccMixerDeviceWorkspace& workspace, const Gfn2Scc
          is_aligned(workspace.sequence_active, alignof(std::uint32_t));
 }
 
-bool validate_ranges(const Gfn2SccDeviceBatch& batch, const ValidatedDimensions& dimensions,
+bool validate_ranges(const Gfn2SccDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+                     const ValidatedDimensions& dimensions,
                      const Gfn2SccDeviceConstMultipoles& input,
                      const Gfn2SccDeviceMultipoles* output,
                      const Gfn2SccIterationDeviceActivity* activity,
                      const Gfn2SccMixerDeviceState& state,
                      const Gfn2SccMixerDeviceWorkspace& workspace,
                      std::uint32_t* device_error) noexcept {
-  std::array<AddressRange, 7> reads{};
+  std::array<AddressRange, 13> reads{};
   std::array<AddressRange, 24> writes;
   if (!make_address_range(batch.shell_offsets, batch.shell_offset_count,
                           sizeof(*batch.shell_offsets), &reads[0]) ||
       !make_address_range(batch.atom_offsets, batch.atom_offset_count, sizeof(*batch.atom_offsets),
                           &reads[1]) ||
-      !make_address_range(input.shell_charges, batch.total_shells, sizeof(double), &reads[2]) ||
+      !make_address_range(input.shell_charges, dimensions.shell_elements, sizeof(double),
+                          &reads[8]) ||
       !make_address_range(input.atomic_dipoles, dimensions.dipole_elements, sizeof(double),
-                          &reads[3]) ||
+                          &reads[9]) ||
       !make_address_range(input.atomic_quadrupoles, dimensions.quadrupole_elements, sizeof(double),
-                          &reads[4]) ||
+                          &reads[10]) ||
       !make_address_range(state.current_inputs, dimensions.vector_elements, sizeof(double),
                           &writes[0]) ||
       !make_address_range(state.previous_inputs, dimensions.vector_elements, sizeof(double),
@@ -970,17 +1095,32 @@ bool validate_ranges(const Gfn2SccDeviceBatch& batch, const ValidatedDimensions&
       !make_address_range(device_error, 1, sizeof(std::uint32_t), &writes[23])) {
     return false;
   }
+  if (layout.spin_channels != nullptr &&
+      (!make_address_range(layout.spin_channels, layout.spin_channel_count,
+                           sizeof(*layout.spin_channels), &reads[2]) ||
+       !make_address_range(layout.spin_channel_offsets, layout.spin_channel_offset_count,
+                           sizeof(*layout.spin_channel_offsets), &reads[3]) ||
+       !make_address_range(layout.spin_orbital_offsets, layout.spin_orbital_offset_count,
+                           sizeof(*layout.spin_orbital_offsets), &reads[4]) ||
+       !make_address_range(layout.spin_matrix_offsets, layout.spin_matrix_offset_count,
+                           sizeof(*layout.spin_matrix_offsets), &reads[5]) ||
+       !make_address_range(layout.spin_shell_offsets, layout.spin_shell_offset_count,
+                           sizeof(*layout.spin_shell_offsets), &reads[6]) ||
+       !make_address_range(layout.spin_atom_offsets, layout.spin_atom_offset_count,
+                           sizeof(*layout.spin_atom_offsets), &reads[7]))) {
+    return false;
+  }
   if (activity != nullptr &&
       (!make_address_range(activity->active_mask, batch.batch_size, sizeof(std::uint8_t),
-                           &reads[5]) ||
-       !make_address_range(activity->sequence_active, 1, sizeof(std::uint32_t), &reads[6]))) {
+                           &reads[11]) ||
+       !make_address_range(activity->sequence_active, 1, sizeof(std::uint32_t), &reads[12]))) {
     return false;
   }
   if (!pairwise_disjoint(reads)) {
     return false;
   }
   if (output != nullptr) {
-    if (!make_address_range(output->shell_charges, batch.total_shells, sizeof(double),
+    if (!make_address_range(output->shell_charges, dimensions.shell_elements, sizeof(double),
                             &writes[20]) ||
         !make_address_range(output->atomic_dipoles, dimensions.dipole_elements, sizeof(double),
                             &writes[21]) ||
@@ -1012,7 +1152,7 @@ bool validate_ranges(const Gfn2SccDeviceBatch& batch, const ValidatedDimensions&
     }
     for (std::size_t read = 0u; read < reads.size(); ++read) {
       const bool allowed_in_place = output != nullptr && write >= 20u && write <= 22u &&
-                                    read == write - 18u && same_range(writes[write], reads[read]);
+                                    read == write - 12u && same_range(writes[write], reads[read]);
       if (ranges_overlap(writes[write], reads[read]) && !allowed_in_place) {
         return false;
       }
@@ -1021,14 +1161,13 @@ bool validate_ranges(const Gfn2SccDeviceBatch& batch, const ValidatedDimensions&
   return true;
 }
 
-cudaError_t validate_common(const Gfn2SccDeviceBatch& batch, const Gfn2SccMixerDevicePolicy& policy,
-                            const Gfn2SccDeviceConstMultipoles& input,
-                            const Gfn2SccDeviceMultipoles* output,
-                            const Gfn2SccIterationDeviceActivity* activity,
-                            const Gfn2SccMixerDeviceState& state,
-                            const Gfn2SccMixerDeviceWorkspace& workspace,
-                            std::uint32_t* device_error, ValidatedDimensions* dimensions) noexcept {
-  if (!validate_dimensions(batch, policy, dimensions) ||
+cudaError_t validate_common(
+    const Gfn2SccDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2SccMixerDevicePolicy& policy, const Gfn2SccDeviceConstMultipoles& input,
+    const Gfn2SccDeviceMultipoles* output, const Gfn2SccIterationDeviceActivity* activity,
+    const Gfn2SccMixerDeviceState& state, const Gfn2SccMixerDeviceWorkspace& workspace,
+    std::uint32_t* device_error, ValidatedDimensions* dimensions) noexcept {
+  if (!validate_dimensions(batch, layout, policy, dimensions) ||
       !is_aligned(batch.shell_offsets, alignof(std::int64_t)) ||
       !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
       !valid_const_multipoles(input, batch, *dimensions) ||
@@ -1036,7 +1175,7 @@ cudaError_t validate_common(const Gfn2SccDeviceBatch& batch, const Gfn2SccMixerD
       (activity != nullptr && !valid_activity(*activity, batch)) ||
       !valid_state(state, batch, *dimensions) || !valid_workspace(workspace, batch, *dimensions) ||
       !is_aligned(device_error, alignof(std::uint32_t)) ||
-      !validate_ranges(batch, *dimensions, input, output, activity, state, workspace,
+      !validate_ranges(batch, layout, *dimensions, input, output, activity, state, workspace,
                        device_error)) {
     return cudaErrorInvalidValue;
   }
@@ -1044,9 +1183,10 @@ cudaError_t validate_common(const Gfn2SccDeviceBatch& batch, const Gfn2SccMixerD
 }
 
 cudaError_t launch_topology_and_capture(const Gfn2SccDeviceBatch& batch,
+                                        const Gfn2WavefunctionLayoutView& layout,
                                         const Gfn2SccMixerDeviceWorkspace& workspace,
                                         std::uint32_t* device_error, cudaStream_t stream) noexcept {
-  topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, device_error);
+  topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, layout, device_error);
   cudaError_t status = cudaPeekAtLastError();
   if (status != cudaSuccess) {
     return status;
@@ -1064,19 +1204,28 @@ cudaError_t initialize_gfn2_scc_mixer_cuda(const Gfn2SccDeviceBatch& batch,
                                            const Gfn2SccMixerDeviceWorkspace& workspace,
                                            std::uint32_t* device_error,
                                            cudaStream_t stream) noexcept {
+  return initialize_gfn2_scc_mixer_cuda(batch, Gfn2WavefunctionLayoutView{}, policy, initial, state,
+                                        workspace, device_error, stream);
+}
+
+cudaError_t initialize_gfn2_scc_mixer_cuda(
+    const Gfn2SccDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2SccMixerDevicePolicy& policy, const Gfn2SccDeviceConstMultipoles& initial,
+    const Gfn2SccMixerDeviceState& state, const Gfn2SccMixerDeviceWorkspace& workspace,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
   ValidatedDimensions dimensions;
-  cudaError_t status = validate_common(batch, policy, initial, nullptr, nullptr, state, workspace,
-                                       device_error, &dimensions);
+  cudaError_t status = validate_common(batch, layout, policy, initial, nullptr, nullptr, state,
+                                       workspace, device_error, &dimensions);
   if (status != cudaSuccess) {
     return status;
   }
-  topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, device_error);
+  topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, layout, device_error);
   status = cudaPeekAtLastError();
   if (status != cudaSuccess) {
     return status;
   }
   initial_values_preflight_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
-                                    0, stream>>>(batch, initial, device_error);
+                                    0, stream>>>(batch, layout, initial, device_error);
   status = cudaPeekAtLastError();
   if (status != cudaSuccess) {
     return status;
@@ -1087,7 +1236,7 @@ cudaError_t initialize_gfn2_scc_mixer_cuda(const Gfn2SccDeviceBatch& batch,
     return status;
   }
   initialize_state_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
-                            stream>>>(batch, policy, initial, state, workspace);
+                            stream>>>(batch, layout, policy, initial, state, workspace);
   return cudaPeekAtLastError();
 }
 
@@ -1096,18 +1245,28 @@ cudaError_t restart_gfn2_scc_mixer_system_cuda(
     const Gfn2SccDeviceConstMultipoles& current_public, const Gfn2SccMixerDeviceState& state,
     const Gfn2SccMixerDeviceWorkspace& workspace, std::uint32_t* device_error,
     cudaStream_t stream) noexcept {
+  return restart_gfn2_scc_mixer_system_cuda(batch, Gfn2WavefunctionLayoutView{}, policy, system,
+                                            current_public, state, workspace, device_error, stream);
+}
+
+cudaError_t restart_gfn2_scc_mixer_system_cuda(
+    const Gfn2SccDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2SccMixerDevicePolicy& policy, std::int64_t system,
+    const Gfn2SccDeviceConstMultipoles& current_public, const Gfn2SccMixerDeviceState& state,
+    const Gfn2SccMixerDeviceWorkspace& workspace, std::uint32_t* device_error,
+    cudaStream_t stream) noexcept {
   ValidatedDimensions dimensions;
-  cudaError_t status = validate_common(batch, policy, current_public, nullptr, nullptr, state,
-                                       workspace, device_error, &dimensions);
+  cudaError_t status = validate_common(batch, layout, policy, current_public, nullptr, nullptr,
+                                       state, workspace, device_error, &dimensions);
   if (status != cudaSuccess || system < 0 || system >= batch.batch_size) {
     return cudaErrorInvalidValue;
   }
-  status = launch_topology_and_capture(batch, workspace, device_error, stream);
+  status = launch_topology_and_capture(batch, layout, workspace, device_error, stream);
   if (status != cudaSuccess) {
     return status;
   }
-  restart_system_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, policy, system, current_public,
-                                                            state, workspace, device_error);
+  restart_system_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+      batch, layout, policy, system, current_public, state, workspace, device_error);
   return cudaPeekAtLastError();
 }
 
@@ -1119,9 +1278,19 @@ cudaError_t mix_gfn2_scc_broyden_cuda(const Gfn2SccDeviceBatch& batch,
                                       const Gfn2SccMixerDeviceState& state,
                                       const Gfn2SccMixerDeviceWorkspace& workspace,
                                       std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  return mix_gfn2_scc_broyden_cuda(batch, Gfn2WavefunctionLayoutView{}, policy, activity, raw,
+                                   next_mixed, state, workspace, device_error, stream);
+}
+
+cudaError_t mix_gfn2_scc_broyden_cuda(
+    const Gfn2SccDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2SccMixerDevicePolicy& policy, const Gfn2SccIterationDeviceActivity& activity,
+    const Gfn2SccDeviceConstMultipoles& raw, const Gfn2SccDeviceMultipoles& next_mixed,
+    const Gfn2SccMixerDeviceState& state, const Gfn2SccMixerDeviceWorkspace& workspace,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
   ValidatedDimensions dimensions;
-  cudaError_t status = validate_common(batch, policy, raw, &next_mixed, &activity, state, workspace,
-                                       device_error, &dimensions);
+  cudaError_t status = validate_common(batch, layout, policy, raw, &next_mixed, &activity, state,
+                                       workspace, device_error, &dimensions);
   if (status != cudaSuccess) {
     return status;
   }
@@ -1138,13 +1307,14 @@ cudaError_t mix_gfn2_scc_broyden_cuda(const Gfn2SccDeviceBatch& batch,
   if (status != cudaSuccess) {
     return status;
   }
-  active_topology_preflight_kernel<<<1, 1, 0, stream>>>(batch, activity, workspace, device_error);
+  active_topology_preflight_kernel<<<1, 1, 0, stream>>>(batch, layout, activity, workspace,
+                                                        device_error);
   status = cudaPeekAtLastError();
   if (status != cudaSuccess) {
     return status;
   }
   mix_broyden_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0, stream>>>(
-      batch, policy, activity, raw, next_mixed, state, workspace, device_error);
+      batch, layout, policy, activity, raw, next_mixed, state, workspace, device_error);
   return cudaPeekAtLastError();
 }
 

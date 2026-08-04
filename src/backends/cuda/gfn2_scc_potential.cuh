@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/common/gfn2_plan_schema.hpp"
 #include "backends/cuda/gfn2_scc_iteration_control.cuh"
 
 namespace gpuxtb::detail::cuda {
@@ -48,6 +49,8 @@ enum class Gfn2SccPotentialDeviceError : std::uint32_t {
   kNonfinitePeriodicPotential = 13u,
   kNonfiniteShellPotentialArithmetic = 14u,
   kNonfiniteAtomicPotentialArithmetic = 15u,
+  kInvalidSpinLayout = 16u,
+  kNonfiniteSpinPotential = 17u,
 };
 
 /*
@@ -130,6 +133,15 @@ struct Gfn2SccPotentialDeviceComponents {
   std::uint64_t plan_token = 0u;
 };
 
+/* Spin-polarization shell potential in WavefunctionLayout charge/magnetization
+ * packing. Restricted slices are not inspected; for unrestricted slices only
+ * the magnetization channel contributes to the composed potential. */
+struct Gfn2SccPotentialDeviceSpinComponent {
+  const double* shell = nullptr;
+  std::int64_t shell_elements = 0;
+  std::uint64_t plan_token = 0u;
+};
+
 /* Complete field-layout potentials consumed by the Hamiltonian assembler. */
 struct Gfn2SccPotentialDeviceResults {
   double* shell = nullptr;
@@ -164,6 +176,8 @@ static_assert(std::is_trivially_copyable_v<Gfn2SccPotentialDeviceActivity>);
 static_assert(std::is_trivially_copyable_v<Gfn2SccPotentialDeviceMixedFields>);
 static_assert(std::is_trivially_copyable_v<Gfn2SccPotentialDeviceTopologyMultipoles>);
 static_assert(std::is_trivially_copyable_v<Gfn2SccPotentialDeviceComponents>);
+static_assert(std::is_trivially_copyable_v<Gfn2SccPotentialDeviceSpinComponent>);
+static_assert(std::is_standard_layout_v<Gfn2SccPotentialDeviceSpinComponent>);
 static_assert(std::is_trivially_copyable_v<Gfn2SccPotentialDeviceResults>);
 static_assert(std::is_trivially_copyable_v<Gfn2SccPotentialDeviceWorkspace>);
 
@@ -200,6 +214,22 @@ cudaError_t reduce_gfn2_scc_mixed_atomic_charges_cuda(
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
 /*
+ * Mixed-spin canonical-ledger projection. spin_topology preserves the exact
+ * WavefunctionLayout charge/magnetization packing and receives one shell-sum
+ * per spin atom. physical_topology receives the dense charge-channel qsh,
+ * qat, dipole, and quadrupole arrays consumed by legacy physical-topology
+ * component kernels. Both destinations publish together per active system;
+ * inactive and failed peers preserve every destination byte.
+ */
+cudaError_t reduce_gfn2_scc_spin_atomic_charges_cuda(
+    const Gfn2SccPotentialDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2SccPotentialDeviceMixedFields& mixed, const Gfn2SccIterationDeviceActivity& activity,
+    const Gfn2SccPotentialDeviceTopologyMultipoles& spin_topology,
+    const Gfn2SccPotentialDeviceTopologyMultipoles& physical_topology,
+    const Gfn2SccPotentialDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
  * Compose component potentials in CPU order and map topology-major arrays back
  * to field layouts. Shell order is ES2, ES3, explicit-PC; atomic order is AES2,
  * periodic, D4. Disabled components require null+zero extents and publish zero.
@@ -209,6 +239,26 @@ cudaError_t compose_gfn2_scc_potentials_cuda(
     const Gfn2SccPotentialDeviceActivity& activity, const Gfn2SccPotentialDeviceResults& results,
     const Gfn2SccPotentialDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Compose potentials for a mixed one-/two-channel batch. Charge components
+ * retain the established CPU association order and are written to channel
+ * zero. The channel-zero shell field is Hamiltonian-ready: each raw shell
+ * value receives its owning atom's scalar value with the literal legacy
+ * `vsh + vat` bridge operation. Unrestricted channel one receives the
+ * spin-polarization shell potential; its atom, dipole, and quadrupole fields
+ * are exact +0.0. Restricted systems therefore match the legacy composer
+ * followed by the scalar bridge, without a second collection pass.
+ * Results/workspace extents follow layout.total_spin_shells and
+ * layout.total_spin_atoms (with 3x/6x multipole extents).
+ */
+cudaError_t compose_gfn2_scc_spin_potentials_cuda(
+    const Gfn2SccPotentialDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2SccPotentialDeviceComponents& components,
+    const Gfn2SccPotentialDeviceSpinComponent& spin, const Gfn2SccPotentialDeviceActivity& activity,
+    const Gfn2SccPotentialDeviceResults& results, const Gfn2SccPotentialDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
 
 /* Canonical-ledger overload used by the SCC iteration composer.  Unlike the
  * compatibility entry above, its plan preflight reads offsets only for active

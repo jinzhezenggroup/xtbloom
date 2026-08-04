@@ -38,6 +38,7 @@ struct CanonicalStages {
 CanonicalStages canonical_stages(std::uint32_t components) noexcept {
   CanonicalStages stages{};
   stages.append(Gfn2SccStageId::kMixedGather);
+  stages.append(Gfn2SccStageId::kSpinPotential);
   stages.append(Gfn2SccStageId::kES2Potential);
   stages.append(Gfn2SccStageId::kES3Potential);
   stages.append(Gfn2SccStageId::kAES2Potential);
@@ -54,6 +55,7 @@ CanonicalStages canonical_stages(std::uint32_t components) noexcept {
   stages.append(Gfn2SccStageId::kOccupations);
   stages.append(Gfn2SccStageId::kDensity);
   stages.append(Gfn2SccStageId::kMulliken);
+  stages.append(Gfn2SccStageId::kSpinRawEnergy);
   stages.append(Gfn2SccStageId::kES2RawEnergy);
   stages.append(Gfn2SccStageId::kES3RawEnergy);
   stages.append(Gfn2SccStageId::kAES2RawEnergy);
@@ -85,6 +87,10 @@ bool report_spec(Gfn2SccStageId stage, ReportSpec& spec) noexcept {
   switch (stage) {
     case Gfn2SccStageId::kMixedGather:
       spec.peer_mask = 0xfcu;
+      return true;
+    case Gfn2SccStageId::kSpinPotential:
+    case Gfn2SccStageId::kSpinRawEnergy:
+      spec.peer_mask = kGfn2SpinDevicePeerErrorMask;
       return true;
     case Gfn2SccStageId::kES2Potential:
       spec.role = Gfn2SccStageDeviceCodeRole::kPlanOnly;
@@ -162,7 +168,7 @@ bool report_spec(Gfn2SccStageId stage, ReportSpec& spec) noexcept {
       spec.peer_mask = 0xfcu;
       return true;
     case Gfn2SccStageId::kFreeEnergy:
-      spec.peer_mask = 0xffeu;
+      spec.peer_mask = 0x1ffeu;
       return true;
     case Gfn2SccStageId::kMixer:
       spec.format = Gfn2SccStageCodeFormat::kGpuxtbStatus;
@@ -224,6 +230,7 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
   auto& workspace = candidate.workspace;
   const std::uint64_t token = plan.plan_token;
   const std::uint32_t components = plan.enabled_components;
+  const bool mixed_spin = plan.wavefunction_layout.total_spin_channels != plan.topology.batch_size;
 
   /* One canonical activity ledger fans out to every active-aware primitive. */
   const auto* active = workspace.ledger.active_mask;
@@ -249,6 +256,8 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
                         state.scc.current_inputs.atomic_quadrupoles,
                         state.scc.current_inputs.quadrupole_elements,
                         token};
+  input.mixed_spin = {state.scc.current_inputs.shell_charges,
+                      state.scc.current_inputs.shell_elements, token};
   workspace.mixed_topology.shell_charges = state.scc.current_inputs.shell_charges;
   workspace.mixed_topology.shell_elements = state.scc.current_inputs.shell_elements;
   workspace.mixed_topology.atomic_dipoles = state.scc.current_inputs.atomic_dipoles;
@@ -256,6 +265,7 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
   workspace.mixed_topology.atomic_quadrupoles = state.scc.current_inputs.atomic_quadrupoles;
   workspace.mixed_topology.quadrupole_elements = state.scc.current_inputs.quadrupole_elements;
   workspace.mixed_topology.plan_token = token;
+  workspace.physical_topology.plan_token = token;
 
   /* Component producer storage is projected once into composer inputs. */
   const auto& storage = workspace.components;
@@ -291,8 +301,14 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
       workspace.complete_potentials.shell, workspace.complete_potentials.shell_elements,
       workspace.complete_potentials.atomic, workspace.complete_potentials.atom_elements, token};
   workspace.scalar_bridge.plan_token = token;
-  input.hamiltonian.shell_scalar_potentials = workspace.scalar_bridge.shell_scalar;
-  input.hamiltonian.shell_scalar_elements = workspace.scalar_bridge.shell_elements;
+  /* Mixed-spin composition already folds the physical atomic scalar into the
+   * charge-channel shell result. Restricted plans retain the legacy bridge
+   * descriptor so their arithmetic and compatibility entry remain exact. */
+  input.hamiltonian.shell_scalar_potentials =
+      mixed_spin ? workspace.complete_potentials.shell : workspace.scalar_bridge.shell_scalar;
+  input.hamiltonian.shell_scalar_elements = mixed_spin
+                                                ? workspace.complete_potentials.shell_elements
+                                                : workspace.scalar_bridge.shell_elements;
   input.hamiltonian.atomic_dipole_potentials = workspace.complete_potentials.dipole;
   input.hamiltonian.atomic_dipole_elements = workspace.complete_potentials.dipole_elements;
   input.hamiltonian.atomic_quadrupole_potentials = workspace.complete_potentials.quadrupole;
@@ -352,6 +368,8 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
                        storage.es3_energy_elements,
                        storage.aes2_energy,
                        storage.aes2_energy_elements,
+                       workspace.staged_spin_energies,
+                       workspace.staged_spin_energy_elements,
                        nullptr,
                        0,
                        nullptr,
@@ -386,6 +404,8 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
                           workspace.staged_raw_population.quadrupole,
                           workspace.staged_raw_population.quadrupole_elements,
                           token};
+  input.raw_spin = {workspace.staged_raw_population.qsh,
+                    workspace.staged_raw_population.qsh_elements, token};
   input.complete_free_energies = workspace.staged_free_energy.free_energy;
   input.complete_free_energy_elements = workspace.staged_free_energy.free_energy_elements;
   input.plan_token = token;
@@ -404,6 +424,8 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
   state.free_energy.es3_elements = state.classical_energy.es3_elements;
   state.free_energy.aes2 = state.classical_energy.aes2;
   state.free_energy.aes2_elements = state.classical_energy.aes2_elements;
+  state.free_energy.spin = state.spin_energies;
+  state.free_energy.spin_elements = state.spin_energy_elements;
   state.free_energy.d4_two_body = state.classical_energy.d4_two_body;
   state.free_energy.d4_two_body_elements = state.classical_energy.d4_two_body_elements;
   state.free_energy.explicit_point_charge = state.classical_energy.explicit_point_charge;
@@ -414,7 +436,8 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
       state.classical_energy.periodic_embedding_elements;
   state.publication.wavefunction = {state.eigenpairs, state.occupations, state.density,
                                     state.raw_population, token};
-  state.publication.energy = {state.classical_energy, state.free_energy, token};
+  state.publication.energy = {state.classical_energy, state.free_energy, state.spin_energies,
+                              state.spin_energy_elements, token};
   state.publication.mixer = state.mixer;
   state.publication.published = state.published;
   state.publication.scc = state.scc;
@@ -427,6 +450,8 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
   workspace.staged_free_energy.es3_elements = workspace.staged_classical_energy.es3_elements;
   workspace.staged_free_energy.aes2 = workspace.staged_classical_energy.aes2;
   workspace.staged_free_energy.aes2_elements = workspace.staged_classical_energy.aes2_elements;
+  workspace.staged_free_energy.spin = workspace.staged_spin_energies;
+  workspace.staged_free_energy.spin_elements = workspace.staged_spin_energy_elements;
   workspace.staged_free_energy.d4_two_body = workspace.staged_classical_energy.d4_two_body;
   workspace.staged_free_energy.d4_two_body_elements =
       workspace.staged_classical_energy.d4_two_body_elements;
@@ -444,8 +469,9 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
   workspace.staged_publication.wavefunction = {
       workspace.staged_eigenpairs, workspace.staged_occupations, workspace.staged_density,
       workspace.staged_raw_population, token};
-  workspace.staged_publication.energy = {workspace.staged_classical_energy,
-                                         workspace.staged_free_energy, token};
+  workspace.staged_publication.energy = {
+      workspace.staged_classical_energy, workspace.staged_free_energy,
+      workspace.staged_spin_energies, workspace.staged_spin_energy_elements, token};
   workspace.staged_publication.mixer = workspace.staged_mixer;
   workspace.staged_publication.next_mixed = {workspace.next_mixed.shell_charges,
                                              workspace.next_mixed.shell_elements,
@@ -465,6 +491,9 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
   workspace.eigensolver_workspace.solver_host_workspace = plan.eigensolver_provider.host_workspace;
   workspace.eigensolver_workspace.solver_host_workspace_bytes =
       plan.eigensolver_provider.host_workspace_bytes;
+  workspace.spin_output.spin_energies = workspace.staged_spin_energies;
+  workspace.spin_output.spin_energy_elements = workspace.staged_spin_energy_elements;
+  workspace.spin_output.plan_token = token;
   workspace.plan_token = token;
 }
 
@@ -501,6 +530,10 @@ void assign_report_owners(Gfn2SccStageDeviceReport& report, std::int64_t index, 
     case Gfn2SccStageId::kMixedGather:
     case Gfn2SccStageId::kPotentialCompose:
       report.stage_sequence_active = workspace.potential_workspace.sequence_active;
+      break;
+    case Gfn2SccStageId::kSpinPotential:
+    case Gfn2SccStageId::kSpinRawEnergy:
+      report.stage_sequence_active = workspace.spin_workspace.sequence_active;
       break;
     case Gfn2SccStageId::kScalarBridge:
       report.stage_sequence_active = workspace.scalar_bridge.workspace.sequence_active;

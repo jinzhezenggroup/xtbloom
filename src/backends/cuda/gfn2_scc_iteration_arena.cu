@@ -20,8 +20,21 @@ struct ArenaShape {
   std::int64_t shells = 0;
   std::int64_t orbitals = 0;
   std::int64_t matrices = 0;
+  std::int64_t spin_channels = 0;
+  std::int64_t spin_orbitals = 0;
+  std::int64_t spin_matrices = 0;
+  std::int64_t spin_shells = 0;
+  std::int64_t spin_atoms = 0;
   std::int64_t dipoles = 0;
   std::int64_t quadrupoles = 0;
+  std::int64_t spin_dipoles = 0;
+  std::int64_t spin_quadrupoles = 0;
+  std::int64_t spin_channel_count = 0;
+  std::int64_t spin_channel_offset_count = 0;
+  std::int64_t spin_orbital_offset_count = 0;
+  std::int64_t spin_matrix_offset_count = 0;
+  std::int64_t spin_shell_offset_count = 0;
+  std::int64_t spin_atom_offset_count = 0;
   std::int64_t two_batch = 0;
   std::int64_t two_orbitals = 0;
   std::int64_t mixer_vector = 0;
@@ -80,6 +93,8 @@ struct ArenaShape {
   shape = {};
   error = Gfn2SccIterationArenaError::kInvalidPlan;
   const auto& topology = plan.topology;
+  const auto& wavefunction = plan.wavefunction_layout;
+  const auto& spin = plan.spin_batch;
   if (plan.abi_version != kGfn2SccIterationAbiVersion || plan.plan_token == 0u ||
       topology.plan_token != plan.plan_token || topology.batch_size <= 0 ||
       topology.bucket_count <= 0 || topology.total_atoms <= 0 || topology.total_shells <= 0 ||
@@ -89,6 +104,36 @@ struct ArenaShape {
       (plan.enabled_components & ~kGfn2SccPotentialAllComponents) != 0u ||
       plan.geometry_batch.total_pairs < 0 || plan.es2_batch.total_matrix_elements < 0 ||
       plan.aes2_batch.total_pairs < 0 || plan.d4_batch.total_pairs < 0) {
+    return false;
+  }
+  std::int64_t wavefunction_offset_count = 0;
+  if (!checked_add(topology.batch_size, 1, wavefunction_offset_count)) {
+    error = Gfn2SccIterationArenaError::kSizeOverflow;
+    return false;
+  }
+  const auto valid_spin_extent = [](std::int64_t physical, std::int64_t expanded) noexcept {
+    return expanded >= physical && expanded - physical <= physical;
+  };
+  if (wavefunction.memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
+      wavefunction.plan_token != plan.plan_token || wavefunction.layout_fingerprint == 0u ||
+      wavefunction.batch_size != topology.batch_size ||
+      !valid_spin_extent(topology.batch_size, wavefunction.total_spin_channels) ||
+      !valid_spin_extent(topology.total_orbitals, wavefunction.total_spin_orbitals) ||
+      !valid_spin_extent(topology.total_matrix_elements, wavefunction.total_spin_matrix_elements) ||
+      !valid_spin_extent(topology.total_shells, wavefunction.total_spin_shells) ||
+      !valid_spin_extent(topology.total_atoms, wavefunction.total_spin_atoms) ||
+      wavefunction.spin_channel_count != topology.batch_size ||
+      wavefunction.spin_channel_offset_count != wavefunction_offset_count ||
+      wavefunction.spin_orbital_offset_count != wavefunction_offset_count ||
+      wavefunction.spin_matrix_offset_count != wavefunction_offset_count ||
+      wavefunction.spin_shell_offset_count != wavefunction_offset_count ||
+      wavefunction.spin_atom_offset_count != wavefunction_offset_count ||
+      wavefunction.spin_channels == nullptr || wavefunction.spin_channel_offsets == nullptr ||
+      wavefunction.spin_orbital_offsets == nullptr || wavefunction.spin_matrix_offsets == nullptr ||
+      wavefunction.spin_shell_offsets == nullptr || wavefunction.spin_atom_offsets == nullptr ||
+      spin.plan_token != plan.plan_token || spin.batch_size != topology.batch_size ||
+      spin.total_atoms != topology.total_atoms || spin.total_shells != topology.total_shells ||
+      spin.shell_population_elements != wavefunction.total_spin_shells) {
     return false;
   }
   if (provider_requirements.solver_device_workspace_bytes >
@@ -105,6 +150,17 @@ struct ArenaShape {
   shape.shells = topology.total_shells;
   shape.orbitals = topology.total_orbitals;
   shape.matrices = topology.total_matrix_elements;
+  shape.spin_channels = wavefunction.total_spin_channels;
+  shape.spin_orbitals = wavefunction.total_spin_orbitals;
+  shape.spin_matrices = wavefunction.total_spin_matrix_elements;
+  shape.spin_shells = wavefunction.total_spin_shells;
+  shape.spin_atoms = wavefunction.total_spin_atoms;
+  shape.spin_channel_count = wavefunction.spin_channel_count;
+  shape.spin_channel_offset_count = wavefunction.spin_channel_offset_count;
+  shape.spin_orbital_offset_count = wavefunction.spin_orbital_offset_count;
+  shape.spin_matrix_offset_count = wavefunction.spin_matrix_offset_count;
+  shape.spin_shell_offset_count = wavefunction.spin_shell_offset_count;
+  shape.spin_atom_offset_count = wavefunction.spin_atom_offset_count;
   shape.mixer_history = plan.mixer_policy.history_size;
   shape.es2_matrix_elements = plan.es2_batch.total_matrix_elements;
   shape.enabled_components = plan.enabled_components;
@@ -115,10 +171,12 @@ struct ArenaShape {
   std::int64_t history_square = 0;
   if (!checked_multiply(shape.atoms, 3, shape.dipoles) ||
       !checked_multiply(shape.atoms, 6, shape.quadrupoles) ||
+      !checked_multiply(shape.spin_atoms, 3, shape.spin_dipoles) ||
+      !checked_multiply(shape.spin_atoms, 6, shape.spin_quadrupoles) ||
       !checked_multiply(shape.batch, 2, shape.two_batch) ||
       !checked_multiply(shape.orbitals, 2, shape.two_orbitals) ||
-      !checked_multiply(shape.atoms, 9, shape.mixer_vector) ||
-      !checked_add(shape.shells, shape.mixer_vector, shape.mixer_vector) ||
+      !checked_multiply(shape.spin_atoms, 9, shape.mixer_vector) ||
+      !checked_add(shape.spin_shells, shape.mixer_vector, shape.mixer_vector) ||
       !checked_multiply(shape.mixer_vector, shape.mixer_history, shape.mixer_history_elements) ||
       !checked_multiply(shape.batch, shape.mixer_history, shape.mixer_omega_elements) ||
       !checked_multiply(shape.mixer_history, shape.mixer_history, history_square) ||
@@ -240,6 +298,17 @@ void hash_append(std::uint64_t value, std::uint64_t& hash) noexcept {
   hash_append(static_cast<std::uint64_t>(shape.shells), hash);
   hash_append(static_cast<std::uint64_t>(shape.orbitals), hash);
   hash_append(static_cast<std::uint64_t>(shape.matrices), hash);
+  hash_append(static_cast<std::uint64_t>(shape.spin_channels), hash);
+  hash_append(static_cast<std::uint64_t>(shape.spin_orbitals), hash);
+  hash_append(static_cast<std::uint64_t>(shape.spin_matrices), hash);
+  hash_append(static_cast<std::uint64_t>(shape.spin_shells), hash);
+  hash_append(static_cast<std::uint64_t>(shape.spin_atoms), hash);
+  hash_append(static_cast<std::uint64_t>(shape.spin_channel_count), hash);
+  hash_append(static_cast<std::uint64_t>(shape.spin_channel_offset_count), hash);
+  hash_append(static_cast<std::uint64_t>(shape.spin_orbital_offset_count), hash);
+  hash_append(static_cast<std::uint64_t>(shape.spin_matrix_offset_count), hash);
+  hash_append(static_cast<std::uint64_t>(shape.spin_shell_offset_count), hash);
+  hash_append(static_cast<std::uint64_t>(shape.spin_atom_offset_count), hash);
   hash_append(static_cast<std::uint64_t>(shape.mixer_history), hash);
   hash_append(static_cast<std::uint64_t>(shape.geometry_pair_elements), hash);
   hash_append(static_cast<std::uint64_t>(shape.es2_matrix_elements), hash);
@@ -379,20 +448,33 @@ void project_workspace_front(ArenaCursor& cursor, const ArenaShape& shape,
   workspace.staged_occupations = take_occupations(cursor, shape);
   workspace.staged_density = take_density(cursor, shape);
   workspace.staged_raw_population = take_population(cursor, shape);
+  workspace.staged_spin_energies = cursor.take<double>(shape.batch);
+  workspace.staged_spin_energy_elements = shape.batch;
   take_energy_trace(cursor, shape, workspace.staged_occupations.entropies, true,
                     workspace.staged_classical_energy, workspace.staged_free_energy);
+  workspace.staged_free_energy.spin = workspace.staged_spin_energies;
+  workspace.staged_free_energy.spin_elements = workspace.staged_spin_energy_elements;
   workspace.staged_mixer = take_mixer(cursor, shape);
   workspace.next_mixed = take_multipoles(cursor, shape);
 
   workspace.mixed_topology = {state.scc.current_inputs.shell_charges,
-                              shape.shells,
-                              cursor.take<double>(shape.atoms),
-                              shape.atoms,
+                              shape.spin_shells,
+                              cursor.take<double>(shape.spin_atoms),
+                              shape.spin_atoms,
                               state.scc.current_inputs.atomic_dipoles,
-                              shape.dipoles,
+                              shape.spin_dipoles,
                               state.scc.current_inputs.atomic_quadrupoles,
-                              shape.quadrupoles,
+                              shape.spin_quadrupoles,
                               shape.plan_token};
+  workspace.physical_topology = {cursor.take<double>(shape.shells),
+                                 shape.shells,
+                                 cursor.take<double>(shape.atoms),
+                                 shape.atoms,
+                                 cursor.take<double>(shape.dipoles),
+                                 shape.dipoles,
+                                 cursor.take<double>(shape.quadrupoles),
+                                 shape.quadrupoles,
+                                 shape.plan_token};
 
   take_component_storage(cursor, shape, workspace.components);
   workspace.potential_components.enabled_components = shape.enabled_components;
@@ -419,35 +501,37 @@ void project_workspace_front(ArenaCursor& cursor, const ArenaShape& shape,
       workspace.components.periodic_atomic_elements;
   workspace.potential_components.plan_token = shape.plan_token;
 
-  workspace.complete_potentials = {cursor.take<double>(shape.shells),
-                                   shape.shells,
-                                   cursor.take<double>(shape.atoms),
-                                   shape.atoms,
-                                   cursor.take<double>(shape.dipoles),
-                                   shape.dipoles,
-                                   cursor.take<double>(shape.quadrupoles),
-                                   shape.quadrupoles,
+  workspace.complete_potentials = {cursor.take<double>(shape.spin_shells),
+                                   shape.spin_shells,
+                                   cursor.take<double>(shape.spin_atoms),
+                                   shape.spin_atoms,
+                                   cursor.take<double>(shape.spin_dipoles),
+                                   shape.spin_dipoles,
+                                   cursor.take<double>(shape.spin_quadrupoles),
+                                   shape.spin_quadrupoles,
                                    shape.plan_token};
-  workspace.scalar_bridge.fields = {workspace.complete_potentials.shell, shape.shells,
-                                    workspace.complete_potentials.atomic, shape.atoms,
+  workspace.scalar_bridge.fields = {workspace.complete_potentials.shell, shape.spin_shells,
+                                    workspace.complete_potentials.atomic, shape.spin_atoms,
                                     shape.plan_token};
   workspace.scalar_bridge.shell_scalar = cursor.take<double>(shape.shells);
   workspace.scalar_bridge.shell_elements = shape.shells;
   workspace.scalar_bridge.plan_token = shape.plan_token;
-  workspace.hamiltonian = {cursor.take<double>(shape.matrices), shape.matrices, shape.plan_token};
+  workspace.hamiltonian = {cursor.take<double>(shape.spin_matrices), shape.spin_matrices,
+                           shape.plan_token};
 
   workspace.staged_publication.wavefunction = {
       workspace.staged_eigenpairs, workspace.staged_occupations, workspace.staged_density,
       workspace.staged_raw_population, shape.plan_token};
-  workspace.staged_publication.energy = {workspace.staged_classical_energy,
-                                         workspace.staged_free_energy, shape.plan_token};
+  workspace.staged_publication.energy = {
+      workspace.staged_classical_energy, workspace.staged_free_energy,
+      workspace.staged_spin_energies, workspace.staged_spin_energy_elements, shape.plan_token};
   workspace.staged_publication.mixer = workspace.staged_mixer;
   workspace.staged_publication.next_mixed = {workspace.next_mixed.shell_charges,
-                                             shape.shells,
+                                             shape.spin_shells,
                                              workspace.next_mixed.atomic_dipoles,
-                                             shape.dipoles,
+                                             shape.spin_dipoles,
                                              workspace.next_mixed.atomic_quadrupoles,
-                                             shape.quadrupoles,
+                                             shape.spin_quadrupoles,
                                              shape.plan_token};
   workspace.staged_publication.plan_token = shape.plan_token;
 }
@@ -522,10 +606,10 @@ namespace {
 [[nodiscard]] Gfn2EigensolverDeviceResults take_eigenpairs(ArenaCursor& cursor,
                                                            const ArenaShape& shape) noexcept {
   Gfn2EigensolverDeviceResults result{};
-  result.eigenvalues = cursor.take<double>(shape.orbitals);
-  result.eigenvalue_elements = shape.orbitals;
-  result.coefficients = cursor.take<double>(shape.matrices);
-  result.coefficient_elements = shape.matrices;
+  result.eigenvalues = cursor.take<double>(shape.spin_orbitals);
+  result.eigenvalue_elements = shape.spin_orbitals;
+  result.coefficients = cursor.take<double>(shape.spin_matrices);
+  result.coefficient_elements = shape.spin_matrices;
   result.plan_token = shape.plan_token;
   return result;
 }
@@ -548,10 +632,10 @@ namespace {
 [[nodiscard]] Gfn2DensityDeviceResults take_density(ArenaCursor& cursor,
                                                     const ArenaShape& shape) noexcept {
   Gfn2DensityDeviceResults result{};
-  result.density = cursor.take<double>(shape.matrices);
-  result.density_elements = shape.matrices;
-  result.energy_weighted_density = cursor.take<double>(shape.matrices);
-  result.weighted_density_elements = shape.matrices;
+  result.density = cursor.take<double>(shape.spin_matrices);
+  result.density_elements = shape.spin_matrices;
+  result.energy_weighted_density = cursor.take<double>(shape.spin_matrices);
+  result.weighted_density_elements = shape.spin_matrices;
   result.band_energies = cursor.take<double>(shape.batch);
   result.band_energy_elements = shape.batch;
   result.occupation_sums = cursor.take<double>(shape.batch);
@@ -561,20 +645,28 @@ namespace {
   result.weighted_density_traces = cursor.take<double>(shape.batch);
   result.weighted_density_trace_elements = shape.batch;
   result.plan_token = shape.plan_token;
+  result.channel_band_energies = cursor.take<double>(shape.spin_channels);
+  result.channel_band_energy_elements = shape.spin_channels;
+  result.channel_occupation_sums = cursor.take<double>(shape.spin_channels);
+  result.channel_occupation_sum_elements = shape.spin_channels;
+  result.channel_density_traces = cursor.take<double>(shape.spin_channels);
+  result.channel_density_trace_elements = shape.spin_channels;
+  result.channel_weighted_density_traces = cursor.take<double>(shape.spin_channels);
+  result.channel_weighted_density_trace_elements = shape.spin_channels;
   return result;
 }
 
 [[nodiscard]] Gfn2MullikenDevicePopulation take_population(ArenaCursor& cursor,
                                                            const ArenaShape& shape) noexcept {
   Gfn2MullikenDevicePopulation result{};
-  result.qsh = cursor.take<double>(shape.shells);
-  result.qsh_elements = shape.shells;
-  result.qat = cursor.take<double>(shape.atoms);
-  result.qat_elements = shape.atoms;
-  result.dipole = cursor.take<double>(shape.dipoles);
-  result.dipole_elements = shape.dipoles;
-  result.quadrupole = cursor.take<double>(shape.quadrupoles);
-  result.quadrupole_elements = shape.quadrupoles;
+  result.qsh = cursor.take<double>(shape.spin_shells);
+  result.qsh_elements = shape.spin_shells;
+  result.qat = cursor.take<double>(shape.spin_atoms);
+  result.qat_elements = shape.spin_atoms;
+  result.dipole = cursor.take<double>(shape.spin_dipoles);
+  result.dipole_elements = shape.spin_dipoles;
+  result.quadrupole = cursor.take<double>(shape.spin_quadrupoles);
+  result.quadrupole_elements = shape.spin_quadrupoles;
   result.plan_token = shape.plan_token;
   return result;
 }
@@ -582,12 +674,12 @@ namespace {
 [[nodiscard]] Gfn2SccDeviceMultipoles take_multipoles(ArenaCursor& cursor,
                                                       const ArenaShape& shape) noexcept {
   Gfn2SccDeviceMultipoles result{};
-  result.shell_charges = cursor.take<double>(shape.shells);
-  result.shell_elements = shape.shells;
-  result.atomic_dipoles = cursor.take<double>(shape.dipoles);
-  result.dipole_elements = shape.dipoles;
-  result.atomic_quadrupoles = cursor.take<double>(shape.quadrupoles);
-  result.quadrupole_elements = shape.quadrupoles;
+  result.shell_charges = cursor.take<double>(shape.spin_shells);
+  result.shell_elements = shape.spin_shells;
+  result.atomic_dipoles = cursor.take<double>(shape.spin_dipoles);
+  result.dipole_elements = shape.spin_dipoles;
+  result.atomic_quadrupoles = cursor.take<double>(shape.spin_quadrupoles);
+  result.quadrupole_elements = shape.spin_quadrupoles;
   result.plan_token = shape.plan_token;
   return result;
 }
@@ -673,14 +765,18 @@ void project_persistent(ArenaCursor& cursor, const ArenaShape& shape,
   state.occupations = take_occupations(cursor, shape);
   state.density = take_density(cursor, shape);
   state.raw_population = take_population(cursor, shape);
+  state.spin_energies = cursor.take<double>(shape.batch);
+  state.spin_energy_elements = shape.batch;
   take_energy_trace(cursor, shape, nullptr, false, state.classical_energy, state.free_energy);
+  state.free_energy.spin = state.spin_energies;
+  state.free_energy.spin_elements = state.spin_energy_elements;
   state.mixer = take_mixer(cursor, shape);
   state.published = {state.raw_population.qsh,
-                     shape.shells,
+                     shape.spin_shells,
                      state.raw_population.dipole,
-                     shape.dipoles,
+                     shape.spin_dipoles,
                      state.raw_population.quadrupole,
-                     shape.quadrupoles,
+                     shape.spin_quadrupoles,
                      shape.plan_token};
 
   state.scc.current_inputs = take_multipoles(cursor, shape);
@@ -696,7 +792,8 @@ void project_persistent(ArenaCursor& cursor, const ArenaShape& shape,
 
   state.publication.wavefunction = {state.eigenpairs, state.occupations, state.density,
                                     state.raw_population, shape.plan_token};
-  state.publication.energy = {state.classical_energy, state.free_energy, shape.plan_token};
+  state.publication.energy = {state.classical_energy, state.free_energy, state.spin_energies,
+                              state.spin_energy_elements, shape.plan_token};
   state.publication.mixer = state.mixer;
   state.publication.published = state.published;
   state.publication.scc = state.scc;
@@ -759,20 +856,20 @@ void project_primitive_workspace_front(ArenaCursor& cursor, const ArenaShape& sh
                                     shape.plan_token};
   }
 
-  workspace.potential_workspace = {cursor.take<double>(shape.shells),
-                                   shape.shells,
-                                   cursor.take<double>(shape.atoms),
-                                   shape.atoms,
-                                   cursor.take<double>(shape.dipoles),
-                                   shape.dipoles,
-                                   cursor.take<double>(shape.quadrupoles),
-                                   shape.quadrupoles,
+  workspace.potential_workspace = {cursor.take<double>(shape.spin_shells),
+                                   shape.spin_shells,
+                                   cursor.take<double>(shape.spin_atoms),
+                                   shape.spin_atoms,
+                                   cursor.take<double>(shape.spin_dipoles),
+                                   shape.spin_dipoles,
+                                   cursor.take<double>(shape.spin_quadrupoles),
+                                   shape.spin_quadrupoles,
                                    cursor.take<std::uint32_t>(1),
                                    1,
                                    shape.plan_token};
   workspace.scalar_bridge.workspace = {cursor.take<double>(shape.shells), shape.shells,
                                        cursor.take<std::uint32_t>(1), 1, shape.plan_token};
-  workspace.hamiltonian_workspace = {cursor.take<double>(shape.matrices), shape.matrices,
+  workspace.hamiltonian_workspace = {cursor.take<double>(shape.spin_matrices), shape.spin_matrices,
                                      cursor.take<std::uint32_t>(1), 1, shape.plan_token};
 }
 
@@ -780,22 +877,22 @@ void project_solver_and_wavefunction_workspace(
     ArenaCursor& cursor, const ArenaShape& shape, const Gfn2SccIterationDevicePlan& plan,
     Gfn2SccIterationDeviceWorkspace& workspace) noexcept {
   auto& eigensolver = workspace.eigensolver_workspace;
-  eigensolver.matrix_scratch_a = cursor.take<double>(shape.matrices);
-  eigensolver.matrix_a_elements = shape.matrices;
-  eigensolver.matrix_scratch_b = cursor.take<double>(shape.matrices);
-  eigensolver.matrix_b_elements = shape.matrices;
-  eigensolver.eigenvalue_scratch = cursor.take<double>(shape.orbitals);
-  eigensolver.eigenvalue_elements = shape.orbitals;
-  eigensolver.factor_pointers = cursor.take<double*>(shape.batch);
-  eigensolver.factor_pointer_elements = shape.batch;
-  eigensolver.matrix_pointers = cursor.take<double*>(shape.batch);
-  eigensolver.matrix_pointer_elements = shape.batch;
-  eigensolver.info_a = cursor.take<int>(shape.batch);
-  eigensolver.info_a_elements = shape.batch;
-  eigensolver.info_b = cursor.take<int>(shape.batch);
-  eigensolver.info_b_elements = shape.batch;
-  eigensolver.eligible = cursor.take<std::uint8_t>(shape.batch);
-  eigensolver.eligible_elements = shape.batch;
+  eigensolver.matrix_scratch_a = cursor.take<double>(shape.spin_matrices);
+  eigensolver.matrix_a_elements = shape.spin_matrices;
+  eigensolver.matrix_scratch_b = cursor.take<double>(shape.spin_matrices);
+  eigensolver.matrix_b_elements = shape.spin_matrices;
+  eigensolver.eigenvalue_scratch = cursor.take<double>(shape.spin_orbitals);
+  eigensolver.eigenvalue_elements = shape.spin_orbitals;
+  eigensolver.factor_pointers = cursor.take<double*>(shape.spin_channels);
+  eigensolver.factor_pointer_elements = shape.spin_channels;
+  eigensolver.matrix_pointers = cursor.take<double*>(shape.spin_channels);
+  eigensolver.matrix_pointer_elements = shape.spin_channels;
+  eigensolver.info_a = cursor.take<int>(shape.spin_channels);
+  eigensolver.info_a_elements = shape.spin_channels;
+  eigensolver.info_b = cursor.take<int>(shape.spin_channels);
+  eigensolver.info_b_elements = shape.spin_channels;
+  eigensolver.eligible = cursor.take<std::uint8_t>(shape.spin_channels);
+  eigensolver.eligible_elements = shape.spin_channels;
   eigensolver.sequence_active = cursor.take<std::uint32_t>(1);
   eigensolver.sequence_active_elements = 1;
   eigensolver.solver_device_workspace = plan.eigensolver_provider.device_workspace;
@@ -803,10 +900,10 @@ void project_solver_and_wavefunction_workspace(
   eigensolver.solver_host_workspace = plan.eigensolver_provider.host_workspace;
   eigensolver.solver_host_workspace_bytes = shape.provider_host_bytes;
   eigensolver.plan_token = shape.plan_token;
-  eigensolver.compact_systems = cursor.take<std::int32_t>(shape.batch);
-  eigensolver.compact_system_elements = shape.batch;
-  eigensolver.compact_source_slots = cursor.take<std::int32_t>(shape.batch);
-  eigensolver.compact_source_slot_elements = shape.batch;
+  eigensolver.compact_systems = cursor.take<std::int32_t>(shape.spin_channels);
+  eigensolver.compact_system_elements = shape.spin_channels;
+  eigensolver.compact_source_slots = cursor.take<std::int32_t>(shape.spin_channels);
+  eigensolver.compact_source_slot_elements = shape.spin_channels;
   eigensolver.bucket_activity = cursor.take<Gfn2EigensolverBucketActivity>(shape.buckets);
   eigensolver.bucket_activity_elements = shape.buckets;
 
@@ -821,36 +918,57 @@ void project_solver_and_wavefunction_workspace(
                                      cursor.take<std::uint32_t>(1),
                                      1,
                                      shape.plan_token};
-  workspace.density_workspace = {cursor.take<double>(shape.matrices),
-                                 shape.matrices,
-                                 cursor.take<double>(shape.matrices),
-                                 shape.matrices,
-                                 cursor.take<double>(shape.orbitals),
-                                 shape.orbitals,
-                                 cursor.take<double>(shape.orbitals),
-                                 shape.orbitals,
-                                 cursor.take<double>(shape.batch),
-                                 shape.batch,
-                                 cursor.take<double>(shape.batch),
-                                 shape.batch,
-                                 cursor.take<double>(shape.batch),
-                                 shape.batch,
-                                 cursor.take<double>(shape.batch),
-                                 shape.batch,
-                                 cursor.take<std::uint32_t>(1),
-                                 1,
-                                 shape.plan_token};
-  workspace.mulliken_workspace = {cursor.take<double>(shape.shells),
-                                  shape.shells,
-                                  cursor.take<double>(shape.atoms),
-                                  shape.atoms,
-                                  cursor.take<double>(shape.dipoles),
-                                  shape.dipoles,
-                                  cursor.take<double>(shape.quadrupoles),
-                                  shape.quadrupoles,
+  auto& density = workspace.density_workspace;
+  density.density_scratch = cursor.take<double>(shape.spin_matrices);
+  density.density_elements = shape.spin_matrices;
+  density.weighted_density_scratch = cursor.take<double>(shape.spin_matrices);
+  density.weighted_density_elements = shape.spin_matrices;
+  density.weights = cursor.take<double>(shape.spin_orbitals);
+  density.weight_elements = shape.spin_orbitals;
+  density.energy_weights = cursor.take<double>(shape.spin_orbitals);
+  density.energy_weight_elements = shape.spin_orbitals;
+  density.band_energy_scratch = cursor.take<double>(shape.batch);
+  density.band_energy_elements = shape.batch;
+  density.occupation_sum_scratch = cursor.take<double>(shape.batch);
+  density.occupation_sum_elements = shape.batch;
+  density.density_trace_scratch = cursor.take<double>(shape.batch);
+  density.density_trace_elements = shape.batch;
+  density.weighted_density_trace_scratch = cursor.take<double>(shape.batch);
+  density.weighted_density_trace_elements = shape.batch;
+  density.sequence_active = cursor.take<std::uint32_t>(1);
+  density.sequence_active_elements = 1;
+  density.plan_token = shape.plan_token;
+  density.channel_band_energy_scratch = cursor.take<double>(shape.spin_channels);
+  density.channel_band_energy_elements = shape.spin_channels;
+  density.channel_occupation_sum_scratch = cursor.take<double>(shape.spin_channels);
+  density.channel_occupation_sum_elements = shape.spin_channels;
+  density.channel_density_trace_scratch = cursor.take<double>(shape.spin_channels);
+  density.channel_density_trace_elements = shape.spin_channels;
+  density.channel_weighted_density_trace_scratch = cursor.take<double>(shape.spin_channels);
+  density.channel_weighted_density_trace_elements = shape.spin_channels;
+
+  workspace.mulliken_workspace = {cursor.take<double>(shape.spin_shells),
+                                  shape.spin_shells,
+                                  cursor.take<double>(shape.spin_atoms),
+                                  shape.spin_atoms,
+                                  cursor.take<double>(shape.spin_dipoles),
+                                  shape.spin_dipoles,
+                                  cursor.take<double>(shape.spin_quadrupoles),
+                                  shape.spin_quadrupoles,
                                   cursor.take<std::uint32_t>(1),
                                   1,
                                   shape.plan_token};
+
+  workspace.spin_output = {workspace.staged_spin_energies, workspace.staged_spin_energy_elements,
+                           cursor.take<double>(shape.spin_shells), shape.spin_shells,
+                           shape.plan_token};
+  workspace.spin_workspace = {cursor.take<double>(shape.batch),
+                              shape.batch,
+                              cursor.take<double>(shape.spin_shells),
+                              shape.spin_shells,
+                              cursor.take<std::uint32_t>(1),
+                              1,
+                              shape.plan_token};
 }
 
 void project_energy_mixer_and_publication_workspace(
@@ -887,7 +1005,7 @@ void project_energy_mixer_and_publication_workspace(
 
   auto& publication = workspace.publication_workspace;
   publication.mixed_atomic_charges = workspace.mixed_topology.atomic_charges;
-  publication.mixed_atomic_charge_elements = shape.atoms;
+  publication.mixed_atomic_charge_elements = shape.spin_atoms;
   publication.previous_free_energies = cursor.take<double>(shape.batch);
   publication.free_energy_changes = cursor.take<double>(shape.batch);
   publication.next_iterations = cursor.take<std::uint64_t>(shape.batch);

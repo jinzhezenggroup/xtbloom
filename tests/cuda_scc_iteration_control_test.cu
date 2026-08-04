@@ -15,9 +15,9 @@ namespace {
 using gpuxtb::detail::Gfn2GenerationScope;
 using gpuxtb::detail::Gfn2GeometryCacheProvenanceView;
 using gpuxtb::detail::Gfn2PlanMemorySpace;
-using gpuxtb::detail::cuda::Gfn2SccCacheProvenanceBinding;
 using gpuxtb::detail::cuda::Gfn2GeometryEpochConsumerDevice;
 using gpuxtb::detail::cuda::Gfn2GeometryEpochDevice;
+using gpuxtb::detail::cuda::Gfn2SccCacheProvenanceBinding;
 using gpuxtb::detail::cuda::Gfn2SccIterationControlCode;
 using gpuxtb::detail::cuda::Gfn2SccIterationDeviceLedger;
 using gpuxtb::detail::cuda::Gfn2SccIterationDevicePolicy;
@@ -42,8 +42,10 @@ static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kAES2RawEnergy) == 26u)
 static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kD4RawEnergy) == 27u);
 static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kExplicitPointChargeRawEnergy) == 28u);
 static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kPeriodicRawEnergy) == 29u);
-static_assert(gpuxtb::detail::cuda::gfn2_scc_stage_id_is_valid(Gfn2SccStageId::kPeriodicRawEnergy));
-static_assert(!gpuxtb::detail::cuda::gfn2_scc_stage_id_in_domain(static_cast<Gfn2SccStageId>(30u)));
+static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kSpinPotential) == 30u);
+static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kSpinRawEnergy) == 31u);
+static_assert(gpuxtb::detail::cuda::gfn2_scc_stage_id_is_valid(Gfn2SccStageId::kSpinRawEnergy));
+static_assert(!gpuxtb::detail::cuda::gfn2_scc_stage_id_in_domain(static_cast<Gfn2SccStageId>(32u)));
 
 #define CHECK(condition)                                                                         \
   do {                                                                                           \
@@ -233,9 +235,10 @@ struct Fixture {
     return cudaSuccess;
   }
 
-  cudaError_t install_geometry_transaction(
-      std::uint64_t epoch, const std::vector<std::uint64_t>& committed,
-      const std::vector<std::uint8_t>& host_eligible, cudaStream_t stream = nullptr) const {
+  cudaError_t install_geometry_transaction(std::uint64_t epoch,
+                                           const std::vector<std::uint64_t>& committed,
+                                           const std::vector<std::uint8_t>& host_eligible,
+                                           cudaStream_t stream = nullptr) const {
     if (committed.size() != batch_size || host_eligible.size() != batch_size) {
       return cudaErrorInvalidValue;
     }
@@ -475,8 +478,7 @@ int test_batch_provenance_and_embedded_alias() {
   };
   const Gfn2SccCacheProvenanceBinding invalid_owner_binding{
       valid_view,
-      static_cast<Gfn2SccStageId>(static_cast<std::uint32_t>(Gfn2SccStageId::kPeriodicRawEnergy) +
-                                  1u),
+      static_cast<Gfn2SccStageId>(static_cast<std::uint32_t>(Gfn2SccStageId::kSpinRawEnergy) + 1u),
       0u};
   CUDA_CHECK(fixture.cache_bindings.copy_from(&invalid_owner_binding, 1u));
   Snapshot invalid_owner;
@@ -1149,8 +1151,7 @@ int test_host_validation() {
   const std::vector<std::uint32_t> codes(1u, 77u);
   CUDA_CHECK(fixture.install_stage(codes, 77u, 1u));
   Gfn2SccStageDeviceReport invalid_stage_report{
-      static_cast<Gfn2SccStageId>(static_cast<std::uint32_t>(Gfn2SccStageId::kPeriodicRawEnergy) +
-                                  1u),
+      static_cast<Gfn2SccStageId>(static_cast<std::uint32_t>(Gfn2SccStageId::kSpinRawEnergy) + 1u),
       Gfn2SccStageCodeFormat::kUint32Error,
       fixture.stage_codes.get(),
       1,

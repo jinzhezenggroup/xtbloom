@@ -31,12 +31,15 @@
 #include "backends/cuda/gfn2_scc_mixer.cuh"
 #include "backends/cuda/gfn2_scc_potential.cuh"
 #include "backends/cuda/gfn2_scc_publication.cuh"
+#include "backends/cuda/gfn2_spin.cuh"
 
 namespace gpuxtb::detail::cuda {
 
-inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 1u;
-inline constexpr std::int64_t kGfn2SccIterationBaseStageReportCount = 19;
-inline constexpr std::int64_t kGfn2SccIterationMaximumStageReportCount = 24;
+/* ABI v2 seals the complete ordered WavefunctionLayout spin packing in the
+ * device plan instead of accepting aggregate extents as layout identity. */
+inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 2u;
+inline constexpr std::int64_t kGfn2SccIterationBaseStageReportCount = 21;
+inline constexpr std::int64_t kGfn2SccIterationMaximumStageReportCount = 26;
 inline constexpr std::int64_t kGfn2SccIterationStageReportCapacity = 40;
 
 /*
@@ -96,6 +99,7 @@ enum class Gfn2SccIterationBindingField : std::uint32_t {
   kStatePublication = 22u,
   kStageReports = 23u,
   kWorkspace = 24u,
+  kSpin = 25u,
 };
 
 struct Gfn2SccIterationBindingDiagnostic {
@@ -230,6 +234,8 @@ struct Gfn2SccIterationDevicePlan {
   std::uint64_t geometry_generation = 0u;
 
   Gfn2RaggedTopologyView topology{};
+  /* Canonical mixed one/two-channel packing shared by every spin-aware leaf. */
+  Gfn2WavefunctionLayoutView wavefunction_layout{};
   Gfn2SccIterationDevicePolicy activity_policy{};
   Gfn2SccDevicePolicy state_policy{};
   Gfn2SccMixerDevicePolicy mixer_policy{};
@@ -239,6 +245,7 @@ struct Gfn2SccIterationDevicePlan {
   Gfn2GeometryDeviceCache geometry_cache{};
   Gfn2SccDeviceBatch scc_batch{};
   Gfn2SccPotentialDeviceBatch potential_batch{};
+  Gfn2SpinDeviceBatch spin_batch{};
   Gfn2ES2DeviceBatch es2_batch{};
   Gfn2ES2DeviceCache es2_cache{};
   Gfn2ES3DeviceBatch es3_batch{};
@@ -277,6 +284,9 @@ struct Gfn2SccIterationDevicePlan {
 struct Gfn2SccIterationDeviceInput {
   Gfn2SccIterationDeviceStateInput activity_state{};
   Gfn2SccPotentialDeviceMixedFields mixed_fields{};
+  /* Mixed qsh drives the Hamiltonian spin potential; raw qsh drives energy. */
+  Gfn2SpinDeviceInput mixed_spin{};
+  Gfn2SpinDeviceInput raw_spin{};
   Gfn2HamiltonianDeviceInput hamiltonian{};
   const double* eigensolver_hamiltonians = nullptr;
   std::int64_t eigensolver_hamiltonian_elements = 0;
@@ -299,6 +309,8 @@ struct Gfn2SccIterationDeviceState {
   Gfn2OccupationsDeviceResults occupations{};
   Gfn2DensityDeviceResults density{};
   Gfn2MullikenDevicePopulation raw_population{};
+  double* spin_energies = nullptr;
+  std::int64_t spin_energy_elements = 0;
   Gfn2SccClassicalEnergyDeviceDiagnostics classical_energy{};
   Gfn2SccFreeEnergyDeviceDiagnostics free_energy{};
   Gfn2SccMixerDeviceState mixer{};
@@ -323,7 +335,11 @@ struct Gfn2SccIterationDeviceWorkspace {
   Gfn2SccClassicalEnergyDeviceActivity classical_energy_activity{};
   Gfn2SccFreeEnergyDeviceActivity free_energy_activity{};
 
+  /* Spin-ragged charge/magnetization multipoles remain the SCC/publication
+   * authority. physical_topology is the transactionally projected charge
+   * channel consumed by legacy physical-topology classical kernels. */
   Gfn2SccPotentialDeviceTopologyMultipoles mixed_topology{};
+  Gfn2SccPotentialDeviceTopologyMultipoles physical_topology{};
   Gfn2SccIterationDeviceComponentStorage components{};
   Gfn2SccPotentialDeviceComponents potential_components{};
   Gfn2SccPotentialDeviceResults complete_potentials{};
@@ -335,8 +351,13 @@ struct Gfn2SccIterationDeviceWorkspace {
   Gfn2OccupationsDeviceResults staged_occupations{};
   Gfn2DensityDeviceResults staged_density{};
   Gfn2MullikenDevicePopulation staged_raw_population{};
+  double* staged_spin_energies = nullptr;
+  std::int64_t staged_spin_energy_elements = 0;
   Gfn2SccClassicalEnergyDeviceDiagnostics staged_classical_energy{};
   Gfn2SccFreeEnergyDeviceDiagnostics staged_free_energy{};
+  /* Per-system transaction clone of mixer state. Clone ranges are derived
+   * from wavefunction_layout's spin-aware shell/atom offsets so mixed-spin
+   * peers own their complete charge and magnetization history slices. */
   Gfn2SccMixerDeviceState staged_mixer{};
   Gfn2SccDeviceMultipoles next_mixed{};
   /* Exact zero-copy projection of the complete unpublished transaction. */
@@ -353,6 +374,9 @@ struct Gfn2SccIterationDeviceWorkspace {
   Gfn2OccupationsDeviceWorkspace occupations_workspace{};
   Gfn2DensityDeviceWorkspace density_workspace{};
   Gfn2MullikenDeviceWorkspace mulliken_workspace{};
+  /* One sequentially reused transaction: potential before H, raw energy after Mulliken. */
+  Gfn2SpinDeviceOutput spin_output{};
+  Gfn2SpinDeviceWorkspace spin_workspace{};
   Gfn2SccEnergyDeviceWorkspace electronic_energy_workspace{};
   Gfn2SccClassicalEnergyDeviceWorkspace classical_energy_workspace{};
   Gfn2SccFreeEnergyDeviceWorkspace free_energy_workspace{};
@@ -413,20 +437,27 @@ static_assert(std::is_standard_layout_v<Gfn2SccIterationBinding>);
     Gfn2SccIterationBinding& binding) noexcept;
 
 /*
- * Advance one restricted GFN2 SCC iteration entirely on the caller stream.
+ * Advance one mixed one-/two-channel GFN2 SCC iteration entirely on the caller stream.
  * binding must have been produced by bind_gfn2_scc_iteration_cuda and remain
  * immutable between launches; numerical buffers referenced by it may change.
  * The hot path allocates, transfers, rebuilds descriptors, polls, and
  * synchronizes nothing, and is suitable for CUDA Graph capture subject to the
  * setup-declared eigensolver provider capture mode.
  */
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_scc_iteration_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
+
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_scc_iteration_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream = nullptr) noexcept;
+
+/* Backward-compatible names retained for restricted-only callers. */
 [[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
     const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
 
-/* Replay-safe iteration consuming numerical caches published for the device epoch. */
+/* Replay-safe compatibility entry consuming numerical caches for the device epoch. */
 [[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
-    const Gfn2SccIterationBinding& binding,
-    const Gfn2GeometryEpochConsumerDevice& geometry,
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream = nullptr) noexcept;
 
 /*
@@ -435,12 +466,18 @@ static_assert(std::is_standard_layout_v<Gfn2SccIterationBinding>);
  * work. Keeping this phase separate lets a conditional Graph decide whether
  * the reusable numerical body must execute at all.
  */
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_scc_activity_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
+
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_scc_activity_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream = nullptr) noexcept;
+
 [[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_activity_cuda(
     const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
 
 [[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_activity_cuda(
-    const Gfn2SccIterationBinding& binding,
-    const Gfn2GeometryEpochConsumerDevice& geometry,
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream = nullptr) noexcept;
 
 /*
@@ -450,12 +487,18 @@ static_assert(std::is_standard_layout_v<Gfn2SccIterationBinding>);
  * activity itself. It is capture-safe when the setup-declared provider mode is
  * kGraphSupported.
  */
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_scc_numerical_body_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
+
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_scc_numerical_body_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream = nullptr) noexcept;
+
 [[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_numerical_body_cuda(
     const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
 
 [[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_numerical_body_cuda(
-    const Gfn2SccIterationBinding& binding,
-    const Gfn2GeometryEpochConsumerDevice& geometry,
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda

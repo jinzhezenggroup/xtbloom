@@ -583,6 +583,8 @@ struct Gfn2SccSetupTopology::Impl {
     host_wavefunction.spin_matrix_offsets = spin_matrix_offsets.data();
     host_wavefunction.spin_shell_offsets = spin_shell_offsets.data();
     host_wavefunction.spin_atom_offsets = spin_atom_offsets.data();
+    host_wavefunction.layout_fingerprint =
+        gfn2_wavefunction_layout_fingerprint_host(host_wavefunction);
   }
 };
 

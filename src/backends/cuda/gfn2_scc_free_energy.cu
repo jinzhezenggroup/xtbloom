@@ -114,18 +114,20 @@ __global__ void compose_free_energy_kernel(Gfn2SccFreeEnergyDeviceBatch batch,
       component_enabled(batch.enabled_components, Gfn2SccClassicalEnergyComponent::kAES2),
       input.aes2, system, Gfn2SccFreeEnergyDeviceError::kNonfiniteAES2, &finite, system_errors,
       device_error);
+  load_component(values, 5, true, input.spin, system, Gfn2SccFreeEnergyDeviceError::kNonfiniteSpin,
+                 &finite, system_errors, device_error);
   load_component(
-      values, 5,
+      values, 6,
       component_enabled(batch.enabled_components, Gfn2SccClassicalEnergyComponent::kD4TwoBody),
       input.d4_two_body, system, Gfn2SccFreeEnergyDeviceError::kNonfiniteD4TwoBody, &finite,
       system_errors, device_error);
-  load_component(values, 6,
+  load_component(values, 7,
                  component_enabled(batch.enabled_components,
                                    Gfn2SccClassicalEnergyComponent::kExplicitPointCharge),
                  input.explicit_point_charge, system,
                  Gfn2SccFreeEnergyDeviceError::kNonfiniteExplicitPointCharge, &finite,
                  system_errors, device_error);
-  load_component(values, 7,
+  load_component(values, 8,
                  component_enabled(batch.enabled_components,
                                    Gfn2SccClassicalEnergyComponent::kPeriodicEmbedding),
                  input.periodic_embedding, system,
@@ -161,9 +163,10 @@ __global__ void compose_free_energy_kernel(Gfn2SccFreeEnergyDeviceBatch batch,
   workspace.diagnostic_scratch[4 * batch.batch_size + system] = values[5];
   workspace.diagnostic_scratch[5 * batch.batch_size + system] = values[6];
   workspace.diagnostic_scratch[6 * batch.batch_size + system] = values[7];
-  workspace.diagnostic_scratch[7 * batch.batch_size + system] = values[1];
-  workspace.diagnostic_scratch[8 * batch.batch_size + system] = internal_energy;
-  workspace.diagnostic_scratch[9 * batch.batch_size + system] = free_energy;
+  workspace.diagnostic_scratch[7 * batch.batch_size + system] = values[8];
+  workspace.diagnostic_scratch[8 * batch.batch_size + system] = values[1];
+  workspace.diagnostic_scratch[9 * batch.batch_size + system] = internal_energy;
+  workspace.diagnostic_scratch[10 * batch.batch_size + system] = free_energy;
 }
 
 __global__ void publish_free_energy_kernel(Gfn2SccFreeEnergyDeviceBatch batch,
@@ -182,14 +185,15 @@ __global__ void publish_free_energy_kernel(Gfn2SccFreeEnergyDeviceBatch batch,
   diagnostics.es2[system] = workspace.diagnostic_scratch[batch.batch_size + system];
   diagnostics.es3[system] = workspace.diagnostic_scratch[2 * batch.batch_size + system];
   diagnostics.aes2[system] = workspace.diagnostic_scratch[3 * batch.batch_size + system];
-  diagnostics.d4_two_body[system] = workspace.diagnostic_scratch[4 * batch.batch_size + system];
+  diagnostics.spin[system] = workspace.diagnostic_scratch[4 * batch.batch_size + system];
+  diagnostics.d4_two_body[system] = workspace.diagnostic_scratch[5 * batch.batch_size + system];
   diagnostics.explicit_point_charge[system] =
-      workspace.diagnostic_scratch[5 * batch.batch_size + system];
-  diagnostics.periodic_embedding[system] =
       workspace.diagnostic_scratch[6 * batch.batch_size + system];
-  diagnostics.entropy[system] = workspace.diagnostic_scratch[7 * batch.batch_size + system];
-  diagnostics.internal_energy[system] = workspace.diagnostic_scratch[8 * batch.batch_size + system];
-  diagnostics.free_energy[system] = workspace.diagnostic_scratch[9 * batch.batch_size + system];
+  diagnostics.periodic_embedding[system] =
+      workspace.diagnostic_scratch[7 * batch.batch_size + system];
+  diagnostics.entropy[system] = workspace.diagnostic_scratch[8 * batch.batch_size + system];
+  diagnostics.internal_energy[system] = workspace.diagnostic_scratch[9 * batch.batch_size + system];
+  diagnostics.free_energy[system] = workspace.diagnostic_scratch[10 * batch.batch_size + system];
 }
 
 bool is_aligned(const void* pointer, std::size_t alignment) noexcept {
@@ -273,6 +277,7 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
       !valid_input(
           input.aes2, input.aes2_elements, batch.batch_size,
           component_enabled(batch.enabled_components, Gfn2SccClassicalEnergyComponent::kAES2)) ||
+      !valid_input(input.spin, input.spin_elements, batch.batch_size, true) ||
       !valid_input(input.d4_two_body, input.d4_two_body_elements, batch.batch_size,
                    component_enabled(batch.enabled_components,
                                      Gfn2SccClassicalEnergyComponent::kD4TwoBody)) ||
@@ -290,6 +295,7 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
       !valid_output(diagnostics.es2, diagnostics.es2_elements, batch.batch_size) ||
       !valid_output(diagnostics.es3, diagnostics.es3_elements, batch.batch_size) ||
       !valid_output(diagnostics.aes2, diagnostics.aes2_elements, batch.batch_size) ||
+      !valid_output(diagnostics.spin, diagnostics.spin_elements, batch.batch_size) ||
       !valid_output(diagnostics.d4_two_body, diagnostics.d4_two_body_elements, batch.batch_size) ||
       !valid_output(diagnostics.explicit_point_charge, diagnostics.explicit_point_charge_elements,
                     batch.batch_size) ||
@@ -316,6 +322,7 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
       input.es2,
       input.es3,
       input.aes2,
+      input.spin,
       input.d4_two_body,
       input.explicit_point_charge,
       input.periodic_embedding};
@@ -325,6 +332,7 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
       input.es2_elements,
       input.es3_elements,
       input.aes2_elements,
+      input.spin_elements,
       input.d4_two_body_elements,
       input.explicit_point_charge_elements,
       input.periodic_embedding_elements};
@@ -345,6 +353,7 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
       diagnostics.es2,
       diagnostics.es3,
       diagnostics.aes2,
+      diagnostics.spin,
       diagnostics.d4_two_body,
       diagnostics.explicit_point_charge,
       diagnostics.periodic_embedding,
@@ -378,9 +387,10 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
     }
     for (std::size_t read_index = 0; read_index < reads.size(); ++read_index) {
       const AddressRange& read = reads[read_index];
+      const bool in_place_spin = lhs == 4u && read_index == 5u && ranges_equal(writes[lhs], read);
       const bool in_place_entropy =
-          lhs == 7u && read_index == 1u && ranges_equal(writes[lhs], read);
-      if (ranges_overlap(writes[lhs], read) && !in_place_entropy) {
+          lhs == 8u && read_index == 1u && ranges_equal(writes[lhs], read);
+      if (ranges_overlap(writes[lhs], read) && !in_place_spin && !in_place_entropy) {
         return false;
       }
     }

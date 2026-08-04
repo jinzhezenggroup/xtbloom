@@ -27,6 +27,7 @@
 namespace {
 
 using gpuxtb::detail::Gfn2RaggedTopologyView;
+using gpuxtb::detail::Gfn2WavefunctionLayoutView;
 using gpuxtb::detail::cuda::Gfn2D4DeviceElementData;
 using gpuxtb::detail::cuda::Gfn2D4DeviceReferenceData;
 using gpuxtb::detail::cuda::Gfn2SccCacheProvenanceBinding;
@@ -177,6 +178,7 @@ struct SetupFixture {
   DeviceArena topology_arena;
   DeviceArena inputs_arena;
   Gfn2RaggedTopologyView device_topology{};
+  Gfn2WavefunctionLayoutView device_wavefunction{};
   cudaStream_t stream = nullptr;
 
   ~SetupFixture() {
@@ -200,7 +202,7 @@ struct SetupFixture {
     if (!topology_arena.allocate(topology_owner.requirements().immutable_device_bytes) ||
         !topology_owner
              .bind_device_arena_and_upload_async(topology_arena.data(), topology_arena.bytes(),
-                                                 device_topology, stream)
+                                                 device_topology, device_wavefunction, stream)
              .success()) {
       return false;
     }
@@ -240,8 +242,8 @@ int test_all_optional_four_system_upload() {
   Gfn2SccIterationDeviceInput input{};
   CHECK(fixture.inputs_owner
             .bind_device_arena_and_upload_async(
-                fixture.device_topology, fixture.inputs_arena.data(), fixture.inputs_arena.bytes(),
-                plan, input, fixture.stream)
+                fixture.device_topology, fixture.device_wavefunction, fixture.inputs_arena.data(),
+                fixture.inputs_arena.bytes(), plan, input, fixture.stream)
             .success());
   CUDA_CHECK(cudaStreamSynchronize(fixture.stream));
 
@@ -253,6 +255,23 @@ int test_all_optional_four_system_upload() {
   CHECK((plan.enabled_components & optional_mask) == optional_mask);
   CHECK(plan.geometry_generation == fixture.host.options().geometry_generation);
   CHECK(plan.topology.atom_offsets == fixture.device_topology.atom_offsets);
+  CHECK(plan.wavefunction_layout.spin_channels == fixture.device_wavefunction.spin_channels);
+  CHECK(plan.wavefunction_layout.spin_shell_offsets ==
+        fixture.device_wavefunction.spin_shell_offsets);
+  CHECK(plan.publication_plan.wavefunction_layout.spin_channels ==
+        fixture.device_wavefunction.spin_channels);
+  CHECK(plan.publication_plan.wavefunction_layout.spin_shell_offsets ==
+        fixture.device_wavefunction.spin_shell_offsets);
+  CHECK(plan.spin_batch.spin_channels == fixture.device_wavefunction.spin_channels);
+  CHECK(plan.spin_batch.shell_population_offsets == fixture.device_wavefunction.spin_shell_offsets);
+  CHECK(plan.spin_batch.shell_population_elements == fixture.device_wavefunction.total_spin_shells);
+  CHECK(fixture.device_wavefunction.total_spin_channels == fixture.host.batch_size());
+  CHECK(fixture.device_wavefunction.total_spin_orbitals ==
+        fixture.host.basis_plan().total_orbitals);
+  CHECK(fixture.device_wavefunction.total_spin_matrix_elements ==
+        fixture.host.integral_plan().total_matrix_elements);
+  CHECK(fixture.device_wavefunction.total_spin_shells == fixture.host.basis_plan().total_shells);
+  CHECK(fixture.device_wavefunction.total_spin_atoms == fixture.host.total_atoms());
   CHECK(plan.d4_batch.atomic_number_hash != 0u);
   CHECK(plan.explicit_point_charge_batch.total_point_charges == fixture.host.batch_size());
   CHECK(plan.periodic_batch.total_matrix_elements ==
@@ -304,8 +323,8 @@ int test_base_canonical_null_and_transactional_failures() {
   Gfn2SccIterationDeviceInput input{};
   CHECK(fixture.inputs_owner
             .bind_device_arena_and_upload_async(
-                fixture.device_topology, fixture.inputs_arena.data(), fixture.inputs_arena.bytes(),
-                plan, input, fixture.stream)
+                fixture.device_topology, fixture.device_wavefunction, fixture.inputs_arena.data(),
+                fixture.inputs_arena.bytes(), plan, input, fixture.stream)
             .success());
   CUDA_CHECK(cudaStreamSynchronize(fixture.stream));
   CHECK(all_zero(plan.d4_batch));
@@ -321,17 +340,25 @@ int test_base_canonical_null_and_transactional_failures() {
   Gfn2SccIterationDeviceInput sentinel_input{};
   sentinel_input.plan_token = 888u;
   const auto too_small = fixture.inputs_owner.bind_device_arena_and_upload_async(
-      fixture.device_topology, fixture.inputs_arena.data(), fixture.inputs_arena.bytes() - 1u,
-      sentinel_plan, sentinel_input, fixture.stream);
+      fixture.device_topology, fixture.device_wavefunction, fixture.inputs_arena.data(),
+      fixture.inputs_arena.bytes() - 1u, sentinel_plan, sentinel_input, fixture.stream);
   CHECK(too_small.error == Gfn2SccSetupInputsError::kInsufficientArena);
   CHECK(sentinel_plan.plan_token == 999u && sentinel_input.plan_token == 888u);
 
   Gfn2RaggedTopologyView cross_plan = fixture.device_topology;
   ++cross_plan.plan_token;
   const auto cross = fixture.inputs_owner.bind_device_arena_and_upload_async(
-      cross_plan, fixture.inputs_arena.data(), fixture.inputs_arena.bytes(), sentinel_plan,
-      sentinel_input, fixture.stream);
+      cross_plan, fixture.device_wavefunction, fixture.inputs_arena.data(),
+      fixture.inputs_arena.bytes(), sentinel_plan, sentinel_input, fixture.stream);
   CHECK(cross.error == Gfn2SccSetupInputsError::kCrossPlan);
+  CHECK(sentinel_plan.plan_token == 999u && sentinel_input.plan_token == 888u);
+
+  Gfn2WavefunctionLayoutView cross_wavefunction = fixture.device_wavefunction;
+  ++cross_wavefunction.plan_token;
+  const auto wavefunction_cross = fixture.inputs_owner.bind_device_arena_and_upload_async(
+      fixture.device_topology, cross_wavefunction, fixture.inputs_arena.data(),
+      fixture.inputs_arena.bytes(), sentinel_plan, sentinel_input, fixture.stream);
+  CHECK(wavefunction_cross.error == Gfn2SccSetupInputsError::kCrossPlan);
   CHECK(sentinel_plan.plan_token == 999u && sentinel_input.plan_token == 888u);
   return 0;
 }
