@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import unittest
 from pathlib import Path
 
@@ -21,6 +22,7 @@ SCHEMA_PATH = (
 SPEC = importlib.util.spec_from_file_location("gpuxtb_scc_trace", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 TRACE = importlib.util.module_from_spec(SPEC)
+sys.modules.setdefault("gpuxtb_scc_trace", TRACE)
 SPEC.loader.exec_module(TRACE)
 
 REVISION = "e9abc395b122018ed688aecb1c3a65cecaf97beb"
