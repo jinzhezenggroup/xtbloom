@@ -66,6 +66,13 @@ constexpr std::uint64_t kInitialGeometryGeneration = 1u;
 constexpr std::uint64_t kInitialStateGeneration = 1u;
 constexpr std::size_t kArenaAlignment = 256u;
 
+Gfn2CudaSccStartMode public_scc_start_mode(const gpuxtb_compute_options_t& options) noexcept {
+  return options.struct_size >= GPUXTB_COMPUTE_OPTIONS_V2_SIZE &&
+                 options.scc_start_mode == GPUXTB_SCC_START_WARM
+             ? Gfn2CudaSccStartMode::kWarm
+             : Gfn2CudaSccStartMode::kFresh;
+}
+
 std::uintptr_t opaque_address(const void* pointer) noexcept {
   return reinterpret_cast<std::uintptr_t>(pointer);
 }
@@ -366,6 +373,13 @@ struct NumericalRefreshDeviceBinding {
   /* Canonical eigensolver/SCC activity leaf snapshotted by overlap refactor. */
   std::uint8_t* factor_active = nullptr;
   std::uint64_t* committed_generations = nullptr;
+  /* The immediately preceding successfully committed numerical epoch. Warm
+   * reset uses this edge instead of rewriting checkpoint generations, so two
+   * refreshes without an intervening inference cannot chain a stale state. */
+  std::uint64_t* refresh_predecessor_generations = nullptr;
+  /* Bound after the inference arena is built. A failed refresh must revoke
+   * both the predecessor edge and its consumable warm checkpoint. */
+  std::uint64_t* warm_checkpoint_generations = nullptr;
 
   double* candidate_positions = nullptr;
   double* candidate_point_positions = nullptr;
@@ -542,9 +556,14 @@ __global__ void commit_gfn2_numerical_refresh_kernel(NumericalRefreshDeviceBindi
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   if (system >= binding.batch_size) return;
   const std::uint64_t generation = *binding.geometry_epoch;
+  const std::uint64_t previous_generation = binding.committed_generations[system];
   const bool publish = binding.eligible[system] == 1u && binding.factor_statuses[system] == 0u &&
                        binding.factor_generations[system] == generation;
-  if (threadIdx.x == 0) binding.eligible[system] = publish ? 1u : 0u;
+  if (threadIdx.x == 0) {
+    binding.eligible[system] = publish ? 1u : 0u;
+    binding.refresh_predecessor_generations[system] = publish ? previous_generation : 0u;
+    if (!publish) binding.warm_checkpoint_generations[system] = 0u;
+  }
   if (!publish) return;
 
   const std::int64_t atom_begin = binding.atom_offsets[system];
@@ -638,11 +657,12 @@ __global__ void commit_gfn2_numerical_refresh_kernel(NumericalRefreshDeviceBindi
 }
 
 /*
- * Warm execution reuses the device wavefunction, published multipoles, and
- * modified-Broyden history.  The driver-visible terminal trace belongs to one
- * inference attempt, however, and must be restarted or the bounded loop would
- * treat the prior converged state as inactive.  Mixer counters/history are
- * intentionally not touched: they are the warm checkpoint itself.
+ * Warm execution reuses the device wavefunction and published multipoles.
+ * Same-epoch reuse also retains modified-Broyden history, while predecessor-
+ * epoch migration starts a new mixer history window for the refreshed
+ * operator. The driver-visible terminal trace belongs to one inference
+ * attempt and must always be restarted or the bounded loop would treat the
+ * prior converged state as inactive.
  */
 struct WarmSccResetDeviceBinding {
   std::int64_t batch_size = 0;
@@ -650,7 +670,9 @@ struct WarmSccResetDeviceBinding {
   Gfn2GeometryEpochDevice geometry_epoch{};
   const std::uint8_t* eligible = nullptr;
   const std::uint64_t* committed_generations = nullptr;
+  const std::uint64_t* refresh_predecessor_generations = nullptr;
   std::uint64_t* warm_checkpoint_generations = nullptr;
+  Gfn2SccMixerDeviceState mixer{};
   Gfn2SccDeviceState scc{};
 };
 
@@ -662,12 +684,28 @@ __global__ void reset_gfn2_warm_scc_trace_kernel(WarmSccResetDeviceBinding bindi
   const std::uint64_t epoch = *binding.geometry_epoch.value;
   const std::uint64_t checkpoint = atomicExch(
       reinterpret_cast<unsigned long long*>(binding.warm_checkpoint_generations + system), 0ULL);
-  const bool compatible = epoch != 0u && binding.eligible[system] == 1u &&
-                          binding.committed_generations[system] == epoch && checkpoint == epoch;
+  const std::uint64_t predecessor = binding.refresh_predecessor_generations[system];
+  const bool compatible = epoch != 0u && checkpoint != 0u && binding.eligible[system] == 1u &&
+                          binding.committed_generations[system] == epoch &&
+                          (checkpoint == epoch || checkpoint == predecessor);
+  const bool migrated = compatible && checkpoint != epoch && checkpoint == predecessor;
+
+  /* A geometry-epoch migration keeps the converged multipoles/wavefunction
+   * but starts a new Broyden history window. The old finite-difference basis
+   * belongs to the predecessor operator and can be substantially worse than
+   * simple damping after even a small coordinate change. Setting iteration
+   * zero makes subsequent slots overwrite old history before it can be read. */
+  if (migrated) {
+    binding.mixer.residual_rms[system] = 0.0;
+    binding.mixer.residual_maximum[system] = 0.0;
+    binding.mixer.iterations[system] = 0u;
+    binding.mixer.system_statuses[system] = GPUXTB_STATUS_SUCCESS;
+    binding.mixer.residual_converged[system] = 0u;
+  }
 
   /* iteration==0 deliberately seeds the first warm energy delta from zero,
    * matching fresh driver accounting while retaining the expensive electronic
-   * and mixer checkpoint. */
+   * checkpoint and, for same-epoch reuse, the mixer history. */
   binding.scc.free_energies[system] = 0.0;
   binding.scc.previous_free_energies[system] = 0.0;
   binding.scc.free_energy_changes[system] = 0.0;
@@ -688,6 +726,7 @@ struct WarmCheckpointPublicationDeviceBinding {
   const gpuxtb_status_t* result_statuses = nullptr;
   const std::uint8_t* result_converged = nullptr;
   std::uint64_t* warm_checkpoint_generations = nullptr;
+  std::uint32_t* batch_ready = nullptr;
 };
 
 static_assert(std::is_trivially_copyable_v<WarmCheckpointPublicationDeviceBinding>);
@@ -704,6 +743,7 @@ __global__ void publish_gfn2_warm_checkpoint_generation_kernel(
       binding.result_statuses[system] == GPUXTB_STATUS_SUCCESS &&
       binding.result_converged[system] == 1u;
   binding.warm_checkpoint_generations[system] = publish ? epoch : 0u;
+  if (!publish) atomicExch(binding.batch_ready, 0u);
 }
 
 /*
@@ -1772,6 +1812,8 @@ struct InferenceState {
 
   /* Per-peer generation of the last successfully published SCC checkpoint. */
   std::uint64_t* warm_checkpoint_generations = nullptr;
+  /* Device aggregate: nonzero only when every peer published a checkpoint. */
+  std::uint32_t* warm_checkpoint_batch_ready = nullptr;
   bool ready = false;
   bool warm_checkpoint_ready = false;
 };
@@ -1791,6 +1833,8 @@ struct PublicResultState {
   std::uint8_t* converged = nullptr;
   gpuxtb_status_t* system_statuses = nullptr;
   Gfn2PublicResultBridgeControl* host_control = nullptr;
+  /* Pinned mirror copied under the existing public completion event. */
+  std::uint32_t* warm_checkpoint_ready = nullptr;
   Gfn2PublicResultBridgeDeviceStaging device_staging{};
   Gfn2PublicResultBridgeDeviceDiagnostics diagnostics{};
   std::uint32_t pending_result_flags = 0u;
@@ -2037,6 +2081,7 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t host_requested = 0u;
       std::size_t eligible = 0u;
       std::size_t committed_generations = 0u;
+      std::size_t refresh_predecessor_generations = 0u;
       std::size_t geometry_epoch = 0u;
 
       std::size_t output_geometry_pairs = 0u;
@@ -2147,6 +2192,7 @@ struct Gfn2CudaExecutionCache::Impl {
     offset.host_requested = layout.append<std::uint8_t>(batch);
     offset.eligible = layout.append<std::uint8_t>(batch);
     offset.committed_generations = layout.append<std::uint64_t>(batch);
+    offset.refresh_predecessor_generations = layout.append<std::uint64_t>(batch);
     offset.geometry_epoch = layout.append<std::uint64_t>(1);
 
     offset.output_geometry_pairs = layout.append<double>(geometry_pair_elements);
@@ -2302,6 +2348,11 @@ struct Gfn2CudaExecutionCache::Impl {
        * through convergence or failure. */
       cuda_status = cudaMemsetAsync(arena_pointer<std::uint8_t>(arena, offset.eligible), 1,
                                     static_cast<std::size_t>(batch), stream);
+    }
+    if (cuda_status == cudaSuccess) {
+      cuda_status = cudaMemsetAsync(
+          arena_pointer<std::uint64_t>(arena, offset.refresh_predecessor_generations), 0,
+          static_cast<std::size_t>(batch) * sizeof(std::uint64_t), stream);
     }
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("CUDA numerical refresh setup upload", cuda_status);
@@ -2539,6 +2590,8 @@ struct Gfn2CudaExecutionCache::Impl {
     device.factor_active = candidate.workspace_seed.ledger.active_mask;
     device.committed_generations =
         arena_pointer<std::uint64_t>(arena, offset.committed_generations);
+    device.refresh_predecessor_generations =
+        arena_pointer<std::uint64_t>(arena, offset.refresh_predecessor_generations);
     device.candidate_positions = arena_pointer<double>(arena, offset.candidate_positions);
     device.candidate_point_positions =
         arena_pointer_if<double>(arena, offset.candidate_point_positions, point_coordinates);
@@ -3894,6 +3947,7 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t publication_system_errors = 0u;
       std::size_t publication_plan_error = 0u;
       std::size_t warm_checkpoint_generations = 0u;
+      std::size_t warm_checkpoint_batch_ready = 0u;
     } offset;
 
     ArenaLayout layout;
@@ -3927,6 +3981,7 @@ struct Gfn2CudaExecutionCache::Impl {
     offset.publication_system_errors = layout.append<std::uint32_t>(batch);
     offset.publication_plan_error = layout.append<std::uint32_t>(1);
     offset.warm_checkpoint_generations = layout.append<std::uint64_t>(batch);
+    offset.warm_checkpoint_batch_ready = layout.append<std::uint32_t>(1);
     if (!layout.valid()) {
       error = "inference arena layout overflows size_t";
       return GPUXTB_STATUS_ALLOCATION_FAILED;
@@ -4110,6 +4165,8 @@ struct Gfn2CudaExecutionCache::Impl {
     };
     inference.warm_checkpoint_generations =
         arena_pointer<std::uint64_t>(arena, offset.warm_checkpoint_generations);
+    inference.warm_checkpoint_batch_ready =
+        arena_pointer<std::uint32_t>(arena, offset.warm_checkpoint_batch_ready);
     inference.ready = true;
     return GPUXTB_STATUS_SUCCESS;
   }
@@ -4144,6 +4201,7 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t converged = 0u;
       std::size_t system_statuses = 0u;
       std::size_t control = 0u;
+      std::size_t warm_checkpoint_ready = 0u;
     } host_offset;
     struct DeviceOffsets {
       std::size_t energies = 0u;
@@ -4165,6 +4223,7 @@ struct Gfn2CudaExecutionCache::Impl {
     host_offset.converged = host_layout.append<std::uint8_t>(batch);
     host_offset.system_statuses = host_layout.append<gpuxtb_status_t>(batch);
     host_offset.control = host_layout.append<Gfn2PublicResultBridgeControl>(1);
+    host_offset.warm_checkpoint_ready = host_layout.append<std::uint32_t>(1);
 
     ArenaLayout device_layout;
     device_offset.energies = device_layout.append<double>(energy_requested ? batch : 0);
@@ -4216,6 +4275,8 @@ struct Gfn2CudaExecutionCache::Impl {
     state.system_statuses = arena_pointer<gpuxtb_status_t>(host_arena, host_offset.system_statuses);
     state.host_control =
         arena_pointer<Gfn2PublicResultBridgeControl>(host_arena, host_offset.control);
+    state.warm_checkpoint_ready =
+        arena_pointer<std::uint32_t>(host_arena, host_offset.warm_checkpoint_ready);
     void* const device_arena = candidate.public_result_device_arena.get();
     state.device_staging = {
         arena_pointer_if<double>(device_arena, device_offset.energies,
@@ -4577,6 +4638,11 @@ struct Gfn2CudaExecutionCache::Impl {
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = build_inference_bindings(*candidate, error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
+    /* Numerical refresh is built first because inference consumes its epoch
+     * descriptors. Close the reverse failure-invalidation edge only after the
+     * inference arena owns the stable checkpoint array. */
+    candidate->numerical.device.warm_checkpoint_generations =
+        candidate->inference.warm_checkpoint_generations;
     status = build_public_result_state(*candidate, error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
 
@@ -4728,6 +4794,11 @@ struct Gfn2CudaExecutionCache::Impl {
     }
     auto& numerical = current.numerical;
     auto& device = numerical.device;
+    if (device.refresh_predecessor_generations == nullptr ||
+        device.warm_checkpoint_generations == nullptr) {
+      error = "CUDA GFN2 numerical refresh has an incomplete warm-checkpoint binding";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
     auto& preprocessing = numerical.preprocessing;
     cudaError_t cuda_status = cudaSetDevice(device_id);
     if (cuda_status != cudaSuccess) {
@@ -5134,6 +5205,12 @@ struct Gfn2CudaExecutionCache::Impl {
       error = "CUDA GFN2 inference requires a prepared numerical/runtime binding";
       return GPUXTB_STATUS_INVALID_ARGUMENT;
     }
+    if (current.numerical.device.refresh_predecessor_generations == nullptr ||
+        current.inference.warm_checkpoint_generations == nullptr ||
+        current.inference.warm_checkpoint_batch_ready == nullptr) {
+      error = "CUDA GFN2 inference has an incomplete warm-checkpoint binding";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
     if (mode != Gfn2CudaSccStartMode::kFresh && mode != Gfn2CudaSccStartMode::kWarm) {
       error = "CUDA GFN2 inference received an unknown SCC start mode";
       return GPUXTB_STATUS_INVALID_ARGUMENT;
@@ -5179,7 +5256,9 @@ struct Gfn2CudaExecutionCache::Impl {
           inference.epoch_consumer.epoch,
           inference.epoch_consumer.eligible_mask,
           inference.epoch_consumer.committed_generations,
+          current.numerical.device.refresh_predecessor_generations,
           inference.warm_checkpoint_generations,
+          current.state_seed.mixer,
           current.state_seed.scc,
       };
       constexpr int kThreads = 256;
@@ -5252,6 +5331,13 @@ struct Gfn2CudaExecutionCache::Impl {
                                                   : GPUXTB_STATUS_INTERNAL_ERROR;
     }
 
+    cuda_status =
+        cudaMemsetAsync(inference.warm_checkpoint_batch_ready, 0xff, sizeof(std::uint32_t), stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA warm-checkpoint aggregate initialization", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
     const WarmCheckpointPublicationDeviceBinding checkpoint{
         current.host.basis.batch_size,
         inference.epoch_consumer.epoch,
@@ -5261,6 +5347,7 @@ struct Gfn2CudaExecutionCache::Impl {
         inference.publication_results.system_statuses,
         inference.publication_results.converged,
         inference.warm_checkpoint_generations,
+        inference.warm_checkpoint_batch_ready,
     };
     constexpr int kThreads = 256;
     const auto blocks = static_cast<unsigned int>(
@@ -5441,6 +5528,13 @@ struct Gfn2CudaExecutionCache::Impl {
       return cuda_status == cudaErrorInvalidValue ? GPUXTB_STATUS_INVALID_ARGUMENT
                                                   : GPUXTB_STATUS_INTERNAL_ERROR;
     }
+    cuda_status =
+        cudaMemcpyAsync(public_state.warm_checkpoint_ready, inference.warm_checkpoint_batch_ready,
+                        sizeof(std::uint32_t), cudaMemcpyDeviceToHost, stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA warm-checkpoint readiness download", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
     cuda_status = cudaEventRecord(current.public_result_completion_event.get(), stream);
     if (cuda_status == cudaSuccess) {
       cuda_status = cudaEventSynchronize(current.public_result_completion_event.get());
@@ -5551,7 +5645,7 @@ struct Gfn2CudaExecutionCache::Impl {
     commit_host(result.per_system_status, public_state.system_statuses, batch_size,
                 sizeof(gpuxtb_status_t));
     result.flags = public_state.pending_result_flags;
-    current.inference.warm_checkpoint_ready = true;
+    current.inference.warm_checkpoint_ready = *public_state.warm_checkpoint_ready != 0u;
     error.clear();
     return GPUXTB_STATUS_SUCCESS;
   }
@@ -5774,6 +5868,20 @@ gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
     Gfn2CudaExecutionCache::Impl::Prepared* working = implementation.prepared.get();
     const bool reuse_runtime =
         working != nullptr && topology_snapshot_matches(*topology, options, working->host.key);
+    const Gfn2CudaSccStartMode start_mode = public_scc_start_mode(options);
+    if (start_mode == Gfn2CudaSccStartMode::kWarm) {
+      if (!reuse_runtime) {
+        abort_topology_candidate();
+        error =
+            "CUDA strict WARM SCC start requires the existing compatible fixed-topology runtime";
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
+      if (!working->inference.warm_checkpoint_ready) {
+        abort_topology_candidate();
+        error = "CUDA strict WARM SCC start requires a preceding successful public checkpoint";
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
+    }
     std::unique_ptr<Gfn2CudaExecutionCache::Impl::Prepared> candidate;
     if (!reuse_runtime) {
       TopologyKey key;
@@ -5826,7 +5934,7 @@ gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
     numerical.charge_response_matrix = batch.charge_response_matrix;
     status = implementation.refresh_numerical_locked(*working, numerical, error);
     if (status != GPUXTB_STATUS_SUCCESS) return fail_working_transaction(status);
-    status = implementation.execute_inference_locked(*working, Gfn2CudaSccStartMode::kFresh, error);
+    status = implementation.execute_inference_locked(*working, start_mode, error);
     if (status != GPUXTB_STATUS_SUCCESS) return fail_working_transaction(status);
     /* Public synchronous readiness is finalized only after the completion
      * event and aggregate bridge diagnostics are known to have succeeded. */

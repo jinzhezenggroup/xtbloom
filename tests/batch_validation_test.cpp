@@ -2,10 +2,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -96,6 +98,7 @@ struct Fixture {
     options.charge_tolerance = 1.0e-6;
     options.energy_tolerance = 1.0e-8;
     options.electronic_temperature = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+    options.scc_start_mode = GPUXTB_SCC_START_FRESH;
 
     result.struct_size = sizeof(result);
     result.api_version = GPUXTB_API_VERSION;
@@ -347,6 +350,9 @@ bool test_headers_counts_and_overflow() {
   const std::vector<InvalidCase> cases = {
       {"batch ABI size", [](Fixture& f) { f.batch.struct_size = GPUXTB_BATCH_V1_SIZE - 1; },
        "batch is"},
+      {"options ABI size",
+       [](Fixture& f) { f.options.struct_size = GPUXTB_COMPUTE_OPTIONS_V1_SIZE - 1; },
+       "compute options"},
       {"options ABI version", [](Fixture& f) { f.options.api_version += 1; }, "compute options"},
       {"result ABI version", [](Fixture& f) { f.result.api_version += 1; }, "batch result"},
       {"empty batch", [](Fixture& f) { f.batch.batch_size = 0; }, "batch_size"},
@@ -410,6 +416,17 @@ bool test_compute_options() {
        },
        "electronic_temperature"},
       {"options reserved", [](Fixture& f) { f.options.reserved = 1; }, "reserved"},
+      {"zero SCC start mode", [](Fixture& f) { f.options.scc_start_mode = 0; }, "scc_start_mode"},
+      {"negative SCC start mode", [](Fixture& f) { f.options.scc_start_mode = -1; },
+       "scc_start_mode"},
+      {"unknown SCC start mode", [](Fixture& f) { f.options.scc_start_mode = 3; },
+       "scc_start_mode"},
+      {"maximum SCC start mode",
+       [](Fixture& f) { f.options.scc_start_mode = std::numeric_limits<std::int32_t>::max(); },
+       "scc_start_mode"},
+      {"options ABI-v2 reserved", [](Fixture& f) { f.options.reserved_v2 = 1; }, "reserved_v2"},
+      {"CPU WARM SCC start", [](Fixture& f) { f.options.scc_start_mode = GPUXTB_SCC_START_WARM; },
+       "CPU backend", GPUXTB_STATUS_NOT_SUPPORTED},
       {"result reserved", [](Fixture& f) { f.result.reserved = 1; }, "reserved"},
   };
   for (const InvalidCase& test : cases) {
@@ -422,6 +439,37 @@ bool test_compute_options() {
   CHECK(validate_compute_descriptors(GPUXTB_BACKEND_CPU, &fixture.batch, &fixture.options,
                                      &fixture.result)
             .ok());
+
+  fixture.options.model = GPUXTB_MODEL_GFN2_XTB;
+  fixture.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(validate_compute_descriptors(GPUXTB_BACKEND_CUDA, &fixture.batch, &fixture.options,
+                                     &fixture.result)
+            .ok());
+  return true;
+}
+
+bool test_compute_options_short_prefixes() {
+  Fixture fixture;
+  constexpr std::size_t kCanaryBytes = 16;
+  for (const std::size_t caller_size :
+       {static_cast<std::size_t>(GPUXTB_COMPUTE_OPTIONS_V1_SIZE),
+        static_cast<std::size_t>(GPUXTB_COMPUTE_OPTIONS_V2_SIZE - 1)}) {
+    std::unique_ptr<unsigned char, decltype(&std::free)> storage(
+        static_cast<unsigned char*>(std::malloc(caller_size + kCanaryBytes)), &std::free);
+    CHECK(storage != nullptr);
+    std::memset(storage.get(), 0xa5, caller_size + kCanaryBytes);
+    std::memcpy(storage.get(), &fixture.options, caller_size);
+    const std::uint32_t encoded_size = static_cast<std::uint32_t>(caller_size);
+    std::memcpy(storage.get(), &encoded_size, sizeof(encoded_size));
+
+    const auto* short_options = reinterpret_cast<const gpuxtb_compute_options_t*>(storage.get());
+    const DescriptorValidationResult checked = validate_compute_descriptors(
+        GPUXTB_BACKEND_CPU, &fixture.batch, short_options, &fixture.result);
+    CHECK(checked.ok());
+    for (std::size_t index = caller_size; index < caller_size + kCanaryBytes; ++index) {
+      CHECK(storage.get()[index] == 0xa5);
+    }
+  }
   return true;
 }
 
@@ -772,6 +820,7 @@ int main() {
       {"host topology semantic split", test_host_semantics_remain_separate_and_unchanged},
       {"headers, counts, and overflow", test_headers_counts_and_overflow},
       {"compute options", test_compute_options},
+      {"compute-options short prefixes", test_compute_options_short_prefixes},
       {"buffer descriptors and sizes", test_buffer_descriptors_and_sizes},
       {"ABI-v2 spin channels", test_spin_channel_abi_v2},
       {"required and optional outputs", test_required_and_optional_outputs},

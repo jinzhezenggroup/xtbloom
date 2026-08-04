@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "gpuxtb/gpuxtb.h"
@@ -739,6 +740,203 @@ int execute_cuda_and_compare(gpuxtb_context_t* cuda_context, PublicBatch& batch,
   return compare_result(result, actual, reference, options);
 }
 
+int expect_strict_warm_rejection(gpuxtb_context_t* context, PublicBatch& batch,
+                                 const gpuxtb_compute_options_t& options, ResultLayout layout) {
+  bind_inputs(batch, nullptr, InputLayout::kHost);
+  ResultOwner result;
+  CUDA_CHECK(result.bind(batch, layout, options.flags));
+  CHECK(gpuxtb_compute(context, &batch.descriptor, &options, &result.descriptor) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  bool unchanged = false;
+  CUDA_CHECK(result.unchanged(unchanged));
+  CHECK(unchanged);
+  bool guards = false;
+  CUDA_CHECK(result.guards_intact(guards));
+  CHECK(guards);
+  return 0;
+}
+
+int test_public_warm_start_transactions(std::int32_t device) {
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+  gpuxtb_status_t reference_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  ContextHandle fresh_reference =
+      make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), reference_status);
+  CHECK(reference_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(fresh_reference != nullptr);
+
+  PublicBatch batch_a;
+  CHECK(make_fixture_batch(1u, false, batch_a) == 0);
+  gpuxtb_compute_options_t fresh_options = make_compute_options();
+  fresh_options.scc_start_mode = GPUXTB_SCC_START_FRESH;
+  gpuxtb_compute_options_t warm_options = fresh_options;
+  warm_options.scc_start_mode = GPUXTB_SCC_START_WARM;
+
+  /* First-call WARM is rejected before any runtime or caller-output commit.
+   * Exercise every public output placement because rollback is part of the ABI. */
+  std::string scenario;
+  for (const auto& [layout, name] :
+       {std::pair{ResultLayout::kHost, "host"}, std::pair{ResultLayout::kDevice, "device"},
+        std::pair{ResultLayout::kMixed, "mixed"}}) {
+    scenario = std::string("warm/first-call-rejection/") + name;
+    g_scenario = scenario.c_str();
+    CHECK(expect_strict_warm_rejection(context.get(), batch_a, warm_options, layout) == 0);
+  }
+
+  /* A successful public call may still contain a data-level SCC failure. It
+   * must not advertise a complete batch checkpoint to the next strict WARM
+   * call merely because result publication itself succeeded. */
+  g_scenario = "warm/reject-after-nonconverged-fresh";
+  gpuxtb_status_t nonconverged_context_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  ContextHandle nonconverged_context =
+      make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), nonconverged_context_status);
+  CHECK(nonconverged_context_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(nonconverged_context != nullptr);
+  PublicBatch nonconverged_batch;
+  CHECK(make_fixture_batch(1u, false, nonconverged_batch) == 0);
+  gpuxtb_compute_options_t one_iteration_fresh = fresh_options;
+  one_iteration_fresh.max_scc_iterations = 1;
+  ResultOwner nonconverged_owner;
+  CUDA_CHECK(
+      nonconverged_owner.bind(nonconverged_batch, ResultLayout::kHost, one_iteration_fresh.flags));
+  CHECK(gpuxtb_compute(nonconverged_context.get(), &nonconverged_batch.descriptor,
+                       &one_iteration_fresh,
+                       &nonconverged_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  MaterializedResult nonconverged;
+  CUDA_CHECK(nonconverged_owner.materialize(nonconverged));
+  CHECK(nonconverged.statuses[0] == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+  CHECK(nonconverged.converged[0] == 0u);
+  CHECK(nonconverged.iterations[0] == 1);
+  gpuxtb_compute_options_t one_iteration_warm = one_iteration_fresh;
+  one_iteration_warm.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(expect_strict_warm_rejection(nonconverged_context.get(), nonconverged_batch,
+                                     one_iteration_warm, ResultLayout::kMixed) == 0);
+
+  g_scenario = "warm/fresh-A";
+  bind_inputs(batch_a, nullptr, InputLayout::kHost);
+  ResultOwner fresh_a_owner;
+  CUDA_CHECK(fresh_a_owner.bind(batch_a, ResultLayout::kHost, fresh_options.flags));
+  CHECK(gpuxtb_compute(context.get(), &batch_a.descriptor, &fresh_options,
+                       &fresh_a_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  MaterializedResult fresh_a;
+  CUDA_CHECK(fresh_a_owner.materialize(fresh_a));
+  CHECK(compare_result(fresh_a_owner, fresh_a, fresh_a, fresh_options) == 0);
+
+  g_scenario = "warm/warm-A";
+  ResultOwner warm_a_owner;
+  CUDA_CHECK(warm_a_owner.bind(batch_a, ResultLayout::kDevice, warm_options.flags));
+  CHECK(gpuxtb_compute(context.get(), &batch_a.descriptor, &warm_options,
+                       &warm_a_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  MaterializedResult warm_a;
+  CUDA_CHECK(warm_a_owner.materialize(warm_a));
+  CHECK(compare_result(warm_a_owner, warm_a, fresh_a, warm_options) == 0);
+  for (std::size_t system = 0; system < warm_a.iterations.size(); ++system) {
+    CHECK(warm_a.iterations[system] <= fresh_a.iterations[system]);
+  }
+
+  /* Isolate the changed-geometry contract from the preceding same-geometry
+   * warm probe: publish a fresh A checkpoint, then consume that checkpoint
+   * exactly once for B. */
+  g_scenario = "warm/reseed-fresh-A-for-B";
+  ResultOwner reseeded_a_owner;
+  CUDA_CHECK(reseeded_a_owner.bind(batch_a, ResultLayout::kHost, fresh_options.flags));
+  CHECK(gpuxtb_compute(context.get(), &batch_a.descriptor, &fresh_options,
+                       &reseeded_a_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  MaterializedResult reseeded_a;
+  CUDA_CHECK(reseeded_a_owner.materialize(reseeded_a));
+  CHECK(compare_result(reseeded_a_owner, reseeded_a, fresh_a, fresh_options) == 0);
+
+  PublicBatch batch_b = batch_a;
+  batch_b.perturb(0.002);
+  g_scenario = "warm/independent-fresh-B";
+  bind_inputs(batch_b, nullptr, InputLayout::kHost);
+  ResultOwner fresh_b_owner;
+  CUDA_CHECK(fresh_b_owner.bind(batch_b, ResultLayout::kHost, fresh_options.flags));
+  CHECK(gpuxtb_compute(fresh_reference.get(), &batch_b.descriptor, &fresh_options,
+                       &fresh_b_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  MaterializedResult fresh_b;
+  CUDA_CHECK(fresh_b_owner.materialize(fresh_b));
+  CHECK(compare_result(fresh_b_owner, fresh_b, fresh_b, fresh_options) == 0);
+
+  g_scenario = "warm/warm-B";
+  ResultOwner warm_b_owner;
+  CUDA_CHECK(warm_b_owner.bind(batch_b, ResultLayout::kMixed, warm_options.flags));
+  CHECK(gpuxtb_compute(context.get(), &batch_b.descriptor, &warm_options,
+                       &warm_b_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  MaterializedResult warm_b;
+  CUDA_CHECK(warm_b_owner.materialize(warm_b));
+  CHECK(compare_result(warm_b_owner, warm_b, fresh_b, warm_options) == 0);
+  for (std::size_t system = 0; system < warm_b.iterations.size(); ++system) {
+    if (warm_b.iterations[system] > fresh_b.iterations[system]) {
+      std::fprintf(stderr,
+                   "changed-geometry WARM iteration regression in %s at system %zu: warm=%d "
+                   "fresh=%d\n",
+                   g_scenario, system, warm_b.iterations[system], fresh_b.iterations[system]);
+    }
+    CHECK(warm_b.iterations[system] <= fresh_b.iterations[system]);
+  }
+
+  /* Strict mode never constructs a replacement runtime. Each rejected request
+   * must leave both caller outputs and the B checkpoint untouched. */
+  PublicBatch topology_changed;
+  CHECK(make_fixture_batch(1u, true, topology_changed) == 0);
+  g_scenario = "warm/reject-topology";
+  CHECK(expect_strict_warm_rejection(context.get(), topology_changed, warm_options,
+                                     ResultLayout::kHost) == 0);
+
+  PublicBatch charge_changed = batch_b;
+  charge_changed.molecular_charges[0] += 0.125;
+  charge_changed.bind();
+  g_scenario = "warm/reject-charge";
+  CHECK(expect_strict_warm_rejection(context.get(), charge_changed, warm_options,
+                                     ResultLayout::kDevice) == 0);
+
+  PublicBatch unpaired_changed = batch_b;
+  unpaired_changed.unpaired_electrons[0] += 1;
+  unpaired_changed.bind();
+  g_scenario = "warm/reject-unpaired";
+  CHECK(expect_strict_warm_rejection(context.get(), unpaired_changed, warm_options,
+                                     ResultLayout::kMixed) == 0);
+
+  gpuxtb_compute_options_t temperature_changed = warm_options;
+  temperature_changed.electronic_temperature = 300.0;
+  g_scenario = "warm/reject-temperature";
+  CHECK(expect_strict_warm_rejection(context.get(), batch_b, temperature_changed,
+                                     ResultLayout::kHost) == 0);
+
+  gpuxtb_compute_options_t policy_changed = warm_options;
+  policy_changed.max_scc_iterations -= 1;
+  g_scenario = "warm/reject-policy";
+  CHECK(expect_strict_warm_rejection(context.get(), batch_b, policy_changed,
+                                     ResultLayout::kDevice) == 0);
+
+  g_scenario = "warm/checkpoint-survives-rejections";
+  ResultOwner preserved_owner;
+  CUDA_CHECK(preserved_owner.bind(batch_b, ResultLayout::kMixed, warm_options.flags));
+  CHECK(gpuxtb_compute(context.get(), &batch_b.descriptor, &warm_options,
+                       &preserved_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  MaterializedResult preserved;
+  CUDA_CHECK(preserved_owner.materialize(preserved));
+  CHECK(compare_result(preserved_owner, preserved, fresh_b, warm_options) == 0);
+
+  /* Once the caller explicitly requests FRESH, the previously rejected
+   * topology may replace the runtime and converge normally. */
+  g_scenario = "warm/fresh-recovery-after-rejection";
+  bind_inputs(topology_changed, nullptr, InputLayout::kHost);
+  ResultOwner recovered_owner;
+  CUDA_CHECK(recovered_owner.bind(topology_changed, ResultLayout::kDevice, fresh_options.flags));
+  CHECK(gpuxtb_compute(context.get(), &topology_changed.descriptor, &fresh_options,
+                       &recovered_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  MaterializedResult recovered;
+  CUDA_CHECK(recovered_owner.materialize(recovered));
+  CHECK(compare_result(recovered_owner, recovered, recovered, fresh_options) == 0);
+  return 0;
+}
+
 int test_host_device_mixed_and_streams(std::int32_t device, PublicBatch& batch,
                                        const gpuxtb_compute_options_t& options,
                                        const MaterializedResult& reference) {
@@ -1106,6 +1304,7 @@ int main() {
       line != 0) {
     return line;
   }
+  if (const int line = test_public_warm_start_transactions(device); line != 0) return line;
   if (const int line = test_input_descriptor_matrix(device, cpu_context.get(), options);
       line != 0) {
     return line;

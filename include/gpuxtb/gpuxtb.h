@@ -78,6 +78,14 @@ enum gpuxtb_memory_space_value {
 typedef int32_t gpuxtb_model_t;
 enum gpuxtb_model_value { GPUXTB_MODEL_GFN1_XTB = 1, GPUXTB_MODEL_GFN2_XTB = 2 };
 
+typedef int32_t gpuxtb_scc_start_mode_t;
+enum gpuxtb_scc_start_mode_value {
+  /* Restore the immutable initial electronic state before SCC. */
+  GPUXTB_SCC_START_FRESH = 1,
+  /* Strictly consume a checkpoint from the latest fully converged compatible batch call. */
+  GPUXTB_SCC_START_WARM = 2
+};
+
 typedef int32_t gpuxtb_compute_flag_t;
 enum gpuxtb_compute_flag_value {
   GPUXTB_COMPUTE_ENERGY = 1 << 0,
@@ -104,6 +112,8 @@ static_assert(sizeof(gpuxtb_backend_t) == sizeof(int32_t), "gpuxtb_backend_t mus
 static_assert(sizeof(gpuxtb_memory_space_t) == sizeof(int32_t),
               "gpuxtb_memory_space_t must be 32-bit");
 static_assert(sizeof(gpuxtb_model_t) == sizeof(int32_t), "gpuxtb_model_t must be 32-bit");
+static_assert(sizeof(gpuxtb_scc_start_mode_t) == sizeof(int32_t),
+              "gpuxtb_scc_start_mode_t must be 32-bit");
 static_assert(sizeof(gpuxtb_compute_flag_t) == sizeof(int32_t),
               "gpuxtb_compute_flag_t must be 32-bit");
 static_assert(sizeof(gpuxtb_result_flag_t) == sizeof(int32_t),
@@ -114,6 +124,8 @@ _Static_assert(sizeof(gpuxtb_backend_t) == sizeof(int32_t), "gpuxtb_backend_t mu
 _Static_assert(sizeof(gpuxtb_memory_space_t) == sizeof(int32_t),
                "gpuxtb_memory_space_t must be 32-bit");
 _Static_assert(sizeof(gpuxtb_model_t) == sizeof(int32_t), "gpuxtb_model_t must be 32-bit");
+_Static_assert(sizeof(gpuxtb_scc_start_mode_t) == sizeof(int32_t),
+               "gpuxtb_scc_start_mode_t must be 32-bit");
 _Static_assert(sizeof(gpuxtb_compute_flag_t) == sizeof(int32_t),
                "gpuxtb_compute_flag_t must be 32-bit");
 _Static_assert(sizeof(gpuxtb_result_flag_t) == sizeof(int32_t),
@@ -215,6 +227,12 @@ typedef struct gpuxtb_batch {
 /*
  * electronic_temperature is k_B*T in Hartree. Bindings that accept kelvin
  * should multiply by GPUXTB_KELVIN_TO_HARTREE before populating this struct.
+ *
+ * The ABI-v2 scc_start_mode suffix is a strict per-call policy. FRESH restores
+ * the immutable initial electronic state. CUDA WARM consumes a compatible
+ * checkpoint from the latest fully converged compatible public batch call; it
+ * never falls back to FRESH. A V1/short prefix means FRESH. CPU WARM is not
+ * supported.
  */
 typedef struct gpuxtb_compute_options {
   uint32_t struct_size;
@@ -226,10 +244,35 @@ typedef struct gpuxtb_compute_options {
   double charge_tolerance;
   double energy_tolerance;
   double electronic_temperature;
+  /* ABI v2 optional suffix; absent suffix preserves strict FRESH semantics. */
+  gpuxtb_scc_start_mode_t scc_start_mode;
+  uint32_t reserved_v2;
 } gpuxtb_compute_options_t;
 
 #define GPUXTB_COMPUTE_OPTIONS_V1_SIZE \
   (offsetof(gpuxtb_compute_options_t, electronic_temperature) + sizeof(double))
+#define GPUXTB_COMPUTE_OPTIONS_V2_SIZE \
+  (offsetof(gpuxtb_compute_options_t, reserved_v2) + sizeof(uint32_t))
+
+#if defined(__cplusplus)
+static_assert(offsetof(gpuxtb_compute_options_t, scc_start_mode) == 48u,
+              "gpuxtb_compute_options_t ABI-v2 suffix must start at byte 48");
+static_assert(GPUXTB_COMPUTE_OPTIONS_V1_SIZE == 48u,
+              "gpuxtb_compute_options_t ABI-v1 prefix must remain 48 bytes");
+static_assert(GPUXTB_COMPUTE_OPTIONS_V2_SIZE == 56u,
+              "gpuxtb_compute_options_t ABI-v2 image must remain 56 bytes");
+static_assert(sizeof(gpuxtb_compute_options_t) == GPUXTB_COMPUTE_OPTIONS_V2_SIZE,
+              "gpuxtb_compute_options_t must not add trailing ABI padding");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(offsetof(gpuxtb_compute_options_t, scc_start_mode) == 48u,
+               "gpuxtb_compute_options_t ABI-v2 suffix must start at byte 48");
+_Static_assert(GPUXTB_COMPUTE_OPTIONS_V1_SIZE == 48u,
+               "gpuxtb_compute_options_t ABI-v1 prefix must remain 48 bytes");
+_Static_assert(GPUXTB_COMPUTE_OPTIONS_V2_SIZE == 56u,
+               "gpuxtb_compute_options_t ABI-v2 image must remain 56 bytes");
+_Static_assert(sizeof(gpuxtb_compute_options_t) == GPUXTB_COMPUTE_OPTIONS_V2_SIZE,
+               "gpuxtb_compute_options_t must not add trailing ABI padding");
+#endif
 
 /*
  * Caller-allocated result buffers. At finite electronic temperature, energies

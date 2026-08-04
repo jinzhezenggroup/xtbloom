@@ -49,7 +49,7 @@ struct Gfn2CudaExecutionIdentity {
   std::uint8_t numerical_refresh_ready = 0u;
   /* One after terminal energy/publication descriptors own stable storage. */
   std::uint8_t inference_ready = 0u;
-  /* One after an earlier inference has queued a device warm checkpoint. */
+  /* One after every peer published a consumable checkpoint and host aggregation completed. */
   std::uint8_t warm_checkpoint_ready = 0u;
   /* One when normal inference launches the context-owned conditional SCC Graph. */
   std::uint8_t scc_conditional_graph_ready = 0u;
@@ -221,8 +221,10 @@ class Gfn2CudaExecutionCache {
    * Enqueue SCC through internal result publication on the context stream.
    * Fresh mode restores the immutable SAD image. Warm mode reuses the prior
    * device wavefunction and mixer checkpoint only when its per-peer geometry
-   * generation matches the current committed numerical epoch; it still resets
-   * the driver-visible terminal trace for the new inference attempt.
+   * generation matches either the current numerical epoch or the immediately
+   * preceding committed epoch accepted by the latest refresh transaction. It
+   * still resets the driver-visible terminal trace for the new inference
+   * attempt.
    */
   [[nodiscard]] gpuxtb_status_t execute_inference_async(Gfn2CudaSccStartMode mode,
                                                         std::string& error);
