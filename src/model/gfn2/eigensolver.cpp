@@ -1,6 +1,8 @@
 #include "model/gfn2/eigensolver.hpp"
 
+#if !defined(_WIN32)
 #include <dlfcn.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -1151,12 +1153,25 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
   };
   static const MklRuntimeState runtime = [] {
     MklRuntimeState state;
-    void* handle = dlopen("libmkl_rt.so.2", RTLD_NOW | RTLD_LOCAL);
-    if (handle == nullptr) {
-      handle = dlopen("libmkl_rt.so", RTLD_NOW | RTLD_LOCAL);
+#if defined(_WIN32)
+    /* The CPU eigensolver currently loads MKL through POSIX dlopen; the Windows
+     * port (LoadLibrary/GetProcAddress of mkl_rt.dll) is tracked as a follow-up. */
+    state.message = "MKL runtime loading is not ported to Windows yet";
+    return state;
+#else
+    /* MKL has changed its libmkl_rt soname across releases (.so.2 -> .so.3),
+     * and pip/conda layouts may only ship an unversioned .so symlink. Probe a
+     * couple of known sonames so the loader also resolves an object that the
+     * Python layer preloaded (which registers it under its SONAME). */
+    void* handle = nullptr;
+    for (const char* name : {"libmkl_rt.so.2", "libmkl_rt.so.3", "libmkl_rt.so.4", "libmkl_rt.so"}) {
+      handle = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+      if (handle != nullptr) {
+        break;
+      }
     }
     if (handle == nullptr) {
-      state.message = "failed to load libmkl_rt.so.2 or libmkl_rt.so";
+      state.message = "failed to load an MKL runtime (libmkl_rt.so.{2,3,4} or libmkl_rt.so)";
       return state;
     }
 
@@ -1196,6 +1211,7 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
     state.backend = created;
     state.status = GPUXTB_STATUS_SUCCESS;
     return state;
+#endif
   }();
 
   if (runtime.status != GPUXTB_STATUS_SUCCESS) {

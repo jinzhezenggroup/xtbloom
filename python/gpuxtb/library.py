@@ -164,10 +164,14 @@ def _installed_package_library() -> Optional[Path]:
 
     With ``wheel.install-dir = "gpuxtb"`` the CMake install step drops the
     versioned shared object plus symlinks into ``gpuxtb/lib``. We glob so a
-    wheel that flattened the SONAME symlink still resolves.
+    wheel that flattened the SONAME symlink still resolves, and we accept the
+    platform-specific file naming (ELF ``libgpuxtb.so*``, macOS
+    ``libgpuxtb.dylib``, Windows ``gpuxtb.dll``).
     """
     lib_dir = Path(__file__).resolve().parent / "lib"
-    candidates = sorted(lib_dir.glob("libgpuxtb.so*"))
+    candidates = sorted(
+        lib_dir.glob("libgpuxtb.so*")
+    ) + sorted(lib_dir.glob("libgpuxtb.dylib*")) + sorted(lib_dir.glob("gpuxtb.dll"))
     return candidates[0] if candidates else None
 
 
@@ -254,11 +258,123 @@ def _configure_library(library: ctypes.CDLL) -> None:
 _lib: Optional[ctypes.CDLL] = None
 
 
+def _runtime_search_dirs() -> list[Path]:
+    """Return directories that may contain the runtimes libgpuxtb depends on.
+
+    libgpuxtb links the CUDA math/runtime libraries (cuBLAS, cuSOLVER, ...)
+    when built with CUDA, and the CPU eigensolver dlopens the MKL runtime
+    (libmkl_rt) at compute time. Those live either in the ``mkl``/``nvidia-*``
+    PyPI packages or in an installed CUDA toolkit. Collecting them lets the
+    package resolve everything on import instead of forcing users to set
+    ``LD_LIBRARY_PATH`` (or ``PATH`` on Windows).
+    """
+    dirs: list[Path] = []
+
+    try:
+        import site
+    except Exception:  # pragma: no cover - defensive
+        site = None
+    site_packages = getattr(site, "getsitepackages", lambda: [])() if site is not None else []
+
+    for sp in site_packages:
+        base = Path(sp)
+        mkl_lib = base / "mkl" / "lib"
+        if mkl_lib.is_dir():
+            dirs.append(mkl_lib)
+        # The PyPI `mkl` package installs its libraries into the interpreter
+        # prefix root's lib/ (site-packages/../../libmkl_rt.so.3 in a venv or
+        # conda env), so add that location as well.
+        for prefix_lib in (base.parent.parent, base.parent.parent.parent):
+            if prefix_lib.name == "lib" and prefix_lib.is_dir():
+                dirs.append(prefix_lib)
+        nvidia_root = base / "nvidia"
+        if nvidia_root.is_dir():
+            dirs.extend(
+                entry / "lib"
+                for entry in nvidia_root.iterdir()
+                if (entry / "lib").is_dir()
+            )
+
+    for candidate in (
+        "/usr/local/cuda/lib64",
+        "/usr/local/cuda/lib64/stubs",
+        "/usr/local/cuda/targets/x86_64-linux/lib",
+        "/usr/local/lib",
+        "/usr/lib/x86_64-linux-gnu",
+    ):
+        path = Path(candidate)
+        if path.is_dir():
+            dirs.append(path)
+
+    return dirs
+
+
+# Runtime library name prefixes that libgpuxtb depends on, plus the MKL runtime
+# the CPU eigensolver dlopens. ``libcuda`` (the NVIDIA kernel driver) is only
+# preloaded when the loader cannot already resolve a driver via the default
+# search path, so a toolkit stub never shadows a real installed driver.
+_RUNTIME_LIB_PREFIXES = (
+    "libcublas",
+    "libcublasLt",
+    "libcusolver",
+    "libcusparse",
+    "libcudart",
+    "libnvJitLink",
+    "libnvrtc",
+    "libcurand",
+    "libcufft",
+    "libmkl_rt",
+    "libmkl_core",
+    "libmkl_intel_lp64",
+    "libmkl_gnu_thread",
+    "libmkl_sequential",
+)
+
+
+def _preload_runtime_libraries() -> list[str]:
+    """Preload the runtimes libgpuxtb needs so users need no environment setup.
+
+    On POSIX, loading the dependency by absolute path registers it under its
+    SONAME, so a later ``dlopen`` by name (the CPU eigensolver's MKL lookup)
+    and the DT_NEEDED resolution of a CUDA-enabled ``libgpuxtb`` reuse the
+    already-loaded object instead of failing. On Windows the discovered
+    directories are registered as DLL search locations instead.
+    """
+    search_dirs = _runtime_search_dirs()
+    if os.name == "nt":
+        for directory in search_dirs:
+            try:
+                os.add_dll_directory(str(directory))
+            except OSError:
+                pass
+        return []
+
+    driver_resolvable = bool(ctypes.util.find_library("cuda"))
+    loaded: list[str] = []
+    for directory in search_dirs:
+        for candidate in sorted(directory.glob("*.so*")):
+            name = candidate.name
+            depends_on = name.startswith(_RUNTIME_LIB_PREFIXES)
+            is_driver = name.startswith("libcuda.") and driver_resolvable is False
+            if not (depends_on or is_driver):
+                continue
+            if not candidate.is_file():
+                continue
+            try:
+                ctypes.CDLL(str(candidate))
+                loaded.append(name)
+            except OSError:
+                # A broken or unrelated matching file must never block startup.
+                pass
+    return loaded
+
+
 def load_library() -> ctypes.CDLL:
     """Load (once) and configure the gpuxtb shared library."""
     global _lib
     if _lib is None:
         path = library_path()
+        _preload_runtime_libraries()
         try:
             library = ctypes.CDLL(str(path))
         except OSError as exc:

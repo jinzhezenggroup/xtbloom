@@ -1,18 +1,21 @@
 name: Python wheels
 
-# Builds cross-platform wheels with cibuildwheel and tests them through
-# cibuildwheel's own test feature (see `test-command`/`before-test` in
-# pyproject.toml). Kept separate from the C++ CI so packaging jobs can be tuned
-# independently (see https://cibuildwheel.pypa.io).
+# Builds cross-platform wheels with cibuildwheel (one matrix entry per
+# platform, as recommended by cibuildwheel and modeled on DeePMD-kit's
+# build_wheel.yml). Each entry tells cibuildwheel exactly which build to
+# produce via CIBW_BUILD and which test (if any) to run through cibuildwheel's
+# own test feature.
 #
-# - Linux wheels build in the PyPA CUDA manylinux images (see
-#   [tool.cibuildwheel.linux] in pyproject.toml) and run the full conformance
-#   suite as the cibuildwheel test.
-# - macOS wheels build CPU-only and get an import smoke test (their CPU
-#   inference needs an MKL runtime exposing the `libmkl_rt.so` names the
-#   eigensolver dlopens, which the bundled library does not provide).
-# - Windows is a follow-up: the C++ CPU eigensolver uses `dlopen`/`libmkl_rt`
-#   and needs a platform port before Windows wheels can build.
+# - Linux x86_64 builds CUDA-enabled wheels in the PyPA CUDA manylinux image
+#   ([tool.cibuildwheel] in pyproject.toml) and runs the full conformance suite
+#   via `test-extras` (deps from the package's `[test]` optional dependency).
+# - Linux aarch64 wheels build CUDA-enabled on the native ARM runner (no QEMU).
+# - macOS x86_64 / arm64 wheels build CPU-only.
+# - Windows wheels build CPU-only; the C++ CPU eigensolver's MKL runtime loader
+#   is not ported to Windows yet.
+# All non-x86_64-Linux wheels get an import smoke test: macOS/Windows have no
+# MKL runtime for the CPU eigensolver, and the GPU-less runners / ARM platforms
+# have no CUDA device, so the deeper numerical suite stays on x86_64 Linux.
 
 on:
   push:
@@ -22,20 +25,56 @@ permissions:
   contents: read
 
 jobs:
-  wheels:
-    name: ${{ matrix.os }}
+  build_wheels:
+    name: Build wheels for ${{ matrix.platform_id }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        include:
+          # linux-64 (CUDA-enabled wheels + full test suite)
+          - os: ubuntu-24.04
+            platform_id: manylinux_x86_64
+            build: "cp311-manylinux_x86_64 cp314-manylinux_x86_64"
+            variant: cuda
+            tests: full
+          # linux-aarch64 (CUDA-enabled wheels, native ARM runner)
+          - os: ubuntu-24.04-arm
+            platform_id: manylinux_aarch64
+            build: "cp311-manylinux_aarch64 cp314-manylinux_aarch64"
+            variant: cuda
+            tests: smoke
+          # macos-x86-64
+          - os: macos-13
+            platform_id: macosx_x86_64
+            build: "cp311-macosx_x86_64 cp314-macosx_x86_64"
+            variant: cpu
+            tests: smoke
+          # macos-arm64
+          - os: macos-14
+            platform_id: macosx_arm64
+            build: "cp311-macosx_arm64 cp314-macosx_arm64"
+            variant: cpu
+            tests: smoke
+          # win-64
+          - os: windows-2022
+            platform_id: win_amd64
+            build: "cp311-win_amd64 cp314-win_amd64"
+            variant: cpu
+            tests: smoke
     steps:
       - uses: actions/checkout@v5
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22.0
+        uses: pypa/cibuildwheel@v4.1
+        env:
+          CIBW_ARCHS: all
+          CIBW_BUILD: ${{ matrix.build }}
+          CIBW_ENVIRONMENT: "GPUXTB_ENABLE_CUDA=${{ matrix.variant == 'cuda' && 'ON' || 'OFF' }}"
+          CIBW_TEST_COMMAND: ${{ matrix.tests == 'full' && 'python -m pytest {project}/python/tests -q' || 'python -c "import gpuxtb, gpuxtb.library, gpuxtb.interface"' }}
+          CIBW_TEST_EXTRAS: ${{ matrix.tests == 'full' && 'test' || '' }}
         with:
           output-dir: wheelhouse
       - uses: actions/upload-artifact@v4
         with:
-          name: gpuxtb-wheels-${{ matrix.os }}
+          name: gpuxtb-wheels-${{ matrix.platform_id }}
           path: ./wheelhouse/*.whl

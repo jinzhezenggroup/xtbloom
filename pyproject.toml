@@ -22,13 +22,20 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Chemistry",
   "Topic :: Scientific/Engineering :: Physics",
 ]
-dependencies = ["numpy>=1.20"]
+dependencies = [
+  "numpy>=1.20",
+  # The CPU eigensolver dlopens libmkl_rt; ship it automatically on platforms
+  # where the PyPI `mkl` package exists so users never set LD_LIBRARY_PATH.
+  # gpuxtb.library() locates and preloads it on import.
+  "mkl; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
 
 [project.optional-dependencies]
 ase = ["ase"]
 dpdata = ["dpdata"]
 # CUDA-enabled wheels do not bundle the CUDA runtime; the PyPI nvidia-* packages
 # supply it at runtime (the CUDA *driver* still comes from the system kernel).
+# gpuxtb.library() locates and preloads them on import.
 cuda = [
   "cuda-python",
   "nvidia-cublas-cu12",
@@ -37,7 +44,13 @@ cuda = [
   "nvidia-cuda-runtime-cu12",
   "nvidia-nvjitlink-cu12",
 ]
-test = ["pytest>=7", "pytest-cov", "ase", "dpdata"]
+test = [
+  "pytest>=7",
+  "pytest-cov",
+  "ase",
+  "dpdata",
+  "mkl; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
 
 [project.entry-points."dpdata.plugins"]
 gpuxtb = "gpuxtb.dpdata"
@@ -58,37 +71,29 @@ wheel.install-dir = "gpuxtb"
 [tool.scikit-build.cmake.define]
 GPUXTB_ENABLE_CUDA = { env = "GPUXTB_ENABLE_CUDA", default = "AUTO" }
 
-# cibuildwheel: build CPython wheels for Linux in the CUDA-enabled manylinux
-# images provided by PyPA (quay.io/manylinux_cuda). GPUXTB_ENABLE_CUDA defaults
-# to AUTO, so nvcc being present in the image enables the CUDA backend
-# automatically; the image also carries the CUDA runtime/toolkit libraries used
-# at link time.
+# cibuildwheel: build wheels across platforms. The .github/workflows/wheels.yml
+# matrix drives exactly which build each runner produces via CIBW_BUILD and
+# whether GPUXTB_ENABLE_CUDA is ON (Linux x86_64, CUDA manylinux image) or OFF
+# everywhere else. Linux x86_64 also runs the full conformance suite through
+# cibuildwheel's own test feature (`test-extras`); the other platforms get an
+# import smoke test.
 [tool.cibuildwheel]
-build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
-skip = "*-musllinux_*"
-# Tests run through cibuildwheel's own test feature (official `test-command`).
-# macOS only gets an import smoke test because its CPU inference needs an MKL
-# runtime exposing the libmkl_rt.so names the eigensolver dlopens; Linux runs
-# the full conformance suite (see [tool.cibuildwheel.linux] below).
+build = ["cp311-*", "cp314-*"]
+skip = ["*-win32", "*-manylinux_i686", "*-musllinux*"]
+# CUDA-enabled manylinux images provided by PyPA (quay.io/manylinux_cuda); they
+# ship nvcc/cublas/cudart but not cuSOLVER, so a Linux before-build installs
+# the missing libcusolver/libnvJitLink from PyPI into the toolkit lib dir.
+manylinux-x86_64-image = "quay.io/manylinux_cuda/manylinux_2_28_x86_64_cuda12_9:latest"
+manylinux-aarch64-image = "quay.io/manylinux_cuda/manylinux_2_28_aarch64_cuda12_9:latest"
+# Default test is an import smoke test (importing gpuxtb needs no runtime); the
+# x86_64 Linux CI entry overrides it with the full conformance suite.
 test-command = "python -c 'import gpuxtb, gpuxtb.library, gpuxtb.interface'"
 
 [tool.cibuildwheel.linux]
-# CUDA-enabled manylinux images provided by PyPA (quay.io/manylinux_cuda); nvcc
-# in the image means GPUXTB_ENABLE_CUDA=AUTO builds the CUDA backend. The image
-# ships cublas/cudart but not cuSOLVER, so before-build installs the missing
-# libcusolver/libnvJitLink from PyPI into the toolkit lib dir.
-archs = ["x86_64"]
-manylinux-x86_64-image = "quay.io/manylinux_cuda/manylinux_2_28_x86_64_cuda12_9:latest"
-manylinux-aarch64-image = "quay.io/manylinux_cuda/manylinux_2_28_aarch64_cuda12_9:latest"
 before-build = "bash {package}/python/ci/install-cuda-wheel-deps.sh"
-# Run the full conformance suite with cibuildwheel's test feature. The helper
-# adds the pip-installed MKL and the container CUDA runtimes to LD_LIBRARY_PATH.
-before-test = "python -m pip install --quiet pytest ase dpdata mkl"
-test-command = "bash {project}/python/ci/run-wheel-tests.sh"
 # The CUDA runtime libraries (cublas/cusolver/cudart/...) are intentionally not
 # bundled: a CUDA-enabled wheel relies on the system CUDA driver plus the
-# PyPI-distributed `nvidia-cublas-cu12`/`nvidia-cusolver-cu12`/
-# `nvidia-cuda-runtime-cu12` packages at runtime. libcuda.so.1 is the NVIDIA
+# PyPI-distributed nvidia-* packages at runtime. libcuda.so.1 is the NVIDIA
 # driver interface and is likewise provided by the system, never bundled.
 repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel} --exclude libcublas.so.12 --exclude libcublasLt.so.12 --exclude libcusolver.so.12 --exclude libcusparse.so.12 --exclude libcudart.so.12 --exclude libcufft.so.11 --exclude libcurand.so.10 --exclude libcuda.so.1"
 

@@ -41,18 +41,35 @@ A CUDA-enabled wheel does **not** bundle the CUDA runtime libraries; at runtime
 it needs the system CUDA driver plus the PyPI CUDA packages, which the
 ``[cuda]`` extra installs: ``pip install "gpuxtb[cuda]"``.
 
+### Runtime libraries are loaded automatically
+
+You never need to set ``LD_LIBRARY_PATH``. On import,
+:func:`gpuxtb.library` locates and preloads the runtime libraries the native
+library depends on:
+
+* the **MKL** runtime ``libmkl_rt`` (dlopen'ed by the CPU eigensolver) — it is
+  pulled in automatically on Linux x86_64 via a platform-tagged dependency, and
+  discovered from any installed ``mkl`` package / system path elsewhere; and
+* the **CUDA** runtime libraries (cuBLAS, cuSOLVER, ...) — resolved from the
+  installed ``nvidia-*`` PyPI packages or a CUDA toolkit.
+
+Only the CUDA *driver* interface (``libcuda``) is never shipped or preloaded by
+the package; it always comes from the system NVIDIA kernel driver.
+
 CI builds wheels with cibuildwheel (`.github/workflows/wheels.yml`) and tests
 them through cibuildwheel's own test feature:
 
-* **Linux** wheels build in the PyPA CUDA manylinux images
-  (`quay.io/manylinux_cuda/manylinux_2_28_*_cuda12_9`), so the CUDA backend is
-  compiled in by default (cuSOLVER, which those images do not ship, is pulled
-  from PyPI into the container before the build). The full conformance suite
-  runs as the cibuildwheel test with an MKL runtime installed from PyPI.
-* **macOS** wheels build CPU-only (no CUDA toolkit); they only receive an
-  import smoke test because their CPU inference needs an MKL runtime exposing
-  the `libmkl_rt.so` names the C++ eigensolver dlopens.
-* **Windows** wheels are a follow-up (the CPU eigensolver uses `dlopen`).
+* **Linux x86_64 and aarch64** wheels build in the PyPA CUDA manylinux images
+  (`quay.io/manylinux_cuda/manylinux_2_28_*_cuda12_9`) with the CUDA backend
+  compiled in (aarch64 natively on a GitHub ARM runner, no QEMU). cuSOLVER,
+  which those images do not ship, is pulled from PyPI into the container before
+  the build. x86_64 additionally runs the full conformance suite as the
+  cibuildwheel test (deps from the package ``[test]`` extra through
+  ``test-extras``, MKL included).
+* **macOS** (x86_64 and arm64) wheels build CPU-only and get an import smoke
+  test.
+* **Windows** wheels build CPU-only; the C++ CPU eigensolver's MKL runtime
+  loader is not ported to Windows yet, so they also get an import smoke test.
 
 The public Python interface always uses host buffers on both backends; CUDA
 device-resident memory is a future extension. The current CUDA backend is
