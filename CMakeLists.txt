@@ -160,6 +160,7 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/gfn2_scc_setup_eigensolver.cu
     src/backends/cuda/gfn2_scc_setup_inputs.cu
     src/backends/cuda/gfn2_scc_setup_topology.cu
+    src/backends/cuda/gfn2_spin.cu
     src/backends/cuda/gfn2_terminal_classical_energy.cu
     src/backends/cuda/gfn2_total_energy.cu
   )
@@ -651,6 +652,24 @@ if(GPUXTB_BUILD_TESTS)
       CUDA_SEPARABLE_COMPILATION ON
     )
     add_test(NAME gpuxtb.cuda.mulliken COMMAND gpuxtb_cuda_mulliken_test)
+
+    add_executable(gpuxtb_cuda_spin_test tests/cuda_spin_test.cu)
+    target_link_libraries(gpuxtb_cuda_spin_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_spin_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_spin_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_spin_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.spin COMMAND gpuxtb_cuda_spin_test)
 
     add_executable(gpuxtb_cuda_occupations_test tests/cuda_occupations_test.cu)
     target_link_libraries(gpuxtb_cuda_occupations_test PRIVATE
