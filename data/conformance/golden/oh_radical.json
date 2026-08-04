@@ -5,9 +5,9 @@
   "properties": {
     "atomic_dipoles_e_bohr": [
       [
+        0.0,
         -0.0,
-        -0.0,
-        0.11404469
+        0.11404468
       ],
       [
         0.0,
@@ -20,14 +20,14 @@
         0.14490942,
         0.0,
         0.14490942,
-        0.0,
+        -0.0,
         0.0,
         -0.28981884
       ],
       [
-        -0.07048694,
+        -0.07048695,
         0.0,
-        -0.07048694,
+        -0.07048695,
         -0.0,
         -0.0,
         0.14097389
@@ -35,32 +35,52 @@
     ],
     "energy_hartree": -4.42833345932,
     "forces_hartree_per_bohr": [
-      -2.2444320580404e-19,
-      -2.0356958163549e-17,
-      0.0060595839099953,
-      2.2444320580404e-19,
-      2.0356958163549e-17,
-      -0.0060595839099953
+      6.3926072946487e-20,
+      -7.153190104741e-18,
+      0.006059584199658,
+      -6.3926072946487e-20,
+      7.153190104741e-18,
+      -0.006059584199658
     ],
     "gradient_hartree_per_bohr": [
-      2.2444320580404e-19,
-      2.0356958163549e-17,
-      -0.0060595839099953,
-      -2.2444320580404e-19,
-      -2.0356958163549e-17,
-      0.0060595839099953
+      -6.3926072946487e-20,
+      7.153190104741e-18,
+      -0.006059584199658,
+      6.3926072946487e-20,
+      -7.153190104741e-18,
+      0.006059584199658
     ],
     "partial_charges_e": [
-      -0.33069504,
-      0.33069504
+      -0.33069505,
+      0.33069505
     ]
   },
   "provenance": {
+    "accuracy": 0.0001,
     "command": [
+      "{executable}",
+      "coord",
+      "--gfn",
+      "2",
+      "--acc",
+      "0.0001",
+      "--grad",
+      "--json",
+      "--norestart",
+      "--chrg",
+      "0",
+      "--uhf",
+      "1",
+      "-P",
+      "1"
+    ],
+    "command_template": [
       "{executable}",
       "{input}",
       "--gfn",
       "2",
+      "--acc",
+      "0.0001",
       "--grad",
       "--json",
       "--norestart",
@@ -69,14 +89,43 @@
       "--uhf",
       "{unpaired_electrons}",
       "-P",
-      "1"
+      "1",
+      "[--input {xcontrol}]"
     ],
     "engine": "xtb",
+    "environment": {
+      "cleared_variable_prefixes": [
+        "XTB"
+      ],
+      "inherited_environment_boundary": "Non-XTB variables are inherited; the loaded libxtb and selected GFN2 parameter file are independently hashed.",
+      "set": {
+        "LC_ALL": "C",
+        "OMP_NUM_THREADS": "1",
+        "OMP_STACKSIZE": "4G",
+        "OPENBLAS_NUM_THREADS": "1",
+        "XTBPATH": "<directory-containing-pinned-param_gfn2-xtb.txt>"
+      }
+    },
     "executable_sha256": "271dd6cdd5da127a8e39919e7e32d924790fb346f0057b4183769ba8b3411887",
     "executable_version": "-----------------------------------------------------------      \n     |                   =====================                   |     \n     |                           x T B                           |     \n     |                   =====================                   |     \n     |                         S. Grimme                         |     \n     |          Mulliken Center for Theoretical Chemistry        |     \n     |                    University of Bonn                     |     \n      -----------------------------------------------------------      \n\n   * xtb version 6.7.1 (edcfbbe) compiled by 'conda@5dfe00f5fb80' on 2026-06-10\n\nnormal termination of xtb",
     "generation_mode": "live-cli",
     "input": "data/conformance/inputs/oh_radical.coord",
-    "source_output_sha256": "cee62bf0d8f99e0ca12035bdbc550c2795488bed852c5f6ea1093063fd670ba1",
+    "runtime": {
+      "gfn2_parameter": {
+        "discovery": "executable-prefix",
+        "filename": "param_gfn2-xtb.txt",
+        "selection": "XTBPATH",
+        "sha256": "f6f05c6c5264cb2f75c54f8ac6838044541c1e493b16f1a4d4ee4fa64de5f545",
+        "status": "resolved"
+      },
+      "libxtb": {
+        "discovery": "ldd",
+        "filename": "libxtb.so.6.7.1",
+        "sha256": "c405797f34ed96470f23158406e6d8a8e102681d3c3cbbaea16692f514f22853",
+        "status": "resolved"
+      }
+    },
+    "source_output_sha256": "df4b58ef6644f5234e448e369c9a41c2b3035d37ad4edb82553aec813e61e237",
     "source_revision": "edcfbbe39d411edc225e27315fbda3a204ddb023"
   },
   "schema_version": 1,

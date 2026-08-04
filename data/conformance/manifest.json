@@ -4,76 +4,80 @@
       "atom_count": 3,
       "description": "Planar H3+ exercises a positively charged, symmetry-sensitive SCC case.",
       "golden": "data/conformance/golden/h3_plus.json",
-      "golden_sha256": "8953f7b4352dbbb9317d585c17b7e59ff47237bb6422c456b48596f7fc720e58",
+      "golden_sha256": "22f970aa92f73dbe55d86cb6b9c08bed2fe146ca817ea94076adb8034be03675",
       "id": "h3_plus",
       "input": "data/conformance/inputs/h3_plus.coord",
       "input_sha256": "b8fd190d7713b5247e6e12803c804adca9438b52bc02d64999d1d634ae857e37",
       "molecular_charge": 1,
+      "reference_engine": "tblite",
+      "reference_output_sha256": "b67d4124718f1b36fdff606e8bcb65eec5d702d757cea520c05902a9a582a3d4",
       "unpaired_electrons": 0,
       "upstream_input_sha256": "b8fd190d7713b5247e6e12803c804adca9438b52bc02d64999d1d634ae857e37",
-      "upstream_output_sha256": "7cfd3ce6be8082431b28b911820cfb6449b43ef8334a55756cf3728171010c08",
       "upstream_validation_case": "test/validation/01_h3+"
     },
     {
       "atom_count": 5,
       "description": "Neutral ketene covers H/C/O and a non-equilibrium molecular gradient.",
       "golden": "data/conformance/golden/ketene.json",
-      "golden_sha256": "a2cfd2ca1023772844f1ce7d56140b2589c5f83217d3b2a684de6a34c702d83e",
+      "golden_sha256": "5b61547910cb75d391b39a8a98ef43b888ce698123a6922a2607537a8dd2d022",
       "id": "ketene",
       "input": "data/conformance/inputs/ketene.coord",
       "input_sha256": "df51094bedadc80e7aac3966a6fb0656f8b907850bbdf717a9b0b5d55eb6201e",
       "molecular_charge": 0,
+      "reference_engine": "tblite",
+      "reference_output_sha256": "99dc9bd807560cf4add1eb90eafabab373d5e9825dc4adbaeacf64a89f431d30",
       "unpaired_electrons": 0,
       "upstream_input_sha256": "df51094bedadc80e7aac3966a6fb0656f8b907850bbdf717a9b0b5d55eb6201e",
-      "upstream_output_sha256": "982bfc7408fb53941f2adde1f98f712445c2a1f019aaff906b8efe86136fffda",
       "upstream_validation_case": "test/validation/08_ketene"
     },
     {
       "atom_count": 3,
       "description": "Ne-Na-Cl covers third-row parameters and a weakly interacting mixed system.",
       "golden": "data/conformance/golden/nenacl.json",
-      "golden_sha256": "63844bccef9889bc557ffb74fde25e738de01dd354672730bbe86d25b942eecc",
+      "golden_sha256": "5b639efbb5e8553c96b5cf435d47080270a4a2167065437ce8051a22df94c621",
       "id": "nenacl",
       "input": "data/conformance/inputs/nenacl.coord",
       "input_sha256": "3415aead6aaea22db84922d46ed4f62dae86ddc8319ad3c55404949bca2b873a",
       "molecular_charge": 0,
+      "reference_engine": "tblite",
+      "reference_output_sha256": "0d159deb6607cf23102af41cc9b82da0abce9bd0aada205e9df07d02ed13d544",
       "unpaired_electrons": 0,
       "upstream_input_sha256": "3415aead6aaea22db84922d46ed4f62dae86ddc8319ad3c55404949bca2b873a",
-      "upstream_output_sha256": "b0de97f990af464a31b11d335fea864e54a25ab87f3d884410ca9a5a770c6f8b",
       "upstream_validation_case": "test/validation/10_nenacl"
     },
     {
       "atom_count": 6,
       "description": "Trigonal-bipyramidal SiF5- covers an anion and p-block hypercoordination.",
       "golden": "data/conformance/golden/sif5_minus.json",
-      "golden_sha256": "6c00feb740a7d95d29460d8683c48bf062b5cca5665f1b99c75d1685c9fd705d",
+      "golden_sha256": "823884f252a18d9b6595614a29f181f9f046013a772b12bad08f466a0f47c63b",
       "id": "sif5_minus",
       "input": "data/conformance/inputs/sif5_minus.coord",
       "input_sha256": "c959cf7302441fe18401618ef2fe04eaa0f92b192f511f9691b3212d0b157fc2",
       "molecular_charge": -1,
+      "reference_engine": "tblite",
+      "reference_output_sha256": "ba3a2e2e9e4d0e8fc5b990d6e415c0397bda613dc50198b83582d801d2606910",
       "unpaired_electrons": 0,
       "upstream_input_sha256": "c959cf7302441fe18401618ef2fe04eaa0f92b192f511f9691b3212d0b157fc2",
-      "upstream_output_sha256": "19d9543d8cb2d3c640b886f0cda66e8e2c487ca18e06a931337d9256c163b22c",
       "upstream_validation_case": "test/validation/14_sif5-"
     },
     {
       "atom_count": 2,
       "description": "Neutral OH radical exercises unrestricted open-shell SCC and atom-resolved charge, dipole, and quadrupole state.",
       "golden": "data/conformance/golden/oh_radical.json",
-      "golden_sha256": "3aa14dbb7c46f8c7844748514947a9c52b01b3b298a057b4d54059165b67f37a",
+      "golden_sha256": "218ed420399030b4ff2e777daf6b3b113c9765054617b3b1345f2c9621318304",
       "id": "oh_radical",
       "input": "data/conformance/inputs/oh_radical.coord",
       "input_sha256": "6dd67aab2bce7e68a391b3dffbf106818235d5b09ccbcea5ed377e5684192975",
       "molecular_charge": 0,
       "reference_engine": "xtb",
-      "reference_output_sha256": "cee62bf0d8f99e0ca12035bdbc550c2795488bed852c5f6ea1093063fd670ba1",
+      "reference_output_sha256": "df4b58ef6644f5234e448e369c9a41c2b3035d37ad4edb82553aec813e61e237",
       "unpaired_electrons": 1
     },
     {
       "atom_count": 3,
       "description": "One water plus one explicit gamma=999 point charge is the minimal external-charge SCC and force-sign case.",
       "golden": "data/conformance/golden/water_one_pc_gamma999.json",
-      "golden_sha256": "274312fb6151c2b5096c20783caf79a9681bf3daf24fa788833015acd8e806ff",
+      "golden_sha256": "a75c59ab4354f3d6b3105004379d3dbc2d6476ef6c8063d5108e05372ce080c7",
       "id": "water_one_pc_gamma999",
       "input": "data/conformance/inputs/water_one_pc_gamma999.qmmm.json",
       "input_schema": "qmmm-v1",
@@ -81,7 +85,7 @@
       "molecular_charge": 0,
       "point_charge_count": 1,
       "reference_engine": "xtb",
-      "reference_output_sha256": "363a783159068f13f88364c472ab452836bdcc23a0d55a9e7b819fcb15ab3f45",
+      "reference_output_sha256": "4c500389315198225c695cbfc18025e49a9c726fc9e0eef1d717b9052c3c9649",
       "scientific_source": "Reduced one-water/one-PC case derived from the xTB 6.7.1 water-tetramer PCEM API regression geometry.",
       "unpaired_electrons": 0
     },
@@ -89,7 +93,7 @@
       "atom_count": 6,
       "description": "The official xTB water-tetramer PCEM regression represented as 6 QM atoms plus 6 external charges with element hardnesses.",
       "golden": "data/conformance/golden/water_dimer_6pc_hardness.json",
-      "golden_sha256": "b68af10a7f16f60265dbc3daa542394b71cfd382d913d13856296efc0fce71d9",
+      "golden_sha256": "e1ac69bca3df14b46a09dcc6119d7207355024dd5cf21f88e8757ffacea4b9bb",
       "id": "water_dimer_6pc_hardness",
       "input": "data/conformance/inputs/water_dimer_6pc_hardness.qmmm.json",
       "input_schema": "qmmm-v1",
@@ -97,7 +101,7 @@
       "molecular_charge": 0,
       "point_charge_count": 6,
       "reference_engine": "xtb",
-      "reference_output_sha256": "36ece6ee7736481108dcd9efed16fcc59e6084c783ff11cf08d0ff777826a0ad",
+      "reference_output_sha256": "a9b8df726788176f6d8b3ac63bf87ec35078d6765c3062d60820efbaa49bd324",
       "scientific_source": "xTB test/api/c_api_example.c testSecond and test/unit/test_gfn2.f90 test_gfn2_pcem_api.",
       "unpaired_electrons": 0
     },
@@ -105,7 +109,7 @@
       "atom_count": 6,
       "description": "The official xTB water-tetramer PCEM regression with every external-charge gamma set to 999 hartree.",
       "golden": "data/conformance/golden/water_dimer_6pc_gamma999.json",
-      "golden_sha256": "24212eb2d05f5b16df454831878e04c90e4a76a1ba71f5e450b51e785121ed3d",
+      "golden_sha256": "54460aa9219f7c7f95b2e288d7ef5609ff0539bd6973fe51a54814b7c45cdb5d",
       "id": "water_dimer_6pc_gamma999",
       "input": "data/conformance/inputs/water_dimer_6pc_gamma999.qmmm.json",
       "input_schema": "qmmm-v1",
@@ -113,7 +117,7 @@
       "molecular_charge": 0,
       "point_charge_count": 6,
       "reference_engine": "xtb",
-      "reference_output_sha256": "b7ca7a48a2b3a46d67c806cba13773b6eb06f95c0f6f295cdd3c890d505c6dd6",
+      "reference_output_sha256": "41a38e31d0b288fbf585a3e41e8b5c3b18e8b4eb9983a9fd401f17f80e9c7f93",
       "scientific_source": "xTB test/unit/test_gfn2.f90 test_gfn2_pcem_api gamma=999 branch.",
       "unpaired_electrons": 0
     }
@@ -131,16 +135,19 @@
       "rtol": 0.0,
       "unit": "hartree/bohr"
     },
-    "rationale": "The independent xtb 6.7.1 and tblite snapshot agree more closely in energy than in analytic gradients. This gate is used only for explicitly identified reference-engine cross-checks; gpuxtb remains subject to the tighter primary tolerances."
+    "rationale": "This separate allowance is retained only for explicit live cross-engine comparisons. Each case's primary pinned live oracle and gpuxtb remain subject to the tighter primary tolerances."
   },
   "reference_engines": {
     "tblite": {
+      "accuracy": 0.0001,
       "cli_command_template": [
         "{executable}",
         "{input}",
         "--no-restart",
         "--method",
         "gfn2",
+        "--acc",
+        "0.0001",
         "--grad",
         "{gradient_output}",
         "[--charge {signed_charge}]",
@@ -151,6 +158,9 @@
       "output": "JSON energy, gradient, and virial in atomic units",
       "repository": "https://github.com/tblite/tblite",
       "revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb",
+      "runtime_artifacts": {
+        "libtblite_sha256": "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725"
+      },
       "snapshot_command_template": [
         "tblite",
         "coord",
@@ -163,14 +173,18 @@
         "--json",
         "result.json"
       ],
-      "snapshot_origin": "test/validation/<case>/gfn2-xtb.json"
+      "snapshot_origin": "test/validation/<case>/gfn2-xtb.json",
+      "version": "0.7.0"
     },
     "xtb": {
+      "accuracy": 0.0001,
       "cli_command_template": [
         "{executable}",
         "{input}",
         "--gfn",
         "2",
+        "--acc",
+        "0.0001",
         "--grad",
         "--json",
         "--norestart",
@@ -194,6 +208,8 @@
         "coord",
         "--gfn",
         "2",
+        "--acc",
+        "0.0001",
         "--grad",
         "--json",
         "--norestart",
@@ -247,7 +263,7 @@
       "rtol": 0.0,
       "unit": "hartree/bohr"
     },
-    "rationale": "The seed gate matches tblite's own validation absolute tolerance. Tighter term-level and finite-difference gates can be added without weakening this oracle check."
+    "rationale": "The primary gate applies uniformly to gpuxtb versus each case's pinned live tblite or xTB oracle. Tighter term-level and finite-difference gates can be added without weakening this check."
   },
   "units": {
     "coordinates": "bohr",

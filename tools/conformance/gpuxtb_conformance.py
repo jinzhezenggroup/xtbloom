@@ -24,10 +24,27 @@ from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPOSITORY_ROOT / "data" / "conformance" / "manifest.json"
+PRIMARY_ORACLE_ACCURACY = 1.0e-4
+PRIMARY_ORACLE_ACCURACY_TEXT = "0.0001"
 
 
 class ConformanceError(RuntimeError):
     """An actionable corpus, reference execution, or comparison failure."""
+
+
+def reference_accuracy(reference: dict[str, Any], engine: str) -> str:
+    """Validate and return the reviewed CLI spelling of the primary accuracy.
+
+    Both reference engines use the same numerical setting.  Keeping the text
+    token centralized prevents a float formatter or a stale command template
+    from silently regenerating a looser SCC oracle.
+    """
+    value = reference.get("accuracy")
+    if type(value) not in (int, float) or float(value) != PRIMARY_ORACLE_ACCURACY:
+        raise ConformanceError(
+            f"manifest {engine} accuracy must be {PRIMARY_ORACLE_ACCURACY_TEXT}"
+        )
+    return PRIMARY_ORACLE_ACCURACY_TEXT
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -667,7 +684,22 @@ def check_manifest(manifest_path: Path) -> None:
         raise ConformanceError(f"manifest units must include {expected_units}")
 
     cases = selected_cases(manifest, None)
-    xtb_reference = manifest["reference_engines"]["xtb"]
+    references = manifest.get("reference_engines", {})
+    tblite_reference = references.get("tblite", {})
+    xtb_reference = references.get("xtb", {})
+    for engine, reference in (("tblite", tblite_reference), ("xtb", xtb_reference)):
+        accuracy = reference_accuracy(reference, engine)
+        templates = [reference.get("cli_command_template")]
+        if engine == "xtb":
+            templates.append(reference.get("qmmm_cli_command_template"))
+        for template in templates:
+            if not isinstance(template, list) or not any(
+                template[index : index + 2] == ["--acc", accuracy]
+                for index in range(max(0, len(template) - 1))
+            ):
+                raise ConformanceError(
+                    f"manifest {engine} command template must pin --acc {accuracy}"
+                )
     if xtb_reference.get("qmmm_materialization_schema") != QMMM_MATERIALIZATION_SCHEMA:
         raise ConformanceError(
             "manifest has an unsupported QMMM materialization schema"
@@ -729,38 +761,70 @@ def check_manifest(manifest_path: Path) -> None:
             raise ConformanceError(
                 f"golden {golden_path} has the wrong {reference_engine} revision"
             )
-        expected_output_hash = case.get(
-            "reference_output_sha256", case.get("upstream_output_sha256")
-        )
+        expected_output_hash = case.get("reference_output_sha256")
+        if not isinstance(expected_output_hash, str):
+            raise ConformanceError(
+                f"case {case['id']} must pin a live reference output hash"
+            )
         if provenance.get("source_output_sha256") != expected_output_hash:
             raise ConformanceError(
                 f"golden {golden_path} has the wrong reference output hash"
             )
-        if qmmm_input is not None:
-            if provenance.get("qmmm_input_sha256") != case["input_sha256"]:
-                raise ConformanceError(
-                    f"golden {golden_path} has the wrong QMMM input hash"
-                )
-            if provenance.get("scientific_source") != case.get("scientific_source"):
-                raise ConformanceError(
-                    f"golden {golden_path} has the wrong QM/MM scientific source"
-                )
-            expected_command = xtb_command(Path("{executable}"), case)
-            if provenance.get("command") != expected_command:
-                raise ConformanceError(
-                    f"golden {golden_path} has the wrong materialized xTB command"
-                )
+        reference = references[reference_engine]
+        expected_accuracy = reference_accuracy(reference, reference_engine)
+        if (
+            provenance.get("generation_mode") != "live-cli"
+            or provenance.get("accuracy") != float(expected_accuracy)
+        ):
+            raise ConformanceError(
+                f"golden {golden_path} does not pin the primary oracle accuracy"
+            )
+        if reference_engine == "tblite":
+            expected_template = tblite_reference["cli_command_template"]
             if (
-                provenance.get("command_template")
-                != xtb_reference["qmmm_cli_command_template"]
+                provenance.get("command") != expected_template
+                or provenance.get("command_template") != expected_template
             ):
                 raise ConformanceError(
-                    f"golden {golden_path} has the wrong QMMM command template"
+                    f"golden {golden_path} has the wrong tblite command template"
                 )
-            expected_materialization = qmmm_materialization_provenance(qmmm_input)
-            if provenance.get("materialized_input") != expected_materialization:
+            if f"tblite version {tblite_reference['version']}" not in str(
+                provenance.get("executable_version", "")
+            ):
                 raise ConformanceError(
-                    f"golden {golden_path} has stale materialized QMMM input hashes"
+                    f"golden {golden_path} has the wrong tblite version"
+                )
+            runtime = provenance.get("runtime", {})
+            if (
+                runtime.get("libtblite", {}).get("sha256")
+                != tblite_reference["runtime_artifacts"]["libtblite_sha256"]
+            ):
+                raise ConformanceError(
+                    f"golden {golden_path} has the wrong libtblite hash"
+                )
+            environment_record = provenance.get("environment", {})
+            expected_set = {
+                "LC_ALL": "C",
+                "OMP_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": "1",
+            }
+            if environment_record.get("set") != expected_set:
+                raise ConformanceError(
+                    f"golden {golden_path} does not pin the tblite runtime environment"
+                )
+        else:
+            expected_command = xtb_command(Path("{executable}"), case)
+            expected_template = xtb_reference[
+                "qmmm_cli_command_template"
+                if qmmm_input is not None
+                else "cli_command_template"
+            ]
+            if (
+                provenance.get("command") != expected_command
+                or provenance.get("command_template") != expected_template
+            ):
+                raise ConformanceError(
+                    f"golden {golden_path} has the wrong xTB command contract"
                 )
             runtime = provenance.get("runtime", {})
             expected_runtime = xtb_reference["runtime_artifacts"]
@@ -783,6 +847,20 @@ def check_manifest(manifest_path: Path) -> None:
             ):
                 raise ConformanceError(
                     f"golden {golden_path} does not pin the xTB parameter lookup"
+                )
+        if qmmm_input is not None:
+            if provenance.get("qmmm_input_sha256") != case["input_sha256"]:
+                raise ConformanceError(
+                    f"golden {golden_path} has the wrong QMMM input hash"
+                )
+            if provenance.get("scientific_source") != case.get("scientific_source"):
+                raise ConformanceError(
+                    f"golden {golden_path} has the wrong QM/MM scientific source"
+                )
+            expected_materialization = qmmm_materialization_provenance(qmmm_input)
+            if provenance.get("materialized_input") != expected_materialization:
+                raise ConformanceError(
+                    f"golden {golden_path} has stale materialized QMMM input hashes"
                 )
         properties = golden.get("properties", {})
         forces = properties.get("forces_hartree_per_bohr")
@@ -841,11 +919,11 @@ def check_manifest(manifest_path: Path) -> None:
                 raise ConformanceError(
                     f"golden {golden_path} violates QM+PC force conservation"
                 )
+        if provenance.get("source_output_sha256") != sha256_json(properties):
+            raise ConformanceError(
+                f"golden {golden_path} does not match its normalized reference output hash"
+            )
         if reference_engine == "xtb":
-            if provenance.get("source_output_sha256") != sha256_json(properties):
-                raise ConformanceError(
-                    f"golden {golden_path} does not match its normalized xtb output hash"
-                )
             expected_shapes = {
                 "partial_charges_e": (int(case["atom_count"]),),
                 "atomic_dipoles_e_bohr": (int(case["atom_count"]), 3),
@@ -1000,6 +1078,69 @@ def xtb_environment(
     return environment, provenance
 
 
+def discover_tblite_runtime(
+    executable: Path, expected_artifacts: dict[str, Any]
+) -> dict[str, Any]:
+    """Resolve and hash the libtblite actually selected by the CLI loader."""
+    runtime: dict[str, Any] = {}
+    try:
+        completed = subprocess.run(
+            ["ldd", str(executable)],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+        ldd_output = completed.stdout
+    except OSError:
+        ldd_output = ""
+    library_path: Path | None = None
+    for line in ldd_output.splitlines():
+        match = re.search(r"\blibtblite\.so\S*\s+=>\s+(\S+)", line)
+        if match is not None:
+            candidate = Path(match.group(1))
+            if candidate.is_file():
+                library_path = candidate.resolve()
+                break
+    if library_path is None:
+        runtime["libtblite"] = {"discovery": "ldd", "status": "unresolved"}
+    else:
+        actual_hash = sha256_file(library_path)
+        expected_hash = expected_artifacts.get("libtblite_sha256")
+        if actual_hash != expected_hash:
+            raise ConformanceError(
+                "pinned tblite libtblite SHA-256 mismatch: "
+                f"expected {expected_hash}, got {actual_hash}"
+            )
+        runtime["libtblite"] = {
+            "discovery": "ldd",
+            "filename": library_path.name,
+            "sha256": actual_hash,
+            "status": "resolved",
+        }
+    return runtime
+
+
+def tblite_environment() -> tuple[dict[str, str], dict[str, Any]]:
+    """Select deterministic locale and single-threaded reference execution."""
+    environment = os.environ.copy()
+    fixed = {
+        "LC_ALL": "C",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+    }
+    environment.update(fixed)
+    provenance = {
+        "inherited_environment_boundary": (
+            "Variables other than the fixed locale and thread controls are inherited; "
+            "the loaded libtblite is independently hashed."
+        ),
+        "set": fixed,
+    }
+    return environment, provenance
+
+
 def tblite_command(
     executable: Path, case: dict[str, Any], input_path: Path, output_path: Path
 ) -> list[str]:
@@ -1010,6 +1151,8 @@ def tblite_command(
         "--no-restart",
         "--method",
         "gfn2",
+        "--acc",
+        PRIMARY_ORACLE_ACCURACY_TEXT,
         "--grad",
         str(output_path.with_suffix(".txt")),
     ]
@@ -1031,19 +1174,37 @@ def generate_with_tblite(
 ) -> None:
     """Run a tblite executable and emit normalized, provenance-rich golden JSON."""
     manifest = load_json(manifest_path)
-    cases = selected_cases(manifest, case_names)
-    qmmm_cases = [case["id"] for case in cases if case.get("input_schema")]
-    if case_names and qmmm_cases:
+    selected = selected_cases(manifest, case_names)
+    unsupported = [case["id"] for case in selected if case.get("input_schema")]
+    if case_names and unsupported:
         raise ConformanceError(
             "tblite CLI generation does not support external point charges: "
-            + ", ".join(qmmm_cases)
+            + ", ".join(unsupported)
         )
-    cases = [case for case in cases if not case.get("input_schema")]
+    cases = (
+        [case for case in selected if not case.get("input_schema")]
+        if case_names
+        else [
+            case
+            for case in selected
+            if case.get("reference_engine", "tblite") == "tblite"
+            and not case.get("input_schema")
+        ]
+    )
     resolved_executable = Path(shutil.which(str(executable)) or executable).resolve()
     if not resolved_executable.is_file():
         raise ConformanceError(f"tblite executable does not exist: {executable}")
+    reference = manifest["reference_engines"]["tblite"]
+    reference_accuracy(reference, "tblite")
     version = executable_version(resolved_executable)
+    if f"tblite version {reference['version']}" not in version:
+        raise ConformanceError(
+            "tblite executable does not match the pinned oracle: expected "
+            f"version {reference['version']}, got:\n{version}"
+        )
     executable_digest = sha256_file(resolved_executable)
+    runtime = discover_tblite_runtime(resolved_executable, reference["runtime_artifacts"])
+    environment, environment_provenance = tblite_environment()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="gpuxtb-conformance-") as temporary:
@@ -1055,6 +1216,7 @@ def generate_with_tblite(
             completed = subprocess.run(
                 command,
                 cwd=work,
+                env=environment,
                 check=False,
                 text=True,
                 stdout=subprocess.PIPE,
@@ -1066,17 +1228,22 @@ def generate_with_tblite(
                     f"{completed.stdout}"
                 )
             raw = load_json(raw_output)
+            properties = normalize_tblite_output(raw, case)
             provenance = {
                 # Store the reviewed template rather than temporary absolute
                 # paths, which would make otherwise identical runs differ.
-                "command": manifest["reference_engines"]["tblite"][
-                    "cli_command_template"
-                ],
+                "accuracy": PRIMARY_ORACLE_ACCURACY,
+                "command": reference["cli_command_template"],
+                "command_template": reference["cli_command_template"],
                 "engine": "tblite",
+                "environment": environment_provenance,
                 "executable_sha256": executable_digest,
                 "executable_version": version,
                 "generation_mode": "live-cli",
                 "input": case["input"],
+                "runtime": runtime,
+                "source_output_sha256": sha256_json(properties),
+                "source_revision": reference["revision"],
             }
             destination = output_dir / f"{case['id']}.json"
             dump_json(destination, canonical_golden(manifest, case, raw, provenance))
@@ -1090,6 +1257,8 @@ def xtb_command(executable: Path, case: dict[str, Any]) -> list[str]:
         "coord",
         "--gfn",
         "2",
+        "--acc",
+        PRIMARY_ORACLE_ACCURACY_TEXT,
         "--grad",
         "--json",
         "--norestart",
@@ -1113,13 +1282,23 @@ def generate_with_xtb(
 ) -> None:
     """Run xtb and emit normalized energy, force, and SCC-state goldens."""
     manifest = load_json(manifest_path)
-    cases = selected_cases(manifest, case_names)
+    selected = selected_cases(manifest, case_names)
+    cases = (
+        selected
+        if case_names
+        else [
+            case
+            for case in selected
+            if case.get("reference_engine", "tblite") == "xtb"
+        ]
+    )
     resolved_executable = Path(shutil.which(str(executable)) or executable).resolve()
     if not resolved_executable.is_file():
         raise ConformanceError(f"xtb executable does not exist: {executable}")
     version = executable_version(resolved_executable)
     executable_digest = sha256_file(resolved_executable)
     xtb_reference = manifest["reference_engines"]["xtb"]
+    reference_accuracy(xtb_reference, "xtb")
     expected_version = str(xtb_reference["version"])
     expected_revision_prefix = str(xtb_reference["revision"])[:7]
     if (
@@ -1192,6 +1371,7 @@ def generate_with_xtb(
                 else "cli_command_template"
             ]
             provenance = {
+                "accuracy": PRIMARY_ORACLE_ACCURACY,
                 "command": ["{executable}", *command[1:]],
                 "command_template": command_template,
                 "engine": "xtb",

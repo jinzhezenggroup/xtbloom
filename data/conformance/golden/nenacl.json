@@ -3,58 +3,95 @@
   "method": "GFN2-xTB",
   "molecular_charge": 0,
   "properties": {
-    "energy_hartree": -10.757666084895805,
+    "energy_hartree": -10.757666086840793,
     "forces_hartree_per_bohr": [
-      4.109226170462222e-18,
-      3.131638832132508e-18,
-      0.002008122104582456,
-      1.3486938901144894e-17,
-      1.2970478030685133e-17,
-      0.007505684777941075,
-      -1.7596165071607116e-17,
-      -1.6102116862817643e-17,
-      -0.009513806882523528
+      1.2671165771203857e-17,
+      6.1251854138918845e-18,
+      0.0020083341033490885,
+      -1.6170140335338964e-17,
+      -6.78922451586116e-18,
+      0.007506818987544202,
+      3.498974564135107e-18,
+      6.640391019692773e-19,
+      -0.009515153090893288
     ],
     "gradient_hartree_per_bohr": [
-      -4.109226170462222e-18,
-      -3.131638832132508e-18,
-      -0.002008122104582456,
-      -1.3486938901144894e-17,
-      -1.2970478030685133e-17,
-      -0.007505684777941075,
-      1.7596165071607116e-17,
-      1.6102116862817643e-17,
-      0.009513806882523528
+      -1.2671165771203857e-17,
+      -6.1251854138918845e-18,
+      -0.0020083341033490885,
+      1.6170140335338964e-17,
+      6.78922451586116e-18,
+      -0.007506818987544202,
+      -3.498974564135107e-18,
+      -6.640391019692773e-19,
+      0.009515153090893288
     ],
     "virial_hartree": [
       0.0,
       0.0,
-      4.942653037258744e-17,
+      2.2421695205829078e-17,
       0.0,
       0.0,
-      4.3726679330741715e-17,
-      4.942653037258744e-17,
-      4.3726679330741715e-17,
-      0.05242579556844571
+      1.3150675574668178e-17,
+      2.2421695205829078e-17,
+      1.3150675574668178e-17,
+      0.05243286881998778
     ]
   },
   "provenance": {
+    "accuracy": 0.0001,
     "command": [
-      "tblite",
-      "coord",
+      "{executable}",
+      "{input}",
       "--no-restart",
       "--method",
       "gfn2",
+      "--acc",
+      "0.0001",
       "--grad",
-      "result.txt",
+      "{gradient_output}",
       "[--charge {signed_charge}]",
+      "[--spin {unpaired_electrons}]",
       "--json",
-      "result.json"
+      "{json_output}"
+    ],
+    "command_template": [
+      "{executable}",
+      "{input}",
+      "--no-restart",
+      "--method",
+      "gfn2",
+      "--acc",
+      "0.0001",
+      "--grad",
+      "{gradient_output}",
+      "[--charge {signed_charge}]",
+      "[--spin {unpaired_electrons}]",
+      "--json",
+      "{json_output}"
     ],
     "engine": "tblite",
-    "generation_mode": "upstream-validation-snapshot",
-    "source_output_sha256": "b0de97f990af464a31b11d335fea864e54a25ab87f3d884410ca9a5a770c6f8b",
-    "source_path": "test/validation/10_nenacl/gfn2-xtb.json",
+    "environment": {
+      "inherited_environment_boundary": "Variables other than the fixed locale and thread controls are inherited; the loaded libtblite is independently hashed.",
+      "set": {
+        "LC_ALL": "C",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1"
+      }
+    },
+    "executable_sha256": "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
+    "executable_version": "tblite version 0.7.0\nddX support: disabled\nHDF5 support: disabled\nTREXIO support: disabled",
+    "generation_mode": "live-cli",
+    "input": "data/conformance/inputs/nenacl.coord",
+    "runtime": {
+      "libtblite": {
+        "discovery": "ldd",
+        "filename": "libtblite.so.0.7.0",
+        "sha256": "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725",
+        "status": "resolved"
+      }
+    },
+    "source_output_sha256": "0d159deb6607cf23102af41cc9b82da0abce9bd0aada205e9df07d02ed13d544",
     "source_revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb"
   },
   "schema_version": 1,

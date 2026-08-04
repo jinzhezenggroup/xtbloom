@@ -1,9 +1,12 @@
 # GFN2-xTB conformance tools
 
-The corpus is deliberately independent of the gpuxtb implementation. Its
-committed seed values come from tblite's validation suite at the exact revision
-recorded in `data/conformance/manifest.json`. Coordinates, energies, gradients,
-and forces use atomic units; forces are stored explicitly as `-gradient`.
+The corpus is deliberately independent of the gpuxtb implementation. Four
+closed-shell gas-phase cases use a pinned live tblite calculation as their
+primary oracle; the open-shell OH case and three QM/MM cases use pinned xTB
+6.7.1. Both command lines explicitly set `--acc 0.0001`: the looser CLI
+defaults can leave SCC charge and force residuals larger than gpuxtb's primary
+`5e-7` acceptance threshold. Coordinates, energies, gradients, and forces use
+atomic units; forces are stored explicitly as `-gradient`.
 
 Verify that the committed files still match the manifest:
 
@@ -11,16 +14,20 @@ Verify that the committed files still match the manifest:
 python3 tools/conformance/gpuxtb_conformance.py check
 ```
 
-Recreate the corpus from the pinned tblite source checkout, then update the
-input and golden SHA-256 values in the manifest as an intentional review step:
+The snapshot importer remains available to audit the historical validation
+inputs at the pinned tblite source revision. Snapshot outputs are not the
+primary goldens because their original convergence setting was not recorded:
 
 ```sh
 python3 tools/conformance/gpuxtb_conformance.py import-tblite-snapshot \
   --source-root /path/to/tblite
 ```
 
-Generate independent values with a built tblite executable. Output goes to a
-separate directory so it cannot silently replace reviewed goldens:
+Regenerate the four tblite-primary gas cases with a built executable from the
+pinned revision. The generator verifies tblite 0.7.0, records the resolved
+`libtblite` hash, forces a deterministic single-threaded environment, and
+stores the reviewed accuracy in provenance. Output goes to a separate
+directory so it cannot silently replace reviewed goldens:
 
 ```sh
 python3 tools/conformance/gpuxtb_conformance.py generate \
@@ -29,7 +36,8 @@ python3 tools/conformance/gpuxtb_conformance.py compare \
   --actual-dir build/conformance/tblite
 ```
 
-The xtb 6.7.1 adapter is the supported live second oracle. It combines the
+The xTB 6.7.1 adapter is the primary oracle for OH and QM/MM and remains an
+independent live cross-engine oracle for gas-phase diagnostics. It combines the
 high-precision energy and Cartesian gradient from xtb's `gradient` artifact
 with partial charges, atomic dipoles, and atomic quadrupoles from
 `xtbout.json`. Gas-phase inputs are copied to an isolated `coord` file, while
@@ -37,7 +45,8 @@ QM/MM JSON is deterministically materialized as described below. The runner
 forces OpenMP, OpenBLAS, and xtb itself to one thread, so temporary paths and
 thread scheduling do not enter the normalized scientific-output checksum. The
 runner also rejects executables whose reported version/revision does not match
-the oracle pinned in the manifest:
+the oracle pinned in the manifest. Its command and provenance use the same
+explicit `--acc 0.0001` contract as tblite:
 
 ```sh
 python3 tools/conformance/gpuxtb_conformance.py generate-xtb \
@@ -83,9 +92,18 @@ python3 tools/conformance/gpuxtb_conformance.py generate-xtb \
 
 When a generated result and committed golden explicitly identify different
 reference engines, `compare` uses the manifest's separate cross-engine force
-tolerance. This records the observed xtb/tblite analytic-gradient spread
-without weakening the tighter gpuxtb acceptance gate, which applies to normal
-implementation outputs that do not claim to be a reference engine.
+tolerance. This preserves the live tblite/xTB diagnostic without weakening the
+tighter primary gate applied to gpuxtb and each case's designated oracle.
+Explicit `--case` selections may use a non-primary live engine for this check;
+for example, an xTB cross-check of the tblite-primary ketene case is:
+
+```sh
+python3 tools/conformance/gpuxtb_conformance.py generate-xtb \
+  --executable /path/to/xtb --output-dir build/conformance/xtb-cross \
+  --case ketene
+python3 tools/conformance/gpuxtb_conformance.py compare \
+  --actual-dir build/conformance/xtb-cross --case ketene
+```
 
 `oh_radical` is the initial unrestricted open-shell gate (`--uhf 1`). Its
 committed xtb golden requires the atom-resolved SCC state in addition to energy

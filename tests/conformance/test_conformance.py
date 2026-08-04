@@ -50,6 +50,29 @@ class ConformanceToolTest(unittest.TestCase):
         completed = self.run_tool("check")
         self.assertIn("8 cases", completed.stdout)
 
+    def test_primary_oracles_pin_the_reviewed_accuracy(self) -> None:
+        """Neither live reference command may regress to its loose CLI default."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        for engine in ("tblite", "xtb"):
+            reference = manifest["reference_engines"][engine]
+            self.assertEqual(reference["accuracy"], 0.0001)
+            templates = [reference["cli_command_template"]]
+            if engine == "xtb":
+                templates.append(reference["qmmm_cli_command_template"])
+            for template in templates:
+                index = template.index("--acc")
+                self.assertEqual(template[index + 1], "0.0001")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            invalid = json.loads(json.dumps(manifest))
+            invalid["reference_engines"]["tblite"]["accuracy"] = 1.0
+            path = Path(temporary) / "manifest.json"
+            path.write_text(json.dumps(invalid), encoding="utf-8")
+            with self.assertRaisesRegex(
+                CONFORMANCE.ConformanceError, "tblite accuracy must be 0.0001"
+            ):
+                CONFORMANCE.check_manifest(path)
+
     def test_gas_phase_coord_inputs_are_parsed_for_public_consumers(self) -> None:
         """The shared parser handles element case and stops at later directives."""
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -148,6 +171,7 @@ class ConformanceToolTest(unittest.TestCase):
                 golden["provenance"]["command"],
                 CONFORMANCE.xtb_command(Path("{executable}"), case),
             )
+            self.assertEqual(golden["provenance"]["accuracy"], 0.0001)
             self.assertEqual(
                 golden["provenance"]["materialized_input"]["schema"],
                 "gpuxtb-xtb-pcem-cli-v1",
@@ -206,23 +230,24 @@ class ConformanceToolTest(unittest.TestCase):
             "element_hardness",
         )
 
-        # Independent constants copied from xTB's own GFN2 PCEM unit test.
+        # The strict live oracle remains close to the independent constants in
+        # xTB's PCEM unit test while avoiding its default-accuracy SCC residue.
         hardness = json.loads(
             (REPOSITORY_ROOT / by_id["water_dimer_6pc_hardness"]["golden"]).read_text(
                 encoding="utf-8"
             )
         )["properties"]
         self.assertAlmostEqual(
-            hardness["energy_hartree"], -10.160927754235, delta=1e-10
+            hardness["energy_hartree"], -10.16092775478, delta=1e-11
         )
         self.assertAlmostEqual(
             hardness["gradient_hartree_per_bohr"][12],
-            -2.0326750053811e-3,
-            delta=1e-12,
+            -2.0334108000991e-3,
+            delta=1e-14,
         )
         self.assertAlmostEqual(
             hardness["point_charge_gradient_hartree_per_bohr"][12],
-            -2.4831958012524e-4,
+            -2.4831e-4,
             delta=5e-9,
         )
         gamma999 = json.loads(
@@ -231,7 +256,7 @@ class ConformanceToolTest(unittest.TestCase):
             )
         )["properties"]
         self.assertAlmostEqual(
-            gamma999["energy_hartree"], -10.168788268962, delta=1e-10
+            gamma999["energy_hartree"], -10.16878826896, delta=1e-11
         )
 
     def test_qmmm_input_rejects_element_and_gamma_semantic_mismatches(self) -> None:
@@ -336,9 +361,10 @@ class ConformanceToolTest(unittest.TestCase):
                 "#!/usr/bin/env python3\n"
                 "import json, pathlib, sys\n"
                 "if '--version' in sys.argv:\n"
-                "    print('tblite fake-reference 1')\n"
+                "    print('tblite version 0.7.0')\n"
                 "    raise SystemExit(0)\n"
                 "assert sys.argv[sys.argv.index('--method') + 1] == 'gfn2'\n"
+                "assert sys.argv[sys.argv.index('--acc') + 1] == '0.0001'\n"
                 "assert sys.argv[sys.argv.index('--charge') + 1] == '+1'\n"
                 "assert '--grad' in sys.argv and '--no-restart' in sys.argv\n"
                 "out = pathlib.Path(sys.argv[sys.argv.index('--json') + 1])\n"
@@ -364,6 +390,7 @@ class ConformanceToolTest(unittest.TestCase):
             )
             self.assertEqual(generated["properties"], expected)
             self.assertEqual(generated["provenance"]["generation_mode"], "live-cli")
+            self.assertEqual(generated["provenance"]["accuracy"], 0.0001)
             self.run_tool(
                 "compare",
                 "--actual-dir",
@@ -390,6 +417,7 @@ class ConformanceToolTest(unittest.TestCase):
                 "    raise SystemExit(0)\n"
                 "assert sys.argv[1] == 'coord'\n"
                 "assert sys.argv[sys.argv.index('--gfn') + 1] == '2'\n"
+                "assert sys.argv[sys.argv.index('--acc') + 1] == '0.0001'\n"
                 "assert sys.argv[sys.argv.index('--chrg') + 1] == '0'\n"
                 "assert sys.argv[sys.argv.index('--uhf') + 1] == '1'\n"
                 "assert sys.argv[sys.argv.index('-P') + 1] == '1'\n"
@@ -460,6 +488,7 @@ class ConformanceToolTest(unittest.TestCase):
                 "    print('xtb version 6.7.1 (edcfbbe)')\n"
                 "    raise SystemExit(0)\n"
                 "assert sys.argv[sys.argv.index('--input') + 1] == 'xcontrol'\n"
+                "assert sys.argv[sys.argv.index('--acc') + 1] == '0.0001'\n"
                 "assert 'input=pcharge' in pathlib.Path('xcontrol').read_text()\n"
                 "pcharge = pathlib.Path('pcharge').read_text().splitlines()\n"
                 "assert pcharge[0] == '1' and float(pcharge[1].split()[4]) == 999.0\n"
