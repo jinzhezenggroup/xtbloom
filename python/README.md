@@ -53,9 +53,11 @@ You never need to set ``LD_LIBRARY_PATH``. On import,
 :func:`gpuxtb.library` locates and preloads the runtime libraries the native
 library depends on:
 
-* the **MKL** runtime ``libmkl_rt`` (dlopen'ed by the CPU eigensolver) — it is
-  pulled in automatically on Linux x86_64 via a platform-tagged dependency, and
-  discovered from any installed ``mkl`` package / system path elsewhere; and
+* the **BLAS** runtime for the CPU eigensolver — Intel MKL (`libmkl_rt`) via a
+  platform-tagged dependency on linux x86_64, and the LP64 OpenBLAS wheel
+  `scipy-openblas32` on linux aarch64 (Intel MKL has no aarch64 builds). On
+  other platforms it is discovered from any installed `mkl` package / system
+  path; and
 * the **CUDA** runtime libraries (cuBLAS, cuSOLVER, ...) — resolved from the
   installed ``nvidia-*`` PyPI packages or a CUDA toolkit.
 

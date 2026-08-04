@@ -39,22 +39,33 @@ using BlasSetNumThreadsLocal = int (*)(int threads);
  * Verified LP64 linear-algebra dispatch.
  *
  * Production code obtains this handle from make_mkl_rt_lp64_backend. The
- * factory loads and verifies all required symbols before requesting LP64, and
- * rejects an explicit or already-active ILP64 runtime rather than switching it.
- * Call it during single-threaded runtime initialization, before concurrent MKL
- * use or a host's first MKL interface selection. The testing factory is kept in
- * this internal namespace so tests can install spies and deterministic LAPACK
- * failures without making ABI claims on behalf of an external provider.
+ * factory dlopens and verifies all required symbols from the LP64 runtime the
+ * build configured (MKL on x86_64 by default, OpenBLAS where Intel MKL does not
+ * exist, e.g. linux/aarch64) or from common SONAMEs, and requests LP64 before
+ * use. It rejects an explicit or already-active ILP64 MKL runtime rather than
+ * switching it. Call it during single-threaded runtime initialization, before
+ * concurrent BLAS use or a host's first MKL interface selection. The testing
+ * factory is kept in this internal namespace so tests can install spies and
+ * deterministic LAPACK failures without making ABI claims on behalf of an
+ * external provider.
  */
 class CpuLinearAlgebraBackend {
  public:
   CpuLinearAlgebraBackend() noexcept = default;
 
   [[nodiscard]] bool ready() const noexcept;
+  /* True for any verified lazily-loaded production backend (MKL or OpenBLAS). */
+  [[nodiscard]] bool production() const noexcept;
+  /* True only when the loaded production backend is MKL (libmkl_rt). */
   [[nodiscard]] bool production_mkl() const noexcept;
 
  private:
-  enum class Origin : std::uint8_t { kNone, kMklRtLp64, kInternalTestLp64 };
+  enum class Origin : std::uint8_t {
+    kNone,
+    kMklRtLp64,
+    kOpenBlasLp64,
+    kInternalTestLp64,
+  };
 
   Origin origin_ = Origin::kNone;
   LapackDpotrfWork dpotrf_work_ = nullptr;

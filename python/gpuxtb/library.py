@@ -282,10 +282,12 @@ def _runtime_search_dirs() -> list[Path]:
     """Return directories that may contain the runtimes libgpuxtb depends on.
 
     libgpuxtb links the CUDA math/runtime libraries (cuBLAS, cuSOLVER, ...)
-    when built with CUDA, and the CPU eigensolver dlopens the MKL runtime
-    (libmkl_rt) at compute time. Those live either in the ``mkl``/``nvidia-*``
-    PyPI packages or in an installed CUDA toolkit. Collecting them lets the
-    package resolve everything on import instead of forcing users to set
+    when built with CUDA, and the CPU eigensolver dlopens the LP64 BLAS
+    runtime (MKL libmkl_rt on x86_64, OpenBLAS on aarch64) at compute time.
+    Those live either in the ``mkl``/``nvidia-*`` PyPI packages, an installed
+    CUDA toolkit, or the ``scipy-openblas*`` PyPI wheels (the LP64
+    ``scipy-openblas32`` is what numpy uses on aarch64). Collecting them lets
+    the package resolve everything on import instead of forcing users to set
     ``LD_LIBRARY_PATH`` (or ``PATH`` on Windows).
     """
     dirs: list[Path] = []
@@ -318,6 +320,12 @@ def _runtime_search_dirs() -> list[Path]:
         for prefix_lib in (base.parent.parent, base.parent.parent.parent):
             if prefix_lib.name == "lib" and prefix_lib.is_dir():
                 dirs.append(prefix_lib)
+        # scipy-openblas32 (LP64) / scipy-openblas64 (ILP64) install their
+        # library under <site-packages>/scipy_openblas{32,64}/lib.
+        for openblas_style in ("scipy_openblas32", "scipy_openblas64"):
+            openblas_lib = base / openblas_style / "lib"
+            if openblas_lib.is_dir():
+                dirs.append(openblas_lib)
         nvidia_root = base / "nvidia"
         if nvidia_root.is_dir():
             dirs.extend(
@@ -352,6 +360,11 @@ _RUNTIME_LIBRARY_GROUPS = (
     ("libcusolver.so.11",),
     # MKL changes its SONAME between releases; load exactly one runtime.
     ("libmkl_rt.so.4", "libmkl_rt.so.3", "libmkl_rt.so.2", "libmkl_rt.so"),
+    # OpenBLAS is the LP64 BLAS used on platforms without Intel MKL builds
+    # (linux/aarch64 numpy ships libscipy_openblas32_.so). Preload at most one
+    # instance by SONAME so the eigensolver's by-name dlopen reuses it instead
+    # of loading a second, conflicting BLAS into the process.
+    ("libscipy_openblas32_.so", "libopenblas.so.0", "libopenblas.so", "libopenblas.so.3"),
 )
 
 

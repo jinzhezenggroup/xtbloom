@@ -95,7 +95,8 @@ int main() {
   const gpuxtb_status_t valid_compute_status =
       gpuxtb_compute(context.get(), &batch, &compute_options, &result);
   if (valid_compute_status == GPUXTB_STATUS_BACKEND_UNAVAILABLE) {
-    /* CPU-only CI configurations need not provide a production LP64 MKL runtime. */
+    /* CPU-only CI configurations need not provide a production LP64 BLAS
+     * (MKL) runtime; the error still names libmkl_rt alongside OpenBLAS. */
     CHECK(std::strstr(gpuxtb_get_last_error(), "libmkl_rt") != nullptr);
   } else {
     CHECK(valid_compute_status == GPUXTB_STATUS_SUCCESS);
