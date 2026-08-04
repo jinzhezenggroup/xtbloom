@@ -248,3 +248,50 @@ completed entry with `convergence.overall=true`.
 with two-atom complete, multi-iteration, point-charge, and failure fixtures,
 independently of tblite. When the test environment provides `jsonschema`, the
 canonical writer outputs are also checked with a Draft 7 validator.
+
+## SCC trace comparator foundation
+
+`gpuxtb_scc_compare.py` validates and compares complete traces or one
+standalone iteration snapshot. It is intentionally a read-only comparison
+tool: it never generates or updates a golden file. A backend replay harness
+must separately inject the golden mixed state, execute gpuxtb, and provide the
+actual snapshot; that execution and the independent Broyden-history replay
+remain part of issue #49.
+
+The built-in tolerance policies have stable versioned identifiers:
+
+- `cpu_closed_loop_v1` compares complete CPU trajectories from the same
+  initial guess with default `(atol=1e-8, rtol=1e-9)`, residual overrides of
+  `(1e-7, 1e-7)`, and an energy override of `(1e-8, 1e-8)`;
+- `cuda_replay_v1` compares one independently executed iteration with default
+  `(atol=1e-9, rtol=1e-10)` and residual overrides of `(1e-8, 1e-8)`.
+
+These version-1 values are tuning targets until issue #48 lands the pinned
+corpus and manifest used to anchor them. Every numeric field uses
+`abs(actual - expected) <= atol + rtol * max(abs(actual), abs(expected))`.
+Dimensions, provenance pins, layouts, iteration indices/convergence flags, and
+terminal status/count metadata are exact.
+
+Compare two complete traces:
+
+```bash
+python tools/oracle/tblite_scc_trace/gpuxtb_scc_compare.py trace \
+  actual.json golden.json \
+  --profile cpu_closed_loop_v1 \
+  --golden-sha256 <canonical-golden-sha256>
+```
+
+Compare an externally produced iteration snapshot to logical iteration 3 of a
+complete golden:
+
+```bash
+python tools/oracle/tblite_scc_trace/gpuxtb_scc_compare.py iteration \
+  actual-iteration.json golden.json \
+  --iteration 3 \
+  --profile cuda_replay_v1
+```
+
+The exit-code contract is `0` for a match, `1` for a scientific mismatch, and
+`2` for CLI, JSON, schema, profile, canonicalization, or hash errors. Golden
+files are opened only for reading. Golden generation and manifest/hash updates
+belong to the separate issue #48 workflow.
