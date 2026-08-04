@@ -25,3 +25,32 @@ jobs:
         run: cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  public-cpu-release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install LP64 eigensolver runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libmkl-rt
+      - name: Configure shared public inference build
+        run: |
+          mkl_rt="$(dpkg -L libmkl-rt | awk '/\/libmkl_rt\.so$/ { print; exit }')"
+          test -n "${mkl_rt}"
+          cmake -S . -B build-public -G Ninja \
+            -DGPUXTB_ENABLE_CUDA=OFF \
+            -DGPUXTB_MKL_RT_LIBRARY="${mkl_rt}" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build-public --parallel
+      - name: Test public inference and conformance
+        run: ctest --test-dir build-public --output-on-failure
+      - name: Install and consume exported CMake package
+        run: |
+          cmake --install build-public --prefix "${RUNNER_TEMP}/gpuxtb-install"
+          cmake -S tests/install_consumer -B build-consumer -G Ninja \
+            -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/gpuxtb-install"
+          cmake --build build-consumer --parallel
+          "${PWD}/build-consumer/gpuxtb_install_consumer"
