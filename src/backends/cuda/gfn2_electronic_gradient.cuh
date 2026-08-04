@@ -51,9 +51,11 @@ static_assert(std::is_standard_layout_v<Gfn2ElectronicGradientDeviceWorkspace>);
  *   H0/Pulay seeds -> SCC-Hamiltonian S/D/Q adjoints -> integral dE/dR.
  *
  * h0_output.overlap_adjoint and hamiltonian_output.overlap_adjoint must name
- * the same accumulator. The final atom-major value remains dE/dR; the public
- * force composer applies the minus sign. Coordination adjoints remain exposed
- * for the separate coordination-number reverse pass.
+ * the same accumulator. Unrestricted callers pass physical total P/W to H0
+ * and Hamiltonian charge response, plus physical P_alpha-P_beta and v_mag to
+ * the Hamiltonian overlap response. The final atom-major value remains dE/dR;
+ * the public force composer applies the minus sign. Coordination adjoints
+ * remain exposed for the separate coordination-number reverse pass.
  *
  * A request with gradients_requested == 0 returns success before inspecting
  * any batch, input, output, diagnostic, or workspace descriptor. This makes

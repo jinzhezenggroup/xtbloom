@@ -188,6 +188,11 @@ __global__ void preflight_and_seed_kernel(Gfn2HamiltonianDeviceBatch batch,
                           Gfn2HamiltonianForceDeviceError::kNonfiniteInput);
       atomicExch(&valid, 0);
     }
+    if (input.spin_density != nullptr && !isfinite(input.spin_shell_scalar_potentials[shell])) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2HamiltonianForceDeviceError::kNonfiniteInput);
+      atomicExch(&valid, 0);
+    }
   }
   for (std::int64_t orbital = ranges.orbital_begin + threadIdx.x; orbital < ranges.orbital_end;
        orbital += blockDim.x) {
@@ -206,6 +211,11 @@ __global__ void preflight_and_seed_kernel(Gfn2HamiltonianDeviceBatch batch,
   for (std::int64_t matrix = ranges.matrix_begin + threadIdx.x; matrix < ranges.matrix_end;
        matrix += blockDim.x) {
     if (!isfinite(input.density[matrix])) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2HamiltonianForceDeviceError::kNonfiniteInput);
+      atomicExch(&valid, 0);
+    }
+    if (input.spin_density != nullptr && !isfinite(input.spin_density[matrix])) {
       record_system_error(system_errors, system, device_error,
                           Gfn2HamiltonianForceDeviceError::kNonfiniteInput);
       atomicExch(&valid, 0);
@@ -276,12 +286,27 @@ __global__ void contract_kernel(Gfn2HamiltonianDeviceBatch batch, Gfn2ForceDevic
     const double scalar_factor = -0.5 * (input.shell_scalar_potentials[row_shell] +
                                          input.shell_scalar_potentials[column_shell]);
     const double overlap_contribution = pair_density * scalar_factor;
-    const double overlap_updated =
+    const double charge_overlap_updated =
         workspace.overlap_adjoint_scratch[forward] + overlap_contribution;
     bool finite = isfinite(pair_density) && isfinite(scalar_factor) &&
-                  isfinite(overlap_contribution) && isfinite(overlap_updated);
+                  isfinite(overlap_contribution) && isfinite(charge_overlap_updated);
     if (finite) {
-      workspace.overlap_adjoint_scratch[forward] = overlap_updated;
+      /* Match the CPU composer order: charge response is accumulated first,
+       * followed by the independent magnetization overlap response. */
+      workspace.overlap_adjoint_scratch[forward] = charge_overlap_updated;
+      if (input.spin_density != nullptr) {
+        const double pair_spin_density =
+            input.spin_density[forward] + (forward == reverse ? 0.0 : input.spin_density[reverse]);
+        const double spin_scalar_factor = -0.5 * (input.spin_shell_scalar_potentials[row_shell] +
+                                                  input.spin_shell_scalar_potentials[column_shell]);
+        const double spin_overlap_contribution = pair_spin_density * spin_scalar_factor;
+        const double spin_overlap_updated = charge_overlap_updated + spin_overlap_contribution;
+        finite = isfinite(pair_spin_density) && isfinite(spin_scalar_factor) &&
+                 isfinite(spin_overlap_contribution) && isfinite(spin_overlap_updated);
+        if (finite) {
+          workspace.overlap_adjoint_scratch[forward] = spin_overlap_updated;
+        }
+      }
     }
 
     for (int component = 0; component < kGfn2HamiltonianDipoleComponents && finite; ++component) {
@@ -445,6 +470,7 @@ cudaError_t validate_descriptors(const Gfn2HamiltonianDeviceBatch& batch,
                                  const Gfn2HamiltonianForceDeviceWorkspace& workspace,
                                  std::uint32_t* system_errors,
                                  std::uint32_t* device_error) noexcept {
+  const bool has_spin = input.spin_density != nullptr;
   if (batch.batch_size <= 0 || batch.batch_size > std::numeric_limits<int>::max() ||
       batch.total_atoms <= 0 || batch.total_shells <= 0 || batch.total_orbitals <= 0 ||
       batch.total_matrix_elements <= 0 ||
@@ -466,6 +492,10 @@ cudaError_t validate_descriptors(const Gfn2HamiltonianDeviceBatch& batch,
       input.shell_scalar_elements < batch.total_shells ||
       input.atomic_dipole_elements < batch.total_atoms * kGfn2HamiltonianDipoleComponents ||
       input.atomic_quadrupole_elements < batch.total_atoms * kGfn2HamiltonianQuadrupoleComponents ||
+      has_spin != (input.spin_shell_scalar_potentials != nullptr) ||
+      (!has_spin && (input.spin_density_elements != 0 || input.spin_shell_scalar_elements != 0)) ||
+      (has_spin && (input.spin_density_elements < batch.total_matrix_elements ||
+                    input.spin_shell_scalar_elements < batch.total_shells)) ||
       output.overlap_adjoint_elements < batch.total_matrix_elements ||
       output.dipole_adjoint_elements <
           batch.total_matrix_elements * kGfn2HamiltonianDipoleComponents ||
@@ -493,6 +523,8 @@ cudaError_t validate_descriptors(const Gfn2HamiltonianDeviceBatch& batch,
                         batch.total_atoms * kGfn2HamiltonianDipoleComponents) ||
       !required_pointer(input.atomic_quadrupole_potentials,
                         batch.total_atoms * kGfn2HamiltonianQuadrupoleComponents) ||
+      (has_spin && (!is_aligned(input.spin_density, alignof(double)) ||
+                    !is_aligned(input.spin_shell_scalar_potentials, alignof(double)))) ||
       !required_pointer(output.overlap_adjoint, batch.total_matrix_elements) ||
       !required_pointer(output.dipole_adjoint,
                         batch.total_matrix_elements * kGfn2HamiltonianDipoleComponents) ||
@@ -510,7 +542,7 @@ cudaError_t validate_descriptors(const Gfn2HamiltonianDeviceBatch& batch,
                                                               : cudaErrorInvalidValue;
   }
 
-  std::array<MemoryRange, 15> reads;
+  std::array<MemoryRange, 17> reads;
   std::array<MemoryRange, 9> writes;
   if (!make_range(batch.atom_offsets, batch.atom_offset_count, sizeof(*batch.atom_offsets),
                   &reads[0]) ||
@@ -543,6 +575,10 @@ cudaError_t validate_descriptors(const Gfn2HamiltonianDeviceBatch& batch,
       !make_range(input.atomic_quadrupole_potentials,
                   batch.total_atoms * kGfn2HamiltonianQuadrupoleComponents,
                   sizeof(*input.atomic_quadrupole_potentials), &reads[14]) ||
+      !make_range(input.spin_density, has_spin ? batch.total_matrix_elements : 0,
+                  sizeof(*input.spin_density), &reads[15]) ||
+      !make_range(input.spin_shell_scalar_potentials, has_spin ? batch.total_shells : 0,
+                  sizeof(*input.spin_shell_scalar_potentials), &reads[16]) ||
       !make_range(output.overlap_adjoint, batch.total_matrix_elements,
                   sizeof(*output.overlap_adjoint), &writes[0]) ||
       !make_range(output.dipole_adjoint,

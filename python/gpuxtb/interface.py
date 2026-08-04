@@ -15,10 +15,9 @@ Charge and spin semantics are implemented directly on top of the C ABI:
 * ``charge`` maps to ``molecular_charges``.
 * ``uhf`` (number of unpaired electrons, ``multiplicity - 1``) maps to
   ``unpaired_electrons``.
-* ``spin_channels`` selects restricted (1) or unrestricted (2) orbitals. On the
-  CPU backend the default is unrestricted for open-shell systems and restricted
-  otherwise. The current CUDA descriptor boundary only supports restricted,
-  closed-shell systems.
+* ``spin_channels`` selects restricted (1) or unrestricted (2) orbitals. This
+  high-level interface defaults open-shell systems to unrestricted and submits
+  that explicit choice to either CPU or CUDA.
 """
 
 from __future__ import annotations
@@ -129,15 +128,6 @@ _BACKENDS = {
     "cpu": library.BACKEND_CPU,
     "cuda": library.BACKEND_CUDA,
 }
-
-CUDA_UNRESTRICTED_SCOPE_REASON = (
-    "the CUDA public GFN2 path does not support ABI-v2 unrestricted spin_channels yet"
-)
-CUDA_OPEN_SHELL_SCOPE_REASON = (
-    "the CUDA public GFN2 path does not support open-shell systems "
-    "(nonzero unpaired electrons) yet"
-)
-
 
 def _default_spin_channels(uhf: int) -> int:
     """Pick the tblite-compatible spin-polarization default for a spin state."""
@@ -396,13 +386,6 @@ def _destroy_native_context(library_instance, handle: ctypes.c_void_p) -> None:
     library_instance.gpuxtb_context_destroy(handle)
 
 
-def _requires_cpu_spin_scope(structures: Sequence[Structure]) -> bool:
-    """Whether the current public CUDA boundary cannot represent this batch."""
-    return any(
-        structure.uhf != 0 or structure.spin_channels != 1 for structure in structures
-    )
-
-
 class Context:
     """Ownership wrapper around a ``gpuxtb_context_t``.
 
@@ -438,31 +421,6 @@ class Context:
         self._handle = None
         self._backend: Optional[int] = None
         self._finalizer: Optional[weakref.finalize] = None
-        # Keep the caller's AUTO request separate from the backend request used
-        # for the current native context. Unsupported spin temporarily pins
-        # AUTO to CPU, but a later closed-shell update may select CUDA again.
-        self._effective_request = self._requested
-        self._created_request: Optional[int] = None
-
-    def _prepare_for_structures(self, structures: Sequence[Structure]) -> None:
-        """Make AUTO honor Python's CPU fallback for unsupported spin states.
-
-        The C API's AUTO policy prefers CUDA whenever a device is present.  At
-        the current public CUDA boundary that would make the same default
-        open-shell calculation work on a CPU-only host but fail on a GPU host.
-        Pin this calculator context to CPU before submission when its batch
-        requires unrestricted/open-shell semantics.  If a previously closed-
-        shell AUTO calculator already resolved to CUDA, rebuild it once.
-        """
-        desired_request = self._requested
-        if self._requested == library.BACKEND_AUTO and _requires_cpu_spin_scope(
-            structures
-        ):
-            desired_request = library.BACKEND_CPU
-
-        if self._handle is not None and self._created_request != desired_request:
-            self.close()
-        self._effective_request = desired_request
 
     def _create(self) -> None:
         if self._handle is not None:
@@ -475,7 +433,7 @@ class Context:
                 ctypes.byref(options), ctypes.sizeof(options)
             ),
         )
-        options.backend = self._effective_request
+        options.backend = self._requested
         options.device_id = self._device_id
         options.cpu_threads = self._cpu_threads
         handle = ctypes.c_void_p()
@@ -494,7 +452,6 @@ class Context:
             )
         self._handle = handle
         self._backend = library_instance.gpuxtb_context_get_backend(handle)
-        self._created_request = self._effective_request
         # Keep both the CDLL and the native handle alive in the finalizer so
         # contexts are reclaimed even when users follow the concise examples
         # and do not call close() explicitly.
@@ -521,7 +478,6 @@ class Context:
             self._handle = None
             self._backend = None
             self._finalizer = None
-            self._created_request = None
 
     def __enter__(self) -> "Context":
         self._create()
@@ -551,20 +507,6 @@ class _ComputedBatch:
     keepalive: list
 
 
-def _validate_for_backend(structures: Sequence[Structure], backend: int) -> None:
-    """Enforce the current per-backend descriptor limits early and clearly."""
-    if backend == library.BACKEND_CUDA:
-        for index, structure in enumerate(structures):
-            if structure.uhf != 0:
-                raise GPUxtbNotSupportedError(
-                    f"structure {index}: {CUDA_OPEN_SHELL_SCOPE_REASON}"
-                )
-            if structure.spin_channels != 1:
-                raise GPUxtbNotSupportedError(
-                    f"structure {index}: {CUDA_UNRESTRICTED_SCOPE_REASON}"
-                )
-
-
 def _compute_batch(
     context: Context,
     structures: Sequence[Structure],
@@ -577,10 +519,7 @@ def _compute_batch(
     flags: int,
 ) -> _ComputedBatch:
     """Populate descriptors and run one synchronous ``gpuxtb_compute`` call."""
-    context._prepare_for_structures(structures)
     context._create()
-    backend = context.backend
-    _validate_for_backend(structures, backend)
 
     # --- assemble the ragged inputs -------------------------------------------
     atom_offsets = [0]
@@ -650,9 +589,7 @@ def _compute_batch(
     bind("positions", positions, ctypes.c_double, np.float64)
     bind("molecular_charges", molecular_charges, ctypes.c_double, np.float64)
     bind("unpaired_electrons", unpaired_electrons, ctypes.c_int32, np.int32)
-    # The CUDA descriptor boundary rejects any active spin-channel buffer.
-    if backend != library.BACKEND_CUDA:
-        bind("spin_channels", spin_channels, ctypes.c_int32, np.int32)
+    bind("spin_channels", spin_channels, ctypes.c_int32, np.int32)
     if total_points:
         bind("point_charge_offsets", point_offsets, ctypes.c_int64, np.int64)
         bind("point_charge_positions", point_positions, ctypes.c_double, np.float64)
@@ -1059,7 +996,6 @@ class Calculator(Structure):
     @property
     def backend(self) -> int:
         """The resolved execution backend of this calculator."""
-        self._context._prepare_for_structures([self])
         return self._context.backend
 
     @property
@@ -1161,7 +1097,6 @@ class BatchCalculator:
 
     @property
     def backend(self) -> int:
-        self._context._prepare_for_structures(self._structures)
         return self._context.backend
 
     def set(self, attribute: str, value: Any) -> None:

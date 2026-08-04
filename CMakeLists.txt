@@ -414,6 +414,31 @@ if(GPUXTB_BUILD_TESTS)
     )
     add_test(NAME gpuxtb.cuda.public_api COMMAND gpuxtb_cuda_public_api_test)
 
+    add_executable(gpuxtb_cuda_public_unrestricted_test
+      tests/cuda_public_unrestricted_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_public_unrestricted_test PRIVATE
+      gpuxtb::gpuxtb
+      CUDA::cudart
+    )
+    target_include_directories(gpuxtb_cuda_public_unrestricted_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_public_unrestricted_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_public_unrestricted_test PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      # Shared-library builds must load the cudart paired with the selected
+      # CUDA compiler, even when another toolkit is the system default.
+      BUILD_RPATH "$<TARGET_FILE_DIR:CUDA::cudart>"
+    )
+    add_test(NAME gpuxtb.cuda.public_unrestricted
+      COMMAND gpuxtb_cuda_public_unrestricted_test
+    )
+
     add_executable(gpuxtb_cuda_atomics_test tests/cuda_atomics_test.cu)
     target_link_libraries(gpuxtb_cuda_atomics_test PRIVATE CUDA::cudart)
     target_include_directories(gpuxtb_cuda_atomics_test PRIVATE

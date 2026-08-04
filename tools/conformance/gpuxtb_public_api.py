@@ -41,15 +41,6 @@ CUDA_SUCCESS = 0
 CUDA_MEMCPY_HOST_TO_DEVICE = 1
 CUDA_MEMCPY_DEVICE_TO_HOST = 2
 
-CUDA_SPIN_POLARIZED_SCOPE_REASON = (
-    "the CUDA public GFN2 path does not support ABI-v2 unrestricted spin_channels yet"
-)
-CUDA_SHARED_OPEN_SHELL_SCOPE_REASON = (
-    "the CUDA public GFN2 path does not support shared-orbital systems with "
-    "nonzero unpaired_electrons yet"
-)
-
-
 class ContextOptions(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_context_options_t`` ABI version 1."""
 
@@ -604,9 +595,9 @@ def _make_batch(
 ) -> Batch:
     """Initialize and bind a public batch using the selected placement policy.
 
-    CPU calls explicitly bind the ABI-v2 suffix, including channel value one
-    for restricted systems. CUDA calls omit the suffix buffer because the
-    current CUDA descriptor boundary rejects any active spin-channel buffer.
+    ABI-v2 calls explicitly bind the spin suffix on both backends, including
+    channel value one for restricted systems. ``include_spin_channels=False``
+    remains available only for explicit ABI-v1 compatibility checks.
     """
     batch = Batch()
     _call_ok(
@@ -795,7 +786,7 @@ def run_backend(
                 library,
                 storage,
                 memory,
-                include_spin_channels=backend == "cpu",
+                include_spin_channels=True,
             )
             result = BatchResult()
             _call_ok(
@@ -965,36 +956,6 @@ def main(argv: Iterable[str] | None = None) -> int:
             spin_polarized = [
                 case for case in cases if int(case.get("spin_channels", 1)) == 2
             ]
-            if backend == "cuda":
-                cuda_supported = [
-                    case
-                    for case in shared_orbital
-                    if int(case["unpaired_electrons"]) == 0
-                ]
-                cuda_shared_open_shell = [
-                    case
-                    for case in shared_orbital
-                    if int(case["unpaired_electrons"]) != 0
-                ]
-                if cuda_supported:
-                    run_backend(
-                        library,
-                        args.manifest,
-                        manifest,
-                        cuda_supported,
-                        backend,
-                        args.actual_dir,
-                        args.device_id,
-                        args.cpu_threads,
-                        args.memory_mode,
-                        request_forces=True,
-                    )
-                for case in cuda_shared_open_shell:
-                    print(f"SKIP {case['id']}: {CUDA_SHARED_OPEN_SHELL_SCOPE_REASON}")
-                for case in spin_polarized:
-                    print(f"SKIP {case['id']}: {CUDA_SPIN_POLARIZED_SCOPE_REASON}")
-                continue
-
             if shared_orbital:
                 run_backend(
                     library,

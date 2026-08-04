@@ -2096,9 +2096,9 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
 
 bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
                                 const Gfn2SccIterationDeviceWorkspace& workspace,
-                                std::int64_t dipoles, std::int64_t quadrupoles,
-                                std::int64_t two_batch, std::int64_t two_orbitals,
-                                std::int64_t mixer_vector, Validator& validator) noexcept {
+                                std::int64_t dipoles, std::int64_t two_batch,
+                                std::int64_t two_orbitals, std::int64_t mixer_vector,
+                                Validator& validator) noexcept {
   const std::int64_t batch = plan.topology.batch_size;
   const std::int64_t atoms = plan.topology.total_atoms;
   const std::int64_t shells = plan.topology.total_shells;
@@ -2686,8 +2686,8 @@ Gfn2SccIterationBindingDiagnostic validate_gfn2_scc_iteration_binding_cuda(
                              two_orbitals, mixer_vector, validator) ||
       !validate_component_and_energy_buffers(plan, input, state, workspace, dipoles, quadrupoles,
                                              validator) ||
-      !validate_workspace_buffers(plan, workspace, dipoles, quadrupoles, two_batch, two_orbitals,
-                                  mixer_vector, validator) ||
+      !validate_workspace_buffers(plan, workspace, dipoles, two_batch, two_orbitals, mixer_vector,
+                                  validator) ||
       !validator.aliases_valid()) {
     return validator.diagnostic();
   }

@@ -19,9 +19,10 @@ __device__ void record_execution_error(std::uint32_t* system_errors, std::int64_
   atomicCAS(device_error, 0u, value);
 }
 
-__global__ void preflight_geometry_transaction_kernel(
-    std::int64_t batch_size, Gfn2GeometryEpochConsumerDevice geometry,
-    std::uint32_t* plan_failure, std::uint32_t* execution_device_error) {
+__global__ void preflight_geometry_transaction_kernel(std::int64_t batch_size,
+                                                      Gfn2GeometryEpochConsumerDevice geometry,
+                                                      std::uint32_t* plan_failure,
+                                                      std::uint32_t* execution_device_error) {
   __shared__ int invalid;
   if (threadIdx.x == 0) {
     invalid = *geometry.epoch.value == 0u ? 1 : 0;
@@ -41,9 +42,10 @@ __global__ void preflight_geometry_transaction_kernel(
   }
 }
 
-__device__ bool geometry_transaction_allows(
-    std::int64_t system, Gfn2GeometryEpochConsumerDevice geometry, int dynamic_epoch,
-    std::uint32_t* execution_errors, std::uint32_t* execution_device_error) {
+__device__ bool geometry_transaction_allows(std::int64_t system,
+                                            Gfn2GeometryEpochConsumerDevice geometry,
+                                            int dynamic_epoch, std::uint32_t* execution_errors,
+                                            std::uint32_t* execution_device_error) {
   if (dynamic_epoch == 0) {
     return true;
   }
@@ -64,8 +66,7 @@ __device__ bool geometry_transaction_allows(
 __global__ void gate_after_energy_kernel(std::int64_t batch_size, Gfn2ForceDeviceActivity activity,
                                          Gfn2TotalEnergyDeviceSccState scc_state,
                                          Gfn2GeometryEpochConsumerDevice geometry,
-                                         int dynamic_epoch,
-                                         const std::uint32_t* energy_errors,
+                                         int dynamic_epoch, const std::uint32_t* energy_errors,
                                          const std::uint32_t* plan_failure,
                                          std::uint8_t* success_mask,
                                          std::uint32_t* execution_errors,
@@ -102,15 +103,11 @@ __global__ void gate_after_energy_kernel(std::int64_t batch_size, Gfn2ForceDevic
   }
 }
 
-__global__ void publish_energy_only_kernel(std::int64_t batch_size,
-                                           Gfn2TotalEnergyDeviceSccState scc_state,
-                                           Gfn2GeometryEpochConsumerDevice geometry,
-                                           int dynamic_epoch,
-                                           const std::uint32_t* energy_errors,
-                                           const double* staged_energy, double* public_energy,
-                                           const std::uint32_t* plan_failure,
-                                           std::uint32_t* execution_errors,
-                                           std::uint32_t* execution_device_error) {
+__global__ void publish_energy_only_kernel(
+    std::int64_t batch_size, Gfn2TotalEnergyDeviceSccState scc_state,
+    Gfn2GeometryEpochConsumerDevice geometry, int dynamic_epoch, const std::uint32_t* energy_errors,
+    const double* staged_energy, double* public_energy, const std::uint32_t* plan_failure,
+    std::uint32_t* execution_errors, std::uint32_t* execution_device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   if (system >= batch_size || threadIdx.x != 0) {
     return;
@@ -306,9 +303,8 @@ __global__ void publish_execution_results_kernel(
       scc_state.system_statuses[system] != GPUXTB_STATUS_SUCCESS) {
     return;
   }
-  if (dynamic_epoch != 0 &&
-      (geometry.eligible_mask[system] != 1u ||
-       geometry.committed_generations[system] != *geometry.epoch.value)) {
+  if (dynamic_epoch != 0 && (geometry.eligible_mask[system] != 1u ||
+                             geometry.committed_generations[system] != *geometry.epoch.value)) {
     return;
   }
   const std::uint8_t requested = activity.requested_mask[system];
@@ -429,6 +425,7 @@ cudaError_t validate_force_binding(
     const Gfn2EnergyForceExecutionDeviceDiagnostics& diagnostics) noexcept {
   const std::uint64_t token = plan.plan_token;
   const std::int64_t batch_size = plan.total_energy_batch.batch_size;
+  const bool has_spin = input.hamiltonian.spin_density != nullptr;
   const bool explicit_pc = force_component_enabled(
       plan.force_composition_batch, Gfn2ForceCompositionComponent::kExplicitPointChargeForce);
   const bool point_output = results.forces.point_forces != nullptr;
@@ -457,8 +454,15 @@ cudaError_t validate_force_binding(
       workspace.post_scc_potential.plan_token != token ||
       diagnostics.post_scc_potential.plan_token != token ||
       intermediates.h0.overlap_adjoint != intermediates.hamiltonian.overlap_adjoint ||
-      input.h0.density != input.hamiltonian.density || intermediates.h0.gradients == nullptr ||
-      intermediates.h0.coordination_adjoint == nullptr ||
+      input.h0.density != input.hamiltonian.density ||
+      input.h0.density_elements != input.hamiltonian.density_elements ||
+      has_spin != (input.hamiltonian.spin_shell_scalar_potentials != nullptr) ||
+      (!has_spin && (input.hamiltonian.spin_density_elements != 0 ||
+                     input.hamiltonian.spin_shell_scalar_elements != 0)) ||
+      (has_spin &&
+       (input.hamiltonian.spin_density_elements < plan.integral_batch.total_matrix_elements ||
+        input.hamiltonian.spin_shell_scalar_elements < plan.integral_batch.total_shells)) ||
+      intermediates.h0.gradients == nullptr || intermediates.h0.coordination_adjoint == nullptr ||
       intermediates.classical.forces == nullptr || results.forces.plan_token != token ||
       intermediates.forces.plan_token != token || results.forces.qm_forces == nullptr ||
       results.forces.qm_force_elements != plan.integral_batch.total_atoms * 3 ||
@@ -567,8 +571,7 @@ static cudaError_t execute_energy_force_impl(
        geometry->epoch.value == nullptr || geometry->committed_generations == nullptr ||
        geometry->eligible_mask == nullptr ||
        reinterpret_cast<std::uintptr_t>(geometry->epoch.value) % alignof(std::uint64_t) != 0u ||
-       reinterpret_cast<std::uintptr_t>(geometry->committed_generations) %
-               alignof(std::uint64_t) !=
+       reinterpret_cast<std::uintptr_t>(geometry->committed_generations) % alignof(std::uint64_t) !=
            0u ||
        reinterpret_cast<std::uintptr_t>(geometry->eligible_mask) % alignof(std::uint8_t) != 0u)) {
     return cudaErrorInvalidValue;
@@ -621,18 +624,17 @@ static cudaError_t execute_energy_force_impl(
   if (plan.compute_forces == 0u) {
     publish_energy_only_kernel<<<static_cast<unsigned int>(batch_size), 1, 0, stream>>>(
         batch_size, input.scc_state, consumer, geometry == nullptr ? 0 : 1,
-        diagnostics.total_energy_system_errors,
-        intermediates.energy.total_energy, results.energy.total_energy, workspace.plan_failure,
-        diagnostics.execution_system_errors, diagnostics.execution_device_error);
+        diagnostics.total_energy_system_errors, intermediates.energy.total_energy,
+        results.energy.total_energy, workspace.plan_failure, diagnostics.execution_system_errors,
+        diagnostics.execution_device_error);
     return check_launch();
   }
 
   const int blocks = static_cast<int>((batch_size + kThreadsPerBlock - 1) / kThreadsPerBlock);
   gate_after_energy_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
       batch_size, input.force_activity, input.scc_state, consumer, geometry == nullptr ? 0 : 1,
-      diagnostics.total_energy_system_errors, workspace.plan_failure,
-      workspace.energy_success_mask, diagnostics.execution_system_errors,
-      diagnostics.execution_device_error);
+      diagnostics.total_energy_system_errors, workspace.plan_failure, workspace.energy_success_mask,
+      diagnostics.execution_system_errors, diagnostics.execution_device_error);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;
@@ -651,16 +653,13 @@ static cudaError_t execute_energy_force_impl(
                              batch_size, plan.plan_token};
   status = geometry == nullptr
                ? refresh_gfn2_post_scc_potentials_cuda(
-                     plan.post_scc_potential_plan, post_scc_input,
-                     intermediates.post_scc_potential,
-                     intermediates.post_scc_potential_intermediates,
-                     workspace.post_scc_potential, diagnostics.post_scc_potential, stream)
+                     plan.post_scc_potential_plan, post_scc_input, intermediates.post_scc_potential,
+                     intermediates.post_scc_potential_intermediates, workspace.post_scc_potential,
+                     diagnostics.post_scc_potential, stream)
                : refresh_gfn2_post_scc_potentials_cuda(
-                     plan.post_scc_potential_plan, post_scc_input,
-                     intermediates.post_scc_potential,
-                     intermediates.post_scc_potential_intermediates,
-                     workspace.post_scc_potential, diagnostics.post_scc_potential, *geometry,
-                     stream);
+                     plan.post_scc_potential_plan, post_scc_input, intermediates.post_scc_potential,
+                     intermediates.post_scc_potential_intermediates, workspace.post_scc_potential,
+                     diagnostics.post_scc_potential, *geometry, stream);
   if (status != cudaSuccess) {
     return status;
   }
@@ -759,17 +758,16 @@ static cudaError_t execute_energy_force_impl(
   const Gfn2ForceDeviceActivity classical_activity{workspace.coordination_success_mask,
                                                    input.force_activity.system_statuses, batch_size,
                                                    plan.plan_token};
-  status = geometry == nullptr
-               ? add_gfn2_classical_forces_cuda(
-                     plan.classical_plan, classical_activity, input.classical,
-                     intermediates.classical, workspace.classical,
-                     diagnostics.classical_system_errors, diagnostics.classical_device_error,
-                     stream)
-               : add_gfn2_classical_forces_cuda(
-                     plan.classical_plan, classical_activity, input.classical,
-                     intermediates.classical, workspace.classical, geometry->epoch,
-                     diagnostics.classical_system_errors, diagnostics.classical_device_error,
-                     stream);
+  status =
+      geometry == nullptr
+          ? add_gfn2_classical_forces_cuda(plan.classical_plan, classical_activity, input.classical,
+                                           intermediates.classical, workspace.classical,
+                                           diagnostics.classical_system_errors,
+                                           diagnostics.classical_device_error, stream)
+          : add_gfn2_classical_forces_cuda(plan.classical_plan, classical_activity, input.classical,
+                                           intermediates.classical, workspace.classical,
+                                           geometry->epoch, diagnostics.classical_system_errors,
+                                           diagnostics.classical_device_error, stream);
   if (status != cudaSuccess) {
     return status;
   }
@@ -873,8 +871,8 @@ static cudaError_t execute_energy_force_impl(
                                      stream>>>(
       plan.integral_batch, plan.external_point_charge_batch, input.force_activity, input.scc_state,
       consumer, geometry == nullptr ? 0 : 1, workspace.energy_success_mask,
-      diagnostics.total_energy_system_errors,
-      diagnostics.execution_system_errors, workspace.plan_failure, intermediates, results);
+      diagnostics.total_energy_system_errors, diagnostics.execution_system_errors,
+      workspace.plan_failure, intermediates, results);
   return check_launch();
 }
 

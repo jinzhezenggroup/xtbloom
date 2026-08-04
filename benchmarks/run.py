@@ -285,14 +285,13 @@ class GpuxtbAdapter:
             self.owns_cuda_control = True
         if self.cuda_control is not None:
             configure_cuda_runtime(self.cuda_control)
-        # CPU ABI-v2 descriptors carry the explicit one/two-channel selection.
-        # CUDA remains ABI-v1 until unrestricted SCC is implemented there, so
-        # even restricted CUDA cells must omit the optional suffix.
+        # Both backends consume the same explicit ABI-v2 one/two-channel
+        # selection; benchmark cells therefore exercise the production suffix.
         self.batch = public_api._make_batch(
             self.library,
             self.storage,
             self.memory,
-            include_spin_channels=cell.backend == "cpu",
+            include_spin_channels=True,
         )
         self.options = public_api.ComputeOptions()
         public_api._call_ok(

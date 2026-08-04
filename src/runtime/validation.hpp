@@ -26,9 +26,11 @@ enum TopologyValidationRequirement : std::uint32_t {
   kPointChargeOffsetsNeedStaging = 1u << 4,
   kChargeResponseOffsetsNeedStaging = 1u << 5,
   kChargeResponseShapeNeedsStaging = 1u << 6,
+  kSpinChannelsNeedStaging = 1u << 7,
   kTopologyMetadataStagingMask = kAtomOffsetsNeedStaging | kAtomicNumbersNeedStaging |
                                  kMolecularChargesNeedStaging | kUnpairedElectronsNeedStaging |
-                                 kPointChargeOffsetsNeedStaging | kChargeResponseOffsetsNeedStaging,
+                                 kPointChargeOffsetsNeedStaging |
+                                 kChargeResponseOffsetsNeedStaging | kSpinChannelsNeedStaging,
   kAllTopologyValidationPending = kTopologyMetadataStagingMask | kChargeResponseShapeNeedsStaging,
 };
 

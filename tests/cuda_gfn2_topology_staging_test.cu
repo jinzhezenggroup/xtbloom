@@ -79,6 +79,7 @@ struct Topology {
   std::vector<std::int32_t> atomic_numbers;
   std::vector<double> molecular_charges;
   std::vector<std::int32_t> unpaired_electrons;
+  std::vector<std::int32_t> spin_channels;
   std::vector<std::int64_t> point_offsets;
   std::vector<std::int64_t> response_offsets;
 
@@ -94,7 +95,9 @@ struct Topology {
       topology.point_offsets.push_back(topology.point_offsets.back() + points);
       topology.response_offsets.push_back(topology.response_offsets.back() + atoms * atoms);
       topology.molecular_charges.push_back(0.25 * static_cast<double>(system % 5 - 2));
-      topology.unpaired_electrons.push_back(0);
+      const bool unrestricted = system % 2 != 0;
+      topology.unpaired_electrons.push_back(unrestricted ? 1 : 0);
+      topology.spin_channels.push_back(unrestricted ? 2 : 1);
       for (std::int64_t atom = 0; atom < atoms; ++atom) {
         topology.atomic_numbers.push_back(
             static_cast<std::int32_t>(1 + (system * 7 + atom * 13) % 118));
@@ -109,6 +112,7 @@ struct DeviceTopology {
   DeviceArray<std::int32_t> atomic_numbers;
   DeviceArray<double> molecular_charges;
   DeviceArray<std::int32_t> unpaired_electrons;
+  DeviceArray<std::int32_t> spin_channels;
   DeviceArray<std::int64_t> point_offsets;
   DeviceArray<std::int64_t> response_offsets;
 
@@ -117,6 +121,7 @@ struct DeviceTopology {
     CUDA_CHECK(atomic_numbers.upload(topology.atomic_numbers, stream));
     CUDA_CHECK(molecular_charges.upload(topology.molecular_charges, stream));
     CUDA_CHECK(unpaired_electrons.upload(topology.unpaired_electrons, stream));
+    CUDA_CHECK(spin_channels.upload(topology.spin_channels, stream));
     CUDA_CHECK(point_offsets.upload(topology.point_offsets, stream));
     CUDA_CHECK(response_offsets.upload(topology.response_offsets, stream));
     return 0;
@@ -126,7 +131,8 @@ struct DeviceTopology {
 enum class SourceMode { kHost, kDevice, kMixed };
 
 gpuxtb_batch_t make_batch(const Topology& host, const DeviceTopology& device, SourceMode mode,
-                          bool include_points = true, bool include_response = true) {
+                          bool include_points = true, bool include_response = true,
+                          bool include_spin = true) {
   gpuxtb_batch_t batch{};
   batch.struct_size = sizeof(batch);
   batch.api_version = GPUXTB_API_VERSION;
@@ -147,6 +153,10 @@ gpuxtb_batch_t make_batch(const Topology& host, const DeviceTopology& device, So
       charge_device ? device.molecular_charges.view() : host_buffer(host.molecular_charges);
   batch.unpaired_electrons =
       spin_device ? device.unpaired_electrons.view() : host_buffer(host.unpaired_electrons);
+  if (include_spin) {
+    batch.spin_channels =
+        spin_device ? device.spin_channels.view() : host_buffer(host.spin_channels);
+  }
   if (include_points) {
     batch.point_charge_offsets =
         point_device ? device.point_offsets.view() : host_buffer(host.point_offsets);
@@ -169,6 +179,7 @@ bool snapshot_equals(const Gfn2CudaTopologyHostSnapshot& snapshot, const Topolog
          snapshot.atomic_numbers == topology.atomic_numbers &&
          snapshot.molecular_charges == topology.molecular_charges &&
          snapshot.unpaired_electrons == topology.unpaired_electrons &&
+         snapshot.spin_channels == topology.spin_channels &&
          snapshot.point_charge_offsets == topology.point_offsets &&
          snapshot.charge_response_offsets == topology.response_offsets;
 }
@@ -271,6 +282,27 @@ int exercise_absent_normalization(int device_id, cudaStream_t stream) {
   result = staging.stage_and_validate(batch, error);
   CHECK(result.success());
   CHECK(result.disposition == Gfn2CudaTopologyStageDisposition::kMatchesCommitted);
+  return 0;
+}
+
+int exercise_abi_v1_spin_default(int device_id, cudaStream_t stream) {
+  Topology topology = Topology::make(8);
+  DeviceTopology device;
+  CHECK(device.upload(topology, stream) == 0);
+  gpuxtb_batch_t batch = make_batch(topology, device, SourceMode::kMixed, true, true, false);
+  batch.struct_size = GPUXTB_BATCH_V1_SIZE;
+
+  Gfn2CudaTopologyStaging staging(device_id, stream);
+  CHECK(staging.valid());
+  std::string error;
+  const auto result = staging.stage_and_validate(batch, error);
+  CHECK(result.success());
+  CHECK(result.disposition == Gfn2CudaTopologyStageDisposition::kCandidate);
+  const auto* snapshot = staging.candidate_snapshot();
+  CHECK(snapshot != nullptr);
+  CHECK(std::all_of(snapshot->spin_channels.begin(), snapshot->spin_channels.end(),
+                    [](std::int32_t channels) { return channels == 1; }));
+  CHECK(snapshot->unpaired_electrons == topology.unpaired_electrons);
   return 0;
 }
 
@@ -387,7 +419,7 @@ void mutate_invalid(Topology& topology, InvalidCase invalid) {
       topology.molecular_charges[0] = std::numeric_limits<double>::infinity();
       break;
     case InvalidCase::kSpin:
-      topology.unpaired_electrons[0] = 1;
+      topology.spin_channels[0] = 3;
       break;
     case InvalidCase::kPointFirst:
       topology.point_offsets[0] = 1;
@@ -423,7 +455,7 @@ Gfn2CudaTopologyStagingField expected_field(InvalidCase invalid) {
     case InvalidCase::kChargeInf:
       return Gfn2CudaTopologyStagingField::kMolecularCharges;
     case InvalidCase::kSpin:
-      return Gfn2CudaTopologyStagingField::kUnpairedElectrons;
+      return Gfn2CudaTopologyStagingField::kSpinChannels;
     case InvalidCase::kPointFirst:
     case InvalidCase::kPointNonmonotone:
     case InvalidCase::kPointEndpoint:
@@ -468,11 +500,7 @@ int exercise_invalid_matrix(int device_id, cudaStream_t stream) {
       CHECK(staging.committed_snapshot() == nullptr);
       CHECK(staging.candidate_snapshot() == nullptr);
       CHECK(staging.identity().full_metadata_downloads == 0u);
-      if (invalid == InvalidCase::kSpin) {
-        CHECK(result.status == GPUXTB_STATUS_NOT_SUPPORTED);
-      } else {
-        CHECK(result.status == GPUXTB_STATUS_INVALID_ARGUMENT);
-      }
+      CHECK(result.status == GPUXTB_STATUS_INVALID_ARGUMENT);
     }
   }
   return 0;
@@ -520,6 +548,7 @@ int main() {
     CHECK(exercise_sources_and_transactions(batch_size, device_id, stream) == 0);
   }
   CHECK(exercise_absent_normalization(device_id, stream) == 0);
+  CHECK(exercise_abi_v1_spin_default(device_id, stream) == 0);
   CHECK(exercise_signed_zero_and_checked_publish(device_id, stream) == 0);
   CHECK(exercise_layout_replacement(device_id, stream) == 0);
   CHECK(exercise_invalid_matrix(device_id, stream) == 0);
