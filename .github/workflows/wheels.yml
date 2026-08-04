@@ -43,15 +43,24 @@ jobs:
         with:
           name: gpuxtb-wheels-${{ matrix.os }}
           path: ./wheelhouse/*.whl
-      - name: Install MKL runtime (Linux)
+      - name: Install MKL and CUDA runtime (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install --yes libmkl-rt
+          # The built Linux wheel is CUDA-enabled but does not bundle the CUDA
+          # runtime, so provide it from PyPI as documented in python/README.md.
+          python -m pip install \
+            nvidia-cublas-cu12 nvidia-cusolver-cu12 nvidia-cuda-runtime-cu12 nvidia-nvjitlink-cu12
       - name: Test the Linux wheel (host, with MKL)
         if: runner.os == 'Linux'
         run: |
           mkl_dir="$(dirname "$(dpkg -L libmkl-rt | awk '/\/libmkl_rt\.so$/ { print; exit }')")"
+          nvidia_dir="$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"] + "/nvidia")')"
+          nv_lib_dirs=()
+          while IFS= read -r -d '' d; do nv_lib_dirs+=("$d"); done < \
+            <(find "$nvidia_dir" -maxdepth 4 -type d -name lib -print0)
+          export LD_LIBRARY_PATH="$(printf '%s:' "${nv_lib_dirs[@]}")${mkl_dir}:${LD_LIBRARY_PATH:-}"
           python -m pip install wheelhouse/*cp312*.whl
           pip install pytest ase dpdata
-          LD_LIBRARY_PATH="${mkl_dir}" python -m pytest python/tests -q
+          python -m pytest python/tests -q

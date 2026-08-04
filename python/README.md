@@ -45,8 +45,10 @@ CI builds wheels with cibuildwheel (`.github/workflows/wheels.yml`):
 
 * **Linux** wheels build in the PyPA CUDA manylinux images
   (`quay.io/manylinux_cuda/manylinux_2_28_*_cuda12_9`), so the CUDA backend is
-  compiled in by default. The full test suite runs against the built wheel on a
-  host with an MKL runtime.
+  compiled in by default (cuSOLVER, which those images do not ship, is pulled
+  from PyPI into the container before the build). The full test suite runs
+  against the built wheel on a host with an MKL runtime and the PyPI
+  `nvidia-*` runtime packages.
 * **macOS** wheels build CPU-only (no CUDA toolkit); they are covered by the
   cibuildwheel import smoke test. Note their CPU inference currently needs an
   MKL runtime exposing the `libmkl_rt.so` names the C++ eigensolver dlopens,
