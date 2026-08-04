@@ -321,7 +321,7 @@ def _runtime_search_dirs() -> list[Path]:
             if prefix_lib.name == "lib" and prefix_lib.is_dir():
                 dirs.append(prefix_lib)
         # scipy-openblas32 (LP64) / scipy-openblas64 (ILP64) install their
-        # library under <site-packages>/scipy_openblas{32,64}/lib.
+        # prefixed runtime under <site-packages>/scipy_openblas{32,64}/lib.
         for openblas_style in ("scipy_openblas32", "scipy_openblas64"):
             openblas_lib = base / openblas_style / "lib"
             if openblas_lib.is_dir():
@@ -361,10 +361,16 @@ _RUNTIME_LIBRARY_GROUPS = (
     # MKL changes its SONAME between releases; load exactly one runtime.
     ("libmkl_rt.so.4", "libmkl_rt.so.3", "libmkl_rt.so.2", "libmkl_rt.so"),
     # OpenBLAS is the LP64 BLAS used on platforms without Intel MKL builds
-    # (linux/aarch64 numpy ships libscipy_openblas32_.so). Preload at most one
-    # instance by SONAME so the eigensolver's by-name dlopen reuses it instead
-    # of loading a second, conflicting BLAS into the process.
-    ("libscipy_openblas32_.so", "libopenblas.so.0", "libopenblas.so", "libopenblas.so.3"),
+    # (the scipy-openblas32 wheel ships libscipy_openblas.so with scipy_-prefixed
+    # symbols). Preload at most one instance by SONAME so the eigensolver's
+    # by-name dlopen reuses it instead of loading a second, conflicting BLAS.
+    (
+        "libscipy_openblas.so",
+        "libscipy_openblas32_.so",
+        "libopenblas.so.0",
+        "libopenblas.so",
+        "libopenblas.so.3",
+    ),
 )
 
 

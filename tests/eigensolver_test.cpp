@@ -22,6 +22,14 @@
 
 #include "model/gfn2/basis.hpp"
 
+#if defined(GPUXTB_TEST_SCIPY_PREFIXED_BLAS)
+#define LAPACKE_dpotrf_work scipy_LAPACKE_dpotrf_work
+#define LAPACKE_dpocon_work scipy_LAPACKE_dpocon_work
+#define LAPACKE_dsyevd_work scipy_LAPACKE_dsyevd_work
+#define cblas_dtrsm scipy_cblas_dtrsm
+#define cblas_dgemm scipy_cblas_dgemm
+#endif
+
 extern "C" {
 std::int32_t LAPACKE_dpotrf_work(std::int32_t matrix_layout, char uplo, std::int32_t n,
                                  double* matrix, std::int32_t leading_dimension);

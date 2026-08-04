@@ -86,7 +86,7 @@ class CpuLinearAlgebraBackend {
 
 gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::string& error);
 
-/* Internal test-only dependency injection; production must use the MKL factory. */
+/* Internal test-only dependency injection; production must use the runtime factory. */
 gpuxtb_status_t make_internal_test_lp64_backend(
     LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
     CblasDtrsm dtrsm, CblasDgemm dgemm, BlasSetNumThreadsLocal set_num_threads_local,

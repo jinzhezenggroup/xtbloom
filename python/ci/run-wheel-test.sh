@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mode=${1:?usage: run-wheel-test.sh <full|smoke> <project-dir>}
-project_dir=${2:?usage: run-wheel-test.sh <full|smoke> <project-dir>}
+mode=${1:?usage: run-wheel-test.sh <full|cpu|smoke> <project-dir>}
+project_dir=${2:?usage: run-wheel-test.sh <full|cpu|smoke> <project-dir>}
 
 # CUDA-enabled wheels link the driver SONAME libcuda.so.1. Toolkit-only CI
 # images ship a linkable stub named libcuda.so, so expose an exact SONAME link
@@ -23,6 +23,32 @@ export LD_LIBRARY_PATH="$stub_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 case "$mode" in
   full)
     python -m pytest "$project_dir/python/tests" -q
+    ;;
+  cpu)
+    # Force a real installed-wheel CPU inference. Import-only smoke tests do
+    # not exercise the eigensolver because its BLAS runtime is loaded lazily.
+    python - <<'PY'
+import numpy as np
+from gpuxtb import Calculator
+
+calculator = Calculator(
+    "GFN2-xTB",
+    np.array([8, 1, 1]),
+    np.array(
+        [
+            [0.0, 0.0, -0.73578586109551],
+            [1.44183152868459, 0.0, 0.36789293054775],
+            [-1.44183152868459, 0.0, 0.36789293054775],
+        ]
+    ),
+    backend="cpu",
+)
+result = calculator.singlepoint()
+assert result.scc_converged
+assert np.isfinite(result.energy)
+assert np.isfinite(result.forces).all()
+print(f"gpuxtb CPU wheel smoke energy: {result.energy:.16g}")
+PY
     ;;
   smoke)
     python -c 'import gpuxtb; print(gpuxtb.library.get_version())'

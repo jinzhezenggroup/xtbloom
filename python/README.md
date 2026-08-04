@@ -56,8 +56,8 @@ library depends on:
 * the **BLAS** runtime for the CPU eigensolver — Intel MKL (`libmkl_rt`) via a
   platform-tagged dependency on linux x86_64, and the LP64 OpenBLAS wheel
   `scipy-openblas32` on linux aarch64 (Intel MKL has no aarch64 builds). On
-  other platforms it is discovered from any installed `mkl` package / system
-  path; and
+  other platforms, compatible system MKL or OpenBLAS runtimes are discovered
+  when available; and
 * the **CUDA** runtime libraries (cuBLAS, cuSOLVER, ...) — resolved from the
   installed ``nvidia-*`` PyPI packages or a CUDA toolkit.
 
