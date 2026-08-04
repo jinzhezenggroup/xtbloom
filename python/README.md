@@ -66,8 +66,7 @@ them through cibuildwheel's own test feature:
   the build. x86_64 additionally runs the full conformance suite as the
   cibuildwheel test (deps from the package ``[test]`` extra through
   ``test-extras``, MKL included).
-* **macOS** (x86_64 and arm64) wheels build CPU-only and get an import smoke
-  test.
+* **macOS arm64** wheels build CPU-only and get an import smoke test.
 * **Windows** wheels build CPU-only; the C++ CPU eigensolver's MKL runtime
   loader is not ported to Windows yet, so they also get an import smoke test.
 
