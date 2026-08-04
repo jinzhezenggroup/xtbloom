@@ -149,3 +149,27 @@ export LD_LIBRARY_PATH=/group/software/deepmd-kit-3.1.1/lib
 Meson fallback dependencies may require network access on the first run. Issue
 #45 will turn this validation build into the fully pinned corpus-generation
 toolchain; #44 only freezes and validates the observer seam itself.
+
+## Canonical SCC trace format (`gpuxtb-scc-trace-v1`)
+
+`gpuxtb_scc_trace.py` implements the versioned interchange format that the
+observer recordings will be serialized to and that the CPU/CUDA conformance
+tests consume (issue #47). It is pure standard library; it runs before either
+Fortran reference is built.
+
+- `gpuxtb-scc-trace-v1.schema.json` — the machine-readable JSON Schema.
+- `gpuxtb_scc_trace.py` — canonical writer + structural validation:
+  - `validate(trace)` rejects unsupported format versions, malformed
+    dimensions, non-finite floats, unpinned provenance, and terminal/iteration
+    mismatches with actionable messages;
+  - `dumps(trace)` emits canonical JSON (sorted keys, at least 17 significant
+    decimal digits per float, trailing newline) so that reading and re-writing
+    a trace is byte-identical.
+
+Matrices are stored in logical `[spin][row][column]` order, multipoles in
+`[spin][atom][component]`, and quadrupoles in the `xx, xy, yy, xz, yz, zz`
+packing. The mixer residual is shell charges followed by atomic dipoles and
+atomic quadrupoles in the exact tblite flattening order.
+
+`tests/oracle/test_trace_writer.py` keeps the writer and schema synchronized
+with synthetic fixtures, independently of tblite.

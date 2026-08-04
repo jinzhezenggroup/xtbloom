@@ -1,0 +1,207 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/jinzhezenggroup/gpuxtb/schemas/gpuxtb-scc-trace-v1.schema.json",
+  "title": "gpuxtb-scc-trace-v1",
+  "description": "Versioned interchange format for pinned tblite GFN2 SCC iteration goldens consumed by the CPU/CUDA conformance tests. Matrices are stored in logical [spin][row][column] order and multipoles in [spin][atom][component] order; quadrupoles use the packing order xx, xy, yy, xz, yz, zz. All floats are finite binary64 values.",
+  "type": "object",
+  "required": [
+    "format",
+    "provenance",
+    "input",
+    "basis",
+    "statics",
+    "residual_layout",
+    "iterations",
+    "terminal"
+  ],
+  "properties": {
+    "format": {
+      "const": "gpuxtb-scc-trace-v1"
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["tblite_revision", "oracle_patch_sha256"],
+      "properties": {
+        "tblite_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "Pinned full upstream tblite commit SHA."
+        },
+        "oracle_patch_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of the observer patch used to record the trace."
+        },
+        "oracle_command": {
+          "type": "string",
+          "description": "Optionally, the exact oracle command used to generate the trace."
+        }
+      },
+      "additionalProperties": true
+    },
+    "input": {
+      "type": "object",
+      "required": [
+        "atomic_numbers",
+        "positions",
+        "molecular_charge",
+        "unpaired_electrons",
+        "spin_channels"
+      ],
+      "properties": {
+        "atomic_numbers": {
+          "type": "array",
+          "items": {"type": "integer"},
+          "minItems": 1
+        },
+        "positions": {
+          "type": "array",
+          "items": {"type": "number"},
+          "description": "Flat Cartesian coordinates in bohr; length 3 * n_atoms."
+        },
+        "molecular_charge": {"type": "number"},
+        "unpaired_electrons": {"type": "integer", "minimum": 0},
+        "spin_channels": {"type": "integer", "enum": [1, 2]},
+        "temperature": {"type": "number", "description": "Electronic temperature in kelvin, when recorded."},
+        "point_charges": {
+          "type": "object",
+          "description": "Optional external point-charge coupling (bohr / e / Hartree hardness).",
+          "properties": {
+            "positions": {"type": "array", "items": {"type": "number"}},
+            "charges": {"type": "array", "items": {"type": "number"}},
+            "hardnesses": {"type": "array", "items": {"type": "number"}}
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "basis": {
+      "type": "object",
+      "required": ["n_atoms", "n_shells", "nao", "atom_to_shell_count"],
+      "properties": {
+        "n_atoms": {"type": "integer", "minimum": 1},
+        "n_shells": {"type": "integer", "minimum": 1},
+        "nao": {"type": "integer", "minimum": 1},
+        "atom_to_shell_count": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0},
+          "description": "Number of shells contributed by each atom."
+        },
+        "shell_offsets": {
+          "type": "array",
+          "items": {"type": "integer"},
+          "description": "Optional flat prefix offsets into shell-indexed arrays."
+        }
+      },
+      "additionalProperties": true
+    },
+    "statics": {
+      "type": "object",
+      "required": ["overlap", "core_hamiltonian"],
+      "properties": {
+        "overlap": {"$ref": "#/definitions/matrix1"},
+        "core_hamiltonian": {"$ref": "#/definitions/matrix1"}
+      },
+      "additionalProperties": true
+    },
+    "residual_layout": {
+      "type": "object",
+      "description": "Ordering of the mixer residual vector: shell charges, then atomic dipoles, then atomic quadrupoles.",
+      "properties": {
+        "shell_charges": {"type": "integer", "minimum": 0},
+        "atomic_dipoles": {"type": "integer", "minimum": 0},
+        "atomic_quadrupoles": {"type": "integer", "minimum": 0}
+      }
+    },
+    "iterations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/definitions/iteration"}
+    },
+    "terminal": {
+      "type": "object",
+      "required": ["status", "converged", "iterations"],
+      "properties": {
+        "status": {"type": "integer", "description": "tblite observer status: 1 converged, 2 max iterations, 3 failed."},
+        "converged": {"type": "boolean"},
+        "iterations": {"type": "integer", "minimum": 0}
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "matrix1": {
+      "type": "array",
+      "description": "Spin-independent matrix stored as a single [1][row][column] channel.",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "array",
+          "items": {"type": "number"}
+        }
+      }
+    },
+    "matrix": {
+      "type": "array",
+      "description": "Spin-resolved matrix stored as [spin][row][column].",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "array",
+          "items": {"type": "number"}
+        }
+      }
+    },
+    "spectrum": {
+      "type": "array",
+      "description": "Spin-resolved vector stored as [spin][value].",
+      "items": {
+        "type": "array",
+        "items": {"type": "number"}
+      }
+    },
+    "iteration": {
+      "type": "object",
+      "required": [
+        "index",
+        "hamiltonian",
+        "eigenvalues",
+        "occupations",
+        "density",
+        "mixed_qsh",
+        "raw_qsh",
+        "mixed_qat",
+        "raw_qat",
+        "residual",
+        "residual_rms",
+        "energy",
+        "converged",
+        "status"
+      ],
+      "properties": {
+        "index": {"type": "integer", "minimum": 1},
+        "hamiltonian": {"$ref": "#/definitions/matrix"},
+        "density": {"$ref": "#/definitions/matrix"},
+        "eigenvalues": {"$ref": "#/definitions/spectrum"},
+        "occupations": {"$ref": "#/definitions/spectrum"},
+        "mixed_qsh": {"$ref": "#/definitions/spectrum"},
+        "raw_qsh": {"$ref": "#/definitions/spectrum"},
+        "mixed_qat": {"$ref": "#/definitions/spectrum"},
+        "raw_qat": {"$ref": "#/definitions/spectrum"},
+        "dipoles": {"$ref": "#/definitions/spectrum", "description": "Optional [spin][atom * 3] Cartesian dipoles."},
+        "quadrupoles": {"$ref": "#/definitions/spectrum", "description": "Optional [spin][atom * 6] packed xx xy yy xz yz zz."},
+        "residual": {
+          "type": "array",
+          "items": {"type": "number"},
+          "description": "Mixer residual vector in the residual_layout flattening order."
+        },
+        "residual_rms": {"type": "number"},
+        "energy": {"type": "number", "description": "Electronic SCC energy in Hartree for this iteration."},
+        "energy_delta": {"type": "number", "description": "Electronic energy change vs the previous iteration, when recorded."},
+        "converged": {"type": "boolean"},
+        "status": {"type": "integer"}
+      },
+      "additionalProperties": true
+    }
+  }
+}
