@@ -375,14 +375,18 @@ __global__ void evaluate_kernel(Gfn2OccupationsDeviceBatch batch, Gfn2Wavefuncti
   std::uint8_t spin_channels = 1u;
   if (spin_layout) {
     const std::int32_t configured_channels = layout.spin_channels[system];
+    if (configured_channels != 1 && configured_channels != 2) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2OccupationsDeviceError::kInvalidSpinLayout);
+      return;
+    }
     spin_channels = static_cast<std::uint8_t>(configured_channels);
     const std::int64_t channel_begin = layout.spin_channel_offsets[system];
     const std::int64_t channel_end = layout.spin_channel_offsets[system + 1];
     spin_orbital_begin = layout.spin_orbital_offsets[system];
     const std::int64_t spin_orbital_end = layout.spin_orbital_offsets[system + 1];
-    if ((spin_channels != 1u && spin_channels != 2u) || channel_begin < 0 ||
-        channel_end - channel_begin != spin_channels || channel_end > layout.total_spin_channels ||
-        spin_orbital_begin < 0 ||
+    if (channel_begin < 0 || channel_end - channel_begin != spin_channels ||
+        channel_end > layout.total_spin_channels || spin_orbital_begin < 0 ||
         spin_orbital_end - spin_orbital_begin != static_cast<std::int64_t>(spin_channels) * count ||
         spin_orbital_end > layout.total_spin_orbitals ||
         (system == 0 && (channel_begin != 0 || spin_orbital_begin != 0)) ||

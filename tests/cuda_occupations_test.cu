@@ -576,6 +576,25 @@ int test_mixed_spin_spectra_batches_and_system_transaction() {
       }
       CHECK(actual.entropies[failed_system] == kSentinel);
       CHECK(actual.entropies[2] != kSentinel);
+
+      /* Validate the full int32_t value before narrowing to the kernel's 1/2 channel type. */
+      CUDA_CHECK(device.eigenvalues.copy_from(host.eigenvalues.data(), host.eigenvalues.size()));
+      std::vector<std::int32_t> hostile_spin = host.spin_channels;
+      hostile_spin[failed_system] = 257;
+      CUDA_CHECK(device.spin_channels.copy_from(hostile_spin.data(), hostile_spin.size()));
+      CUDA_CHECK(device.reset_outputs(host, nullptr));
+      CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+          8, device.system_errors.get(), device.device_error.get()));
+      CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_occupations_cuda(
+          device.batch(host), device.layout(host), device.eigenvalues.get(),
+          static_cast<std::int64_t>(device.eigenvalues.size()), device.results(host),
+          device.workspace(), device.system_errors.get(), device.device_error.get()));
+      CUDA_CHECK(copy_results(host, device, actual, nullptr));
+      CUDA_CHECK(cudaDeviceSynchronize());
+      CHECK(actual.system_errors[failed_system] ==
+            static_cast<std::uint32_t>(Gfn2OccupationsDeviceError::kInvalidSpinLayout));
+      CHECK(actual.entropies[failed_system] == kSentinel);
+      CHECK(actual.entropies[2] != kSentinel);
     }
   }
   return 0;
