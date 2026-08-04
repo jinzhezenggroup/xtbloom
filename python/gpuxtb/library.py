@@ -486,24 +486,29 @@ def compute_checked(
 
 def host_const(
     values: Optional[Sequence[Union[int, float, bool]]], ctype, dtype
-) -> ConstBuffer:
+) -> "tuple[ConstBuffer, np.ndarray]":
     """Build a host ``gpuxtb_const_buffer_t`` from a numpy-compatible sequence.
 
     The returned buffer aliases the contiguous numpy array, so the caller must
-    keep that array alive (the *owner* is returned) until the compute call
-    completes.
+    keep that array alive (the *owner*, returned as the second element) until
+    the compute call completes. Empty input yields a null buffer descriptor
+    with a zero-sized owner.
     """
-    if values is None or len(values) == 0:
-        return ConstBuffer(None, 0, MEMORY_HOST, 0)
+    if values is None:
+        owner = np.empty(0, dtype=dtype)
+        return ConstBuffer(None, 0, MEMORY_HOST, 0), owner
     owner = np.ascontiguousarray(np.asarray(values, dtype=dtype))
-    if owner.nbytes == 0:
-        return ConstBuffer(None, 0, MEMORY_HOST, 0)
-    return ConstBuffer(
-        ctypes.cast(owner.ctypes.data, ctypes.c_void_p),
-        owner.nbytes,
-        MEMORY_HOST,
-        0,
-    ), owner
+    if owner.size == 0:
+        return ConstBuffer(None, 0, MEMORY_HOST, 0), owner
+    return (
+        ConstBuffer(
+            ctypes.cast(owner.ctypes.data, ctypes.c_void_p),
+            owner.nbytes,
+            MEMORY_HOST,
+            0,
+        ),
+        owner,
+    )
 
 
 def empty_result_shape(shape, ctype, dtype) -> "tuple[Buffer, np.ndarray]":
