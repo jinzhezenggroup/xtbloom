@@ -21,6 +21,7 @@
 namespace {
 
 using gpuxtb::detail::bind_gfn2_topology_host;
+using gpuxtb::detail::bind_gfn2_wavefunction_layout_host;
 using gpuxtb::detail::Gfn2AtomPair;
 using gpuxtb::detail::Gfn2GenerationScope;
 using gpuxtb::detail::Gfn2GeometryCacheProvenanceView;
@@ -30,9 +31,12 @@ using gpuxtb::detail::Gfn2PlanSchemaDiagnostic;
 using gpuxtb::detail::Gfn2PlanSchemaError;
 using gpuxtb::detail::Gfn2PlanSchemaField;
 using gpuxtb::detail::Gfn2RaggedTopologyView;
+using gpuxtb::detail::Gfn2WavefunctionLayoutView;
 using gpuxtb::detail::validate_gfn2_geometry_provenance_host;
 using gpuxtb::detail::validate_gfn2_topology_binding;
 using gpuxtb::detail::validate_gfn2_topology_host;
+using gpuxtb::detail::validate_gfn2_wavefunction_layout_binding;
+using gpuxtb::detail::validate_gfn2_wavefunction_layout_host;
 
 constexpr std::uint64_t kPlanToken = 0x6a09e667f3bcc909ULL;
 constexpr std::uint64_t kGeneration = 41u;
@@ -169,6 +173,70 @@ HostTopology make_topology(std::int64_t batch_size, bool explicit_pairs = false)
   host.refresh_view(explicit_pairs ? Gfn2PairMapKind::kExplicit
                                    : Gfn2PairMapKind::kPackedLowerTriangle);
   return host;
+}
+
+struct HostWavefunctionLayout {
+  std::vector<std::int32_t> spin_channels;
+  std::vector<std::int64_t> spin_channel_offsets;
+  std::vector<std::int64_t> spin_orbital_offsets;
+  std::vector<std::int64_t> spin_matrix_offsets;
+  std::vector<std::int64_t> spin_shell_offsets;
+  std::vector<std::int64_t> spin_atom_offsets;
+  Gfn2WavefunctionLayoutView view{};
+
+  void refresh_view(const HostTopology& topology) {
+    view.memory_space = topology.view.memory_space;
+    view.plan_token = topology.view.plan_token;
+    view.batch_size = topology.view.batch_size;
+    view.total_spin_channels = spin_channel_offsets.back();
+    view.total_spin_orbitals = spin_orbital_offsets.back();
+    view.total_spin_matrix_elements = spin_matrix_offsets.back();
+    view.total_spin_shells = spin_shell_offsets.back();
+    view.total_spin_atoms = spin_atom_offsets.back();
+    view.spin_channel_count = static_cast<std::int64_t>(spin_channels.size());
+    view.spin_channel_offset_count = static_cast<std::int64_t>(spin_channel_offsets.size());
+    view.spin_orbital_offset_count = static_cast<std::int64_t>(spin_orbital_offsets.size());
+    view.spin_matrix_offset_count = static_cast<std::int64_t>(spin_matrix_offsets.size());
+    view.spin_shell_offset_count = static_cast<std::int64_t>(spin_shell_offsets.size());
+    view.spin_atom_offset_count = static_cast<std::int64_t>(spin_atom_offsets.size());
+    view.spin_channels = pointer_or_null(spin_channels);
+    view.spin_channel_offsets = pointer_or_null(spin_channel_offsets);
+    view.spin_orbital_offsets = pointer_or_null(spin_orbital_offsets);
+    view.spin_matrix_offsets = pointer_or_null(spin_matrix_offsets);
+    view.spin_shell_offsets = pointer_or_null(spin_shell_offsets);
+    view.spin_atom_offsets = pointer_or_null(spin_atom_offsets);
+  }
+};
+
+HostWavefunctionLayout make_wavefunction_layout(const HostTopology& topology) {
+  HostWavefunctionLayout layout;
+  layout.spin_channel_offsets.push_back(0);
+  layout.spin_orbital_offsets.push_back(0);
+  layout.spin_matrix_offsets.push_back(0);
+  layout.spin_shell_offsets.push_back(0);
+  layout.spin_atom_offsets.push_back(0);
+  for (std::int64_t system = 0; system < topology.view.batch_size; ++system) {
+    const std::int32_t spin_channels = (system % 3) == 0 ? 2 : 1;
+    layout.spin_channels.push_back(spin_channels);
+    const std::int64_t atoms = topology.atom_offsets[static_cast<std::size_t>(system + 1)] -
+                               topology.atom_offsets[static_cast<std::size_t>(system)];
+    const std::int64_t shells = topology.batch_shell_offsets[static_cast<std::size_t>(system + 1)] -
+                                topology.batch_shell_offsets[static_cast<std::size_t>(system)];
+    const std::int64_t orbitals =
+        topology.batch_orbital_offsets[static_cast<std::size_t>(system + 1)] -
+        topology.batch_orbital_offsets[static_cast<std::size_t>(system)];
+    const std::int64_t matrices = topology.matrix_offsets[static_cast<std::size_t>(system + 1)] -
+                                  topology.matrix_offsets[static_cast<std::size_t>(system)];
+    layout.spin_channel_offsets.push_back(layout.spin_channel_offsets.back() + spin_channels);
+    layout.spin_orbital_offsets.push_back(layout.spin_orbital_offsets.back() +
+                                          spin_channels * orbitals);
+    layout.spin_matrix_offsets.push_back(layout.spin_matrix_offsets.back() +
+                                         spin_channels * matrices);
+    layout.spin_shell_offsets.push_back(layout.spin_shell_offsets.back() + spin_channels * shells);
+    layout.spin_atom_offsets.push_back(layout.spin_atom_offsets.back() + spin_channels * atoms);
+  }
+  layout.refresh_view(topology);
+  return layout;
 }
 
 int test_batches_and_layout() {
@@ -324,6 +392,58 @@ int test_provenance() {
   return 0;
 }
 
+int test_wavefunction_layout() {
+  static_assert(std::is_trivially_copyable_v<Gfn2WavefunctionLayoutView>);
+  static_assert(std::is_standard_layout_v<Gfn2WavefunctionLayoutView>);
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    HostTopology topology = make_topology(batch_size);
+    HostWavefunctionLayout layout = make_wavefunction_layout(topology);
+    CHECK(validate_gfn2_wavefunction_layout_host(topology.view, layout.view).error ==
+          Gfn2PlanSchemaError::kSuccess);
+    Gfn2WavefunctionLayoutView binding{};
+    CHECK(bind_gfn2_wavefunction_layout_host(topology.view, layout.view, binding).error ==
+          Gfn2PlanSchemaError::kSuccess);
+    CHECK(std::memcmp(&binding, &layout.view, sizeof(binding)) == 0);
+
+    topology.view.memory_space = Gfn2PlanMemorySpace::kHipDevice;
+    layout.view.memory_space = Gfn2PlanMemorySpace::kHipDevice;
+    CHECK(validate_gfn2_wavefunction_layout_binding(topology.view, layout.view,
+                                                    Gfn2PlanMemorySpace::kHipDevice)
+              .error == Gfn2PlanSchemaError::kSuccess);
+  }
+
+  HostTopology topology = make_topology(8);
+  HostWavefunctionLayout layout = make_wavefunction_layout(topology);
+  layout.spin_channels[3] = 3;
+  CHECK(validate_gfn2_wavefunction_layout_host(topology.view, layout.view).error ==
+        Gfn2PlanSchemaError::kInvalidSpinChannels);
+
+  layout = make_wavefunction_layout(topology);
+  ++layout.spin_orbital_offsets[1];
+  CHECK(validate_gfn2_wavefunction_layout_host(topology.view, layout.view).field ==
+        Gfn2PlanSchemaField::kSpinOrbitalOffsets);
+
+  layout = make_wavefunction_layout(topology);
+  layout.view.plan_token += 1u;
+  Gfn2WavefunctionLayoutView binding = layout.view;
+  CHECK(bind_gfn2_wavefunction_layout_host(topology.view, layout.view, binding).error ==
+        Gfn2PlanSchemaError::kCrossPlan);
+  CHECK(binding.plan_token == 0u);
+
+  layout = make_wavefunction_layout(topology);
+  layout.view.spin_orbital_offsets = topology.atom_offsets.data();
+  CHECK(validate_gfn2_wavefunction_layout_binding(topology.view, layout.view,
+                                                  Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kAliasedRange);
+
+  layout = make_wavefunction_layout(topology);
+  layout.view.spin_matrix_offsets = nullptr;
+  CHECK(validate_gfn2_wavefunction_layout_binding(topology.view, layout.view,
+                                                  Gfn2PlanMemorySpace::kHost)
+            .field == Gfn2PlanSchemaField::kSpinMatrixOffsets);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -333,6 +453,9 @@ int main() {
   }
   if (status == 0) {
     status = test_provenance();
+  }
+  if (status == 0) {
+    status = test_wavefunction_layout();
   }
   return status;
 }

@@ -30,8 +30,10 @@ using gpuxtb::detail::cuda::Gfn2EigensolverOverlapCache;
 using gpuxtb::detail::cuda::Gfn2EigensolverWorkspaceRequirements;
 using gpuxtb::detail::cuda::Gfn2GeometryEpochDevice;
 using gpuxtb::detail::cuda::query_gfn2_eigensolver_bucket_workspace_cuda;
+using gpuxtb::detail::cuda::query_gfn2_spin_eigensolver_bucket_workspace_cuda;
 using gpuxtb::detail::cuda::reset_gfn2_eigensolver_device_errors_cuda;
 using gpuxtb::detail::cuda::solve_gfn2_eigensystems_cuda;
+using gpuxtb::detail::cuda::solve_gfn2_spin_eigensystems_cuda;
 
 constexpr double kSentinel = 91.25;
 
@@ -512,6 +514,299 @@ bool solve(DeviceFixture& fixture, std::uint64_t generation, bool reset_errors =
     return false;
   }
   return cuda_ok(cudaStreamSynchronize(fixture.providers.stream), "solve synchronize");
+}
+
+struct SpinSolveFixture {
+  std::vector<std::int32_t> spin_channels;
+  std::vector<std::int64_t> spin_channel_offsets;
+  std::vector<std::int64_t> spin_orbital_offsets;
+  std::vector<std::int64_t> spin_matrix_offsets;
+  std::vector<Gfn2EigensolverBucket> buckets;
+  std::vector<double> hamiltonian;
+  DeviceBuffer<std::int32_t> device_spin_channels;
+  DeviceBuffer<std::int64_t> device_spin_channel_offsets;
+  DeviceBuffer<std::int64_t> device_spin_orbital_offsets;
+  DeviceBuffer<std::int64_t> device_spin_matrix_offsets;
+  DeviceBuffer<double> device_hamiltonian;
+  DeviceBuffer<double> matrix_a;
+  DeviceBuffer<double> matrix_b;
+  DeviceBuffer<double> eigen_scratch;
+  DeviceBuffer<double*> factor_pointers;
+  DeviceBuffer<double*> matrix_pointers;
+  DeviceBuffer<int> info_a;
+  DeviceBuffer<int> info_b;
+  DeviceBuffer<std::uint8_t> eligible;
+  DeviceBuffer<std::uint32_t> sequence_active;
+  DeviceBuffer<std::byte> solver_device_workspace;
+  PinnedBuffer solver_host_workspace;
+  DeviceBuffer<double> eigenvalues;
+  DeviceBuffer<double> coefficients;
+  gpuxtb::detail::Gfn2WavefunctionLayoutView layout{};
+  Gfn2EigensolverDeviceWorkspace workspace{};
+  Gfn2EigensolverDeviceResults results{};
+
+  bool create(DeviceFixture& physical) {
+    const TestBatch& host = physical.host;
+    spin_channels.resize(static_cast<std::size_t>(host.batch_size));
+    spin_channel_offsets.assign(static_cast<std::size_t>(host.batch_size + 1), 0);
+    spin_orbital_offsets.assign(static_cast<std::size_t>(host.batch_size + 1), 0);
+    spin_matrix_offsets.assign(static_cast<std::size_t>(host.batch_size + 1), 0);
+    for (std::int64_t system = 0; system < host.batch_size; ++system) {
+      const std::int32_t channels = host.batch_size == 1 || system % 3 != 0 ? 2 : 1;
+      const std::int64_t orbitals = host.orbital_offsets[static_cast<std::size_t>(system + 1)] -
+                                    host.orbital_offsets[static_cast<std::size_t>(system)];
+      const std::int64_t matrices = host.matrix_offsets[static_cast<std::size_t>(system + 1)] -
+                                    host.matrix_offsets[static_cast<std::size_t>(system)];
+      spin_channels[static_cast<std::size_t>(system)] = channels;
+      spin_channel_offsets[static_cast<std::size_t>(system + 1)] =
+          spin_channel_offsets[static_cast<std::size_t>(system)] + channels;
+      spin_orbital_offsets[static_cast<std::size_t>(system + 1)] =
+          spin_orbital_offsets[static_cast<std::size_t>(system)] + channels * orbitals;
+      spin_matrix_offsets[static_cast<std::size_t>(system + 1)] =
+          spin_matrix_offsets[static_cast<std::size_t>(system)] + channels * matrices;
+    }
+    hamiltonian.assign(static_cast<std::size_t>(spin_matrix_offsets.back()), 0.0);
+    for (std::int64_t system = 0; system < host.batch_size; ++system) {
+      const std::int64_t n = host.orbital_offsets[static_cast<std::size_t>(system + 1)] -
+                             host.orbital_offsets[static_cast<std::size_t>(system)];
+      const std::int64_t matrix_stride = n * n;
+      const std::int64_t source = host.matrix_offsets[static_cast<std::size_t>(system)];
+      const std::int64_t destination = spin_matrix_offsets[static_cast<std::size_t>(system)];
+      for (std::int32_t spin = 0; spin < spin_channels[static_cast<std::size_t>(system)]; ++spin) {
+        for (std::int64_t index = 0; index < matrix_stride; ++index) {
+          const std::int64_t row = index / n;
+          const std::int64_t column = index - row * n;
+          double value = host.hamiltonian[static_cast<std::size_t>(source + index)];
+          if (row == column) {
+            value += 0.025 * static_cast<double>(spin);
+          }
+          hamiltonian[static_cast<std::size_t>(destination + spin * matrix_stride + index)] = value;
+        }
+      }
+    }
+
+    buckets = host.buckets;
+    std::int64_t solve_offset = 0;
+    std::int64_t matrix_scratch_offset = 0;
+    std::int64_t orbital_scratch_offset = 0;
+    for (Gfn2EigensolverBucket& bucket : buckets) {
+      std::int32_t solve_count = 0;
+      for (std::int32_t local = 0; local < bucket.system_count; ++local) {
+        const std::int32_t system = host.bucket_systems[static_cast<std::size_t>(
+            bucket.system_index_offset + static_cast<std::int64_t>(local))];
+        solve_count += spin_channels[static_cast<std::size_t>(system)];
+      }
+      bucket.solve_count = solve_count;
+      bucket.solve_index_offset = solve_offset;
+      bucket.spin_matrix_scratch_offset = matrix_scratch_offset;
+      bucket.spin_orbital_scratch_offset = orbital_scratch_offset;
+      solve_offset += solve_count;
+      matrix_scratch_offset +=
+          static_cast<std::int64_t>(solve_count) * bucket.orbital_count * bucket.orbital_count;
+      orbital_scratch_offset += static_cast<std::int64_t>(solve_count) * bucket.orbital_count;
+    }
+    if (solve_offset != spin_channel_offsets.back() ||
+        matrix_scratch_offset != spin_matrix_offsets.back() ||
+        orbital_scratch_offset != spin_orbital_offsets.back() ||
+        !device_spin_channels.allocate(spin_channels.size()) ||
+        !device_spin_channel_offsets.allocate(spin_channel_offsets.size()) ||
+        !device_spin_orbital_offsets.allocate(spin_orbital_offsets.size()) ||
+        !device_spin_matrix_offsets.allocate(spin_matrix_offsets.size()) ||
+        !device_hamiltonian.allocate(hamiltonian.size()) ||
+        !matrix_a.allocate(static_cast<std::size_t>(matrix_scratch_offset)) ||
+        !matrix_b.allocate(static_cast<std::size_t>(matrix_scratch_offset)) ||
+        !eigen_scratch.allocate(static_cast<std::size_t>(orbital_scratch_offset)) ||
+        !factor_pointers.allocate(static_cast<std::size_t>(solve_offset)) ||
+        !matrix_pointers.allocate(static_cast<std::size_t>(solve_offset)) ||
+        !info_a.allocate(static_cast<std::size_t>(solve_offset)) ||
+        !info_b.allocate(static_cast<std::size_t>(solve_offset)) ||
+        !eligible.allocate(static_cast<std::size_t>(solve_offset)) ||
+        !sequence_active.allocate(1u) ||
+        !eigenvalues.allocate(static_cast<std::size_t>(spin_orbital_offsets.back())) ||
+        !coefficients.allocate(static_cast<std::size_t>(spin_matrix_offsets.back())) ||
+        !device_spin_channels.upload(spin_channels) ||
+        !device_spin_channel_offsets.upload(spin_channel_offsets) ||
+        !device_spin_orbital_offsets.upload(spin_orbital_offsets) ||
+        !device_spin_matrix_offsets.upload(spin_matrix_offsets) ||
+        !device_hamiltonian.upload(hamiltonian)) {
+      return false;
+    }
+
+    Gfn2EigensolverWorkspaceRequirements requirements{};
+    for (const Gfn2EigensolverBucket& bucket : buckets) {
+      const auto query = query_gfn2_spin_eigensolver_bucket_workspace_cuda(
+          physical.providers.solver, physical.providers.parameters, bucket, matrix_b.get(),
+          eigen_scratch.get(), requirements);
+      if (!query.success()) {
+        return false;
+      }
+    }
+    if (!solver_device_workspace.allocate(requirements.solver_device_workspace_bytes) ||
+        !solver_host_workspace.allocate(requirements.solver_host_workspace_bytes)) {
+      return false;
+    }
+    layout.memory_space = gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice;
+    layout.plan_token = physical.batch.plan_token;
+    layout.batch_size = host.batch_size;
+    layout.total_spin_channels = spin_channel_offsets.back();
+    layout.total_spin_orbitals = spin_orbital_offsets.back();
+    layout.total_spin_matrix_elements = spin_matrix_offsets.back();
+    layout.spin_channel_count = host.batch_size;
+    layout.spin_channel_offset_count = host.batch_size + 1;
+    layout.spin_orbital_offset_count = host.batch_size + 1;
+    layout.spin_matrix_offset_count = host.batch_size + 1;
+    layout.spin_channels = device_spin_channels.get();
+    layout.spin_channel_offsets = device_spin_channel_offsets.get();
+    layout.spin_orbital_offsets = device_spin_orbital_offsets.get();
+    layout.spin_matrix_offsets = device_spin_matrix_offsets.get();
+    workspace = {matrix_a.get(),
+                 static_cast<std::int64_t>(matrix_a.size()),
+                 matrix_b.get(),
+                 static_cast<std::int64_t>(matrix_b.size()),
+                 eigen_scratch.get(),
+                 static_cast<std::int64_t>(eigen_scratch.size()),
+                 factor_pointers.get(),
+                 static_cast<std::int64_t>(factor_pointers.size()),
+                 matrix_pointers.get(),
+                 static_cast<std::int64_t>(matrix_pointers.size()),
+                 info_a.get(),
+                 static_cast<std::int64_t>(info_a.size()),
+                 info_b.get(),
+                 static_cast<std::int64_t>(info_b.size()),
+                 eligible.get(),
+                 static_cast<std::int64_t>(eligible.size()),
+                 sequence_active.get(),
+                 static_cast<std::int64_t>(sequence_active.size()),
+                 solver_device_workspace.get(),
+                 requirements.solver_device_workspace_bytes,
+                 solver_host_workspace.get(),
+                 solver_host_workspace.size(),
+                 physical.batch.plan_token};
+    results = {eigenvalues.get(), static_cast<std::int64_t>(eigenvalues.size()), coefficients.get(),
+               static_cast<std::int64_t>(coefficients.size()), physical.batch.plan_token};
+    return fill_outputs(kSentinel);
+  }
+
+  bool fill_outputs(double value) {
+    return eigenvalues.upload(std::vector<double>(eigenvalues.size(), value)) &&
+           coefficients.upload(std::vector<double>(coefficients.size(), value));
+  }
+};
+
+bool validate_spin_system(const DeviceFixture& physical, const SpinSolveFixture& spin,
+                          std::int64_t system, std::int32_t channel,
+                          const std::vector<double>& eigenvalues,
+                          const std::vector<double>& coefficients) {
+  const TestBatch& batch = physical.host;
+  const std::int64_t n = batch.orbital_offsets[static_cast<std::size_t>(system + 1)] -
+                         batch.orbital_offsets[static_cast<std::size_t>(system)];
+  const std::int64_t physical_matrix = batch.matrix_offsets[static_cast<std::size_t>(system)];
+  const std::int64_t spin_matrix = spin.spin_matrix_offsets[static_cast<std::size_t>(system)] +
+                                   static_cast<std::int64_t>(channel) * n * n;
+  const std::int64_t spin_orbital = spin.spin_orbital_offsets[static_cast<std::size_t>(system)] +
+                                    static_cast<std::int64_t>(channel) * n;
+  for (std::int64_t orbital = 0; orbital < n; ++orbital) {
+    for (std::int64_t row = 0; row < n; ++row) {
+      double hc = 0.0;
+      double sc = 0.0;
+      for (std::int64_t column = 0; column < n; ++column) {
+        const double coefficient =
+            coefficients[static_cast<std::size_t>(spin_matrix + column * n + orbital)];
+        hc += spin.hamiltonian[static_cast<std::size_t>(spin_matrix + row * n + column)] *
+              coefficient;
+        sc += batch.overlap[static_cast<std::size_t>(physical_matrix + row * n + column)] *
+              coefficient;
+      }
+      if (!near(hc, sc * eigenvalues[static_cast<std::size_t>(spin_orbital + orbital)], 3.0e-10)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool solve_spin(DeviceFixture& physical, SpinSolveFixture& spin, std::uint64_t generation) {
+  if (!cuda_ok(reset_gfn2_eigensolver_device_errors_cuda(
+                   physical.host.batch_size, physical.system_errors.get(),
+                   physical.device_error.get(), physical.providers.stream),
+               "reset spin solve errors")) {
+    return false;
+  }
+  const auto launch = solve_gfn2_spin_eigensystems_cuda(
+      physical.batch, spin.layout, spin.buckets.data(),
+      static_cast<std::int64_t>(spin.buckets.size()), physical.cache, generation,
+      spin.device_hamiltonian.get(), Gfn2EigensolverOptions{}, physical.providers.solver,
+      physical.providers.parameters, physical.providers.blas, spin.workspace, spin.results,
+      physical.system_errors.get(), physical.device_error.get(), physical.providers.stream);
+  return launch.success() &&
+         cuda_ok(cudaStreamSynchronize(physical.providers.stream), "spin solve synchronize");
+}
+
+bool test_spin_eigensolver_mixed_batches_and_transaction() {
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    DeviceFixture physical;
+    if (!physical.create(make_batch(batch_size, true)) || !factor(physical, 53u)) {
+      return false;
+    }
+    SpinSolveFixture spin;
+    if (!spin.create(physical) || !solve_spin(physical, spin, 53u)) {
+      return false;
+    }
+    std::vector<std::uint32_t> errors;
+    std::vector<double> eigenvalues;
+    std::vector<double> coefficients;
+    if (!physical.system_errors.download(errors) || !spin.eigenvalues.download(eigenvalues) ||
+        !spin.coefficients.download(coefficients)) {
+      return false;
+    }
+    for (std::int64_t system = 0; system < batch_size; ++system) {
+      if (errors[static_cast<std::size_t>(system)] != 0u) {
+        return false;
+      }
+      for (std::int32_t channel = 0; channel < spin.spin_channels[static_cast<std::size_t>(system)];
+           ++channel) {
+        if (!validate_spin_system(physical, spin, system, channel, eigenvalues, coefficients)) {
+          return false;
+        }
+      }
+    }
+
+    if (batch_size == 8) {
+      constexpr std::int64_t failed_system = 1;
+      if (spin.spin_channels[failed_system] != 2 || !spin.fill_outputs(kSentinel)) {
+        return false;
+      }
+      std::vector<double> poisoned = spin.hamiltonian;
+      const std::int64_t n = physical.host.orbital_offsets[failed_system + 1] -
+                             physical.host.orbital_offsets[failed_system];
+      const std::int64_t beta = spin.spin_matrix_offsets[failed_system] + n * n;
+      poisoned[static_cast<std::size_t>(beta)] = std::numeric_limits<double>::quiet_NaN();
+      if (!spin.device_hamiltonian.upload(poisoned) || !solve_spin(physical, spin, 53u) ||
+          !physical.system_errors.download(errors) || !spin.eigenvalues.download(eigenvalues) ||
+          !spin.coefficients.download(coefficients)) {
+        return false;
+      }
+      if (errors[failed_system] !=
+          static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kNonfiniteHamiltonian)) {
+        return false;
+      }
+      const std::int64_t orbital_begin = spin.spin_orbital_offsets[failed_system];
+      const std::int64_t orbital_end = spin.spin_orbital_offsets[failed_system + 1];
+      const std::int64_t matrix_begin = spin.spin_matrix_offsets[failed_system];
+      const std::int64_t matrix_end = spin.spin_matrix_offsets[failed_system + 1];
+      if (!std::all_of(eigenvalues.begin() + orbital_begin, eigenvalues.begin() + orbital_end,
+                       [](double value) { return value == kSentinel; }) ||
+          !std::all_of(coefficients.begin() + matrix_begin, coefficients.begin() + matrix_end,
+                       [](double value) { return value == kSentinel; })) {
+        return false;
+      }
+      if (errors[2] != 0u ||
+          !validate_spin_system(physical, spin, 2, 0, eigenvalues, coefficients)) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 bool launch_compacted(DeviceFixture& fixture, const Gfn2EigensolverCompactedSolveGraph& graph) {
@@ -1325,6 +1620,10 @@ int main() {
       std::cerr << "compacted graph batch test failed for size " << batch_size << '\n';
       return 1;
     }
+  }
+  if (!test_spin_eigensolver_mixed_batches_and_transaction()) {
+    std::cerr << "spin eigensolver batch/transaction test failed\n";
+    return 1;
   }
   if (!test_batch(8, true) || !test_batch(1, false, 8) || !test_batch(8, false, 16) ||
       !test_batch(4, false, 32) || !test_compacted_graph_batch(8, true) ||

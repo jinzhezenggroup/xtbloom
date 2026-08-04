@@ -93,6 +93,15 @@ bool square(std::int64_t value, std::int64_t& result) noexcept {
   return true;
 }
 
+bool product(std::int64_t first, std::int64_t second, std::int64_t& result) noexcept {
+  if (first < 0 || second < 0 ||
+      (first != 0 && second > std::numeric_limits<std::int64_t>::max() / first)) {
+    return false;
+  }
+  result = first * second;
+  return true;
+}
+
 bool triangle(std::int64_t value, std::int64_t& result) noexcept {
   if (value < 0 || (value > 1 && value > std::numeric_limits<std::int64_t>::max() / (value - 1))) {
     return false;
@@ -511,6 +520,173 @@ Gfn2PlanSchemaDiagnostic bind_gfn2_topology_host(const Gfn2RaggedTopologyView& c
                                                  Gfn2RaggedTopologyView& binding) noexcept {
   binding = {};
   const Gfn2PlanSchemaDiagnostic diagnostic = validate_gfn2_topology_host(candidate);
+  if (diagnostic.error == Gfn2PlanSchemaError::kSuccess) {
+    binding = candidate;
+  }
+  return diagnostic;
+}
+
+Gfn2PlanSchemaDiagnostic validate_gfn2_wavefunction_layout_binding(
+    const Gfn2RaggedTopologyView& topology, const Gfn2WavefunctionLayoutView& layout,
+    Gfn2PlanMemorySpace expected_memory_space) noexcept {
+  Gfn2PlanSchemaDiagnostic diagnostic =
+      validate_gfn2_topology_binding(topology, expected_memory_space);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  if (!known_memory_space(layout.memory_space) || layout.memory_space != expected_memory_space) {
+    return failure(Gfn2PlanSchemaError::kInvalidMemorySpace, Gfn2PlanSchemaField::kSpinChannels);
+  }
+  if (layout.plan_token == 0u) {
+    return failure(Gfn2PlanSchemaError::kInvalidPlanToken, Gfn2PlanSchemaField::kSpinChannels);
+  }
+  if (layout.plan_token != topology.plan_token || layout.batch_size != topology.batch_size) {
+    return failure(Gfn2PlanSchemaError::kCrossPlan, Gfn2PlanSchemaField::kSpinChannels);
+  }
+  if (layout.total_spin_channels < 0 || layout.total_spin_orbitals < 0 ||
+      layout.total_spin_matrix_elements < 0 || layout.total_spin_shells < 0 ||
+      layout.total_spin_atoms < 0) {
+    return failure(Gfn2PlanSchemaError::kInvalidCount, Gfn2PlanSchemaField::kSpinChannels);
+  }
+
+  std::int64_t offset_count = 0;
+  if (!add_one(topology.batch_size, offset_count)) {
+    return failure(Gfn2PlanSchemaError::kCountOverflow, Gfn2PlanSchemaField::kSpinChannelOffsets);
+  }
+  if (layout.spin_channel_count != topology.batch_size ||
+      layout.spin_channel_offset_count != offset_count ||
+      layout.spin_orbital_offset_count != offset_count ||
+      layout.spin_matrix_offset_count != offset_count ||
+      layout.spin_shell_offset_count != offset_count ||
+      layout.spin_atom_offset_count != offset_count) {
+    return failure(Gfn2PlanSchemaError::kInvalidCount, Gfn2PlanSchemaField::kSpinChannels);
+  }
+
+  std::array<AddressRange, 6> ranges{};
+  diagnostic = make_range(layout.spin_channels, layout.spin_channel_count,
+                          Gfn2PlanSchemaField::kSpinChannels, ranges[0]);
+  if (diagnostic.error == Gfn2PlanSchemaError::kSuccess) {
+    diagnostic = make_range(layout.spin_channel_offsets, layout.spin_channel_offset_count,
+                            Gfn2PlanSchemaField::kSpinChannelOffsets, ranges[1]);
+  }
+  if (diagnostic.error == Gfn2PlanSchemaError::kSuccess) {
+    diagnostic = make_range(layout.spin_orbital_offsets, layout.spin_orbital_offset_count,
+                            Gfn2PlanSchemaField::kSpinOrbitalOffsets, ranges[2]);
+  }
+  if (diagnostic.error == Gfn2PlanSchemaError::kSuccess) {
+    diagnostic = make_range(layout.spin_matrix_offsets, layout.spin_matrix_offset_count,
+                            Gfn2PlanSchemaField::kSpinMatrixOffsets, ranges[3]);
+  }
+  if (diagnostic.error == Gfn2PlanSchemaError::kSuccess) {
+    diagnostic = make_range(layout.spin_shell_offsets, layout.spin_shell_offset_count,
+                            Gfn2PlanSchemaField::kSpinShellOffsets, ranges[4]);
+  }
+  if (diagnostic.error == Gfn2PlanSchemaError::kSuccess) {
+    diagnostic = make_range(layout.spin_atom_offsets, layout.spin_atom_offset_count,
+                            Gfn2PlanSchemaField::kSpinAtomOffsets, ranges[5]);
+  }
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  diagnostic = validate_aliases(ranges);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  for (const AddressRange& range : ranges) {
+    diagnostic = validate_no_topology_alias(topology, range);
+    if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+      return diagnostic;
+    }
+  }
+  return success();
+}
+
+Gfn2PlanSchemaDiagnostic validate_gfn2_wavefunction_layout_host(
+    const Gfn2RaggedTopologyView& topology, const Gfn2WavefunctionLayoutView& layout) noexcept {
+  Gfn2PlanSchemaDiagnostic diagnostic =
+      validate_gfn2_wavefunction_layout_binding(topology, layout, Gfn2PlanMemorySpace::kHost);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+
+  const struct OffsetSet {
+    const std::int64_t* values;
+    std::int64_t endpoint;
+    Gfn2PlanSchemaField field;
+  } offsets[] = {
+      {layout.spin_channel_offsets, layout.total_spin_channels,
+       Gfn2PlanSchemaField::kSpinChannelOffsets},
+      {layout.spin_orbital_offsets, layout.total_spin_orbitals,
+       Gfn2PlanSchemaField::kSpinOrbitalOffsets},
+      {layout.spin_matrix_offsets, layout.total_spin_matrix_elements,
+       Gfn2PlanSchemaField::kSpinMatrixOffsets},
+      {layout.spin_shell_offsets, layout.total_spin_shells, Gfn2PlanSchemaField::kSpinShellOffsets},
+      {layout.spin_atom_offsets, layout.total_spin_atoms, Gfn2PlanSchemaField::kSpinAtomOffsets},
+  };
+  for (const OffsetSet& set : offsets) {
+    diagnostic = validate_offsets(set.values, topology.batch_size, set.endpoint, set.field);
+    if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+      return diagnostic;
+    }
+  }
+
+  for (std::int64_t system = 0; system < topology.batch_size; ++system) {
+    const std::int32_t spin_channels = layout.spin_channels[system];
+    if (spin_channels != 1 && spin_channels != 2) {
+      return failure(Gfn2PlanSchemaError::kInvalidSpinChannels, Gfn2PlanSchemaField::kSpinChannels,
+                     system);
+    }
+    const std::int64_t atoms = topology.atom_offsets[system + 1] - topology.atom_offsets[system];
+    const std::int64_t shells =
+        topology.batch_shell_offsets[system + 1] - topology.batch_shell_offsets[system];
+    const std::int64_t orbitals =
+        topology.batch_orbital_offsets[system + 1] - topology.batch_orbital_offsets[system];
+    const std::int64_t matrices =
+        topology.matrix_offsets[system + 1] - topology.matrix_offsets[system];
+    std::int64_t expected_orbitals = 0;
+    std::int64_t expected_matrices = 0;
+    std::int64_t expected_shells = 0;
+    std::int64_t expected_atoms = 0;
+    if (!product(spin_channels, orbitals, expected_orbitals) ||
+        !product(spin_channels, matrices, expected_matrices) ||
+        !product(spin_channels, shells, expected_shells) ||
+        !product(spin_channels, atoms, expected_atoms)) {
+      return failure(Gfn2PlanSchemaError::kCountOverflow, Gfn2PlanSchemaField::kSpinChannels,
+                     system);
+    }
+    const auto extent = [system](const std::int64_t* values) noexcept {
+      return values[system + 1] - values[system];
+    };
+    if (extent(layout.spin_channel_offsets) != spin_channels) {
+      return failure(Gfn2PlanSchemaError::kInvalidWavefunctionExtent,
+                     Gfn2PlanSchemaField::kSpinChannelOffsets, system);
+    }
+    if (extent(layout.spin_orbital_offsets) != expected_orbitals) {
+      return failure(Gfn2PlanSchemaError::kInvalidWavefunctionExtent,
+                     Gfn2PlanSchemaField::kSpinOrbitalOffsets, system);
+    }
+    if (extent(layout.spin_matrix_offsets) != expected_matrices) {
+      return failure(Gfn2PlanSchemaError::kInvalidWavefunctionExtent,
+                     Gfn2PlanSchemaField::kSpinMatrixOffsets, system);
+    }
+    if (extent(layout.spin_shell_offsets) != expected_shells) {
+      return failure(Gfn2PlanSchemaError::kInvalidWavefunctionExtent,
+                     Gfn2PlanSchemaField::kSpinShellOffsets, system);
+    }
+    if (extent(layout.spin_atom_offsets) != expected_atoms) {
+      return failure(Gfn2PlanSchemaError::kInvalidWavefunctionExtent,
+                     Gfn2PlanSchemaField::kSpinAtomOffsets, system);
+    }
+  }
+  return success();
+}
+
+Gfn2PlanSchemaDiagnostic bind_gfn2_wavefunction_layout_host(
+    const Gfn2RaggedTopologyView& topology, const Gfn2WavefunctionLayoutView& candidate,
+    Gfn2WavefunctionLayoutView& binding) noexcept {
+  binding = {};
+  const Gfn2PlanSchemaDiagnostic diagnostic =
+      validate_gfn2_wavefunction_layout_host(topology, candidate);
   if (diagnostic.error == Gfn2PlanSchemaError::kSuccess) {
     binding = candidate;
   }

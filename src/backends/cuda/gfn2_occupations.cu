@@ -343,8 +343,8 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
   return isfinite(result->electron_sum);
 }
 
-__global__ void evaluate_kernel(Gfn2OccupationsDeviceBatch batch, const double* eigenvalues,
-                                Gfn2OccupationsDeviceWorkspace workspace,
+__global__ void evaluate_kernel(Gfn2OccupationsDeviceBatch batch, Gfn2WavefunctionLayoutView layout,
+                                const double* eigenvalues, Gfn2OccupationsDeviceWorkspace workspace,
                                 std::uint32_t* system_errors, std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   if (threadIdx.x != 0 || atomicAdd(workspace.sequence_active, 0u) == 0u ||
@@ -370,6 +370,29 @@ __global__ void evaluate_kernel(Gfn2OccupationsDeviceBatch batch, const double* 
     return;
   }
   const std::int64_t count = end - begin;
+  const bool spin_layout = layout.spin_channels != nullptr;
+  std::int64_t spin_orbital_begin = begin;
+  std::uint8_t spin_channels = 1u;
+  if (spin_layout) {
+    const std::int32_t configured_channels = layout.spin_channels[system];
+    spin_channels = static_cast<std::uint8_t>(configured_channels);
+    const std::int64_t channel_begin = layout.spin_channel_offsets[system];
+    const std::int64_t channel_end = layout.spin_channel_offsets[system + 1];
+    spin_orbital_begin = layout.spin_orbital_offsets[system];
+    const std::int64_t spin_orbital_end = layout.spin_orbital_offsets[system + 1];
+    if ((spin_channels != 1u && spin_channels != 2u) || channel_begin < 0 ||
+        channel_end - channel_begin != spin_channels || channel_end > layout.total_spin_channels ||
+        spin_orbital_begin < 0 ||
+        spin_orbital_end - spin_orbital_begin != static_cast<std::int64_t>(spin_channels) * count ||
+        spin_orbital_end > layout.total_spin_orbitals ||
+        (system == 0 && (channel_begin != 0 || spin_orbital_begin != 0)) ||
+        (system + 1 == batch.batch_size && (channel_end != layout.total_spin_channels ||
+                                            spin_orbital_end != layout.total_spin_orbitals))) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2OccupationsDeviceError::kInvalidSpinLayout);
+      return;
+    }
+  }
   const double temperature = batch.temperatures[system];
   if (!(temperature >= 0.0) || !isfinite(temperature)) {
     record_system_error(system_errors, system, device_error,
@@ -385,26 +408,33 @@ __global__ void evaluate_kernel(Gfn2OccupationsDeviceBatch batch, const double* 
       return;
     }
   }
-  for (std::int64_t orbital = begin; orbital < end; ++orbital) {
-    const double eigenvalue = eigenvalues[orbital];
-    if (!isfinite(eigenvalue)) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2OccupationsDeviceError::kNonfiniteEigenvalue);
-      return;
-    }
-    if (orbital != begin && eigenvalue < eigenvalues[orbital - 1]) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2OccupationsDeviceError::kUnsortedEigenvalues);
-      return;
+  for (std::uint8_t spin = 0u; spin < spin_channels; ++spin) {
+    const std::int64_t spectrum_begin =
+        spin_orbital_begin + static_cast<std::int64_t>(spin) * count;
+    for (std::int64_t orbital = 0; orbital < count; ++orbital) {
+      const double eigenvalue = eigenvalues[spectrum_begin + orbital];
+      if (!isfinite(eigenvalue)) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2OccupationsDeviceError::kNonfiniteEigenvalue);
+        return;
+      }
+      if (orbital != 0 && eigenvalue < eigenvalues[spectrum_begin + orbital - 1]) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2OccupationsDeviceError::kUnsortedEigenvalues);
+        return;
+      }
     }
   }
 
   const std::int64_t occupation_base = begin * 2;
   SpinResult spin_results[2];
   for (int spin = 0; spin < 2; ++spin) {
+    const std::int64_t spectrum_begin =
+        spin_orbital_begin + (spin_channels == 2u ? static_cast<std::int64_t>(spin) * count : 0);
     Gfn2OccupationsDeviceError error = Gfn2OccupationsDeviceError::kSuccess;
-    if (!fill_one_spin(eigenvalues + begin, count, batch.electron_counts[system * 2 + spin],
-                       temperature, workspace.occupation_scratch + occupation_base + spin * count,
+    if (!fill_one_spin(eigenvalues + spectrum_begin, count,
+                       batch.electron_counts[system * 2 + spin], temperature,
+                       workspace.occupation_scratch + occupation_base + spin * count,
                        spin_results + spin, &error)) {
       record_system_error(system_errors, system, device_error, error);
       return;
@@ -541,12 +571,16 @@ bool disjoint_sets(const std::array<AddressRange, FirstCount>& first,
   return true;
 }
 
-bool valid_bindings(const Gfn2OccupationsDeviceBatch& batch, const double* eigenvalues,
+bool valid_bindings(const Gfn2OccupationsDeviceBatch& batch,
+                    const Gfn2WavefunctionLayoutView* layout, const double* eigenvalues,
                     std::int64_t eigenvalue_elements, const Gfn2OccupationsDeviceResults& results,
                     const Gfn2OccupationsDeviceWorkspace& workspace, std::uint32_t* system_errors,
                     std::uint32_t* device_error) noexcept {
   std::int64_t two_batch = 0;
   std::int64_t two_orbitals = 0;
+  const bool spin_layout = layout != nullptr;
+  const std::int64_t spectrum_elements =
+      spin_layout ? layout->total_spin_orbitals : batch.total_orbitals;
   if (batch.batch_size <= 0 || batch.batch_size > std::numeric_limits<int>::max() ||
       batch.total_orbitals <= 0 || batch.plan_token == 0u ||
       !checked_multiply(batch.batch_size, 2, &two_batch) ||
@@ -554,7 +588,7 @@ bool valid_bindings(const Gfn2OccupationsDeviceBatch& batch, const double* eigen
       batch.orbital_offset_count != batch.batch_size + 1 ||
       batch.electron_count_elements != two_batch ||
       batch.temperature_elements != batch.batch_size || batch.active_elements != batch.batch_size ||
-      eigenvalue_elements != batch.total_orbitals || results.plan_token != batch.plan_token ||
+      eigenvalue_elements != spectrum_elements || results.plan_token != batch.plan_token ||
       results.occupation_elements != two_orbitals ||
       results.chemical_potential_elements != two_batch ||
       results.electron_sum_elements != two_batch || results.entropy_elements != batch.batch_size ||
@@ -576,18 +610,38 @@ bool valid_bindings(const Gfn2OccupationsDeviceBatch& batch, const double* eigen
       !is_aligned(workspace.entropy_scratch, alignof(double)) ||
       !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||
       !is_aligned(system_errors, alignof(std::uint32_t)) ||
-      !is_aligned(device_error, alignof(std::uint32_t))) {
+      !is_aligned(device_error, alignof(std::uint32_t)) ||
+      (spin_layout &&
+       (layout->memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
+        layout->plan_token != batch.plan_token || layout->batch_size != batch.batch_size ||
+        layout->total_spin_channels < batch.batch_size || layout->total_spin_channels > two_batch ||
+        layout->total_spin_orbitals < batch.total_orbitals ||
+        layout->total_spin_orbitals > two_orbitals ||
+        layout->spin_channel_count != batch.batch_size ||
+        layout->spin_channel_offset_count != batch.batch_size + 1 ||
+        layout->spin_orbital_offset_count != batch.batch_size + 1 ||
+        !is_aligned(layout->spin_channels, alignof(std::int32_t)) ||
+        !is_aligned(layout->spin_channel_offsets, alignof(std::int64_t)) ||
+        !is_aligned(layout->spin_orbital_offsets, alignof(std::int64_t))))) {
     return false;
   }
 
-  std::array<AddressRange, 5> inputs{};
+  std::array<AddressRange, 8> inputs{};
   std::array<AddressRange, 11> writable{};
   if (!make_address_range(batch.orbital_offsets, batch.orbital_offset_count, sizeof(std::int64_t),
                           &inputs[0]) ||
       !make_address_range(batch.electron_counts, two_batch, sizeof(double), &inputs[1]) ||
       !make_address_range(batch.temperatures, batch.batch_size, sizeof(double), &inputs[2]) ||
       !make_address_range(batch.active, batch.batch_size, sizeof(std::uint8_t), &inputs[3]) ||
-      !make_address_range(eigenvalues, batch.total_orbitals, sizeof(double), &inputs[4]) ||
+      !make_address_range(eigenvalues, spectrum_elements, sizeof(double), &inputs[4]) ||
+      !make_address_range(spin_layout ? layout->spin_channels : nullptr,
+                          spin_layout ? batch.batch_size : 0, sizeof(std::int32_t), &inputs[5]) ||
+      !make_address_range(spin_layout ? layout->spin_channel_offsets : nullptr,
+                          spin_layout ? batch.batch_size + 1 : 0, sizeof(std::int64_t),
+                          &inputs[6]) ||
+      !make_address_range(spin_layout ? layout->spin_orbital_offsets : nullptr,
+                          spin_layout ? batch.batch_size + 1 : 0, sizeof(std::int64_t),
+                          &inputs[7]) ||
       !make_address_range(results.occupations, two_orbitals, sizeof(double), &writable[0]) ||
       !make_address_range(results.chemical_potentials, two_batch, sizeof(double), &writable[1]) ||
       !make_address_range(results.electron_sums, two_batch, sizeof(double), &writable[2]) ||
@@ -638,8 +692,8 @@ cudaError_t evaluate_gfn2_restricted_occupations_cuda(
     std::int64_t eigenvalue_elements, const Gfn2OccupationsDeviceResults& results,
     const Gfn2OccupationsDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream) noexcept {
-  if (!valid_bindings(batch, eigenvalues, eigenvalue_elements, results, workspace, system_errors,
-                      device_error)) {
+  if (!valid_bindings(batch, nullptr, eigenvalues, eigenvalue_elements, results, workspace,
+                      system_errors, device_error)) {
     return cudaErrorInvalidValue;
   }
   capture_sequence_kernel<<<1, 1, 0, stream>>>(device_error, workspace.sequence_active);
@@ -648,7 +702,38 @@ cudaError_t evaluate_gfn2_restricted_occupations_cuda(
     return status;
   }
   evaluate_kernel<<<static_cast<unsigned int>(batch.batch_size), 1, 0, stream>>>(
-      batch, eigenvalues, workspace, system_errors, device_error);
+      batch, {}, eigenvalues, workspace, system_errors, device_error);
+  status = cudaGetLastError();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  canonicalize_device_error_kernel<<<1, 1, 0, stream>>>(batch.batch_size, workspace.sequence_active,
+                                                        system_errors, device_error);
+  status = cudaGetLastError();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  publish_kernel<<<static_cast<unsigned int>(batch.batch_size), kPublishThreads, 0, stream>>>(
+      batch, results, workspace, system_errors);
+  return cudaGetLastError();
+}
+
+cudaError_t evaluate_gfn2_occupations_cuda(
+    const Gfn2OccupationsDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const double* eigenvalues, std::int64_t eigenvalue_elements,
+    const Gfn2OccupationsDeviceResults& results, const Gfn2OccupationsDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  if (!valid_bindings(batch, &layout, eigenvalues, eigenvalue_elements, results, workspace,
+                      system_errors, device_error)) {
+    return cudaErrorInvalidValue;
+  }
+  capture_sequence_kernel<<<1, 1, 0, stream>>>(device_error, workspace.sequence_active);
+  cudaError_t status = cudaGetLastError();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  evaluate_kernel<<<static_cast<unsigned int>(batch.batch_size), 1, 0, stream>>>(
+      batch, layout, eigenvalues, workspace, system_errors, device_error);
   status = cudaGetLastError();
   if (status != cudaSuccess) {
     return status;

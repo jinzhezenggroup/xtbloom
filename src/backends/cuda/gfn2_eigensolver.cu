@@ -236,6 +236,94 @@ bool valid_bucket_plan(const Gfn2EigensolverDeviceBatch& batch,
          counted_matrices == batch.total_matrix_elements;
 }
 
+bool valid_spin_bucket_plan(const Gfn2EigensolverDeviceBatch& batch,
+                            const Gfn2WavefunctionLayoutView& layout,
+                            const Gfn2EigensolverBucket* buckets,
+                            std::int64_t bucket_count) noexcept {
+  std::int64_t two_batch = 0;
+  std::int64_t two_orbitals = 0;
+  std::int64_t two_matrices = 0;
+  if (!valid_bucket_plan(batch, buckets, bucket_count) ||
+      !checked_multiply(batch.batch_size, 2, &two_batch) ||
+      !checked_multiply(batch.total_orbitals, 2, &two_orbitals) ||
+      !checked_multiply(batch.total_matrix_elements, 2, &two_matrices) ||
+      layout.memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
+      layout.plan_token != batch.plan_token || layout.batch_size != batch.batch_size ||
+      layout.total_spin_channels < batch.batch_size || layout.total_spin_channels > two_batch ||
+      layout.total_spin_orbitals < batch.total_orbitals ||
+      layout.total_spin_orbitals > two_orbitals ||
+      layout.total_spin_matrix_elements < batch.total_matrix_elements ||
+      layout.total_spin_matrix_elements > two_matrices ||
+      layout.spin_channel_count != batch.batch_size ||
+      layout.spin_channel_offset_count != batch.batch_size + 1 ||
+      layout.spin_orbital_offset_count != batch.batch_size + 1 ||
+      layout.spin_matrix_offset_count != batch.batch_size + 1 ||
+      !is_aligned(layout.spin_channels, alignof(std::int32_t)) ||
+      !is_aligned(layout.spin_channel_offsets, alignof(std::int64_t)) ||
+      !is_aligned(layout.spin_orbital_offsets, alignof(std::int64_t)) ||
+      !is_aligned(layout.spin_matrix_offsets, alignof(std::int64_t))) {
+    return false;
+  }
+
+  std::int64_t counted_solves = 0;
+  std::int64_t counted_orbitals = 0;
+  std::int64_t counted_matrices = 0;
+  for (std::int64_t bucket_index = 0; bucket_index < bucket_count; ++bucket_index) {
+    const Gfn2EigensolverBucket& bucket = buckets[bucket_index];
+    const std::int64_t n = bucket.orbital_count;
+    const std::int64_t solve_count = bucket.solve_count;
+    std::int64_t matrix_stride = 0;
+    std::int64_t matrix_span = 0;
+    std::int64_t orbital_span = 0;
+    std::int64_t solve_end = 0;
+    std::int64_t matrix_end = 0;
+    std::int64_t orbital_end = 0;
+    if (solve_count < bucket.system_count ||
+        solve_count > 2LL * static_cast<std::int64_t>(bucket.system_count) ||
+        !checked_multiply(n, n, &matrix_stride) ||
+        !checked_multiply(matrix_stride, solve_count, &matrix_span) ||
+        !checked_multiply(n, solve_count, &orbital_span) ||
+        !checked_add(bucket.solve_index_offset, solve_count, &solve_end) ||
+        !checked_add(bucket.spin_matrix_scratch_offset, matrix_span, &matrix_end) ||
+        !checked_add(bucket.spin_orbital_scratch_offset, orbital_span, &orbital_end) ||
+        solve_end > layout.total_spin_channels || matrix_end > layout.total_spin_matrix_elements ||
+        orbital_end > layout.total_spin_orbitals ||
+        !checked_add(counted_solves, solve_count, &counted_solves) ||
+        !checked_add(counted_orbitals, orbital_span, &counted_orbitals) ||
+        !checked_add(counted_matrices, matrix_span, &counted_matrices)) {
+      return false;
+    }
+    for (std::int64_t other_index = 0; other_index < bucket_index; ++other_index) {
+      const Gfn2EigensolverBucket& other = buckets[other_index];
+      std::int64_t other_matrix_stride = 0;
+      std::int64_t other_matrix_span = 0;
+      std::int64_t other_orbital_span = 0;
+      std::int64_t other_solve_end = 0;
+      std::int64_t other_matrix_end = 0;
+      std::int64_t other_orbital_end = 0;
+      if (!checked_multiply(other.orbital_count, other.orbital_count, &other_matrix_stride) ||
+          !checked_multiply(other_matrix_stride, other.solve_count, &other_matrix_span) ||
+          !checked_multiply(other.orbital_count, other.solve_count, &other_orbital_span) ||
+          !checked_add(other.solve_index_offset, other.solve_count, &other_solve_end) ||
+          !checked_add(other.spin_matrix_scratch_offset, other_matrix_span, &other_matrix_end) ||
+          !checked_add(other.spin_orbital_scratch_offset, other_orbital_span, &other_orbital_end)) {
+        return false;
+      }
+      if (ranges_overlap(bucket.solve_index_offset, solve_end, other.solve_index_offset,
+                         other_solve_end) ||
+          ranges_overlap(bucket.spin_matrix_scratch_offset, matrix_end,
+                         other.spin_matrix_scratch_offset, other_matrix_end) ||
+          ranges_overlap(bucket.spin_orbital_scratch_offset, orbital_end,
+                         other.spin_orbital_scratch_offset, other_orbital_end)) {
+        return false;
+      }
+    }
+  }
+  return counted_solves == layout.total_spin_channels &&
+         counted_orbitals == layout.total_spin_orbitals &&
+         counted_matrices == layout.total_spin_matrix_elements;
+}
+
 bool valid_workspace(const Gfn2EigensolverDeviceBatch& batch,
                      const Gfn2EigensolverDeviceWorkspace& workspace) noexcept {
   return workspace.plan_token == batch.plan_token &&
@@ -261,6 +349,20 @@ bool valid_workspace(const Gfn2EigensolverDeviceBatch& batch,
          (workspace.solver_host_workspace_bytes == 0u ||
           is_aligned(static_cast<const std::byte*>(workspace.solver_host_workspace),
                      alignof(std::max_align_t)));
+}
+
+bool valid_spin_workspace(const Gfn2EigensolverDeviceBatch& batch,
+                          const Gfn2WavefunctionLayoutView& layout,
+                          const Gfn2EigensolverDeviceWorkspace& workspace) noexcept {
+  return valid_workspace(batch, workspace) &&
+         workspace.matrix_a_elements >= layout.total_spin_matrix_elements &&
+         workspace.matrix_b_elements >= layout.total_spin_matrix_elements &&
+         workspace.eigenvalue_elements >= layout.total_spin_orbitals &&
+         workspace.factor_pointer_elements >= layout.total_spin_channels &&
+         workspace.matrix_pointer_elements >= layout.total_spin_channels &&
+         workspace.info_a_elements >= layout.total_spin_channels &&
+         workspace.info_b_elements >= layout.total_spin_channels &&
+         workspace.eligible_elements >= layout.total_spin_channels;
 }
 
 bool valid_cache(const Gfn2EigensolverDeviceBatch& batch,
@@ -367,6 +469,61 @@ bool valid_solve_ranges(const Gfn2EigensolverDeviceBatch& batch,
                     sizeof(std::int32_t), &writes[16]) &&
          make_range(workspace.bucket_activity, workspace.bucket_activity_elements,
                     sizeof(Gfn2EigensolverBucketActivity), &writes[17]) &&
+         pairwise_disjoint(reads) && pairwise_disjoint(writes) && disjoint_sets(reads, writes);
+}
+
+bool valid_spin_solve_ranges(const Gfn2EigensolverDeviceBatch& batch,
+                             const Gfn2WavefunctionLayoutView& layout,
+                             const Gfn2EigensolverOverlapCache& cache, const double* hamiltonians,
+                             const std::uint64_t* geometry_epoch,
+                             const Gfn2EigensolverDeviceWorkspace& workspace,
+                             const Gfn2EigensolverDeviceResults& results,
+                             std::uint32_t* system_errors, std::uint32_t* device_error) noexcept {
+  std::array<AddressRange, 13> reads{};
+  std::array<AddressRange, 15> writes{};
+  return make_range(batch.orbital_offsets, batch.batch_size + 1, sizeof(std::int64_t), &reads[0]) &&
+         make_range(batch.matrix_offsets, batch.batch_size + 1, sizeof(std::int64_t), &reads[1]) &&
+         make_range(batch.bucket_systems, batch.batch_size, sizeof(std::int32_t), &reads[2]) &&
+         make_range(batch.active, batch.batch_size, sizeof(std::uint8_t), &reads[3]) &&
+         make_range(layout.spin_channels, batch.batch_size, sizeof(std::int32_t), &reads[4]) &&
+         make_range(layout.spin_channel_offsets, batch.batch_size + 1, sizeof(std::int64_t),
+                    &reads[5]) &&
+         make_range(layout.spin_orbital_offsets, batch.batch_size + 1, sizeof(std::int64_t),
+                    &reads[6]) &&
+         make_range(layout.spin_matrix_offsets, batch.batch_size + 1, sizeof(std::int64_t),
+                    &reads[7]) &&
+         make_range(cache.cholesky_factors, batch.total_matrix_elements, sizeof(double),
+                    &reads[8]) &&
+         make_range(cache.geometry_generations, batch.batch_size, sizeof(std::uint64_t),
+                    &reads[9]) &&
+         make_range(cache.factor_statuses, batch.batch_size, sizeof(std::uint32_t), &reads[10]) &&
+         make_range(hamiltonians, layout.total_spin_matrix_elements, sizeof(double), &reads[11]) &&
+         make_range(geometry_epoch, geometry_epoch == nullptr ? 0 : 1, sizeof(std::uint64_t),
+                    &reads[12]) &&
+         make_range(workspace.matrix_scratch_a, layout.total_spin_matrix_elements, sizeof(double),
+                    &writes[0]) &&
+         make_range(workspace.matrix_scratch_b, layout.total_spin_matrix_elements, sizeof(double),
+                    &writes[1]) &&
+         make_range(workspace.eigenvalue_scratch, layout.total_spin_orbitals, sizeof(double),
+                    &writes[2]) &&
+         make_range(workspace.factor_pointers, layout.total_spin_channels, sizeof(double*),
+                    &writes[3]) &&
+         make_range(workspace.matrix_pointers, layout.total_spin_channels, sizeof(double*),
+                    &writes[4]) &&
+         make_range(workspace.info_a, layout.total_spin_channels, sizeof(int), &writes[5]) &&
+         make_range(workspace.info_b, layout.total_spin_channels, sizeof(int), &writes[6]) &&
+         make_range(workspace.eligible, layout.total_spin_channels, sizeof(std::uint8_t),
+                    &writes[7]) &&
+         make_range(workspace.sequence_active, 1, sizeof(std::uint32_t), &writes[8]) &&
+         make_byte_range(workspace.solver_device_workspace, workspace.solver_device_workspace_bytes,
+                         &writes[9]) &&
+         make_byte_range(workspace.solver_host_workspace, workspace.solver_host_workspace_bytes,
+                         &writes[10]) &&
+         make_range(results.eigenvalues, layout.total_spin_orbitals, sizeof(double), &writes[11]) &&
+         make_range(results.coefficients, layout.total_spin_matrix_elements, sizeof(double),
+                    &writes[12]) &&
+         make_range(system_errors, batch.batch_size, sizeof(std::uint32_t), &writes[13]) &&
+         make_range(device_error, 1, sizeof(std::uint32_t), &writes[14]) &&
          pairwise_disjoint(reads) && pairwise_disjoint(writes) && disjoint_sets(reads, writes);
 }
 
@@ -714,6 +871,327 @@ __global__ void prepare_solve_bucket_kernel(
     }
     workspace.matrix_scratch_a[scratch_begin + index] = factor;
     workspace.matrix_scratch_b[scratch_begin + index] = hamiltonian;
+  }
+}
+
+/* Resolve canonical bucket-local solve work without materializing another
+ * device map. Topology setup fixes spin_channels for the plan lifetime, and
+ * the scan order is deliberately system-major then spin-major. */
+__device__ bool resolve_spin_solve_work(Gfn2EigensolverDeviceBatch batch,
+                                        Gfn2WavefunctionLayoutView layout,
+                                        Gfn2EigensolverBucket bucket, std::int64_t work_local,
+                                        std::int32_t* system, std::int32_t* physical_local,
+                                        std::uint8_t* spin) {
+  for (std::int32_t local = 0; local < bucket.system_count; ++local) {
+    const std::int32_t candidate =
+        batch.bucket_systems[bucket.system_index_offset + static_cast<std::int64_t>(local)];
+    if (candidate < 0 || candidate >= batch.batch_size) {
+      return false;
+    }
+    const std::int32_t channels = layout.spin_channels[candidate];
+    if (channels != 1 && channels != 2) {
+      return false;
+    }
+    if (work_local < channels) {
+      *system = candidate;
+      *physical_local = local;
+      *spin = static_cast<std::uint8_t>(work_local);
+      return true;
+    }
+    work_local -= channels;
+  }
+  return false;
+}
+
+/* Provider batch counts are host metadata, so device topology must prove that
+ * each count exactly matches sum(nspin) before any physical result can publish.
+ * A mismatch is a plan-wide error: provider calls still receive identity
+ * placeholders, but the complete sequence remains fail-closed. */
+__global__ void validate_spin_bucket_layout_kernel(Gfn2EigensolverDeviceBatch batch,
+                                                   Gfn2WavefunctionLayoutView layout,
+                                                   Gfn2EigensolverBucket bucket,
+                                                   std::uint32_t* sequence_active,
+                                                   std::uint32_t* device_error) {
+  if (blockIdx.x != 0 || threadIdx.x != 0 || atomicAdd(sequence_active, 0u) == 0u) {
+    return;
+  }
+  std::int64_t solve_count = 0;
+  const std::int64_t n = bucket.orbital_count;
+  const std::int64_t matrix_stride = n * n;
+  for (std::int32_t local = 0; local < bucket.system_count; ++local) {
+    const std::int32_t system =
+        batch.bucket_systems[bucket.system_index_offset + static_cast<std::int64_t>(local)];
+    if (system < 0 || system >= batch.batch_size) {
+      record_global_error(device_error, Gfn2EigensolverDeviceError::kInvalidSpinLayout);
+      atomicExch(sequence_active, 0u);
+      return;
+    }
+    const std::int32_t channels = layout.spin_channels[system];
+    const std::int64_t orbital_begin = batch.orbital_offsets[system];
+    const std::int64_t orbital_end = batch.orbital_offsets[system + 1];
+    const std::int64_t matrix_begin = batch.matrix_offsets[system];
+    const std::int64_t matrix_end = batch.matrix_offsets[system + 1];
+    const std::int64_t channel_begin = layout.spin_channel_offsets[system];
+    const std::int64_t channel_end = layout.spin_channel_offsets[system + 1];
+    const std::int64_t spin_orbital_begin = layout.spin_orbital_offsets[system];
+    const std::int64_t spin_orbital_end = layout.spin_orbital_offsets[system + 1];
+    const std::int64_t spin_matrix_begin = layout.spin_matrix_offsets[system];
+    const std::int64_t spin_matrix_end = layout.spin_matrix_offsets[system + 1];
+    if ((channels != 1 && channels != 2) || orbital_begin < 0 || orbital_end - orbital_begin != n ||
+        orbital_end > batch.total_orbitals || matrix_begin < 0 ||
+        matrix_end - matrix_begin != matrix_stride || matrix_end > batch.total_matrix_elements ||
+        channel_begin < 0 || channel_end - channel_begin != channels ||
+        channel_end > layout.total_spin_channels || spin_orbital_begin < 0 ||
+        spin_orbital_end - spin_orbital_begin != static_cast<std::int64_t>(channels) * n ||
+        spin_orbital_end > layout.total_spin_orbitals || spin_matrix_begin < 0 ||
+        spin_matrix_end - spin_matrix_begin !=
+            static_cast<std::int64_t>(channels) * matrix_stride ||
+        spin_matrix_end > layout.total_spin_matrix_elements ||
+        (system == 0 && (orbital_begin != 0 || matrix_begin != 0 || channel_begin != 0 ||
+                         spin_orbital_begin != 0 || spin_matrix_begin != 0)) ||
+        (system + 1 == batch.batch_size &&
+         (orbital_end != batch.total_orbitals || matrix_end != batch.total_matrix_elements ||
+          channel_end != layout.total_spin_channels ||
+          spin_orbital_end != layout.total_spin_orbitals ||
+          spin_matrix_end != layout.total_spin_matrix_elements))) {
+      record_global_error(device_error, Gfn2EigensolverDeviceError::kInvalidSpinLayout);
+      atomicExch(sequence_active, 0u);
+      return;
+    }
+    solve_count += channels;
+  }
+  if (solve_count != bucket.solve_count) {
+    record_global_error(device_error, Gfn2EigensolverDeviceError::kInvalidSpinLayout);
+    atomicExch(sequence_active, 0u);
+  }
+}
+
+__global__ void prepare_spin_solve_bucket_kernel(
+    Gfn2EigensolverDeviceBatch batch, Gfn2WavefunctionLayoutView layout,
+    Gfn2EigensolverBucket bucket, Gfn2EigensolverOverlapCache cache,
+    std::uint64_t scalar_generation, const std::uint64_t* device_generation,
+    const double* hamiltonians, double symmetry_tolerance, Gfn2EigensolverDeviceWorkspace workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error) {
+  const std::int64_t work_local = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t solve_slot = bucket.solve_index_offset + work_local;
+  const std::int64_t matrix_stride = static_cast<std::int64_t>(bucket.orbital_count) *
+                                     static_cast<std::int64_t>(bucket.orbital_count);
+  const std::int64_t scratch_begin = bucket.spin_matrix_scratch_offset + work_local * matrix_stride;
+
+  __shared__ std::int32_t system;
+  __shared__ std::int32_t physical_local;
+  __shared__ std::uint8_t spin;
+  __shared__ std::int64_t input_begin;
+  __shared__ std::int64_t factor_begin;
+  __shared__ int valid;
+  if (threadIdx.x == 0) {
+    system = -1;
+    physical_local = -1;
+    spin = 0u;
+    input_begin = 0;
+    factor_begin = 0;
+    valid = 0;
+    workspace.eligible[solve_slot] = 0u;
+    workspace.factor_pointers[solve_slot] = workspace.matrix_scratch_a + scratch_begin;
+    workspace.matrix_pointers[solve_slot] = workspace.matrix_scratch_b + scratch_begin;
+    if (atomicAdd(workspace.sequence_active, 0u) != 0u &&
+        resolve_spin_solve_work(batch, layout, bucket, work_local, &system, &physical_local,
+                                &spin) &&
+        system_is_clear(system_errors, system)) {
+      const std::uint8_t active = batch.active[system];
+      if (active != 0u && active != 1u) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2EigensolverDeviceError::kInvalidActiveMask);
+      } else if (active == 1u) {
+        const std::uint64_t geometry_generation =
+            load_geometry_generation({scalar_generation, device_generation});
+        factor_begin = bucket.matrix_scratch_offset +
+                       static_cast<std::int64_t>(physical_local) * matrix_stride;
+        input_begin =
+            layout.spin_matrix_offsets[system] + static_cast<std::int64_t>(spin) * matrix_stride;
+        if (cache.geometry_generations[system] != geometry_generation ||
+            cache.factor_statuses[system] !=
+                static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kSuccess)) {
+          record_system_error(system_errors, system, device_error,
+                              Gfn2EigensolverDeviceError::kStaleOverlapCache);
+        } else {
+          bool finite = true;
+          const bool symmetric = symmetric_input_is_valid(
+              hamiltonians + input_begin, bucket.orbital_count, symmetry_tolerance, &finite);
+          bool factor_finite = true;
+          for (std::int64_t diagonal = 0; diagonal < bucket.orbital_count; ++diagonal) {
+            const double value =
+                cache.cholesky_factors[factor_begin + diagonal * bucket.orbital_count + diagonal];
+            factor_finite = factor_finite && isfinite(value) && value > 0.0;
+          }
+          if (!finite) {
+            record_system_error(system_errors, system, device_error,
+                                Gfn2EigensolverDeviceError::kNonfiniteHamiltonian);
+          } else if (!symmetric) {
+            record_system_error(system_errors, system, device_error,
+                                Gfn2EigensolverDeviceError::kNonsymmetricHamiltonian);
+          } else if (!factor_finite) {
+            record_system_error(system_errors, system, device_error,
+                                Gfn2EigensolverDeviceError::kStaleOverlapCache);
+          } else {
+            valid = 1;
+            workspace.eligible[solve_slot] = 1u;
+          }
+        }
+      }
+    }
+  }
+  __syncthreads();
+
+  for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
+    const std::int64_t row = index % bucket.orbital_count;
+    const std::int64_t column = index / bucket.orbital_count;
+    double factor = row == column ? 1.0 : 0.0;
+    double hamiltonian = row == column ? 1.0 : 0.0;
+    if (valid != 0) {
+      factor = cache.cholesky_factors[factor_begin + index];
+      const double first = hamiltonians[input_begin + row * bucket.orbital_count + column];
+      const double second = hamiltonians[input_begin + column * bucket.orbital_count + row];
+      hamiltonian = row == column ? first : 0.5 * first + 0.5 * second;
+    }
+    workspace.matrix_scratch_a[scratch_begin + index] = factor;
+    workspace.matrix_scratch_b[scratch_begin + index] = hamiltonian;
+  }
+}
+
+__global__ void symmetrize_spin_transformed_bucket_kernel(Gfn2EigensolverDeviceBatch batch,
+                                                          Gfn2WavefunctionLayoutView layout,
+                                                          Gfn2EigensolverBucket bucket,
+                                                          Gfn2EigensolverDeviceWorkspace workspace,
+                                                          std::uint32_t* system_errors,
+                                                          std::uint32_t* device_error) {
+  const std::int64_t work_local = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t solve_slot = bucket.solve_index_offset + work_local;
+  std::int32_t system = -1;
+  std::int32_t physical_local = -1;
+  std::uint8_t spin = 0u;
+  if (!resolve_spin_solve_work(batch, layout, bucket, work_local, &system, &physical_local,
+                               &spin)) {
+    return;
+  }
+  const std::int64_t matrix_stride = static_cast<std::int64_t>(bucket.orbital_count) *
+                                     static_cast<std::int64_t>(bucket.orbital_count);
+  const std::int64_t matrix_begin = bucket.spin_matrix_scratch_offset + work_local * matrix_stride;
+  __shared__ int valid;
+  if (threadIdx.x == 0) {
+    valid = workspace.eligible[solve_slot] == 1u && system_is_clear(system_errors, system) ? 1 : 0;
+    for (std::int64_t index = 0; valid != 0 && index < matrix_stride; ++index) {
+      if (!isfinite(workspace.matrix_scratch_b[matrix_begin + index])) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2EigensolverDeviceError::kNonfiniteEigenpair);
+        valid = 0;
+      }
+    }
+  }
+  __syncthreads();
+  for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
+    const std::int64_t row = index % bucket.orbital_count;
+    const std::int64_t column = index / bucket.orbital_count;
+    if (row < column) {
+      continue;
+    }
+    double value = row == column ? 1.0 : 0.0;
+    if (valid != 0) {
+      const double first =
+          workspace.matrix_scratch_b[matrix_begin + row + column * bucket.orbital_count];
+      const double second =
+          workspace.matrix_scratch_b[matrix_begin + column + row * bucket.orbital_count];
+      value = row == column ? first : 0.5 * first + 0.5 * second;
+    }
+    workspace.matrix_scratch_b[matrix_begin + row + column * bucket.orbital_count] = value;
+    workspace.matrix_scratch_b[matrix_begin + column + row * bucket.orbital_count] = value;
+  }
+}
+
+/* This validation is intentionally a separate ordered stage. A failure in
+ * either spin records the physical system error before any peer block can
+ * publish the other spin. */
+__global__ void validate_spin_eigenpairs_bucket_kernel(Gfn2EigensolverDeviceBatch batch,
+                                                       Gfn2WavefunctionLayoutView layout,
+                                                       Gfn2EigensolverBucket bucket,
+                                                       Gfn2EigensolverDeviceWorkspace workspace,
+                                                       std::uint32_t* system_errors,
+                                                       std::uint32_t* device_error) {
+  const std::int64_t work_local = static_cast<std::int64_t>(blockIdx.x);
+  if (threadIdx.x != 0) {
+    return;
+  }
+  const std::int64_t solve_slot = bucket.solve_index_offset + work_local;
+  std::int32_t system = -1;
+  std::int32_t physical_local = -1;
+  std::uint8_t spin = 0u;
+  if (!resolve_spin_solve_work(batch, layout, bucket, work_local, &system, &physical_local,
+                               &spin) ||
+      workspace.eligible[solve_slot] != 1u || !system_is_clear(system_errors, system)) {
+    return;
+  }
+  if (workspace.info_a[solve_slot] != 0) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2EigensolverDeviceError::kEigensolverFailed);
+    return;
+  }
+  const std::int64_t matrix_stride = static_cast<std::int64_t>(bucket.orbital_count) *
+                                     static_cast<std::int64_t>(bucket.orbital_count);
+  const std::int64_t matrix_begin = bucket.spin_matrix_scratch_offset + work_local * matrix_stride;
+  const std::int64_t orbital_begin =
+      bucket.spin_orbital_scratch_offset + work_local * bucket.orbital_count;
+  for (std::int64_t orbital = 0; orbital < bucket.orbital_count; ++orbital) {
+    if (!isfinite(workspace.eigenvalue_scratch[orbital_begin + orbital])) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2EigensolverDeviceError::kNonfiniteEigenpair);
+      return;
+    }
+  }
+  for (std::int64_t index = 0; index < matrix_stride; ++index) {
+    if (!isfinite(workspace.matrix_scratch_b[matrix_begin + index])) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2EigensolverDeviceError::kNonfiniteEigenpair);
+      return;
+    }
+  }
+}
+
+__global__ void publish_spin_eigensystems_bucket_kernel(Gfn2EigensolverDeviceBatch batch,
+                                                        Gfn2WavefunctionLayoutView layout,
+                                                        Gfn2EigensolverBucket bucket,
+                                                        Gfn2EigensolverDeviceWorkspace workspace,
+                                                        Gfn2EigensolverDeviceResults results,
+                                                        const std::uint32_t* system_errors) {
+  const std::int64_t work_local = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t solve_slot = bucket.solve_index_offset + work_local;
+  std::int32_t system = -1;
+  std::int32_t physical_local = -1;
+  std::uint8_t spin = 0u;
+  if (!resolve_spin_solve_work(batch, layout, bucket, work_local, &system, &physical_local,
+                               &spin) ||
+      workspace.eligible[solve_slot] != 1u || batch.active[system] != 1u ||
+      !system_is_clear(system_errors, system)) {
+    return;
+  }
+  const std::int64_t matrix_stride = static_cast<std::int64_t>(bucket.orbital_count) *
+                                     static_cast<std::int64_t>(bucket.orbital_count);
+  const std::int64_t scratch_matrix_begin =
+      bucket.spin_matrix_scratch_offset + work_local * matrix_stride;
+  const std::int64_t scratch_orbital_begin =
+      bucket.spin_orbital_scratch_offset + work_local * bucket.orbital_count;
+  const std::int64_t output_matrix_begin =
+      layout.spin_matrix_offsets[system] + static_cast<std::int64_t>(spin) * matrix_stride;
+  const std::int64_t output_orbital_begin =
+      layout.spin_orbital_offsets[system] + static_cast<std::int64_t>(spin) * bucket.orbital_count;
+  for (std::int64_t orbital = threadIdx.x; orbital < bucket.orbital_count; orbital += blockDim.x) {
+    results.eigenvalues[output_orbital_begin + orbital] =
+        workspace.eigenvalue_scratch[scratch_orbital_begin + orbital];
+  }
+  for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
+    const std::int64_t ao = index / bucket.orbital_count;
+    const std::int64_t orbital = index - ao * bucket.orbital_count;
+    results.coefficients[output_matrix_begin + index] =
+        workspace.matrix_scratch_b[scratch_matrix_begin + ao + orbital * bucket.orbital_count];
   }
 }
 
@@ -1715,6 +2193,20 @@ Gfn2EigensolverLaunchResult query_gfn2_eigensolver_bucket_workspace_cuda(
   return launch_success();
 }
 
+Gfn2EigensolverLaunchResult query_gfn2_spin_eigensolver_bucket_workspace_cuda(
+    cusolverDnHandle_t solver, cusolverDnParams_t parameters, const Gfn2EigensolverBucket& bucket,
+    const double* device_matrix, const double* device_eigenvalues,
+    Gfn2EigensolverWorkspaceRequirements& requirements) noexcept {
+  if (bucket.solve_count <= 0) {
+    return invalid_argument();
+  }
+  const Gfn2EigensolverBucket submission{
+      bucket.orbital_count, bucket.solve_count, bucket.solve_index_offset,
+      bucket.spin_matrix_scratch_offset, bucket.spin_orbital_scratch_offset};
+  return query_gfn2_eigensolver_bucket_workspace_cuda(solver, parameters, submission, device_matrix,
+                                                      device_eigenvalues, requirements);
+}
+
 cudaError_t reset_gfn2_eigensolver_device_errors_cuda(std::int64_t batch_size,
                                                       std::uint32_t* system_errors,
                                                       std::uint32_t* device_error,
@@ -1932,6 +2424,131 @@ static Gfn2EigensolverLaunchResult solve_eigensystems_impl(
   return launch_success();
 }
 
+static Gfn2EigensolverLaunchResult solve_spin_eigensystems_impl(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2EigensolverBucket* buckets, std::int64_t bucket_count,
+    const Gfn2EigensolverOverlapCache& cache, std::uint64_t scalar_generation,
+    const Gfn2GeometryEpochDevice* geometry_epoch, const double* hamiltonians,
+    const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver, cusolverDnParams_t parameters,
+    cublasHandle_t blas, const Gfn2EigensolverDeviceWorkspace& workspace,
+    const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  const bool dynamic_epoch = geometry_epoch != nullptr;
+  if (!valid_spin_bucket_plan(batch, layout, buckets, bucket_count) || !valid_options(options) ||
+      !valid_spin_workspace(batch, layout, workspace) || !valid_cache(batch, cache) ||
+      ((!dynamic_epoch && scalar_generation == 0u) ||
+       (dynamic_epoch &&
+        (scalar_generation != 0u || geometry_epoch->value == nullptr ||
+         geometry_epoch->value_elements != 1 || geometry_epoch->plan_token != batch.plan_token ||
+         !is_aligned(geometry_epoch->value, alignof(std::uint64_t))))) ||
+      solver == nullptr || parameters == nullptr || blas == nullptr ||
+      results.plan_token != batch.plan_token ||
+      results.eigenvalue_elements < layout.total_spin_orbitals ||
+      results.coefficient_elements < layout.total_spin_matrix_elements ||
+      !is_aligned(hamiltonians, alignof(double)) ||
+      !is_aligned(results.eigenvalues, alignof(double)) ||
+      !is_aligned(results.coefficients, alignof(double)) ||
+      !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(device_error, alignof(std::uint32_t)) ||
+      !valid_spin_solve_ranges(batch, layout, cache, hamiltonians,
+                               dynamic_epoch ? geometry_epoch->value : nullptr, workspace, results,
+                               system_errors, device_error)) {
+    return invalid_argument();
+  }
+  Gfn2EigensolverLaunchResult result = configure_solver(solver, stream);
+  if (!result.success()) {
+    return result;
+  }
+  result = prepare_launch_sequence(batch, workspace, device_error, stream);
+  if (!result.success()) {
+    return result;
+  }
+  cudaError_t clear_status = cudaMemsetAsync(
+      workspace.info_a, 0,
+      static_cast<std::size_t>(layout.total_spin_channels) * sizeof(*workspace.info_a), stream);
+  if (clear_status != cudaSuccess) {
+    return cuda_failure(clear_status);
+  }
+  result = configure_blas(blas, stream, options.deterministic_debug);
+  if (!result.success()) {
+    return result;
+  }
+
+  /* Validate every bucket before launching any publication stage so a device-
+   * resident topology mismatch is whole-call fail-closed. */
+  for (std::int64_t bucket_index = 0; bucket_index < bucket_count; ++bucket_index) {
+    validate_spin_bucket_layout_kernel<<<1, 1, 0, stream>>>(
+        batch, layout, buckets[bucket_index], workspace.sequence_active, device_error);
+    result = check_kernel_launch();
+    if (!result.success()) {
+      return result;
+    }
+  }
+
+  for (std::int64_t bucket_index = 0; bucket_index < bucket_count; ++bucket_index) {
+    const Gfn2EigensolverBucket bucket = buckets[bucket_index];
+    const Gfn2EigensolverBucket submission{
+        bucket.orbital_count, bucket.solve_count, bucket.solve_index_offset,
+        bucket.spin_matrix_scratch_offset, bucket.spin_orbital_scratch_offset};
+    prepare_spin_solve_bucket_kernel<<<static_cast<unsigned int>(bucket.solve_count),
+                                       kThreadsPerSystem, 0, stream>>>(
+        batch, layout, bucket, cache, scalar_generation,
+        dynamic_epoch ? geometry_epoch->value : nullptr, hamiltonians, options.symmetry_tolerance,
+        workspace, system_errors, device_error);
+    result = check_kernel_launch();
+    if (!result.success()) {
+      return result;
+    }
+    result = triangular_solve(blas, CUBLAS_SIDE_LEFT, CUBLAS_OP_N, submission,
+                              workspace.factor_pointers + bucket.solve_index_offset,
+                              workspace.matrix_pointers + bucket.solve_index_offset);
+    if (!result.success()) {
+      return result;
+    }
+    result = triangular_solve(blas, CUBLAS_SIDE_RIGHT, CUBLAS_OP_T, submission,
+                              workspace.factor_pointers + bucket.solve_index_offset,
+                              workspace.matrix_pointers + bucket.solve_index_offset);
+    if (!result.success()) {
+      return result;
+    }
+    symmetrize_spin_transformed_bucket_kernel<<<static_cast<unsigned int>(bucket.solve_count),
+                                                kThreadsPerSystem, 0, stream>>>(
+        batch, layout, bucket, workspace, system_errors, device_error);
+    result = check_kernel_launch();
+    if (!result.success()) {
+      return result;
+    }
+    result = symmetric_eigensolve(solver, parameters, CUSOLVER_EIG_MODE_VECTOR, submission,
+                                  workspace.matrix_scratch_b + bucket.spin_matrix_scratch_offset,
+                                  workspace.eigenvalue_scratch + bucket.spin_orbital_scratch_offset,
+                                  workspace, workspace.info_a + bucket.solve_index_offset);
+    if (!result.success()) {
+      return result;
+    }
+    result = triangular_solve(blas, CUBLAS_SIDE_LEFT, CUBLAS_OP_T, submission,
+                              workspace.factor_pointers + bucket.solve_index_offset,
+                              workspace.matrix_pointers + bucket.solve_index_offset);
+    if (!result.success()) {
+      return result;
+    }
+    validate_spin_eigenpairs_bucket_kernel<<<static_cast<unsigned int>(bucket.solve_count), 1, 0,
+                                             stream>>>(batch, layout, bucket, workspace,
+                                                       system_errors, device_error);
+    result = check_kernel_launch();
+    if (!result.success()) {
+      return result;
+    }
+    publish_spin_eigensystems_bucket_kernel<<<static_cast<unsigned int>(bucket.solve_count),
+                                              kThreadsPerSystem, 0, stream>>>(
+        batch, layout, bucket, workspace, results, system_errors);
+    result = check_kernel_launch();
+    if (!result.success()) {
+      return result;
+    }
+  }
+  return launch_success();
+}
+
 Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
     const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
     std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
@@ -1945,6 +2562,19 @@ Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
                                  results, system_errors, device_error, stream);
 }
 
+Gfn2EigensolverLaunchResult solve_gfn2_spin_eigensystems_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2EigensolverBucket* buckets, std::int64_t bucket_count,
+    const Gfn2EigensolverOverlapCache& cache, std::uint64_t geometry_generation,
+    const double* hamiltonians, const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver,
+    cusolverDnParams_t parameters, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, const Gfn2EigensolverDeviceResults& results,
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  return solve_spin_eigensystems_impl(
+      batch, layout, buckets, bucket_count, cache, geometry_generation, nullptr, hamiltonians,
+      options, solver, parameters, blas, workspace, results, system_errors, device_error, stream);
+}
+
 Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
     const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
     std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
@@ -1956,6 +2586,19 @@ Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
   return solve_eigensystems_impl(batch, buckets, bucket_count, cache, 0u, &geometry_epoch,
                                  hamiltonians, options, solver, parameters, blas, workspace,
                                  results, system_errors, device_error, stream);
+}
+
+Gfn2EigensolverLaunchResult solve_gfn2_spin_eigensystems_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2EigensolverBucket* buckets, std::int64_t bucket_count,
+    const Gfn2EigensolverOverlapCache& cache, const Gfn2GeometryEpochDevice& geometry_epoch,
+    const double* hamiltonians, const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver,
+    cusolverDnParams_t parameters, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, const Gfn2EigensolverDeviceResults& results,
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  return solve_spin_eigensystems_impl(
+      batch, layout, buckets, bucket_count, cache, 0u, &geometry_epoch, hamiltonians, options,
+      solver, parameters, blas, workspace, results, system_errors, device_error, stream);
 }
 
 }  // namespace gpuxtb::detail::cuda

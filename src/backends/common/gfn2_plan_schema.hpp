@@ -47,6 +47,8 @@ enum class Gfn2PlanSchemaError : std::uint32_t {
   kCrossPlan = 15u,
   kStaleGeometry = 16u,
   kInvalidActiveMask = 17u,
+  kInvalidSpinChannels = 18u,
+  kInvalidWavefunctionExtent = 19u,
 };
 
 /* Identifies the first field involved in a setup failure. */
@@ -70,6 +72,12 @@ enum class Gfn2PlanSchemaField : std::uint32_t {
   kGeometryProvenance = 16u,
   kSystemGeometryGenerations = 17u,
   kActiveMask = 18u,
+  kSpinChannels = 19u,
+  kSpinChannelOffsets = 20u,
+  kSpinOrbitalOffsets = 21u,
+  kSpinMatrixOffsets = 22u,
+  kSpinShellOffsets = 23u,
+  kSpinAtomOffsets = 24u,
 };
 
 struct Gfn2PlanSchemaDiagnostic {
@@ -140,6 +148,45 @@ struct Gfn2RaggedTopologyView {
 };
 
 /*
+ * Exact device-neutral projection of WavefunctionLayout's spin-dependent
+ * system offsets.  The physical atom/shell/orbital/matrix partitions remain
+ * authoritative in Gfn2RaggedTopologyView; this view adds only the extents
+ * that grow with nspin.  Keeping the two views separate lets one overlap
+ * factor and one integral matrix serve both unrestricted channels.
+ *
+ * spin_channel_offsets partitions scalar per-channel diagnostics and advances
+ * by nspin.  The other offsets advance respectively by nspin*nao,
+ * nspin*nao*nao, nspin*nsh, and nspin*nat.  Occupations intentionally do not
+ * appear here because their immutable CPU/CUDA contract is always
+ * 2*batch_orbital_offsets, even for restricted systems.
+ */
+struct Gfn2WavefunctionLayoutView {
+  Gfn2PlanMemorySpace memory_space = Gfn2PlanMemorySpace::kHost;
+  std::uint64_t plan_token = 0u;
+
+  std::int64_t batch_size = 0;
+  std::int64_t total_spin_channels = 0;
+  std::int64_t total_spin_orbitals = 0;
+  std::int64_t total_spin_matrix_elements = 0;
+  std::int64_t total_spin_shells = 0;
+  std::int64_t total_spin_atoms = 0;
+
+  std::int64_t spin_channel_count = 0;
+  std::int64_t spin_channel_offset_count = 0;
+  std::int64_t spin_orbital_offset_count = 0;
+  std::int64_t spin_matrix_offset_count = 0;
+  std::int64_t spin_shell_offset_count = 0;
+  std::int64_t spin_atom_offset_count = 0;
+
+  const std::int32_t* spin_channels = nullptr;
+  const std::int64_t* spin_channel_offsets = nullptr;
+  const std::int64_t* spin_orbital_offsets = nullptr;
+  const std::int64_t* spin_matrix_offsets = nullptr;
+  const std::int64_t* spin_shell_offsets = nullptr;
+  const std::int64_t* spin_atom_offsets = nullptr;
+};
+
+/*
  * Provenance for a geometry-derived cache.  Batch-scoped caches store one
  * scalar generation.  Transactional caches instead store one generation per
  * system; scalar geometry_generation must then remain zero to avoid two
@@ -161,6 +208,8 @@ static_assert(std::is_trivially_copyable_v<Gfn2AtomPair>);
 static_assert(std::is_standard_layout_v<Gfn2AtomPair>);
 static_assert(std::is_trivially_copyable_v<Gfn2RaggedTopologyView>);
 static_assert(std::is_standard_layout_v<Gfn2RaggedTopologyView>);
+static_assert(std::is_trivially_copyable_v<Gfn2WavefunctionLayoutView>);
+static_assert(std::is_standard_layout_v<Gfn2WavefunctionLayoutView>);
 static_assert(std::is_trivially_copyable_v<Gfn2GeometryCacheProvenanceView>);
 static_assert(std::is_standard_layout_v<Gfn2GeometryCacheProvenanceView>);
 
@@ -181,6 +230,25 @@ static_assert(std::is_standard_layout_v<Gfn2GeometryCacheProvenanceView>);
  */
 [[nodiscard]] Gfn2PlanSchemaDiagnostic bind_gfn2_topology_host(
     const Gfn2RaggedTopologyView& candidate, Gfn2RaggedTopologyView& binding) noexcept;
+
+/*
+ * Validate the structural pointer/count contract without dereferencing device
+ * metadata.  topology and layout must name the same plan, memory space, and
+ * batch.  The layout arrays must be disjoint from each other and from every
+ * immutable topology array.
+ */
+[[nodiscard]] Gfn2PlanSchemaDiagnostic validate_gfn2_wavefunction_layout_binding(
+    const Gfn2RaggedTopologyView& topology, const Gfn2WavefunctionLayoutView& layout,
+    Gfn2PlanMemorySpace expected_memory_space) noexcept;
+
+/* Inspect every host spin value and prove its ragged extents against topology. */
+[[nodiscard]] Gfn2PlanSchemaDiagnostic validate_gfn2_wavefunction_layout_host(
+    const Gfn2RaggedTopologyView& topology, const Gfn2WavefunctionLayoutView& layout) noexcept;
+
+/* Fail-closed host builder; binding is cleared before validation. */
+[[nodiscard]] Gfn2PlanSchemaDiagnostic bind_gfn2_wavefunction_layout_host(
+    const Gfn2RaggedTopologyView& topology, const Gfn2WavefunctionLayoutView& candidate,
+    Gfn2WavefunctionLayoutView& binding) noexcept;
 
 /* Structural validation that never dereferences the optional generation array. */
 [[nodiscard]] Gfn2PlanSchemaDiagnostic validate_gfn2_geometry_provenance_binding(

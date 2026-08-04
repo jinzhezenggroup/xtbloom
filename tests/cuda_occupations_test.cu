@@ -115,6 +115,9 @@ cudaError_t allocate_and_copy(DeviceBuffer<T>& device, const std::vector<T>& hos
 
 struct HostCase {
   std::vector<std::int64_t> offsets;
+  std::vector<std::int32_t> spin_channels;
+  std::vector<std::int64_t> spin_channel_offsets;
+  std::vector<std::int64_t> spin_orbital_offsets;
   std::vector<double> eigenvalues;
   std::vector<double> electron_counts;
   std::vector<double> temperatures;
@@ -125,7 +128,8 @@ struct HostCase {
   std::vector<double> expected_entropies;
 
   std::size_t batch_size() const { return offsets.size() - 1u; }
-  std::size_t total_orbitals() const { return eigenvalues.size(); }
+  std::size_t total_orbitals() const { return static_cast<std::size_t>(offsets.back()); }
+  bool spin_layout() const { return !spin_channels.empty(); }
 };
 
 bool build_cpu_reference(HostCase& host, std::string& error) {
@@ -140,14 +144,20 @@ bool build_cpu_reference(HostCase& host, std::string& error) {
     const std::int64_t begin = host.offsets[system];
     const std::int64_t end = host.offsets[system + 1u];
     const std::int64_t count = end - begin;
+    const std::int64_t spectrum_begin =
+        host.spin_layout() ? host.spin_orbital_offsets[system] : begin;
+    const std::uint8_t channels = host.spin_layout() ? host.spin_channels[system] : 1u;
     double total_entropy = 0.0;
     for (int spin = 0; spin < 2; ++spin) {
       double mu = 0.0;
       double entropy = 0.0;
       double* const output = host.expected_occupations.data() + 2 * begin + spin * count;
+      const std::int64_t spin_spectrum_begin =
+          spectrum_begin + (channels == 2u ? static_cast<std::int64_t>(spin) * count : 0);
       if (gpuxtb::detail::gfn2::fill_occupations_cpu(
-              count, host.eigenvalues.data() + begin, host.electron_counts[2u * system + spin],
-              host.temperatures[system], output, mu, entropy, error) != GPUXTB_STATUS_SUCCESS) {
+              count, host.eigenvalues.data() + spin_spectrum_begin,
+              host.electron_counts[2u * system + spin], host.temperatures[system], output, mu,
+              entropy, error) != GPUXTB_STATUS_SUCCESS) {
         return false;
       }
       host.expected_chemical_potentials[2u * system + spin] = mu;
@@ -212,6 +222,9 @@ HostCase make_regular_case(std::size_t batch_size) {
 
 struct DeviceFixture {
   DeviceBuffer<std::int64_t> offsets;
+  DeviceBuffer<std::int32_t> spin_channels;
+  DeviceBuffer<std::int64_t> spin_channel_offsets;
+  DeviceBuffer<std::int64_t> spin_orbital_offsets;
   DeviceBuffer<double> eigenvalues;
   DeviceBuffer<double> electron_counts;
   DeviceBuffer<double> temperatures;
@@ -241,6 +254,15 @@ struct DeviceFixture {
     }
     if (status == cudaSuccess) {
       status = allocate_and_copy(active, host.active, stream);
+    }
+    if (status == cudaSuccess && host.spin_layout()) {
+      status = allocate_and_copy(spin_channels, host.spin_channels, stream);
+    }
+    if (status == cudaSuccess && host.spin_layout()) {
+      status = allocate_and_copy(spin_channel_offsets, host.spin_channel_offsets, stream);
+    }
+    if (status == cudaSuccess && host.spin_layout()) {
+      status = allocate_and_copy(spin_orbital_offsets, host.spin_orbital_offsets, stream);
     }
     const std::size_t occupation_count = 2u * host.total_orbitals();
     const std::size_t spin_count = 2u * host.batch_size();
@@ -299,17 +321,34 @@ struct DeviceFixture {
   }
 
   Gfn2OccupationsDeviceBatch batch(const HostCase& host) const {
-    return {static_cast<std::int64_t>(host.batch_size()),
-            static_cast<std::int64_t>(host.total_orbitals()),
-            static_cast<std::int64_t>(host.offsets.size()),
-            static_cast<std::int64_t>(host.electron_counts.size()),
-            static_cast<std::int64_t>(host.temperatures.size()),
-            static_cast<std::int64_t>(host.active.size()),
-            kPlanToken,
-            offsets.get(),
-            electron_counts.get(),
-            temperatures.get(),
-            active.get()};
+    Gfn2OccupationsDeviceBatch result{static_cast<std::int64_t>(host.batch_size()),
+                                      static_cast<std::int64_t>(host.total_orbitals()),
+                                      static_cast<std::int64_t>(host.offsets.size()),
+                                      static_cast<std::int64_t>(host.electron_counts.size()),
+                                      static_cast<std::int64_t>(host.temperatures.size()),
+                                      static_cast<std::int64_t>(host.active.size()),
+                                      kPlanToken,
+                                      offsets.get(),
+                                      electron_counts.get(),
+                                      temperatures.get(),
+                                      active.get()};
+    return result;
+  }
+
+  gpuxtb::detail::Gfn2WavefunctionLayoutView layout(const HostCase& host) const {
+    gpuxtb::detail::Gfn2WavefunctionLayoutView result{};
+    result.memory_space = gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice;
+    result.plan_token = kPlanToken;
+    result.batch_size = static_cast<std::int64_t>(host.batch_size());
+    result.total_spin_channels = host.spin_channel_offsets.back();
+    result.total_spin_orbitals = host.spin_orbital_offsets.back();
+    result.spin_channel_count = static_cast<std::int64_t>(host.spin_channels.size());
+    result.spin_channel_offset_count = static_cast<std::int64_t>(host.spin_channel_offsets.size());
+    result.spin_orbital_offset_count = static_cast<std::int64_t>(host.spin_orbital_offsets.size());
+    result.spin_channels = spin_channels.get();
+    result.spin_channel_offsets = spin_channel_offsets.get();
+    result.spin_orbital_offsets = spin_orbital_offsets.get();
+    return result;
   }
 
   Gfn2OccupationsDeviceResults results(const HostCase& host) {
@@ -447,6 +486,97 @@ int test_cpu_parity_ragged_batches_and_custom_stream() {
     const int comparison = compare_success(host, actual);
     CHECK(comparison == 0);
     CUDA_CHECK(cudaStreamDestroy(stream));
+  }
+  return 0;
+}
+
+HostCase make_mixed_spin_case(std::size_t batch_size) {
+  HostCase host;
+  host.offsets.assign(batch_size + 1u, 0);
+  host.spin_channels.resize(batch_size);
+  host.spin_channel_offsets.assign(batch_size + 1u, 0);
+  host.spin_orbital_offsets.assign(batch_size + 1u, 0);
+  host.electron_counts.resize(2u * batch_size);
+  host.temperatures.resize(batch_size);
+  host.active.assign(batch_size, 1u);
+  for (std::size_t system = 0; system < batch_size; ++system) {
+    const std::int64_t count = batch_size == 1u ? 4 : 2 + static_cast<std::int64_t>(system % 4u);
+    const std::int32_t channels = batch_size == 1u || system % 3u != 0u ? 2 : 1;
+    host.offsets[system + 1u] = host.offsets[system] + count;
+    host.spin_channels[system] = channels;
+    host.spin_channel_offsets[system + 1u] = host.spin_channel_offsets[system] + channels;
+    host.spin_orbital_offsets[system + 1u] =
+        host.spin_orbital_offsets[system] + static_cast<std::int64_t>(channels) * count;
+    host.temperatures[system] = system % 2u == 0u ? 0.0 : 0.01;
+    host.electron_counts[2u * system] = std::min(1.25, static_cast<double>(count));
+    host.electron_counts[2u * system + 1u] = std::min(0.75, static_cast<double>(count));
+  }
+  host.eigenvalues.resize(static_cast<std::size_t>(host.spin_orbital_offsets.back()));
+  for (std::size_t system = 0; system < batch_size; ++system) {
+    const std::int64_t count = host.offsets[system + 1u] - host.offsets[system];
+    const std::int64_t spectrum_begin = host.spin_orbital_offsets[system];
+    for (std::int32_t spin = 0; spin < host.spin_channels[system]; ++spin) {
+      for (std::int64_t orbital = 0; orbital < count; ++orbital) {
+        host.eigenvalues[static_cast<std::size_t>(
+            spectrum_begin + static_cast<std::int64_t>(spin) * count + orbital)] =
+            -0.8 + 0.21 * static_cast<double>(orbital) + 0.017 * static_cast<double>(spin) +
+            0.001 * static_cast<double>(system);
+      }
+    }
+  }
+  return host;
+}
+
+int test_mixed_spin_spectra_batches_and_system_transaction() {
+  for (const std::size_t batch_size : {1u, 8u, 32u, 128u}) {
+    HostCase host = make_mixed_spin_case(batch_size);
+    std::string error;
+    CHECK(build_cpu_reference(host, error));
+    DeviceFixture device;
+    CUDA_CHECK(device.initialize(host, nullptr));
+    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+        static_cast<std::int64_t>(batch_size), device.system_errors.get(),
+        device.device_error.get()));
+    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_occupations_cuda(
+        device.batch(host), device.layout(host), device.eigenvalues.get(),
+        static_cast<std::int64_t>(device.eigenvalues.size()), device.results(host),
+        device.workspace(), device.system_errors.get(), device.device_error.get()));
+    Results actual;
+    CUDA_CHECK(copy_results(host, device, actual, nullptr));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CHECK(compare_success(host, actual) == 0);
+    CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+              device.batch(host), device.eigenvalues.get(),
+              static_cast<std::int64_t>(device.eigenvalues.size()), device.results(host),
+              device.workspace(), device.system_errors.get(),
+              device.device_error.get()) == cudaErrorInvalidValue);
+
+    if (batch_size == 8u) {
+      constexpr std::size_t failed_system = 1u;
+      CHECK(host.spin_channels[failed_system] == 2u);
+      std::vector<double> poisoned = host.eigenvalues;
+      const std::int64_t count = host.offsets[failed_system + 1u] - host.offsets[failed_system];
+      poisoned[static_cast<std::size_t>(host.spin_orbital_offsets[failed_system] + count)] =
+          std::numeric_limits<double>::quiet_NaN();
+      CUDA_CHECK(device.eigenvalues.copy_from(poisoned.data(), poisoned.size()));
+      CUDA_CHECK(device.reset_outputs(host, nullptr));
+      CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+          8, device.system_errors.get(), device.device_error.get()));
+      CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_occupations_cuda(
+          device.batch(host), device.layout(host), device.eigenvalues.get(),
+          static_cast<std::int64_t>(device.eigenvalues.size()), device.results(host),
+          device.workspace(), device.system_errors.get(), device.device_error.get()));
+      CUDA_CHECK(copy_results(host, device, actual, nullptr));
+      CUDA_CHECK(cudaDeviceSynchronize());
+      CHECK(actual.system_errors[failed_system] ==
+            static_cast<std::uint32_t>(Gfn2OccupationsDeviceError::kNonfiniteEigenvalue));
+      for (std::int64_t element = 2 * host.offsets[failed_system];
+           element < 2 * host.offsets[failed_system + 1u]; ++element) {
+        CHECK(actual.occupations[static_cast<std::size_t>(element)] == kSentinel);
+      }
+      CHECK(actual.entropies[failed_system] == kSentinel);
+      CHECK(actual.entropies[2] != kSentinel);
+    }
   }
   return 0;
 }
@@ -731,6 +861,9 @@ int main() {
     return line;
   }
   if (const int line = test_boundary_degenerate_translated_and_extreme_spectra(); line != 0) {
+    return line;
+  }
+  if (const int line = test_mixed_spin_spectra_batches_and_system_transaction(); line != 0) {
     return line;
   }
   if (const int line = test_peer_isolated_failures_inactive_mask_and_hostile_offsets(); line != 0) {

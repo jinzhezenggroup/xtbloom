@@ -10,6 +10,7 @@
 #include <memory>
 #include <type_traits>
 
+#include "backends/common/gfn2_plan_schema.hpp"
 #include "backends/cuda/gfn2_geometry.cuh"
 
 namespace gpuxtb::detail::cuda {
@@ -30,6 +31,7 @@ enum class Gfn2EigensolverDeviceError : std::uint32_t {
   kNonsymmetricHamiltonian = 11u,
   kEigensolverFailed = 12u,
   kNonfiniteEigenpair = 13u,
+  kInvalidSpinLayout = 14u,
 };
 
 /* Synchronous launcher/provider diagnostics; device failures remain per system. */
@@ -64,6 +66,18 @@ struct Gfn2EigensolverBucket {
   std::int64_t system_index_offset = 0;
   std::int64_t matrix_scratch_offset = 0;
   std::int64_t orbital_scratch_offset = 0;
+
+  /*
+   * Optional spin solve projection. Legacy restricted buckets leave these
+   * fields zero. solve_count is sum(nspin) over the bucket's physical systems;
+   * solve_index_offset addresses pointer/info/eligibility arrays, while the
+   * spin scratch offsets address nspin-expanded matrices and eigenvalues.
+   * Canonical work order is bucket system order, spin 0 then spin 1.
+   */
+  std::int32_t solve_count = 0;
+  std::int64_t solve_index_offset = 0;
+  std::int64_t spin_matrix_scratch_offset = 0;
+  std::int64_t spin_orbital_scratch_offset = 0;
 };
 
 /*
@@ -283,6 +297,12 @@ Gfn2EigensolverLaunchResult query_gfn2_eigensolver_bucket_workspace_cuda(
     const double* device_matrix, const double* device_eigenvalues,
     Gfn2EigensolverWorkspaceRequirements& requirements) noexcept;
 
+/* Query the provider workspace for every spin-expanded batch count. */
+Gfn2EigensolverLaunchResult query_gfn2_spin_eigensolver_bucket_workspace_cuda(
+    cusolverDnHandle_t solver, cusolverDnParams_t parameters, const Gfn2EigensolverBucket& bucket,
+    const double* device_matrix, const double* device_eigenvalues,
+    Gfn2EigensolverWorkspaceRequirements& requirements) noexcept;
+
 /* Clear per-system and sticky diagnostics asynchronously. */
 cudaError_t reset_gfn2_eigensolver_device_errors_cuda(std::int64_t batch_size,
                                                       std::uint32_t* system_errors,
@@ -342,6 +362,34 @@ Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
     cublasHandle_t blas, const Gfn2EigensolverDeviceWorkspace& workspace,
     const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Solve the spin-expanded Hamiltonian projection while reusing one physical
+ * overlap factor per system. Restricted systems submit exactly one provider
+ * solve; unrestricted systems submit alpha then beta. Both spin outputs are
+ * validated before either is published, making the physical system the
+ * transaction boundary. This leaf entry point is intentionally independent
+ * of SCC setup/arena ownership so those layers can adopt it in a later issue.
+ */
+Gfn2EigensolverLaunchResult solve_gfn2_spin_eigensystems_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2EigensolverBucket* buckets, std::int64_t bucket_count,
+    const Gfn2EigensolverOverlapCache& cache, std::uint64_t geometry_generation,
+    const double* hamiltonians, const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver,
+    cusolverDnParams_t parameters, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, const Gfn2EigensolverDeviceResults& results,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
+
+Gfn2EigensolverLaunchResult solve_gfn2_spin_eigensystems_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2EigensolverBucket* buckets, std::int64_t bucket_count,
+    const Gfn2EigensolverOverlapCache& cache, const Gfn2GeometryEpochDevice& geometry_epoch,
+    const double* hamiltonians, const Gfn2EigensolverOptions& options, cusolverDnHandle_t solver,
+    cusolverDnParams_t parameters, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, const Gfn2EigensolverDeviceResults& results,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
 
 /* Replay-safe solve against overlap factors published for the current epoch. */
 Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(

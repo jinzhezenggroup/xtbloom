@@ -24,6 +24,7 @@ using gpuxtb::detail::Gfn2PlanMemorySpace;
 using gpuxtb::detail::Gfn2PlanSchemaDiagnostic;
 using gpuxtb::detail::Gfn2PlanSchemaError;
 using gpuxtb::detail::Gfn2RaggedTopologyView;
+using gpuxtb::detail::Gfn2WavefunctionLayoutView;
 using gpuxtb::detail::cuda::Gfn2EigensolverBucket;
 using gpuxtb::detail::cuda::Gfn2SccSetupTopology;
 using gpuxtb::detail::cuda::Gfn2SccSetupTopologyError;
@@ -68,7 +69,21 @@ Plans make_plans() {
   plans.wavefunction.atom_offsets = plans.basis.atom_offsets;
   plans.wavefunction.batch_shell_offsets = plans.basis.batch_shell_offsets;
   plans.wavefunction.batch_orbital_offsets = plans.basis.batch_orbital_offsets;
-  plans.wavefunction.spin_channels = {1, 1, 1};
+  plans.wavefunction.spin_channels = {1, 2, 1};
+  const auto assign_field = [](auto& field, std::vector<std::int64_t> offsets) {
+    field.system_offsets = std::move(offsets);
+    field.element_count = field.system_offsets.back();
+    field.size_bytes = static_cast<std::size_t>(field.element_count) * sizeof(double);
+  };
+  assign_field(plans.wavefunction.coefficients, {0, 4, 6, 10});
+  assign_field(plans.wavefunction.eigenvalues, {0, 2, 4, 6});
+  assign_field(plans.wavefunction.occupations, {0, 4, 6, 10});
+  assign_field(plans.wavefunction.density, {0, 4, 6, 10});
+  assign_field(plans.wavefunction.qsh, {0, 2, 4, 6});
+  assign_field(plans.wavefunction.qat, {0, 2, 4, 6});
+  assign_field(plans.wavefunction.dipole, {0, 6, 12, 18});
+  assign_field(plans.wavefunction.quadrupole, {0, 12, 24, 36});
+  assign_field(plans.wavefunction.energy_weighted_density, {0, 4, 6, 10});
   return plans;
 }
 
@@ -127,6 +142,20 @@ int test_host_blueprint_and_transactional_create() {
   CHECK(host.total_orbitals == 5);
   CHECK(host.total_matrix_elements == 9);
   CHECK(host.bucket_count == 2);
+  const Gfn2WavefunctionLayoutView& host_wavefunction = topology.host_wavefunction_layout();
+  CHECK(host_wavefunction.memory_space == Gfn2PlanMemorySpace::kHost);
+  CHECK(host_wavefunction.plan_token == kPlanToken);
+  CHECK(host_wavefunction.total_spin_channels == 4);
+  CHECK(host_wavefunction.total_spin_orbitals == 6);
+  CHECK(host_wavefunction.total_spin_matrix_elements == 10);
+  CHECK(std::vector<std::int32_t>(
+            host_wavefunction.spin_channels,
+            host_wavefunction.spin_channels + host_wavefunction.spin_channel_count) ==
+        std::vector<std::int32_t>({1, 2, 1}));
+  CHECK(std::vector<std::int64_t>(
+            host_wavefunction.spin_channel_offsets,
+            host_wavefunction.spin_channel_offsets + host_wavefunction.spin_channel_offset_count) ==
+        std::vector<std::int64_t>({0, 1, 3, 4}));
   CHECK(std::vector<std::int64_t>(host.orbital_to_shell,
                                   host.orbital_to_shell + host.orbital_to_shell_count) ==
         std::vector<std::int64_t>({0, 1, 2, 3, 4}));
@@ -150,11 +179,19 @@ int test_host_blueprint_and_transactional_create() {
   CHECK(buckets[0].system_index_offset == 0);
   CHECK(buckets[0].matrix_scratch_offset == 0);
   CHECK(buckets[0].orbital_scratch_offset == 0);
+  CHECK(buckets[0].solve_count == 2);
+  CHECK(buckets[0].solve_index_offset == 0);
+  CHECK(buckets[0].spin_matrix_scratch_offset == 0);
+  CHECK(buckets[0].spin_orbital_scratch_offset == 0);
   CHECK(buckets[1].orbital_count == 2);
   CHECK(buckets[1].system_count == 2);
   CHECK(buckets[1].system_index_offset == 1);
   CHECK(buckets[1].matrix_scratch_offset == 1);
   CHECK(buckets[1].orbital_scratch_offset == 1);
+  CHECK(buckets[1].solve_count == 2);
+  CHECK(buckets[1].solve_index_offset == 2);
+  CHECK(buckets[1].spin_matrix_scratch_offset == 2);
+  CHECK(buckets[1].spin_orbital_scratch_offset == 2);
 
   const auto requirements = topology.requirements();
   CHECK(requirements.immutable_device_bytes > 0u);
@@ -163,6 +200,12 @@ int test_host_blueprint_and_transactional_create() {
   /* create() is owner-transactional: a rejected replacement cannot destroy a
    * setup that may still back in-flight work on another stream. */
   plans.integrals.matrix_offsets[2] = 6;
+  for (auto* field : {&plans.wavefunction.coefficients, &plans.wavefunction.density,
+                      &plans.wavefunction.energy_weighted_density}) {
+    field->system_offsets = {0, 4, 8, 11};
+    field->element_count = 11;
+    field->size_bytes = 11u * sizeof(double);
+  }
   diagnostic = Gfn2SccSetupTopology::create(plans.basis, plans.integrals, plans.wavefunction,
                                             kPlanToken + 1u, topology);
   CHECK(!diagnostic.success());
@@ -172,14 +215,33 @@ int test_host_blueprint_and_transactional_create() {
   CHECK(topology.host_topology().plan_token == kPlanToken);
 
   Plans incompatible = make_plans();
-  incompatible.wavefunction.spin_channels[1] = 2;
+  incompatible.wavefunction.spin_channels[1] = 3;
   Gfn2SccSetupTopology rejected;
   diagnostic = Gfn2SccSetupTopology::create(incompatible.basis, incompatible.integrals,
                                             incompatible.wavefunction, kPlanToken, rejected);
   CHECK(!diagnostic.success());
-  CHECK(diagnostic.status == GPUXTB_STATUS_NOT_SUPPORTED);
+  CHECK(diagnostic.status == GPUXTB_STATUS_INVALID_ARGUMENT);
   CHECK(diagnostic.field == Gfn2SccSetupTopologyField::kWavefunction);
   CHECK(diagnostic.index == 1);
+  CHECK(!rejected.valid());
+
+  /* A forged layout must fail before setup copies offsets or calls back(). */
+  incompatible = make_plans();
+  incompatible.wavefunction.eigenvalues.system_offsets.clear();
+  diagnostic = Gfn2SccSetupTopology::create(incompatible.basis, incompatible.integrals,
+                                            incompatible.wavefunction, kPlanToken, rejected);
+  CHECK(!diagnostic.success());
+  CHECK(diagnostic.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(diagnostic.field == Gfn2SccSetupTopologyField::kWavefunction);
+  CHECK(!rejected.valid());
+
+  incompatible = make_plans();
+  ++incompatible.wavefunction.density.system_offsets[2];
+  diagnostic = Gfn2SccSetupTopology::create(incompatible.basis, incompatible.integrals,
+                                            incompatible.wavefunction, kPlanToken, rejected);
+  CHECK(!diagnostic.success());
+  CHECK(diagnostic.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(diagnostic.field == Gfn2SccSetupTopologyField::kWavefunction);
   CHECK(!rejected.valid());
 
   incompatible = make_plans();
@@ -216,6 +278,11 @@ int test_device_upload_and_fail_closed_binding() {
   sentinel.plan_token = 0xdeadbeefULL;
   sentinel.atom_offsets = reinterpret_cast<const std::int64_t*>(0x1000u);
   Gfn2RaggedTopologyView binding = sentinel;
+  Gfn2WavefunctionLayoutView wavefunction_sentinel{};
+  wavefunction_sentinel.memory_space = Gfn2PlanMemorySpace::kHipDevice;
+  wavefunction_sentinel.plan_token = 0xcafebabeULL;
+  wavefunction_sentinel.spin_channels = reinterpret_cast<const std::int32_t*>(0x2000u);
+  Gfn2WavefunctionLayoutView wavefunction_binding = wavefunction_sentinel;
 
   diagnostic = topology.bind_device_arena_and_upload_async(
       nullptr, requirements.immutable_device_bytes, binding, stream);
@@ -249,11 +316,14 @@ int test_device_upload_and_fail_closed_binding() {
    * therefore also cover stream routing without adding a hidden synchronize. */
   CUDA_CHECK(cudaMemsetAsync(allocation.get(), 0xa5, requirements.immutable_device_bytes, stream));
   diagnostic = topology.bind_device_arena_and_upload_async(
-      allocation.get(), requirements.immutable_device_bytes, binding, stream);
+      allocation.get(), requirements.immutable_device_bytes, binding, wavefunction_binding, stream);
   CHECK(diagnostic.success());
   CHECK(binding.memory_space == Gfn2PlanMemorySpace::kCudaDevice);
   CHECK(binding.plan_token == kPlanToken);
   CHECK(binding.atom_offsets != topology.host_topology().atom_offsets);
+  CHECK(wavefunction_binding.memory_space == Gfn2PlanMemorySpace::kCudaDevice);
+  CHECK(wavefunction_binding.plan_token == kPlanToken);
+  CHECK(wavefunction_binding.spin_channels != topology.host_wavefunction_layout().spin_channels);
   CUDA_CHECK(cudaStreamSynchronize(stream));
 
   const Gfn2RaggedTopologyView& host = topology.host_topology();
@@ -284,6 +354,26 @@ int test_device_upload_and_fail_closed_binding() {
       binding.bucket_orbital_counts,
       std::vector<std::int32_t>(host.bucket_orbital_counts,
                                 host.bucket_orbital_counts + host.bucket_orbital_count)));
+  const Gfn2WavefunctionLayoutView& host_wavefunction = topology.host_wavefunction_layout();
+  CHECK(same_device_values(wavefunction_binding.spin_channels,
+                           std::vector<std::int32_t>(host_wavefunction.spin_channels,
+                                                     host_wavefunction.spin_channels +
+                                                         host_wavefunction.spin_channel_count)));
+  CHECK(same_device_values(
+      wavefunction_binding.spin_channel_offsets,
+      std::vector<std::int64_t>(
+          host_wavefunction.spin_channel_offsets,
+          host_wavefunction.spin_channel_offsets + host_wavefunction.spin_channel_offset_count)));
+  CHECK(same_device_values(
+      wavefunction_binding.spin_orbital_offsets,
+      std::vector<std::int64_t>(
+          host_wavefunction.spin_orbital_offsets,
+          host_wavefunction.spin_orbital_offsets + host_wavefunction.spin_orbital_offset_count)));
+  CHECK(same_device_values(
+      wavefunction_binding.spin_matrix_offsets,
+      std::vector<std::int64_t>(
+          host_wavefunction.spin_matrix_offsets,
+          host_wavefunction.spin_matrix_offsets + host_wavefunction.spin_matrix_offset_count)));
 
   DeviceAllocation device_diagnostic;
   CUDA_CHECK(device_diagnostic.allocate(sizeof(Gfn2PlanSchemaDiagnostic)));

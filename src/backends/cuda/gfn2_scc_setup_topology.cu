@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <new>
 #include <type_traits>
@@ -16,6 +17,7 @@ namespace {
 
 using gfn2::BasisPlan;
 using gfn2::IntegralPlan;
+using gfn2::WavefunctionFieldLayout;
 using gfn2::WavefunctionLayout;
 
 Gfn2SccSetupTopologyDiagnostic failure(gpuxtb_status_t status, Gfn2SccSetupTopologyError error,
@@ -96,6 +98,64 @@ bool valid_offsets(const std::vector<std::int64_t>& offsets, std::int64_t partit
   return true;
 }
 
+/*
+ * Gfn2SccSetupTopology is a public setup boundary and therefore cannot assume
+ * that a WavefunctionLayout came directly from make_wavefunction_layout().
+ * Prove every field partition before create() copies offsets or calls back().
+ */
+bool valid_wavefunction_field_offsets(const BasisPlan& basis, const IntegralPlan& integrals,
+                                      const WavefunctionLayout& wavefunction) noexcept {
+  const WavefunctionFieldLayout* const fields[] = {
+      &wavefunction.coefficients, &wavefunction.eigenvalues, &wavefunction.occupations,
+      &wavefunction.density,      &wavefunction.qsh,         &wavefunction.qat,
+      &wavefunction.dipole,       &wavefunction.quadrupole,  &wavefunction.energy_weighted_density,
+  };
+  for (const WavefunctionFieldLayout* field : fields) {
+    if (!valid_offsets(field->system_offsets, basis.batch_size, field->element_count)) {
+      return false;
+    }
+  }
+
+  for (std::int64_t system = 0; system < basis.batch_size; ++system) {
+    const std::size_t index = static_cast<std::size_t>(system);
+    const std::int32_t spin_channels = wavefunction.spin_channels[index];
+    const std::int64_t atoms = basis.atom_offsets[index + 1u] - basis.atom_offsets[index];
+    const std::int64_t shells =
+        basis.batch_shell_offsets[index + 1u] - basis.batch_shell_offsets[index];
+    const std::int64_t orbitals =
+        basis.batch_orbital_offsets[index + 1u] - basis.batch_orbital_offsets[index];
+    const std::int64_t matrices =
+        integrals.matrix_offsets[index + 1u] - integrals.matrix_offsets[index];
+    std::int64_t spin_matrices = 0;
+    std::int64_t spin_orbitals = 0;
+    std::int64_t occupations = 0;
+    std::int64_t spin_shells = 0;
+    std::int64_t spin_atoms = 0;
+    std::int64_t dipoles = 0;
+    std::int64_t quadrupoles = 0;
+    if ((spin_channels != 1 && spin_channels != 2) ||
+        !checked_multiply(matrices, spin_channels, spin_matrices) ||
+        !checked_multiply(orbitals, spin_channels, spin_orbitals) ||
+        !checked_multiply(orbitals, 2, occupations) ||
+        !checked_multiply(shells, spin_channels, spin_shells) ||
+        !checked_multiply(atoms, spin_channels, spin_atoms) ||
+        !checked_multiply(spin_atoms, 3, dipoles) ||
+        !checked_multiply(spin_atoms, gfn2::kWavefunctionQuadrupoleComponents, quadrupoles)) {
+      return false;
+    }
+    const std::int64_t expected[] = {spin_matrices, spin_orbitals, occupations,
+                                     spin_matrices, spin_shells,   spin_atoms,
+                                     dipoles,       quadrupoles,   spin_matrices};
+    for (std::size_t field_index = 0; field_index < std::size(fields); ++field_index) {
+      const auto& offsets = fields[field_index]->system_offsets;
+      if (offsets[index + 1u] - offsets[index] != expected[field_index]) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 Gfn2SccSetupTopologyDiagnostic validate_plan_compatibility(const BasisPlan& basis,
                                                            const IntegralPlan& integrals,
                                                            const WavefunctionLayout& wavefunction,
@@ -132,10 +192,15 @@ Gfn2SccSetupTopologyDiagnostic validate_plan_compatibility(const BasisPlan& basi
                    Gfn2SccSetupTopologyField::kWavefunction);
   }
   for (std::int64_t system = 0; system < basis.batch_size; ++system) {
-    if (wavefunction.spin_channels[static_cast<std::size_t>(system)] != 1) {
-      return failure(GPUXTB_STATUS_NOT_SUPPORTED, Gfn2SccSetupTopologyError::kInvalidPlan,
+    const std::int32_t channels = wavefunction.spin_channels[static_cast<std::size_t>(system)];
+    if (channels != 1 && channels != 2) {
+      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                      Gfn2SccSetupTopologyField::kWavefunction, system);
     }
+  }
+  if (!valid_wavefunction_field_offsets(basis, integrals, wavefunction)) {
+    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+                   Gfn2SccSetupTopologyField::kWavefunction);
   }
   return {};
 }
@@ -222,6 +287,76 @@ Gfn2SccSetupTopologyDiagnostic build_buckets(const BasisPlan& basis, const Integ
   return {};
 }
 
+/*
+ * Append the canonical spin solve projection without changing the physical
+ * bucket permutation used by overlap factorization.  Each bucket walks its
+ * systems in the existing deterministic order and expands only unrestricted
+ * members to alpha then beta work items.
+ */
+Gfn2SccSetupTopologyDiagnostic configure_spin_buckets(
+    const std::vector<std::int32_t>& spin_channels, const std::vector<std::int32_t>& bucket_systems,
+    std::vector<Gfn2EigensolverBucket>& buckets, std::int64_t expected_spin_channels,
+    std::int64_t expected_spin_orbitals, std::int64_t expected_spin_matrix_elements) noexcept {
+  std::int64_t solve_offset = 0;
+  std::int64_t orbital_offset = 0;
+  std::int64_t matrix_offset = 0;
+  for (std::size_t bucket_index = 0; bucket_index < buckets.size(); ++bucket_index) {
+    Gfn2EigensolverBucket& bucket = buckets[bucket_index];
+    std::int64_t solve_count = 0;
+    const std::int64_t system_end =
+        bucket.system_index_offset + static_cast<std::int64_t>(bucket.system_count);
+    if (bucket.system_index_offset < 0 || system_end < bucket.system_index_offset ||
+        static_cast<std::uint64_t>(system_end) > bucket_systems.size()) {
+      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+                     Gfn2SccSetupTopologyField::kBuckets, static_cast<std::int64_t>(bucket_index));
+    }
+    for (std::int64_t position = bucket.system_index_offset; position < system_end; ++position) {
+      const std::int32_t system = bucket_systems[static_cast<std::size_t>(position)];
+      if (system < 0 || static_cast<std::uint64_t>(system) >= spin_channels.size()) {
+        return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+                       Gfn2SccSetupTopologyField::kBuckets, position);
+      }
+      const std::int32_t channels = spin_channels[static_cast<std::size_t>(system)];
+      if ((channels != 1 && channels != 2) ||
+          solve_count > std::numeric_limits<std::int64_t>::max() - channels) {
+        return failure(GPUXTB_STATUS_INVALID_ARGUMENT,
+                       channels == 1 || channels == 2 ? Gfn2SccSetupTopologyError::kCountOverflow
+                                                      : Gfn2SccSetupTopologyError::kInvalidPlan,
+                       Gfn2SccSetupTopologyField::kWavefunction, system);
+      }
+      solve_count += channels;
+    }
+    std::int64_t matrix_stride = 0;
+    std::int64_t orbital_span = 0;
+    std::int64_t matrix_span = 0;
+    if (solve_count <= 0 || solve_count > INT32_MAX ||
+        !checked_multiply(static_cast<std::int64_t>(bucket.orbital_count),
+                          static_cast<std::int64_t>(bucket.orbital_count), matrix_stride) ||
+        !checked_multiply(static_cast<std::int64_t>(bucket.orbital_count), solve_count,
+                          orbital_span) ||
+        !checked_multiply(matrix_stride, solve_count, matrix_span) ||
+        solve_offset > std::numeric_limits<std::int64_t>::max() - solve_count ||
+        orbital_offset > std::numeric_limits<std::int64_t>::max() - orbital_span ||
+        matrix_offset > std::numeric_limits<std::int64_t>::max() - matrix_span) {
+      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kCountOverflow,
+                     Gfn2SccSetupTopologyField::kBuckets, static_cast<std::int64_t>(bucket_index));
+    }
+    bucket.solve_count = static_cast<std::int32_t>(solve_count);
+    bucket.solve_index_offset = solve_offset;
+    bucket.spin_orbital_scratch_offset = orbital_offset;
+    bucket.spin_matrix_scratch_offset = matrix_offset;
+    solve_offset += solve_count;
+    orbital_offset += orbital_span;
+    matrix_offset += matrix_span;
+  }
+  if (solve_offset != expected_spin_channels || orbital_offset != expected_spin_orbitals ||
+      matrix_offset != expected_spin_matrix_elements) {
+    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+                   Gfn2SccSetupTopologyField::kBuckets);
+  }
+  return {};
+}
+
 template <typename T>
 bool append_array_layout(std::size_t elements, std::size_t& cursor, std::size_t& offset) noexcept {
   std::size_t aligned = cursor;
@@ -240,6 +375,11 @@ bool append_array_layout(std::size_t elements, std::size_t& cursor, std::size_t&
 
 const Gfn2RaggedTopologyView& empty_topology() noexcept {
   static const Gfn2RaggedTopologyView empty{};
+  return empty;
+}
+
+const Gfn2WavefunctionLayoutView& empty_wavefunction_layout() noexcept {
+  static const Gfn2WavefunctionLayoutView empty{};
   return empty;
 }
 
@@ -264,6 +404,12 @@ struct Gfn2SccSetupTopology::Impl {
     std::size_t bucket_offsets = 0u;
     std::size_t bucket_systems = 0u;
     std::size_t bucket_orbital_counts = 0u;
+    std::size_t spin_channels = 0u;
+    std::size_t spin_channel_offsets = 0u;
+    std::size_t spin_orbital_offsets = 0u;
+    std::size_t spin_matrix_offsets = 0u;
+    std::size_t spin_shell_offsets = 0u;
+    std::size_t spin_atom_offsets = 0u;
     std::size_t total_bytes = 0u;
   } arena;
 
@@ -285,8 +431,15 @@ struct Gfn2SccSetupTopology::Impl {
   std::vector<std::int64_t> bucket_offsets;
   std::vector<std::int32_t> bucket_systems;
   std::vector<std::int32_t> bucket_orbital_counts;
+  std::vector<std::int32_t> spin_channels;
+  std::vector<std::int64_t> spin_channel_offsets;
+  std::vector<std::int64_t> spin_orbital_offsets;
+  std::vector<std::int64_t> spin_matrix_offsets;
+  std::vector<std::int64_t> spin_shell_offsets;
+  std::vector<std::int64_t> spin_atom_offsets;
   std::vector<Gfn2EigensolverBucket> buckets;
   Gfn2RaggedTopologyView host{};
+  Gfn2WavefunctionLayoutView host_wavefunction{};
   void* upload_image = nullptr;
 
   ~Impl() {
@@ -316,6 +469,17 @@ struct Gfn2SccSetupTopology::Impl {
            append_array_layout<std::int32_t>(bucket_systems.size(), cursor, arena.bucket_systems) &&
            append_array_layout<std::int32_t>(bucket_orbital_counts.size(), cursor,
                                              arena.bucket_orbital_counts) &&
+           append_array_layout<std::int32_t>(spin_channels.size(), cursor, arena.spin_channels) &&
+           append_array_layout<std::int64_t>(spin_channel_offsets.size(), cursor,
+                                             arena.spin_channel_offsets) &&
+           append_array_layout<std::int64_t>(spin_orbital_offsets.size(), cursor,
+                                             arena.spin_orbital_offsets) &&
+           append_array_layout<std::int64_t>(spin_matrix_offsets.size(), cursor,
+                                             arena.spin_matrix_offsets) &&
+           append_array_layout<std::int64_t>(spin_shell_offsets.size(), cursor,
+                                             arena.spin_shell_offsets) &&
+           append_array_layout<std::int64_t>(spin_atom_offsets.size(), cursor,
+                                             arena.spin_atom_offsets) &&
            (arena.total_bytes = cursor, true);
   }
 
@@ -349,6 +513,12 @@ struct Gfn2SccSetupTopology::Impl {
     pack(bucket_offsets, arena.bucket_offsets);
     pack(bucket_systems, arena.bucket_systems);
     pack(bucket_orbital_counts, arena.bucket_orbital_counts);
+    pack(spin_channels, arena.spin_channels);
+    pack(spin_channel_offsets, arena.spin_channel_offsets);
+    pack(spin_orbital_offsets, arena.spin_orbital_offsets);
+    pack(spin_matrix_offsets, arena.spin_matrix_offsets);
+    pack(spin_shell_offsets, arena.spin_shell_offsets);
+    pack(spin_atom_offsets, arena.spin_atom_offsets);
     return cudaSuccess;
   }
 
@@ -387,6 +557,32 @@ struct Gfn2SccSetupTopology::Impl {
     host.bucket_offsets = bucket_offsets.data();
     host.bucket_systems = bucket_systems.data();
     host.bucket_orbital_counts = bucket_orbital_counts.data();
+
+    host_wavefunction = {};
+    host_wavefunction.memory_space = Gfn2PlanMemorySpace::kHost;
+    host_wavefunction.plan_token = plan_token;
+    host_wavefunction.batch_size = batch_size;
+    host_wavefunction.total_spin_channels = spin_channel_offsets.back();
+    host_wavefunction.total_spin_orbitals = spin_orbital_offsets.back();
+    host_wavefunction.total_spin_matrix_elements = spin_matrix_offsets.back();
+    host_wavefunction.total_spin_shells = spin_shell_offsets.back();
+    host_wavefunction.total_spin_atoms = spin_atom_offsets.back();
+    host_wavefunction.spin_channel_count = static_cast<std::int64_t>(spin_channels.size());
+    host_wavefunction.spin_channel_offset_count =
+        static_cast<std::int64_t>(spin_channel_offsets.size());
+    host_wavefunction.spin_orbital_offset_count =
+        static_cast<std::int64_t>(spin_orbital_offsets.size());
+    host_wavefunction.spin_matrix_offset_count =
+        static_cast<std::int64_t>(spin_matrix_offsets.size());
+    host_wavefunction.spin_shell_offset_count =
+        static_cast<std::int64_t>(spin_shell_offsets.size());
+    host_wavefunction.spin_atom_offset_count = static_cast<std::int64_t>(spin_atom_offsets.size());
+    host_wavefunction.spin_channels = spin_channels.data();
+    host_wavefunction.spin_channel_offsets = spin_channel_offsets.data();
+    host_wavefunction.spin_orbital_offsets = spin_orbital_offsets.data();
+    host_wavefunction.spin_matrix_offsets = spin_matrix_offsets.data();
+    host_wavefunction.spin_shell_offsets = spin_shell_offsets.data();
+    host_wavefunction.spin_atom_offsets = spin_atom_offsets.data();
   }
 };
 
@@ -424,10 +620,42 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(const BasisPlan& bas
     candidate->atom_shell_offsets = basis.atom_shell_offsets;
     candidate->shell_orbital_offsets = basis.shell_orbital_offsets;
     candidate->shell_to_atom = basis.shell_to_atom;
+    candidate->spin_channels = wavefunction.spin_channels;
+    candidate->spin_channel_offsets.resize(static_cast<std::size_t>(basis.batch_size) + 1u, 0);
+    for (std::int64_t system = 0; system < basis.batch_size; ++system) {
+      const std::int32_t channels = candidate->spin_channels[static_cast<std::size_t>(system)];
+      if (channels != 1 && channels != 2) {
+        return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+                       Gfn2SccSetupTopologyField::kWavefunction, system);
+      }
+      const std::int64_t previous =
+          candidate->spin_channel_offsets[static_cast<std::size_t>(system)];
+      if (previous > std::numeric_limits<std::int64_t>::max() - channels) {
+        return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kCountOverflow,
+                       Gfn2SccSetupTopologyField::kWavefunction, system);
+      }
+      candidate->spin_channel_offsets[static_cast<std::size_t>(system + 1)] = previous + channels;
+    }
+    candidate->spin_orbital_offsets = wavefunction.eigenvalues.system_offsets;
+    candidate->spin_matrix_offsets = wavefunction.density.system_offsets;
+    candidate->spin_shell_offsets = wavefunction.qsh.system_offsets;
+    candidate->spin_atom_offsets = wavefunction.qat.system_offsets;
+    if (wavefunction.coefficients.system_offsets != candidate->spin_matrix_offsets ||
+        wavefunction.energy_weighted_density.system_offsets != candidate->spin_matrix_offsets) {
+      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+                     Gfn2SccSetupTopologyField::kWavefunction);
+    }
 
     diagnostic =
         build_buckets(basis, integrals, candidate->bucket_offsets, candidate->bucket_systems,
                       candidate->bucket_orbital_counts, candidate->buckets);
+    if (!diagnostic.success()) {
+      return diagnostic;
+    }
+    diagnostic = configure_spin_buckets(candidate->spin_channels, candidate->bucket_systems,
+                                        candidate->buckets, candidate->spin_channel_offsets.back(),
+                                        candidate->spin_orbital_offsets.back(),
+                                        candidate->spin_matrix_offsets.back());
     if (!diagnostic.success()) {
       return diagnostic;
     }
@@ -457,6 +685,14 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(const BasisPlan& bas
       diagnostic = failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                            Gfn2SccSetupTopologyField::kHostTopology, schema.index);
       diagnostic.schema = schema;
+      return diagnostic;
+    }
+    const Gfn2PlanSchemaDiagnostic wavefunction_schema =
+        validate_gfn2_wavefunction_layout_host(candidate->host, candidate->host_wavefunction);
+    if (wavefunction_schema.error != Gfn2PlanSchemaError::kSuccess) {
+      diagnostic = failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+                           Gfn2SccSetupTopologyField::kWavefunction, wavefunction_schema.index);
+      diagnostic.schema = wavefunction_schema;
       return diagnostic;
     }
 
@@ -493,6 +729,10 @@ const Gfn2RaggedTopologyView& Gfn2SccSetupTopology::host_topology() const noexce
   return impl_ == nullptr ? empty_topology() : impl_->host;
 }
 
+const Gfn2WavefunctionLayoutView& Gfn2SccSetupTopology::host_wavefunction_layout() const noexcept {
+  return impl_ == nullptr ? empty_wavefunction_layout() : impl_->host_wavefunction;
+}
+
 const std::vector<Gfn2EigensolverBucket>& Gfn2SccSetupTopology::eigensolver_buckets()
     const noexcept {
   return impl_ == nullptr ? empty_buckets() : impl_->buckets;
@@ -508,7 +748,7 @@ Gfn2SccSetupTopologyRequirements Gfn2SccSetupTopology::requirements() const noex
 
 Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::bind_device_arena_and_upload_async(
     void* device_arena, std::size_t device_arena_bytes, Gfn2RaggedTopologyView& device_topology,
-    cudaStream_t stream) const noexcept {
+    Gfn2WavefunctionLayoutView& device_wavefunction, cudaStream_t stream) const noexcept {
   if (impl_ == nullptr) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                    Gfn2SccSetupTopologyField::kHostTopology);
@@ -576,6 +816,21 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::bind_device_arena_and_uploa
   candidate.bucket_orbital_counts =
       reinterpret_cast<const std::int32_t*>(arena + impl_->arena.bucket_orbital_counts);
 
+  Gfn2WavefunctionLayoutView wavefunction_candidate = impl_->host_wavefunction;
+  wavefunction_candidate.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  wavefunction_candidate.spin_channels =
+      reinterpret_cast<const std::int32_t*>(arena + impl_->arena.spin_channels);
+  wavefunction_candidate.spin_channel_offsets =
+      reinterpret_cast<const std::int64_t*>(arena + impl_->arena.spin_channel_offsets);
+  wavefunction_candidate.spin_orbital_offsets =
+      reinterpret_cast<const std::int64_t*>(arena + impl_->arena.spin_orbital_offsets);
+  wavefunction_candidate.spin_matrix_offsets =
+      reinterpret_cast<const std::int64_t*>(arena + impl_->arena.spin_matrix_offsets);
+  wavefunction_candidate.spin_shell_offsets =
+      reinterpret_cast<const std::int64_t*>(arena + impl_->arena.spin_shell_offsets);
+  wavefunction_candidate.spin_atom_offsets =
+      reinterpret_cast<const std::int64_t*>(arena + impl_->arena.spin_atom_offsets);
+
   /* The private descriptor must remain structurally valid even if this layout
    * changes later. Semantic validation is unnecessary here: create() already
    * validated the identical host values that are being uploaded. */
@@ -586,6 +841,15 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::bind_device_arena_and_uploa
         failure(GPUXTB_STATUS_INTERNAL_ERROR, Gfn2SccSetupTopologyError::kInvalidPlan,
                 Gfn2SccSetupTopologyField::kHostTopology, schema.index);
     diagnostic.schema = schema;
+    return diagnostic;
+  }
+  const Gfn2PlanSchemaDiagnostic wavefunction_schema = validate_gfn2_wavefunction_layout_binding(
+      candidate, wavefunction_candidate, Gfn2PlanMemorySpace::kCudaDevice);
+  if (wavefunction_schema.error != Gfn2PlanSchemaError::kSuccess) {
+    Gfn2SccSetupTopologyDiagnostic diagnostic =
+        failure(GPUXTB_STATUS_INTERNAL_ERROR, Gfn2SccSetupTopologyError::kInvalidPlan,
+                Gfn2SccSetupTopologyField::kWavefunction, wavefunction_schema.index);
+    diagnostic.schema = wavefunction_schema;
     return diagnostic;
   }
 
@@ -601,7 +865,16 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::bind_device_arena_and_uploa
   }
 
   device_topology = candidate;
+  device_wavefunction = wavefunction_candidate;
   return {};
+}
+
+Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::bind_device_arena_and_upload_async(
+    void* device_arena, std::size_t device_arena_bytes, Gfn2RaggedTopologyView& device_topology,
+    cudaStream_t stream) const noexcept {
+  Gfn2WavefunctionLayoutView ignored{};
+  return bind_device_arena_and_upload_async(device_arena, device_arena_bytes, device_topology,
+                                            ignored, stream);
 }
 
 }  // namespace gpuxtb::detail::cuda

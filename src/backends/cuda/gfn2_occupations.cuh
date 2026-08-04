@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/common/gfn2_plan_schema.hpp"
+
 namespace gpuxtb::detail::cuda {
 
 /* Semantic or arithmetic failure reported per system and by canonical lowest index. */
@@ -20,6 +22,7 @@ enum class Gfn2OccupationsDeviceError : std::uint32_t {
   kChemicalPotentialBracketFailure = 7u,
   kElectronConservationFailure = 8u,
   kNonfiniteEntropy = 9u,
+  kInvalidSpinLayout = 10u,
 };
 
 /*
@@ -118,6 +121,20 @@ cudaError_t evaluate_gfn2_restricted_occupations_cuda(
     std::int64_t eigenvalue_elements, const Gfn2OccupationsDeviceResults& results,
     const Gfn2OccupationsDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Spin-aware entry point. Restricted systems consume one spectrum for both
+ * alpha and beta occupations; unrestricted systems consume independent
+ * spin-major spectra. Publication remains transactional per physical system.
+ * The legacy restricted entry point above remains source- and numerically
+ * compatible and rejects a configured unrestricted projection.
+ */
+cudaError_t evaluate_gfn2_occupations_cuda(
+    const Gfn2OccupationsDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const double* eigenvalues, std::int64_t eigenvalue_elements,
+    const Gfn2OccupationsDeviceResults& results, const Gfn2OccupationsDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 

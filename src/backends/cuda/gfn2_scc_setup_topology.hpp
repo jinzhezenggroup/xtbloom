@@ -98,6 +98,7 @@ class Gfn2SccSetupTopology {
 
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] const Gfn2RaggedTopologyView& host_topology() const noexcept;
+  [[nodiscard]] const Gfn2WavefunctionLayoutView& host_wavefunction_layout() const noexcept;
   [[nodiscard]] const std::vector<Gfn2EigensolverBucket>& eigensolver_buckets() const noexcept;
   [[nodiscard]] Gfn2SccSetupTopologyRequirements requirements() const noexcept;
 
@@ -108,6 +109,16 @@ class Gfn2SccSetupTopology {
    * explicit event ordering as described by the class lifetime contract. */
   [[nodiscard]] Gfn2SccSetupTopologyDiagnostic bind_device_arena_and_upload_async(
       void* device_arena, std::size_t device_arena_bytes, Gfn2RaggedTopologyView& device_topology,
+      cudaStream_t stream = nullptr) const noexcept;
+
+  /*
+   * Upload the same immutable arena while also publishing the exact
+   * WavefunctionLayout spin projection.  The two output descriptors are one
+   * transaction: either both remain unchanged or both name the uploaded plan.
+   */
+  [[nodiscard]] Gfn2SccSetupTopologyDiagnostic bind_device_arena_and_upload_async(
+      void* device_arena, std::size_t device_arena_bytes, Gfn2RaggedTopologyView& device_topology,
+      Gfn2WavefunctionLayoutView& device_wavefunction,
       cudaStream_t stream = nullptr) const noexcept;
 
  private:

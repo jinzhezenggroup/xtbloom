@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/common/gfn2_plan_schema.hpp"
+
 namespace gpuxtb::detail::cuda {
 
 /* Per-system failure code; the batch diagnostic is canonicalized by system index. */
@@ -21,6 +23,7 @@ enum class Gfn2DensityDeviceError : std::uint32_t {
   kNonfiniteDensityArithmetic = 8u,
   kNonfiniteWeightedDensityArithmetic = 9u,
   kNonfiniteTrace = 10u,
+  kInvalidSpinChannels = 11u,
 };
 
 /*
@@ -77,6 +80,16 @@ struct Gfn2DensityDeviceResults {
   double* weighted_density_traces = nullptr;
   std::int64_t weighted_density_trace_elements = 0;
   std::uint64_t plan_token = 0u;
+
+  /* Compact system-major/channel-major diagnostics in spin_channel_offsets. */
+  double* channel_band_energies = nullptr;
+  std::int64_t channel_band_energy_elements = 0;
+  double* channel_occupation_sums = nullptr;
+  std::int64_t channel_occupation_sum_elements = 0;
+  double* channel_density_traces = nullptr;
+  std::int64_t channel_density_trace_elements = 0;
+  double* channel_weighted_density_traces = nullptr;
+  std::int64_t channel_weighted_density_trace_elements = 0;
 };
 
 /* Caller-owned unpublished matrices, orbital weights, scalars, and sequence state. */
@@ -100,6 +113,16 @@ struct Gfn2DensityDeviceWorkspace {
   std::uint32_t* sequence_active = nullptr;
   std::int64_t sequence_active_elements = 0;
   std::uint64_t plan_token = 0u;
+
+  /* Unpublished compact per-channel diagnostics for transactional publication. */
+  double* channel_band_energy_scratch = nullptr;
+  std::int64_t channel_band_energy_elements = 0;
+  double* channel_occupation_sum_scratch = nullptr;
+  std::int64_t channel_occupation_sum_elements = 0;
+  double* channel_density_trace_scratch = nullptr;
+  std::int64_t channel_density_trace_elements = 0;
+  double* channel_weighted_density_trace_scratch = nullptr;
+  std::int64_t channel_weighted_density_trace_elements = 0;
 };
 
 static_assert(std::is_trivially_copyable_v<Gfn2DensityDeviceBatch>);
@@ -134,6 +157,25 @@ cudaError_t evaluate_gfn2_restricted_density_cuda(const Gfn2DensityDeviceBatch& 
                                                   std::uint32_t* system_errors,
                                                   std::uint32_t* device_error,
                                                   cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Assemble density and energy-weighted density matrices for a mixed one- and
+ * two-channel batch. Restricted systems retain the original arithmetic:
+ * P=C(f_alpha+f_beta)C^T and one total P/W matrix. Unrestricted systems publish
+ * separate alpha then beta matrices using system-major/spin-major packing.
+ *
+ * Per-channel diagnostics use spin_channel_offsets. Existing per-system
+ * diagnostics are formed by the fixed channel-zero-then-channel-one sum. A
+ * failure in either unrestricted channel suppresses every matrix and scalar
+ * result for that peer. Unlike the legacy restricted entry point, this API
+ * requires complete spin metadata and never interprets missing metadata as a
+ * one-channel batch.
+ */
+cudaError_t evaluate_gfn2_spin_density_cuda(
+    const Gfn2DensityDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2DensityDeviceInput& input, const Gfn2DensityDeviceResults& results,
+    const Gfn2DensityDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 

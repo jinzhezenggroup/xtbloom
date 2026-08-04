@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/common/gfn2_plan_schema.hpp"
+
 namespace gpuxtb::detail::cuda {
 
 inline constexpr std::int64_t kGfn2MullikenDipoleComponents = 3;
@@ -22,6 +24,8 @@ enum class Gfn2MullikenDeviceError : std::uint32_t {
   kNonfiniteReferenceOccupation = 6u,
   kNonfiniteContraction = 7u,
   kNonfinitePopulationReduction = 8u,
+  kInvalidSpinChannels = 9u,
+  kNonfiniteSpinConversion = 10u,
 };
 
 /*
@@ -149,6 +153,24 @@ cudaError_t evaluate_gfn2_mulliken_population_cuda(
     const Gfn2MullikenDeviceActivity& activity, const Gfn2MullikenDevicePopulation& population,
     const Gfn2MullikenDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Evaluate mixed restricted/unrestricted populations using the spin-aware
+ * common WavefunctionLayout projection. Density is system-major alpha/beta matrix data.
+ * Outputs are system-major charge/magnetization channels and therefore match
+ * WavefunctionLayout qsh/qat/dipole/quadrupole packing exactly.
+ *
+ * The legacy restricted entry point remains available so existing consumers
+ * retain their established launch geometry and arithmetic path. This entry
+ * preserves the same per-system transactional publication, inactive-first
+ * behavior, custom-stream execution, and CUDA Graph capture contract.
+ */
+cudaError_t evaluate_gfn2_mulliken_population_spin_cuda(
+    const Gfn2MullikenDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2MullikenDeviceInput& input, const Gfn2MullikenDeviceActivity& activity,
+    const Gfn2MullikenDevicePopulation& population, const Gfn2MullikenDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 
