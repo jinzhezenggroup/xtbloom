@@ -2458,30 +2458,14 @@ gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data
     for (std::int32_t spin = 0; spin < 2; ++spin) {
       for (std::int64_t matrix = 0; matrix < matrix_elements; ++matrix) {
         const double h0 = geometry.h0[static_cast<std::size_t>(matrix_begin + matrix)];
-        const double temporary = workspace.hamiltonian[static_cast<std::size_t>(
+        double& target = workspace.hamiltonian[static_cast<std::size_t>(
             hamiltonian_base + static_cast<std::int64_t>(spin) * matrix_elements + matrix)];
-        const double physical = std::fma(2.0, temporary - h0, h0);
+        const double physical = std::fma(2.0, target - h0, h0);
         if (!std::isfinite(physical)) {
           error = "SCC driver unrestricted Hamiltonian scaling overflowed";
           return GPUXTB_STATUS_INTERNAL_ERROR;
         }
-      }
-    }
-  }
-  for (std::size_t system = 0u; system < batch; ++system) {
-    if (layout.spin_channels[system] != 2) {
-      continue;
-    }
-    const std::int64_t matrix_begin = data.mulliken.matrix_offsets()[system];
-    const std::int64_t matrix_end = data.mulliken.matrix_offsets()[system + 1u];
-    const std::int64_t matrix_elements = matrix_end - matrix_begin;
-    const std::int64_t hamiltonian_base = layout.density.system_offsets[system];
-    for (std::int32_t spin = 0; spin < 2; ++spin) {
-      for (std::int64_t matrix = 0; matrix < matrix_elements; ++matrix) {
-        const double h0 = geometry.h0[static_cast<std::size_t>(matrix_begin + matrix)];
-        double& target = workspace.hamiltonian[static_cast<std::size_t>(
-            hamiltonian_base + static_cast<std::int64_t>(spin) * matrix_elements + matrix)];
-        target = std::fma(2.0, target - h0, h0);
+        target = physical;
       }
     }
   }
