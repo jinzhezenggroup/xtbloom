@@ -13,8 +13,8 @@ pip install .
 ```
 
 This builds `libgpuxtb` from the repository CMake project and bundles it inside
-the wheel under `gpuxtb/lib`. Requires a C++17 compiler, a working BLAS/MKL
-runtime (the CPU eigensolver dlopens `libmkl_rt`), and `numpy`.
+the wheel under `gpuxtb/lib`. Requires Python >= 3.10, a C++17 compiler, a
+working BLAS/MKL runtime (the CPU eigensolver dlopens `libmkl_rt`), and `numpy`.
 
 Optional extras:
 
@@ -39,8 +39,19 @@ GPUXTB_ENABLE_CUDA=ON pip install .
 
 If the resulting wheel is CUDA-enabled it does **not** bundle the CUDA runtime
 libraries; at runtime it needs the system CUDA driver plus the PyPI CUDA
-packages above. CI builds wheels with cibuildwheel in the PyPA CUDA manylinux
-images (`quay.io/manylinux_cuda/manylinux_2_28_*_cuda12_9`).
+packages above.
+
+CI builds wheels with cibuildwheel (`.github/workflows/wheels.yml`):
+
+* **Linux** wheels build in the PyPA CUDA manylinux images
+  (`quay.io/manylinux_cuda/manylinux_2_28_*_cuda12_9`), so the CUDA backend is
+  compiled in by default. The full test suite runs against the built wheel on a
+  host with an MKL runtime.
+* **macOS** wheels build CPU-only (no CUDA toolkit); they are covered by the
+  cibuildwheel import smoke test. Note their CPU inference currently needs an
+  MKL runtime exposing the `libmkl_rt.so` names the C++ eigensolver dlopens,
+  which the bundled library does not provide on macOS.
+* **Windows** wheels are a follow-up (the CPU eigensolver uses `dlopen`).
 
 The public Python interface always uses host buffers on both backends; CUDA
 device-resident memory is a future extension. The current CUDA backend is

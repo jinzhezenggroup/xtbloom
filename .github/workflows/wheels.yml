@@ -1,0 +1,57 @@
+name: Python wheels
+
+# Builds cross-platform wheels with cibuildwheel and runs the Python test suite
+# against the built Linux wheel. Kept separate from the C++ CI so packaging
+# jobs can be tuned independently (see https://cibuildwheel.pypa.io).
+#
+# - Linux builds run in the PyPA CUDA manylinux images (see
+#   [tool.cibuildwheel.linux] in pyproject.toml); nvcc in the image means the
+#   CUDA backend is compiled in by default and the full test suite runs here
+#   against an installed system MKL runtime.
+# - macOS builds CPU-only wheels (no CUDA toolkit); the cibuildwheel import
+#   smoke test covers those. Their CPU inference currently needs an MKL runtime
+#   exposing the `libmkl_rt.so` names the eigensolver dlopens, which the
+#   bundled library does not supply, so the deep suite is Linux-only.
+# - Windows is a follow-up: the C++ CPU eigensolver uses `dlopen`/`libmkl_rt`
+#   and needs a platform port before Windows wheels can build.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.22.0
+        with:
+          output-dir: wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gpuxtb-wheels-${{ matrix.os }}
+          path: ./wheelhouse/*.whl
+      - name: Install MKL runtime (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libmkl-rt
+      - name: Test the Linux wheel (host, with MKL)
+        if: runner.os == 'Linux'
+        run: |
+          mkl_dir="$(dirname "$(dpkg -L libmkl-rt | awk '/\/libmkl_rt\.so$/ { print; exit }')")"
+          python -m pip install wheelhouse/*cp312*.whl
+          pip install pytest ase dpdata
+          LD_LIBRARY_PATH="${mkl_dir}" python -m pytest python/tests -q
