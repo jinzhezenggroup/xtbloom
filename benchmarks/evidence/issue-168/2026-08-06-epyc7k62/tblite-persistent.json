@@ -122,7 +122,7 @@
           -0.006047766728572985,
           9.483047390587707e-17
         ],
-        "latency_ms": 18.458463,
+        "latency_ms": 18.472137999999998,
         "per_system_status": null,
         "scc_converged": null,
         "scc_iterations": null
@@ -138,7 +138,7 @@
           "OMP_NUM_THREADS": "1",
           "OPENBLAS_NUM_THREADS": "1",
           "omp_set_num_threads": true,
-          "openblas_set_num_threads": false
+          "openblas_set_num_threads": true
         },
         "timed_result_getters": [
           "energy",
@@ -251,8 +251,8 @@
           9.483047390587707e-17
         ],
         "fresh_reference_comparison": {
-          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "artifact_sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a",
+          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "artifact_sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779",
           "energy": {
             "atol_hartree": 5e-07,
             "max_abs_delta_hartree": 2.0605739337042905e-13
@@ -394,7 +394,7 @@
             -0.006047766751610282,
             7.574597457145408e-17
           ],
-          "latency_ms": 9.50886,
+          "latency_ms": 9.542183999999999,
           "per_system_status": null,
           "sample_index": 0,
           "scc_converged": null,
@@ -503,7 +503,7 @@
             -0.006047766751620256,
             3.551656825808485e-17
           ],
-          "latency_ms": 9.504501,
+          "latency_ms": 9.508619999999999,
           "per_system_status": null,
           "sample_index": 1,
           "scc_converged": null,
@@ -612,7 +612,7 @@
             -0.006047766751626339,
             9.365606272467286e-17
           ],
-          "latency_ms": 9.496606,
+          "latency_ms": 9.517006,
           "per_system_status": null,
           "sample_index": 2,
           "scc_converged": null,
@@ -721,7 +721,7 @@
             -0.006047766751629932,
             1.1396325411862113e-16
           ],
-          "latency_ms": 9.521533999999999,
+          "latency_ms": 9.50312,
           "per_system_status": null,
           "sample_index": 3,
           "scc_converged": null,
@@ -830,7 +830,7 @@
             -0.0060477667516325466,
             -1.2125223376706724e-17
           ],
-          "latency_ms": 9.515552,
+          "latency_ms": 9.500014,
           "per_system_status": null,
           "sample_index": 4,
           "scc_converged": null,
@@ -939,7 +939,7 @@
             -0.0060477667516343125,
             7.950383624194812e-17
           ],
-          "latency_ms": 9.512485999999999,
+          "latency_ms": 9.511526,
           "per_system_status": null,
           "sample_index": 5,
           "scc_converged": null,
@@ -1048,7 +1048,7 @@
             -0.0060477667516355,
             2.536737154716928e-16
           ],
-          "latency_ms": 9.512065999999999,
+          "latency_ms": 9.524830999999999,
           "per_system_status": null,
           "sample_index": 6,
           "scc_converged": null,
@@ -1157,7 +1157,7 @@
             -0.006047766751635808,
             5.588728712307737e-17
           ],
-          "latency_ms": 9.497347999999999,
+          "latency_ms": 9.499512,
           "per_system_status": null,
           "sample_index": 7,
           "scc_converged": null,
@@ -1266,7 +1266,7 @@
             -0.00604776675163645,
             1.8756025283965288e-16
           ],
-          "latency_ms": 9.513658999999999,
+          "latency_ms": 9.532046,
           "per_system_status": null,
           "sample_index": 8,
           "scc_converged": null,
@@ -1375,7 +1375,7 @@
             -0.006047766751636584,
             3.005523304210084e-16
           ],
-          "latency_ms": 9.504972,
+          "latency_ms": 9.569657,
           "per_system_status": null,
           "sample_index": 9,
           "scc_converged": null,
@@ -1484,7 +1484,7 @@
             -0.006047766751636894,
             1.436712406776713e-16
           ],
-          "latency_ms": 9.513689,
+          "latency_ms": 9.506034999999999,
           "per_system_status": null,
           "sample_index": 10,
           "scc_converged": null,
@@ -1593,7 +1593,7 @@
             -0.0060477667516370525,
             9.289585065451227e-17
           ],
-          "latency_ms": 9.507577999999999,
+          "latency_ms": 9.489033,
           "per_system_status": null,
           "sample_index": 11,
           "scc_converged": null,
@@ -1702,7 +1702,7 @@
             -0.006047766751636882,
             2.7680787932710223e-16
           ],
-          "latency_ms": 9.520491999999999,
+          "latency_ms": 9.498932,
           "per_system_status": null,
           "sample_index": 12,
           "scc_converged": null,
@@ -1811,7 +1811,7 @@
             -0.006047766751637208,
             1.7784054976990978e-16
           ],
-          "latency_ms": 9.512958,
+          "latency_ms": 9.515314,
           "per_system_status": null,
           "sample_index": 13,
           "scc_converged": null,
@@ -1920,7 +1920,7 @@
             -0.006047766751637199,
             2.614363489168048e-16
           ],
-          "latency_ms": 9.563303999999999,
+          "latency_ms": 9.498501,
           "per_system_status": null,
           "sample_index": 14,
           "scc_converged": null,
@@ -2029,7 +2029,7 @@
             -0.006047766751637149,
             1.5673248872433262e-16
           ],
-          "latency_ms": 9.518217,
+          "latency_ms": 9.532485999999999,
           "per_system_status": null,
           "sample_index": 15,
           "scc_converged": null,
@@ -2138,7 +2138,7 @@
             -0.006047766751637232,
             1.6416139118822646e-16
           ],
-          "latency_ms": 9.513107999999999,
+          "latency_ms": 9.506526,
           "per_system_status": null,
           "sample_index": 16,
           "scc_converged": null,
@@ -2247,7 +2247,7 @@
             -0.006047766751637192,
             -2.9153126715359865e-17
           ],
-          "latency_ms": 9.509031,
+          "latency_ms": 9.489464,
           "per_system_status": null,
           "sample_index": 17,
           "scc_converged": null,
@@ -2356,7 +2356,7 @@
             -0.006047766751637354,
             2.1958445099296984e-16
           ],
-          "latency_ms": 9.510473,
+          "latency_ms": 9.497459,
           "per_system_status": null,
           "sample_index": 18,
           "scc_converged": null,
@@ -2465,7 +2465,7 @@
             -0.006047766751637313,
             3.484910071038128e-16
           ],
-          "latency_ms": 9.506675999999999,
+          "latency_ms": 9.49798,
           "per_system_status": null,
           "sample_index": 19,
           "scc_converged": null,
@@ -2574,7 +2574,7 @@
             -0.006047766751637478,
             6.196898368436326e-17
           ],
-          "latency_ms": 9.490705,
+          "latency_ms": 9.48761,
           "per_system_status": null,
           "sample_index": 20,
           "scc_converged": null,
@@ -2683,7 +2683,7 @@
             -0.006047766751637206,
             1.6365486548576839e-16
           ],
-          "latency_ms": 9.492378,
+          "latency_ms": 9.49791,
           "per_system_status": null,
           "sample_index": 21,
           "scc_converged": null,
@@ -2792,7 +2792,7 @@
             -0.006047766751637329,
             -1.2499611939393066e-17
           ],
-          "latency_ms": 9.501546,
+          "latency_ms": 9.4879,
           "per_system_status": null,
           "sample_index": 22,
           "scc_converged": null,
@@ -2901,7 +2901,7 @@
             -0.006047766751637434,
             1.3854457376441465e-16
           ],
-          "latency_ms": 9.504972,
+          "latency_ms": 9.48763,
           "per_system_status": null,
           "sample_index": 23,
           "scc_converged": null,
@@ -3010,7 +3010,7 @@
             -0.006047766751637085,
             1.1498525522215773e-17
           ],
-          "latency_ms": 9.515362,
+          "latency_ms": 9.498661,
           "per_system_status": null,
           "sample_index": 24,
           "scc_converged": null,
@@ -3119,7 +3119,7 @@
             -0.0060477667516372615,
             1.9825446731521205e-16
           ],
-          "latency_ms": 9.507256,
+          "latency_ms": 9.499153,
           "per_system_status": null,
           "sample_index": 25,
           "scc_converged": null,
@@ -3228,7 +3228,7 @@
             -0.006047766751637419,
             1.0035651685392815e-16
           ],
-          "latency_ms": 9.505143,
+          "latency_ms": 9.49286,
           "per_system_status": null,
           "sample_index": 26,
           "scc_converged": null,
@@ -3337,7 +3337,7 @@
             -0.006047766751637132,
             4.7657938524028226e-17
           ],
-          "latency_ms": 9.5197,
+          "latency_ms": 9.492239,
           "per_system_status": null,
           "sample_index": 27,
           "scc_converged": null,
@@ -3446,7 +3446,7 @@
             -0.006047766751637309,
             1.7205785583900467e-16
           ],
-          "latency_ms": 9.513579,
+          "latency_ms": 9.474995999999999,
           "per_system_status": null,
           "sample_index": 28,
           "scc_converged": null,
@@ -3555,7 +3555,7 @@
             -0.00604776675163733,
             1.7457100259350818e-16
           ],
-          "latency_ms": 9.511764999999999,
+          "latency_ms": 9.596047,
           "per_system_status": null,
           "sample_index": 29,
           "scc_converged": null,
@@ -3571,7 +3571,7 @@
           "--engine",
           "tblite",
           "--library",
-          "/tmp/tblite-build/libtblite.so",
+          "/tmp/tblite-pr169-6f7f1e2/libtblite.so.0.7.0",
           "--backend",
           "cpu",
           "--cpu-threads",
@@ -3587,15 +3587,15 @@
           "--repetitions",
           "30",
           "--energy-reference-json",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
           "--cross-engine-energy-atol",
           "5e-7",
           "--cross-engine-force-atol",
           "5e-6",
           "--output-json",
-          "build/benchmarks/pr169-evidence-255833d/tblite-persistent.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/tblite-persistent.json",
           "--output-csv",
-          "build/benchmarks/pr169-evidence-255833d/tblite-persistent.csv"
+          "build/benchmarks/pr169-evidence-6f7f1e2/tblite-persistent.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -3603,10 +3603,10 @@
           "status": "eligible"
         },
         "fresh_reference_artifact": {
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a"
+          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
         },
-        "generated_at_utc": "2026-08-05T17:35:36.341358+00:00",
+        "generated_at_utc": "2026-08-05T18:29:38.099027+00:00",
         "hardware": {
           "cpu_model": "AMD EPYC 7K62 48-Core Processor",
           "logical_cpu_count": 48,
@@ -3616,7 +3616,7 @@
         },
         "library": {
           "build": {
-            "build_directory": "/tmp/tblite-build",
+            "build_directory": "/tmp/tblite-pr169-6f7f1e2",
             "build_options": {
               "b_lto": false,
               "b_ndebug": "false",
@@ -3634,34 +3634,17 @@
             "build_system": "meson",
             "compilers": {
               "build": {
-                "c": {
-                  "default_suffix": "c",
+                "fortran": {
+                  "default_suffix": "f90",
                   "executable_files": [
                     {
                       "is_file": true,
-                      "path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-                      "sha256": "821af3c74506283c179ca413bb33e6b528805a4dd8a5c09df125e5ad560a9e89"
+                      "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran",
+                      "sha256": "de744570ad7763b884735bc75503fc79520f01eb8859d5b010ec377a2d4d8174"
                     }
                   ],
                   "exelist": [
-                    "gcc"
-                  ],
-                  "file_suffixes": [
-                    "c"
-                  ],
-                  "full_version": "gcc (conda-forge gcc 13.4.0-20) 13.4.0",
-                  "id": "gcc",
-                  "linker_exelist": [
-                    "gcc"
-                  ],
-                  "linker_id": "ld.bfd",
-                  "version": "13.4.0"
-                },
-                "fortran": {
-                  "default_suffix": "f90",
-                  "executable_files": [],
-                  "exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "file_suffixes": [
                     "f90",
@@ -3676,9 +3659,10 @@
                   "full_version": "GNU Fortran (conda-forge gcc 13.4.0-20) 13.4.0",
                   "id": "gcc",
                   "linker_exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "linker_id": "ld.bfd",
+                  "unresolved_executable_entries": [],
                   "version": "13.4.0"
                 }
               },
@@ -3688,29 +3672,36 @@
                   "executable_files": [
                     {
                       "is_file": true,
-                      "path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-                      "sha256": "821af3c74506283c179ca413bb33e6b528805a4dd8a5c09df125e5ad560a9e89"
+                      "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gcc",
+                      "sha256": "6420cb0972435d925a3248db3ccb0c1c4ff7f1a81e6aa8f37e1ae54da1538d98"
                     }
                   ],
                   "exelist": [
-                    "gcc"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-cc"
                   ],
                   "file_suffixes": [
                     "c"
                   ],
-                  "full_version": "gcc (conda-forge gcc 13.4.0-20) 13.4.0",
+                  "full_version": "x86_64-conda-linux-gnu-cc (conda-forge gcc 13.4.0-20) 13.4.0",
                   "id": "gcc",
                   "linker_exelist": [
-                    "gcc"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-cc"
                   ],
                   "linker_id": "ld.bfd",
+                  "unresolved_executable_entries": [],
                   "version": "13.4.0"
                 },
                 "fortran": {
                   "default_suffix": "f90",
-                  "executable_files": [],
+                  "executable_files": [
+                    {
+                      "is_file": true,
+                      "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran",
+                      "sha256": "de744570ad7763b884735bc75503fc79520f01eb8859d5b010ec377a2d4d8174"
+                    }
+                  ],
                   "exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "file_suffixes": [
                     "f90",
@@ -3725,9 +3716,10 @@
                   "full_version": "GNU Fortran (conda-forge gcc 13.4.0-20) 13.4.0",
                   "id": "gcc",
                   "linker_exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "linker_id": "ld.bfd",
+                  "unresolved_executable_entries": [],
                   "version": "13.4.0"
                 }
               }
@@ -3747,55 +3739,144 @@
               },
               {
                 "compile_args": [
-                  "-I/tmp/lammps-qmmm-xtb-env/include"
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
                 ],
                 "link_args": [
-                  "/tmp/lammps-qmmm-xtb-env/lib/libopenblas.so"
+                  "/tmp/lammps-qmmm-xtb-env/lib/libtoml-f.so"
                 ],
                 "linked_files": [
                   {
                     "is_file": true,
-                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libopenblasp-r0.3.33.so",
-                    "sha256": "60ddaebfbdae101e9325efa24360c3bd639abb77ef569b35becd6bbcbed6605e"
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libtoml-f.so.0.5.2",
+                    "sha256": "00a8ef2feff63d7939d6717a7588a40d219e3c9c14c33105ebdd5bd449a5663b"
                   }
                 ],
-                "name": "openblas",
+                "name": "toml-f",
                 "type": "pkgconfig",
-                "version": "0.3.33"
+                "version": "0.5.2"
               },
               {
                 "compile_args": [
-                  "-fopenmp"
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
                 ],
                 "link_args": [
-                  "-fopenmp"
+                  "/tmp/lammps-qmmm-xtb-env/lib/libmctc-lib.so"
                 ],
-                "linked_files": [],
-                "name": "OpenMP",
-                "type": "system",
-                "version": "4.5"
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libmctc-lib.so.0.5.2",
+                    "sha256": "114eb96417b0ce0409fe03920c19cecd412dbad8c8bf89c3cf3b686bd0052c38"
+                  }
+                ],
+                "name": "mctc-lib",
+                "type": "pkgconfig",
+                "version": "0.5.2"
+              },
+              {
+                "compile_args": [
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/multicharge/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+                ],
+                "link_args": [
+                  "/tmp/lammps-qmmm-xtb-env/lib/libmulticharge.so"
+                ],
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libmulticharge.so.0.5.0",
+                    "sha256": "d8db344a0a2fce9595711d35eec40e624bd75ab514c971458e46bf96cd3db407"
+                  }
+                ],
+                "name": "multicharge",
+                "type": "pkgconfig",
+                "version": "0.5.0"
+              },
+              {
+                "compile_args": [
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/dftd4/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/multicharge/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+                ],
+                "link_args": [
+                  "/tmp/lammps-qmmm-xtb-env/lib/libdftd4.so"
+                ],
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libdftd4.so.4.2.0",
+                    "sha256": "5eaf8f6a243643fba2a9cb32ab18348ece9c23913a73a6f5cc15d3534f643e5f"
+                  }
+                ],
+                "name": "dftd4",
+                "type": "pkgconfig",
+                "version": "4.2.0"
+              },
+              {
+                "compile_args": [
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/s-dftd3/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+                ],
+                "link_args": [
+                  "/tmp/lammps-qmmm-xtb-env/lib/libs-dftd3.so"
+                ],
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libs-dftd3.so.1.4.0",
+                    "sha256": "1c856b7edf915c3d32ed181684b5bc1785ff0b4c42804882e47a571e14904a78"
+                  }
+                ],
+                "name": "s-dftd3",
+                "type": "pkgconfig",
+                "version": "1.4.0"
               }
             ],
             "introspection_files": {
               "intro-buildoptions.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-buildoptions.json",
-                "sha256": "25f541568189d80d647fde0ffee5eb541f51a1978bc75ceaac67247d5c73422b"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-buildoptions.json",
+                "sha256": "5579062ea5906c64d45e1952448ac7b668acbd34920e4f0ec895c595d325ae5b"
               },
               "intro-compilers.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-compilers.json",
-                "sha256": "4ecd2e148eff62ee9cd09453f56f924be65ac8c745ea16fa96ec8e5e6c4704df"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-compilers.json",
+                "sha256": "f29d5228e8abe2447218aec9f6515adb0e93dd07ec9ebfcbb1cd7a6ef772a670"
               },
               "intro-dependencies.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-dependencies.json",
-                "sha256": "abdfc2e8180de0ea5d38b9a9cd2e3d5b97e68ac2eba23e4427fb681fc14750bf"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-dependencies.json",
+                "sha256": "499796f1d2fdbbbc51c08b0ad57698e365c593c553de5e31a611066e733f9fcb"
               },
               "intro-projectinfo.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-projectinfo.json",
-                "sha256": "8c09d7044234aad22205d166a20120064afd1d9260ac1fe2f1a5fdc9c2289778"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-projectinfo.json",
+                "sha256": "e75726a2a09d3744d4ec0f5d6c6ec5dd8da9de00b74fe8096461624b946e58c3"
               },
               "meson-info.json": {
-                "path": "/tmp/tblite-build/meson-info/meson-info.json",
-                "sha256": "829208a9a50e6252a1b167fd37dcaeecfa03b414c0193382cb97a5291649ffe3"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/meson-info.json",
+                "sha256": "e8c706ac67ecfa4ebe691eb4b50b4cf8effc1f49764fc5a74ffc2929399571d9"
               }
             },
             "meson_version": {
@@ -3813,44 +3894,9 @@
               "subproject_dir": "subprojects",
               "subprojects": [
                 {
-                  "descriptive_name": "toml-f",
-                  "name": "toml-f",
-                  "version": "0.5.1"
-                },
-                {
-                  "descriptive_name": "test-drive",
-                  "name": "test-drive",
-                  "version": "0.6.0"
-                },
-                {
-                  "descriptive_name": "mctc-lib",
-                  "name": "mctc-lib",
-                  "version": "0.5.2"
-                },
-                {
-                  "descriptive_name": "jonquil",
-                  "name": "jonquil",
-                  "version": "0.3.0"
-                },
-                {
-                  "descriptive_name": "multicharge",
-                  "name": "multicharge",
-                  "version": "0.5.0"
-                },
-                {
                   "descriptive_name": "mstore",
                   "name": "mstore",
                   "version": "0.3.0"
-                },
-                {
-                  "descriptive_name": "dftd4",
-                  "name": "dftd4",
-                  "version": "4.2.0"
-                },
-                {
-                  "descriptive_name": "s-dftd3",
-                  "name": "s-dftd3",
-                  "version": "1.4.0"
                 }
               ],
               "version": "0.7.0"
@@ -3877,13 +3923,13 @@
             }
           },
           "engine": "tblite",
-          "path": "/tmp/tblite-build/libtblite.so.0.7.0",
-          "sha256": "b7d23807eddf46ee2472e6522ceb1b73611166e7060a72d6bdd31bb4ae00db9c"
+          "path": "/tmp/tblite-pr169-6f7f1e2/libtblite.so.0.7.0",
+          "sha256": "1c2fb4308b398851580af11ccad5eec22314ff45a34a553380277e776a44c3b5"
         },
         "repository": {
           "dirty": false,
           "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-          "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+          "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
         },
         "runner": {
           "hostname": "node3",
@@ -3905,43 +3951,43 @@
       "start_mode": "persistent",
       "timing": {
         "count": 30,
-        "mean_ms": 9.510850533333333,
-        "median_ms": 9.511118999999999,
-        "min_ms": 9.490705,
-        "p95_ms": 9.521533999999999,
+        "mean_ms": 9.5085084,
+        "median_ms": 9.4993325,
+        "min_ms": 9.474995999999999,
+        "p95_ms": 9.569657,
         "samples_ms": [
-          9.50886,
-          9.504501,
-          9.496606,
-          9.521533999999999,
-          9.515552,
-          9.512485999999999,
-          9.512065999999999,
-          9.497347999999999,
-          9.513658999999999,
-          9.504972,
-          9.513689,
-          9.507577999999999,
-          9.520491999999999,
-          9.512958,
-          9.563303999999999,
-          9.518217,
-          9.513107999999999,
-          9.509031,
-          9.510473,
-          9.506675999999999,
-          9.490705,
-          9.492378,
-          9.501546,
-          9.504972,
-          9.515362,
-          9.507256,
-          9.505143,
-          9.5197,
-          9.513579,
-          9.511764999999999
+          9.542183999999999,
+          9.508619999999999,
+          9.517006,
+          9.50312,
+          9.500014,
+          9.511526,
+          9.524830999999999,
+          9.499512,
+          9.532046,
+          9.569657,
+          9.506034999999999,
+          9.489033,
+          9.498932,
+          9.515314,
+          9.498501,
+          9.532485999999999,
+          9.506526,
+          9.489464,
+          9.497459,
+          9.49798,
+          9.48761,
+          9.49791,
+          9.4879,
+          9.48763,
+          9.498661,
+          9.499153,
+          9.49286,
+          9.492239,
+          9.474995999999999,
+          9.596047
         ],
-        "systems_per_second_at_median": 105.14009970856218
+        "systems_per_second_at_median": 105.2705545363319
       },
       "warmups": 10,
       "workload_identity": {
@@ -4155,7 +4201,7 @@
           -0.006047328131605203,
           -6.767403800435385e-16
         ],
-        "latency_ms": 58.569871,
+        "latency_ms": 58.519591999999996,
         "per_system_status": null,
         "scc_converged": null,
         "scc_iterations": null
@@ -4374,8 +4420,8 @@
           -6.767403800435385e-16
         ],
         "fresh_reference_comparison": {
-          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "artifact_sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a",
+          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "artifact_sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779",
           "energy": {
             "atol_hartree": 5e-07,
             "max_abs_delta_hartree": 3.410605131648481e-13
@@ -4607,7 +4653,7 @@
             -0.006047328146655781,
             -7.259507822864573e-16
           ],
-          "latency_ms": 27.042348999999998,
+          "latency_ms": 27.156691,
           "per_system_status": null,
           "sample_index": 0,
           "scc_converged": null,
@@ -4806,7 +4852,7 @@
             -0.0060473281466559975,
             -6.073468907046907e-16
           ],
-          "latency_ms": 27.058961999999998,
+          "latency_ms": 27.154576,
           "per_system_status": null,
           "sample_index": 1,
           "scc_converged": null,
@@ -5005,7 +5051,7 @@
             -0.006047328146656043,
             -6.889272749647592e-16
           ],
-          "latency_ms": 27.081815,
+          "latency_ms": 27.153585,
           "per_system_status": null,
           "sample_index": 2,
           "scc_converged": null,
@@ -5204,7 +5250,7 @@
             -0.00604732814665622,
             -7.882571858126927e-16
           ],
-          "latency_ms": 27.048410999999998,
+          "latency_ms": 27.126523,
           "per_system_status": null,
           "sample_index": 3,
           "scc_converged": null,
@@ -5403,7 +5449,7 @@
             -0.006047328146656529,
             -7.773112731488049e-16
           ],
-          "latency_ms": 27.060343999999997,
+          "latency_ms": 27.069103,
           "per_system_status": null,
           "sample_index": 4,
           "scc_converged": null,
@@ -5602,7 +5648,7 @@
             -0.006047328146656429,
             -8.818432086294238e-16
           ],
-          "latency_ms": 27.056846999999998,
+          "latency_ms": 27.06793,
           "per_system_status": null,
           "sample_index": 5,
           "scc_converged": null,
@@ -5801,7 +5847,7 @@
             -0.006047328146656409,
             -5.927989518273878e-16
           ],
-          "latency_ms": 27.075263,
+          "latency_ms": 27.139015999999998,
           "per_system_status": null,
           "sample_index": 6,
           "scc_converged": null,
@@ -6000,7 +6046,7 @@
             -0.006047328146656439,
             -7.053462696508116e-16
           ],
-          "latency_ms": 27.091172999999998,
+          "latency_ms": 27.134708999999997,
           "per_system_status": null,
           "sample_index": 7,
           "scc_converged": null,
@@ -6199,7 +6245,7 @@
             -0.006047328146656304,
             -7.53976806364656e-16
           ],
-          "latency_ms": 27.284812,
+          "latency_ms": 27.226784,
           "per_system_status": null,
           "sample_index": 8,
           "scc_converged": null,
@@ -6398,7 +6444,7 @@
             -0.0060473281466560565,
             -8.122228391155013e-16
           ],
-          "latency_ms": 27.099038,
+          "latency_ms": 27.124378,
           "per_system_status": null,
           "sample_index": 9,
           "scc_converged": null,
@@ -6597,7 +6643,7 @@
             -0.0060473281466563306,
             -5.836260846784421e-16
           ],
-          "latency_ms": 27.122802999999998,
+          "latency_ms": 27.225903,
           "per_system_status": null,
           "sample_index": 10,
           "scc_converged": null,
@@ -6796,7 +6842,7 @@
             -0.0060473281466562855,
             -6.715862210665684e-16
           ],
-          "latency_ms": 27.227092,
+          "latency_ms": 27.094911999999997,
           "per_system_status": null,
           "sample_index": 11,
           "scc_converged": null,
@@ -6995,7 +7041,7 @@
             -0.006047328146656093,
             -7.809202617252808e-16
           ],
-          "latency_ms": 27.257690999999998,
+          "latency_ms": 27.226725,
           "per_system_status": null,
           "sample_index": 12,
           "scc_converged": null,
@@ -7194,7 +7240,7 @@
             -0.006047328146656391,
             -7.210860499654927e-16
           ],
-          "latency_ms": 27.144174999999997,
+          "latency_ms": 27.192508999999998,
           "per_system_status": null,
           "sample_index": 13,
           "scc_converged": null,
@@ -7393,7 +7439,7 @@
             -0.006047328146656207,
             -7.247666583960683e-16
           ],
-          "latency_ms": 27.044645,
+          "latency_ms": 27.270187,
           "per_system_status": null,
           "sample_index": 14,
           "scc_converged": null,
@@ -7592,7 +7638,7 @@
             -0.006047328146656317,
             -7.60340403283238e-16
           ],
-          "latency_ms": 27.053561,
+          "latency_ms": 27.194933,
           "per_system_status": null,
           "sample_index": 15,
           "scc_converged": null,
@@ -7791,7 +7837,7 @@
             -0.006047328146656389,
             -7.73183342232726e-16
           ],
-          "latency_ms": 27.034305,
+          "latency_ms": 27.377132,
           "per_system_status": null,
           "sample_index": 16,
           "scc_converged": null,
@@ -7990,7 +8036,7 @@
             -0.006047328146656181,
             -7.431970520378317e-16
           ],
-          "latency_ms": 27.064262,
+          "latency_ms": 27.097969,
           "per_system_status": null,
           "sample_index": 17,
           "scc_converged": null,
@@ -8189,7 +8235,7 @@
             -0.006047328146656084,
             -7.17531146985148e-16
           ],
-          "latency_ms": 27.036489,
+          "latency_ms": 27.059454,
           "per_system_status": null,
           "sample_index": 18,
           "scc_converged": null,
@@ -8388,7 +8434,7 @@
             -0.006047328146656044,
             -6.90731887171932e-16
           ],
-          "latency_ms": 27.063581,
+          "latency_ms": 27.05709,
           "per_system_status": null,
           "sample_index": 19,
           "scc_converged": null,
@@ -8587,7 +8633,7 @@
             -0.006047328146655977,
             -7.508102833116337e-16
           ],
-          "latency_ms": 27.066226,
+          "latency_ms": 27.076086,
           "per_system_status": null,
           "sample_index": 20,
           "scc_converged": null,
@@ -8786,7 +8832,7 @@
             -0.006047328146656192,
             -5.948663903365923e-16
           ],
-          "latency_ms": 27.031409,
+          "latency_ms": 27.070545,
           "per_system_status": null,
           "sample_index": 21,
           "scc_converged": null,
@@ -8985,7 +9031,7 @@
             -0.006047328146656084,
             -8.828957110676003e-16
           ],
-          "latency_ms": 27.144644999999997,
+          "latency_ms": 27.066157,
           "per_system_status": null,
           "sample_index": 22,
           "scc_converged": null,
@@ -9184,7 +9230,7 @@
             -0.006047328146655919,
             -8.638133644629069e-16
           ],
-          "latency_ms": 27.035937,
+          "latency_ms": 27.159886999999998,
           "per_system_status": null,
           "sample_index": 23,
           "scc_converged": null,
@@ -9383,7 +9429,7 @@
             -0.006047328146656307,
             -7.745704391113714e-16
           ],
-          "latency_ms": 27.080322,
+          "latency_ms": 27.062199,
           "per_system_status": null,
           "sample_index": 24,
           "scc_converged": null,
@@ -9582,7 +9628,7 @@
             -0.006047328146656272,
             -8.561576933226663e-16
           ],
-          "latency_ms": 27.044164,
+          "latency_ms": 27.097056,
           "per_system_status": null,
           "sample_index": 25,
           "scc_converged": null,
@@ -9781,7 +9827,7 @@
             -0.006047328146656297,
             -7.924127294492508e-16
           ],
-          "latency_ms": 27.034865999999997,
+          "latency_ms": 27.033786,
           "per_system_status": null,
           "sample_index": 26,
           "scc_converged": null,
@@ -9980,7 +10026,7 @@
             -0.006047328146656372,
             -8.118872342130159e-16
           ],
-          "latency_ms": 27.060705,
+          "latency_ms": 27.08861,
           "per_system_status": null,
           "sample_index": 27,
           "scc_converged": null,
@@ -10179,7 +10225,7 @@
             -0.006047328146656149,
             -6.927138669824474e-16
           ],
-          "latency_ms": 27.055936,
+          "latency_ms": 27.041950999999997,
           "per_system_status": null,
           "sample_index": 28,
           "scc_converged": null,
@@ -10378,7 +10424,7 @@
             -0.00604732814665648,
             -6.796430793725644e-16
           ],
-          "latency_ms": 27.031128,
+          "latency_ms": 27.080824999999997,
           "per_system_status": null,
           "sample_index": 29,
           "scc_converged": null,
@@ -10394,7 +10440,7 @@
           "--engine",
           "tblite",
           "--library",
-          "/tmp/tblite-build/libtblite.so",
+          "/tmp/tblite-pr169-6f7f1e2/libtblite.so.0.7.0",
           "--backend",
           "cpu",
           "--cpu-threads",
@@ -10410,15 +10456,15 @@
           "--repetitions",
           "30",
           "--energy-reference-json",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
           "--cross-engine-energy-atol",
           "5e-7",
           "--cross-engine-force-atol",
           "5e-6",
           "--output-json",
-          "build/benchmarks/pr169-evidence-255833d/tblite-persistent.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/tblite-persistent.json",
           "--output-csv",
-          "build/benchmarks/pr169-evidence-255833d/tblite-persistent.csv"
+          "build/benchmarks/pr169-evidence-6f7f1e2/tblite-persistent.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -10426,10 +10472,10 @@
           "status": "eligible"
         },
         "fresh_reference_artifact": {
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a"
+          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
         },
-        "generated_at_utc": "2026-08-05T17:35:36.341358+00:00",
+        "generated_at_utc": "2026-08-05T18:29:38.099027+00:00",
         "hardware": {
           "cpu_model": "AMD EPYC 7K62 48-Core Processor",
           "logical_cpu_count": 48,
@@ -10439,7 +10485,7 @@
         },
         "library": {
           "build": {
-            "build_directory": "/tmp/tblite-build",
+            "build_directory": "/tmp/tblite-pr169-6f7f1e2",
             "build_options": {
               "b_lto": false,
               "b_ndebug": "false",
@@ -10457,34 +10503,17 @@
             "build_system": "meson",
             "compilers": {
               "build": {
-                "c": {
-                  "default_suffix": "c",
+                "fortran": {
+                  "default_suffix": "f90",
                   "executable_files": [
                     {
                       "is_file": true,
-                      "path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-                      "sha256": "821af3c74506283c179ca413bb33e6b528805a4dd8a5c09df125e5ad560a9e89"
+                      "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran",
+                      "sha256": "de744570ad7763b884735bc75503fc79520f01eb8859d5b010ec377a2d4d8174"
                     }
                   ],
                   "exelist": [
-                    "gcc"
-                  ],
-                  "file_suffixes": [
-                    "c"
-                  ],
-                  "full_version": "gcc (conda-forge gcc 13.4.0-20) 13.4.0",
-                  "id": "gcc",
-                  "linker_exelist": [
-                    "gcc"
-                  ],
-                  "linker_id": "ld.bfd",
-                  "version": "13.4.0"
-                },
-                "fortran": {
-                  "default_suffix": "f90",
-                  "executable_files": [],
-                  "exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "file_suffixes": [
                     "f90",
@@ -10499,9 +10528,10 @@
                   "full_version": "GNU Fortran (conda-forge gcc 13.4.0-20) 13.4.0",
                   "id": "gcc",
                   "linker_exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "linker_id": "ld.bfd",
+                  "unresolved_executable_entries": [],
                   "version": "13.4.0"
                 }
               },
@@ -10511,29 +10541,36 @@
                   "executable_files": [
                     {
                       "is_file": true,
-                      "path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-                      "sha256": "821af3c74506283c179ca413bb33e6b528805a4dd8a5c09df125e5ad560a9e89"
+                      "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gcc",
+                      "sha256": "6420cb0972435d925a3248db3ccb0c1c4ff7f1a81e6aa8f37e1ae54da1538d98"
                     }
                   ],
                   "exelist": [
-                    "gcc"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-cc"
                   ],
                   "file_suffixes": [
                     "c"
                   ],
-                  "full_version": "gcc (conda-forge gcc 13.4.0-20) 13.4.0",
+                  "full_version": "x86_64-conda-linux-gnu-cc (conda-forge gcc 13.4.0-20) 13.4.0",
                   "id": "gcc",
                   "linker_exelist": [
-                    "gcc"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-cc"
                   ],
                   "linker_id": "ld.bfd",
+                  "unresolved_executable_entries": [],
                   "version": "13.4.0"
                 },
                 "fortran": {
                   "default_suffix": "f90",
-                  "executable_files": [],
+                  "executable_files": [
+                    {
+                      "is_file": true,
+                      "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran",
+                      "sha256": "de744570ad7763b884735bc75503fc79520f01eb8859d5b010ec377a2d4d8174"
+                    }
+                  ],
                   "exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "file_suffixes": [
                     "f90",
@@ -10548,9 +10585,10 @@
                   "full_version": "GNU Fortran (conda-forge gcc 13.4.0-20) 13.4.0",
                   "id": "gcc",
                   "linker_exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "linker_id": "ld.bfd",
+                  "unresolved_executable_entries": [],
                   "version": "13.4.0"
                 }
               }
@@ -10570,55 +10608,144 @@
               },
               {
                 "compile_args": [
-                  "-I/tmp/lammps-qmmm-xtb-env/include"
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
                 ],
                 "link_args": [
-                  "/tmp/lammps-qmmm-xtb-env/lib/libopenblas.so"
+                  "/tmp/lammps-qmmm-xtb-env/lib/libtoml-f.so"
                 ],
                 "linked_files": [
                   {
                     "is_file": true,
-                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libopenblasp-r0.3.33.so",
-                    "sha256": "60ddaebfbdae101e9325efa24360c3bd639abb77ef569b35becd6bbcbed6605e"
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libtoml-f.so.0.5.2",
+                    "sha256": "00a8ef2feff63d7939d6717a7588a40d219e3c9c14c33105ebdd5bd449a5663b"
                   }
                 ],
-                "name": "openblas",
+                "name": "toml-f",
                 "type": "pkgconfig",
-                "version": "0.3.33"
+                "version": "0.5.2"
               },
               {
                 "compile_args": [
-                  "-fopenmp"
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
                 ],
                 "link_args": [
-                  "-fopenmp"
+                  "/tmp/lammps-qmmm-xtb-env/lib/libmctc-lib.so"
                 ],
-                "linked_files": [],
-                "name": "OpenMP",
-                "type": "system",
-                "version": "4.5"
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libmctc-lib.so.0.5.2",
+                    "sha256": "114eb96417b0ce0409fe03920c19cecd412dbad8c8bf89c3cf3b686bd0052c38"
+                  }
+                ],
+                "name": "mctc-lib",
+                "type": "pkgconfig",
+                "version": "0.5.2"
+              },
+              {
+                "compile_args": [
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/multicharge/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+                ],
+                "link_args": [
+                  "/tmp/lammps-qmmm-xtb-env/lib/libmulticharge.so"
+                ],
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libmulticharge.so.0.5.0",
+                    "sha256": "d8db344a0a2fce9595711d35eec40e624bd75ab514c971458e46bf96cd3db407"
+                  }
+                ],
+                "name": "multicharge",
+                "type": "pkgconfig",
+                "version": "0.5.0"
+              },
+              {
+                "compile_args": [
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/dftd4/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/multicharge/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+                ],
+                "link_args": [
+                  "/tmp/lammps-qmmm-xtb-env/lib/libdftd4.so"
+                ],
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libdftd4.so.4.2.0",
+                    "sha256": "5eaf8f6a243643fba2a9cb32ab18348ece9c23913a73a6f5cc15d3534f643e5f"
+                  }
+                ],
+                "name": "dftd4",
+                "type": "pkgconfig",
+                "version": "4.2.0"
+              },
+              {
+                "compile_args": [
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/s-dftd3/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+                ],
+                "link_args": [
+                  "/tmp/lammps-qmmm-xtb-env/lib/libs-dftd3.so"
+                ],
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libs-dftd3.so.1.4.0",
+                    "sha256": "1c856b7edf915c3d32ed181684b5bc1785ff0b4c42804882e47a571e14904a78"
+                  }
+                ],
+                "name": "s-dftd3",
+                "type": "pkgconfig",
+                "version": "1.4.0"
               }
             ],
             "introspection_files": {
               "intro-buildoptions.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-buildoptions.json",
-                "sha256": "25f541568189d80d647fde0ffee5eb541f51a1978bc75ceaac67247d5c73422b"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-buildoptions.json",
+                "sha256": "5579062ea5906c64d45e1952448ac7b668acbd34920e4f0ec895c595d325ae5b"
               },
               "intro-compilers.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-compilers.json",
-                "sha256": "4ecd2e148eff62ee9cd09453f56f924be65ac8c745ea16fa96ec8e5e6c4704df"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-compilers.json",
+                "sha256": "f29d5228e8abe2447218aec9f6515adb0e93dd07ec9ebfcbb1cd7a6ef772a670"
               },
               "intro-dependencies.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-dependencies.json",
-                "sha256": "abdfc2e8180de0ea5d38b9a9cd2e3d5b97e68ac2eba23e4427fb681fc14750bf"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-dependencies.json",
+                "sha256": "499796f1d2fdbbbc51c08b0ad57698e365c593c553de5e31a611066e733f9fcb"
               },
               "intro-projectinfo.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-projectinfo.json",
-                "sha256": "8c09d7044234aad22205d166a20120064afd1d9260ac1fe2f1a5fdc9c2289778"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-projectinfo.json",
+                "sha256": "e75726a2a09d3744d4ec0f5d6c6ec5dd8da9de00b74fe8096461624b946e58c3"
               },
               "meson-info.json": {
-                "path": "/tmp/tblite-build/meson-info/meson-info.json",
-                "sha256": "829208a9a50e6252a1b167fd37dcaeecfa03b414c0193382cb97a5291649ffe3"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/meson-info.json",
+                "sha256": "e8c706ac67ecfa4ebe691eb4b50b4cf8effc1f49764fc5a74ffc2929399571d9"
               }
             },
             "meson_version": {
@@ -10636,44 +10763,9 @@
               "subproject_dir": "subprojects",
               "subprojects": [
                 {
-                  "descriptive_name": "toml-f",
-                  "name": "toml-f",
-                  "version": "0.5.1"
-                },
-                {
-                  "descriptive_name": "test-drive",
-                  "name": "test-drive",
-                  "version": "0.6.0"
-                },
-                {
-                  "descriptive_name": "mctc-lib",
-                  "name": "mctc-lib",
-                  "version": "0.5.2"
-                },
-                {
-                  "descriptive_name": "jonquil",
-                  "name": "jonquil",
-                  "version": "0.3.0"
-                },
-                {
-                  "descriptive_name": "multicharge",
-                  "name": "multicharge",
-                  "version": "0.5.0"
-                },
-                {
                   "descriptive_name": "mstore",
                   "name": "mstore",
                   "version": "0.3.0"
-                },
-                {
-                  "descriptive_name": "dftd4",
-                  "name": "dftd4",
-                  "version": "4.2.0"
-                },
-                {
-                  "descriptive_name": "s-dftd3",
-                  "name": "s-dftd3",
-                  "version": "1.4.0"
                 }
               ],
               "version": "0.7.0"
@@ -10700,13 +10792,13 @@
             }
           },
           "engine": "tblite",
-          "path": "/tmp/tblite-build/libtblite.so.0.7.0",
-          "sha256": "b7d23807eddf46ee2472e6522ceb1b73611166e7060a72d6bdd31bb4ae00db9c"
+          "path": "/tmp/tblite-pr169-6f7f1e2/libtblite.so.0.7.0",
+          "sha256": "1c2fb4308b398851580af11ccad5eec22314ff45a34a553380277e776a44c3b5"
         },
         "repository": {
           "dirty": false,
           "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-          "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+          "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
         },
         "runner": {
           "hostname": "node3",
@@ -10728,43 +10820,43 @@
       "start_mode": "persistent",
       "timing": {
         "count": 30,
-        "mean_ms": 27.084431866666666,
-        "median_ms": 27.0605245,
-        "min_ms": 27.031128,
-        "p95_ms": 27.257690999999998,
+        "mean_ms": 27.130907033333333,
+        "median_ms": 27.1111735,
+        "min_ms": 27.033786,
+        "p95_ms": 27.270187,
         "samples_ms": [
-          27.042348999999998,
-          27.058961999999998,
-          27.081815,
-          27.048410999999998,
-          27.060343999999997,
-          27.056846999999998,
-          27.075263,
-          27.091172999999998,
-          27.284812,
-          27.099038,
-          27.122802999999998,
-          27.227092,
-          27.257690999999998,
-          27.144174999999997,
-          27.044645,
-          27.053561,
-          27.034305,
-          27.064262,
-          27.036489,
-          27.063581,
-          27.066226,
-          27.031409,
-          27.144644999999997,
-          27.035937,
-          27.080322,
-          27.044164,
-          27.034865999999997,
-          27.060705,
-          27.055936,
-          27.031128
+          27.156691,
+          27.154576,
+          27.153585,
+          27.126523,
+          27.069103,
+          27.06793,
+          27.139015999999998,
+          27.134708999999997,
+          27.226784,
+          27.124378,
+          27.225903,
+          27.094911999999997,
+          27.226725,
+          27.192508999999998,
+          27.270187,
+          27.194933,
+          27.377132,
+          27.097969,
+          27.059454,
+          27.05709,
+          27.076086,
+          27.070545,
+          27.066157,
+          27.159886999999998,
+          27.062199,
+          27.097056,
+          27.033786,
+          27.08861,
+          27.041950999999997,
+          27.080824999999997
         ],
-        "systems_per_second_at_median": 36.95419872589683
+        "systems_per_second_at_median": 36.88516102041839
       },
       "warmups": 10,
       "workload_identity": {
@@ -11086,7 +11178,7 @@
           -0.006047221279587952,
           -1.685939226210792e-16
         ],
-        "latency_ms": 137.146809,
+        "latency_ms": 136.84435299999998,
         "per_system_status": null,
         "scc_converged": null,
         "scc_iterations": null
@@ -11413,8 +11505,8 @@
           -1.685939226210792e-16
         ],
         "fresh_reference_comparison": {
-          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "artifact_sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a",
+          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "artifact_sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779",
           "energy": {
             "atol_hartree": 5e-07,
             "max_abs_delta_hartree": 9.805489753489383e-13
@@ -11754,7 +11846,7 @@
             -0.0060472212754336795,
             -5.52558834647558e-17
           ],
-          "latency_ms": 57.249474,
+          "latency_ms": 54.749295,
           "per_system_status": null,
           "sample_index": 0,
           "scc_converged": null,
@@ -12061,7 +12153,7 @@
             -0.006047221275426344,
             1.2671828133075338e-16
           ],
-          "latency_ms": 57.263450999999996,
+          "latency_ms": 54.890736,
           "per_system_status": null,
           "sample_index": 1,
           "scc_converged": null,
@@ -12368,7 +12460,7 @@
             -0.006047221275420539,
             -5.932078340976245e-17
           ],
-          "latency_ms": 57.164151,
+          "latency_ms": 54.712824999999995,
           "per_system_status": null,
           "sample_index": 2,
           "scc_converged": null,
@@ -12675,7 +12767,7 @@
             -0.006047221275415617,
             -8.549523558047024e-17
           ],
-          "latency_ms": 57.275804,
+          "latency_ms": 54.748073,
           "per_system_status": null,
           "sample_index": 3,
           "scc_converged": null,
@@ -12982,7 +13074,7 @@
             -0.00604722127541114,
             -2.679395988321104e-17
           ],
-          "latency_ms": 57.194649999999996,
+          "latency_ms": 54.735828999999995,
           "per_system_status": null,
           "sample_index": 4,
           "scc_converged": null,
@@ -13289,7 +13381,7 @@
             -0.006047221275407102,
             -1.318199616444703e-16
           ],
-          "latency_ms": 57.396345,
+          "latency_ms": 54.687166999999995,
           "per_system_status": null,
           "sample_index": 5,
           "scc_converged": null,
@@ -13596,7 +13688,7 @@
             -0.006047221275404196,
             1.2369885990955126e-16
           ],
-          "latency_ms": 57.24162,
+          "latency_ms": 54.792929,
           "per_system_status": null,
           "sample_index": 6,
           "scc_converged": null,
@@ -13903,7 +13995,7 @@
             -0.006047221275401831,
             6.147790410933181e-17
           ],
-          "latency_ms": 57.24216,
+          "latency_ms": 54.857161,
           "per_system_status": null,
           "sample_index": 7,
           "scc_converged": null,
@@ -14210,7 +14302,7 @@
             -0.0060472212753997796,
             -2.8904427791686247e-17
           ],
-          "latency_ms": 57.346059,
+          "latency_ms": 55.133421,
           "per_system_status": null,
           "sample_index": 8,
           "scc_converged": null,
@@ -14517,7 +14609,7 @@
             -0.0060472212753979555,
             -1.9832653188382182e-17
           ],
-          "latency_ms": 57.189640999999995,
+          "latency_ms": 55.126096,
           "per_system_status": null,
           "sample_index": 9,
           "scc_converged": null,
@@ -14824,7 +14916,7 @@
             -0.006047221275397011,
             2.3812823699890984e-17
           ],
-          "latency_ms": 57.317214,
+          "latency_ms": 54.705290999999995,
           "per_system_status": null,
           "sample_index": 10,
           "scc_converged": null,
@@ -15131,7 +15223,7 @@
             -0.006047221275395782,
             -1.7265210264757125e-18
           ],
-          "latency_ms": 57.385853999999995,
+          "latency_ms": 54.727433999999995,
           "per_system_status": null,
           "sample_index": 11,
           "scc_converged": null,
@@ -15438,7 +15530,7 @@
             -0.0060472212753949805,
             -8.944201015212729e-17
           ],
-          "latency_ms": 57.437222999999996,
+          "latency_ms": 54.794149999999995,
           "per_system_status": null,
           "sample_index": 12,
           "scc_converged": null,
@@ -15745,7 +15837,7 @@
             -0.006047221275394715,
             1.522207884541524e-16
           ],
-          "latency_ms": 57.266287,
+          "latency_ms": 54.717473999999996,
           "per_system_status": null,
           "sample_index": 13,
           "scc_converged": null,
@@ -16052,7 +16144,7 @@
             -0.006047221275393792,
             6.559294722324845e-17
           ],
-          "latency_ms": 57.276686999999995,
+          "latency_ms": 54.774924,
           "per_system_status": null,
           "sample_index": 14,
           "scc_converged": null,
@@ -16359,7 +16451,7 @@
             -0.006047221275393145,
             8.28016090421849e-18
           ],
-          "latency_ms": 57.157058,
+          "latency_ms": 54.747301,
           "per_system_status": null,
           "sample_index": 15,
           "scc_converged": null,
@@ -16666,7 +16758,7 @@
             -0.006047221275392886,
             1.3544006120382151e-16
           ],
-          "latency_ms": 57.405251,
+          "latency_ms": 54.722023,
           "per_system_status": null,
           "sample_index": 16,
           "scc_converged": null,
@@ -16973,7 +17065,7 @@
             -0.006047221275392597,
             -2.3827624951758487e-16
           ],
-          "latency_ms": 57.513268,
+          "latency_ms": 54.677397,
           "per_system_status": null,
           "sample_index": 17,
           "scc_converged": null,
@@ -17280,7 +17372,7 @@
             -0.006047221275392635,
             -7.367450920803832e-17
           ],
-          "latency_ms": 57.297236,
+          "latency_ms": 54.691354,
           "per_system_status": null,
           "sample_index": 18,
           "scc_converged": null,
@@ -17587,7 +17679,7 @@
             -0.0060472212753922144,
             -5.4980729956471376e-17
           ],
-          "latency_ms": 57.568442999999995,
+          "latency_ms": 54.809760999999995,
           "per_system_status": null,
           "sample_index": 19,
           "scc_converged": null,
@@ -17894,7 +17986,7 @@
             -0.006047221275392224,
             -8.809084007249772e-17
           ],
-          "latency_ms": 57.190562,
+          "latency_ms": 54.760816999999996,
           "per_system_status": null,
           "sample_index": 20,
           "scc_converged": null,
@@ -18201,7 +18293,7 @@
             -0.006047221275392336,
             1.8186626461863867e-16
           ],
-          "latency_ms": 57.247951,
+          "latency_ms": 54.734868,
           "per_system_status": null,
           "sample_index": 21,
           "scc_converged": null,
@@ -18508,7 +18600,7 @@
             -0.006047221275392188,
             1.3650396982598107e-17
           ],
-          "latency_ms": 57.263472,
+          "latency_ms": 54.65831,
           "per_system_status": null,
           "sample_index": 22,
           "scc_converged": null,
@@ -18815,7 +18907,7 @@
             -0.006047221275392056,
             1.9971807305642148e-16
           ],
-          "latency_ms": 57.254574999999996,
+          "latency_ms": 54.817065,
           "per_system_status": null,
           "sample_index": 23,
           "scc_converged": null,
@@ -19122,7 +19214,7 @@
             -0.006047221275392097,
             -1.5267931920401102e-16
           ],
-          "latency_ms": 57.266217,
+          "latency_ms": 54.798598999999996,
           "per_system_status": null,
           "sample_index": 24,
           "scc_converged": null,
@@ -19429,7 +19521,7 @@
             -0.006047221275391939,
             -2.940190699333043e-16
           ],
-          "latency_ms": 57.229797999999995,
+          "latency_ms": 54.694801,
           "per_system_status": null,
           "sample_index": 25,
           "scc_converged": null,
@@ -19736,7 +19828,7 @@
             -0.006047221275391964,
             9.445076062645493e-17
           ],
-          "latency_ms": 57.170463999999996,
+          "latency_ms": 55.00266,
           "per_system_status": null,
           "sample_index": 26,
           "scc_converged": null,
@@ -20043,7 +20135,7 @@
             -0.006047221275392069,
             -6.405494155858364e-17
           ],
-          "latency_ms": 57.273861999999994,
+          "latency_ms": 54.893321,
           "per_system_status": null,
           "sample_index": 27,
           "scc_converged": null,
@@ -20350,7 +20442,7 @@
             -0.0060472212753918215,
             5.444559901750048e-17
           ],
-          "latency_ms": 57.287006999999996,
+          "latency_ms": 54.751177999999996,
           "per_system_status": null,
           "sample_index": 28,
           "scc_converged": null,
@@ -20657,7 +20749,7 @@
             -0.0060472212753920835,
             1.2599519736169178e-16
           ],
-          "latency_ms": 57.505052,
+          "latency_ms": 54.691103999999996,
           "per_system_status": null,
           "sample_index": 29,
           "scc_converged": null,
@@ -20673,7 +20765,7 @@
           "--engine",
           "tblite",
           "--library",
-          "/tmp/tblite-build/libtblite.so",
+          "/tmp/tblite-pr169-6f7f1e2/libtblite.so.0.7.0",
           "--backend",
           "cpu",
           "--cpu-threads",
@@ -20689,15 +20781,15 @@
           "--repetitions",
           "30",
           "--energy-reference-json",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
           "--cross-engine-energy-atol",
           "5e-7",
           "--cross-engine-force-atol",
           "5e-6",
           "--output-json",
-          "build/benchmarks/pr169-evidence-255833d/tblite-persistent.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/tblite-persistent.json",
           "--output-csv",
-          "build/benchmarks/pr169-evidence-255833d/tblite-persistent.csv"
+          "build/benchmarks/pr169-evidence-6f7f1e2/tblite-persistent.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -20705,10 +20797,10 @@
           "status": "eligible"
         },
         "fresh_reference_artifact": {
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a"
+          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
         },
-        "generated_at_utc": "2026-08-05T17:35:36.341358+00:00",
+        "generated_at_utc": "2026-08-05T18:29:38.099027+00:00",
         "hardware": {
           "cpu_model": "AMD EPYC 7K62 48-Core Processor",
           "logical_cpu_count": 48,
@@ -20718,7 +20810,7 @@
         },
         "library": {
           "build": {
-            "build_directory": "/tmp/tblite-build",
+            "build_directory": "/tmp/tblite-pr169-6f7f1e2",
             "build_options": {
               "b_lto": false,
               "b_ndebug": "false",
@@ -20736,34 +20828,17 @@
             "build_system": "meson",
             "compilers": {
               "build": {
-                "c": {
-                  "default_suffix": "c",
+                "fortran": {
+                  "default_suffix": "f90",
                   "executable_files": [
                     {
                       "is_file": true,
-                      "path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-                      "sha256": "821af3c74506283c179ca413bb33e6b528805a4dd8a5c09df125e5ad560a9e89"
+                      "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran",
+                      "sha256": "de744570ad7763b884735bc75503fc79520f01eb8859d5b010ec377a2d4d8174"
                     }
                   ],
                   "exelist": [
-                    "gcc"
-                  ],
-                  "file_suffixes": [
-                    "c"
-                  ],
-                  "full_version": "gcc (conda-forge gcc 13.4.0-20) 13.4.0",
-                  "id": "gcc",
-                  "linker_exelist": [
-                    "gcc"
-                  ],
-                  "linker_id": "ld.bfd",
-                  "version": "13.4.0"
-                },
-                "fortran": {
-                  "default_suffix": "f90",
-                  "executable_files": [],
-                  "exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "file_suffixes": [
                     "f90",
@@ -20778,9 +20853,10 @@
                   "full_version": "GNU Fortran (conda-forge gcc 13.4.0-20) 13.4.0",
                   "id": "gcc",
                   "linker_exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "linker_id": "ld.bfd",
+                  "unresolved_executable_entries": [],
                   "version": "13.4.0"
                 }
               },
@@ -20790,29 +20866,36 @@
                   "executable_files": [
                     {
                       "is_file": true,
-                      "path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-                      "sha256": "821af3c74506283c179ca413bb33e6b528805a4dd8a5c09df125e5ad560a9e89"
+                      "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gcc",
+                      "sha256": "6420cb0972435d925a3248db3ccb0c1c4ff7f1a81e6aa8f37e1ae54da1538d98"
                     }
                   ],
                   "exelist": [
-                    "gcc"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-cc"
                   ],
                   "file_suffixes": [
                     "c"
                   ],
-                  "full_version": "gcc (conda-forge gcc 13.4.0-20) 13.4.0",
+                  "full_version": "x86_64-conda-linux-gnu-cc (conda-forge gcc 13.4.0-20) 13.4.0",
                   "id": "gcc",
                   "linker_exelist": [
-                    "gcc"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-cc"
                   ],
                   "linker_id": "ld.bfd",
+                  "unresolved_executable_entries": [],
                   "version": "13.4.0"
                 },
                 "fortran": {
                   "default_suffix": "f90",
-                  "executable_files": [],
+                  "executable_files": [
+                    {
+                      "is_file": true,
+                      "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran",
+                      "sha256": "de744570ad7763b884735bc75503fc79520f01eb8859d5b010ec377a2d4d8174"
+                    }
+                  ],
                   "exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "file_suffixes": [
                     "f90",
@@ -20827,9 +20910,10 @@
                   "full_version": "GNU Fortran (conda-forge gcc 13.4.0-20) 13.4.0",
                   "id": "gcc",
                   "linker_exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "linker_id": "ld.bfd",
+                  "unresolved_executable_entries": [],
                   "version": "13.4.0"
                 }
               }
@@ -20849,55 +20933,144 @@
               },
               {
                 "compile_args": [
-                  "-I/tmp/lammps-qmmm-xtb-env/include"
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
                 ],
                 "link_args": [
-                  "/tmp/lammps-qmmm-xtb-env/lib/libopenblas.so"
+                  "/tmp/lammps-qmmm-xtb-env/lib/libtoml-f.so"
                 ],
                 "linked_files": [
                   {
                     "is_file": true,
-                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libopenblasp-r0.3.33.so",
-                    "sha256": "60ddaebfbdae101e9325efa24360c3bd639abb77ef569b35becd6bbcbed6605e"
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libtoml-f.so.0.5.2",
+                    "sha256": "00a8ef2feff63d7939d6717a7588a40d219e3c9c14c33105ebdd5bd449a5663b"
                   }
                 ],
-                "name": "openblas",
+                "name": "toml-f",
                 "type": "pkgconfig",
-                "version": "0.3.33"
+                "version": "0.5.2"
               },
               {
                 "compile_args": [
-                  "-fopenmp"
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
                 ],
                 "link_args": [
-                  "-fopenmp"
+                  "/tmp/lammps-qmmm-xtb-env/lib/libmctc-lib.so"
                 ],
-                "linked_files": [],
-                "name": "OpenMP",
-                "type": "system",
-                "version": "4.5"
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libmctc-lib.so.0.5.2",
+                    "sha256": "114eb96417b0ce0409fe03920c19cecd412dbad8c8bf89c3cf3b686bd0052c38"
+                  }
+                ],
+                "name": "mctc-lib",
+                "type": "pkgconfig",
+                "version": "0.5.2"
+              },
+              {
+                "compile_args": [
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/multicharge/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+                ],
+                "link_args": [
+                  "/tmp/lammps-qmmm-xtb-env/lib/libmulticharge.so"
+                ],
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libmulticharge.so.0.5.0",
+                    "sha256": "d8db344a0a2fce9595711d35eec40e624bd75ab514c971458e46bf96cd3db407"
+                  }
+                ],
+                "name": "multicharge",
+                "type": "pkgconfig",
+                "version": "0.5.0"
+              },
+              {
+                "compile_args": [
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/dftd4/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/multicharge/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+                ],
+                "link_args": [
+                  "/tmp/lammps-qmmm-xtb-env/lib/libdftd4.so"
+                ],
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libdftd4.so.4.2.0",
+                    "sha256": "5eaf8f6a243643fba2a9cb32ab18348ece9c23913a73a6f5cc15d3534f643e5f"
+                  }
+                ],
+                "name": "dftd4",
+                "type": "pkgconfig",
+                "version": "4.2.0"
+              },
+              {
+                "compile_args": [
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/s-dftd3/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+                ],
+                "link_args": [
+                  "/tmp/lammps-qmmm-xtb-env/lib/libs-dftd3.so"
+                ],
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libs-dftd3.so.1.4.0",
+                    "sha256": "1c856b7edf915c3d32ed181684b5bc1785ff0b4c42804882e47a571e14904a78"
+                  }
+                ],
+                "name": "s-dftd3",
+                "type": "pkgconfig",
+                "version": "1.4.0"
               }
             ],
             "introspection_files": {
               "intro-buildoptions.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-buildoptions.json",
-                "sha256": "25f541568189d80d647fde0ffee5eb541f51a1978bc75ceaac67247d5c73422b"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-buildoptions.json",
+                "sha256": "5579062ea5906c64d45e1952448ac7b668acbd34920e4f0ec895c595d325ae5b"
               },
               "intro-compilers.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-compilers.json",
-                "sha256": "4ecd2e148eff62ee9cd09453f56f924be65ac8c745ea16fa96ec8e5e6c4704df"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-compilers.json",
+                "sha256": "f29d5228e8abe2447218aec9f6515adb0e93dd07ec9ebfcbb1cd7a6ef772a670"
               },
               "intro-dependencies.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-dependencies.json",
-                "sha256": "abdfc2e8180de0ea5d38b9a9cd2e3d5b97e68ac2eba23e4427fb681fc14750bf"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-dependencies.json",
+                "sha256": "499796f1d2fdbbbc51c08b0ad57698e365c593c553de5e31a611066e733f9fcb"
               },
               "intro-projectinfo.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-projectinfo.json",
-                "sha256": "8c09d7044234aad22205d166a20120064afd1d9260ac1fe2f1a5fdc9c2289778"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-projectinfo.json",
+                "sha256": "e75726a2a09d3744d4ec0f5d6c6ec5dd8da9de00b74fe8096461624b946e58c3"
               },
               "meson-info.json": {
-                "path": "/tmp/tblite-build/meson-info/meson-info.json",
-                "sha256": "829208a9a50e6252a1b167fd37dcaeecfa03b414c0193382cb97a5291649ffe3"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/meson-info.json",
+                "sha256": "e8c706ac67ecfa4ebe691eb4b50b4cf8effc1f49764fc5a74ffc2929399571d9"
               }
             },
             "meson_version": {
@@ -20915,44 +21088,9 @@
               "subproject_dir": "subprojects",
               "subprojects": [
                 {
-                  "descriptive_name": "toml-f",
-                  "name": "toml-f",
-                  "version": "0.5.1"
-                },
-                {
-                  "descriptive_name": "test-drive",
-                  "name": "test-drive",
-                  "version": "0.6.0"
-                },
-                {
-                  "descriptive_name": "mctc-lib",
-                  "name": "mctc-lib",
-                  "version": "0.5.2"
-                },
-                {
-                  "descriptive_name": "jonquil",
-                  "name": "jonquil",
-                  "version": "0.3.0"
-                },
-                {
-                  "descriptive_name": "multicharge",
-                  "name": "multicharge",
-                  "version": "0.5.0"
-                },
-                {
                   "descriptive_name": "mstore",
                   "name": "mstore",
                   "version": "0.3.0"
-                },
-                {
-                  "descriptive_name": "dftd4",
-                  "name": "dftd4",
-                  "version": "4.2.0"
-                },
-                {
-                  "descriptive_name": "s-dftd3",
-                  "name": "s-dftd3",
-                  "version": "1.4.0"
                 }
               ],
               "version": "0.7.0"
@@ -20979,13 +21117,13 @@
             }
           },
           "engine": "tblite",
-          "path": "/tmp/tblite-build/libtblite.so.0.7.0",
-          "sha256": "b7d23807eddf46ee2472e6522ceb1b73611166e7060a72d6bdd31bb4ae00db9c"
+          "path": "/tmp/tblite-pr169-6f7f1e2/libtblite.so.0.7.0",
+          "sha256": "1c2fb4308b398851580af11ccad5eec22314ff45a34a553380277e776a44c3b5"
         },
         "repository": {
           "dirty": false,
           "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-          "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+          "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
         },
         "runner": {
           "hostname": "node3",
@@ -21007,43 +21145,43 @@
       "start_mode": "persistent",
       "timing": {
         "count": 30,
-        "mean_ms": 57.29589453333333,
-        "median_ms": 57.266251999999994,
-        "min_ms": 57.157058,
-        "p95_ms": 57.513268,
+        "mean_ms": 54.78677879999999,
+        "median_ms": 54.748684,
+        "min_ms": 54.65831,
+        "p95_ms": 55.126096,
         "samples_ms": [
-          57.249474,
-          57.263450999999996,
-          57.164151,
-          57.275804,
-          57.194649999999996,
-          57.396345,
-          57.24162,
-          57.24216,
-          57.346059,
-          57.189640999999995,
-          57.317214,
-          57.385853999999995,
-          57.437222999999996,
-          57.266287,
-          57.276686999999995,
-          57.157058,
-          57.405251,
-          57.513268,
-          57.297236,
-          57.568442999999995,
-          57.190562,
-          57.247951,
-          57.263472,
-          57.254574999999996,
-          57.266217,
-          57.229797999999995,
-          57.170463999999996,
-          57.273861999999994,
-          57.287006999999996,
-          57.505052
+          54.749295,
+          54.890736,
+          54.712824999999995,
+          54.748073,
+          54.735828999999995,
+          54.687166999999995,
+          54.792929,
+          54.857161,
+          55.133421,
+          55.126096,
+          54.705290999999995,
+          54.727433999999995,
+          54.794149999999995,
+          54.717473999999996,
+          54.774924,
+          54.747301,
+          54.722023,
+          54.677397,
+          54.691354,
+          54.809760999999995,
+          54.760816999999996,
+          54.734868,
+          54.65831,
+          54.817065,
+          54.798598999999996,
+          54.694801,
+          55.00266,
+          54.893321,
+          54.751177999999996,
+          54.691103999999996
         ],
-        "systems_per_second_at_median": 17.462291752566593
+        "systems_per_second_at_median": 18.265279216574413
       },
       "warmups": 10,
       "workload_identity": {
@@ -21437,7 +21575,7 @@
           -0.006047196651320739,
           -7.27831997717244e-17
         ],
-        "latency_ms": 217.573408,
+        "latency_ms": 215.238194,
         "per_system_status": null,
         "scc_converged": null,
         "scc_iterations": null
@@ -21836,8 +21974,8 @@
           -7.27831997717244e-17
         ],
         "fresh_reference_comparison": {
-          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "artifact_sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a",
+          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "artifact_sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779",
           "energy": {
             "atol_hartree": 5e-07,
             "max_abs_delta_hartree": 5.201172825763933e-12
@@ -22249,7 +22387,7 @@
             -0.006047196645663935,
             3.764872398346891e-17
           ],
-          "latency_ms": 82.921223,
+          "latency_ms": 79.381683,
           "per_system_status": null,
           "sample_index": 0,
           "scc_converged": null,
@@ -22628,7 +22766,7 @@
             -0.006047196645656546,
             -4.8249422018796636e-17
           ],
-          "latency_ms": 82.75494599999999,
+          "latency_ms": 79.172623,
           "per_system_status": null,
           "sample_index": 1,
           "scc_converged": null,
@@ -23007,7 +23145,7 @@
             -0.006047196645649936,
             -1.62500080945788e-17
           ],
-          "latency_ms": 82.849346,
+          "latency_ms": 79.271783,
           "per_system_status": null,
           "sample_index": 2,
           "scc_converged": null,
@@ -23386,7 +23524,7 @@
             -0.006047196645644402,
             2.8299680787050464e-16
           ],
-          "latency_ms": 82.846381,
+          "latency_ms": 78.69024999999999,
           "per_system_status": null,
           "sample_index": 3,
           "scc_converged": null,
@@ -23765,7 +23903,7 @@
             -0.006047196645640132,
             7.10095813683189e-17
           ],
-          "latency_ms": 82.85122,
+          "latency_ms": 78.859554,
           "per_system_status": null,
           "sample_index": 4,
           "scc_converged": null,
@@ -24144,7 +24282,7 @@
             -0.006047196645636411,
             -5.132722410576583e-17
           ],
-          "latency_ms": 82.962301,
+          "latency_ms": 78.754182,
           "per_system_status": null,
           "sample_index": 5,
           "scc_converged": null,
@@ -24523,7 +24661,7 @@
             -0.0060471966456332365,
             -3.963447053936521e-17
           ],
-          "latency_ms": 82.79404099999999,
+          "latency_ms": 79.13014199999999,
           "per_system_status": null,
           "sample_index": 6,
           "scc_converged": null,
@@ -24902,7 +25040,7 @@
             -0.006047196645630587,
             2.4174336025136766e-16
           ],
-          "latency_ms": 82.87766099999999,
+          "latency_ms": 78.953794,
           "per_system_status": null,
           "sample_index": 7,
           "scc_converged": null,
@@ -25281,7 +25419,7 @@
             -0.006047196645628393,
             1.8385419228426255e-16
           ],
-          "latency_ms": 82.858865,
+          "latency_ms": 78.77909,
           "per_system_status": null,
           "sample_index": 8,
           "scc_converged": null,
@@ -25660,7 +25798,7 @@
             -0.006047196645626839,
             1.3708046073175363e-16
           ],
-          "latency_ms": 83.673007,
+          "latency_ms": 78.995564,
           "per_system_status": null,
           "sample_index": 9,
           "scc_converged": null,
@@ -26039,7 +26177,7 @@
             -0.006047196645625565,
             4.587041715699225e-17
           ],
-          "latency_ms": 82.96402499999999,
+          "latency_ms": 79.120824,
           "per_system_status": null,
           "sample_index": 10,
           "scc_converged": null,
@@ -26418,7 +26556,7 @@
             -0.006047196645624403,
             9.118650429055008e-17
           ],
-          "latency_ms": 83.421157,
+          "latency_ms": 79.196559,
           "per_system_status": null,
           "sample_index": 11,
           "scc_converged": null,
@@ -26797,7 +26935,7 @@
             -0.006047196645623396,
             4.881747522477584e-17
           ],
-          "latency_ms": 82.81152399999999,
+          "latency_ms": 78.9256,
           "per_system_status": null,
           "sample_index": 12,
           "scc_converged": null,
@@ -27176,7 +27314,7 @@
             -0.006047196645622784,
             2.1034430129368088e-16
           ],
-          "latency_ms": 82.909171,
+          "latency_ms": 78.930419,
           "per_system_status": null,
           "sample_index": 13,
           "scc_converged": null,
@@ -27555,7 +27693,7 @@
             -0.006047196645622275,
             2.9467541091347354e-16
           ],
-          "latency_ms": 82.806635,
+          "latency_ms": 78.914518,
           "per_system_status": null,
           "sample_index": 14,
           "scc_converged": null,
@@ -27934,7 +28072,7 @@
             -0.0060471966456217,
             7.660037509799291e-17
           ],
-          "latency_ms": 82.944718,
+          "latency_ms": 78.831681,
           "per_system_status": null,
           "sample_index": 15,
           "scc_converged": null,
@@ -28313,7 +28451,7 @@
             -0.006047196645621054,
             1.2207273873748275e-16
           ],
-          "latency_ms": 83.080558,
+          "latency_ms": 78.76356,
           "per_system_status": null,
           "sample_index": 16,
           "scc_converged": null,
@@ -28692,7 +28830,7 @@
             -0.006047196645620898,
             2.1187959791962911e-16
           ],
-          "latency_ms": 82.90858899999999,
+          "latency_ms": 78.858482,
           "per_system_status": null,
           "sample_index": 17,
           "scc_converged": null,
@@ -29071,7 +29209,7 @@
             -0.006047196645621019,
             9.711277466590647e-17
           ],
-          "latency_ms": 83.069687,
+          "latency_ms": 78.85378299999999,
           "per_system_status": null,
           "sample_index": 18,
           "scc_converged": null,
@@ -29450,7 +29588,7 @@
             -0.006047196645620957,
             2.4392820759072416e-16
           ],
-          "latency_ms": 82.867021,
+          "latency_ms": 79.049928,
           "per_system_status": null,
           "sample_index": 19,
           "scc_converged": null,
@@ -29829,7 +29967,7 @@
             -0.006047196645620663,
             1.6517654036127955e-16
           ],
-          "latency_ms": 82.897729,
+          "latency_ms": 78.99913099999999,
           "per_system_status": null,
           "sample_index": 20,
           "scc_converged": null,
@@ -30208,7 +30346,7 @@
             -0.006047196645620686,
             -3.489327284770011e-18
           ],
-          "latency_ms": 82.946653,
+          "latency_ms": 79.04563,
           "per_system_status": null,
           "sample_index": 21,
           "scc_converged": null,
@@ -30587,7 +30725,7 @@
             -0.006047196645620535,
             1.5168312414521131e-16
           ],
-          "latency_ms": 83.221637,
+          "latency_ms": 79.23937099999999,
           "per_system_status": null,
           "sample_index": 22,
           "scc_converged": null,
@@ -30966,7 +31104,7 @@
             -0.006047196645620341,
             1.2577354843407888e-16
           ],
-          "latency_ms": 82.988773,
+          "latency_ms": 78.921442,
           "per_system_status": null,
           "sample_index": 23,
           "scc_converged": null,
@@ -31345,7 +31483,7 @@
             -0.006047196645620601,
             -5.392910343566266e-17
           ],
-          "latency_ms": 82.975208,
+          "latency_ms": 78.824938,
           "per_system_status": null,
           "sample_index": 24,
           "scc_converged": null,
@@ -31724,7 +31862,7 @@
             -0.0060471966456202945,
             9.70039621474703e-17
           ],
-          "latency_ms": 83.070058,
+          "latency_ms": 78.89823799999999,
           "per_system_status": null,
           "sample_index": 25,
           "scc_converged": null,
@@ -32103,7 +32241,7 @@
             -0.006047196645619869,
             7.179418689724514e-17
           ],
-          "latency_ms": 83.363417,
+          "latency_ms": 78.87722699999999,
           "per_system_status": null,
           "sample_index": 26,
           "scc_converged": null,
@@ -32482,7 +32620,7 @@
             -0.006047196645620108,
             1.7800369301000958e-16
           ],
-          "latency_ms": 83.079556,
+          "latency_ms": 78.783819,
           "per_system_status": null,
           "sample_index": 27,
           "scc_converged": null,
@@ -32861,7 +32999,7 @@
             -0.006047196645620179,
             9.891443014637557e-17
           ],
-          "latency_ms": 82.65666999999999,
+          "latency_ms": 78.70621,
           "per_system_status": null,
           "sample_index": 28,
           "scc_converged": null,
@@ -33240,7 +33378,7 @@
             -0.006047196645620255,
             2.9651256860169695e-16
           ],
-          "latency_ms": 82.85316399999999,
+          "latency_ms": 78.923146,
           "per_system_status": null,
           "sample_index": 29,
           "scc_converged": null,
@@ -33256,7 +33394,7 @@
           "--engine",
           "tblite",
           "--library",
-          "/tmp/tblite-build/libtblite.so",
+          "/tmp/tblite-pr169-6f7f1e2/libtblite.so.0.7.0",
           "--backend",
           "cpu",
           "--cpu-threads",
@@ -33272,15 +33410,15 @@
           "--repetitions",
           "30",
           "--energy-reference-json",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
           "--cross-engine-energy-atol",
           "5e-7",
           "--cross-engine-force-atol",
           "5e-6",
           "--output-json",
-          "build/benchmarks/pr169-evidence-255833d/tblite-persistent.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/tblite-persistent.json",
           "--output-csv",
-          "build/benchmarks/pr169-evidence-255833d/tblite-persistent.csv"
+          "build/benchmarks/pr169-evidence-6f7f1e2/tblite-persistent.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -33288,10 +33426,10 @@
           "status": "eligible"
         },
         "fresh_reference_artifact": {
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a"
+          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
         },
-        "generated_at_utc": "2026-08-05T17:35:36.341358+00:00",
+        "generated_at_utc": "2026-08-05T18:29:38.099027+00:00",
         "hardware": {
           "cpu_model": "AMD EPYC 7K62 48-Core Processor",
           "logical_cpu_count": 48,
@@ -33301,7 +33439,7 @@
         },
         "library": {
           "build": {
-            "build_directory": "/tmp/tblite-build",
+            "build_directory": "/tmp/tblite-pr169-6f7f1e2",
             "build_options": {
               "b_lto": false,
               "b_ndebug": "false",
@@ -33319,34 +33457,17 @@
             "build_system": "meson",
             "compilers": {
               "build": {
-                "c": {
-                  "default_suffix": "c",
+                "fortran": {
+                  "default_suffix": "f90",
                   "executable_files": [
                     {
                       "is_file": true,
-                      "path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-                      "sha256": "821af3c74506283c179ca413bb33e6b528805a4dd8a5c09df125e5ad560a9e89"
+                      "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran",
+                      "sha256": "de744570ad7763b884735bc75503fc79520f01eb8859d5b010ec377a2d4d8174"
                     }
                   ],
                   "exelist": [
-                    "gcc"
-                  ],
-                  "file_suffixes": [
-                    "c"
-                  ],
-                  "full_version": "gcc (conda-forge gcc 13.4.0-20) 13.4.0",
-                  "id": "gcc",
-                  "linker_exelist": [
-                    "gcc"
-                  ],
-                  "linker_id": "ld.bfd",
-                  "version": "13.4.0"
-                },
-                "fortran": {
-                  "default_suffix": "f90",
-                  "executable_files": [],
-                  "exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "file_suffixes": [
                     "f90",
@@ -33361,9 +33482,10 @@
                   "full_version": "GNU Fortran (conda-forge gcc 13.4.0-20) 13.4.0",
                   "id": "gcc",
                   "linker_exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "linker_id": "ld.bfd",
+                  "unresolved_executable_entries": [],
                   "version": "13.4.0"
                 }
               },
@@ -33373,29 +33495,36 @@
                   "executable_files": [
                     {
                       "is_file": true,
-                      "path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-                      "sha256": "821af3c74506283c179ca413bb33e6b528805a4dd8a5c09df125e5ad560a9e89"
+                      "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gcc",
+                      "sha256": "6420cb0972435d925a3248db3ccb0c1c4ff7f1a81e6aa8f37e1ae54da1538d98"
                     }
                   ],
                   "exelist": [
-                    "gcc"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-cc"
                   ],
                   "file_suffixes": [
                     "c"
                   ],
-                  "full_version": "gcc (conda-forge gcc 13.4.0-20) 13.4.0",
+                  "full_version": "x86_64-conda-linux-gnu-cc (conda-forge gcc 13.4.0-20) 13.4.0",
                   "id": "gcc",
                   "linker_exelist": [
-                    "gcc"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-cc"
                   ],
                   "linker_id": "ld.bfd",
+                  "unresolved_executable_entries": [],
                   "version": "13.4.0"
                 },
                 "fortran": {
                   "default_suffix": "f90",
-                  "executable_files": [],
+                  "executable_files": [
+                    {
+                      "is_file": true,
+                      "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran",
+                      "sha256": "de744570ad7763b884735bc75503fc79520f01eb8859d5b010ec377a2d4d8174"
+                    }
+                  ],
                   "exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "file_suffixes": [
                     "f90",
@@ -33410,9 +33539,10 @@
                   "full_version": "GNU Fortran (conda-forge gcc 13.4.0-20) 13.4.0",
                   "id": "gcc",
                   "linker_exelist": [
-                    "gfortran"
+                    "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
                   ],
                   "linker_id": "ld.bfd",
+                  "unresolved_executable_entries": [],
                   "version": "13.4.0"
                 }
               }
@@ -33432,55 +33562,144 @@
               },
               {
                 "compile_args": [
-                  "-I/tmp/lammps-qmmm-xtb-env/include"
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
                 ],
                 "link_args": [
-                  "/tmp/lammps-qmmm-xtb-env/lib/libopenblas.so"
+                  "/tmp/lammps-qmmm-xtb-env/lib/libtoml-f.so"
                 ],
                 "linked_files": [
                   {
                     "is_file": true,
-                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libopenblasp-r0.3.33.so",
-                    "sha256": "60ddaebfbdae101e9325efa24360c3bd639abb77ef569b35becd6bbcbed6605e"
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libtoml-f.so.0.5.2",
+                    "sha256": "00a8ef2feff63d7939d6717a7588a40d219e3c9c14c33105ebdd5bd449a5663b"
                   }
                 ],
-                "name": "openblas",
+                "name": "toml-f",
                 "type": "pkgconfig",
-                "version": "0.3.33"
+                "version": "0.5.2"
               },
               {
                 "compile_args": [
-                  "-fopenmp"
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
                 ],
                 "link_args": [
-                  "-fopenmp"
+                  "/tmp/lammps-qmmm-xtb-env/lib/libmctc-lib.so"
                 ],
-                "linked_files": [],
-                "name": "OpenMP",
-                "type": "system",
-                "version": "4.5"
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libmctc-lib.so.0.5.2",
+                    "sha256": "114eb96417b0ce0409fe03920c19cecd412dbad8c8bf89c3cf3b686bd0052c38"
+                  }
+                ],
+                "name": "mctc-lib",
+                "type": "pkgconfig",
+                "version": "0.5.2"
+              },
+              {
+                "compile_args": [
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/multicharge/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+                ],
+                "link_args": [
+                  "/tmp/lammps-qmmm-xtb-env/lib/libmulticharge.so"
+                ],
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libmulticharge.so.0.5.0",
+                    "sha256": "d8db344a0a2fce9595711d35eec40e624bd75ab514c971458e46bf96cd3db407"
+                  }
+                ],
+                "name": "multicharge",
+                "type": "pkgconfig",
+                "version": "0.5.0"
+              },
+              {
+                "compile_args": [
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/dftd4/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/multicharge/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+                ],
+                "link_args": [
+                  "/tmp/lammps-qmmm-xtb-env/lib/libdftd4.so"
+                ],
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libdftd4.so.4.2.0",
+                    "sha256": "5eaf8f6a243643fba2a9cb32ab18348ece9c23913a73a6f5cc15d3534f643e5f"
+                  }
+                ],
+                "name": "dftd4",
+                "type": "pkgconfig",
+                "version": "4.2.0"
+              },
+              {
+                "compile_args": [
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/s-dftd3/gcc-14.3.0",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+                  "-I/tmp/lammps-qmmm-xtb-env/include",
+                  "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+                ],
+                "link_args": [
+                  "/tmp/lammps-qmmm-xtb-env/lib/libs-dftd3.so"
+                ],
+                "linked_files": [
+                  {
+                    "is_file": true,
+                    "path": "/tmp/lammps-qmmm-xtb-env/lib/libs-dftd3.so.1.4.0",
+                    "sha256": "1c856b7edf915c3d32ed181684b5bc1785ff0b4c42804882e47a571e14904a78"
+                  }
+                ],
+                "name": "s-dftd3",
+                "type": "pkgconfig",
+                "version": "1.4.0"
               }
             ],
             "introspection_files": {
               "intro-buildoptions.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-buildoptions.json",
-                "sha256": "25f541568189d80d647fde0ffee5eb541f51a1978bc75ceaac67247d5c73422b"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-buildoptions.json",
+                "sha256": "5579062ea5906c64d45e1952448ac7b668acbd34920e4f0ec895c595d325ae5b"
               },
               "intro-compilers.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-compilers.json",
-                "sha256": "4ecd2e148eff62ee9cd09453f56f924be65ac8c745ea16fa96ec8e5e6c4704df"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-compilers.json",
+                "sha256": "f29d5228e8abe2447218aec9f6515adb0e93dd07ec9ebfcbb1cd7a6ef772a670"
               },
               "intro-dependencies.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-dependencies.json",
-                "sha256": "abdfc2e8180de0ea5d38b9a9cd2e3d5b97e68ac2eba23e4427fb681fc14750bf"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-dependencies.json",
+                "sha256": "499796f1d2fdbbbc51c08b0ad57698e365c593c553de5e31a611066e733f9fcb"
               },
               "intro-projectinfo.json": {
-                "path": "/tmp/tblite-build/meson-info/intro-projectinfo.json",
-                "sha256": "8c09d7044234aad22205d166a20120064afd1d9260ac1fe2f1a5fdc9c2289778"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-projectinfo.json",
+                "sha256": "e75726a2a09d3744d4ec0f5d6c6ec5dd8da9de00b74fe8096461624b946e58c3"
               },
               "meson-info.json": {
-                "path": "/tmp/tblite-build/meson-info/meson-info.json",
-                "sha256": "829208a9a50e6252a1b167fd37dcaeecfa03b414c0193382cb97a5291649ffe3"
+                "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/meson-info.json",
+                "sha256": "e8c706ac67ecfa4ebe691eb4b50b4cf8effc1f49764fc5a74ffc2929399571d9"
               }
             },
             "meson_version": {
@@ -33498,44 +33717,9 @@
               "subproject_dir": "subprojects",
               "subprojects": [
                 {
-                  "descriptive_name": "toml-f",
-                  "name": "toml-f",
-                  "version": "0.5.1"
-                },
-                {
-                  "descriptive_name": "test-drive",
-                  "name": "test-drive",
-                  "version": "0.6.0"
-                },
-                {
-                  "descriptive_name": "mctc-lib",
-                  "name": "mctc-lib",
-                  "version": "0.5.2"
-                },
-                {
-                  "descriptive_name": "jonquil",
-                  "name": "jonquil",
-                  "version": "0.3.0"
-                },
-                {
-                  "descriptive_name": "multicharge",
-                  "name": "multicharge",
-                  "version": "0.5.0"
-                },
-                {
                   "descriptive_name": "mstore",
                   "name": "mstore",
                   "version": "0.3.0"
-                },
-                {
-                  "descriptive_name": "dftd4",
-                  "name": "dftd4",
-                  "version": "4.2.0"
-                },
-                {
-                  "descriptive_name": "s-dftd3",
-                  "name": "s-dftd3",
-                  "version": "1.4.0"
                 }
               ],
               "version": "0.7.0"
@@ -33562,13 +33746,13 @@
             }
           },
           "engine": "tblite",
-          "path": "/tmp/tblite-build/libtblite.so.0.7.0",
-          "sha256": "b7d23807eddf46ee2472e6522ceb1b73611166e7060a72d6bdd31bb4ae00db9c"
+          "path": "/tmp/tblite-pr169-6f7f1e2/libtblite.so.0.7.0",
+          "sha256": "1c2fb4308b398851580af11ccad5eec22314ff45a34a553380277e776a44c3b5"
         },
         "repository": {
           "dirty": false,
           "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-          "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+          "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
         },
         "runner": {
           "hostname": "node3",
@@ -33590,43 +33774,43 @@
       "start_mode": "persistent",
       "timing": {
         "count": 30,
-        "mean_ms": 82.9741647,
-        "median_ms": 82.915197,
-        "min_ms": 82.65666999999999,
-        "p95_ms": 83.421157,
+        "mean_ms": 78.9551057,
+        "median_ms": 78.922294,
+        "min_ms": 78.69024999999999,
+        "p95_ms": 79.271783,
         "samples_ms": [
-          82.921223,
-          82.75494599999999,
-          82.849346,
-          82.846381,
-          82.85122,
-          82.962301,
-          82.79404099999999,
-          82.87766099999999,
-          82.858865,
-          83.673007,
-          82.96402499999999,
-          83.421157,
-          82.81152399999999,
-          82.909171,
-          82.806635,
-          82.944718,
-          83.080558,
-          82.90858899999999,
-          83.069687,
-          82.867021,
-          82.897729,
-          82.946653,
-          83.221637,
-          82.988773,
-          82.975208,
-          83.070058,
-          83.363417,
-          83.079556,
-          82.65666999999999,
-          82.85316399999999
+          79.381683,
+          79.172623,
+          79.271783,
+          78.69024999999999,
+          78.859554,
+          78.754182,
+          79.13014199999999,
+          78.953794,
+          78.77909,
+          78.995564,
+          79.120824,
+          79.196559,
+          78.9256,
+          78.930419,
+          78.914518,
+          78.831681,
+          78.76356,
+          78.858482,
+          78.85378299999999,
+          79.049928,
+          78.99913099999999,
+          79.04563,
+          79.23937099999999,
+          78.921442,
+          78.824938,
+          78.89823799999999,
+          78.87722699999999,
+          78.783819,
+          78.70621,
+          78.923146
         ],
-        "systems_per_second_at_median": 12.060515275625528
+        "systems_per_second_at_median": 12.670690996386902
       },
       "warmups": 10,
       "workload_identity": {
@@ -33652,7 +33836,7 @@
       "--engine",
       "tblite",
       "--library",
-      "/tmp/tblite-build/libtblite.so",
+      "/tmp/tblite-pr169-6f7f1e2/libtblite.so.0.7.0",
       "--backend",
       "cpu",
       "--cpu-threads",
@@ -33668,15 +33852,15 @@
       "--repetitions",
       "30",
       "--energy-reference-json",
-      "build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
+      "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
       "--cross-engine-energy-atol",
       "5e-7",
       "--cross-engine-force-atol",
       "5e-6",
       "--output-json",
-      "build/benchmarks/pr169-evidence-255833d/tblite-persistent.json",
+      "build/benchmarks/pr169-evidence-6f7f1e2/tblite-persistent.json",
       "--output-csv",
-      "build/benchmarks/pr169-evidence-255833d/tblite-persistent.csv"
+      "build/benchmarks/pr169-evidence-6f7f1e2/tblite-persistent.csv"
     ],
     "evidence_eligibility": {
       "allow_dirty_evidence": false,
@@ -33684,10 +33868,10 @@
       "status": "eligible"
     },
     "fresh_reference_artifact": {
-      "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-      "sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a"
+      "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+      "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
     },
-    "generated_at_utc": "2026-08-05T17:35:36.341358+00:00",
+    "generated_at_utc": "2026-08-05T18:29:38.099027+00:00",
     "hardware": {
       "cpu_model": "AMD EPYC 7K62 48-Core Processor",
       "logical_cpu_count": 48,
@@ -33697,7 +33881,7 @@
     },
     "library": {
       "build": {
-        "build_directory": "/tmp/tblite-build",
+        "build_directory": "/tmp/tblite-pr169-6f7f1e2",
         "build_options": {
           "b_lto": false,
           "b_ndebug": "false",
@@ -33715,34 +33899,17 @@
         "build_system": "meson",
         "compilers": {
           "build": {
-            "c": {
-              "default_suffix": "c",
+            "fortran": {
+              "default_suffix": "f90",
               "executable_files": [
                 {
                   "is_file": true,
-                  "path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-                  "sha256": "821af3c74506283c179ca413bb33e6b528805a4dd8a5c09df125e5ad560a9e89"
+                  "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran",
+                  "sha256": "de744570ad7763b884735bc75503fc79520f01eb8859d5b010ec377a2d4d8174"
                 }
               ],
               "exelist": [
-                "gcc"
-              ],
-              "file_suffixes": [
-                "c"
-              ],
-              "full_version": "gcc (conda-forge gcc 13.4.0-20) 13.4.0",
-              "id": "gcc",
-              "linker_exelist": [
-                "gcc"
-              ],
-              "linker_id": "ld.bfd",
-              "version": "13.4.0"
-            },
-            "fortran": {
-              "default_suffix": "f90",
-              "executable_files": [],
-              "exelist": [
-                "gfortran"
+                "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
               ],
               "file_suffixes": [
                 "f90",
@@ -33757,9 +33924,10 @@
               "full_version": "GNU Fortran (conda-forge gcc 13.4.0-20) 13.4.0",
               "id": "gcc",
               "linker_exelist": [
-                "gfortran"
+                "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
               ],
               "linker_id": "ld.bfd",
+              "unresolved_executable_entries": [],
               "version": "13.4.0"
             }
           },
@@ -33769,29 +33937,36 @@
               "executable_files": [
                 {
                   "is_file": true,
-                  "path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-                  "sha256": "821af3c74506283c179ca413bb33e6b528805a4dd8a5c09df125e5ad560a9e89"
+                  "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gcc",
+                  "sha256": "6420cb0972435d925a3248db3ccb0c1c4ff7f1a81e6aa8f37e1ae54da1538d98"
                 }
               ],
               "exelist": [
-                "gcc"
+                "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-cc"
               ],
               "file_suffixes": [
                 "c"
               ],
-              "full_version": "gcc (conda-forge gcc 13.4.0-20) 13.4.0",
+              "full_version": "x86_64-conda-linux-gnu-cc (conda-forge gcc 13.4.0-20) 13.4.0",
               "id": "gcc",
               "linker_exelist": [
-                "gcc"
+                "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-cc"
               ],
               "linker_id": "ld.bfd",
+              "unresolved_executable_entries": [],
               "version": "13.4.0"
             },
             "fortran": {
               "default_suffix": "f90",
-              "executable_files": [],
+              "executable_files": [
+                {
+                  "is_file": true,
+                  "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran",
+                  "sha256": "de744570ad7763b884735bc75503fc79520f01eb8859d5b010ec377a2d4d8174"
+                }
+              ],
               "exelist": [
-                "gfortran"
+                "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
               ],
               "file_suffixes": [
                 "f90",
@@ -33806,9 +33981,10 @@
               "full_version": "GNU Fortran (conda-forge gcc 13.4.0-20) 13.4.0",
               "id": "gcc",
               "linker_exelist": [
-                "gfortran"
+                "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
               ],
               "linker_id": "ld.bfd",
+              "unresolved_executable_entries": [],
               "version": "13.4.0"
             }
           }
@@ -33828,55 +34004,144 @@
           },
           {
             "compile_args": [
-              "-I/tmp/lammps-qmmm-xtb-env/include"
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
             ],
             "link_args": [
-              "/tmp/lammps-qmmm-xtb-env/lib/libopenblas.so"
+              "/tmp/lammps-qmmm-xtb-env/lib/libtoml-f.so"
             ],
             "linked_files": [
               {
                 "is_file": true,
-                "path": "/tmp/lammps-qmmm-xtb-env/lib/libopenblasp-r0.3.33.so",
-                "sha256": "60ddaebfbdae101e9325efa24360c3bd639abb77ef569b35becd6bbcbed6605e"
+                "path": "/tmp/lammps-qmmm-xtb-env/lib/libtoml-f.so.0.5.2",
+                "sha256": "00a8ef2feff63d7939d6717a7588a40d219e3c9c14c33105ebdd5bd449a5663b"
               }
             ],
-            "name": "openblas",
+            "name": "toml-f",
             "type": "pkgconfig",
-            "version": "0.3.33"
+            "version": "0.5.2"
           },
           {
             "compile_args": [
-              "-fopenmp"
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
             ],
             "link_args": [
-              "-fopenmp"
+              "/tmp/lammps-qmmm-xtb-env/lib/libmctc-lib.so"
             ],
-            "linked_files": [],
-            "name": "OpenMP",
-            "type": "system",
-            "version": "4.5"
+            "linked_files": [
+              {
+                "is_file": true,
+                "path": "/tmp/lammps-qmmm-xtb-env/lib/libmctc-lib.so.0.5.2",
+                "sha256": "114eb96417b0ce0409fe03920c19cecd412dbad8c8bf89c3cf3b686bd0052c38"
+              }
+            ],
+            "name": "mctc-lib",
+            "type": "pkgconfig",
+            "version": "0.5.2"
+          },
+          {
+            "compile_args": [
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/multicharge/gcc-14.3.0",
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+            ],
+            "link_args": [
+              "/tmp/lammps-qmmm-xtb-env/lib/libmulticharge.so"
+            ],
+            "linked_files": [
+              {
+                "is_file": true,
+                "path": "/tmp/lammps-qmmm-xtb-env/lib/libmulticharge.so.0.5.0",
+                "sha256": "d8db344a0a2fce9595711d35eec40e624bd75ab514c971458e46bf96cd3db407"
+              }
+            ],
+            "name": "multicharge",
+            "type": "pkgconfig",
+            "version": "0.5.0"
+          },
+          {
+            "compile_args": [
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/dftd4/gcc-14.3.0",
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/multicharge/gcc-14.3.0",
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+            ],
+            "link_args": [
+              "/tmp/lammps-qmmm-xtb-env/lib/libdftd4.so"
+            ],
+            "linked_files": [
+              {
+                "is_file": true,
+                "path": "/tmp/lammps-qmmm-xtb-env/lib/libdftd4.so.4.2.0",
+                "sha256": "5eaf8f6a243643fba2a9cb32ab18348ece9c23913a73a6f5cc15d3534f643e5f"
+              }
+            ],
+            "name": "dftd4",
+            "type": "pkgconfig",
+            "version": "4.2.0"
+          },
+          {
+            "compile_args": [
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/s-dftd3/gcc-14.3.0",
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/mctc-lib/modules",
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/jonquil/modules",
+              "-I/tmp/lammps-qmmm-xtb-env/include",
+              "-I/tmp/lammps-qmmm-xtb-env/include/toml-f/modules"
+            ],
+            "link_args": [
+              "/tmp/lammps-qmmm-xtb-env/lib/libs-dftd3.so"
+            ],
+            "linked_files": [
+              {
+                "is_file": true,
+                "path": "/tmp/lammps-qmmm-xtb-env/lib/libs-dftd3.so.1.4.0",
+                "sha256": "1c856b7edf915c3d32ed181684b5bc1785ff0b4c42804882e47a571e14904a78"
+              }
+            ],
+            "name": "s-dftd3",
+            "type": "pkgconfig",
+            "version": "1.4.0"
           }
         ],
         "introspection_files": {
           "intro-buildoptions.json": {
-            "path": "/tmp/tblite-build/meson-info/intro-buildoptions.json",
-            "sha256": "25f541568189d80d647fde0ffee5eb541f51a1978bc75ceaac67247d5c73422b"
+            "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-buildoptions.json",
+            "sha256": "5579062ea5906c64d45e1952448ac7b668acbd34920e4f0ec895c595d325ae5b"
           },
           "intro-compilers.json": {
-            "path": "/tmp/tblite-build/meson-info/intro-compilers.json",
-            "sha256": "4ecd2e148eff62ee9cd09453f56f924be65ac8c745ea16fa96ec8e5e6c4704df"
+            "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-compilers.json",
+            "sha256": "f29d5228e8abe2447218aec9f6515adb0e93dd07ec9ebfcbb1cd7a6ef772a670"
           },
           "intro-dependencies.json": {
-            "path": "/tmp/tblite-build/meson-info/intro-dependencies.json",
-            "sha256": "abdfc2e8180de0ea5d38b9a9cd2e3d5b97e68ac2eba23e4427fb681fc14750bf"
+            "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-dependencies.json",
+            "sha256": "499796f1d2fdbbbc51c08b0ad57698e365c593c553de5e31a611066e733f9fcb"
           },
           "intro-projectinfo.json": {
-            "path": "/tmp/tblite-build/meson-info/intro-projectinfo.json",
-            "sha256": "8c09d7044234aad22205d166a20120064afd1d9260ac1fe2f1a5fdc9c2289778"
+            "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/intro-projectinfo.json",
+            "sha256": "e75726a2a09d3744d4ec0f5d6c6ec5dd8da9de00b74fe8096461624b946e58c3"
           },
           "meson-info.json": {
-            "path": "/tmp/tblite-build/meson-info/meson-info.json",
-            "sha256": "829208a9a50e6252a1b167fd37dcaeecfa03b414c0193382cb97a5291649ffe3"
+            "path": "/tmp/tblite-pr169-6f7f1e2/meson-info/meson-info.json",
+            "sha256": "e8c706ac67ecfa4ebe691eb4b50b4cf8effc1f49764fc5a74ffc2929399571d9"
           }
         },
         "meson_version": {
@@ -33894,44 +34159,9 @@
           "subproject_dir": "subprojects",
           "subprojects": [
             {
-              "descriptive_name": "toml-f",
-              "name": "toml-f",
-              "version": "0.5.1"
-            },
-            {
-              "descriptive_name": "test-drive",
-              "name": "test-drive",
-              "version": "0.6.0"
-            },
-            {
-              "descriptive_name": "mctc-lib",
-              "name": "mctc-lib",
-              "version": "0.5.2"
-            },
-            {
-              "descriptive_name": "jonquil",
-              "name": "jonquil",
-              "version": "0.3.0"
-            },
-            {
-              "descriptive_name": "multicharge",
-              "name": "multicharge",
-              "version": "0.5.0"
-            },
-            {
               "descriptive_name": "mstore",
               "name": "mstore",
               "version": "0.3.0"
-            },
-            {
-              "descriptive_name": "dftd4",
-              "name": "dftd4",
-              "version": "4.2.0"
-            },
-            {
-              "descriptive_name": "s-dftd3",
-              "name": "s-dftd3",
-              "version": "1.4.0"
             }
           ],
           "version": "0.7.0"
@@ -33958,13 +34188,13 @@
         }
       },
       "engine": "tblite",
-      "path": "/tmp/tblite-build/libtblite.so.0.7.0",
-      "sha256": "b7d23807eddf46ee2472e6522ceb1b73611166e7060a72d6bdd31bb4ae00db9c"
+      "path": "/tmp/tblite-pr169-6f7f1e2/libtblite.so.0.7.0",
+      "sha256": "1c2fb4308b398851580af11ccad5eec22314ff45a34a553380277e776a44c3b5"
     },
     "repository": {
       "dirty": false,
       "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-      "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+      "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
     },
     "runner": {
       "hostname": "node3",

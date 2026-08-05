@@ -140,8 +140,8 @@
           1.4754101625264154e-16
         ],
         "fresh_reference_comparison": {
-          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "artifact_sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a",
+          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "artifact_sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779",
           "energy": {
             "atol_hartree": 5e-07,
             "max_abs_delta_hartree": 5.684341886080802e-14
@@ -287,7 +287,7 @@
             -0.006047766751671971,
             2.555326348298813e-16
           ],
-          "latency_ms": 6.165102999999999,
+          "latency_ms": 6.169118999999999,
           "per_system_status": [
             0
           ],
@@ -402,7 +402,7 @@
             -0.006047766751655108,
             -6.050806328490696e-17
           ],
-          "latency_ms": 6.1526689999999995,
+          "latency_ms": 6.309627,
           "per_system_status": [
             0
           ],
@@ -517,7 +517,7 @@
             -0.006047766751644646,
             1.9765826167578398e-16
           ],
-          "latency_ms": 6.163279999999999,
+          "latency_ms": 6.1527769999999995,
           "per_system_status": [
             0
           ],
@@ -632,7 +632,7 @@
             -0.006047766751637842,
             1.386209122851065e-16
           ],
-          "latency_ms": 6.154413,
+          "latency_ms": 6.150002,
           "per_system_status": [
             0
           ],
@@ -747,7 +747,7 @@
             -0.006047766751633753,
             1.773328590734698e-16
           ],
-          "latency_ms": 6.168749999999999,
+          "latency_ms": 6.158799,
           "per_system_status": [
             0
           ],
@@ -862,7 +862,7 @@
             -0.006047766751630764,
             3.5179369412059627e-16
           ],
-          "latency_ms": 6.171065,
+          "latency_ms": 6.186863,
           "per_system_status": [
             0
           ],
@@ -977,7 +977,7 @@
             -0.006047766751628902,
             1.6664669141090954e-16
           ],
-          "latency_ms": 6.173068,
+          "latency_ms": 6.180891,
           "per_system_status": [
             0
           ],
@@ -1092,7 +1092,7 @@
             -0.006047766751627223,
             2.6007273142716436e-16
           ],
-          "latency_ms": 6.173178,
+          "latency_ms": 6.170571,
           "per_system_status": [
             0
           ],
@@ -1207,7 +1207,7 @@
             -0.006047766751626925,
             2.0336726374027797e-16
           ],
-          "latency_ms": 6.220889,
+          "latency_ms": 6.159631,
           "per_system_status": [
             0
           ],
@@ -1322,7 +1322,7 @@
             -0.006047766751626839,
             -7.280952277788117e-17
           ],
-          "latency_ms": 6.122121,
+          "latency_ms": 6.167045,
           "per_system_status": [
             0
           ],
@@ -1437,7 +1437,7 @@
             -0.006047766751626617,
             -1.2016274087545522e-17
           ],
-          "latency_ms": 6.138883,
+          "latency_ms": 6.212270999999999,
           "per_system_status": [
             0
           ],
@@ -1552,7 +1552,7 @@
             -0.006047766751626168,
             1.7891257552009906e-16
           ],
-          "latency_ms": 6.127650999999999,
+          "latency_ms": 6.169779999999999,
           "per_system_status": [
             0
           ],
@@ -1667,7 +1667,7 @@
             -0.006047766751626102,
             2.8854235581732865e-16
           ],
-          "latency_ms": 6.1456159999999995,
+          "latency_ms": 6.152918,
           "per_system_status": [
             0
           ],
@@ -1782,7 +1782,7 @@
             -0.006047766751625828,
             1.1412810758230116e-16
           ],
-          "latency_ms": 6.223355,
+          "latency_ms": 6.14387,
           "per_system_status": [
             0
           ],
@@ -1897,7 +1897,7 @@
             -0.006047766751625786,
             7.095489120030867e-19
           ],
-          "latency_ms": 6.138522999999999,
+          "latency_ms": 6.151364999999999,
           "per_system_status": [
             0
           ],
@@ -2012,7 +2012,7 @@
             -0.006047766751625661,
             2.714001030307961e-16
           ],
-          "latency_ms": 6.124395,
+          "latency_ms": 6.135314,
           "per_system_status": [
             0
           ],
@@ -2127,7 +2127,7 @@
             -0.006047766751625713,
             -1.0291984998687703e-16
           ],
-          "latency_ms": 6.129625,
+          "latency_ms": 6.1479479999999995,
           "per_system_status": [
             0
           ],
@@ -2242,7 +2242,7 @@
             -0.006047766751625605,
             6.143079980182212e-17
           ],
-          "latency_ms": 6.151618,
+          "latency_ms": 6.17,
           "per_system_status": [
             0
           ],
@@ -2357,7 +2357,7 @@
             -0.006047766751625729,
             2.1095159674999297e-16
           ],
-          "latency_ms": 6.163531,
+          "latency_ms": 6.143549,
           "per_system_status": [
             0
           ],
@@ -2472,7 +2472,7 @@
             -0.0060477667516252494,
             6.2000005942377e-17
           ],
-          "latency_ms": 6.156988,
+          "latency_ms": 6.1518749999999995,
           "per_system_status": [
             0
           ],
@@ -2587,7 +2587,7 @@
             -0.006047766751625302,
             5.1408705969909234e-17
           ],
-          "latency_ms": 6.1284529999999995,
+          "latency_ms": 6.137347,
           "per_system_status": [
             0
           ],
@@ -2702,7 +2702,7 @@
             -0.00604776675162543,
             2.8807564066339153e-16
           ],
-          "latency_ms": 6.1272009999999995,
+          "latency_ms": 6.141877,
           "per_system_status": [
             0
           ],
@@ -2817,7 +2817,7 @@
             -0.00604776675162519,
             3.448590353814253e-16
           ],
-          "latency_ms": 6.145566,
+          "latency_ms": 6.14941,
           "per_system_status": [
             0
           ],
@@ -2932,7 +2932,7 @@
             -0.006047766751625704,
             1.3933427284537224e-17
           ],
-          "latency_ms": 6.141679,
+          "latency_ms": 6.158588,
           "per_system_status": [
             0
           ],
@@ -3047,7 +3047,7 @@
             -0.006047766751625627,
             9.689792218793179e-18
           ],
-          "latency_ms": 6.1432709999999995,
+          "latency_ms": 6.174748999999999,
           "per_system_status": [
             0
           ],
@@ -3162,7 +3162,7 @@
             -0.006047766751625532,
             -2.13582004628132e-17
           ],
-          "latency_ms": 6.139885,
+          "latency_ms": 6.155302,
           "per_system_status": [
             0
           ],
@@ -3277,7 +3277,7 @@
             -0.006047766751625952,
             7.736603063851727e-17
           ],
-          "latency_ms": 6.125658,
+          "latency_ms": 6.149751999999999,
           "per_system_status": [
             0
           ],
@@ -3392,7 +3392,7 @@
             -0.006047766751625497,
             9.235681973902387e-17
           ],
-          "latency_ms": 6.13178,
+          "latency_ms": 6.158958999999999,
           "per_system_status": [
             0
           ],
@@ -3507,7 +3507,7 @@
             -0.006047766751625765,
             -1.2271162183242102e-16
           ],
-          "latency_ms": 6.186154,
+          "latency_ms": 6.149972,
           "per_system_status": [
             0
           ],
@@ -3622,7 +3622,7 @@
             -0.006047766751625623,
             -1.0440639280930833e-16
           ],
-          "latency_ms": 6.262369,
+          "latency_ms": 6.140974,
           "per_system_status": [
             0
           ],
@@ -3662,15 +3662,15 @@
           "--start-mode",
           "warm",
           "--energy-reference-json",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
           "--cross-engine-energy-atol",
           "5e-7",
           "--cross-engine-force-atol",
           "5e-6",
           "--output-json",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-warm.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-warm.json",
           "--output-csv",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-warm.csv"
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-warm.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -3678,10 +3678,10 @@
           "status": "eligible"
         },
         "fresh_reference_artifact": {
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a"
+          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
         },
-        "generated_at_utc": "2026-08-05T17:35:07.905529+00:00",
+        "generated_at_utc": "2026-08-05T18:29:19.745770+00:00",
         "hardware": {
           "cpu_model": "AMD EPYC 7K62 48-Core Processor",
           "logical_cpu_count": 48,
@@ -3728,7 +3728,7 @@
               "git": {
                 "dirty": false,
                 "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-                "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+                "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
               },
               "inputs": [
                 {
@@ -3752,7 +3752,7 @@
         "repository": {
           "dirty": false,
           "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-          "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+          "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
         },
         "runner": {
           "hostname": "node3",
@@ -3885,43 +3885,43 @@
       "start_mode": "warm",
       "timing": {
         "count": 30,
-        "mean_ms": 6.156557899999999,
-        "median_ms": 6.148617,
-        "min_ms": 6.122121,
-        "p95_ms": 6.223355,
+        "mean_ms": 6.163371499999999,
+        "median_ms": 6.154109999999999,
+        "min_ms": 6.135314,
+        "p95_ms": 6.212270999999999,
         "samples_ms": [
-          6.165102999999999,
-          6.1526689999999995,
-          6.163279999999999,
-          6.154413,
-          6.168749999999999,
-          6.171065,
-          6.173068,
-          6.173178,
-          6.220889,
-          6.122121,
-          6.138883,
-          6.127650999999999,
-          6.1456159999999995,
-          6.223355,
-          6.138522999999999,
-          6.124395,
-          6.129625,
-          6.151618,
-          6.163531,
-          6.156988,
-          6.1284529999999995,
-          6.1272009999999995,
-          6.145566,
-          6.141679,
-          6.1432709999999995,
-          6.139885,
-          6.125658,
-          6.13178,
-          6.186154,
-          6.262369
+          6.169118999999999,
+          6.309627,
+          6.1527769999999995,
+          6.150002,
+          6.158799,
+          6.186863,
+          6.180891,
+          6.170571,
+          6.159631,
+          6.167045,
+          6.212270999999999,
+          6.169779999999999,
+          6.152918,
+          6.14387,
+          6.151364999999999,
+          6.135314,
+          6.1479479999999995,
+          6.17,
+          6.143549,
+          6.1518749999999995,
+          6.137347,
+          6.141877,
+          6.14941,
+          6.158588,
+          6.174748999999999,
+          6.155302,
+          6.149751999999999,
+          6.158958999999999,
+          6.149972,
+          6.140974
         ],
-        "systems_per_second_at_median": 162.63819977728326
+        "systems_per_second_at_median": 162.49303311120536
       },
       "warmups": 10,
       "workload_identity": {
@@ -4153,8 +4153,8 @@
           -7.225739361563631e-16
         ],
         "fresh_reference_comparison": {
-          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "artifact_sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a",
+          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "artifact_sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779",
           "energy": {
             "atol_hartree": 5e-07,
             "max_abs_delta_hartree": 2.2737367544323206e-13
@@ -4390,7 +4390,7 @@
             -0.006047328146767038,
             -4.633090094630833e-16
           ],
-          "latency_ms": 20.627004,
+          "latency_ms": 20.621533,
           "per_system_status": [
             0
           ],
@@ -4595,7 +4595,7 @@
             -0.006047328146733435,
             -5.247620968193301e-16
           ],
-          "latency_ms": 20.650078,
+          "latency_ms": 20.629507,
           "per_system_status": [
             0
           ],
@@ -4800,7 +4800,7 @@
             -0.006047328146708956,
             -7.52790989516713e-16
           ],
-          "latency_ms": 20.702468,
+          "latency_ms": 20.630378999999998,
           "per_system_status": [
             0
           ],
@@ -5005,7 +5005,7 @@
             -0.006047328146691221,
             -9.511711879613537e-16
           ],
-          "latency_ms": 20.641271,
+          "latency_ms": 20.684793,
           "per_system_status": [
             0
           ],
@@ -5210,7 +5210,7 @@
             -0.00604732814667866,
             -8.108788149735184e-16
           ],
-          "latency_ms": 20.626583,
+          "latency_ms": 20.623236,
           "per_system_status": [
             0
           ],
@@ -5415,7 +5415,7 @@
             -0.006047328146669521,
             -6.128187949829399e-16
           ],
-          "latency_ms": 20.639025999999998,
+          "latency_ms": 20.644596,
           "per_system_status": [
             0
           ],
@@ -5620,7 +5620,7 @@
             -0.006047328146662368,
             -9.285206799188264e-16
           ],
-          "latency_ms": 20.695342999999998,
+          "latency_ms": 20.706885,
           "per_system_status": [
             0
           ],
@@ -5825,7 +5825,7 @@
             -0.006047328146657493,
             -9.01856082739261e-16
           ],
-          "latency_ms": 20.725671,
+          "latency_ms": 20.635609,
           "per_system_status": [
             0
           ],
@@ -6030,7 +6030,7 @@
             -0.006047328146654396,
             -8.475053666457416e-16
           ],
-          "latency_ms": 20.799964,
+          "latency_ms": 20.789644,
           "per_system_status": [
             0
           ],
@@ -6235,7 +6235,7 @@
             -0.0060473281466515635,
             -5.611226801461154e-16
           ],
-          "latency_ms": 20.624719,
+          "latency_ms": 20.616001999999998,
           "per_system_status": [
             0
           ],
@@ -6440,7 +6440,7 @@
             -0.006047328146650193,
             -6.325148521054441e-16
           ],
-          "latency_ms": 20.696234999999998,
+          "latency_ms": 20.648222999999998,
           "per_system_status": [
             0
           ],
@@ -6645,7 +6645,7 @@
             -0.006047328146648655,
             -6.660810737392375e-16
           ],
-          "latency_ms": 20.663612999999998,
+          "latency_ms": 20.660687,
           "per_system_status": [
             0
           ],
@@ -6850,7 +6850,7 @@
             -0.006047328146647847,
             -8.432812133377844e-16
           ],
-          "latency_ms": 20.607817,
+          "latency_ms": 20.634116,
           "per_system_status": [
             0
           ],
@@ -7055,7 +7055,7 @@
             -0.00604732814664695,
             -8.048979153329558e-16
           ],
-          "latency_ms": 20.595093,
+          "latency_ms": 20.681176999999998,
           "per_system_status": [
             0
           ],
@@ -7260,7 +7260,7 @@
             -0.006047328146646113,
             -7.140324559162507e-16
           ],
-          "latency_ms": 20.594541,
+          "latency_ms": 20.656529,
           "per_system_status": [
             0
           ],
@@ -7465,7 +7465,7 @@
             -0.006047328146645467,
             -5.307091151420025e-16
           ],
-          "latency_ms": 20.68313,
+          "latency_ms": 20.663352,
           "per_system_status": [
             0
           ],
@@ -7670,7 +7670,7 @@
             -0.0060473281466455475,
             -7.928149903403732e-16
           ],
-          "latency_ms": 20.639868,
+          "latency_ms": 20.616843,
           "per_system_status": [
             0
           ],
@@ -7875,7 +7875,7 @@
             -0.006047328146645488,
             -5.674550984597886e-16
           ],
-          "latency_ms": 20.719649999999998,
+          "latency_ms": 20.671969,
           "per_system_status": [
             0
           ],
@@ -8080,7 +8080,7 @@
             -0.006047328146644937,
             -7.272961448373058e-16
           ],
-          "latency_ms": 20.630129,
+          "latency_ms": 20.638084,
           "per_system_status": [
             0
           ],
@@ -8285,7 +8285,7 @@
             -0.006047328146644995,
             -5.688984426019099e-16
           ],
-          "latency_ms": 20.722936,
+          "latency_ms": 20.634106,
           "per_system_status": [
             0
           ],
@@ -8490,7 +8490,7 @@
             -0.006047328146645022,
             -7.313847728737023e-16
           ],
-          "latency_ms": 20.838597,
+          "latency_ms": 20.584370999999997,
           "per_system_status": [
             0
           ],
@@ -8695,7 +8695,7 @@
             -0.006047328146644791,
             -4.1926414323880697e-16
           ],
-          "latency_ms": 20.789873999999998,
+          "latency_ms": 20.639727,
           "per_system_status": [
             0
           ],
@@ -8900,7 +8900,7 @@
             -0.0060473281466448875,
             -6.250262338187689e-16
           ],
-          "latency_ms": 20.67756,
+          "latency_ms": 20.612004,
           "per_system_status": [
             0
           ],
@@ -9105,7 +9105,7 @@
             -0.006047328146644701,
             -7.160721112532391e-16
           ],
-          "latency_ms": 20.774725,
+          "latency_ms": 20.669663999999997,
           "per_system_status": [
             0
           ],
@@ -9310,7 +9310,7 @@
             -0.006047328146644807,
             -5.758000670561379e-16
           ],
-          "latency_ms": 20.736943999999998,
+          "latency_ms": 20.642723,
           "per_system_status": [
             0
           ],
@@ -9515,7 +9515,7 @@
             -0.006047328146644794,
             -7.054985989726637e-16
           ],
-          "latency_ms": 20.665036,
+          "latency_ms": 20.650598,
           "per_system_status": [
             0
           ],
@@ -9720,7 +9720,7 @@
             -0.0060473281466445475,
             -5.235084880573937e-16
           ],
-          "latency_ms": 20.683953,
+          "latency_ms": 20.721493,
           "per_system_status": [
             0
           ],
@@ -9925,7 +9925,7 @@
             -0.006047328146644844,
             -5.977195856651847e-16
           ],
-          "latency_ms": 20.632074,
+          "latency_ms": 20.758484,
           "per_system_status": [
             0
           ],
@@ -10130,7 +10130,7 @@
             -0.0060473281466444685,
             -8.118164804461289e-16
           ],
-          "latency_ms": 20.655376999999998,
+          "latency_ms": 20.648213,
           "per_system_status": [
             0
           ],
@@ -10335,7 +10335,7 @@
             -0.00604732814664513,
             -7.497840225539602e-16
           ],
-          "latency_ms": 20.655799,
+          "latency_ms": 20.607595,
           "per_system_status": [
             0
           ],
@@ -10375,15 +10375,15 @@
           "--start-mode",
           "warm",
           "--energy-reference-json",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
           "--cross-engine-energy-atol",
           "5e-7",
           "--cross-engine-force-atol",
           "5e-6",
           "--output-json",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-warm.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-warm.json",
           "--output-csv",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-warm.csv"
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-warm.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -10391,10 +10391,10 @@
           "status": "eligible"
         },
         "fresh_reference_artifact": {
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a"
+          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
         },
-        "generated_at_utc": "2026-08-05T17:35:07.905529+00:00",
+        "generated_at_utc": "2026-08-05T18:29:19.745770+00:00",
         "hardware": {
           "cpu_model": "AMD EPYC 7K62 48-Core Processor",
           "logical_cpu_count": 48,
@@ -10441,7 +10441,7 @@
               "git": {
                 "dirty": false,
                 "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-                "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+                "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
               },
               "inputs": [
                 {
@@ -10465,7 +10465,7 @@
         "repository": {
           "dirty": false,
           "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-          "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+          "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
         },
         "runner": {
           "hostname": "node3",
@@ -10688,43 +10688,43 @@
       "start_mode": "warm",
       "timing": {
         "count": 30,
-        "mean_ms": 20.679835933333333,
-        "median_ms": 20.6643245,
-        "min_ms": 20.594541,
-        "p95_ms": 20.799964,
+        "mean_ms": 20.6540714,
+        "median_ms": 20.6436595,
+        "min_ms": 20.584370999999997,
+        "p95_ms": 20.758484,
         "samples_ms": [
-          20.627004,
-          20.650078,
-          20.702468,
-          20.641271,
-          20.626583,
-          20.639025999999998,
-          20.695342999999998,
-          20.725671,
-          20.799964,
-          20.624719,
-          20.696234999999998,
-          20.663612999999998,
-          20.607817,
-          20.595093,
-          20.594541,
-          20.68313,
-          20.639868,
-          20.719649999999998,
-          20.630129,
-          20.722936,
-          20.838597,
-          20.789873999999998,
-          20.67756,
-          20.774725,
-          20.736943999999998,
-          20.665036,
-          20.683953,
-          20.632074,
-          20.655376999999998,
-          20.655799
+          20.621533,
+          20.629507,
+          20.630378999999998,
+          20.684793,
+          20.623236,
+          20.644596,
+          20.706885,
+          20.635609,
+          20.789644,
+          20.616001999999998,
+          20.648222999999998,
+          20.660687,
+          20.634116,
+          20.681176999999998,
+          20.656529,
+          20.663352,
+          20.616843,
+          20.671969,
+          20.638084,
+          20.634106,
+          20.584370999999997,
+          20.639727,
+          20.612004,
+          20.669663999999997,
+          20.642723,
+          20.650598,
+          20.721493,
+          20.758484,
+          20.648213,
+          20.607595
         ],
-        "systems_per_second_at_median": 48.39258113663478
+        "systems_per_second_at_median": 48.44102374387642
       },
       "warmups": 10,
       "workload_identity": {
@@ -11064,8 +11064,8 @@
           1.0786449746070262e-16
         ],
         "fresh_reference_comparison": {
-          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "artifact_sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a",
+          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "artifact_sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779",
           "energy": {
             "atol_hartree": 5e-07,
             "max_abs_delta_hartree": 3.979039320256561e-13
@@ -11409,7 +11409,7 @@
             -0.006047221275448479,
             -1.1191260026452893e-16
           ],
-          "latency_ms": 47.532967,
+          "latency_ms": 47.424366,
           "per_system_status": [
             0
           ],
@@ -11722,7 +11722,7 @@
             -0.006047221275429665,
             2.203597902184935e-16
           ],
-          "latency_ms": 47.557113,
+          "latency_ms": 47.454623999999995,
           "per_system_status": [
             0
           ],
@@ -12035,7 +12035,7 @@
             -0.006047221275415499,
             6.886794760206188e-17
           ],
-          "latency_ms": 47.742397,
+          "latency_ms": 47.48365,
           "per_system_status": [
             0
           ],
@@ -12348,7 +12348,7 @@
             -0.006047221275406029,
             1.7283785374573823e-16
           ],
-          "latency_ms": 47.637367,
+          "latency_ms": 47.513946999999995,
           "per_system_status": [
             0
           ],
@@ -12661,7 +12661,7 @@
             -0.006047221275398802,
             -7.385795104323498e-17
           ],
-          "latency_ms": 47.802310999999996,
+          "latency_ms": 47.516591999999996,
           "per_system_status": [
             0
           ],
@@ -12974,7 +12974,7 @@
             -0.006047221275393378,
             -4.597955565025419e-17
           ],
-          "latency_ms": 47.874499,
+          "latency_ms": 47.633136,
           "per_system_status": [
             0
           ],
@@ -13287,7 +13287,7 @@
             -0.006047221275389908,
             3.086265525530224e-16
           ],
-          "latency_ms": 47.641956,
+          "latency_ms": 47.419908,
           "per_system_status": [
             0
           ],
@@ -13600,7 +13600,7 @@
             -0.006047221275387508,
             -5.5691635423472e-17
           ],
-          "latency_ms": 47.548307,
+          "latency_ms": 47.659755999999994,
           "per_system_status": [
             0
           ],
@@ -13913,7 +13913,7 @@
             -0.006047221275385244,
             2.8640718428064757e-16
           ],
-          "latency_ms": 47.812169999999995,
+          "latency_ms": 47.482247,
           "per_system_status": [
             0
           ],
@@ -14226,7 +14226,7 @@
             -0.006047221275384425,
             2.467736656456716e-16
           ],
-          "latency_ms": 47.908985,
+          "latency_ms": 47.602216,
           "per_system_status": [
             0
           ],
@@ -14539,7 +14539,7 @@
             -0.006047221275383502,
             -1.871960415835439e-16
           ],
-          "latency_ms": 47.603131999999995,
+          "latency_ms": 47.397484,
           "per_system_status": [
             0
           ],
@@ -14852,7 +14852,7 @@
             -0.006047221275382361,
             4.014427288472541e-16
           ],
-          "latency_ms": 47.46082,
+          "latency_ms": 47.629608,
           "per_system_status": [
             0
           ],
@@ -15165,7 +15165,7 @@
             -0.006047221275381633,
             -1.4399990237241633e-16
           ],
-          "latency_ms": 47.588784,
+          "latency_ms": 47.528895,
           "per_system_status": [
             0
           ],
@@ -15478,7 +15478,7 @@
             -0.006047221275381491,
             -1.4032039124954365e-16
           ],
-          "latency_ms": 47.522166999999996,
+          "latency_ms": 47.401181,
           "per_system_status": [
             0
           ],
@@ -15791,7 +15791,7 @@
             -0.006047221275381676,
             2.1024621682827715e-16
           ],
-          "latency_ms": 47.488302,
+          "latency_ms": 47.448422,
           "per_system_status": [
             0
           ],
@@ -16104,7 +16104,7 @@
             -0.006047221275381177,
             1.1345067974784473e-16
           ],
-          "latency_ms": 47.545572,
+          "latency_ms": 47.452208999999996,
           "per_system_status": [
             0
           ],
@@ -16417,7 +16417,7 @@
             -0.006047221275381322,
             3.721370829381498e-16
           ],
-          "latency_ms": 47.609313,
+          "latency_ms": 47.394428999999995,
           "per_system_status": [
             0
           ],
@@ -16730,7 +16730,7 @@
             -0.006047221275380752,
             -1.1901726116319178e-17
           ],
-          "latency_ms": 47.562805,
+          "latency_ms": 47.452309,
           "per_system_status": [
             0
           ],
@@ -17043,7 +17043,7 @@
             -0.00604722127538075,
             3.6250970645965744e-16
           ],
-          "latency_ms": 47.651323,
+          "latency_ms": 47.562771,
           "per_system_status": [
             0
           ],
@@ -17356,7 +17356,7 @@
             -0.006047221275380761,
             2.4159829433794783e-16
           ],
-          "latency_ms": 47.452985,
+          "latency_ms": 47.474641999999996,
           "per_system_status": [
             0
           ],
@@ -17669,7 +17669,7 @@
             -0.006047221275380366,
             -3.162404126018831e-17
           ],
-          "latency_ms": 47.480317,
+          "latency_ms": 47.43683,
           "per_system_status": [
             0
           ],
@@ -17982,7 +17982,7 @@
             -0.006047221275380359,
             -1.033499442007352e-16
           ],
-          "latency_ms": 47.831798,
+          "latency_ms": 47.743547,
           "per_system_status": [
             0
           ],
@@ -18295,7 +18295,7 @@
             -0.006047221275380364,
             5.186221138033613e-16
           ],
-          "latency_ms": 47.542004999999996,
+          "latency_ms": 47.438331999999996,
           "per_system_status": [
             0
           ],
@@ -18608,7 +18608,7 @@
             -0.0060472212753804044,
             -1.452738399250868e-16
           ],
-          "latency_ms": 47.758388,
+          "latency_ms": 47.391473,
           "per_system_status": [
             0
           ],
@@ -18921,7 +18921,7 @@
             -0.006047221275380999,
             3.052121627426403e-16
           ],
-          "latency_ms": 47.723552,
+          "latency_ms": 47.441939,
           "per_system_status": [
             0
           ],
@@ -19234,7 +19234,7 @@
             -0.006047221275380225,
             -1.975289965070991e-16
           ],
-          "latency_ms": 47.704014,
+          "latency_ms": 47.599270999999995,
           "per_system_status": [
             0
           ],
@@ -19547,7 +19547,7 @@
             -0.006047221275380557,
             2.4096810182519063e-16
           ],
-          "latency_ms": 47.696169,
+          "latency_ms": 47.753766,
           "per_system_status": [
             0
           ],
@@ -19860,7 +19860,7 @@
             -0.006047221275380232,
             2.440301259295149e-16
           ],
-          "latency_ms": 47.656774,
+          "latency_ms": 47.469001999999996,
           "per_system_status": [
             0
           ],
@@ -20173,7 +20173,7 @@
             -0.006047221275380936,
             -2.5184896795161116e-17
           ],
-          "latency_ms": 47.752797,
+          "latency_ms": 47.523255,
           "per_system_status": [
             0
           ],
@@ -20486,7 +20486,7 @@
             -0.006047221275380759,
             2.850976713441924e-16
           ],
-          "latency_ms": 47.836497,
+          "latency_ms": 47.436439,
           "per_system_status": [
             0
           ],
@@ -20526,15 +20526,15 @@
           "--start-mode",
           "warm",
           "--energy-reference-json",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
           "--cross-engine-energy-atol",
           "5e-7",
           "--cross-engine-force-atol",
           "5e-6",
           "--output-json",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-warm.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-warm.json",
           "--output-csv",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-warm.csv"
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-warm.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -20542,10 +20542,10 @@
           "status": "eligible"
         },
         "fresh_reference_artifact": {
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a"
+          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
         },
-        "generated_at_utc": "2026-08-05T17:35:07.905529+00:00",
+        "generated_at_utc": "2026-08-05T18:29:19.745770+00:00",
         "hardware": {
           "cpu_model": "AMD EPYC 7K62 48-Core Processor",
           "logical_cpu_count": 48,
@@ -20592,7 +20592,7 @@
               "git": {
                 "dirty": false,
                 "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-                "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+                "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
               },
               "inputs": [
                 {
@@ -20616,7 +20616,7 @@
         "repository": {
           "dirty": false,
           "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-          "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+          "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
         },
         "runner": {
           "hostname": "node3",
@@ -20947,43 +20947,43 @@
       "start_mode": "warm",
       "timing": {
         "count": 30,
-        "mean_ms": 47.65085286666667,
-        "median_ms": 47.6396615,
-        "min_ms": 47.452985,
-        "p95_ms": 47.874499,
+        "mean_ms": 47.505541533333336,
+        "median_ms": 47.471821999999996,
+        "min_ms": 47.391473,
+        "p95_ms": 47.743547,
         "samples_ms": [
-          47.532967,
-          47.557113,
-          47.742397,
-          47.637367,
-          47.802310999999996,
-          47.874499,
-          47.641956,
-          47.548307,
-          47.812169999999995,
-          47.908985,
-          47.603131999999995,
-          47.46082,
-          47.588784,
-          47.522166999999996,
-          47.488302,
-          47.545572,
-          47.609313,
-          47.562805,
-          47.651323,
-          47.452985,
-          47.480317,
-          47.831798,
-          47.542004999999996,
-          47.758388,
-          47.723552,
-          47.704014,
-          47.696169,
-          47.656774,
-          47.752797,
-          47.836497
+          47.424366,
+          47.454623999999995,
+          47.48365,
+          47.513946999999995,
+          47.516591999999996,
+          47.633136,
+          47.419908,
+          47.659755999999994,
+          47.482247,
+          47.602216,
+          47.397484,
+          47.629608,
+          47.528895,
+          47.401181,
+          47.448422,
+          47.452208999999996,
+          47.394428999999995,
+          47.452309,
+          47.562771,
+          47.474641999999996,
+          47.43683,
+          47.743547,
+          47.438331999999996,
+          47.391473,
+          47.441939,
+          47.599270999999995,
+          47.753766,
+          47.469001999999996,
+          47.523255,
+          47.436439
         ],
-        "systems_per_second_at_median": 20.990913212093247
+        "systems_per_second_at_median": 21.065127856268084
       },
       "warmups": 10,
       "workload_identity": {
@@ -21395,8 +21395,8 @@
           1.9164161459786928e-16
         ],
         "fresh_reference_comparison": {
-          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "artifact_sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a",
+          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "artifact_sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779",
           "energy": {
             "atol_hartree": 5e-07,
             "max_abs_delta_hartree": 9.379164112033322e-13
@@ -21812,7 +21812,7 @@
             -0.0060471966456805675,
             2.680414453413654e-16
           ],
-          "latency_ms": 72.817742,
+          "latency_ms": 72.38165699999999,
           "per_system_status": [
             0
           ],
@@ -22197,7 +22197,7 @@
             -0.006047196645660264,
             8.168149145121052e-17
           ],
-          "latency_ms": 72.548239,
+          "latency_ms": 72.421703,
           "per_system_status": [
             0
           ],
@@ -22582,7 +22582,7 @@
             -0.006047196645645418,
             2.007641594397981e-16
           ],
-          "latency_ms": 72.808655,
+          "latency_ms": 72.387097,
           "per_system_status": [
             0
           ],
@@ -22967,7 +22967,7 @@
             -0.006047196645635091,
             2.370180166152294e-16
           ],
-          "latency_ms": 72.992265,
+          "latency_ms": 72.46136899999999,
           "per_system_status": [
             0
           ],
@@ -23352,7 +23352,7 @@
             -0.006047196645627849,
             -2.881644335390654e-16
           ],
-          "latency_ms": 72.921711,
+          "latency_ms": 72.35919299999999,
           "per_system_status": [
             0
           ],
@@ -23737,7 +23737,7 @@
             -0.006047196645622376,
             2.133620804643113e-16
           ],
-          "latency_ms": 72.94617699999999,
+          "latency_ms": 72.31743399999999,
           "per_system_status": [
             0
           ],
@@ -24122,7 +24122,7 @@
             -0.006047196645618177,
             2.968888464260051e-16
           ],
-          "latency_ms": 72.715428,
+          "latency_ms": 72.31531,
           "per_system_status": [
             0
           ],
@@ -24507,7 +24507,7 @@
             -0.006047196645615369,
             1.1531971088552055e-16
           ],
-          "latency_ms": 72.992736,
+          "latency_ms": 72.377599,
           "per_system_status": [
             0
           ],
@@ -24892,7 +24892,7 @@
             -0.006047196645613659,
             5.849650561896581e-17
           ],
-          "latency_ms": 72.987777,
+          "latency_ms": 72.33636,
           "per_system_status": [
             0
           ],
@@ -25277,7 +25277,7 @@
             -0.006047196645612254,
             3.4815890369036066e-16
           ],
-          "latency_ms": 72.639974,
+          "latency_ms": 72.287026,
           "per_system_status": [
             0
           ],
@@ -25662,7 +25662,7 @@
             -0.006047196645611337,
             1.4061465578937572e-16
           ],
-          "latency_ms": 72.80597,
+          "latency_ms": 72.68016899999999,
           "per_system_status": [
             0
           ],
@@ -26047,7 +26047,7 @@
             -0.006047196645610246,
             3.9871660624607534e-16
           ],
-          "latency_ms": 72.796322,
+          "latency_ms": 72.27685699999999,
           "per_system_status": [
             0
           ],
@@ -26432,7 +26432,7 @@
             -0.006047196645609954,
             2.5710370889347063e-16
           ],
-          "latency_ms": 72.994039,
+          "latency_ms": 72.434798,
           "per_system_status": [
             0
           ],
@@ -26817,7 +26817,7 @@
             -0.006047196645609877,
             3.6184187392030663e-16
           ],
-          "latency_ms": 73.123395,
+          "latency_ms": 72.43914699999999,
           "per_system_status": [
             0
           ],
@@ -27202,7 +27202,7 @@
             -0.006047196645609263,
             2.041556793606043e-16
           ],
-          "latency_ms": 72.661816,
+          "latency_ms": 72.588893,
           "per_system_status": [
             0
           ],
@@ -27587,7 +27587,7 @@
             -0.006047196645609296,
             1.237299010188085e-16
           ],
-          "latency_ms": 72.85631699999999,
+          "latency_ms": 72.421032,
           "per_system_status": [
             0
           ],
@@ -27972,7 +27972,7 @@
             -0.006047196645609005,
             -8.685095999808311e-17
           ],
-          "latency_ms": 72.785742,
+          "latency_ms": 72.57311299999999,
           "per_system_status": [
             0
           ],
@@ -28357,7 +28357,7 @@
             -0.006047196645608814,
             1.8985691617800447e-16
           ],
-          "latency_ms": 72.731729,
+          "latency_ms": 72.53501,
           "per_system_status": [
             0
           ],
@@ -28742,7 +28742,7 @@
             -0.006047196645608781,
             8.238876396216786e-17
           ],
-          "latency_ms": 72.842179,
+          "latency_ms": 72.578694,
           "per_system_status": [
             0
           ],
@@ -29127,7 +29127,7 @@
             -0.006047196645608966,
             3.894952629517832e-17
           ],
-          "latency_ms": 72.991665,
+          "latency_ms": 72.554217,
           "per_system_status": [
             0
           ],
@@ -29512,7 +29512,7 @@
             -0.006047196645608709,
             5.3520187053846793e-17
           ],
-          "latency_ms": 72.995693,
+          "latency_ms": 72.36152799999999,
           "per_system_status": [
             0
           ],
@@ -29897,7 +29897,7 @@
             -0.006047196645608753,
             3.2037368192157784e-16
           ],
-          "latency_ms": 72.819175,
+          "latency_ms": 72.277988,
           "per_system_status": [
             0
           ],
@@ -30282,7 +30282,7 @@
             -0.006047196645608564,
             2.7592139284967216e-16
           ],
-          "latency_ms": 72.948312,
+          "latency_ms": 72.205539,
           "per_system_status": [
             0
           ],
@@ -30667,7 +30667,7 @@
             -0.006047196645608596,
             -1.525163422010255e-16
           ],
-          "latency_ms": 72.79337699999999,
+          "latency_ms": 72.377209,
           "per_system_status": [
             0
           ],
@@ -31052,7 +31052,7 @@
             -0.006047196645608474,
             2.944815787899084e-16
           ],
-          "latency_ms": 72.633001,
+          "latency_ms": 72.56217199999999,
           "per_system_status": [
             0
           ],
@@ -31437,7 +31437,7 @@
             -0.00604719664560903,
             3.7018345438486697e-16
           ],
-          "latency_ms": 73.149035,
+          "latency_ms": 72.322283,
           "per_system_status": [
             0
           ],
@@ -31822,7 +31822,7 @@
             -0.006047196645608966,
             7.610632059238271e-17
           ],
-          "latency_ms": 73.328698,
+          "latency_ms": 72.385063,
           "per_system_status": [
             0
           ],
@@ -32207,7 +32207,7 @@
             -0.006047196645608955,
             1.7840079556639006e-16
           ],
-          "latency_ms": 72.877096,
+          "latency_ms": 72.43800499999999,
           "per_system_status": [
             0
           ],
@@ -32592,7 +32592,7 @@
             -0.0060471966456090665,
             1.3623380138617648e-16
           ],
-          "latency_ms": 72.869102,
+          "latency_ms": 72.45737199999999,
           "per_system_status": [
             0
           ],
@@ -32977,7 +32977,7 @@
             -0.0060471966456086025,
             -4.935789362081876e-17
           ],
-          "latency_ms": 72.94368399999999,
+          "latency_ms": 72.46296199999999,
           "per_system_status": [
             0
           ],
@@ -33017,15 +33017,15 @@
           "--start-mode",
           "warm",
           "--energy-reference-json",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
           "--cross-engine-energy-atol",
           "5e-7",
           "--cross-engine-force-atol",
           "5e-6",
           "--output-json",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-warm.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-warm.json",
           "--output-csv",
-          "build/benchmarks/pr169-evidence-255833d/gpuxtb-warm.csv"
+          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-warm.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -33033,10 +33033,10 @@
           "status": "eligible"
         },
         "fresh_reference_artifact": {
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-          "sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a"
+          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
         },
-        "generated_at_utc": "2026-08-05T17:35:07.905529+00:00",
+        "generated_at_utc": "2026-08-05T18:29:19.745770+00:00",
         "hardware": {
           "cpu_model": "AMD EPYC 7K62 48-Core Processor",
           "logical_cpu_count": 48,
@@ -33083,7 +33083,7 @@
               "git": {
                 "dirty": false,
                 "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-                "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+                "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
               },
               "inputs": [
                 {
@@ -33107,7 +33107,7 @@
         "repository": {
           "dirty": false,
           "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-          "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+          "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
         },
         "runner": {
           "hostname": "node3",
@@ -33510,43 +33510,43 @@
       "start_mode": "warm",
       "timing": {
         "count": 30,
-        "mean_ms": 72.87723503333333,
-        "median_ms": 72.8627095,
-        "min_ms": 72.548239,
-        "p95_ms": 73.149035,
+        "mean_ms": 72.41922663333334,
+        "median_ms": 72.4040645,
+        "min_ms": 72.205539,
+        "p95_ms": 72.588893,
         "samples_ms": [
-          72.817742,
-          72.548239,
-          72.808655,
-          72.992265,
-          72.921711,
-          72.94617699999999,
-          72.715428,
-          72.992736,
-          72.987777,
-          72.639974,
-          72.80597,
-          72.796322,
-          72.994039,
-          73.123395,
-          72.661816,
-          72.85631699999999,
-          72.785742,
-          72.731729,
-          72.842179,
-          72.991665,
-          72.995693,
-          72.819175,
-          72.948312,
-          72.79337699999999,
-          72.633001,
-          73.149035,
-          73.328698,
-          72.877096,
-          72.869102,
-          72.94368399999999
+          72.38165699999999,
+          72.421703,
+          72.387097,
+          72.46136899999999,
+          72.35919299999999,
+          72.31743399999999,
+          72.31531,
+          72.377599,
+          72.33636,
+          72.287026,
+          72.68016899999999,
+          72.27685699999999,
+          72.434798,
+          72.43914699999999,
+          72.588893,
+          72.421032,
+          72.57311299999999,
+          72.53501,
+          72.578694,
+          72.554217,
+          72.36152799999999,
+          72.277988,
+          72.205539,
+          72.377209,
+          72.56217199999999,
+          72.322283,
+          72.385063,
+          72.43800499999999,
+          72.45737199999999,
+          72.46296199999999
         ],
-        "systems_per_second_at_median": 13.724441581464934
+        "systems_per_second_at_median": 13.811379332164424
       },
       "warmups": 10,
       "workload_identity": {
@@ -33590,15 +33590,15 @@
       "--start-mode",
       "warm",
       "--energy-reference-json",
-      "build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
+      "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
       "--cross-engine-energy-atol",
       "5e-7",
       "--cross-engine-force-atol",
       "5e-6",
       "--output-json",
-      "build/benchmarks/pr169-evidence-255833d/gpuxtb-warm.json",
+      "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-warm.json",
       "--output-csv",
-      "build/benchmarks/pr169-evidence-255833d/gpuxtb-warm.csv"
+      "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-warm.csv"
     ],
     "evidence_eligibility": {
       "allow_dirty_evidence": false,
@@ -33606,10 +33606,10 @@
       "status": "eligible"
     },
     "fresh_reference_artifact": {
-      "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-255833d/gpuxtb-fresh.json",
-      "sha256": "2d4ed25020d7351732f09ea268968b1d96a1cc30f176dc8ab57b3fad851aa72a"
+      "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+      "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
     },
-    "generated_at_utc": "2026-08-05T17:35:07.905529+00:00",
+    "generated_at_utc": "2026-08-05T18:29:19.745770+00:00",
     "hardware": {
       "cpu_model": "AMD EPYC 7K62 48-Core Processor",
       "logical_cpu_count": 48,
@@ -33656,7 +33656,7 @@
           "git": {
             "dirty": false,
             "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-            "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+            "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
           },
           "inputs": [
             {
@@ -33680,7 +33680,7 @@
     "repository": {
       "dirty": false,
       "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
-      "revision": "255833dea27d2870034515c4ede0ee3764a0092d"
+      "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
     },
     "runner": {
       "hostname": "node3",
