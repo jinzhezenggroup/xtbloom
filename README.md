@@ -50,6 +50,9 @@ consumer. At execution time, the backend dynamically resolves compatible CUDA
 12 host runtime/math libraries and the system NVIDIA driver; Python wheels
 install the matching `nvidia-*` runtime packages and preload their SONAMEs.
 gpuxtb does not embed build-host CUDA paths in the installed library's RPATH.
+For a native deployment whose compatible CUDA host libraries are outside the
+system loader path, expose that library directory through `LD_LIBRARY_PATH` or
+preload the SONAMEs before loading libgpuxtb.
 The CUDA compiler may still embed device-runtime code in `libgpuxtb`; the legal
 distribution determination remains open in Issue #162.
 

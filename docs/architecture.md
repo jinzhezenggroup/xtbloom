@@ -80,9 +80,11 @@ eigensolver dlopens an LP64 BLAS/LAPACK runtime (Intel MKL or OpenBLAS) by SONAM
 library. On Linux the CUDA build generates one ELF trampoline shim per wrapped host library
 (cudart, cuBLAS, cuSOLVER, and libcuda) from the byte-pinned
 `cmake/3rdparty/implib` source and compiles those shims into libgpuxtb itself
-(`src/runtime/cuda_dlopen.c`). The first wrapped call resolves the compatible host library with
-`RTLD_LOCAL` and dlsym. A host without the NVIDIA runtime can therefore load libgpuxtb and receive
-a backend-unavailable diagnostic instead of failing at the ELF loader boundary.
+(`src/runtime/cuda_dlopen.c`). An early ELF constructor opens the exact build-major SONAMEs and
+pre-resolves each complete symbol cohort before ordinary NVCC registration constructors run. The
+resolved tables are then immutable, avoiding races on concurrent CUDA calls. A host without the
+NVIDIA runtime can therefore load libgpuxtb and receive a backend-unavailable diagnostic instead
+of failing at the ELF loader boundary.
 
 This host-library indirection is narrower than a claim that the CUDA-enabled binary contains no
 proprietary linked code. nvcc's separable-compilation/device-link pipeline may embed NVIDIA
