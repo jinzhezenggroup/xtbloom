@@ -553,6 +553,41 @@ class _ComputedBatch:
     keepalive: list
 
 
+def _pack_charge_responses(
+    structures: Sequence[Structure],
+) -> tuple[list[int], list[float], list[float]] | None:
+    """Pack optional per-system response operators without penalizing common batches.
+
+    Most callers do not provide periodic charge-response operators. Detect
+    that case before constructing dense square matrices so ordinary inference
+    remains linear in the input size. When any system has a response, systems
+    without one receive explicit zero operators because the public C ABI uses
+    one batch-wide descriptor set.
+    """
+
+    responses = [structure.charge_response for structure in structures]
+    if not any(response is not None for response in responses):
+        return None
+
+    offsets = [0]
+    shifts: list[float] = []
+    matrices: list[float] = []
+    for structure, response in zip(structures, responses):
+        atom_count = len(structure)
+        if response is None:
+            shifts.extend(0.0 for _ in range(atom_count))
+            matrices.extend(0.0 for _ in range(atom_count * atom_count))
+        else:
+            if response.shifts.size != atom_count:
+                raise GPUxtbValueError(
+                    "charge response shifts must match the atom count"
+                )
+            shifts.extend(float(value) for value in response.shifts)
+            matrices.extend(float(value) for value in response.matrix.ravel())
+        offsets.append(len(matrices))
+    return offsets, shifts, matrices
+
+
 def _compute_batch(
     context: Context,
     structures: Sequence[Structure],
@@ -578,10 +613,7 @@ def _compute_batch(
     point_positions: list[float] = []
     point_values: list[float] = []
     point_gammas: list[float] = []
-    response_offsets = [0]
-    response_shifts: list[float] = []
-    response_matrix: list[float] = []
-    charge_response_any = False
+    packed_responses = _pack_charge_responses(structures)
     keepalive: list = []
 
     for structure in structures:
@@ -595,19 +627,8 @@ def _compute_batch(
             point_positions.extend(float(value) for value in points.positions.ravel())
             point_values.extend(float(value) for value in points.charges)
             point_gammas.extend(float(value) for value in points.gammas)
-        cr = structure.charge_response
-        if cr is not None:
-            if cr.shifts.size != len(structure):
-                raise GPUxtbValueError("charge response shifts must match the atom count")
-            charge_response_any = True
-            response_shifts.extend(float(value) for value in cr.shifts)
-            response_matrix.extend(float(value) for value in cr.matrix.ravel())
-        else:
-            response_shifts.extend(0.0 for _ in structure.numbers)
-            response_matrix.extend(0.0 for _ in range(len(structure) * len(structure)))
         atom_offsets.append(len(atomic_numbers))
         point_offsets.append(len(point_values))
-        response_offsets.append(len(response_matrix))
 
     total_atoms = len(atomic_numbers)
     total_points = len(point_values)
@@ -622,7 +643,9 @@ def _compute_batch(
     batch.batch_size = len(structures)
     batch.total_atoms = total_atoms
     batch.total_point_charges = total_points
-    batch.total_charge_response_elements = len(response_matrix) if charge_response_any else 0
+    batch.total_charge_response_elements = (
+        len(packed_responses[2]) if packed_responses is not None else 0
+    )
 
     def bind(descriptor_name, values, ctype, dtype):
         if not values:
@@ -656,7 +679,8 @@ def _compute_batch(
         bind("point_charge_positions", point_positions, ctypes.c_double, np.float64)
         bind("point_charge_values", point_values, ctypes.c_double, np.float64)
         bind("point_charge_gammas", point_gammas, ctypes.c_double, np.float64)
-    if charge_response_any:
+    if packed_responses is not None:
+        response_offsets, response_shifts, response_matrix = packed_responses
         bind("atomic_potential_shifts", response_shifts, ctypes.c_double, np.float64)
         bind("charge_response_offsets", response_offsets, ctypes.c_int64, np.int64)
         bind("charge_response_matrix", response_matrix, ctypes.c_double, np.float64)
