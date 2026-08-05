@@ -801,6 +801,48 @@ int test_one_member_numerical_failure_isolated() {
   return 0;
 }
 
+int test_degenerate_occupation_representability_is_publicly_successful() {
+  ContextHandle context = make_cpu_context(1);
+  CHECK(context != nullptr);
+
+  PublicBatch request;
+  request.atom_offsets = {0, 2, 5};
+  request.atomic_numbers = {1, 1, 1, 1, 1};
+  request.positions = {
+      -0.70, 0.0, 0.0, 0.70, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0e20, 0.0, 0.0, 2.0e20, 0.0, 0.0,
+  };
+  /* The fractional charge gives the three-atom system nextafter(6, 0)
+   * electrons, hence nextafter(3, 0) electrons in each restricted spin
+   * channel. At 1e20 bohr separation all three one-center Hamiltonian blocks
+   * are bitwise identical while inter-center interactions safely tend to
+   * zero, producing the public form of issue #31's representability corner. */
+  request.molecular_charges = {0.0, 3.0 - 2.0 * std::nextafter(3.0, 0.0)};
+  request.unpaired_electrons = {0, 0};
+  const std::uint32_t flags =
+      GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
+  request.bind(flags);
+  CHECK(request.options.electronic_temperature > 0.0);
+  CHECK(0.5 * (3.0 - request.molecular_charges[1]) == std::nextafter(3.0, 0.0));
+  CHECK(gpuxtb_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        GPUXTB_STATUS_SUCCESS);
+
+  /* The ordinary H2 peer proves that the unusual fractional-charge system
+   * publishes independently without disturbing another batch member. */
+  CHECK(request.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(request.converged[0] == 1u);
+  CHECK(std::isfinite(request.energies[0]));
+  CHECK(request.statuses[1] == GPUXTB_STATUS_SUCCESS);
+  CHECK(request.converged[1] == 1u);
+  CHECK(request.iterations[1] > 0 && request.iterations[1] <= request.options.max_scc_iterations);
+  CHECK(near(request.energies[1], -1.8322400836158348, 2.0e-12));
+  for (std::size_t atom = 2u; atom < 5u; ++atom) {
+    CHECK(request.atomic_charges[atom] == -1.0);
+  }
+  CHECK(std::all_of(request.forces.begin(), request.forces.end(),
+                    [](double value) { return std::isfinite(value); }));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -843,6 +885,10 @@ int main() {
     return line;
   }
   if (const int line = test_one_member_numerical_failure_isolated(); line != 0) {
+    return line;
+  }
+  if (const int line = test_degenerate_occupation_representability_is_publicly_successful();
+      line != 0) {
     return line;
   }
   return 0;
