@@ -18,9 +18,9 @@ constexpr double kDoubleEpsilon = 2.220446049250313080847263336181640625e-16;
  * Maximum absolute electron/hole error accepted when a symmetric binary64
  * occupation block cannot reproduce the requested count exactly. A degenerate
  * block publishes one double per equal-energy orbital, so its achievable total
- * is quantized; the accumulated rounding bound of count doubles is at most
- * count * 2 * eps_double. This mirrors the CPU representability policy and the
- * entropy is always derived from the same published occupations.
+ * is quantized; the selected block's accumulated rounding bound is at most
+ * block_count * 2 * eps_double. This mirrors the CPU representability policy,
+ * and the entropy is always derived from the same published occupations.
  */
 constexpr double kRepresentableErrorScale = 2.0 * kDoubleEpsilon;
 
@@ -288,25 +288,60 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
    *
    * For atomically tiny (subnormal) electron targets the 1024-eps-relative
    * product underflows to zero and would reject every such root. Floor the
-   * root tolerance at the published-block quantization scale
-   * (kRepresentableErrorScale * count) so an exactly degenerate block can still
-   * reach the symmetric relaxation path below instead of failing the system.
+   * root tolerance at the largest actual exact-degeneracy block's publication
+   * scale so that block can reach the symmetric relaxation path below. A
+   * spectrum with no multi-orbital degeneracy retains the original relative
+   * root check and cannot borrow the relaxed tolerance.
    */
+  std::int64_t largest_degenerate_block = 0;
+  for (std::int64_t block_begin = 0; block_begin < count;) {
+    std::int64_t block_end = block_begin + 1;
+    while (block_end < count && eigenvalues[block_end] == eigenvalues[block_begin]) {
+      ++block_end;
+    }
+    const std::int64_t block_count = block_end - block_begin;
+    if (block_count > 1) {
+      largest_degenerate_block = max(largest_degenerate_block, block_count);
+    }
+    block_begin = block_end;
+  }
+  const double degenerate_root_floor =
+      largest_degenerate_block > 1
+          ? kRepresentableErrorScale * static_cast<double>(largest_degenerate_block)
+          : 0.0;
   const double representable_root_tolerance =
-      max(1024.0 * kDoubleEpsilon * quantity_target,
-          kRepresentableErrorScale * static_cast<double>(count));
+      max(1024.0 * kDoubleEpsilon * quantity_target, degenerate_root_floor);
   if (!isfinite(result->chemical_potential) || !isfinite(ideal_quantity) ||
       fabs(ideal_quantity - quantity_target) > representable_root_tolerance) {
     *error = Gfn2OccupationsDeviceError::kElectronConservationFailure;
     return false;
   }
+  if (largest_degenerate_block == count && quantity_target / capacity == 0.0) {
+    /* Match the CPU's canonical analytic root when a valid subnormal total
+     * population cannot be divided into a nonzero binary64 per-member value.
+     * This avoids choosing an arbitrary side of the device Fermi jump. */
+    const double log_fraction = log(quantity_target) - log(capacity);
+    const double log_complement = log1p(-exp(log_fraction));
+    const double canonical_scaled_mu =
+        solve_holes ? log_complement - log_fraction : log_fraction - log_complement;
+    result->chemical_potential =
+        saturated_affine(energy_reference, canonical_scaled_mu, temperature);
+  }
 
   const double residual = quantity_target - published_quantity;
   bool representability_relaxed = false;
+  double representable_tolerance = 0.0;
   if (fabs(residual) > tolerance) {
     /* Any material correction is uniform over a complete equal-energy block. */
     const double occupation_delta = solve_holes ? -residual : residual;
     bool corrected = false;
+    bool relaxed_candidate_found = false;
+    double relaxed_error = kDoubleMaximum;
+    double relaxed_quantity = published_quantity;
+    bool relaxed_fractional_block = false;
+    std::int64_t relaxed_begin = count;
+    std::int64_t relaxed_end = count;
+    double relaxed_occupation = 0.0;
     for (std::int64_t block_begin = 0; block_begin < count;) {
       std::int64_t block_end = block_begin + 1;
       while (block_end < count && eigenvalues[block_end] == eigenvalues[block_begin]) {
@@ -317,33 +352,68 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
       const double candidate = old_occupation + occupation_delta / static_cast<double>(block_count);
       if (candidate >= 0.0 && candidate <= 1.0) {
         const double block_scale = static_cast<double>(block_count);
-        const double old_quantity =
-            block_scale * (solve_holes ? 1.0 - old_occupation : old_occupation);
-        const double new_quantity = block_scale * (solve_holes ? 1.0 - candidate : candidate);
-        const double corrected_quantity = published_quantity + new_quantity - old_quantity;
-        if (new_quantity != old_quantity && isfinite(corrected_quantity) &&
-            fabs(corrected_quantity - quantity_target) <= tolerance) {
-          for (std::int64_t orbital = block_begin; orbital < block_end; ++orbital) {
-            occupations[orbital] = candidate;
+        const double candidates[3] = {
+            candidate,
+            nextafter(candidate, -kDoubleMaximum),
+            nextafter(candidate, kDoubleMaximum),
+        };
+        for (int candidate_index = 0; candidate_index < 3; ++candidate_index) {
+          const double block_occupation = candidates[candidate_index];
+          if (block_occupation < 0.0 || block_occupation > 1.0 ||
+              (candidate_index != 0 && block_occupation == candidates[0])) {
+            continue;
           }
-          published_quantity = corrected_quantity;
-          corrected = true;
+          const double occupation_change = block_occupation - old_occupation;
+          const double quantity_change =
+              block_scale * (solve_holes ? -occupation_change : occupation_change);
+          const double corrected_quantity = published_quantity + quantity_change;
+          const double corrected_error = fabs(corrected_quantity - quantity_target);
+          if (isfinite(corrected_quantity) && corrected_error <= tolerance) {
+            for (std::int64_t orbital = block_begin; orbital < block_end; ++orbital) {
+              occupations[orbital] = block_occupation;
+            }
+            published_quantity = corrected_quantity;
+            corrected = true;
+            break;
+          }
+
+          /* Relaxation belongs only to a real exact-degeneracy block. Search
+           * the rounded target and both adjacent binary64 occupations, then
+           * retain the closest symmetric publication state across all such
+           * blocks. */
+          if (block_count > 1) {
+            const double block_tolerance = kRepresentableErrorScale * block_scale;
+            const bool fractional_block = old_occupation > 0.0 && old_occupation < 1.0;
+            if (isfinite(corrected_quantity) && corrected_error <= block_tolerance &&
+                (!relaxed_candidate_found || corrected_error < relaxed_error ||
+                 (corrected_error == relaxed_error && fractional_block &&
+                  !relaxed_fractional_block))) {
+              relaxed_candidate_found = true;
+              relaxed_error = corrected_error;
+              relaxed_quantity = corrected_quantity;
+              representable_tolerance = block_tolerance;
+              relaxed_fractional_block = fractional_block;
+              relaxed_begin = block_begin;
+              relaxed_end = block_end;
+              relaxed_occupation = block_occupation;
+            }
+          }
+        }
+        if (corrected) {
           break;
         }
       }
       block_begin = block_end;
     }
     if (!corrected) {
-      /* Representable but unquantizable symmetric block: when the residual is
-       * attributable to binary64 quantization of the equal-membership block
-       * (matching the CPU policy, bounded by count * 2 * eps_double), relax to
-       * the nearest representable symmetric state by keeping the published
-       * occupations. Anything larger is genuine electron non-conservation. */
-      const double representable_tolerance = kRepresentableErrorScale * static_cast<double>(count);
-      if (fabs(residual) > representable_tolerance) {
+      if (!relaxed_candidate_found) {
         *error = Gfn2OccupationsDeviceError::kElectronConservationFailure;
         return false;
       }
+      for (std::int64_t orbital = relaxed_begin; orbital < relaxed_end; ++orbital) {
+        occupations[orbital] = relaxed_occupation;
+      }
+      published_quantity = relaxed_quantity;
       representability_relaxed = true;
     }
   }
@@ -364,8 +434,7 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
   const double published_error = fabs(published_quantity - quantity_target);
   const bool published_acceptable =
       published_error <= tolerance ||
-      (representability_relaxed &&
-       published_error <= kRepresentableErrorScale * static_cast<double>(count));
+      (representability_relaxed && published_error <= representable_tolerance);
   if (!isfinite(entropy) || !published_acceptable) {
     *error = !isfinite(entropy) ? Gfn2OccupationsDeviceError::kNonfiniteEntropy
                                 : Gfn2OccupationsDeviceError::kElectronConservationFailure;

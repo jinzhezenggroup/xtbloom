@@ -818,12 +818,13 @@ bool compute_occupations(const double* eigenvalues, std::size_t count, double el
    *
    * In that case the solver does not break symmetry by promoting an arbitrary
    * orbital and does not fail the system. It relaxes to the nearest
-   * representable symmetric state: it keeps the equal Fermi-derived block
-   * occupations and records a documented absolute electron/hole error no
-   * larger than the quantization bound of the published block
-   * (count * 2 * eps_double, a few ULPs of an electron). tblite performs no
-   * strict block correction and publishes the same quantization-limited
-   * occupations without failing, so this matches its practical semantics.
+   * representable symmetric state by comparing the rounded target occupation
+   * and its adjacent binary64 values across real multi-orbital degenerate
+   * blocks. The published absolute electron/hole error is no larger than the
+   * selected block's quantization bound (block_count * 2 * eps_double, a few
+   * ULPs of an electron). tblite performs no strict block correction and
+   * publishes the same quantization-limited occupations without failing, so
+   * this matches its practical semantics.
    *
    * Relaxation applies only while the residual can be attributed to this
    * binary64 quantization. A residual beyond the same bound is genuine
@@ -831,9 +832,8 @@ bool compute_occupations(const double* eigenvalues, std::size_t count, double el
    */
   const long double representable_error_scale =
       2.0L * static_cast<long double>(std::numeric_limits<double>::epsilon());
-  const long double representable_tolerance =
-      representable_error_scale * static_cast<long double>(count);
   bool representability_relaxed = false;
+  long double representable_tolerance = 0.0L;
   std::size_t corrected_begin = count;
   std::size_t corrected_end = count;
   double corrected_occupation = 0.0;
@@ -845,6 +845,14 @@ bool compute_occupations(const double* eigenvalues, std::size_t count, double el
      */
     const long double occupation_delta = solve_holes ? -quantity_residual : quantity_residual;
     bool corrected = false;
+    bool relaxed_candidate_found = false;
+    long double relaxed_error = std::numeric_limits<long double>::infinity();
+    long double relaxed_quantity = published_quantity;
+    long double relaxed_tolerance = 0.0L;
+    bool relaxed_fractional_block = false;
+    std::size_t relaxed_begin = count;
+    std::size_t relaxed_end = count;
+    double relaxed_occupation = 0.0;
     for (std::size_t block_begin = 0u; block_begin < count;) {
       std::size_t block_end = block_begin + 1u;
       while (block_end < count && eigenvalues[block_end] == eigenvalues[block_begin]) {
@@ -860,41 +868,78 @@ bool compute_occupations(const double* eigenvalues, std::size_t count, double el
         block_begin = block_end;
         continue;
       }
-      const double block_occupation = static_cast<double>(candidate);
+      const double nearest = static_cast<double>(candidate);
+      const std::array<double, 3> block_occupations{{
+          nearest,
+          std::nextafter(nearest, -std::numeric_limits<double>::infinity()),
+          std::nextafter(nearest, std::numeric_limits<double>::infinity()),
+      }};
       const long double block_scale = static_cast<long double>(block_count);
-      const long double old_quantity =
-          block_scale * (solve_holes ? 1.0L - static_cast<long double>(published)
-                                     : static_cast<long double>(published));
-      const long double new_quantity =
-          block_scale * (solve_holes ? 1.0L - static_cast<long double>(block_occupation)
-                                     : static_cast<long double>(block_occupation));
-      if (new_quantity == old_quantity) {
-        block_begin = block_end;
-        continue;
+      for (std::size_t candidate_index = 0u; candidate_index < block_occupations.size();
+           ++candidate_index) {
+        const double block_occupation = block_occupations[candidate_index];
+        if (block_occupation < 0.0 || block_occupation > 1.0 ||
+            (candidate_index != 0u && block_occupation == block_occupations[0])) {
+          continue;
+        }
+        const long double occupation_change =
+            static_cast<long double>(block_occupation) - static_cast<long double>(published);
+        const long double quantity_change =
+            block_scale * (solve_holes ? -occupation_change : occupation_change);
+        const long double corrected_quantity = published_quantity + quantity_change;
+        const long double corrected_error = std::abs(corrected_quantity - quantity_target);
+        if (corrected_error <= publication_tolerance) {
+          published_quantity = corrected_quantity;
+          if (occupations != nullptr) {
+            std::fill(occupations + block_begin, occupations + block_end, block_occupation);
+          }
+          corrected_begin = block_begin;
+          corrected_end = block_end;
+          corrected_occupation = block_occupation;
+          corrected = true;
+          break;
+        }
+
+        /* Only a genuine multi-orbital exact-degeneracy block may authorize
+         * relaxed conservation. Compare the nearest binary64 state and its
+         * two neighbors explicitly so the selected symmetric occupation is
+         * the closest available publication state, independent of any
+         * intermediate long-double rounding. */
+        if (block_count > 1u) {
+          const long double block_tolerance = representable_error_scale * block_scale;
+          const bool fractional_block = published > 0.0 && published < 1.0;
+          if (corrected_error <= block_tolerance &&
+              (!relaxed_candidate_found || corrected_error < relaxed_error ||
+               (corrected_error == relaxed_error && fractional_block &&
+                !relaxed_fractional_block))) {
+            relaxed_candidate_found = true;
+            relaxed_error = corrected_error;
+            relaxed_quantity = corrected_quantity;
+            relaxed_tolerance = block_tolerance;
+            relaxed_fractional_block = fractional_block;
+            relaxed_begin = block_begin;
+            relaxed_end = block_end;
+            relaxed_occupation = block_occupation;
+          }
+        }
       }
-      const long double corrected_quantity = published_quantity + new_quantity - old_quantity;
-      if (std::abs(corrected_quantity - quantity_target) > publication_tolerance) {
-        block_begin = block_end;
-        continue;
+      if (corrected) {
+        break;
       }
-      published_quantity = corrected_quantity;
-      if (occupations != nullptr) {
-        std::fill(occupations + block_begin, occupations + block_end, block_occupation);
-      }
-      corrected_begin = block_begin;
-      corrected_end = block_end;
-      corrected_occupation = block_occupation;
-      corrected = true;
-      break;
+      block_begin = block_end;
     }
     if (!corrected) {
-      if (std::abs(quantity_residual) > representable_tolerance) {
+      if (!relaxed_candidate_found) {
         return false;
       }
-      /* Nearest representable symmetric state: the unmodified equal Fermi-
-       * derived occupations already satisfy the documented quantization bound,
-       * so nothing is rewritten and the electron/hole error is bounded by
-       * representable_tolerance. */
+      published_quantity = relaxed_quantity;
+      if (occupations != nullptr) {
+        std::fill(occupations + relaxed_begin, occupations + relaxed_end, relaxed_occupation);
+      }
+      corrected_begin = relaxed_begin;
+      corrected_end = relaxed_end;
+      corrected_occupation = relaxed_occupation;
+      representable_tolerance = relaxed_tolerance;
       representability_relaxed = true;
     }
   }
@@ -913,6 +958,29 @@ bool compute_occupations(const double* eigenvalues, std::size_t count, double el
     }
   }
   entropy = static_cast<double>(entropy_value);
+  bool fully_degenerate = true;
+  for (std::size_t orbital = 1u; orbital < count; ++orbital) {
+    fully_degenerate = fully_degenerate && eigenvalues[orbital] == eigenvalues[0];
+  }
+  const double binary64_quantity_target = static_cast<double>(quantity_target);
+  if (fully_degenerate && binary64_quantity_target > 0.0 &&
+      binary64_quantity_target / static_cast<double>(count) == 0.0) {
+    /* The ideal per-member fraction underflows even though the requested total
+     * is a valid subnormal double. Use the analytic equal-level logit so CPU
+     * and CUDA publish the same canonical finite chemical-potential root rather
+     * than choosing backend-dependent sides of the device occupation jump. */
+    const double log_fraction =
+        std::log(binary64_quantity_target) - std::log(static_cast<double>(count));
+    const double log_complement = std::log1p(-std::exp(log_fraction));
+    const double scaled_mu =
+        solve_holes ? log_complement - log_fraction : log_fraction - log_complement;
+    const long double canonical_mu =
+        static_cast<long double>(eigenvalues[0]) +
+        static_cast<long double>(scaled_mu) * static_cast<long double>(temperature);
+    chemical_potential = static_cast<double>(
+        std::clamp(canonical_mu, -static_cast<long double>(std::numeric_limits<double>::max()),
+                   static_cast<long double>(std::numeric_limits<double>::max())));
+  }
   const long double published_error = std::abs(published_quantity - quantity_target);
   return std::isfinite(chemical_potential) && std::isfinite(entropy) &&
          (published_error <= publication_tolerance ||

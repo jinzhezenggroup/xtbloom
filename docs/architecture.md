@@ -39,11 +39,19 @@ symmetric states (for example three exactly degenerate orbitals with `nel = next
 single residual hole cannot be split equally across the three published occupations), the solver
 relaxes to the nearest representable symmetric state instead of failing the system. The published
 electron/hole error is then bounded absolutely by the block quantization scale
-`2 * eps_double * count` (a few ULPs of an electron, where `eps_double` is `2^-52`), and the
-reported entropy is derived from those same published occupations. CPU and CUDA follow this same
-deterministic policy; a residual beyond that quantization bound would indicate genuine electron
-non-conservation and still fails deterministically. The zero-temperature Aufbau path is unaffected.
-See issue #31 for the original representability question.
+`2 * eps_double * block_count` (a few ULPs of an electron, where `eps_double` is `2^-52` and
+`block_count` is the number of orbitals in the selected exact-degeneracy block). Relaxation is never
+authorized by a singleton or by the total spectrum size. When relaxation is needed, the solver
+compares the rounded target occupation and both adjacent binary64 values across eligible blocks,
+publishes the state with the smallest absolute count error, and deterministically prefers an already
+fractional frontier block when two states have the same error. The reported entropy is derived from
+those same published occupations. When an exactly degenerate block's valid subnormal total cannot
+be divided into a
+nonzero binary64 per-member fraction, CPU and CUDA use the same analytic equal-level logit for the
+finite chemical potential. A residual beyond the selected block's quantization bound indicates
+genuine electron non-conservation and still fails deterministically. Nondegenerate spectra retain
+the strict publication tolerance, and the zero-temperature Aufbau path is unaffected. See issue
+#31 for the original representability question.
 
 The public batch call has two failure levels. Any failure detected before the final caller-output
 commit begins leaves every result buffer and result flag unchanged. Once a CUDA caller-output
