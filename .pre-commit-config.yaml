@@ -26,8 +26,11 @@ repos:
       - id: ruff
         args: ["--fix"]
         types_or: [python, pyi, jupyter]
+        # Exact vendored bytes are pinned by cmake/3rdparty/implib_manifest.json.
+        exclude: ^cmake/3rdparty/implib/implib-gen\.py$
       - id: ruff-format
         types_or: [python, pyi, jupyter]
+        exclude: ^cmake/3rdparty/implib/implib-gen\.py$
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: f4d7745e17a28aad7eed2f4874ca8d1568c11c4c # v22.1.8
     hooks:

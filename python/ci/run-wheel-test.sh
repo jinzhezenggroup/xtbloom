@@ -4,10 +4,10 @@ set -euo pipefail
 mode=${1:?usage: run-wheel-test.sh <full|cpu|smoke> <project-dir>}
 project_dir=${2:?usage: run-wheel-test.sh <full|cpu|smoke> <project-dir>}
 
-# CUDA-enabled wheels link the driver SONAME libcuda.so.1. Toolkit-only CI
-# images ship a linkable stub named libcuda.so, so expose an exact SONAME link
-# in a temporary directory for the wheel test. Production discovery never
-# searches or preloads this stub.
+# Toolkit-only CI images have no kernel driver but do ship a libcuda stub. Make
+# that stub visible under the production SONAME so the dynamic driver resolver
+# exercises a present-library/no-device path during wheel tests. Production
+# discovery never searches or preloads toolkit stubs.
 cuda_root=${CUDA_HOME:-/usr/local/cuda}
 stub_source=$(find -L "$cuda_root" -path '*/stubs/libcuda.so' -print -quit)
 if [[ -z "$stub_source" ]]; then

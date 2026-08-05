@@ -710,6 +710,23 @@ int make_fixture_batch(std::size_t batch_size, bool enable_qmmm, PublicBatch& ba
 
 int make_fixture_batch(PublicBatch& batch) { return make_fixture_batch(4u, false, batch); }
 
+PublicBatch make_representability_batch() {
+  PublicBatch batch;
+  batch.atom_offsets = {0, 2, 5};
+  batch.atomic_numbers = {1, 1, 1, 1, 1};
+  batch.positions = {
+      -0.70, 0.0, 0.0, 0.70, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0e20, 0.0, 0.0, 2.0e20, 0.0, 0.0,
+  };
+  /* The three remote hydrogens are physically independent at this scale, so
+   * their one-center eigensystems are bitwise equal while every reciprocal or
+   * overlap interaction safely tends to zero. The fractional charge produces
+   * nextafter(3, 0) electrons in each restricted spin channel. */
+  batch.molecular_charges = {0.0, 3.0 - 2.0 * std::nextafter(3.0, 0.0)};
+  batch.unpaired_electrons = {0, 0};
+  batch.bind();
+  return batch;
+}
+
 int run_cpu_reference(gpuxtb_context_t* cpu_context, PublicBatch& batch,
                       const gpuxtb_compute_options_t& options, MaterializedResult& reference) {
   ResultOwner result;
@@ -738,6 +755,73 @@ int execute_cuda_and_compare(gpuxtb_context_t* cuda_context, PublicBatch& batch,
   MaterializedResult actual;
   CUDA_CHECK(result.materialize(actual));
   return compare_result(result, actual, reference, options);
+}
+
+int verify_input_layout(const PublicBatch& batch, InputLayout layout, bool qmmm);
+
+int test_public_representability_matrix(std::int32_t device, gpuxtb_context_t* cpu_context,
+                                        const gpuxtb_compute_options_t& options) {
+  PublicBatch batch = make_representability_batch();
+  gpuxtb_compute_options_t finite_temperature_options = options;
+  finite_temperature_options.flags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_ATOMIC_CHARGES;
+  finite_temperature_options.electronic_temperature = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+  CHECK(finite_temperature_options.electronic_temperature > 0.0);
+  const double corner_electrons = 3.0 - batch.molecular_charges[1];
+  CHECK(0.5 * corner_electrons == std::nextafter(3.0, 0.0));
+  MaterializedResult reference;
+  g_scenario = "representability/CPU-reference";
+  CHECK(run_cpu_reference(cpu_context, batch, finite_temperature_options, reference) == 0);
+  CHECK(reference.statuses.size() == 2u);
+  CHECK(reference.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(reference.statuses[1] == GPUXTB_STATUS_SUCCESS);
+  CHECK(reference.converged[0] == 1u && reference.converged[1] == 1u);
+  CHECK(reference.iterations[1] > 0 &&
+        reference.iterations[1] <= finite_temperature_options.max_scc_iterations);
+  CHECK(near(reference.energies[1], -1.8322400836158348, 2.0e-12, 2.0e-12));
+  for (std::size_t atom = 2u; atom < 5u; ++atom) {
+    CHECK(reference.atomic_charges[atom] == -1.0);
+  }
+
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+
+  DeviceBatchInputs device_inputs;
+  CUDA_CHECK(device_inputs.upload_all(batch));
+  const std::array<std::pair<InputLayout, ResultLayout>, 3> layouts{{
+      {InputLayout::kHost, ResultLayout::kHost},
+      {InputLayout::kDevice, ResultLayout::kDevice},
+      {InputLayout::kMixed, ResultLayout::kMixed},
+  }};
+  const std::array<const char*, 3> names{{"host", "device", "mixed"}};
+  for (std::size_t index = 0u; index < layouts.size(); ++index) {
+    std::string scenario = std::string("representability/") + names[index];
+    g_scenario = scenario.c_str();
+    const auto [input_layout, result_layout] = layouts[index];
+    bind_inputs(batch, input_layout == InputLayout::kHost ? nullptr : &device_inputs, input_layout);
+    if (input_layout != InputLayout::kHost) {
+      CHECK(verify_input_layout(batch, input_layout, false) == 0);
+    }
+    ResultOwner owner;
+    CUDA_CHECK(owner.bind(batch, result_layout, finite_temperature_options.flags));
+    CHECK(gpuxtb_compute(context.get(), &batch.descriptor, &finite_temperature_options,
+                         &owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+    MaterializedResult actual;
+    CUDA_CHECK(owner.materialize(actual));
+    CHECK(compare_result(owner, actual, reference, finite_temperature_options) == 0);
+    CHECK(actual.statuses[0] == GPUXTB_STATUS_SUCCESS);
+    CHECK(actual.statuses[1] == GPUXTB_STATUS_SUCCESS);
+    CHECK(actual.converged[0] == 1u && actual.converged[1] == 1u);
+    CHECK(actual.iterations[1] > 0 &&
+          actual.iterations[1] <= finite_temperature_options.max_scc_iterations);
+    for (std::size_t atom = 2u; atom < 5u; ++atom) {
+      CHECK(near(actual.atomic_charges[atom], -1.0, 2.0e-12, 2.0e-12));
+    }
+  }
+  return 0;
 }
 
 int expect_strict_warm_rejection(gpuxtb_context_t* context, PublicBatch& batch,
@@ -1301,6 +1385,10 @@ int main() {
   }
 
   if (const int line = test_host_device_mixed_and_streams(device, batch, options, reference);
+      line != 0) {
+    return line;
+  }
+  if (const int line = test_public_representability_matrix(device, cpu_context.get(), options);
       line != 0) {
     return line;
   }
