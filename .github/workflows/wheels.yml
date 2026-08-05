@@ -17,11 +17,9 @@ name: Python wheels
 
 on:
   # Pull requests already build and test wheels. Limit push runs to main so a
-  # same-repository PR branch does not schedule duplicate wheel builds, and
-  # build once more on version tags so the resulting wheels can be published.
+  # same-repository PR branch does not schedule duplicate wheel builds.
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
 
 permissions:
@@ -75,22 +73,6 @@ jobs:
         with:
           name: gpuxtb-wheels-${{ matrix.platform_id }}
           path: ./wheelhouse/*.whl
-
-  upload_pypi:
-    name: Upload wheels to PyPI
-    needs: [build_wheels]
-    runs-on: ubuntu-24.04
-    permissions:
-      # Required for trusted publishing
-      id-token: write
-    if: github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/v')
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: gpuxtb-wheels-*
-          path: dist
-          merge-multiple: true
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
 
   pass:
     name: Pass building wheels
