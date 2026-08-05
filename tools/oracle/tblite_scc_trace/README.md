@@ -149,3 +149,102 @@ export LD_LIBRARY_PATH=/group/software/deepmd-kit-3.1.1/lib
 Meson fallback dependencies may require network access on the first run. Issue
 #45 will turn this validation build into the fully pinned corpus-generation
 toolchain; #44 only freezes and validates the observer seam itself.
+
+## Canonical SCC trace format (`gpuxtb-scc-trace-v1`)
+
+`gpuxtb_scc_trace.py` implements the versioned interchange format that the
+observer recordings will be serialized to and that the CPU/CUDA conformance
+tests consume (issue #47). It is pure standard library; it runs before either
+Fortran reference is built.
+
+- `gpuxtb-scc-trace-v1.schema.json` — the Draft 7 machine-readable JSON
+  Schema.
+- `gpuxtb_scc_trace.py` — canonical writer + structural validation:
+  - `validate(trace)` rejects unsupported format versions, malformed
+    dimensions, non-finite floats, unpinned provenance, inconsistent q/d/Q
+    residuals, and terminal/iteration mismatches with actionable messages;
+  - `dumps(trace)` emits canonical JSON (sorted keys, at least 17 significant
+    decimal digits per float, trailing newline) so that reading and re-writing
+    a trace is byte-identical.
+
+Version 1 is deliberately restricted-only: `input.spin_channels` is one.
+`input.unpaired_electrons` is a nonnegative integer and may be nonzero for
+tblite's restricted shared-orbital open-shell calculations. Matrices use
+logical `[spin=1][row][column]` order. The exception is occupations: tblite
+allocates `focc[nao,max(2,nspin)]`, so restricted traces retain both alpha and
+beta channels as `[2][nao]`. Issue #51 will extend the contract for unrestricted
+charge/magnetization arrays and distinct assembled/solver Hamiltonians while
+keeping restricted v1 documents valid.
+
+### Shapes, ordering, and units
+
+All arrays use the logical order below rather than the recorder's Fortran
+memory layout. Values use atomic units unless stated otherwise.
+
+| Field | Logical shape | Meaning and unit |
+| --- | --- | --- |
+| `input.atomic_numbers` | `[n_atoms]` | Nuclear atomic number, dimensionless |
+| `input.positions` | `[n_atoms * 3]` | Atom-major Cartesian `x,y,z`, bohr |
+| `input.molecular_charge` | scalar | Charge in units of positive elementary charge |
+| `input.temperature` | scalar | Target electronic temperature, kelvin |
+| `input.point_charges.positions` | `[n_pc * 3]` | Point-major Cartesian `x,y,z`, bohr |
+| `input.point_charges.charges` | `[n_pc]` | External charge, positive elementary charge |
+| `input.point_charges.hardnesses` | `[n_pc]` | Positive point-site `gamma_p`, Hartree |
+| `statics.overlap` | `[1][nao][nao]` | AO overlap `S`, dimensionless |
+| `statics.core_hamiltonian` | `[1][nao][nao]` | Bare AO Hamiltonian `H0`, Hartree |
+| `hamiltonian` | `[1][nao][nao]` | Effective Hamiltonian assembled from mixed q/d/Q, Hartree |
+| `eigenvalues` | `[1][nao]` | Restricted orbital eigenvalues, Hartree |
+| `occupations` | `[2][nao]` | Alpha then beta orbital occupations, electrons |
+| `density` | `[1][nao][nao]` | AO density electron-occupation weights, dimensionless |
+| `mixed_qsh`, `raw_qsh` | `[1][n_shells]` | Shell Mulliken charges, elementary charge |
+| `mixed_qat`, `raw_qat` | `[1][n_atoms]` | Atom charges derived from qsh, elementary charge |
+| `mixed_dipoles`, `raw_dipoles` | `[1][n_atoms][3]` | Cartesian `x,y,z`, elementary-charge bohr |
+| `mixed_quadrupoles`, `raw_quadrupoles` | `[1][n_atoms][6]` | `xx,xy,yy,xz,yz,zz`, elementary-charge bohr squared |
+| `energy` | scalar | `sum(eelec)` after a completed attempt, Hartree |
+| `energy_delta` | scalar | `sum(eelec) - elast`, Hartree |
+
+The mixer residual is exactly `raw - mixed`, flattened as the restricted
+Fortran arrays `qsh(:)`, then `dpat(:,:)`, then `qpat(:,:)`. In logical JSON
+terms this is every shell charge, then atom-major dipole components, then
+atom-major quadrupole components. `qat` is derived from qsh and is not part of
+the mixer vector.
+
+The residual deliberately combines elementary charge, elementary-charge bohr,
+and elementary-charge bohr-squared components. Its `residual_rms` is tblite's
+unweighted numerical value
+
+```text
+sqrt(sum(residual[i]**2 / len(residual) for i in residual))
+```
+
+and therefore has no single physical unit. Runtime validation reconstructs the
+vector from mixed/raw q/d/Q and permits only arithmetic roundoff in the RMS,
+not a scientific comparison tolerance.
+
+### Completed iterations, convergence, and failures
+
+Each `iterations` entry pairs one `before_solve` payload with the matching
+successful `after_iteration` payload. `convergence.energy`, `.population`, and
+`.temperature` are the three flags passed by tblite; `.overall` is their
+logical conjunction. Per-iteration status is intentionally absent because
+`after_iteration` does not provide one. Only `finished` supplies terminal
+status: `1` converged, `2` maximum iterations, or `3` failed.
+
+`iterations` may be empty. A mixer-construction failure is represented by
+`terminal = {status: 3, converged: false, iterations: 0}`. A later
+`mixer%next` failure occurs before the next counter increment and before
+`before_solve`, so it has no extra attempt payload and the terminal count
+equals the number of completed entries.
+
+If `before_solve` runs but the eigensolver fails before `after_iteration`, the
+optional root `failed_attempt` stores only its index, Hamiltonian, and mixed
+q/d/Q. It must not contain stale eigenvalues, occupations, density, raw q/d/Q,
+residual, energy, or convergence. In this case `terminal.iterations` is the
+number of completed entries plus one; otherwise it equals the completed count.
+`terminal.converged` is true exactly for status 1, which requires a final
+completed entry with `convergence.overall=true`.
+
+`tests/oracle/test_trace_writer.py` keeps the writer and schema synchronized
+with two-atom complete, multi-iteration, point-charge, and failure fixtures,
+independently of tblite. When the test environment provides `jsonschema`, the
+canonical writer outputs are also checked with a Draft 7 validator.
