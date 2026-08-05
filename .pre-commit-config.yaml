@@ -5,14 +5,12 @@ repos:
     rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
     hooks:
       - id: trailing-whitespace
-        # Unified-diff context blank lines must keep their leading space;
-        # stripping it changes the patch bytes and breaks the pinned hash.
-        exclude: tools/oracle/.*\.patch$
+        # These exact generated or hash-pinned artifacts have canonical bytes.
+        # In particular, unified-diff blank context lines retain one leading
+        # space. Read-only syntax/integrity tests still cover the files.
+        exclude: ^(?:data/parameters/(?:gfn2\.(?:toml|json|hpp)|manifest\.json|d4\.hpp|d4_manifest\.json)|tools/oracle/tblite_scc_trace/tblite-e9abc395-scc-observer\.patch)$
       - id: end-of-file-fixer
-        # The tblite exporter byte stream, including its final blank line, is
-        # canonical and must be preserved (see .gitattributes), and the pinned
-        # observer patch is covered by an integrity hash.
-        exclude: ^(data/parameters/gfn2\.toml|tools/oracle/.*\.patch)$
+        exclude: ^(?:data/parameters/(?:gfn2\.(?:toml|json|hpp)|manifest\.json|d4\.hpp|d4_manifest\.json)|tools/oracle/tblite_scc_trace/tblite-e9abc395-scc-observer\.patch)$
       - id: check-yaml
       - id: check-json
       - id: check-added-large-files
@@ -22,7 +20,6 @@ repos:
       - id: check-merge-conflict
       - id: check-symlinks
       - id: check-toml
-        exclude: ^data/
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: cb8c523fd4835aba42af70f4cad5568db4df0b6c # v0.16.0
     hooks:
@@ -36,6 +33,6 @@ repos:
     hooks:
       - id: clang-format
         types_or: [c++, c, cuda]
-        # The generated tblite parameter headers under data/parameters are
-        # canonical exports and must not be rewritten.
-        exclude: ^data/parameters/
+        # Only the two generated parameter headers are canonical exports;
+        # future hand-written C/C++ files under data must still be formatted.
+        exclude: ^data/parameters/(?:gfn2|d4)\.hpp$
