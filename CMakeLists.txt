@@ -272,93 +272,250 @@ if(UNIX AND NOT APPLE)
 endif()
 
 if(GPUXTB_HAS_CUDA)
-  # The distributed CUDA backend must not carry a DT_NEEDED dependency on the
-  # proprietary NVIDIA CUDA libraries (cudart, cuBLAS, cuSOLVER, libcuda).
-  # Linking GPL-incompatible libraries would require an explicit legal basis;
-  # see Issue #162.  Instead, cmake/3rdparty/implib generates one ELF
-  # trampoline shim per wrapped library and the shims are linked into
-  # libgpuxtb itself: the first call to any wrapped symbol loads the real
-  # library lazily with dlopen and resolves it with dlsym (see
-  # src/runtime/cuda_dlopen.c).  libgpuxtb.so stays the only shipped DSO.
+  # implib's hand-written trampolines are GNU ELF assembly for Linux.  Keep the
+  # accepted architecture aliases explicit so an unsupported wheel cannot
+  # configure successfully and then fail at load time.
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "the CUDA dlopen backend currently requires Linux ELF")
+  endif()
+  string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _gpuxtb_cuda_processor)
+  if(_gpuxtb_cuda_processor MATCHES "^(x86_64|amd64)$")
+    set(GPUXTB_CUDA_IMPLIB_TARGET x86_64)
+  elseif(_gpuxtb_cuda_processor MATCHES "^(aarch64|arm64)$")
+    set(GPUXTB_CUDA_IMPLIB_TARGET aarch64)
+  else()
+    message(FATAL_ERROR
+      "the CUDA dlopen backend supports only Linux x86_64 and aarch64, not "
+      "'${CMAKE_SYSTEM_PROCESSOR}'")
+  endif()
+
+  # The generated shims contain all CUDA-facing definitions needed by the
+  # backend.  CUDA device linking still contributes cudadevrt for RDC, but the
+  # host link must not silently reintroduce cudart_static.
+  set(CMAKE_CUDA_RUNTIME_LIBRARY None)
   enable_language(C ASM)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  find_program(GPUXTB_READELF NAMES readelf REQUIRED)
 
   set(GPUXTB_CUDA_IMPLIB_GEN
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/implib/implib-gen.py")
   set(GPUXTB_CUDA_IMPLIB_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/cuda_implib")
   file(MAKE_DIRECTORY "${GPUXTB_CUDA_IMPLIB_DIR}")
 
-  # gpuxtb's own loader callbacks plus one generated <library>.tramp.S and
-  # <library>.init.c pair per wrapped library.
-  set(GPUXTB_CUDA_DYNLOADER_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/cuda_dlopen.c")
+  # Curate the object-level names actually referenced by gpuxtb.  CUDA headers
+  # normalize several source API names to versioned ELF aliases; listing those
+  # aliases here keeps -z defs useful and prevents a full-library catch-all from
+  # masking a new dependency or an ABI-unsafe fallback category.
+  set(GPUXTB_CUDART_SYMBOLS
+    __cudaInitModule
+    __cudaPopCallConfiguration
+    __cudaPushCallConfiguration
+    __cudaRegisterFatBinary
+    __cudaRegisterFatBinaryEnd
+    __cudaRegisterFunction
+    __cudaRegisterVar
+    __cudaUnregisterFatBinary
+    cudaDeviceGetAttribute
+    cudaDeviceSynchronize
+    cudaEventCreate
+    cudaEventCreateWithFlags
+    cudaEventDestroy
+    cudaEventElapsedTime
+    cudaEventRecord
+    cudaEventSynchronize
+    cudaFree
+    cudaFreeHost
+    cudaGetDevice
+    cudaGetDeviceCount
+    cudaGetErrorName
+    cudaGetErrorString
+    cudaGetLastError
+    cudaGraphAddNode
+    cudaGraphChildGraphNodeGetGraph
+    cudaGraphConditionalHandleCreate
+    cudaGraphCreate
+    cudaGraphDestroy
+    cudaGraphExecDestroy
+    cudaGraphGetNodes
+    cudaGraphInstantiate
+    cudaGraphLaunch
+    cudaGraphMemcpyNodeGetParams
+    cudaGraphNodeGetType
+    cudaGraphUpload
+    cudaHostGetFlags
+    cudaHostRegister
+    cudaHostUnregister
+    cudaLaunchHostFunc
+    cudaLaunchKernel
+    cudaMalloc
+    cudaMallocHost
+    cudaMallocManaged
+    cudaMemcpy
+    cudaMemcpyAsync
+    cudaMemcpyFromSymbol
+    cudaMemcpyToSymbol
+    cudaMemset
+    cudaMemsetAsync
+    cudaPeekAtLastError
+    cudaPointerGetAttributes
+    cudaRuntimeGetVersion
+    cudaSetDevice
+    cudaStreamBeginCapture
+    cudaStreamBeginCaptureToGraph
+    cudaStreamCreate
+    cudaStreamCreateWithFlags
+    cudaStreamDestroy
+    cudaStreamEndCapture
+    cudaStreamGetCaptureInfo_v2
+    cudaStreamGetDevice
+    cudaStreamIsCapturing
+    cudaStreamSynchronize
+    cudaStreamUpdateCaptureDependencies
+    cudaStreamWaitEvent
+  )
+  set(GPUXTB_CUBLAS_SYMBOLS
+    cublasCreate_v2
+    cublasDestroy_v2
+    cublasDtrsmBatched
+    cublasGetMathMode
+    cublasGetPointerMode_v2
+    cublasGetStream_v2
+    cublasGetVersion_v2
+    cublasSetMathMode
+    cublasSetPointerMode_v2
+    cublasSetStream_v2
+  )
+  set(GPUXTB_CUSOLVER_SYMBOLS
+    cusolverDnCreate
+    cusolverDnCreateParams
+    cusolverDnDestroy
+    cusolverDnDestroyParams
+    cusolverDnDpotrfBatched
+    cusolverDnGetStream
+    cusolverDnSetStream
+    cusolverDnXsyevBatched
+    cusolverDnXsyevBatched_bufferSize
+    cusolverGetProperty
+  )
+  set(GPUXTB_CUDA_DRIVER_SYMBOLS
+    cuGetErrorString
+    cuMemGetAddressRange_v2
+  )
 
-  # cudart, cuBLAS, cuSOLVER: wrap the full exported function set (the same
-  # model as DeePMD-kit's deepmd_dyn_cudart, but folded into libgpuxtb.so).
-  set(_gpuxtb_cuda_wrapped_names cudart cublas cusolver)
-  set(_gpuxtb_cuda_wrapped_targets CUDA::cudart CUDA::cublas CUDA::cusolver)
-  foreach(_gpuxtb_cuda_lib _gpuxtb_cuda_target
-      IN ZIP_LISTS _gpuxtb_cuda_wrapped_names _gpuxtb_cuda_wrapped_targets)
-    get_target_property(_gpuxtb_cuda_implib_in "${_gpuxtb_cuda_target}" IMPORTED_LOCATION)
-    if(NOT _gpuxtb_cuda_implib_in)
+  function(gpuxtb_write_implib_symbol_file output_path)
+    file(WRITE "${output_path}" "")
+    foreach(_gpuxtb_symbol IN LISTS ARGN)
+      file(APPEND "${output_path}" "${_gpuxtb_symbol}\n")
+    endforeach()
+  endfunction()
+
+  function(gpuxtb_read_elf_soname library_path output_variable)
+    execute_process(
+      COMMAND "${GPUXTB_READELF}" -dW "${library_path}"
+      RESULT_VARIABLE _gpuxtb_readelf_status
+      OUTPUT_VARIABLE _gpuxtb_readelf_output
+      ERROR_VARIABLE _gpuxtb_readelf_error)
+    if(NOT _gpuxtb_readelf_status EQUAL 0)
+      message(FATAL_ERROR
+        "failed to read CUDA library SONAME from '${library_path}': "
+        "${_gpuxtb_readelf_error}")
+    endif()
+    string(REGEX MATCH "\\(SONAME\\)[^[]*\\[([^]]+)\\]"
+      _gpuxtb_soname_match "${_gpuxtb_readelf_output}")
+    if(NOT _gpuxtb_soname_match)
+      message(FATAL_ERROR "CUDA library '${library_path}' has no ELF SONAME")
+    endif()
+    set(${output_variable} "${CMAKE_MATCH_1}" PARENT_SCOPE)
+  endfunction()
+
+  foreach(_gpuxtb_cuda_target IN ITEMS CUDA::cudart CUDA::cublas CUDA::cusolver)
+    get_target_property(_gpuxtb_cuda_location
+      "${_gpuxtb_cuda_target}" IMPORTED_LOCATION)
+    if(NOT _gpuxtb_cuda_location)
       message(FATAL_ERROR
         "cannot locate ${_gpuxtb_cuda_target} for dlopen shim generation")
     endif()
-    get_filename_component(_gpuxtb_cuda_implib_base "${_gpuxtb_cuda_implib_in}" NAME)
+    list(APPEND _gpuxtb_cuda_implib_inputs "${_gpuxtb_cuda_location}")
+  endforeach()
+  if(NOT CUDA_cuda_driver_LIBRARY)
+    message(FATAL_ERROR "cannot locate CUDA::cuda_driver for dlopen shim generation")
+  endif()
+  list(APPEND _gpuxtb_cuda_implib_inputs "${CUDA_cuda_driver_LIBRARY}")
+  set(_gpuxtb_cuda_implib_bases
+    libcudart.so libcublas.so libcusolver.so libcuda.so)
+  set(_gpuxtb_cuda_symbol_sets
+    GPUXTB_CUDART_SYMBOLS
+    GPUXTB_CUBLAS_SYMBOLS
+    GPUXTB_CUSOLVER_SYMBOLS
+    GPUXTB_CUDA_DRIVER_SYMBOLS)
+
+  set(GPUXTB_CUDA_DYNLOADER_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/cuda_dlopen.c")
+  set(_gpuxtb_cuda_sonames "")
+  foreach(_gpuxtb_cuda_input _gpuxtb_cuda_base _gpuxtb_cuda_symbol_set
+      IN ZIP_LISTS
+        _gpuxtb_cuda_implib_inputs
+        _gpuxtb_cuda_implib_bases
+        _gpuxtb_cuda_symbol_sets)
+    get_filename_component(_gpuxtb_cuda_input_base "${_gpuxtb_cuda_input}" NAME)
+    if(NOT _gpuxtb_cuda_input_base STREQUAL _gpuxtb_cuda_base)
+      message(FATAL_ERROR
+        "expected ${_gpuxtb_cuda_base} from FindCUDAToolkit, got "
+        "'${_gpuxtb_cuda_input_base}'")
+    endif()
+    set(_gpuxtb_cuda_symbol_file
+      "${GPUXTB_CUDA_IMPLIB_DIR}/${_gpuxtb_cuda_base}.symbols")
+    gpuxtb_write_implib_symbol_file(
+      "${_gpuxtb_cuda_symbol_file}" ${${_gpuxtb_cuda_symbol_set}})
+    if(_gpuxtb_cuda_base STREQUAL "libcuda.so")
+      set(_gpuxtb_cuda_soname "libcuda.so.1")
+    else()
+      gpuxtb_read_elf_soname("${_gpuxtb_cuda_input}" _gpuxtb_cuda_soname)
+    endif()
+    list(APPEND _gpuxtb_cuda_sonames "${_gpuxtb_cuda_soname}")
     execute_process(
       COMMAND "${Python3_EXECUTABLE}" "${GPUXTB_CUDA_IMPLIB_GEN}"
-              "${_gpuxtb_cuda_implib_in}"
-              --target "${CMAKE_SYSTEM_PROCESSOR}"
+              "${_gpuxtb_cuda_input}"
+              --target "${GPUXTB_CUDA_IMPLIB_TARGET}"
+              --no-dlopen
               --lazy-load
-              --dlopen-callback gpuxtb_cuda_dlopen
-              --dlsym-callback gpuxtb_cuda_dlsym
+              --library-load-name "${_gpuxtb_cuda_soname}"
+              --dlsym-callback gpu_xtb_cuda_dlsym
+              --symbol-list "${_gpuxtb_cuda_symbol_file}"
               --outdir "${GPUXTB_CUDA_IMPLIB_DIR}"
       RESULT_VARIABLE _gpuxtb_cuda_implib_result
       OUTPUT_VARIABLE _gpuxtb_cuda_implib_output
       ERROR_VARIABLE _gpuxtb_cuda_implib_error
       COMMAND_ERROR_IS_FATAL ANY)
     list(APPEND GPUXTB_CUDA_DYNLOADER_SOURCES
-      "${GPUXTB_CUDA_IMPLIB_DIR}/${_gpuxtb_cuda_implib_base}.tramp.S"
-      "${GPUXTB_CUDA_IMPLIB_DIR}/${_gpuxtb_cuda_implib_base}.init.c")
+      "${GPUXTB_CUDA_IMPLIB_DIR}/${_gpuxtb_cuda_base}.tramp.S"
+      "${GPUXTB_CUDA_IMPLIB_DIR}/${_gpuxtb_cuda_base}.init.c")
+  endforeach()
+  list(GET _gpuxtb_cuda_sonames 0 GPUXTB_CUDART_SONAME)
+  list(GET _gpuxtb_cuda_sonames 1 GPUXTB_CUBLAS_SONAME)
+  list(GET _gpuxtb_cuda_sonames 2 GPUXTB_CUSOLVER_SONAME)
+  list(GET _gpuxtb_cuda_sonames 3 GPUXTB_CUDA_DRIVER_SONAME)
+
+  # Runtime bootstrap consumes the same configure-time list used to generate
+  # the trampolines, so cohort preflight cannot drift from the link closure.
+  set(GPUXTB_CUDA_DLOPEN_SYMBOLS_HEADER
+    "${GPUXTB_CUDA_IMPLIB_DIR}/cuda_dlopen_symbols.h")
+  file(WRITE "${GPUXTB_CUDA_DLOPEN_SYMBOLS_HEADER}"
+    "/* Generated by CMake; do not edit. */\n#pragma once\n")
+  foreach(_gpuxtb_cuda_name IN ITEMS CUDART CUBLAS CUSOLVER CUDA_DRIVER)
+    string(TOLOWER "${_gpuxtb_cuda_name}" _gpuxtb_cuda_name_lower)
+    file(APPEND "${GPUXTB_CUDA_DLOPEN_SYMBOLS_HEADER}"
+      "static const char* const gpu_xtb_${_gpuxtb_cuda_name_lower}_required_symbols[] = {\n")
+    foreach(_gpuxtb_symbol IN LISTS GPUXTB_${_gpuxtb_cuda_name}_SYMBOLS)
+      file(APPEND "${GPUXTB_CUDA_DLOPEN_SYMBOLS_HEADER}"
+        "    \"${_gpuxtb_symbol}\",\n")
+    endforeach()
+    file(APPEND "${GPUXTB_CUDA_DLOPEN_SYMBOLS_HEADER}"
+      "    (const char*)0,\n};\n")
   endforeach()
 
-  # libcuda (the driver) is sliced to exactly the entry points gpuxtb calls
-  # instead of wrapping the whole driver API.  The dlopen callback loads
-  # libcuda.so.1, the real driver installed by the NVIDIA driver package.
-  set(GPUXTB_CUDA_LIBCUDA_SYMBOLS "${GPUXTB_CUDA_IMPLIB_DIR}/libcuda.symbols")
-  file(WRITE "${GPUXTB_CUDA_LIBCUDA_SYMBOLS}"
-    "cuGetErrorString\ncuGetErrorName\n")
-  # FindCUDAToolkit exposes the driver only through the CUDA_cuda_driver_LIBRARY
-  # variable when the CUDA language is enabled (CUDA::cuda_driver has no
-  # IMPORTED_LOCATION in that mode); it resolves to the toolkit's stubs copy.
-  if(NOT CUDA_cuda_driver_LIBRARY)
-    message(FATAL_ERROR "cannot locate CUDA::cuda_driver for dlopen shim generation")
-  endif()
-  set(_gpuxtb_cuda_driver_in "${CUDA_cuda_driver_LIBRARY}")
-  get_filename_component(_gpuxtb_cuda_driver_base "${_gpuxtb_cuda_driver_in}" NAME)
-  execute_process(
-    COMMAND "${Python3_EXECUTABLE}" "${GPUXTB_CUDA_IMPLIB_GEN}"
-            "${_gpuxtb_cuda_driver_in}"
-            --target "${CMAKE_SYSTEM_PROCESSOR}"
-            --lazy-load
-            --dlopen-callback gpuxtb_cuda_dlopen
-            --dlsym-callback gpuxtb_cuda_dlsym
-            --symbol-list "${GPUXTB_CUDA_LIBCUDA_SYMBOLS}"
-            --outdir "${GPUXTB_CUDA_IMPLIB_DIR}"
-    RESULT_VARIABLE _gpuxtb_cuda_driver_implib_result
-    OUTPUT_VARIABLE _gpuxtb_cuda_driver_implib_output
-    ERROR_VARIABLE _gpuxtb_cuda_driver_implib_error
-    COMMAND_ERROR_IS_FATAL ANY)
-  list(APPEND GPUXTB_CUDA_DYNLOADER_SOURCES
-    "${GPUXTB_CUDA_IMPLIB_DIR}/${_gpuxtb_cuda_driver_base}.tramp.S"
-    "${GPUXTB_CUDA_IMPLIB_DIR}/${_gpuxtb_cuda_driver_base}.init.c")
-
-  add_library(gpuxtb_cuda_dynloader OBJECT ${GPUXTB_CUDA_DYNLOADER_SOURCES})
-  set_target_properties(gpuxtb_cuda_dynloader PROPERTIES
-    POSITION_INDEPENDENT_CODE ON
-  )
-
   add_library(gpuxtb_cuda_backend OBJECT
+    ${GPUXTB_CUDA_DYNLOADER_SOURCES}
     src/backends/cuda/cuda_runtime.cu
     src/runtime/cuda_descriptor_validation.cu
     src/runtime/gfn2_cuda_topology_staging.cu
@@ -416,10 +573,19 @@ if(GPUXTB_HAS_CUDA)
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CUDAToolkit_INCLUDE_DIRS}
   )
-  # The CUDA runtime/math/driver shared libraries are deliberately NOT linked:
-  # gpuxtb closes over them only through the lazy dlopen trampolines above, so
-  # libgpuxtb.so keeps no proprietary DT_NEEDED entry.
-  target_compile_definitions(gpuxtb_cuda_backend PRIVATE GPUXTB_HAS_CUDA=1)
+  target_include_directories(gpuxtb_cuda_backend PRIVATE
+    ${GPUXTB_CUDA_IMPLIB_DIR}
+  )
+  # The CUDA runtime/math/driver shared libraries are deliberately NOT linked.
+  # The priority-101 bootstrap pre-resolves the complete shim cohort before
+  # ordinary NVCC registration constructors run.
+  target_compile_definitions(gpuxtb_cuda_backend PRIVATE
+    GPUXTB_HAS_CUDA=1
+    GPUXTB_CUDART_SONAME="${GPUXTB_CUDART_SONAME}"
+    GPUXTB_CUBLAS_SONAME="${GPUXTB_CUBLAS_SONAME}"
+    GPUXTB_CUSOLVER_SONAME="${GPUXTB_CUSOLVER_SONAME}"
+    GPUXTB_CUDA_DRIVER_SONAME="${GPUXTB_CUDA_DRIVER_SONAME}"
+  )
   if(GPUXTB_BUILD_TESTS)
     # White-box CUDA kernels exercise otherwise unreachable transactional
     # overflow boundaries without shipping test entry points in release builds.
@@ -430,24 +596,27 @@ if(GPUXTB_HAS_CUDA)
     CUDA_STANDARD 17
     CUDA_STANDARD_REQUIRED YES
     CUDA_VISIBILITY_PRESET hidden
+    CUDA_RUNTIME_LIBRARY None
+    C_VISIBILITY_PRESET hidden
     POSITION_INDEPENDENT_CODE ON
     VISIBILITY_INLINES_HIDDEN YES
   )
 
   target_sources(gpuxtb PRIVATE
     $<TARGET_OBJECTS:gpuxtb_cuda_backend>
-    $<TARGET_OBJECTS:gpuxtb_cuda_dynloader>
   )
   # The NVIDIA runtime/math/driver libraries are intentionally not linked or
-  # exported transitively; the lazy dlopen trampolines resolve them at runtime
-  # and the installed library does not demand them at load time.
+  # exported transitively; startup pre-resolution fills hidden trampoline
+  # tables and the installed library does not demand them at load time.
   target_compile_definitions(gpuxtb PRIVATE GPUXTB_HAS_CUDA=1)
   set_target_properties(gpuxtb PROPERTIES
     CUDA_STANDARD 17
     CUDA_STANDARD_REQUIRED YES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    CUDA_RUNTIME_LIBRARY None
   )
+  target_link_options(gpuxtb PRIVATE "LINKER:-z,defs")
 endif()
 
 if(GPUXTB_BUILD_TESTS)
@@ -533,6 +702,28 @@ if(GPUXTB_BUILD_TESTS)
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/abi/check_cuda_dependencies.py
                 --readelf ${GPUXTB_READELF} --library $<TARGET_FILE:gpuxtb>
+      )
+      add_test(
+        NAME gpuxtb.abi_cuda_dependency_checker
+        COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_CURRENT_SOURCE_DIR}/tests/abi
+                -p test_check_cuda_dependencies.py -v
+      )
+      add_test(
+        NAME gpuxtb.abi_cuda_direct_dso_load
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/abi/check_cuda_dlopen_runtime.py
+                --library $<TARGET_FILE:gpuxtb> --mode load
+      )
+      add_test(
+        NAME gpuxtb.abi_cuda_no_runtime_concurrent
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/abi/check_cuda_dlopen_runtime.py
+                --library $<TARGET_FILE:gpuxtb>
+                --mode concurrent-unavailable --threads 16 --calls-per-thread 16
+      )
+      set_tests_properties(gpuxtb.abi_cuda_no_runtime_concurrent PROPERTIES
+        ENVIRONMENT "GPUXTB_CUDA_FORCE_FALLBACK=1"
       )
     endif()
   endif()
@@ -2075,6 +2266,7 @@ install(FILES
   data/parameters/spin_manifest.json
   data/parameters/d4_manifest.json
   data/parameters/mctc_manifest.json
+  cmake/3rdparty/implib_manifest.json
   DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/gpuxtb/provenance
 )
 install(FILES data/parameters/d4.NOTICE
