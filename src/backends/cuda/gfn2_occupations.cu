@@ -10,7 +10,13 @@ namespace gpuxtb::detail::cuda {
 namespace {
 
 constexpr int kPublishThreads = 128;
+constexpr int kOccupationsThreads = 128;
 constexpr int kMaximumRootIterations = 4096;
+/* Systems below this orbital count take the original single-thread fill: the
+ * block-wide reduction and per-bisection-step __syncthreads() cost more than
+ * the serial orbital work they would parallelize. The serial path is bit-for-
+ * bit the historic implementation, so small-system results are unchanged. */
+constexpr std::int64_t kSerialOccupationThreshold = 64;
 constexpr double kDoubleMaximum = 1.79769313486231570814527423731704357e308;
 constexpr double kDoubleEpsilon = 2.220446049250313080847263336181640625e-16;
 
@@ -117,10 +123,54 @@ __device__ double fermi_hole_value(double scaled_energy, double scaled_mu) {
   return exponential / (1.0 + exponential);
 }
 
-__device__ double fermi_quantity(const double* eigenvalues, std::int64_t count,
-                                 double energy_reference, double scaled_mu, double temperature,
-                                 bool solve_holes) {
-  /* Kahan summation is deterministic and protects small populations in wide spectra. */
+/* Deterministic chunked accumulation used for every per-orbital weighted sum in
+ * the occupations stage. Each thread Kahan-accumulates its fixed strided
+ * subsequence (tid, tid+nthreads, ...) in ascending index order and publishes a
+ * (sum, compensation) partial into caller storage; one thread then combines the
+ * partials in fixed thread order. The reduction order depends only on nthreads
+ * (always kOccupationsThreads here), so results are reproducible across
+ * launches, CUDA Graph capture/replay, and the parallel SCC loop. */
+template <typename ValueAt>
+__device__ void accumulate_partial_kahan(ValueAt value_at, std::int64_t count, int tid,
+                                         int nthreads, double* partial_sum, double* partial_comp) {
+  double sum = 0.0;
+  double compensation = 0.0;
+  for (std::int64_t index = tid; index < count; index += nthreads) {
+    const double value = value_at(index);
+    const double corrected = value - compensation;
+    const double updated = sum + corrected;
+    compensation = (updated - sum) - corrected;
+    sum = updated;
+  }
+  partial_sum[tid] = sum;
+  partial_comp[tid] = compensation;
+}
+
+__device__ double combine_partial_kahan(const double* partial_sum, const double* partial_comp,
+                                        int nthreads) {
+  double total = 0.0;
+  double compensation = 0.0;
+  for (int thread = 0; thread < nthreads; ++thread) {
+    const double value = partial_sum[thread] - partial_comp[thread];
+    const double corrected = value - compensation;
+    const double updated = total + corrected;
+    compensation = (updated - total) - corrected;
+    total = updated;
+  }
+  return total;
+}
+
+struct SpinResult {
+  double chemical_potential;
+  double electron_sum;
+  double entropy;
+};
+
+/* Historic single-thread Fermi accumulation, reproduced verbatim so the small-
+ * system fast path below is bit-identical to the pre-parallel behavior. */
+__device__ double serial_fermi_quantity(const double* eigenvalues, std::int64_t count,
+                                        double energy_reference, double scaled_mu,
+                                        double temperature, bool solve_holes) {
   double sum = 0.0;
   double compensation = 0.0;
   for (std::int64_t orbital = 0; orbital < count; ++orbital) {
@@ -136,7 +186,7 @@ __device__ double fermi_quantity(const double* eigenvalues, std::int64_t count,
   return sum;
 }
 
-__device__ double actual_electron_sum(const double* occupations, std::int64_t count) {
+__device__ double serial_actual_electron_sum(const double* occupations, std::int64_t count) {
   double sum = 0.0;
   double compensation = 0.0;
   for (std::int64_t orbital = 0; orbital < count; ++orbital) {
@@ -148,15 +198,10 @@ __device__ double actual_electron_sum(const double* occupations, std::int64_t co
   return sum;
 }
 
-struct SpinResult {
-  double chemical_potential;
-  double electron_sum;
-  double entropy;
-};
-
-__device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, double electron_count,
-                              double temperature, double* occupations, SpinResult* result,
-                              Gfn2OccupationsDeviceError* error) {
+/* The complete pre-parallel fill_one_spin, used for small systems. */
+__device__ bool fill_one_spin_serial(const double* eigenvalues, std::int64_t count,
+                                     double electron_count, double temperature, double* occupations,
+                                     SpinResult* result, Gfn2OccupationsDeviceError* error) {
   result->chemical_potential = 0.0;
   result->electron_sum = 0.0;
   result->entropy = 0.0;
@@ -168,7 +213,7 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
     if (full < count) {
       occupations[full] = electron_count - static_cast<double>(full);
     }
-    result->electron_sum = actual_electron_sum(occupations, count);
+    result->electron_sum = serial_actual_electron_sum(occupations, count);
     return true;
   }
   if (electron_count == 0.0) {
@@ -194,7 +239,6 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
     *error = Gfn2OccupationsDeviceError::kElectronConservationFailure;
     return false;
   }
-  /* log(target)-log(capacity) avoids underflow in target/capacity. */
   const double log_fraction = log(quantity_target) - log(capacity);
   const double thermal_steps = max(64.0, -log_fraction + 8.0);
   const double energy_reference = solve_holes ? eigenvalues[count - 1] : eigenvalues[0];
@@ -210,9 +254,9 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
   double lower = saturated_subtract(scaled_minimum, margin);
   double upper = saturated_add(scaled_maximum, margin);
   const double lower_quantity =
-      fermi_quantity(eigenvalues, count, energy_reference, lower, temperature, solve_holes);
+      serial_fermi_quantity(eigenvalues, count, energy_reference, lower, temperature, solve_holes);
   const double upper_quantity =
-      fermi_quantity(eigenvalues, count, energy_reference, upper, temperature, solve_holes);
+      serial_fermi_quantity(eigenvalues, count, energy_reference, upper, temperature, solve_holes);
   const bool bracketed =
       solve_holes ? lower_quantity >= quantity_target && upper_quantity <= quantity_target
                   : lower_quantity <= quantity_target && upper_quantity >= quantity_target;
@@ -225,8 +269,8 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
   const double tolerance = 64.0 * kDoubleEpsilon * quantity_target;
   for (int iteration = 0; iteration < kMaximumRootIterations; ++iteration) {
     const double middle = stable_middle(lower, upper);
-    const double quantity =
-        fermi_quantity(eigenvalues, count, energy_reference, middle, temperature, solve_holes);
+    const double quantity = serial_fermi_quantity(eigenvalues, count, energy_reference, middle,
+                                                  temperature, solve_holes);
     if (!isfinite(quantity)) {
       *error = Gfn2OccupationsDeviceError::kChemicalPotentialBracketFailure;
       return false;
@@ -269,13 +313,6 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
     published_compensation = (published_updated - published_quantity) - published_corrected;
     published_quantity = published_updated;
   }
-  /*
-   * CUDA has no wider device long double. The nearest representable scaled
-   * chemical potential can move a tiny population by
-   * several double ulps even though the occupation itself remains correctable.
-   * Keep that root only within a conservative bound, then require the strict
-   * CPU publication tolerance below after correcting an invariant energy block.
-   */
   const double representable_root_tolerance = 1024.0 * kDoubleEpsilon * quantity_target;
   if (!isfinite(result->chemical_potential) || !isfinite(ideal_quantity) ||
       fabs(ideal_quantity - quantity_target) > representable_root_tolerance) {
@@ -285,7 +322,6 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
 
   const double residual = quantity_target - published_quantity;
   if (fabs(residual) > tolerance) {
-    /* Any material correction is uniform over a complete equal-energy block. */
     const double occupation_delta = solve_holes ? -residual : residual;
     bool corrected = false;
     for (std::int64_t block_begin = 0; block_begin < count;) {
@@ -338,123 +374,493 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
                                 : Gfn2OccupationsDeviceError::kElectronConservationFailure;
     return false;
   }
-  result->electron_sum = actual_electron_sum(occupations, count);
+  result->electron_sum = serial_actual_electron_sum(occupations, count);
   result->entropy = entropy;
   return isfinite(result->electron_sum);
+}
+
+/* Shared state for one block (one system). The bisection control stays on one
+ * thread while every block thread participates in each per-orbital weighted
+ * sum through the deterministic partial-Kahan reduction above. */
+struct OccupationsSharedState {
+  int error;  // 0 ok, -1 silent skip, otherwise error code
+  std::int64_t begin;
+  std::int64_t count;
+  std::int64_t spin_orbital_begin;
+  std::uint8_t spin_channels;
+  double temperature;
+  double energy_reference;
+  bool solve_holes;
+  double quantity_target;
+  double lower;
+  double upper;
+  double scaled_mu;
+  bool done;
+  double partial_sum[kOccupationsThreads];
+  double partial_comp[kOccupationsThreads];
+  double partial_ideal[kOccupationsThreads];
+  double partial_ideal_comp[kOccupationsThreads];
+  double partial_published[kOccupationsThreads];
+  double partial_published_comp[kOccupationsThreads];
+  double partial_entropy[kOccupationsThreads];
+  double partial_entropy_comp[kOccupationsThreads];
+  double partial_electron[kOccupationsThreads];
+  double partial_electron_comp[kOccupationsThreads];
+  SpinResult spin_results[2];
+  double total_entropy;
+};
+
+/* Thread-cooperative restricted occupations fill for one spin channel. Returns
+ * without publishing any public output (shared scratch results stay stale) on
+ * failure, matching the previous serial fill's failure isolation. Every spin
+ * channel is always evaluated (a restricted pair shares one spectrum), so the
+ * spin_results slot must be indexed by the physical spin. */
+__device__ void fill_one_spin_parallel(const double* eigenvalues, std::int64_t spectrum_begin,
+                                       std::int64_t count, double electron_count,
+                                       double temperature, double* occupations, int tid, int spin,
+                                       OccupationsSharedState& state) {
+  if (tid == 0) {
+    state.spin_results[spin].chemical_potential = 0.0;
+    state.spin_results[spin].electron_sum = 0.0;
+    state.spin_results[spin].entropy = 0.0;
+    state.done = false;
+    state.scaled_mu = 0.0;
+    state.solve_holes = false;
+    state.quantity_target = 0.0;
+    state.energy_reference = 0.0;
+  }
+  __syncthreads();
+  if (state.error != 0) {
+    return;
+  }
+
+  /* Small systems: take the historic single-thread path (bit-identical) to
+   * avoid the block-wide reduction and bracketing barriers dominating work
+   * that is only a handful of orbitals wide. */
+  if (count < kSerialOccupationThreshold) {
+    if (tid == 0) {
+      Gfn2OccupationsDeviceError serial_error = Gfn2OccupationsDeviceError::kSuccess;
+      if (!fill_one_spin_serial(eigenvalues + spectrum_begin, count, electron_count, temperature,
+                                occupations, state.spin_results + spin, &serial_error)) {
+        state.error = static_cast<int>(serial_error);
+      }
+    }
+    __syncthreads();
+    return;
+  }
+
+  if (temperature == 0.0) {
+    const std::int64_t full = min(static_cast<std::int64_t>(floor(electron_count)), count);
+    for (std::int64_t orbital = tid; orbital < count; orbital += kOccupationsThreads) {
+      occupations[orbital] =
+          orbital < full ? 1.0
+                         : (orbital == full ? electron_count - static_cast<double>(full) : 0.0);
+    }
+    __syncthreads();
+    const auto value_at = [&](std::int64_t orbital) { return occupations[orbital]; };
+    accumulate_partial_kahan(value_at, count, tid, kOccupationsThreads, state.partial_electron,
+                             state.partial_electron_comp);
+    __syncthreads();
+    if (tid == 0) {
+      state.spin_results[spin].electron_sum = combine_partial_kahan(
+          state.partial_electron, state.partial_electron_comp, kOccupationsThreads);
+    }
+    __syncthreads();
+    return;
+  }
+  if (electron_count == 0.0) {
+    for (std::int64_t orbital = tid; orbital < count; orbital += kOccupationsThreads) {
+      occupations[orbital] = 0.0;
+    }
+    return;
+  }
+
+  if (tid == 0) {
+    const double capacity = static_cast<double>(count);
+    if (electron_count == capacity) {
+      for (std::int64_t orbital = 0; orbital < count; ++orbital) {
+        occupations[orbital] = 1.0;
+      }
+      state.spin_results[spin].chemical_potential =
+          saturated_affine(eigenvalues[spectrum_begin + count - 1], 50.0, temperature);
+      state.spin_results[spin].electron_sum = capacity;
+      state.done = true;
+      state.error =
+          isfinite(state.spin_results[spin].chemical_potential)
+              ? 0
+              : static_cast<int>(Gfn2OccupationsDeviceError::kElectronConservationFailure);
+    } else {
+      const bool solve_holes = electron_count > 0.5 * capacity;
+      const double quantity_target = solve_holes ? capacity - electron_count : electron_count;
+      if (!(quantity_target > 0.0) || !isfinite(quantity_target)) {
+        state.error = static_cast<int>(Gfn2OccupationsDeviceError::kElectronConservationFailure);
+      } else {
+        state.solve_holes = solve_holes;
+        state.quantity_target = quantity_target;
+        state.energy_reference =
+            solve_holes ? eigenvalues[spectrum_begin + count - 1] : eigenvalues[spectrum_begin];
+        const double log_fraction = log(quantity_target) - log(capacity);
+        const double thermal_steps = max(64.0, -log_fraction + 8.0);
+        const double scaled_minimum = scaled_energy_difference(eigenvalues[spectrum_begin],
+                                                               state.energy_reference, temperature);
+        const double scaled_maximum = scaled_energy_difference(
+            eigenvalues[spectrum_begin + count - 1], state.energy_reference, temperature);
+        const double scaled_span = saturated_subtract(scaled_maximum, scaled_minimum);
+        const double energy_scale = max(1.0, fabs(scaled_span));
+        const double representation_margin =
+            saturated_multiply_nonnegative(64.0 * kDoubleEpsilon, energy_scale);
+        const double margin = saturated_add(thermal_steps, representation_margin);
+        state.lower = saturated_subtract(scaled_minimum, margin);
+        state.upper = saturated_add(scaled_maximum, margin);
+        const double scaled_mu = stable_middle(state.lower, state.upper);
+        state.scaled_mu = scaled_mu;
+        state.done = false;
+      }
+    }
+  }
+  __syncthreads();
+  if (state.error != 0) {
+    return;
+  }
+  if (state.done) {
+    return;
+  }
+
+  /* One fixed-size bounded bisection shared by all threads. state.done gates
+   * every phase uniformly so the __syncthreads() count cannot diverge. */
+  for (int iteration = 0; iteration < kMaximumRootIterations && !state.done; ++iteration) {
+    if (tid == 0) {
+      state.scaled_mu = stable_middle(state.lower, state.upper);
+    }
+    __syncthreads();
+    const double scaled_mu = state.scaled_mu;
+    const double energy_reference = state.energy_reference;
+    const bool solve_holes = state.solve_holes;
+    const auto value_at = [&](std::int64_t orbital) {
+      const double scaled_energy = scaled_energy_difference(eigenvalues[spectrum_begin + orbital],
+                                                            energy_reference, temperature);
+      return solve_holes ? fermi_hole_value(scaled_energy, scaled_mu)
+                         : fermi_value(scaled_energy, scaled_mu);
+    };
+    accumulate_partial_kahan(value_at, count, tid, kOccupationsThreads, state.partial_sum,
+                             state.partial_comp);
+    __syncthreads();
+    if (tid == 0) {
+      const double quantity =
+          combine_partial_kahan(state.partial_sum, state.partial_comp, kOccupationsThreads);
+      if (!isfinite(quantity)) {
+        state.error =
+            static_cast<int>(Gfn2OccupationsDeviceError::kChemicalPotentialBracketFailure);
+        state.done = true;
+      } else {
+        const double tolerance = 64.0 * kDoubleEpsilon * state.quantity_target;
+        if (fabs(quantity - state.quantity_target) <= tolerance) {
+          state.lower = state.scaled_mu;
+          state.upper = state.scaled_mu;
+          state.done = true;
+        } else if (state.scaled_mu == state.lower || state.scaled_mu == state.upper) {
+          state.done = true;
+        } else if ((!state.solve_holes && quantity < state.quantity_target) ||
+                   (state.solve_holes && quantity > state.quantity_target)) {
+          state.lower = state.scaled_mu;
+        } else {
+          state.upper = state.scaled_mu;
+        }
+      }
+    }
+    __syncthreads();
+    if (state.error != 0) {
+      return;
+    }
+  }
+  if (state.error != 0) {
+    return;
+  }
+  __syncthreads();
+  if (tid == 0) {
+    state.scaled_mu = stable_middle(state.lower, state.upper);
+    state.spin_results[spin].chemical_potential =
+        saturated_affine(state.energy_reference, state.scaled_mu, temperature);
+    if (!isfinite(state.spin_results[spin].chemical_potential)) {
+      state.error = static_cast<int>(Gfn2OccupationsDeviceError::kElectronConservationFailure);
+    }
+  }
+  __syncthreads();
+  if (state.error != 0) {
+    return;
+  }
+
+  /* Publish occupations and accumulate the ideal/published quantities in the
+   * same strided pass, then correct any material residual on an equal-energy
+   * block, then accumulate entropy and the actual electron sum. */
+  const double scaled_mu = state.scaled_mu;
+  const double energy_reference = state.energy_reference;
+  const bool solve_holes = state.solve_holes;
+  const double quantity_target = state.quantity_target;
+  double ideal_sum = 0.0;
+  double ideal_compensation = 0.0;
+  double published_sum = 0.0;
+  double published_compensation = 0.0;
+  for (std::int64_t orbital = tid; orbital < count; orbital += kOccupationsThreads) {
+    const double scaled_energy = scaled_energy_difference(eigenvalues[spectrum_begin + orbital],
+                                                          energy_reference, temperature);
+    const double occupation = fermi_value(scaled_energy, scaled_mu);
+    const double ideal = solve_holes ? fermi_hole_value(scaled_energy, scaled_mu) : occupation;
+    const double ideal_corrected = ideal - ideal_compensation;
+    const double ideal_updated = ideal_sum + ideal_corrected;
+    ideal_compensation = (ideal_updated - ideal_sum) - ideal_corrected;
+    ideal_sum = ideal_updated;
+    occupations[orbital] = occupation;
+    const double published = solve_holes ? 1.0 - occupation : occupation;
+    const double published_corrected = published - published_compensation;
+    const double published_updated = published_sum + published_corrected;
+    published_compensation = (published_updated - published_sum) - published_corrected;
+    published_sum = published_updated;
+  }
+  state.partial_ideal[tid] = ideal_sum;
+  state.partial_ideal_comp[tid] = ideal_compensation;
+  state.partial_published[tid] = published_sum;
+  state.partial_published_comp[tid] = published_compensation;
+  __syncthreads();
+  if (tid == 0) {
+    const double ideal_quantity =
+        combine_partial_kahan(state.partial_ideal, state.partial_ideal_comp, kOccupationsThreads);
+    double published_quantity = combine_partial_kahan(
+        state.partial_published, state.partial_published_comp, kOccupationsThreads);
+    const double tolerance = 64.0 * kDoubleEpsilon * quantity_target;
+    const double representable_root_tolerance = 1024.0 * kDoubleEpsilon * quantity_target;
+    if (!isfinite(state.spin_results[spin].chemical_potential) || !isfinite(ideal_quantity) ||
+        fabs(ideal_quantity - quantity_target) > representable_root_tolerance) {
+      state.error = static_cast<int>(Gfn2OccupationsDeviceError::kElectronConservationFailure);
+    } else {
+      const double residual = quantity_target - published_quantity;
+      if (fabs(residual) > tolerance) {
+        const double occupation_delta = solve_holes ? -residual : residual;
+        bool corrected = false;
+        for (std::int64_t block_begin = 0; block_begin < count;) {
+          std::int64_t block_end = block_begin + 1;
+          while (block_end < count && eigenvalues[spectrum_begin + block_end] ==
+                                          eigenvalues[spectrum_begin + block_begin]) {
+            ++block_end;
+          }
+          const std::int64_t block_count = block_end - block_begin;
+          const double old_occupation = occupations[block_begin];
+          const double candidate =
+              old_occupation + occupation_delta / static_cast<double>(block_count);
+          if (candidate >= 0.0 && candidate <= 1.0) {
+            const double block_scale = static_cast<double>(block_count);
+            const double old_quantity =
+                block_scale * (solve_holes ? 1.0 - old_occupation : old_occupation);
+            const double new_quantity = block_scale * (solve_holes ? 1.0 - candidate : candidate);
+            const double corrected_quantity = published_quantity + new_quantity - old_quantity;
+            if (new_quantity != old_quantity && isfinite(corrected_quantity) &&
+                fabs(corrected_quantity - quantity_target) <= tolerance) {
+              for (std::int64_t orbital = block_begin; orbital < block_end; ++orbital) {
+                occupations[orbital] = candidate;
+              }
+              published_quantity = corrected_quantity;
+              corrected = true;
+              break;
+            }
+          }
+          block_begin = block_end;
+        }
+        if (!corrected) {
+          state.error = static_cast<int>(Gfn2OccupationsDeviceError::kElectronConservationFailure);
+        }
+      }
+    }
+  }
+  __syncthreads();
+  if (state.error != 0) {
+    return;
+  }
+
+  const auto entropy_at = [&](std::int64_t orbital) {
+    const double occupation = occupations[orbital];
+    if (occupation > 0.0 && occupation < 1.0) {
+      const double hole = 1.0 - occupation;
+      return -occupation * log(occupation) - hole * log(hole);
+    }
+    return 0.0;
+  };
+  accumulate_partial_kahan(entropy_at, count, tid, kOccupationsThreads, state.partial_entropy,
+                           state.partial_entropy_comp);
+  __syncthreads();
+  const auto electron_at = [&](std::int64_t orbital) { return occupations[orbital]; };
+  accumulate_partial_kahan(electron_at, count, tid, kOccupationsThreads, state.partial_electron,
+                           state.partial_electron_comp);
+  __syncthreads();
+  if (tid == 0) {
+    const double entropy = combine_partial_kahan(state.partial_entropy, state.partial_entropy_comp,
+                                                 kOccupationsThreads);
+    const double electron_sum = combine_partial_kahan(
+        state.partial_electron, state.partial_electron_comp, kOccupationsThreads);
+    if (!isfinite(entropy)) {
+      state.error = static_cast<int>(Gfn2OccupationsDeviceError::kNonfiniteEntropy);
+    } else if (!isfinite(electron_sum)) {
+      state.error = static_cast<int>(Gfn2OccupationsDeviceError::kElectronConservationFailure);
+    } else {
+      state.spin_results[spin].electron_sum = electron_sum;
+      state.spin_results[spin].entropy = entropy;
+    }
+  }
+  __syncthreads();
 }
 
 __global__ void evaluate_kernel(Gfn2OccupationsDeviceBatch batch, Gfn2WavefunctionLayoutView layout,
                                 const double* eigenvalues, Gfn2OccupationsDeviceWorkspace workspace,
                                 std::uint32_t* system_errors, std::uint32_t* device_error) {
+  __shared__ OccupationsSharedState state;
+  const int tid = threadIdx.x;
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
-  if (threadIdx.x != 0 || atomicAdd(workspace.sequence_active, 0u) == 0u ||
-      !system_is_valid(system_errors, system)) {
-    return;
-  }
-  const std::uint8_t active = batch.active[system];
-  if (active == 0u) {
-    return;
-  }
-  if (active != 1u) {
-    record_system_error(system_errors, system, device_error,
-                        Gfn2OccupationsDeviceError::kInvalidActiveMask);
-    return;
-  }
-
-  const std::int64_t begin = batch.orbital_offsets[system];
-  const std::int64_t end = batch.orbital_offsets[system + 1];
-  if (begin < 0 || begin >= end || end > batch.total_orbitals || (system == 0 && begin != 0) ||
-      (system + 1 == batch.batch_size && end != batch.total_orbitals)) {
-    record_system_error(system_errors, system, device_error,
-                        Gfn2OccupationsDeviceError::kInvalidOffsets);
-    return;
-  }
-  const std::int64_t count = end - begin;
-  const bool spin_layout = layout.spin_channels != nullptr;
-  std::int64_t spin_orbital_begin = begin;
-  std::uint8_t spin_channels = 1u;
-  if (spin_layout) {
-    const std::int32_t configured_channels = layout.spin_channels[system];
-    if (configured_channels != 1 && configured_channels != 2) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2OccupationsDeviceError::kInvalidSpinLayout);
-      return;
-    }
-    spin_channels = static_cast<std::uint8_t>(configured_channels);
-    const std::int64_t channel_begin = layout.spin_channel_offsets[system];
-    const std::int64_t channel_end = layout.spin_channel_offsets[system + 1];
-    spin_orbital_begin = layout.spin_orbital_offsets[system];
-    const std::int64_t spin_orbital_end = layout.spin_orbital_offsets[system + 1];
-    if (channel_begin < 0 || channel_end - channel_begin != spin_channels ||
-        channel_end > layout.total_spin_channels || spin_orbital_begin < 0 ||
-        spin_orbital_end - spin_orbital_begin != static_cast<std::int64_t>(spin_channels) * count ||
-        spin_orbital_end > layout.total_spin_orbitals ||
-        (system == 0 && (channel_begin != 0 || spin_orbital_begin != 0)) ||
-        (system + 1 == batch.batch_size && (channel_end != layout.total_spin_channels ||
-                                            spin_orbital_end != layout.total_spin_orbitals))) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2OccupationsDeviceError::kInvalidSpinLayout);
-      return;
-    }
-  }
-  const double temperature = batch.temperatures[system];
-  if (!(temperature >= 0.0) || !isfinite(temperature)) {
-    record_system_error(system_errors, system, device_error,
-                        Gfn2OccupationsDeviceError::kInvalidTemperature);
-    return;
-  }
-  for (int spin = 0; spin < 2; ++spin) {
-    const double electron_count = batch.electron_counts[system * 2 + spin];
-    if (!(electron_count >= 0.0) || electron_count > static_cast<double>(count) ||
-        !isfinite(electron_count)) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2OccupationsDeviceError::kInvalidElectronCount);
-      return;
-    }
-  }
-  for (std::uint8_t spin = 0u; spin < spin_channels; ++spin) {
-    const std::int64_t spectrum_begin =
-        spin_orbital_begin + static_cast<std::int64_t>(spin) * count;
-    for (std::int64_t orbital = 0; orbital < count; ++orbital) {
-      const double eigenvalue = eigenvalues[spectrum_begin + orbital];
-      if (!isfinite(eigenvalue)) {
-        record_system_error(system_errors, system, device_error,
-                            Gfn2OccupationsDeviceError::kNonfiniteEigenvalue);
-        return;
-      }
-      if (orbital != 0 && eigenvalue < eigenvalues[spectrum_begin + orbital - 1]) {
-        record_system_error(system_errors, system, device_error,
-                            Gfn2OccupationsDeviceError::kUnsortedEigenvalues);
-        return;
+  __shared__ bool silent_skip;
+  if (tid == 0) {
+    silent_skip = false;
+    state.total_entropy = 0.0;
+    state.error = 0;
+    state.begin = 0;
+    state.count = 0;
+    state.spin_channels = 1u;
+    state.energy_reference = 0.0;
+    state.temperature = 0.0;
+    if (atomicAdd(workspace.sequence_active, 0u) == 0u || !system_is_valid(system_errors, system)) {
+      silent_skip = true;
+      state.error = -1;
+    } else {
+      const std::uint8_t active = batch.active[system];
+      if (active == 0u) {
+        silent_skip = true;
+        state.error = -1;
+      } else if (active != 1u) {
+        state.error = static_cast<int>(Gfn2OccupationsDeviceError::kInvalidActiveMask);
+      } else {
+        const std::int64_t begin = batch.orbital_offsets[system];
+        const std::int64_t end = batch.orbital_offsets[system + 1];
+        if (begin < 0 || begin >= end || end > batch.total_orbitals ||
+            (system == 0 && begin != 0) ||
+            (system + 1 == batch.batch_size && end != batch.total_orbitals)) {
+          state.error = static_cast<int>(Gfn2OccupationsDeviceError::kInvalidOffsets);
+        } else {
+          state.begin = begin;
+          state.count = end - begin;
+          const bool spin_layout = layout.spin_channels != nullptr;
+          std::int64_t spin_orbital_begin = begin;
+          std::uint8_t spin_channels = 1u;
+          bool spin_valid = true;
+          if (spin_layout) {
+            const std::int32_t configured_channels = layout.spin_channels[system];
+            if (configured_channels != 1 && configured_channels != 2) {
+              state.error = static_cast<int>(Gfn2OccupationsDeviceError::kInvalidSpinLayout);
+              spin_valid = false;
+            } else {
+              spin_channels = static_cast<std::uint8_t>(configured_channels);
+              const std::int64_t channel_begin = layout.spin_channel_offsets[system];
+              const std::int64_t channel_end = layout.spin_channel_offsets[system + 1];
+              spin_orbital_begin = layout.spin_orbital_offsets[system];
+              const std::int64_t spin_orbital_end = layout.spin_orbital_offsets[system + 1];
+              if (channel_begin < 0 || channel_end - channel_begin != spin_channels ||
+                  channel_end > layout.total_spin_channels || spin_orbital_begin < 0 ||
+                  spin_orbital_end - spin_orbital_begin !=
+                      static_cast<std::int64_t>(spin_channels) * state.count ||
+                  spin_orbital_end > layout.total_spin_orbitals ||
+                  (system == 0 && (channel_begin != 0 || spin_orbital_begin != 0)) ||
+                  (system + 1 == batch.batch_size &&
+                   (channel_end != layout.total_spin_channels ||
+                    spin_orbital_end != layout.total_spin_orbitals))) {
+                state.error = static_cast<int>(Gfn2OccupationsDeviceError::kInvalidSpinLayout);
+                spin_valid = false;
+              }
+            }
+          }
+          if (spin_valid) {
+            state.spin_orbital_begin = spin_orbital_begin;
+            state.spin_channels = spin_channels;
+            state.temperature = batch.temperatures[system];
+            if (!(state.temperature >= 0.0) || !isfinite(state.temperature)) {
+              state.error = static_cast<int>(Gfn2OccupationsDeviceError::kInvalidTemperature);
+            } else {
+              for (int spin = 0; spin < 2; ++spin) {
+                const double electron_count = batch.electron_counts[system * 2 + spin];
+                if (!(electron_count >= 0.0) || electron_count > static_cast<double>(state.count) ||
+                    !isfinite(electron_count)) {
+                  state.error = static_cast<int>(Gfn2OccupationsDeviceError::kInvalidElectronCount);
+                  break;
+                }
+              }
+            }
+          }
+        }
       }
     }
   }
+  __syncthreads();
 
-  const std::int64_t occupation_base = begin * 2;
-  SpinResult spin_results[2];
-  for (int spin = 0; spin < 2; ++spin) {
+  if (state.error == 0) {
+    for (std::uint8_t spin = 0u; spin < state.spin_channels; ++spin) {
+      const std::int64_t spectrum_begin =
+          state.spin_orbital_begin + static_cast<std::int64_t>(spin) * state.count;
+      for (std::int64_t orbital = tid; orbital < state.count; orbital += kOccupationsThreads) {
+        const double eigenvalue = eigenvalues[spectrum_begin + orbital];
+        if (!isfinite(eigenvalue)) {
+          atomicCAS(&state.error, 0,
+                    static_cast<int>(Gfn2OccupationsDeviceError::kNonfiniteEigenvalue));
+          break;
+        }
+        if (orbital != 0 && eigenvalue < eigenvalues[spectrum_begin + orbital - 1]) {
+          atomicCAS(&state.error, 0,
+                    static_cast<int>(Gfn2OccupationsDeviceError::kUnsortedEigenvalues));
+          break;
+        }
+      }
+      __syncthreads();
+      if (state.error != 0) {
+        break;
+      }
+    }
+  }
+  __syncthreads();
+  if (silent_skip) {
+    return;
+  }
+  if (state.error != 0) {
+    if (tid == 0) {
+      record_system_error(system_errors, system, device_error,
+                          static_cast<Gfn2OccupationsDeviceError>(state.error));
+    }
+    return;
+  }
+
+  const std::int64_t occupation_base = state.begin * 2;
+  for (std::uint8_t spin = 0u; spin < 2u; ++spin) {
     const std::int64_t spectrum_begin =
-        spin_orbital_begin + (spin_channels == 2u ? static_cast<std::int64_t>(spin) * count : 0);
-    Gfn2OccupationsDeviceError error = Gfn2OccupationsDeviceError::kSuccess;
-    if (!fill_one_spin(eigenvalues + spectrum_begin, count,
-                       batch.electron_counts[system * 2 + spin], temperature,
-                       workspace.occupation_scratch + occupation_base + spin * count,
-                       spin_results + spin, &error)) {
-      record_system_error(system_errors, system, device_error, error);
+        state.spin_orbital_begin +
+        (state.spin_channels == 2u ? static_cast<std::int64_t>(spin) * state.count : 0);
+    double* const occupations = workspace.occupation_scratch + occupation_base + spin * state.count;
+    fill_one_spin_parallel(eigenvalues, spectrum_begin, state.count,
+                           batch.electron_counts[system * 2 + spin], state.temperature, occupations,
+                           tid, spin, state);
+    __syncthreads();
+    if (state.error != 0) {
       return;
     }
   }
-  const double total_entropy = spin_results[0].entropy + spin_results[1].entropy;
-  if (!isfinite(total_entropy)) {
-    record_system_error(system_errors, system, device_error,
-                        Gfn2OccupationsDeviceError::kNonfiniteEntropy);
-    return;
+
+  if (tid == 0) {
+    const double total_entropy = state.spin_results[0].entropy + state.spin_results[1].entropy;
+    if (!isfinite(total_entropy)) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2OccupationsDeviceError::kNonfiniteEntropy);
+      return;
+    }
+    state.total_entropy = total_entropy;
+    for (int spin = 0; spin < 2; ++spin) {
+      workspace.chemical_potential_scratch[system * 2 + spin] =
+          state.spin_results[spin].chemical_potential;
+      workspace.electron_sum_scratch[system * 2 + spin] = state.spin_results[spin].electron_sum;
+    }
+    workspace.entropy_scratch[system] = total_entropy;
   }
-  for (int spin = 0; spin < 2; ++spin) {
-    workspace.chemical_potential_scratch[system * 2 + spin] = spin_results[spin].chemical_potential;
-    workspace.electron_sum_scratch[system * 2 + spin] = spin_results[spin].electron_sum;
-  }
-  workspace.entropy_scratch[system] = total_entropy;
 }
 
 /* Lowest active system index wins, making diagnostics reproducible across block schedules. */
@@ -705,7 +1111,7 @@ cudaError_t evaluate_gfn2_restricted_occupations_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  evaluate_kernel<<<static_cast<unsigned int>(batch.batch_size), 1, 0, stream>>>(
+  evaluate_kernel<<<static_cast<unsigned int>(batch.batch_size), kOccupationsThreads, 0, stream>>>(
       batch, {}, eigenvalues, workspace, system_errors, device_error);
   status = cudaGetLastError();
   if (status != cudaSuccess) {
@@ -736,7 +1142,7 @@ cudaError_t evaluate_gfn2_occupations_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  evaluate_kernel<<<static_cast<unsigned int>(batch.batch_size), 1, 0, stream>>>(
+  evaluate_kernel<<<static_cast<unsigned int>(batch.batch_size), kOccupationsThreads, 0, stream>>>(
       batch, layout, eigenvalues, workspace, system_errors, device_error);
   status = cudaGetLastError();
   if (status != cudaSuccess) {
