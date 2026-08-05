@@ -16,7 +16,10 @@ name: Python wheels
 # scientific package.
 
 on:
+  # Pull requests already build and test wheels. Limit push runs to main so a
+  # same-repository PR branch does not schedule duplicate wheel builds.
   push:
+    branches: [main]
   pull_request:
 
 permissions:
