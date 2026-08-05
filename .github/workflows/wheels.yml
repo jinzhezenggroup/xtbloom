@@ -54,10 +54,10 @@ jobs:
           CIBW_BUILD: ${{ matrix.build }}
           CIBW_ENVIRONMENT: "GPUXTB_ENABLE_CUDA=${{ matrix.variant == 'cuda' && 'ON' || 'OFF' }}"
           # Hosted wheel builders have no NVIDIA kernel driver.  Expose the
-          # toolkit stub only inside the isolated wheel test so the CUDA-linked
-          # library can load and exercise its CPU fallback; production code
-          # never searches or preloads stubs.  A real-GPU forced-CUDA test is
-          # run separately on the project GPU before merge/release.
+          # toolkit stub only inside the isolated wheel test so the dynamic
+          # driver resolver can exercise its no-device fallback; production
+          # code never searches or preloads stubs. A real-GPU forced-CUDA test
+          # is run separately on the project GPU before merge/release.
           CIBW_TEST_COMMAND: bash {project}/python/ci/run-wheel-test.sh ${{ matrix.tests }} {project}
           CIBW_TEST_EXTRAS: ${{ matrix.tests == 'full' && 'test' || '' }}
         with:
@@ -69,6 +69,12 @@ jobs:
         run: python python/ci/check-wheel-size.py wheelhouse
       - name: Verify wheel licenses
         run: python tools/licensing/check_licenses.py --source-root . wheelhouse/*.whl
+      - name: Inspect CUDA host-library dependencies
+        run: >-
+          python python/ci/inspect-cuda-wheel.py
+          --checker tests/abi/check_cuda_dependencies.py
+          --readelf readelf
+          wheelhouse/*.whl
       - uses: actions/upload-artifact@v4
         with:
           name: gpuxtb-wheels-${{ matrix.platform_id }}
