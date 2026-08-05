@@ -589,6 +589,159 @@ def _pack_charge_responses(
     return offsets, shifts, matrices
 
 
+# --- auto batch sizing --------------------------------------------------------
+
+# Automatic sizing is deliberately conservative because CUDA workspace cost
+# also depends on basis, spin, embedding, and per-system matrix extents. The
+# estimate chooses an initial chunk size; allocation-failure retry below is the
+# correctness backstop when a workload costs more than this atom proxy predicts.
+_AUTO_BATCH_MEMORY_FRACTION = 0.5
+_AUTO_BATCH_RESERVE_BYTES = 1_000_000_000
+_AUTO_BATCH_BYTES_PER_ATOM = 400_000
+_AUTO_BATCH_MAX_ATOMS = 65_536
+_AUTO_BATCH_FALLBACK_MAX_ATOMS = 4_096
+
+
+def _slice_by_total_atoms(
+    structures: Sequence[Structure], max_total_atoms: int
+) -> list[Sequence[Structure]]:
+    """Split *structures* into contiguous chunks of at most ``max_total_atoms``.
+
+    A single system larger than the limit forms its own oversized chunk because
+    systems are indivisible at the public C ABI. Thus the limit bounds grouped
+    systems, while an oversized individual system is still attempted once.
+    """
+    if max_total_atoms < 1:
+        raise GPUxtbValueError("auto batch size must be a positive atom count")
+    chunks: list[list[Structure]] = []
+    current: list[Structure] = []
+    current_atoms = 0
+    for structure in structures:
+        atoms = len(structure)
+        if atoms > max_total_atoms:
+            if current:
+                chunks.append(current)
+                current = []
+                current_atoms = 0
+            chunks.append([structure])
+            continue
+        if current and current_atoms + atoms > max_total_atoms:
+            chunks.append(current)
+            current = []
+            current_atoms = 0
+        current.append(structure)
+        current_atoms += atoms
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _merge_computed(
+    computed_batches: Sequence[_ComputedBatch],
+    structures: Sequence[Structure],
+) -> _ComputedBatch:
+    """Concatenate per-chunk results and rebase offsets into one public batch.
+
+    Each chunk returns offsets relative to that chunk; the merged result must
+    expose offsets relative to the complete structure list so ``BatchResult``
+    slicing and indexing work uniformly.
+    """
+    point_batches = [
+        batch.point_charge_forces
+        for batch in computed_batches
+        if batch.point_charge_forces is not None
+    ]
+    atom_offsets = [0]
+    point_offsets = [0]
+    for structure in structures:
+        atom_offsets.append(atom_offsets[-1] + len(structure))
+        point_offsets.append(
+            point_offsets[-1] + len(structure.point_charges.charges)
+            if structure.point_charges is not None
+            else point_offsets[-1]
+        )
+    keepalive: list = []
+    for batch in computed_batches:
+        keepalive.extend(batch.keepalive)
+    return _ComputedBatch(
+        energies=np.concatenate([batch.energies for batch in computed_batches]),
+        forces=np.concatenate([batch.forces for batch in computed_batches], axis=0),
+        charges=np.concatenate([batch.charges for batch in computed_batches], axis=0),
+        point_charge_forces=(
+            np.concatenate(point_batches, axis=0) if point_batches else None
+        ),
+        scc_iterations=np.concatenate(
+            [batch.scc_iterations for batch in computed_batches]
+        ),
+        scc_converged=np.concatenate(
+            [batch.scc_converged for batch in computed_batches]
+        ),
+        per_system_status=np.concatenate(
+            [batch.per_system_status for batch in computed_batches]
+        ),
+        result_flags=_merged_result_flags(computed_batches),
+        atom_offsets=np.asarray(atom_offsets, dtype=np.int64),
+        point_offsets=np.asarray(point_offsets, dtype=np.int64)
+        if any(batch.point_offsets is not None for batch in computed_batches)
+        else None,
+        keepalive=keepalive,
+    )
+
+
+def _merged_result_flags(computed_batches: Sequence[_ComputedBatch]) -> int:
+    """Preserve every batch-wide result qualifier produced by any chunk."""
+    flags = 0
+    for batch in computed_batches:
+        flags |= batch.result_flags
+    return flags
+
+
+def _split_chunk_near_half(
+    structures: Sequence[Structure],
+) -> tuple[Sequence[Structure], Sequence[Structure]]:
+    """Split a multi-system chunk near half its total atoms, preserving order."""
+    if len(structures) < 2:
+        raise GPUxtbValueError("cannot split an indivisible batch chunk")
+    target = sum(len(structure) for structure in structures) / 2
+    cumulative = 0
+    split = 1
+    for index, structure in enumerate(structures[:-1], start=1):
+        cumulative += len(structure)
+        split = index
+        if cumulative >= target:
+            break
+    return structures[:split], structures[split:]
+
+
+def _resolve_auto_batch_limit(
+    context: Context,
+    structures: Sequence[Structure],
+) -> int:
+    """Choose a fresh, bounded atom proxy for one automatic compute chunk.
+
+    Free memory is queried for every CUDA call so another process or an earlier
+    gpuxtb context cannot leave a stale cached limit. The estimate intentionally
+    reserves half the reported free memory plus a fixed safety allowance. It is
+    only an initial grouping heuristic: workload-specific allocation failures
+    are handled by splitting multi-system chunks in :meth:`BatchCalculator.compute`.
+    """
+    total_atoms = sum(len(structure) for structure in structures)
+    if int(context.backend) != library.BACKEND_CUDA:
+        return min(total_atoms, _AUTO_BATCH_FALLBACK_MAX_ATOMS)
+
+    memory = library.device_memory_info(int(context.device_id))
+    if memory is None:
+        return min(total_atoms, _AUTO_BATCH_FALLBACK_MAX_ATOMS)
+
+    free_bytes, _ = memory
+    budget = max(
+        0,
+        int(free_bytes * _AUTO_BATCH_MEMORY_FRACTION) - _AUTO_BATCH_RESERVE_BYTES,
+    )
+    estimated_limit = max(1, budget // _AUTO_BATCH_BYTES_PER_ATOM)
+    return min(total_atoms, estimated_limit, _AUTO_BATCH_MAX_ATOMS)
+
+
 def _compute_batch(
     context: Context,
     structures: Sequence[Structure],
@@ -1197,30 +1350,90 @@ class BatchCalculator:
     def set(self, attribute: str, value: Any) -> None:
         self._settings.set(attribute, value)
 
-    def compute(self, *, raise_on_failure: bool = False) -> BatchResult:
+    def compute(
+        self,
+        *,
+        raise_on_failure: bool = False,
+        auto_batch_size: Optional[Union[bool, int]] = None,
+    ) -> BatchResult:
         """Run the batch while preserving successful peers.
 
         By default the result is returned even when individual systems fail;
         their floating-point slices contain NaNs and diagnostics identify the
         failed peers.  Set ``raise_on_failure=True`` or call
         :meth:`BatchResult.raise_for_status` for strict behavior.
+
+        ``auto_batch_size`` controls automatic slicing of one large batch into
+        several ``gpuxtb_compute`` calls. ``None`` or ``False`` preserves the
+        historical single-call behavior. An integer is a target maximum total
+        atom count per chunk (``1`` forces one system per call). ``True`` picks
+        a conservative target from the CUDA device's current free memory, or a
+        fixed fallback when memory cannot be queried, and retries native
+        allocation failures by splitting multi-system chunks. A system larger
+        than the target remains indivisible and is attempted by itself.
+
+        Slicing preserves system order and peer-local failures. CPU results are
+        bit-identical to an unsliced run. CUDA chunking can change eigensolver
+        bucket composition, so CUDA results should be compared with the same
+        tolerances used for ordinary backend conformance.
         """
-        flags = (
+        base_flags = (
             library.COMPUTE_ENERGY
             | library.COMPUTE_FORCES
             | library.COMPUTE_ATOMIC_CHARGES
         )
-        if any(structure.point_charges is not None for structure in self._structures):
-            flags |= library.COMPUTE_POINT_CHARGE_FORCES
-        computed = _compute_batch(
-            self._context,
-            self._structures,
-            model=self._settings.model,
-            max_scc_iterations=self._settings.max_scc_iterations,
-            charge_tolerance=self._settings.charge_tolerance,
-            energy_tolerance=self._settings.energy_tolerance,
-            electronic_temperature=self._settings.electronic_temperature,
-            flags=flags,
+
+        def run_once(structures: Sequence[Structure]) -> _ComputedBatch:
+            # Output descriptors are batch-local. In particular, requesting a
+            # point-charge output for a zero-point chunk is inconsistent with
+            # the native CUDA publication plan even when another chunk has
+            # point charges.
+            flags = base_flags
+            if any(structure.point_charges is not None for structure in structures):
+                flags |= library.COMPUTE_POINT_CHARGE_FORCES
+            return _compute_batch(
+                self._context,
+                structures,
+                model=self._settings.model,
+                max_scc_iterations=self._settings.max_scc_iterations,
+                charge_tolerance=self._settings.charge_tolerance,
+                energy_tolerance=self._settings.energy_tolerance,
+                electronic_temperature=self._settings.electronic_temperature,
+                flags=flags,
+            )
+
+        if auto_batch_size is None or auto_batch_size is False:
+            chunks: list[Sequence[Structure]] = [self._structures]
+        elif auto_batch_size is True:
+            limit = _resolve_auto_batch_limit(self._context, self._structures)
+            chunks = _slice_by_total_atoms(self._structures, limit)
+        else:
+            limit = _as_integer("auto_batch_size", auto_batch_size)
+            if limit <= 0:
+                raise GPUxtbValueError("auto_batch_size must be a positive integer")
+            chunks = _slice_by_total_atoms(self._structures, limit)
+
+        def run_auto_chunk(chunk: Sequence[Structure]) -> list[_ComputedBatch]:
+            """Retry only recoverable native allocation failures at smaller sizes."""
+            try:
+                return [run_once(chunk)]
+            except GPUxtbRuntimeError as error:
+                if (
+                    auto_batch_size is not True
+                    or error.status != library.STATUS_ALLOCATION_FAILED
+                    or len(chunk) == 1
+                ):
+                    raise
+                left, right = _split_chunk_near_half(chunk)
+                return [*run_auto_chunk(left), *run_auto_chunk(right)]
+
+        computed_batches = [
+            computed for chunk in chunks for computed in run_auto_chunk(chunk)
+        ]
+        computed = (
+            computed_batches[0]
+            if len(computed_batches) == 1
+            else _merge_computed(computed_batches, self._structures)
         )
         batch_result = BatchResult(computed, self._structures)
         if raise_on_failure:

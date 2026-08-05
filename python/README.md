@@ -130,6 +130,26 @@ print(result.energies)   # per-system
 print(result[0].forces)  # per-system via Result
 ```
 
+Large ragged batches can be split into several synchronous C calls while
+preserving system order and peer-local diagnostics:
+
+```python
+# Query current CUDA free memory and choose a conservative grouping target.
+result = BatchCalculator(structures, backend="cuda").compute(auto_batch_size=True)
+
+# Or set an explicit target maximum total atom count per call.
+result = BatchCalculator(structures).compute(auto_batch_size=20_000)
+```
+
+The integer is a grouping target rather than a promise that an individual
+system can be subdivided: a system larger than the target is attempted alone.
+Automatic CUDA sizing re-queries current free memory for each call, retains a
+fixed reserve, and retries native allocation failures by splitting only
+multi-system chunks. Other native failures, and allocation failure for one
+indivisible system, are returned unchanged. When CUDA memory cannot be queried,
+a conservative fixed target is used. ``None`` (the default) or ``False`` keeps
+the historical single-call behavior.
+
 Batch failures are peer-local: failed slices contain NaNs and are listed by
 ``result.failed_indices``, while successful peer results remain accessible.
 Call ``result.raise_for_status()`` (or ``compute(raise_on_failure=True)``) when
