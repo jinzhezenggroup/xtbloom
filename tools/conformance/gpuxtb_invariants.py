@@ -14,7 +14,7 @@ finite GFN2-xTB system:
   translation of the whole system (QM atoms and point charges together);
 * energy and atomic charges are invariant under a proper rotation while QM and
   point-charge forces transform covariantly;
-* the total force vanishes for an isolated system and the net point charge
+* the total force vanishes for an isolated system and the net atomic charge
   equals the declared molecular charge.
 
 Every gate executes through the same public C ABI path as the golden runner
@@ -66,13 +66,7 @@ INVARIANT_NET_CHARGE_ATOL = 1.0e-9  # net charge versus declared molecular charg
 # exact 0/1 entries and exercises integer-exact covariance as well.
 TRANSLATION_DELTAS = [(10.0, -7.0, 3.0), (-5.0, 2.5, 11.0)]
 
-# Representative gas-phase and QM/MM cases duplicated inside a homogeneous
-# ragged batch so replicate independence is exercised for both embedding kinds.
-HOMOGENEOUS_CASE_IDS = ("ketene", "water_dimer_6pc_hardness")
 HOMOGENEOUS_REPLICAS = 3
-
-# Homogeneous duplicate batches reuse the first gas and first QM/MM selected
-# case so the gate stays well defined for arbitrary --case selections.
 
 
 @dataclass
@@ -100,6 +94,29 @@ class InvariantResult:
     forces: list[float]  # flat atom-major, hartree/bohr
     charges: list[float]  # elementary charge
     point_forces: list[float]  # flat point-major, hartree/bohr; empty for gas
+
+
+def select_homogeneous_case_ids(
+    geometries: Sequence[Geometry],
+) -> tuple[str, ...]:
+    """Select one gas and one point-charge case from the active case filter.
+
+    Using the selected inputs rather than fixed corpus IDs keeps the homogeneous
+    gate active for focused ``--case`` runs while bounding the full gate's cost.
+    """
+    selected: list[str] = []
+    for has_point_charges in (False, True):
+        case_id = next(
+            (
+                geometry.case_id
+                for geometry in geometries
+                if bool(geometry.point_values) == has_point_charges
+            ),
+            None,
+        )
+        if case_id is not None:
+            selected.append(case_id)
+    return tuple(selected)
 
 
 def load_geometries(
@@ -297,7 +314,10 @@ def gpuxtb_solver(
             library,
             request_forces=True,
             request_charges=True,
-            request_point_forces=True,
+            # Match the golden runner: a gas-only sequential call has no
+            # point-force property or destination to request, while mixed and
+            # QM/MM batches publish the complete nonempty point-force extent.
+            request_point_forces=bool(storage.point_charge_values),
         )
         outputs = public_api.run_compute(
             library, storage, options, backend, device_id, cpu_threads, memory_mode
@@ -345,13 +365,30 @@ def _compare(
                 False,
                 f"{case_id} {label}: shape {len(actual)} != {len(expected)}",
             )
+        expected_values = [float(value) for value in expected]
+        actual_values = [float(value) for value in actual]
+        for index, (left, right) in enumerate(zip(expected_values, actual_values)):
+            if not math.isfinite(left) or not math.isfinite(right):
+                return (
+                    False,
+                    f"{case_id} {label}: non-finite component {index} "
+                    f"expected={left} actual={right}",
+                )
         error = max(
-            (abs(float(left) - float(right)) for left, right in zip(expected, actual)),
+            (abs(left - right) for left, right in zip(expected_values, actual_values)),
             default=0.0,
         )
         location = "component"
     else:
-        error = abs(float(expected) - float(actual))
+        expected_value = float(expected)
+        actual_value = float(actual)
+        if not math.isfinite(expected_value) or not math.isfinite(actual_value):
+            return (
+                False,
+                f"{case_id} {label}: non-finite scalar "
+                f"expected={expected_value} actual={actual_value}",
+            )
+        error = abs(expected_value - actual_value)
         location = "scalar"
     passed = error <= atol
     return passed, (
@@ -560,7 +597,18 @@ def run_invariant_checks(
     by_id: dict[str, Geometry] = {geometry.case_id: geometry for geometry in geometries}
 
     print(f"sequential baseline: {len(geometries)} case(s)")
-    sequential = solver(list(geometries))
+    sequential: list[InvariantResult] = []
+    for geometry in geometries:
+        # A true one-system-at-a-time baseline is essential here. Repeating the
+        # same ragged call would only test determinism and could miss shared
+        # workspace, offset, or peer-isolation defects that appear in batches.
+        single_result = solver([geometry])
+        if len(single_result) != 1 or single_result[0].case_id != geometry.case_id:
+            raise conformance.ConformanceError(
+                "sequential invariance solve returned an unexpected result set "
+                f"for {geometry.case_id}"
+            )
+        sequential.append(single_result[0])
     baseline_by_id = {result.case_id: result for result in sequential}
 
     print(f"heterogeneous ragged batch: {len(geometries)} case(s)")
@@ -658,11 +706,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             print("no GFN2 conformance cases selected")
             return 0
         geometries = load_geometries(args.manifest, manifest, cases)
-        homogeneous_case_ids = tuple(
-            case_id
-            for case_id in HOMOGENEOUS_CASE_IDS
-            if any(geometry.case_id == case_id for geometry in geometries)
-        )
+        homogeneous_case_ids = select_homogeneous_case_ids(geometries)
         library = public_api._configure_library(args.library)
         backends = ("cpu", "cuda") if args.backend == "all" else (args.backend,)
         overall_failures: list[str] = []
@@ -679,7 +723,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             )
             failures = run_invariant_checks(solver, geometries, homogeneous_case_ids)
             print(
-                f"invariance OK: backend={backend}, memory_mode={args.memory_mode}, "
+                f"invariance {'OK' if not failures else 'FAILED'}: "
+                f"backend={backend}, memory_mode={args.memory_mode}, "
                 f"cases={len(cases)}, failures={len(failures)}"
             )
             overall_failures.extend(

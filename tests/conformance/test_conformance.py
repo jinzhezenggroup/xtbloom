@@ -810,18 +810,28 @@ class InvarianceToolTest(unittest.TestCase):
         failures = self.run_invariant_checks(solver, geometries)
         self.assertTrue(any("total_force" in failure for failure in failures))
 
+    def test_nonfinite_array_component_is_detected(self) -> None:
+        """A non-leading NaN cannot be hidden by maximum-error reduction."""
+        passed, message = INVARIANTS._compare(
+            "gas_pair",
+            "forces_hartree_per_bohr",
+            [0.0, 0.0],
+            [0.0, float("nan")],
+            1.0e-12,
+        )
+        self.assertFalse(passed)
+        self.assertIn("non-finite component 1", message)
+
     def test_batch_dependent_results_are_detected(self) -> None:
-        """Per-call state must not make ragged batches differ from sequential runs."""
+        """Batch-size-dependent results must differ from one-system solves."""
         geometries = _invariant_geometries()
-        invocation = {"count": 0}
 
         def solver(items):
-            invocation["count"] += 1
             return [
                 INVARIANTS.InvariantResult(
                     case_id=item.case_id,
                     molecular_charge=item.molecular_charge,
-                    energy=float(invocation["count"]) * 1.0e-6,
+                    energy=1.0e-6 if len(items) > 1 else 0.0,
                     forces=[0.0] * (3 * len(item.atomic_numbers)),
                     charges=[0.0] * len(item.atomic_numbers),
                     point_forces=[0.0] * (3 * len(item.point_values)),
@@ -831,6 +841,31 @@ class InvarianceToolTest(unittest.TestCase):
 
         failures = self.run_invariant_checks(solver, geometries)
         self.assertTrue(any("batch_vs_sequential" in failure for failure in failures))
+
+    def test_sequential_baseline_uses_single_system_calls(self) -> None:
+        """Each baseline result comes from its own public-style solver call."""
+        geometries = _invariant_geometries()
+        invocation_sizes: list[int] = []
+
+        def solver(items):
+            invocation_sizes.append(len(items))
+            return [_zero_invariant_result(item) for item in items]
+
+        failures = self.run_invariant_checks(solver, geometries)
+        self.assertEqual(failures, [])
+        self.assertEqual(invocation_sizes[:3], [1, 1, 2])
+
+    def test_homogeneous_selection_respects_focused_case_sets(self) -> None:
+        """Arbitrary gas or point-charge selections retain a homogeneous gate."""
+        gas, qm_point = _invariant_geometries()
+        self.assertEqual(
+            INVARIANTS.select_homogeneous_case_ids([gas, qm_point]),
+            ("gas_pair", "qm_point"),
+        )
+        self.assertEqual(INVARIANTS.select_homogeneous_case_ids([gas]), ("gas_pair",))
+        self.assertEqual(
+            INVARIANTS.select_homogeneous_case_ids([qm_point]), ("qm_point",)
+        )
 
     def test_cli_rejects_cuda_memory_for_cpu_backend(self) -> None:
         """The invariance CLI enforces the same placement rule as the golden runner."""
