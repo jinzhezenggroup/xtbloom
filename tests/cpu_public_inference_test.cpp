@@ -871,7 +871,7 @@ int test_public_warm_start_transactions() {
   CHECK(h2.statuses[0] == GPUXTB_STATUS_SUCCESS);
   CHECK(h2.converged[0] == 1u);
   CHECK(h2.iterations[0] <= fresh_iterations);
-  CHECK(near(h2.energies[0], fresh_energy, 1.0e-5));
+  CHECK(std::abs(h2.energies[0] - fresh_energy) <= h2.options.energy_tolerance);
   for (std::size_t atom = 0u; atom < 2u; ++atom) {
     CHECK(near(h2.atomic_charges[atom], fresh_charges[atom], 1.0e-5));
     for (std::size_t axis = 0u; axis < 3u; ++axis) {
@@ -905,7 +905,8 @@ int test_public_warm_start_transactions() {
   CHECK(perturbed.statuses[0] == GPUXTB_STATUS_SUCCESS);
   CHECK(perturbed.converged[0] == 1u);
   CHECK(perturbed.iterations[0] <= reference_iterations);
-  CHECK(near(perturbed.energies[0], reference.energies[0], 1.0e-5));
+  CHECK(std::abs(perturbed.energies[0] - reference.energies[0]) <=
+        perturbed.options.energy_tolerance);
   for (std::size_t atom = 0u; atom < 2u; ++atom) {
     CHECK(near(perturbed.atomic_charges[atom], reference.atomic_charges[atom], 1.0e-5));
   }
@@ -965,7 +966,7 @@ int test_public_warm_start_transactions() {
   h2.options.scc_start_mode = GPUXTB_SCC_START_WARM;
   CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) == GPUXTB_STATUS_SUCCESS);
   CHECK(h2.statuses[0] == GPUXTB_STATUS_SUCCESS);
-  CHECK(near(h2.energies[0], fresh_energy, 1.0e-5));
+  CHECK(std::abs(h2.energies[0] - fresh_energy) <= h2.options.energy_tolerance);
 
   /* Candidate construction is transactional. A FRESH unsupported topology
    * fails while building ensure_systems, but the prior H2 systems/checkpoint
