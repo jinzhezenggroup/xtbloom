@@ -328,6 +328,10 @@ bool HostSccCase::Impl::append_system(SmallSystemKind kind, std::int64_t system)
       atom(1, 1.6, 0.0, 1.0);
       atom(1, -1.6, 0.0, 1.0);
       break;
+    case SmallSystemKind::kH2Stretched:
+      atom(1, -4.0, 0.0, 0.0);
+      atom(1, 4.0, 0.0, 0.0);
+      break;
     default:
       return false;
   }
