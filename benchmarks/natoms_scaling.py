@@ -25,7 +25,6 @@ import json
 import math
 import os
 import platform
-import shutil
 import statistics
 import struct
 import subprocess
@@ -380,6 +379,55 @@ def _read_json_metadata(path: Path) -> tuple[Any, dict[str, Any]]:
     }
 
 
+def _meson_compiler_executable_provenance(
+    exelist: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Separate verifiable compiler files from unresolved Meson entries.
+
+    Meson may retain a bare configure-time executable such as ``gcc``. Resolving
+    that name through the benchmark process's later ``PATH`` can identify a
+    different compiler, so only an absolute path that still names a file is
+    eligible for a content hash.
+    """
+    executable_files: list[dict[str, Any]] = []
+    unresolved_entries: list[dict[str, Any]] = []
+    if not isinstance(exelist, list):
+        return executable_files, [
+            {
+                "entry": exelist,
+                "reason": "invalid_nonlist_meson_exelist",
+            }
+        ]
+    for executable in exelist:
+        if not isinstance(executable, str):
+            unresolved_entries.append(
+                {
+                    "entry": executable,
+                    "reason": "invalid_nonstring_meson_exelist_entry",
+                }
+            )
+            continue
+        candidate = Path(executable)
+        if not candidate.is_absolute():
+            unresolved_entries.append(
+                {
+                    "entry": executable,
+                    "reason": "non_absolute_configure_time_entry",
+                }
+            )
+            continue
+        if not candidate.is_file():
+            unresolved_entries.append(
+                {
+                    "entry": executable,
+                    "reason": "absolute_path_unavailable_at_evidence_time",
+                }
+            )
+            continue
+        executable_files.append(_file_identity(candidate))
+    return executable_files, unresolved_entries
+
+
 def _meson_build_metadata(library: Path, info_directory: Path) -> dict[str, Any]:
     """Capture Meson configuration, compilers, dependencies, and source Git state."""
     names = (
@@ -441,14 +489,13 @@ def _meson_build_metadata(library: Path, info_directory: Path) -> dict[str, Any]
     for machine, languages in documents["intro-compilers.json"].items():
         compilers[machine] = {}
         for language, details in languages.items():
-            executable_files = []
-            for executable in details.get("exelist", []):
-                resolved = shutil.which(executable)
-                if resolved is not None:
-                    executable_files.append(_file_identity(Path(resolved)))
+            executable_files, unresolved_entries = (
+                _meson_compiler_executable_provenance(details.get("exelist"))
+            )
             compilers[machine][language] = {
                 **details,
                 "executable_files": executable_files,
+                "unresolved_executable_entries": unresolved_entries,
             }
     source_inputs = []
     for relative in ("meson.build", "meson_options.txt"):
@@ -1921,9 +1968,35 @@ def validate_output_paths(
             )
 
 
+def _csv_summary_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Remove raw/provenance vectors that belong only in the canonical JSON."""
+    summary = {
+        key: value
+        for key, value in row.items()
+        if key not in {"raw_samples", "run_identity", "seed", "cold_sample"}
+    }
+    correctness = summary.get("correctness")
+    if isinstance(correctness, dict):
+        summary["correctness"] = {
+            key: value
+            for key, value in correctness.items()
+            if key
+            not in {
+                "energy_reference_hartree",
+                "force_reference_hartree_per_bohr",
+            }
+        }
+    timing = summary.get("timing")
+    if isinstance(timing, dict):
+        summary["timing"] = {
+            key: value for key, value in timing.items() if key != "samples_ms"
+        }
+    return summary
+
+
 def _serialize_csv(document: dict[str, Any]) -> str:
-    """Build the complete CSV image before any output path is published."""
-    rows = document["rows"]
+    """Build a compact, default-parser-safe CSV summary before publication."""
+    rows = [_csv_summary_row(row) for row in document["rows"]]
     fieldnames: list[str] = []
     for row in rows:
         for key in row:

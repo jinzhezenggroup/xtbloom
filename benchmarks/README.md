@@ -104,6 +104,10 @@ untimed `FRESH` call on the identical topology/options identity, then uses
 energy, complete requested force vector, SCC iteration count, convergence flag,
 and per-system status. FRESH/WARM force vectors are compared numerically; a
 finite-only force result cannot pass correctness.
+JSON is the authoritative audit artifact. CSV is a compact row summary for
+ordinary tools: it omits repeated run identity, seed/cold observable payloads,
+measured raw samples, raw latency vectors, and energy/force reference vectors.
+Use JSON to reproduce correctness calculations or inspect individual samples.
 The default FRESH/WARM force-drift gate is the manifest's primary 5e-7
 Hartree/bohr tolerance; its source and hash are stored in the protocol.
 Correctness flags may select an equal or tighter gate, but the CLI rejects any
@@ -277,9 +281,12 @@ environment, protocol counts, and raw samples. CMake builds additionally record
 the source Git state, build type, generator, compiler path/version/hash, Release
 and linker flags, CUDA selection, and the LP64 LAPACKE+CBLAS provider path/hash.
 Meson builds record hashed introspection files, source Git state, project and
-subproject versions, build type/options, compiler identities and executable
-hashes, and dependency provider link paths/hashes. A reviewable evidence bundle
-should also record hashes of all six artifacts:
+subproject versions, build type/options, and dependency provider link
+paths/hashes. Meson's configure-time compiler exelist and version are preserved;
+an executable receives a content hash only when Meson recorded an absolute path
+that remains available. Bare entries are explicitly unresolved rather than
+being rebound through the benchmark process's later `PATH`. A reviewable
+evidence bundle should also record hashes of all six artifacts:
 
 ```bash
 sha256sum \

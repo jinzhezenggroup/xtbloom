@@ -535,6 +535,41 @@ class NatomsScalingTest(unittest.TestCase):
             set(documents),
         )
 
+    def test_meson_compiler_provenance_does_not_rebind_bare_path_entry(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            configured_compiler = root / "configured" / "cc"
+            benchmark_path_compiler = root / "benchmark-path" / "cc"
+            configured_compiler.parent.mkdir()
+            benchmark_path_compiler.parent.mkdir()
+            configured_compiler.write_bytes(b"configured compiler")
+            benchmark_path_compiler.write_bytes(b"different compiler")
+            benchmark_path_compiler.chmod(0o755)
+            with mock.patch.dict(
+                os.environ, {"PATH": str(benchmark_path_compiler.parent)}
+            ):
+                files, unresolved = (
+                    natoms_scaling._meson_compiler_executable_provenance(
+                        ["cc", str(configured_compiler)]
+                    )
+                )
+        self.assertEqual(
+            files,
+            [
+                {
+                    "path": str(configured_compiler.resolve()),
+                    "sha256": hashlib.sha256(b"configured compiler").hexdigest(),
+                    "is_file": True,
+                }
+            ],
+        )
+        self.assertEqual(
+            unresolved,
+            [{"entry": "cc", "reason": "non_absolute_configure_time_entry"}],
+        )
+
     def test_reference_protocol_records_cold_and_persistent_samples(self) -> None:
         runner = FakeRunner({"fresh": 13, "warm": 2, "persistent": 0})
         clock_values = iter((0, 5_000_000, 10_000_000, 12_000_000))
@@ -585,7 +620,7 @@ class NatomsScalingTest(unittest.TestCase):
             self.assertEqual(written["rows"][0]["raw_samples"][0]["latency_ms"], 2.5)
             with csv_path.open(newline="", encoding="utf-8") as handle:
                 row = next(csv.DictReader(handle))
-            self.assertIn('"latency_ms": 2.5', row["raw_samples"])
+            self.assertNotIn("raw_samples", row)
             with self.assertRaises(FileExistsError):
                 natoms_scaling.write_artifacts(
                     json_path, csv_path, document, allow_overwrite=False
@@ -617,6 +652,57 @@ class NatomsScalingTest(unittest.TestCase):
                     next(csv.DictReader(handle)),
                     {"label": "sample", "values": "[1, 2]"},
                 )
+
+    def test_csv_omits_realistic_raw_vectors_for_default_reader(self) -> None:
+        force_vector = [index / 123456789.0 for index in range(3 * 122)]
+        raw_samples = [
+            {
+                "sample_index": index,
+                "latency_ms": 70.0 + index,
+                "energies_hartree": [-120.0],
+                "forces_hartree_per_bohr": force_vector,
+                "scc_iterations": [2],
+            }
+            for index in range(30)
+        ]
+        self.assertGreater(len(json.dumps(raw_samples)), csv.field_size_limit())
+        document = {
+            "schema_version": 1,
+            "rows": [
+                {
+                    "label": "c40h82",
+                    "run_identity": {"compiler": "complete provenance in JSON"},
+                    "seed": {"forces_hartree_per_bohr": force_vector},
+                    "cold_sample": {"forces_hartree_per_bohr": force_vector},
+                    "raw_samples": raw_samples,
+                    "timing": {
+                        "median_ms": 72.0,
+                        "samples_ms": [sample["latency_ms"] for sample in raw_samples],
+                    },
+                    "correctness": {
+                        "status": "pass",
+                        "energy_reference_hartree": [-120.0],
+                        "force_reference_hartree_per_bohr": force_vector,
+                        "max_abs_force_drift_hartree_per_bohr": 1.0e-11,
+                    },
+                }
+            ],
+        }
+        serialized = natoms_scaling._serialize_csv(document)
+        row = next(csv.DictReader(io.StringIO(serialized)))
+        self.assertEqual(row["label"], "c40h82")
+        self.assertNotIn("run_identity", row)
+        self.assertNotIn("seed", row)
+        self.assertNotIn("cold_sample", row)
+        self.assertNotIn("raw_samples", row)
+        self.assertEqual(json.loads(row["timing"]), {"median_ms": 72.0})
+        self.assertEqual(
+            json.loads(row["correctness"]),
+            {
+                "max_abs_force_drift_hartree_per_bohr": 1.0e-11,
+                "status": "pass",
+            },
+        )
 
     def test_artifact_pair_rolls_back_when_second_publish_fails(self) -> None:
         document = {"schema_version": 1, "rows": [{"value": 1}]}
