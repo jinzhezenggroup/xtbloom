@@ -2191,6 +2191,18 @@ if(GPUXTB_BUILD_TESTS)
         "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_CPU_LINALG_DIRECTORY}"
       LABELS "conformance;public-api"
     )
+    add_test(
+      NAME gpuxtb.conformance.invariants_cpu
+      COMMAND ${Python3_EXECUTABLE} tools/conformance/gpuxtb_invariants.py
+              --library $<TARGET_FILE:gpuxtb> --backend cpu --memory-mode host
+    )
+    set_tests_properties(gpuxtb.conformance.invariants_cpu PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+      ENVIRONMENT_MODIFICATION
+        "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_CPU_LINALG_DIRECTORY}"
+      LABELS "conformance;public-api"
+    )
     if(GPUXTB_HAS_CUDA)
       add_test(
         NAME gpuxtb.conformance.public_cuda
@@ -2200,6 +2212,20 @@ if(GPUXTB_BUILD_TESTS)
                 --skip-backend-unavailable
       )
       set_tests_properties(gpuxtb.conformance.public_cuda PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+        ENVIRONMENT_MODIFICATION
+          "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_CPU_LINALG_DIRECTORY}"
+        LABELS "conformance;public-api"
+        SKIP_RETURN_CODE 77
+      )
+      add_test(
+        NAME gpuxtb.conformance.invariants_cuda
+        COMMAND ${Python3_EXECUTABLE} tools/conformance/gpuxtb_invariants.py
+                --library $<TARGET_FILE:gpuxtb> --backend cuda --memory-mode host
+                --skip-backend-unavailable
+      )
+      set_tests_properties(gpuxtb.conformance.invariants_cuda PROPERTIES
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
         ENVIRONMENT_MODIFICATION
@@ -2217,6 +2243,21 @@ if(GPUXTB_BUILD_TESTS)
                   --skip-backend-unavailable
         )
         set_tests_properties(gpuxtb.conformance.public_cuda_${memory_mode} PROPERTIES
+          WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+          ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+          ENVIRONMENT_MODIFICATION
+            "${GPUXTB_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${GPUXTB_CPU_LINALG_DIRECTORY}"
+          LABELS "conformance;public-api"
+          SKIP_RETURN_CODE 77
+        )
+        add_test(
+          NAME gpuxtb.conformance.invariants_cuda_${memory_mode}
+          COMMAND ${Python3_EXECUTABLE} tools/conformance/gpuxtb_invariants.py
+                  --library $<TARGET_FILE:gpuxtb> --backend cuda
+                  --memory-mode ${memory_mode}
+                  --skip-backend-unavailable
+        )
+        set_tests_properties(gpuxtb.conformance.invariants_cuda_${memory_mode} PROPERTIES
           WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
           ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
           ENVIRONMENT_MODIFICATION

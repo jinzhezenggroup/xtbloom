@@ -171,3 +171,73 @@ and point-charge inputs plus QM/point-charge forces and `scc_converged` use
 CUDA pointers. The runner dynamically loads libcudart, performs explicit
 host/device copies, frees every allocation on success or failure, and restores
 the entry CUDA device. CPU inference accepts only `--memory-mode host`.
+
+## Numerical tolerances and CPU/CUDA agreement
+
+The manifest records absolute (`atol`, `rtol = 0`) tolerances for total energy,
+analytic forces, the SCC state (atomic charges, dipoles, quadrupoles), and
+external point-charge forces, each with a property-specific `justification`
+naming the observed gpuxtb-to-oracle margin on the committed corpus. The
+thresholds are absolute rather than relative because the corpus intentionally
+mixes charged anions, tiny near-zero systems, and large energies where a
+relative scale would grant unphysical slack. Behavior gates:
+
+- Every property must match the same pinned live oracle to its own threshold.
+  The cross-engine `cross_engine_tolerances` block is used only when both
+  compared documents explicitly identify distinct independent reference
+  engines; gpuxtb results always use the primary tolerances.
+- CPU and CUDA must both satisfy the primary energy, forces, and charges
+  thresholds (5e-7 each in atomic units), so a CPU/CUDA pair on identical
+  inputs can deviate by at most twice that value (1e-6) by the triangle
+  inequality. The manifest records this as `cpu_cuda_agreement`.
+- Within one backend, execution is deterministic for identical descriptors and
+  launch configuration: fresh-SCC results are bit-identical across repeated
+  calls (the batch-versus-sequential gates below fail at 1e-12), which makes
+  debugging reproducible. CUDA results are deterministic for a fixed launch
+  geometry and Graph instantiation; compare debug runs backend-by-backend
+  rather than mixing CPU/CUDA artifacts.
+
+## Invariance, conservation, and batch-consistency gates
+
+`gpuxtb_invariants.py` runs the committed corpus through the same public C ABI
+path as the golden runner and checks the exact symmetries an isolated finite
+GFN2-xTB system must satisfy. These gates complement, and never replace, golden
+comparison: no optimized implementation is accepted solely on agreement with
+itself. Each backend is only ever compared with itself at transformed
+geometries, so the gate tolerances measure one backend's numerical
+reproducibility (measured CPU margins are recorded in the tool header) rather
+than cross-engine physics differences. A genuine symmetry break produces errors
+orders of magnitude above the gates (for example a translation break shifts
+every force component by its full value).
+
+```bash
+python3 tools/conformance/gpuxtb_invariants.py \
+  --library build/libgpuxtb.so --backend cpu --memory-mode host
+
+srun --gres=gpu:1 python3 tools/conformance/gpuxtb_invariants.py \
+  --library build/libgpuxtb.so --backend cuda --memory-mode device
+```
+
+The gates cover:
+
+- **Batch versus sequential**: one heterogeneous ragged batch of every selected
+  case must reproduce each case's sequential single-system solve; identical
+  systems duplicated in one homogeneous ragged batch must reproduce the
+  sequential solve.
+- **Translation invariance**: energy, atomic charges, and analytic forces are
+  invariant when the whole system (QM atoms and external point charges
+  together) is displaced; tested for two deterministic translations.
+- **Rotation covariance**: energy and atomic charges are invariant under a
+  proper rotation, while QM and point-charge forces rotate with the structure;
+  tested with a 37-degree axis rotation and an integer-exact 90-degree
+  rotation about z.
+- **Force conservation**: the net force on an isolated system vanishes
+  componentwise (QM plus point-charge forces for QM/MM cases).
+- **Charge conservation**: the summed atomic charges reproduce the declared
+  molecular charge.
+
+The invariance gates reuse the golden runner's strict single-shot options
+(fresh SCC, charge tolerance 1e-10, energy tolerance 1e-12) so the two paths can
+never diverge in convergence policy. Each gate emits one deterministic
+`PASS`/`FAIL` line with the measured maximum error and the limit; any failure
+makes the tool exit nonzero.

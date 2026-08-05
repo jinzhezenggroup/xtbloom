@@ -7,16 +7,19 @@ gpuxtb physics implementation or either Fortran reference package is built.
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "gpuxtb_conformance.py"
 PUBLIC_API_TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "gpuxtb_public_api.py"
+INVARIANTS_TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "gpuxtb_invariants.py"
 MANIFEST = REPOSITORY_ROOT / "data" / "conformance" / "manifest.json"
 SPEC = importlib.util.spec_from_file_location("gpuxtb_conformance_tool", TOOL)
 assert SPEC is not None and SPEC.loader is not None
@@ -30,6 +33,16 @@ assert PUBLIC_SPEC is not None and PUBLIC_SPEC.loader is not None
 PUBLIC_API = importlib.util.module_from_spec(PUBLIC_SPEC)
 sys.modules[PUBLIC_SPEC.name] = PUBLIC_API
 PUBLIC_SPEC.loader.exec_module(PUBLIC_API)
+# The invariants tool imports the ABI mirror by its real module name; alias the
+# already-loaded module so both tools share one ctypes mirror in-process.
+sys.modules.setdefault("gpuxtb_public_api", PUBLIC_API)
+INVARIANTS_SPEC = importlib.util.spec_from_file_location(
+    "gpuxtb_invariants_tool", INVARIANTS_TOOL
+)
+assert INVARIANTS_SPEC is not None and INVARIANTS_SPEC.loader is not None
+INVARIANTS = importlib.util.module_from_spec(INVARIANTS_SPEC)
+sys.modules[INVARIANTS_SPEC.name] = INVARIANTS
+INVARIANTS_SPEC.loader.exec_module(INVARIANTS)
 
 
 class ConformanceToolTest(unittest.TestCase):
@@ -623,6 +636,245 @@ class ConformanceToolTest(unittest.TestCase):
             self.assertIn(
                 "missing point_charge_forces_hartree_per_bohr", completed.stdout
             )
+
+    def test_manifest_justifies_each_tolerance_separately(self) -> None:
+        """Every gate tolerance records a unit and a property-specific rationale."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        for property_name, tolerance in manifest["tolerances"].items():
+            if property_name == "rationale":
+                continue
+            with self.subTest(property_name=property_name):
+                self.assertIsInstance(tolerance["atol"], (int, float))
+                self.assertIsInstance(tolerance["rtol"], (int, float))
+                self.assertIn("unit", tolerance)
+                justification = tolerance["justification"]
+                self.assertIsInstance(justification, str)
+                self.assertGreater(len(justification.strip()), 20)
+
+
+def _zero_invariant_result(
+    geometry: INVARIANTS.Geometry,
+) -> INVARIANTS.InvariantResult:
+    """Build an all-zero result sized to one geometry."""
+    return INVARIANTS.InvariantResult(
+        case_id=geometry.case_id,
+        molecular_charge=geometry.molecular_charge,
+        energy=0.0,
+        forces=[0.0] * (3 * len(geometry.atomic_numbers)),
+        charges=[0.0] * len(geometry.atomic_numbers),
+        point_forces=[0.0] * (3 * len(geometry.point_values)),
+    )
+
+
+def _invariant_geometries() -> list[INVARIANTS.Geometry]:
+    """Two small geometries: a neutral gas pair and one QM atom plus a point."""
+    return [
+        INVARIANTS.Geometry(
+            case_id="gas_pair",
+            atomic_numbers=[1, 1],
+            positions=[0.0, 0.0, 0.0, 0.0, 0.0, 1.4],
+            molecular_charge=0,
+            unpaired_electrons=0,
+            spin_channels=1,
+        ),
+        INVARIANTS.Geometry(
+            case_id="qm_point",
+            atomic_numbers=[8],
+            positions=[0.0, 0.0, 0.0],
+            molecular_charge=0,
+            unpaired_electrons=0,
+            spin_channels=1,
+            point_positions=[3.0, 0.0, 0.0],
+            point_values=[-0.5],
+            point_gammas=[0.405771],
+        ),
+    ]
+
+
+class InvarianceToolTest(unittest.TestCase):
+    """Exercise the automated symmetry, conservation, and batch gates."""
+
+    def run_invariant_checks(self, solver, geometries) -> list[str]:
+        with redirect_stdout(io.StringIO()):
+            return INVARIANTS.run_invariant_checks(solver, geometries, ())
+
+    def test_rotation_matrix_is_proper_and_orthogonal(self) -> None:
+        """The Rodrigues rotation used by the gate is deterministic and valid."""
+        matrix = INVARIANTS.rotation_matrix((1.0, 1.0, 1.0), 37.0)
+        for row in matrix:
+            self.assertAlmostEqual(sum(component**2 for component in row), 1.0)
+        columns = [[matrix[row][column] for row in range(3)] for column in range(3)]
+        for column in columns:
+            self.assertAlmostEqual(sum(component**2 for component in column), 1.0)
+        determinant = (
+            matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+            - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+            + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
+        )
+        self.assertAlmostEqual(determinant, 1.0, places=12)
+
+    def test_transforms_preserve_pairwise_distances(self) -> None:
+        """Translations and rotations are rigid-body geometry transforms."""
+        geometry = _invariant_geometries()[0]
+        baseline_distance = 1.4
+        transforms = [
+            *(
+                INVARIANTS.translated(geometry, delta)
+                for delta in INVARIANTS.TRANSLATION_DELTAS
+            ),
+            INVARIANTS.rotated(
+                geometry, INVARIANTS.rotation_matrix((1.0, 1.0, 1.0), 37.0)
+            ),
+            INVARIANTS.rotated(
+                geometry, [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+            ),
+        ]
+        for transformed in transforms:
+            vector = [
+                transformed.positions[3] - transformed.positions[0],
+                transformed.positions[4] - transformed.positions[1],
+                transformed.positions[5] - transformed.positions[2],
+            ]
+            self.assertAlmostEqual(
+                sum(component**2 for component in vector) ** 0.5,
+                baseline_distance,
+                places=12,
+            )
+
+    def test_zero_solver_passes_every_gate(self) -> None:
+        """A trivially symmetric solver satisfies all self-consistency gates."""
+        geometries = _invariant_geometries()
+
+        def solver(items):
+            return [_zero_invariant_result(item) for item in items]
+
+        failures = self.run_invariant_checks(solver, geometries)
+        self.assertEqual(failures, [])
+
+    def test_translation_break_is_detected(self) -> None:
+        """A position-dependent energy cannot pass the translation gate."""
+        geometries = _invariant_geometries()
+
+        def solver(items):
+            results = []
+            for item in items:
+                result = _zero_invariant_result(item)
+                result.energy = 0.5 * item.positions[0]
+                results.append(result)
+            return results
+
+        failures = self.run_invariant_checks(solver, geometries)
+        translation_failures = [
+            failure for failure in failures if "translation_invariant" in failure
+        ]
+        self.assertTrue(translation_failures)
+        self.assertTrue(any("energy_hartree" in item for item in translation_failures))
+
+    def test_rotation_break_is_detected(self) -> None:
+        """A lab-frame force cannot pass the rotation-covariance gate."""
+        geometries = _invariant_geometries()
+
+        def solver(items):
+            results = []
+            for item in items:
+                result = _zero_invariant_result(item)
+                if len(item.atomic_numbers) == 2:
+                    result.forces[0] = 1.0
+                    result.forces[3] = -1.0
+                results.append(result)
+            return results
+
+        failures = self.run_invariant_checks(solver, geometries)
+        rotation_failures = [
+            failure for failure in failures if "rotation_covariant" in failure
+        ]
+        self.assertTrue(rotation_failures)
+        self.assertFalse(
+            any("total_force" in failure for failure in failures),
+            "symmetric constant forces must still conserve net force",
+        )
+
+    def test_force_conservation_break_is_detected(self) -> None:
+        """A nonzero net force cannot pass the conservation gate."""
+        geometries = _invariant_geometries()
+
+        def solver(items):
+            results = []
+            for item in items:
+                result = _zero_invariant_result(item)
+                for atom in range(len(item.atomic_numbers)):
+                    result.forces[3 * atom] = 1.0
+                results.append(result)
+            return results
+
+        failures = self.run_invariant_checks(solver, geometries)
+        self.assertTrue(any("total_force" in failure for failure in failures))
+
+    def test_batch_dependent_results_are_detected(self) -> None:
+        """Per-call state must not make ragged batches differ from sequential runs."""
+        geometries = _invariant_geometries()
+        invocation = {"count": 0}
+
+        def solver(items):
+            invocation["count"] += 1
+            return [
+                INVARIANTS.InvariantResult(
+                    case_id=item.case_id,
+                    molecular_charge=item.molecular_charge,
+                    energy=float(invocation["count"]) * 1.0e-6,
+                    forces=[0.0] * (3 * len(item.atomic_numbers)),
+                    charges=[0.0] * len(item.atomic_numbers),
+                    point_forces=[0.0] * (3 * len(item.point_values)),
+                )
+                for item in items
+            ]
+
+        failures = self.run_invariant_checks(solver, geometries)
+        self.assertTrue(any("batch_vs_sequential" in failure for failure in failures))
+
+    def test_cli_rejects_cuda_memory_for_cpu_backend(self) -> None:
+        """The invariance CLI enforces the same placement rule as the golden runner."""
+        for memory_mode in ("device", "mixed"):
+            with self.subTest(memory_mode=memory_mode):
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        str(INVARIANTS_TOOL),
+                        "--library",
+                        "/does/not/exist/libgpuxtb.so",
+                        "--backend",
+                        "cpu",
+                        "--memory-mode",
+                        memory_mode,
+                    ],
+                    cwd=REPOSITORY_ROOT,
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn("CPU backend only supports", completed.stderr)
+
+    def test_cli_requires_an_existing_library(self) -> None:
+        """A missing shared library is a hard error, not a skip."""
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(INVARIANTS_TOOL),
+                "--library",
+                "/does/not/exist/libgpuxtb.so",
+                "--backend",
+                "cpu",
+                "--case",
+                "ketene",
+            ],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("shared library is missing", completed.stderr)
 
 
 if __name__ == "__main__":
