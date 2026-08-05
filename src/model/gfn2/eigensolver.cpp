@@ -1,4 +1,5 @@
 #include "model/gfn2/eigensolver.hpp"
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include "model/gfn2/occupation_binary64_policy.hpp"
 
@@ -1193,12 +1194,11 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
     using SetInterfaceLayer = int (*)(int layer);
     using OpenBlasGetConfig = const char* (*)();
     /* dlopen candidates in preference order: the absolute path CMake baked in
-     * (GPUXTB_MKL_RT_LIBRARY / find_package(BLAS) in CMakeLists.txt) first,
-     * then known MKL sonames (which the Python layer may already have
-     * preloaded), then OpenBLAS sonames for platforms without MKL: aarch64
-     * wheels ship a prefixed LP64 libscipy_openblas.so runtime. Skipping a
-     * candidate never fails the factory, so a loaded library that is not a
-     * usable LP64 BLAS just yields the next one. */
+     * (GPUXTB_CPU_LINALG_LIBRARY / find_package(BLAS) in CMakeLists.txt) first,
+     * then known MKL and OpenBLAS sonames that the Python layer may already
+     * have preloaded. Linux wheels use a prefixed LP64 libscipy_openblas.so
+     * runtime. Skipping a candidate never fails the factory, so a loaded
+     * library that is not a usable sequential LP64 BLAS yields the next one. */
     const char* const runtime_names[] = {
         kConfiguredRuntime, "libmkl_rt.so.2",       "libmkl_rt.so.3",          "libmkl_rt.so.4",
         "libmkl_rt.so",     "libscipy_openblas.so", "libscipy_openblas32_.so", "libopenblas.so.0",
@@ -1257,7 +1257,17 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
         saw_ilp64_mkl = true; /* Never accept an ILP64 MKL; try other runtimes. */
         continue;
       }
-      static_cast<void>(load_symbol(handle, "MKL_Set_Num_Threads_Local", set_threads));
+      if (is_mkl) {
+        static_cast<void>(load_symbol(handle, "MKL_Set_Num_Threads_Local", set_threads));
+      } else if (!load_symbol(handle, "openblas_set_num_threads_local", set_threads)) {
+        /* scipy-openblas32 currently retains the unprefixed local-control
+         * symbol, while other prefixed builds may follow the public header. */
+        static_cast<void>(load_symbol(handle, "scipy_openblas_set_num_threads_local", set_threads));
+      }
+      if (set_threads == nullptr) {
+        static_cast<void>(dlclose(handle));
+        continue;
+      }
       CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
           is_mkl ? CpuLinearAlgebraBackend::Origin::kMklRtLp64
                  : CpuLinearAlgebraBackend::Origin::kOpenBlasLp64,

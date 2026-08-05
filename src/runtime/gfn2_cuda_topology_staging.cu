@@ -1,4 +1,5 @@
 #include <cuda_runtime_api.h>
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <climits>
 #include <cmath>

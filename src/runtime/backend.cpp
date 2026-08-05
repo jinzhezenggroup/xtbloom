@@ -1,4 +1,5 @@
 #include "runtime/backend.hpp"
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <memory>
 #include <new>

@@ -1,4 +1,6 @@
 #ifndef GPUXTB_GPUXTB_H
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+
 #define GPUXTB_GPUXTB_H
 
 #include <stddef.h>

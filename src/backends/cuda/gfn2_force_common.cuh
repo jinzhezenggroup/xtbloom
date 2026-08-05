@@ -1,4 +1,6 @@
 #ifndef GPUXTB_BACKENDS_CUDA_GFN2_FORCE_COMMON_CUH
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+
 #define GPUXTB_BACKENDS_CUDA_GFN2_FORCE_COMMON_CUH
 
 #include <cstdint>

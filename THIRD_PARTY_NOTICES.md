@@ -1,7 +1,9 @@
 # Third-party notices and provenance
 
-gpuxtb is distributed under `GPL-3.0-or-later`; see `LICENSE`. The
-following upstream material is retained under its own compatible terms.
+gpuxtb is distributed under `GPL-3.0-or-later`; see `LICENSE`. The additional
+permission in `CUDA_MKL_LINKING_EXCEPTION` applies only to gpuxtb material
+whose copyright holder authorizes it. The following upstream material is
+retained under its own terms and is not relicensed by that permission.
 The manifests named below pin the source revisions and content digests used
 to produce the redistributed data.
 
@@ -18,9 +20,9 @@ Redistributed or derived material:
   representations of the GFN2 parameter export from revision
   `fa8a4416e8fe093d0075bc10ac875494c2a449a9`. Exact source paths and hashes
   are recorded in `data/parameters/manifest.json`.
-- The Stewart STO-nG tables in `src/model/gfn2/basis.cpp` come from
+- The Stewart STO-nG tables in `data/parameters/tblite_sto.hpp` come from
   `src/tblite/basis/slater.f90` at that revision.
-- The element spin constants in `src/model/gfn2/spin.cpp` come from
+- The element spin constants in `data/parameters/tblite_spin.hpp` come from
   `src/tblite/data/spin.f90` at that revision. Their digest is recorded in
   `data/parameters/spin_manifest.json`.
 - The SCC observer development tool in `tools/oracle/tblite_scc_trace/`
@@ -88,12 +90,37 @@ sources remain in the build tree, but their compiled trampoline and initializer
 code is embedded in the distributed `libgpuxtb` binary. Those trampolines
 dynamically resolve the CUDA host runtime, math, and driver APIs (cudart,
 cuBLAS, cuSOLVER, and libcuda) rather than retaining ordinary shared-library
-`DT_NEEDED` entries for those host libraries. CUDA compiler and device-link
-steps may still embed NVIDIA device-runtime code such as `cudadevrt`; therefore
-this mechanism must not be described as eliminating all proprietary linking or
-code from the binary. Whether the resulting distribution is legally permitted
-remains an open owner/legal determination in Issue #162 and continues to block
-the release gate tracked by Issue #129.
+`DT_NEEDED` entries for those host libraries. This mechanism is an engineering
+boundary, not the legal basis for combining with CUDA.
+
+## OpenBLAS runtime dependency
+
+Repository: <https://github.com/MacPython/openblas-libs>
+
+The separately installed `scipy-openblas32` distribution provides gpuxtb's
+default Linux LP64 LAPACKE+CBLAS runtime. Version 0.3.34.0.0 was reviewed for
+this policy: its own license payload records the MacPython wrapper under
+BSD-2-Clause, OpenBLAS and LAPACK under BSD-3-Clause terms, and its GCC runtime
+dependencies under GPL-3.0 with the GCC Runtime Library Exception. The runtime
+is not bundled in gpuxtb source archives, native installs, or wheels; its own
+Python distribution retains the complete notices and license texts.
+
+## CUDA and Intel MKL provider components
+
+CUDA host libraries, the NVIDIA driver, and Intel MKL are not part of gpuxtb
+and remain under their vendor licenses. gpuxtb artifacts must not bundle their
+shared or static library files. CUDA providers may be installed separately
+through the `cuda12` Python extra or supplied by the system. MKL is not a
+Python dependency; native users may explicitly select a compatible
+`libmkl_rt` through `GPUXTB_CPU_LINALG_LIBRARY`.
+
+Dynamic loading does not itself resolve GPL compatibility. Jinzhe Zeng grants
+the narrowly scoped GPLv3 Section 7 permission in
+`CUDA_MKL_LINKING_EXCEPTION` for the enumerated provider interfaces and
+compiler support. Provider code remains under vendor terms, and the permission
+grants no redistribution rights beyond those terms. gpuxtb's device link
+passes `--cudadevrt=none`; NVIDIA libdevice code incorporated by nvcc may still
+be present and is covered expressly by the permission.
 
 ## Distribution policy
 
@@ -101,5 +128,5 @@ Generated artifacts remain accompanied by their upstream SPDX identifier,
 pinned provenance manifest, and applicable license text. Source archives must
 also retain the complete pinned implib source tree used by the build. Source
 archives, Python wheels, and native CMake installs must retain this file, the
-project license, compatible third-party license texts, and all applicable
-provenance manifests.
+project license, `CUDA_MKL_LINKING_EXCEPTION`, compatible third-party license
+texts, and all applicable provenance manifests.

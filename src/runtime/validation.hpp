@@ -1,4 +1,6 @@
 #ifndef GPUXTB_RUNTIME_VALIDATION_HPP
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+
 #define GPUXTB_RUNTIME_VALIDATION_HPP
 
 #include <cstdint>

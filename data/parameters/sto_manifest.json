@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "model": "Stewart STO-nG expansion tables",
+  "source": {
+    "repository": "https://github.com/tblite/tblite",
+    "revision": "fa8a4416e8fe093d0075bc10ac875494c2a449a9",
+    "path": "src/tblite/basis/slater.f90",
+    "sha256": "8a3df2db076469b0e22c02af9dfadf9880932fc241b82d5802ebb268d002773c",
+    "license": "LGPL-3.0-or-later"
+  },
+  "consumer": "data/parameters/tblite_sto.hpp"
+}

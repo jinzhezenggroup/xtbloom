@@ -1,4 +1,6 @@
 #ifndef GPUXTB_RUNTIME_CUDA_DESCRIPTOR_VALIDATION_HPP
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+
 #define GPUXTB_RUNTIME_CUDA_DESCRIPTOR_VALIDATION_HPP
 
 #include <cuda_runtime_api.h>

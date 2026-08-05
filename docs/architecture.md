@@ -123,12 +123,13 @@ resolved tables are then immutable, avoiding races on concurrent CUDA calls. A h
 NVIDIA runtime can therefore load libgpuxtb and receive a backend-unavailable diagnostic instead
 of failing at the ELF loader boundary.
 
-This host-library indirection is narrower than a claim that the CUDA-enabled binary contains no
-proprietary linked code. nvcc's separable-compilation/device-link pipeline may embed NVIDIA
-device-runtime code such as cudadevrt in libgpuxtb even when the inspected dynamic section has no
-ordinary `DT_NEEDED` entry for the wrapped host libraries. The source provenance and packaging
-contract are recorded in `cmake/3rdparty/implib_manifest.json` and
-`THIRD_PARTY_NOTICES.md`; the owner/legal distribution decision remains open in Issue #162.
+This host-library indirection is not a GPL compatibility claim: dynamic loading can still combine
+works under copyright law. The distribution basis is instead the GPLv3 Section 7 additional
+permission in `CUDA_MKL_LINKING_EXCEPTION`. gpuxtb passes `--cudadevrt=none` at device link because
+it uses no CUDA Dynamic Parallelism, but nvcc may still incorporate NVIDIA libdevice code. That
+code and every separately installed CUDA or MKL provider remain under vendor terms. The source
+provenance and packaging contract are recorded in `cmake/3rdparty/implib_manifest.json` and
+`THIRD_PARTY_NOTICES.md`.
 
 ## Correctness strategy
 
@@ -166,12 +167,12 @@ runs first, never the arithmetic order within a system.
 greater than one is clamped to the CPUs available in the process affinity mask; the calling thread
 participates and the context retains the other workers. `cpu_threads=0` selects the affinity count
 capped at 64, which avoids silently constructing an unbounded pool on large shared hosts. The
-verified MKL provider remains LP64 and every factorization/eigensolve installs a thread-local MKL
-limit of one, making the outer system scheduler the sole CPU parallel layer.
+verified BLAS provider remains LP64 and every factorization/eigensolve installs a provider-local
+thread limit of one, making the outer system scheduler the sole CPU parallel layer.
 
 The reproducible CPU benchmark protocol compares identical warm public-C-API runs using
 `cpu_threads=1` and an explicit affinity-constrained worker count, recording compiler, ISA,
-affinity, MKL runtime, warm-up count, raw samples, and batch size. Batch-one latency is reported
+affinity, BLAS runtime, warm-up count, raw samples, and batch size. Batch-one latency is reported
 separately and is not combined with throughput. A pinned regression threshold will be promoted to
 CI only after the benchmark corpus includes gas, QM/MM, homogeneous, and heterogeneous workloads
 on a named runner; local development measurements are evidence, not a portable CI gate.
