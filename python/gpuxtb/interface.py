@@ -589,6 +589,213 @@ def _pack_charge_responses(
     return offsets, shifts, matrices
 
 
+# --- auto batch sizing --------------------------------------------------------
+
+# Conservative device-footprint estimates used to turn a memory budget into a
+# maximum total-atom count per ``gpuxtb_compute`` call when a live calibration
+# is unavailable.  The baseline covers the CUDA context plus fixed provider
+# pools; the per-atom slope is the measured device-memory coefficient.  Both
+# are machine-specific, so explicit overrides and a live calibration are
+# preferred over these defaults.
+AUTO_BATCH_MEMORY_FRACTION = 0.5  # never budget more than half the free device
+AUTO_BATCH_BASELINE_BYTES = 0.9e9  # CUDA context + fixed provider pools
+AUTO_BATCH_BYTES_PER_ATOM = 0.2e6  # device footprint slope (bytes/atom)
+AUTO_BATCH_DEFAULT_MAX_ATOMS = 1 << 20  # fallback ceiling without CUDA info
+
+# Per-machine calibration results are cached by (backend, device_id) so a
+# fresh context in a long-running process does not re-probe the device.
+_auto_batch_limit_cache: dict = {}
+
+
+def _slice_by_total_atoms(
+    structures: Sequence[Structure], max_total_atoms: int
+) -> list[Sequence[Structure]]:
+    """Split *structures* into contiguous chunks of at most ``max_total_atoms``.
+
+    A single system larger than the budget forms its own oversized chunk so it
+    is still evaluated (the C backend simply allocates whatever it needs);
+    memory budgeting protects *batches*, not individual molecules.
+    """
+    if max_total_atoms < 1:
+        raise GPUxtbValueError("auto batch size must be a positive atom count")
+    chunks: list[list[Structure]] = []
+    current: list[Structure] = []
+    current_atoms = 0
+    for structure in structures:
+        atoms = len(structure)
+        if atoms > max_total_atoms:
+            if current:
+                chunks.append(current)
+                current = []
+                current_atoms = 0
+            chunks.append([structure])
+            continue
+        if current and current_atoms + atoms > max_total_atoms:
+            chunks.append(current)
+            current = []
+            current_atoms = 0
+        current.append(structure)
+        current_atoms += atoms
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _merge_computed(
+    computed_batches: Sequence[_ComputedBatch],
+    structures: Sequence[Structure],
+) -> _ComputedBatch:
+    """Concatenate per-chunk results and rebase offsets into one public batch.
+
+    Each chunk returns offsets relative to that chunk; the merged result must
+    expose offsets relative to the complete structure list so ``BatchResult``
+    slicing and indexing work uniformly.
+    """
+    point_batches = [
+        batch.point_charge_forces
+        for batch in computed_batches
+        if batch.point_charge_forces is not None
+    ]
+    atom_offsets = [0]
+    point_offsets = [0]
+    for structure in structures:
+        atom_offsets.append(atom_offsets[-1] + len(structure))
+        point_offsets.append(
+            point_offsets[-1] + len(structure.point_charges.charges)
+            if structure.point_charges is not None
+            else point_offsets[-1]
+        )
+    keepalive: list = []
+    for batch in computed_batches:
+        keepalive.extend(batch.keepalive)
+    return _ComputedBatch(
+        energies=np.concatenate([batch.energies for batch in computed_batches]),
+        forces=np.concatenate([batch.forces for batch in computed_batches], axis=0),
+        charges=np.concatenate([batch.charges for batch in computed_batches], axis=0),
+        point_charge_forces=(
+            np.concatenate(point_batches, axis=0) if point_batches else None
+        ),
+        scc_iterations=np.concatenate(
+            [batch.scc_iterations for batch in computed_batches]
+        ),
+        scc_converged=np.concatenate(
+            [batch.scc_converged for batch in computed_batches]
+        ),
+        per_system_status=np.concatenate(
+            [batch.per_system_status for batch in computed_batches]
+        ),
+        result_flags=computed_batches[0].result_flags,
+        atom_offsets=np.asarray(atom_offsets, dtype=np.int64),
+        point_offsets=np.asarray(point_offsets, dtype=np.int64)
+        if any(batch.point_offsets is not None for batch in computed_batches)
+        else None,
+        keepalive=keepalive,
+    )
+
+
+def _sample_for_calibration(
+    structures: Sequence[Structure], max_atoms: int
+) -> list[Structure]:
+    """Return a small leading subset whose total atom count stays bounded."""
+    sample: list[Structure] = []
+    sample_atoms = 0
+    for structure in structures:
+        atoms = len(structure)
+        if atoms > max_atoms:
+            continue
+        if sample and sample_atoms + atoms > max_atoms:
+            break
+        sample.append(structure)
+        sample_atoms += atoms
+    return sample
+
+
+def _resolve_auto_batch_limit(
+    context: Context,
+    structures: Sequence[Structure],
+    settings: _ComputeSettings,
+    flags: int,
+) -> int:
+    """Return a machine-adaptive maximum total-atom count for one compute call.
+
+    For the CUDA backend the limit is derived from real device memory, refined
+    by a one-time live calibration that measures the actual bytes/total-atom
+    footprint on this device, and cached per (backend, device_id).  Other
+    backends and hosts without queryable CUDA memory fall back to a
+    conservative atom ceiling.  Callers may override with an explicit integer
+    ``auto_batch_size`` to force a budget and skip this logic entirely.
+    """
+    backend = int(context.backend)
+    device_id = int(context.device_id)
+    cache_key = (backend, device_id)
+    cached = _auto_batch_limit_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    if backend == library.BACKEND_CUDA:
+        memory = library.device_memory_info(device_id)
+        if memory is not None:
+            free_bytes, total_bytes = memory
+            # Two-point calibration: the first call pays the fixed plan/cache
+            # allocation, so only the *difference* between two sample sizes
+            # isolates the true marginal bytes/total-atom footprint.  Probing
+            # only happens when the batch is larger than the sample window.
+            sample_small = _sample_for_calibration(structures, max_atoms=384)
+            sample_large = _sample_for_calibration(structures, max_atoms=3072)
+            small_atoms = sum(len(item) for item in sample_small)
+            large_atoms = sum(len(item) for item in sample_large)
+            total_atoms = sum(len(item) for item in structures)
+            if small_atoms and large_atoms > small_atoms and total_atoms > large_atoms:
+                try:
+                    _compute_batch(
+                        context,
+                        sample_small,
+                        model=settings.model,
+                        max_scc_iterations=settings.max_scc_iterations,
+                        charge_tolerance=settings.charge_tolerance,
+                        energy_tolerance=settings.energy_tolerance,
+                        electronic_temperature=settings.electronic_temperature,
+                        flags=flags,
+                    )
+                    midpoint = library.device_memory_info(device_id)
+                    if midpoint is not None:
+                        midpoint_used = midpoint[1] - midpoint[0]
+                        _compute_batch(
+                            context,
+                            sample_large,
+                            model=settings.model,
+                            max_scc_iterations=settings.max_scc_iterations,
+                            charge_tolerance=settings.charge_tolerance,
+                            energy_tolerance=settings.energy_tolerance,
+                            electronic_temperature=settings.electronic_temperature,
+                            flags=flags,
+                        )
+                        after = library.device_memory_info(device_id)
+                    else:
+                        after = None
+                except GPUxtbRuntimeError:
+                    after = None
+                if after is not None:
+                    after_used = after[1] - after[0]
+                    slope = max(0.0, (after_used - midpoint_used)) / (
+                        large_atoms - small_atoms
+                    )
+                    if slope > 0.0:
+                        budget = max(
+                            0.0,
+                            free_bytes * AUTO_BATCH_MEMORY_FRACTION
+                            - AUTO_BATCH_BASELINE_BYTES,
+                        )
+                        limit = int(budget / slope)
+                        limit = max(1, min(limit, AUTO_BATCH_DEFAULT_MAX_ATOMS))
+                        _auto_batch_limit_cache[cache_key] = limit
+                        return limit
+
+    limit = AUTO_BATCH_DEFAULT_MAX_ATOMS
+    _auto_batch_limit_cache[cache_key] = limit
+    return limit
+
+
 def _compute_batch(
     context: Context,
     structures: Sequence[Structure],
@@ -1197,13 +1404,30 @@ class BatchCalculator:
     def set(self, attribute: str, value: Any) -> None:
         self._settings.set(attribute, value)
 
-    def compute(self, *, raise_on_failure: bool = False) -> BatchResult:
+    def compute(
+        self,
+        *,
+        raise_on_failure: bool = False,
+        auto_batch_size: Optional[Union[bool, int]] = None,
+    ) -> BatchResult:
         """Run the batch while preserving successful peers.
 
         By default the result is returned even when individual systems fail;
         their floating-point slices contain NaNs and diagnostics identify the
         failed peers.  Set ``raise_on_failure=True`` or call
         :meth:`BatchResult.raise_for_status` for strict behavior.
+
+        ``auto_batch_size`` controls automatic slicing of one large batch into
+        several ``gpuxtb_compute`` calls so each call stays inside a
+        machine-appropriate device-memory budget.  ``None`` (default) preserves
+        the historical single-call behavior; an explicit integer is a hard
+        maximum total-atom count per chunk (use ``1`` to force one system per
+        call); ``True`` derives the budget from the host's actual device memory
+        with a one-time per-machine calibration.  Slicing always keeps every
+        system whole.  On CPU the sliced results are bit-identical to an
+        unsliced run; on CUDA the eigensolver bucket composition changes, so
+        results agree to the backend's normal numerical tolerance (typically
+        ~1e-15 relative), never worse than a geometry-level degenerate case.
         """
         flags = (
             library.COMPUTE_ENERGY
@@ -1212,16 +1436,38 @@ class BatchCalculator:
         )
         if any(structure.point_charges is not None for structure in self._structures):
             flags |= library.COMPUTE_POINT_CHARGE_FORCES
-        computed = _compute_batch(
-            self._context,
-            self._structures,
-            model=self._settings.model,
-            max_scc_iterations=self._settings.max_scc_iterations,
-            charge_tolerance=self._settings.charge_tolerance,
-            energy_tolerance=self._settings.energy_tolerance,
-            electronic_temperature=self._settings.electronic_temperature,
-            flags=flags,
-        )
+
+        def run_once(structures: Sequence[Structure]) -> _ComputedBatch:
+            return _compute_batch(
+                self._context,
+                structures,
+                model=self._settings.model,
+                max_scc_iterations=self._settings.max_scc_iterations,
+                charge_tolerance=self._settings.charge_tolerance,
+                energy_tolerance=self._settings.energy_tolerance,
+                electronic_temperature=self._settings.electronic_temperature,
+                flags=flags,
+            )
+
+        if auto_batch_size is None or auto_batch_size is False:
+            chunks: list[Sequence[Structure]] = [self._structures]
+        elif auto_batch_size is True:
+            limit = _resolve_auto_batch_limit(
+                self._context, self._structures, self._settings, flags
+            )
+            chunks = _slice_by_total_atoms(self._structures, limit)
+        else:
+            limit = _as_integer("auto_batch_size", auto_batch_size)
+            if limit <= 0:
+                raise GPUxtbValueError("auto_batch_size must be a positive integer")
+            chunks = _slice_by_total_atoms(self._structures, limit)
+
+        if len(chunks) == 1:
+            computed = run_once(chunks[0])
+        else:
+            computed = _merge_computed(
+                [run_once(chunk) for chunk in chunks], self._structures
+            )
         batch_result = BatchResult(computed, self._structures)
         if raise_on_failure:
             batch_result.raise_for_status()

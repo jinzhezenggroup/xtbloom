@@ -473,6 +473,55 @@ def _check_init(operation: str, status: int) -> None:
         )
 
 
+def device_memory_info(device_id: int = 0) -> Optional[tuple[int, int]]:
+    """Return ``(free_bytes, total_bytes)`` for one CUDA device, or ``None``.
+
+    Used by the auto-batch-size controller to budget a batch slice from actual
+    device memory instead of a hard-coded atom limit.  The query is best-effort:
+    a CUDA-less host, a loader stub without a real driver, or a failed
+    ``cudaSetDevice`` all return ``None`` so the caller falls back to a
+    conservative default.  The caller's current device is restored afterwards.
+    """
+    try:
+        import ctypes.util
+
+        cudart_name = ctypes.util.find_library("cudart") or "libcudart.so.12"
+        cudart = ctypes.CDLL(cudart_name)
+    except (OSError, AttributeError):
+        return None
+    try:
+        cudart.cudaGetDevice.argtypes = [ctypes.POINTER(ctypes.c_int)]
+        cudart.cudaGetDevice.restype = ctypes.c_int
+        cudart.cudaSetDevice.argtypes = [ctypes.c_int]
+        cudart.cudaSetDevice.restype = ctypes.c_int
+        cudart.cudaMemGetInfo.argtypes = [
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.POINTER(ctypes.c_size_t),
+        ]
+        cudart.cudaMemGetInfo.restype = ctypes.c_int
+
+        current = ctypes.c_int()
+        if cudart.cudaGetDevice(ctypes.byref(current)) != 0:
+            return None
+        if cudart.cudaSetDevice(int(device_id)) != 0:
+            return None
+        try:
+            free_bytes = ctypes.c_size_t()
+            total_bytes = ctypes.c_size_t()
+            if (
+                cudart.cudaMemGetInfo(
+                    ctypes.byref(free_bytes), ctypes.byref(total_bytes)
+                )
+                != 0
+            ):
+                return None
+            return int(free_bytes.value), int(total_bytes.value)
+        finally:
+            cudart.cudaSetDevice(int(current.value))
+    except (AttributeError, OSError):
+        return None
+
+
 def compute_checked(
     context: ctypes.c_void_p,
     batch: Batch,
