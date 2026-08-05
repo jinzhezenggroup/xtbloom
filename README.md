@@ -4,6 +4,10 @@ gpuxtb is a new C++ library for high-throughput GFN-xTB energy and force inferen
 GPUs. GFN2-xTB is the first implementation target. The public C ABI is designed for ragged batches,
 host or CUDA device pointers, and external point charges that participate in SCC iterations.
 
+gpuxtb is licensed under GPL-3.0-or-later. Redistributed tblite, dftd4,
+mctc-lib, and numerical-oracle material is documented in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) with pinned provenance.
+
 > [!IMPORTANT]
 > Restricted and unrestricted GFN2-xTB inference is available through `gpuxtb_compute` on CPU and
 > CUDA, including energies, analytic QM forces, atomic charges, external point charges in SCC,

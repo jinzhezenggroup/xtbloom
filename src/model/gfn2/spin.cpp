@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "model/gfn2/spin.hpp"
 
 #include <algorithm>
@@ -16,8 +18,8 @@ namespace {
 /*
  * tblite's element spin constants (ss, sp, pp, sd, pd, dd), pinned from
  * src/tblite/data/spin.f90 at the parameter provenance revision recorded in
- * data/parameters/spin_manifest.json. Values are in Hartree and are symmetric in
- * the two angular-momentum indices.
+ * data/parameters/spin_manifest.json (LGPL-3.0-or-later). Values are in
+ * Hartree and are symmetric in the two angular-momentum indices.
  */
 constexpr std::array<std::array<double, 6>, 86> kSpinConstants{{
     {{-0.0716250, 0.0000000, 0.0000000, 0.0000000, 0.0000000, 0.0000000}},

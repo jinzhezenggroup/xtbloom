@@ -1943,6 +1943,16 @@ if(GPUXTB_BUILD_TESTS)
     endif()
   endif()
   add_test(
+    NAME gpuxtb.licensing
+    COMMAND ${Python3_EXECUTABLE} tools/licensing/check_licenses.py
+            --source-root ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  add_test(
+    NAME gpuxtb.licensing_unit
+    COMMAND ${Python3_EXECUTABLE} -m unittest discover
+            -s tests/licensing -p "test_*.py" -v
+  )
+  add_test(
     NAME gpuxtb.oracle.tblite_observer_patch
     COMMAND ${Python3_EXECUTABLE} -m unittest discover
             -s tests/oracle -p "test_*.py" -v
@@ -1950,6 +1960,8 @@ if(GPUXTB_BUILD_TESTS)
   set_tests_properties(
     gpuxtb.parameters.generated
     gpuxtb.parameters.python
+    gpuxtb.licensing
+    gpuxtb.licensing_unit
     gpuxtb.conformance.manifest
     gpuxtb.conformance.python
     gpuxtb.oracle.tblite_observer_patch
@@ -1959,6 +1971,22 @@ endif()
 
 install(TARGETS gpuxtb EXPORT gpuxtbTargets)
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+# Legal material is part of the installed SDK contract. Keep project terms,
+# third-party notices, and machine-readable provenance together so native
+# consumers receive the same audit trail as source and Python distributions.
+install(FILES LICENSE THIRD_PARTY_NOTICES.md
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/gpuxtb
+)
+install(DIRECTORY LICENSES/
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/gpuxtb/third-party
+)
+install(FILES
+  data/parameters/manifest.json
+  data/parameters/spin_manifest.json
+  data/parameters/d4_manifest.json
+  data/parameters/mctc_manifest.json
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/gpuxtb/provenance
+)
 install(FILES data/parameters/d4.NOTICE
   DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/gpuxtb/third-party/d4
 )

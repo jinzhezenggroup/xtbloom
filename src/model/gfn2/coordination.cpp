@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "model/gfn2/coordination.hpp"
 
 #include <array>
@@ -27,7 +29,8 @@ constexpr double kAngstromToBohr = 1.8897261246204404;
 /*
  * Pyykko--Atsumi (2009) covalent radii in angstrom, with transition-metal
  * values reduced by 10%, as used by mctc-lib's get_covalent_rad. The GFN2
- * double-exponential CN uses 4/3 times these values.
+ * double-exponential CN uses 4/3 times these values. The retained mctc-lib
+ * data is Apache-2.0; see THIRD_PARTY_NOTICES.md.
  */
 constexpr std::array<double, parameters::gfn2::kElementCount> kCovalentRadiiAngstrom{{
     0.32, 0.46, 1.20, 0.94, 0.77, 0.75, 0.71, 0.63, 0.64, 0.67, 1.40, 1.25, 1.13, 1.04, 1.10,

@@ -29,6 +29,20 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+  licensing-source-distribution:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Build source distribution
+        run: |
+          python -m pip install build
+          python -m build --sdist --outdir dist-license
+      - name: Verify source distribution licenses
+        run: python tools/licensing/check_licenses.py --source-root . dist-license/*.tar.gz
+
   static-cpu-package:
     runs-on: ubuntu-24.04
     steps:
@@ -44,6 +58,8 @@ jobs:
         run: |
           cmake --build build-static --parallel
           cmake --install build-static --prefix "${RUNNER_TEMP}/gpuxtb-static-install"
+          python3 tools/licensing/check_licenses.py --source-root . \
+            --install-prefix "${RUNNER_TEMP}/gpuxtb-static-install"
       - name: Consume static exported CMake package
         run: |
           cmake -S tests/install_consumer -B build-static-consumer -G Ninja \
@@ -75,6 +91,8 @@ jobs:
       - name: Install and consume exported CMake package
         run: |
           cmake --install build-public --prefix "${RUNNER_TEMP}/gpuxtb-install"
+          python3 tools/licensing/check_licenses.py --source-root . \
+            --install-prefix "${RUNNER_TEMP}/gpuxtb-install"
           cmake -S tests/install_consumer -B build-consumer -G Ninja \
             -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/gpuxtb-install"
           cmake --build build-consumer --parallel
