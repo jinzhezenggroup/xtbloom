@@ -55,16 +55,40 @@ class CompareProfile:
     per_field: Mapping[str, tuple[float, float]] | None = None
 
     def __post_init__(self) -> None:
-        if not self.name or self.version <= 0:
+        if (
+            not isinstance(self.name, str)
+            or not self.name
+            or type(self.version) is not int
+            or self.version <= 0
+        ):
             raise TraceCompareError(
                 "comparison profile needs a name and positive version"
             )
-        for label, tolerance in (
-            ("default", (self.atol, self.rtol)),
-            *((key, value) for key, value in (self.per_field or {}).items()),
-        ):
-            if len(tolerance) != 2 or any(
-                not math.isfinite(value) or value < 0.0 for value in tolerance
+        if self.per_field is not None and not isinstance(self.per_field, Mapping):
+            raise TraceCompareError(
+                f"comparison profile {self.identifier} per_field must be a mapping"
+            )
+
+        tolerances: list[tuple[str, Any]] = [("default", (self.atol, self.rtol))]
+        for key, value in (self.per_field or {}).items():
+            if not isinstance(key, str) or not key:
+                raise TraceCompareError(
+                    f"comparison profile {self.identifier} has an invalid field suffix"
+                )
+            tolerances.append((key, value))
+
+        for label, tolerance in tolerances:
+            if (
+                not isinstance(tolerance, Sequence)
+                or isinstance(tolerance, (str, bytes))
+                or len(tolerance) != 2
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    or value < 0.0
+                    for value in tolerance
+                )
             ):
                 raise TraceCompareError(
                     f"comparison profile {self.identifier} has invalid {label} tolerance"
@@ -518,16 +542,34 @@ def _select_iteration(
 def _validated_iteration_context(
     iteration: Mapping[str, Any], expected_trace: Mapping[str, Any], logical_index: int
 ) -> tuple[int, Mapping[str, Any]]:
-    """Validate a snapshot by replacing its golden entry in a full trace copy."""
+    """Validate a snapshot in a self-consistent prefix of its golden context.
+
+    Golden terminal state and later iterations are intentionally excluded.
+    A replay may legitimately converge differently from the golden; that is a
+    scientific mismatch to report, not a malformed-input error.  The prefix
+    still supplies all dimensions and the logical index needed by strict trace
+    validation.
+    """
 
     TRACE.validate(expected_trace)
     position, expected = _select_iteration(expected_trace, logical_index)
-    # Validation accepts any non-string Sequence for arrays, including tuples.
-    # Materialize only the containers that this contextual replacement mutates
-    # so the public library helper preserves the validator's accepted input set.
     candidate = dict(deepcopy(expected_trace))
-    candidate["iterations"] = list(candidate["iterations"])
-    candidate["iterations"][position] = deepcopy(iteration)
+    candidate["iterations"] = [
+        *list(candidate["iterations"][:position]),
+        deepcopy(iteration),
+    ]
+    candidate.pop("failed_attempt", None)
+    convergence = (
+        iteration.get("convergence") if isinstance(iteration, Mapping) else None
+    )
+    converged = isinstance(convergence, Mapping) and convergence.get("overall") is True
+    candidate["terminal"] = {
+        "status": (
+            TRACE.STATUS_CONVERGED if converged else TRACE.STATUS_MAX_ITERATIONS
+        ),
+        "converged": converged,
+        "iterations": position + 1,
+    }
     TRACE.validate(candidate)
     return position, expected
 

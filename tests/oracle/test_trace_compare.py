@@ -266,6 +266,21 @@ class TraceCompareTest(unittest.TestCase):
         with self.assertRaisesRegex(COMPARE.TraceCompareError, "choose one of"):
             COMPARE.compare_trace(_trace(1), _trace(1), profile="cuda_replay")
 
+    def test_malformed_profile_configuration_is_actionable(self) -> None:
+        malformed = (
+            {"version": True},
+            {"atol": "small"},
+            {"per_field": []},
+            {"per_field": {1: (0.0, 0.0)}},
+            {"per_field": {"energy": (0.0,)}},
+            {"per_field": {"energy": (False, 0.0)}},
+        )
+        for overrides in malformed:
+            with self.subTest(overrides=overrides):
+                arguments = {"name": "invalid", "version": 1, **overrides}
+                with self.assertRaises(COMPARE.TraceCompareError):
+                    COMPARE.CompareProfile(**arguments)
+
     def test_tolerance_boundary_is_inclusive(self) -> None:
         profile = COMPARE.CompareProfile("boundary", 1, atol=1.0e-3)
         golden = _trace(1)
@@ -366,6 +381,28 @@ class TraceCompareTest(unittest.TestCase):
         result = COMPARE.compare_iteration(actual_iteration, golden, 1)
 
         self.assertTrue(result.matches)
+
+    def test_iteration_convergence_difference_is_scientific_mismatch(self) -> None:
+        golden = _trace(1)
+        actual_iteration = deepcopy(golden["iterations"][0])
+        actual_iteration["convergence"] = {
+            "energy": False,
+            "population": False,
+            "temperature": True,
+            "overall": False,
+        }
+
+        result = COMPARE.compare_iteration(actual_iteration, golden, 1)
+
+        self.assertFalse(result.matches)
+        self.assertEqual(
+            {mismatch.path for mismatch in result.mismatches},
+            {
+                "iterations[0].convergence.energy",
+                "iterations[0].convergence.overall",
+                "iterations[0].convergence.population",
+            },
+        )
 
     def test_rejects_malformed_actual_trace(self) -> None:
         with self.assertRaises(COMPARE.TRACE.TraceError):
