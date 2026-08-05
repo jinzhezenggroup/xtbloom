@@ -576,6 +576,10 @@ if(GPUXTB_HAS_CUDA)
   target_include_directories(gpuxtb_cuda_backend PRIVATE
     ${GPUXTB_CUDA_IMPLIB_DIR}
   )
+  # The startup bootstrap uses pthread_once and a diagnostic mutex. Preserve
+  # that dependency for every executable that consumes the backend objects,
+  # not just for the final gpuxtb library target.
+  target_link_libraries(gpuxtb_cuda_backend PUBLIC Threads::Threads)
   # The CUDA runtime/math/driver shared libraries are deliberately NOT linked.
   # The priority-101 bootstrap pre-resolves the complete shim cohort before
   # ordinary NVCC registration constructors run.
