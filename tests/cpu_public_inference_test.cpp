@@ -771,6 +771,155 @@ int test_point_charges_and_periodic_operator() {
   return 0;
 }
 
+int test_public_warm_start_transactions() {
+  ContextHandle context = make_cpu_context();
+  CHECK(context != nullptr);
+  const std::uint32_t flags =
+      GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
+
+  PublicBatch h2;
+  h2.atom_offsets = {0, 2};
+  h2.atomic_numbers = {1, 1};
+  h2.positions = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0};
+  h2.molecular_charges = {0.0};
+  h2.unpaired_electrons = {0};
+  h2.bind(flags);
+
+  /* First-call WARM has no fully converged compatible identity: it is rejected
+   * strictly (INVALID_ARGUMENT) without mutating any caller output or flag. */
+  h2.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  const std::vector<double> pre_energies = h2.energies;
+  const std::vector<double> pre_forces = h2.forces;
+  const std::vector<double> pre_charges = h2.atomic_charges;
+  const std::vector<std::int32_t> pre_iterations = h2.iterations;
+  const std::vector<std::uint8_t> pre_converged = h2.converged;
+  const std::vector<std::int32_t> pre_statuses = h2.statuses;
+  const std::uint32_t pre_flags = h2.result.flags;
+  CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(std::strstr(gpuxtb_get_last_error(), "WARM") != nullptr);
+  CHECK(h2.energies == pre_energies);
+  CHECK(h2.forces == pre_forces);
+  CHECK(h2.atomic_charges == pre_charges);
+  CHECK(h2.iterations == pre_iterations);
+  CHECK(h2.converged == pre_converged);
+  CHECK(h2.statuses == pre_statuses);
+  CHECK(h2.result.flags == pre_flags);
+
+  /* A fully converged FRESH run publishes the checkpoint. */
+  h2.bind(flags);
+  CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(h2.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(h2.converged[0] == 1u);
+  CHECK(h2.iterations[0] > 0);
+  const double fresh_energy = h2.energies[0];
+  const std::int32_t fresh_iterations = h2.iterations[0];
+  const std::vector<double> fresh_charges = h2.atomic_charges;
+  const std::vector<double> fresh_forces = h2.forces;
+
+  /* Same-geometry WARM consumes the checkpoint and reconverges without doing
+   * more work than the fresh run, with the same physics to SCC tolerance. */
+  h2.bind(flags);
+  h2.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(h2.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(h2.converged[0] == 1u);
+  CHECK(h2.iterations[0] <= fresh_iterations);
+  CHECK(near(h2.energies[0], fresh_energy, 1.0e-5));
+  for (std::size_t atom = 0u; atom < 2u; ++atom) {
+    CHECK(near(h2.atomic_charges[atom], fresh_charges[atom], 1.0e-5));
+    for (std::size_t axis = 0u; axis < 3u; ++axis) {
+      CHECK(near(h2.forces[3u * atom + axis], fresh_forces[3u * atom + axis], 1.0e-3));
+    }
+  }
+
+  /* Changed-geometry WARM reuses the converged electronic state as the initial
+   * SCC guess for the new coordinates. Publish a fresh reference on an
+   * isolated context to prove the warm trajectory cannot exceed it. */
+  ContextHandle fresh_reference = make_cpu_context();
+  CHECK(fresh_reference != nullptr);
+  PublicBatch perturbed = h2;
+  perturbed.bind(flags);
+  perturbed.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  perturbed.positions[0] += 0.002;
+  perturbed.positions[3] -= 0.002;
+  perturbed.bind(flags);
+
+  PublicBatch reference = perturbed;
+  reference.positions = perturbed.positions;
+  reference.bind(flags);
+  CHECK(gpuxtb_compute(fresh_reference.get(), &reference.batch, &reference.options,
+                       &reference.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(reference.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  const std::int32_t reference_iterations = reference.iterations[0];
+
+  perturbed.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_compute(context.get(), &perturbed.batch, &perturbed.options, &perturbed.result) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(perturbed.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(perturbed.converged[0] == 1u);
+  CHECK(perturbed.iterations[0] <= reference_iterations);
+  CHECK(near(perturbed.energies[0], reference.energies[0], 1.0e-5));
+  for (std::size_t atom = 0u; atom < 2u; ++atom) {
+    CHECK(near(perturbed.atomic_charges[atom], reference.atomic_charges[atom], 1.0e-5));
+  }
+
+  /* A topology change is a different identity: WARM is rejected without
+   * touching outputs, and the retained checkpoint for the H2 identity survives
+   * the rejection for a later compatible WARM call. */
+  PublicBatch methane;
+  methane.atom_offsets = {0, 5};
+  methane.atomic_numbers = {6, 1, 1, 1, 1};
+  methane.positions = {0.0,   0.0,   0.0,  1.09,  1.09,  1.09,  1.09, -1.09,
+                       -1.09, -1.09, 1.09, -1.09, -1.09, -1.09, 1.09};
+  methane.molecular_charges = {0.0};
+  methane.unpaired_electrons = {0};
+  methane.bind(flags);
+  methane.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_compute(context.get(), &methane.batch, &methane.options, &methane.result) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(methane.energies[0] == -71.0);
+  CHECK(methane.result.flags == UINT32_C(0x5a5a5a5a));
+
+  h2.bind(flags);
+  h2.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(h2.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(near(h2.energies[0], fresh_energy, 1.0e-5));
+  const double pre_temperature_reject_energy = h2.energies[0];
+
+  /* A compute-policy change is also a different identity; a scalar-only
+   * electronic temperature change cannot consume the old checkpoint. */
+  h2.options.electronic_temperature = 0.02;
+  CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(h2.energies[0] == pre_temperature_reject_energy);
+  h2.options.electronic_temperature = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+  CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(h2.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(near(h2.energies[0], fresh_energy, 1.0e-5));
+
+  /* A FRESH call that does not converge (one SCC iteration) must not advertise
+   * a checkpoint; the next strict WARM with the same identity is rejected. */
+  ContextHandle nonconverged_context = make_cpu_context();
+  CHECK(nonconverged_context != nullptr);
+  PublicBatch forced = h2;
+  forced.bind(flags);
+  forced.options.max_scc_iterations = 1;
+  CHECK(gpuxtb_compute(nonconverged_context.get(), &forced.batch, &forced.options,
+                       &forced.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(forced.statuses[0] == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+  CHECK(forced.converged[0] == 0u);
+  CHECK(std::isnan(forced.energies[0]));
+  forced.bind(flags);
+  forced.options.max_scc_iterations = 1;
+  forced.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_compute(nonconverged_context.get(), &forced.batch, &forced.options,
+                       &forced.result) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(forced.energies[0] == -71.0);
+  return 0;
+}
+
 int test_one_member_numerical_failure_isolated() {
   ContextHandle context = make_cpu_context(4);
   CHECK(context != nullptr);
@@ -837,6 +986,9 @@ int main() {
   }
   if (const int line = test_oh_radical_unrestricted_force_matches_energy_finite_difference();
       line != 0) {
+    return line;
+  }
+  if (const int line = test_public_warm_start_transactions(); line != 0) {
     return line;
   }
   if (const int line = test_point_charges_and_periodic_operator(); line != 0) {

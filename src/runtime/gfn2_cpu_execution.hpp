@@ -15,6 +15,9 @@ namespace gpuxtb::detail {
  * The implementation keeps immutable per-system topology plans and their
  * caller-owned numerical workspaces alive across repeated public C API calls.
  * Geometry-dependent caches and SCC state are refreshed for every inference.
+ * A fully converged inference also retains a per-system electronic checkpoint
+ * so a strict WARM start can seed the next SCC run from the converged state
+ * instead of resuming from the SAD guess.
  */
 class Gfn2CpuExecutionCache {
  public:
