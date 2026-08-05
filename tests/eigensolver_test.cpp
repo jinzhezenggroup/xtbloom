@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "model/gfn2/basis.hpp"
+#include "model/gfn2/occupation_binary64_policy.hpp"
 
 #if defined(GPUXTB_TEST_SCIPY_PREFIXED_BLAS)
 #define LAPACKE_dpotrf_work scipy_LAPACKE_dpotrf_work
@@ -573,6 +574,116 @@ int test_occupations_degeneracy_and_fractional_filling() {
   return 0;
 }
 
+int test_binary64_frontier_retry_controls() {
+  namespace policy = gpuxtb::detail::gfn2::binary64_policy;
+  constexpr double temperature = 1.0e-7;
+
+  policy::DoubleDouble just_outside{};
+  policy::add_double_double(just_outside, std::nextafter(0.5, 0.0));
+  policy::add_double_double(just_outside, -1.0);
+  CHECK(!policy::double_double_within(just_outside, 0.5));
+  policy::DoubleDouble exact_boundary{};
+  policy::add_double_double(exact_boundary, -0.5);
+  CHECK(policy::double_double_within(exact_boundary, 0.5));
+
+  const std::array<double, 3> electron_levels{{0.0, 1.0, 1.0}};
+  const double electron_target = std::nextafter(1.5, 0.0);
+  policy::Root electron_root{};
+  CHECK(policy::solve_root(electron_levels.data(), 3, electron_target, temperature, false,
+                           electron_root));
+  CHECK(electron_root.retried_at_frontier);
+  CHECK(electron_root.energy_reference == 1.0);
+  CHECK(electron_root.frontier_begin == 1 && electron_root.frontier_end == 3);
+  policy::Publication electron_publication{};
+  CHECK(policy::select_publication(electron_levels.data(), 3, electron_target, temperature, false,
+                                   electron_root, electron_publication));
+  CHECK(policy::audited_publication_within(electron_levels.data(), 3, temperature, electron_root,
+                                           electron_publication, false, electron_target,
+                                           64.0 * policy::kEpsilon * electron_target));
+  CHECK(policy::published_occupation(electron_levels.data(), 1, temperature, electron_root,
+                                     electron_publication) ==
+        policy::published_occupation(electron_levels.data(), 2, temperature, electron_root,
+                                     electron_publication));
+
+  /* The same sharp frontier translated by a large common offset must retain
+   * identical occupations and entropy; only the chemical potential translates. */
+  const std::array<double, 3> translated_levels{{100.0, 101.0, 101.0}};
+  policy::Root translated_root{};
+  policy::Publication translated_publication{};
+  CHECK(policy::solve_root(translated_levels.data(), 3, electron_target, temperature, false,
+                           translated_root));
+  CHECK(translated_root.retried_at_frontier);
+  CHECK(policy::select_publication(translated_levels.data(), 3, electron_target, temperature, false,
+                                   translated_root, translated_publication));
+  for (std::int64_t orbital = 0; orbital < 3; ++orbital) {
+    CHECK(policy::published_occupation(electron_levels.data(), orbital, temperature, electron_root,
+                                       electron_publication) ==
+          policy::published_occupation(translated_levels.data(), orbital, temperature,
+                                       translated_root, translated_publication));
+  }
+  CHECK(policy::publication_entropy(electron_levels.data(), 3, temperature, electron_root,
+                                    electron_publication) ==
+        policy::publication_entropy(translated_levels.data(), 3, temperature, translated_root,
+                                    translated_publication));
+  const double electron_mu = policy::saturated_affine(electron_root.energy_reference,
+                                                      electron_root.scaled_mu, temperature);
+  const double translated_mu = policy::saturated_affine(translated_root.energy_reference,
+                                                        translated_root.scaled_mu, temperature);
+  CHECK(near(translated_mu, electron_mu + 100.0, 2.0e-15));
+
+  /* Genuine hole mirror: the initial reference is the saturated higher
+   * singleton, while the changing fractional frontier is the lower pair. */
+  const std::array<double, 3> hole_levels{{0.0, 0.0, 1.0}};
+  const double electron_count = std::nextafter(1.5, 3.0);
+  const double hole_target = 3.0 - electron_count;
+  policy::Root hole_root{};
+  CHECK(policy::solve_root(hole_levels.data(), 3, hole_target, temperature, true, hole_root));
+  CHECK(hole_root.retried_at_frontier);
+  CHECK(hole_root.energy_reference == 0.0);
+  CHECK(hole_root.frontier_begin == 0 && hole_root.frontier_end == 2);
+  policy::Publication hole_publication{};
+  CHECK(policy::select_publication(hole_levels.data(), 3, hole_target, temperature, true, hole_root,
+                                   hole_publication));
+  CHECK(policy::audited_publication_within(hole_levels.data(), 3, temperature, hole_root,
+                                           hole_publication, true, hole_target,
+                                           64.0 * policy::kEpsilon * hole_target));
+  CHECK(policy::published_occupation(hole_levels.data(), 0, temperature, hole_root,
+                                     hole_publication) ==
+        policy::published_occupation(hole_levels.data(), 1, temperature, hole_root,
+                                     hole_publication));
+
+  policy::Root ordinary_root{};
+  CHECK(policy::solve_root(electron_levels.data(), 3, 1.5, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
+                           false, ordinary_root));
+  CHECK(!ordinary_root.retried_at_frontier);
+  CHECK(policy::absolute(ordinary_root.quantity - 1.5) <= 64.0 * policy::kEpsilon * 1.5);
+
+  policy::Root no_change{};
+  no_change.energy_reference = 0.0;
+  no_change.lower = 0.0;
+  no_change.upper = std::nextafter(0.0, 1.0);
+  CHECK(policy::unique_changing_degenerate_frontier(electron_levels.data(), 3, temperature, false,
+                                                    no_change) == 3);
+
+  const std::array<double, 4> ambiguous_levels{{0.0, 0.0, 1.0, 1.0}};
+  policy::Root ambiguous{};
+  ambiguous.energy_reference = 0.0;
+  ambiguous.lower = -1.0e8;
+  ambiguous.upper = 1.0e8;
+  CHECK(policy::unique_changing_degenerate_frontier(ambiguous_levels.data(), 4, temperature, false,
+                                                    ambiguous) == -1);
+
+  const double denorm = std::numeric_limits<double>::denorm_min();
+  const std::array<double, 2> reference_frontier{{1.0, 1.0}};
+  policy::Root already_reference{};
+  CHECK(policy::solve_root(reference_frontier.data(), 2, 9.0 * denorm,
+                           GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE, false, already_reference));
+  CHECK(!already_reference.retried_at_frontier);
+  CHECK(already_reference.frontier_begin == 0 && already_reference.frontier_end == 2);
+  CHECK(already_reference.energy_reference == 1.0);
+  return 0;
+}
+
 /* Degenerate finite-temperature representability policy (#31).
  *
  * A symmetric (unitary- and permutation-invariant) description of an exactly
@@ -618,6 +729,28 @@ int test_occupation_representability_policy() {
   }
   CHECK(std::isfinite(entropy) && std::abs(entropy - published_entropy) <= 1.0e-15);
 
+  /* Exact half-subnormal tie: 9 * denorm_min split symmetrically over two
+   * orbitals lies halfway between 4 and 5 denorm_min per member. The canonical
+   * backend-independent rule chooses the lower occupation. */
+  const double denorm = std::numeric_limits<double>::denorm_min();
+  const std::array<double, 2> tie_levels{{1.0, 1.0}};
+  std::array<double, 2> tie_occupations{{-1.0, -1.0}};
+  const double tie_target = 9.0 * denorm;
+  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+            2, tie_levels.data(), tie_target, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
+            tie_occupations.data(), chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(tie_occupations[0] == 4.0 * denorm && tie_occupations[1] == 4.0 * denorm);
+  const long double lower_error =
+      std::abs(8.0L * static_cast<long double>(denorm) - static_cast<long double>(tie_target));
+  const long double upper_error =
+      std::abs(10.0L * static_cast<long double>(denorm) - static_cast<long double>(tie_target));
+  CHECK(lower_error == upper_error);
+  const long double tie_occupation = static_cast<long double>(tie_occupations[0]);
+  const double tie_entropy =
+      static_cast<double>(-2.0L * (tie_occupation * std::log(tie_occupation) +
+                                   (1.0L - tie_occupation) * std::log(1.0L - tie_occupation)));
+  CHECK(entropy == tie_entropy);
+
   /* Electron-poor limit: a subnormal electron target on the same degenerate
    * block is also relaxed to the nearest symmetric (all-zero) state. */
   std::array<double, 3> poor{{-1.0, -1.0, -1.0}};
@@ -629,6 +762,20 @@ int test_occupation_representability_policy() {
   const double electron_poor_error = std::abs((poor[0] + poor[1] + poor[2]) - electron_poor_nel);
   CHECK(electron_poor_error <= 2.0 * eps * 3.0);
   CHECK(entropy == 0.0 && std::isfinite(chemical_potential));
+
+  /* Root spacing for this subnormal target is exhausted at the lower
+   * two-member frontier, but publication can conserve strictly by placing the
+   * denormal electron on the higher singleton. The causal frontier floor must
+   * survive that later strict rescue. */
+  const std::array<double, 3> causal_frontier_rescue{{0.0, 0.0, 1.0}};
+  std::array<double, 3> causal_frontier_occupations{{-1.0, -1.0, -1.0}};
+  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+            3, causal_frontier_rescue.data(), electron_poor_nel, 1.0e-7,
+            causal_frontier_occupations.data(), chemical_potential, entropy,
+            error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(causal_frontier_occupations[0] == 0.0 && causal_frontier_occupations[1] == 0.0 &&
+        causal_frontier_occupations[2] == electron_poor_nel);
+  CHECK(entropy > 0.0 && std::isfinite(entropy) && std::isfinite(chemical_potential));
 
   /* The canonical subnormal logit retains the existing saturated chemical-
    * potential contract even when the translated offset itself exceeds the
@@ -654,6 +801,55 @@ int test_occupation_representability_policy() {
             exact_occupations.data(), chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
   CHECK(exact_occupations[0] == exact_occupations[1]);
   CHECK(std::abs((exact_occupations[0] + exact_occupations[1]) - exact_nel) == 0.0);
+
+  /* A singleton below a three-member frontier block can absorb the remaining
+   * one-hole ulp exactly. Strict global candidates must take precedence over
+   * the relaxed three-member state. */
+  const std::array<double, 4> partial_strict{{0.0, 1.0, 1.0, 1.0}};
+  std::array<double, 4> partial_strict_occupations{};
+  const double partial_strict_nel = std::nextafter(4.0, 0.0);
+  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+            4, partial_strict.data(), partial_strict_nel, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
+            partial_strict_occupations.data(), chemical_potential, entropy,
+            error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(std::all_of(partial_strict_occupations.begin(), partial_strict_occupations.end(),
+                    [one_hole_state](double occupation) { return occupation == one_hole_state; }));
+  long double partial_strict_holes = 0.0L;
+  for (const double occupation : partial_strict_occupations) {
+    partial_strict_holes += 1.0L - static_cast<long double>(occupation);
+  }
+  CHECK(partial_strict_holes == 4.0L - static_cast<long double>(partial_strict_nel));
+
+  /* A sharp low-temperature degenerate frontier can exhaust root spacing
+   * when the translated frame is anchored at an extreme level. Retrying at
+   * the actual frontier must recover the ordinary strict root. */
+  const std::array<double, 3> low_temperature_frontier{{0.0, 1.0, 1.0}};
+  std::array<double, 3> low_temperature_occupations{};
+  const double low_temperature_nel = std::nextafter(1.5, 0.0);
+  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+            3, low_temperature_frontier.data(), low_temperature_nel, 1.0e-7,
+            low_temperature_occupations.data(), chemical_potential, entropy,
+            error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(low_temperature_occupations[1] == low_temperature_occupations[2]);
+  long double low_temperature_sum = 0.0L;
+  for (const double occupation : low_temperature_occupations) {
+    low_temperature_sum += static_cast<long double>(occupation);
+  }
+  CHECK(std::abs(low_temperature_sum - static_cast<long double>(low_temperature_nel)) <=
+        64.0L * static_cast<long double>(eps) * static_cast<long double>(low_temperature_nel));
+
+  const std::array<double, 6> broad_low_temperature_frontier{{0.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
+  std::array<double, 6> broad_low_temperature_occupations{};
+  const double broad_low_temperature_nel = std::nextafter(3.0, 0.0);
+  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+            6, broad_low_temperature_frontier.data(), broad_low_temperature_nel, 1.0e-7,
+            broad_low_temperature_occupations.data(), chemical_potential, entropy,
+            error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(std::all_of(broad_low_temperature_occupations.begin() + 1,
+                    broad_low_temperature_occupations.end(),
+                    [frontier = broad_low_temperature_occupations[1]](double occupation) {
+                      return occupation == frontier;
+                    }));
 
   /* Without an actual multi-orbital degeneracy block, the relaxed tolerance
    * is unavailable. The ordinary singleton correction path must conserve the
@@ -1436,6 +1632,9 @@ int main(int argc, char** argv) {
   /* Complete the injected backend's numerical preflight before call-count tests. */
   static_cast<void>(backend());
   if (const int status = test_occupations_degeneracy_and_fractional_filling(); status != 0) {
+    return status;
+  }
+  if (const int status = test_binary64_frontier_retry_controls(); status != 0) {
     return status;
   }
   if (const int status = test_occupation_representability_policy(); status != 0) {

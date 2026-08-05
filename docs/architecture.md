@@ -41,17 +41,33 @@ relaxes to the nearest representable symmetric state instead of failing the syst
 electron/hole error is then bounded absolutely by the block quantization scale
 `2 * eps_double * block_count` (a few ULPs of an electron, where `eps_double` is `2^-52` and
 `block_count` is the number of orbitals in the selected exact-degeneracy block). Relaxation is never
-authorized by a singleton or by the total spectrum size. When relaxation is needed, the solver
-compares the rounded target occupation and both adjacent binary64 values across eligible blocks,
-publishes the state with the smallest absolute count error, and deterministically prefers an already
-fractional frontier block when two states have the same error. The reported entropy is derived from
-those same published occupations. When an exactly degenerate block's valid subnormal total cannot
-be divided into a
-nonzero binary64 per-member fraction, CPU and CUDA use the same analytic equal-level logit for the
-finite chemical potential. A residual beyond the selected block's quantization bound indicates
-genuine electron non-conservation and still fails deterministically. Nondegenerate spectra retain
-the strict publication tolerance, and the zero-temperature Aufbau path is unaffected. See issue
-#31 for the original representability question.
+authorized by a singleton or by the total spectrum size. The solver collects candidates across all
+energy blocks before selecting: any state inside the strict publication tolerance globally precedes
+every relaxed state. Within either class, it minimizes the binary64 compensated-sum count error,
+then prefers a fractional candidate, the lower occupation at an exact error tie, and finally the
+lower block index. Candidate evaluation includes the directly solved block occupation, its two
+nearest binary64 neighbors on each side, and the original publication value with its immediate
+neighbors. CPU reconstructs this rare-path candidate baseline with the same translated binary64
+root and compensated summation order used by CUDA; its long-double root remains the independent
+ideal-conservation check. If binary64 root spacing is exhausted outside the ordinary root tolerance,
+the final bracket still straddles the target, and exactly one multi-orbital degenerate block changes
+electron or hole contribution across that bracket, both backends may retry once with that frontier
+as the translated reference. A failed or non-improving retry leaves the original root unchanged.
+Only that uniquely identified causal frontier can supply the block-quantization floor for root
+acceptance, including when publication subsequently finds a strict singleton rescue; an unrelated
+degeneracy cannot widen the root gate. If the first phase must select a relaxed block, one bounded
+second phase searches strict candidates only from that vector; if none exists, the first relaxed
+state remains. Every shared rare-path final strict or relaxed decision is audited with the same
+double-double residual interval comparison. The reported entropy is derived from those same
+published occupations. When an exactly degenerate block's valid subnormal total cannot be divided
+into a nonzero binary64 per-member fraction, CPU and CUDA use the same analytic equal-level logit for
+the finite chemical potential. Outside that fully degenerate analytic override, a mixed-spectrum
+subnormal jump has no canonical cross-backend binary64 chemical potential: both backends require a
+finite diagnostic while the shared publication, count, and entropy remain deterministic; broader
+chemical-potential parity remains tracked by #54. A residual beyond the selected block's quantization
+bound indicates genuine electron non-conservation and still fails deterministically. Nondegenerate
+spectra retain the strict publication tolerance, and the zero-temperature Aufbau path is unaffected.
+See issue #31 for the original representability question.
 
 The public batch call has two failure levels. Any failure detected before the final caller-output
 commit begins leaves every result buffer and result flag unchanged. Once a CUDA caller-output

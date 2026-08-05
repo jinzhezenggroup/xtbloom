@@ -1,5 +1,7 @@
 #include "model/gfn2/eigensolver.hpp"
 
+#include "model/gfn2/occupation_binary64_policy.hpp"
+
 #if !defined(_WIN32)
 #include <dlfcn.h>
 #endif
@@ -794,197 +796,81 @@ bool compute_occupations(const double* eigenvalues, std::size_t count, double el
     }
   }
 
-  if (std::abs(ideal_quantity - quantity_target) > tolerance) {
+  const long double publication_tolerance =
+      64.0L * static_cast<long double>(std::numeric_limits<double>::epsilon()) * quantity_target;
+  const bool ideal_acceptable = std::abs(ideal_quantity - quantity_target) <= tolerance;
+  const bool publication_acceptable =
+      std::abs(published_quantity - quantity_target) <= publication_tolerance;
+
+  if (ideal_acceptable && publication_acceptable) {
+    /* Keep the established long-double path byte-identical when the directly
+     * rounded publication already satisfies strict conservation. */
+    long double entropy_value = 0.0L;
+    for (std::size_t orbital = 0u; orbital < count; ++orbital) {
+      const long double occupation = static_cast<long double>(static_cast<double>(fermi_value(
+          static_cast<long double>(eigenvalues[orbital]) - energy_reference, mu, thermal)));
+      if (occupation > 0.0L && occupation < 1.0L) {
+        entropy_value -=
+            occupation * std::log(occupation) + (1.0L - occupation) * std::log(1.0L - occupation);
+      }
+    }
+    entropy = static_cast<double>(entropy_value);
+    return std::isfinite(chemical_potential) && std::isfinite(entropy);
+  }
+
+  namespace policy = binary64_policy;
+  const std::int64_t binary64_count = static_cast<std::int64_t>(count);
+  const std::int64_t largest_degenerate_block =
+      policy::largest_degenerate_block(eigenvalues, binary64_count);
+  if (!ideal_acceptable && largest_degenerate_block <= 1) {
+    /* A wider-precision root failure without a real degenerate frontier is not
+     * a publication representability case and must remain a data failure. */
     return false;
   }
 
-  const long double publication_tolerance =
-      64.0L * static_cast<long double>(std::numeric_limits<double>::epsilon()) * quantity_target;
-  const long double quantity_residual = quantity_target - published_quantity;
-
-  /*
-   * Representability policy for exactly degenerate finite-temperature
-   * occupations.
-   *
-   * Occupations are published as binary64 values. A symmetric (unitary- and
-   * permutation-invariant) description of a degenerate eigenspace requires
-   * every orbital in an exactly equal-energy block to share one double, so the
-   * total electron/hole count such a block can express is quantized to
-   * block_count * f for the representable doubles f in [0, 1]. When the
-   * requested count falls strictly between two symmetric states (for example
-   * three exactly degenerate orbitals with nel = nextafter(3, 0), whose hole
-   * count cannot be split across the three published occupations), no equal-
-   * membership correction can land within publication_tolerance.
-   *
-   * In that case the solver does not break symmetry by promoting an arbitrary
-   * orbital and does not fail the system. It relaxes to the nearest
-   * representable symmetric state by comparing the rounded target occupation
-   * and its adjacent binary64 values across real multi-orbital degenerate
-   * blocks. The published absolute electron/hole error is no larger than the
-   * selected block's quantization bound (block_count * 2 * eps_double, a few
-   * ULPs of an electron). tblite performs no strict block correction and
-   * publishes the same quantization-limited occupations without failing, so
-   * this matches its practical semantics.
-   *
-   * Relaxation applies only while the residual can be attributed to this
-   * binary64 quantization. A residual beyond the same bound is genuine
-   * electron non-conservation and still fails deterministically.
-   */
-  const long double representable_error_scale =
-      2.0L * static_cast<long double>(std::numeric_limits<double>::epsilon());
-  bool representability_relaxed = false;
-  long double representable_tolerance = 0.0L;
-  std::size_t corrected_begin = count;
-  std::size_t corrected_end = count;
-  double corrected_occupation = 0.0;
-  if (std::abs(quantity_residual) > publication_tolerance) {
-    /*
-     * Preserve the unitary invariance of an exactly degenerate eigenspace:
-     * any correction large enough to matter must be shared uniformly by the
-     * complete equal-energy block instead of selecting an arbitrary orbital.
-     */
-    const long double occupation_delta = solve_holes ? -quantity_residual : quantity_residual;
-    bool corrected = false;
-    bool relaxed_candidate_found = false;
-    long double relaxed_error = std::numeric_limits<long double>::infinity();
-    long double relaxed_quantity = published_quantity;
-    long double relaxed_tolerance = 0.0L;
-    bool relaxed_fractional_block = false;
-    std::size_t relaxed_begin = count;
-    std::size_t relaxed_end = count;
-    double relaxed_occupation = 0.0;
-    for (std::size_t block_begin = 0u; block_begin < count;) {
-      std::size_t block_end = block_begin + 1u;
-      while (block_end < count && eigenvalues[block_end] == eigenvalues[block_begin]) {
-        ++block_end;
-      }
-      const std::size_t block_count = block_end - block_begin;
-      const long double shifted_energy =
-          static_cast<long double>(eigenvalues[block_begin]) - energy_reference;
-      const double published = static_cast<double>(fermi_value(shifted_energy, mu, thermal));
-      const long double candidate = static_cast<long double>(published) +
-                                    occupation_delta / static_cast<long double>(block_count);
-      if (candidate < 0.0L || candidate > 1.0L) {
-        block_begin = block_end;
-        continue;
-      }
-      const double nearest = static_cast<double>(candidate);
-      const std::array<double, 3> block_occupations{{
-          nearest,
-          std::nextafter(nearest, -std::numeric_limits<double>::infinity()),
-          std::nextafter(nearest, std::numeric_limits<double>::infinity()),
-      }};
-      const long double block_scale = static_cast<long double>(block_count);
-      for (std::size_t candidate_index = 0u; candidate_index < block_occupations.size();
-           ++candidate_index) {
-        const double block_occupation = block_occupations[candidate_index];
-        if (block_occupation < 0.0 || block_occupation > 1.0 ||
-            (candidate_index != 0u && block_occupation == block_occupations[0])) {
-          continue;
-        }
-        const long double occupation_change =
-            static_cast<long double>(block_occupation) - static_cast<long double>(published);
-        const long double quantity_change =
-            block_scale * (solve_holes ? -occupation_change : occupation_change);
-        const long double corrected_quantity = published_quantity + quantity_change;
-        const long double corrected_error = std::abs(corrected_quantity - quantity_target);
-        if (corrected_error <= publication_tolerance) {
-          published_quantity = corrected_quantity;
-          if (occupations != nullptr) {
-            std::fill(occupations + block_begin, occupations + block_end, block_occupation);
-          }
-          corrected_begin = block_begin;
-          corrected_end = block_end;
-          corrected_occupation = block_occupation;
-          corrected = true;
-          break;
-        }
-
-        /* Only a genuine multi-orbital exact-degeneracy block may authorize
-         * relaxed conservation. Compare the nearest binary64 state and its
-         * two neighbors explicitly so the selected symmetric occupation is
-         * the closest available publication state, independent of any
-         * intermediate long-double rounding. */
-        if (block_count > 1u) {
-          const long double block_tolerance = representable_error_scale * block_scale;
-          const bool fractional_block = published > 0.0 && published < 1.0;
-          if (corrected_error <= block_tolerance &&
-              (!relaxed_candidate_found || corrected_error < relaxed_error ||
-               (corrected_error == relaxed_error && fractional_block &&
-                !relaxed_fractional_block))) {
-            relaxed_candidate_found = true;
-            relaxed_error = corrected_error;
-            relaxed_quantity = corrected_quantity;
-            relaxed_tolerance = block_tolerance;
-            relaxed_fractional_block = fractional_block;
-            relaxed_begin = block_begin;
-            relaxed_end = block_end;
-            relaxed_occupation = block_occupation;
-          }
-        }
-      }
-      if (corrected) {
-        break;
-      }
-      block_begin = block_end;
-    }
-    if (!corrected) {
-      if (!relaxed_candidate_found) {
-        return false;
-      }
-      published_quantity = relaxed_quantity;
-      if (occupations != nullptr) {
-        std::fill(occupations + relaxed_begin, occupations + relaxed_end, relaxed_occupation);
-      }
-      corrected_begin = relaxed_begin;
-      corrected_end = relaxed_end;
-      corrected_occupation = relaxed_occupation;
-      representable_tolerance = relaxed_tolerance;
-      representability_relaxed = true;
-    }
+  const double binary64_capacity = static_cast<double>(count);
+  const double binary64_target = solve_holes ? binary64_capacity - electron_count : electron_count;
+  policy::Root root{};
+  if (!(binary64_target > 0.0) || !std::isfinite(binary64_target) ||
+      !policy::solve_root(eigenvalues, binary64_count, binary64_target, temperature, solve_holes,
+                          root)) {
+    return false;
   }
-  /* Report entropy for the actual published doubles, including any block correction. */
-  long double entropy_value = 0.0L;
-  for (std::size_t orbital = 0u; orbital < count; ++orbital) {
-    const double published =
-        orbital >= corrected_begin && orbital < corrected_end
-            ? corrected_occupation
-            : static_cast<double>(fermi_value(
-                  static_cast<long double>(eigenvalues[orbital]) - energy_reference, mu, thermal));
-    const long double occupation = static_cast<long double>(published);
-    if (occupation > 0.0L && occupation < 1.0L) {
-      entropy_value -=
-          occupation * std::log(occupation) + (1.0L - occupation) * std::log(1.0L - occupation);
-    }
+  policy::Publication publication{};
+  if (!policy::select_publication(eigenvalues, binary64_count, binary64_target, temperature,
+                                  solve_holes, root, publication)) {
+    return false;
   }
-  entropy = static_cast<double>(entropy_value);
-  bool fully_degenerate = true;
-  for (std::size_t orbital = 1u; orbital < count; ++orbital) {
-    fully_degenerate = fully_degenerate && eigenvalues[orbital] == eigenvalues[0];
+  const double root_tolerance = policy::root_acceptance_tolerance(binary64_target, root);
+  if (!std::isfinite(root.quantity) ||
+      policy::absolute(root.quantity - binary64_target) > root_tolerance) {
+    return false;
   }
-  const double binary64_quantity_target = static_cast<double>(quantity_target);
-  if (fully_degenerate && binary64_quantity_target > 0.0 &&
-      binary64_quantity_target / static_cast<double>(count) == 0.0) {
-    /* The ideal per-member fraction underflows even though the requested total
-     * is a valid subnormal double. Use the analytic equal-level logit so CPU
-     * and CUDA publish the same canonical finite chemical-potential root rather
-     * than choosing backend-dependent sides of the device occupation jump. */
+  chemical_potential = policy::saturated_affine(root.energy_reference, root.scaled_mu, temperature);
+  if (largest_degenerate_block == binary64_count && binary64_target / binary64_capacity == 0.0) {
+    /* A valid subnormal total can underflow when divided across a fully
+     * degenerate block. The analytic equal-level logit is the only deliberate
+     * chemical-potential override; all other rare cases use the shared root. */
     const double log_fraction =
-        std::log(binary64_quantity_target) - std::log(static_cast<double>(count));
-    const double log_complement = std::log1p(-std::exp(log_fraction));
-    const double scaled_mu =
+        policy::logarithm(binary64_target) - policy::logarithm(binary64_capacity);
+    const double log_complement = policy::logarithm_one_plus(-policy::exponential(log_fraction));
+    const double canonical_scaled_mu =
         solve_holes ? log_complement - log_fraction : log_fraction - log_complement;
-    const long double canonical_mu =
-        static_cast<long double>(eigenvalues[0]) +
-        static_cast<long double>(scaled_mu) * static_cast<long double>(temperature);
-    chemical_potential = static_cast<double>(
-        std::clamp(canonical_mu, -static_cast<long double>(std::numeric_limits<double>::max()),
-                   static_cast<long double>(std::numeric_limits<double>::max())));
+    chemical_potential =
+        policy::saturated_affine(root.energy_reference, canonical_scaled_mu, temperature);
   }
-  const long double published_error = std::abs(published_quantity - quantity_target);
-  return std::isfinite(chemical_potential) && std::isfinite(entropy) &&
-         (published_error <= publication_tolerance ||
-          (representability_relaxed && published_error <= representable_tolerance));
+  entropy =
+      policy::publication_entropy(eigenvalues, binary64_count, temperature, root, publication);
+  if (!std::isfinite(chemical_potential) || !std::isfinite(entropy)) {
+    return false;
+  }
+  if (occupations != nullptr) {
+    for (std::int64_t orbital = 0; orbital < binary64_count; ++orbital) {
+      occupations[orbital] =
+          policy::published_occupation(eigenvalues, orbital, temperature, root, publication);
+    }
+  }
+  return true;
 }
 
 NumericalResult solve_one_spin(const CpuLinearAlgebraBackend& backend,
