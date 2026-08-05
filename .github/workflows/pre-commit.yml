@@ -1,12 +1,10 @@
 name: Pre-commit
 
-# Runs the project's pre-commit hooks on every push and pull request. On PRs
-# from this repository, the pre-commit-with-autofix action applies any
-# autofixable changes directly back to the branch (a separate autofix commit),
-# so contributors only need to run pre-commit locally (or prek, its Rust
-# reimplementation) before pushing. Autofixes push with `contents: write`.
+# Pull requests run the hooks before merge. Restrict push validation to main so
+# same-repository PR branches do not schedule a duplicate push workflow.
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -14,9 +12,16 @@ permissions:
 
 jobs:
   pre_commit:
-    permissions:
-      contents: write
     runs-on: ubuntu-24.04
     steps:
-      - name: Run pre-commit
-        uses: njzjz/pre-commit-action@master
+      - uses: actions/checkout@v6
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/prek/
+          key: prek-0.3.1-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: prek-0.3.1-${{ runner.os }}-
+      - uses: astral-sh/setup-uv@v7
+      - name: Run pre-commit hooks
+        # Pin the runner as well as every hook revision so CI behavior cannot
+        # change merely because a new prek release is published.
+        run: uvx prek@0.3.1 run --show-diff-on-failure --color=always --all-files

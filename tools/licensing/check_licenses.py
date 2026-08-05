@@ -17,7 +17,6 @@ from pathlib import Path
 
 import tomllib
 
-
 PROJECT_LICENSE = "GPL-3.0-or-later"
 SOURCE_FILES = (
     "LICENSE",
@@ -224,7 +223,9 @@ def check_archive(path: Path) -> None:
         if any(component in f"/{name}" for component in FORBIDDEN_ARCHIVE_PARTS)
     )
     if leaked:
-        raise LicenseCheckError(f"{path} contains excluded local artifacts: {leaked[0]}")
+        raise LicenseCheckError(
+            f"{path} contains excluded local artifacts: {leaked[0]}"
+        )
 
 
 def main() -> int:

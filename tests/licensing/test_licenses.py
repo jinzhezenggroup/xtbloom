@@ -8,7 +8,6 @@ import unittest
 import zipfile
 from pathlib import Path
 
-
 REPOSITORY = Path(__file__).resolve().parents[2]
 CHECKER_PATH = REPOSITORY / "tools" / "licensing" / "check_licenses.py"
 SPEC = importlib.util.spec_from_file_location("gpuxtb_check_licenses", CHECKER_PATH)
@@ -27,9 +26,7 @@ class LicenseArchiveTests(unittest.TestCase):
         return {
             f"gpuxtb-0.1.0.dist-info/licenses/{suffix}"
             for suffix in CHECKER.COMMON_ARCHIVE_SUFFIXES
-        } | {
-            f"gpuxtb/{suffix}" for suffix in CHECKER.WHEEL_ARCHIVE_SUFFIXES
-        }
+        } | {f"gpuxtb/{suffix}" for suffix in CHECKER.WHEEL_ARCHIVE_SUFFIXES}
 
     def test_project_license_cannot_be_satisfied_by_third_party_filename(self) -> None:
         names = self._valid_wheel_names()

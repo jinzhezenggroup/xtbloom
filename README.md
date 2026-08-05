@@ -79,9 +79,8 @@ pre-commit install        # or: prek install
 pre-commit run --all-files  # or: prek run --all-files
 ```
 
-On pull requests, the
-[pre-commit-with-autofix](https://github.com/marketplace/actions/pre-commit-with-autofix)
-action applies any autofixable changes directly to the branch.
+Pull requests run the same hooks in read-only CI. If a hook reports an
+autofixable change, run the command locally and commit the resulting diff.
 
 ## Design goals
 
