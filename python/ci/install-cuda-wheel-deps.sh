@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install the CUDA compute libraries that the PyPA manylinux CUDA images do not
-# ship, so the gpuxtb CUDA backend (which links cuBLAS/cuSOLVER/cuDRT) can be
-# compiled inside the container.
+# ship. The build needs their headers and ELF symbol tables to compile the CUDA
+# backend and generate the host-API trampolines inside the container.
 #
 # The quay.io/manylinux_cuda images ship nvcc, headers, cuBLAS, and cuDRT but
 # not cuSOLVER (libcudart/.hx absent), so FindCUDAToolkit cannot create the
@@ -11,9 +11,10 @@
 # CMake and nvcc already search, then delete every downloaded/extracted file so
 # the build container never accumulates gigabytes of nvidia packages.
 #
-# The resulting wheels still exclude these libraries (see the
-# repair-wheel-command in pyproject.toml); at runtime a CUDA-enabled wheel uses
-# the system CUDA driver plus the same PyPI nvidia-* packages.
+# The resulting wheels exclude these host shared libraries (see the
+# repair-wheel-command in pyproject.toml); at runtime the trampolines resolve
+# the system driver and the same PyPI nvidia-* packages dynamically. nvcc may
+# still embed device-runtime code such as cudadevrt in libgpuxtb itself.
 set -euo pipefail
 
 # The container persists across the per-Python-Version before-build calls, so

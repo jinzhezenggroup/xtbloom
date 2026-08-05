@@ -279,16 +279,14 @@ _dll_directory_handles: list = []
 
 
 def _runtime_search_dirs() -> list[Path]:
-    """Return directories that may contain the runtimes libgpuxtb depends on.
+    """Return directories that may contain gpuxtb's optional host runtimes.
 
-    libgpuxtb links the CUDA math/runtime libraries (cuBLAS, cuSOLVER, ...)
-    when built with CUDA, and the CPU eigensolver dlopens the LP64 BLAS
-    runtime (MKL libmkl_rt on x86_64, OpenBLAS on aarch64) at compute time.
-    Those live either in the ``mkl``/``nvidia-*`` PyPI packages, an installed
-    CUDA toolkit, or the ``scipy-openblas*`` PyPI wheels (the LP64
+    The CUDA host-API shims and CPU eigensolver resolve their providers by
+    SONAME. Those providers live in the ``mkl``/``nvidia-*`` PyPI packages, an
+    installed CUDA toolkit, or the ``scipy-openblas*`` PyPI wheels (the LP64
     ``scipy-openblas32`` is what numpy uses on aarch64). Collecting them lets
-    the package resolve everything on import instead of forcing users to set
-    ``LD_LIBRARY_PATH`` (or ``PATH`` on Windows).
+    the package register those SONAMEs before libgpuxtb is loaded without
+    forcing users to set ``LD_LIBRARY_PATH`` (or ``PATH`` on Windows).
     """
     dirs: list[Path] = []
 
@@ -375,13 +373,12 @@ _RUNTIME_LIBRARY_GROUPS = (
 
 
 def _preload_runtime_libraries() -> list[str]:
-    """Preload the runtimes libgpuxtb needs so users need no environment setup.
+    """Preload optional host runtimes so users need no environment setup.
 
     On POSIX, loading the dependency by absolute path registers it under its
-    SONAME, so a later ``dlopen`` by name (the CPU eigensolver's MKL lookup)
-    and the DT_NEEDED resolution of a CUDA-enabled ``libgpuxtb`` reuse the
-    already-loaded object instead of failing. On Windows the discovered
-    directories are registered as DLL search locations instead.
+    SONAME, so the CUDA host-API shims and the CPU eigensolver's later
+    by-name ``dlopen`` reuse the already-loaded object. On Windows the
+    discovered directories are registered as DLL search locations instead.
     """
     search_dirs = _runtime_search_dirs()
     if os.name == "nt":
