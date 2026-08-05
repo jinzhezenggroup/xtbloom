@@ -142,6 +142,50 @@ struct PublicBatch {
   }
 };
 
+template <typename T>
+bool same_bytes(const std::vector<T>& lhs, const std::vector<T>& rhs) {
+  return lhs.size() == rhs.size() &&
+         (lhs.empty() || std::memcmp(lhs.data(), rhs.data(), lhs.size() * sizeof(T)) == 0);
+}
+
+/* Snapshot every caller-owned output so rejected WARM identities can be
+ * checked against the public no-publication contract byte for byte. */
+struct PublicOutputImage {
+  explicit PublicOutputImage(const PublicBatch& request)
+      : energies(request.energies),
+        forces(request.forces),
+        atomic_charges(request.atomic_charges),
+        point_forces(request.point_forces),
+        iterations(request.iterations),
+        converged(request.converged),
+        statuses(request.statuses),
+        flags(request.result.flags) {}
+
+  bool matches(const PublicBatch& request) const {
+    return same_bytes(energies, request.energies) && same_bytes(forces, request.forces) &&
+           same_bytes(atomic_charges, request.atomic_charges) &&
+           same_bytes(point_forces, request.point_forces) &&
+           same_bytes(iterations, request.iterations) && same_bytes(converged, request.converged) &&
+           same_bytes(statuses, request.statuses) && flags == request.result.flags;
+  }
+
+  std::vector<double> energies;
+  std::vector<double> forces;
+  std::vector<double> atomic_charges;
+  std::vector<double> point_forces;
+  std::vector<std::int32_t> iterations;
+  std::vector<std::uint8_t> converged;
+  std::vector<std::int32_t> statuses;
+  std::uint32_t flags = 0u;
+};
+
+bool warm_rejection_is_atomic(gpuxtb_context_t* context, PublicBatch& request) {
+  const PublicOutputImage before(request);
+  return gpuxtb_compute(context, &request.batch, &request.options, &request.result) ==
+             GPUXTB_STATUS_INVALID_ARGUMENT &&
+         before.matches(request);
+}
+
 PublicBatch make_h2_he_batch() {
   PublicBatch request;
   request.atom_offsets = {0, 2, 3};
@@ -390,6 +434,23 @@ int test_steady_state_reuses_transaction_staging() {
       gpuxtb_compute(context.get(), &request.batch, &request.options, &request.result);
   allocation_test::enabled.store(false, std::memory_order_release);
   CHECK(status == GPUXTB_STATUS_SUCCESS);
+  CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
+
+  /* Strict WARM uses the retained wavefunction image without introducing a
+   * separate steady-state allocation path. Warm twice before measuring so the
+   * test isolates the stable checkpoint-consumption cycle. */
+  request.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        GPUXTB_STATUS_SUCCESS);
+
+  allocation_test::count.store(0u, std::memory_order_relaxed);
+  allocation_test::enabled.store(true, std::memory_order_release);
+  const gpuxtb_status_t warm_status =
+      gpuxtb_compute(context.get(), &request.batch, &request.options, &request.result);
+  allocation_test::enabled.store(false, std::memory_order_release);
+  CHECK(warm_status == GPUXTB_STATUS_SUCCESS);
   CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
   return 0;
 }
@@ -786,25 +847,10 @@ int test_public_warm_start_transactions() {
   h2.bind(flags);
 
   /* First-call WARM has no fully converged compatible identity: it is rejected
-   * strictly (INVALID_ARGUMENT) without mutating any caller output or flag. */
+   * strictly without changing any output byte or result flag. */
   h2.options.scc_start_mode = GPUXTB_SCC_START_WARM;
-  const std::vector<double> pre_energies = h2.energies;
-  const std::vector<double> pre_forces = h2.forces;
-  const std::vector<double> pre_charges = h2.atomic_charges;
-  const std::vector<std::int32_t> pre_iterations = h2.iterations;
-  const std::vector<std::uint8_t> pre_converged = h2.converged;
-  const std::vector<std::int32_t> pre_statuses = h2.statuses;
-  const std::uint32_t pre_flags = h2.result.flags;
-  CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(warm_rejection_is_atomic(context.get(), h2));
   CHECK(std::strstr(gpuxtb_get_last_error(), "WARM") != nullptr);
-  CHECK(h2.energies == pre_energies);
-  CHECK(h2.forces == pre_forces);
-  CHECK(h2.atomic_charges == pre_charges);
-  CHECK(h2.iterations == pre_iterations);
-  CHECK(h2.converged == pre_converged);
-  CHECK(h2.statuses == pre_statuses);
-  CHECK(h2.result.flags == pre_flags);
 
   /* A fully converged FRESH run publishes the checkpoint. */
   h2.bind(flags);
@@ -864,9 +910,81 @@ int test_public_warm_start_transactions() {
     CHECK(near(perturbed.atomic_charges[atom], reference.atomic_charges[atom], 1.0e-5));
   }
 
-  /* A topology change is a different identity: WARM is rejected without
-   * touching outputs, and the retained checkpoint for the H2 identity survives
-   * the rejection for a later compatible WARM call. */
+  /* Every CUDA compute-options key field is also part of the CPU identity.
+   * Reject each individually and retain the old H2 checkpoint throughout. */
+  PublicBatch changed_flags = h2;
+  changed_flags.bind(GPUXTB_COMPUTE_ENERGY);
+  changed_flags.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(context.get(), changed_flags));
+
+  PublicBatch changed_charge = h2;
+  changed_charge.molecular_charges[0] = 2.0;
+  changed_charge.bind(flags);
+  changed_charge.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(context.get(), changed_charge));
+
+  PublicBatch changed_unpaired = h2;
+  changed_unpaired.unpaired_electrons[0] = 2;
+  changed_unpaired.bind(flags);
+  changed_unpaired.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(context.get(), changed_unpaired));
+
+  PublicBatch changed_spin = h2;
+  changed_spin.spin_channels = {2};
+  changed_spin.bind(flags);
+  changed_spin.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(context.get(), changed_spin));
+
+  PublicBatch changed_iterations = h2;
+  changed_iterations.bind(flags);
+  ++changed_iterations.options.max_scc_iterations;
+  changed_iterations.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(context.get(), changed_iterations));
+
+  PublicBatch changed_charge_tolerance = h2;
+  changed_charge_tolerance.bind(flags);
+  changed_charge_tolerance.options.charge_tolerance =
+      std::nextafter(changed_charge_tolerance.options.charge_tolerance, 1.0);
+  changed_charge_tolerance.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(context.get(), changed_charge_tolerance));
+
+  PublicBatch changed_energy_tolerance = h2;
+  changed_energy_tolerance.bind(flags);
+  changed_energy_tolerance.options.energy_tolerance =
+      std::nextafter(changed_energy_tolerance.options.energy_tolerance, 1.0);
+  changed_energy_tolerance.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(context.get(), changed_energy_tolerance));
+
+  PublicBatch changed_temperature = h2;
+  changed_temperature.bind(flags);
+  changed_temperature.options.electronic_temperature = 0.02;
+  changed_temperature.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(context.get(), changed_temperature));
+
+  h2.bind(flags);
+  h2.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(h2.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(near(h2.energies[0], fresh_energy, 1.0e-5));
+
+  /* Candidate construction is transactional. A FRESH unsupported topology
+   * fails while building ensure_systems, but the prior H2 systems/checkpoint
+   * remain available to the next compatible strict WARM request. */
+  PublicBatch unsupported = h2;
+  unsupported.atomic_numbers[0] = 0;
+  unsupported.bind(flags);
+  const PublicOutputImage unsupported_before(unsupported);
+  CHECK(gpuxtb_compute(context.get(), &unsupported.batch, &unsupported.options,
+                       &unsupported.result) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(std::strstr(gpuxtb_get_last_error(), "unsupported atomic number") != nullptr);
+  CHECK(unsupported_before.matches(unsupported));
+
+  h2.bind(flags);
+  h2.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) == GPUXTB_STATUS_SUCCESS);
+
+  /* A changed topology is rejected by WARM but can establish its own identity
+   * through FRESH. The subsequent WARM proves changed-topology recovery. */
   PublicBatch methane;
   methane.atom_offsets = {0, 5};
   methane.atomic_numbers = {6, 1, 1, 1, 1};
@@ -876,31 +994,20 @@ int test_public_warm_start_transactions() {
   methane.unpaired_electrons = {0};
   methane.bind(flags);
   methane.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(context.get(), methane));
+
+  methane.bind(flags);
   CHECK(gpuxtb_compute(context.get(), &methane.batch, &methane.options, &methane.result) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(methane.energies[0] == -71.0);
-  CHECK(methane.result.flags == UINT32_C(0x5a5a5a5a));
-
-  h2.bind(flags);
-  h2.options.scc_start_mode = GPUXTB_SCC_START_WARM;
-  CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) == GPUXTB_STATUS_SUCCESS);
-  CHECK(h2.statuses[0] == GPUXTB_STATUS_SUCCESS);
-  CHECK(near(h2.energies[0], fresh_energy, 1.0e-5));
-  const double pre_temperature_reject_energy = h2.energies[0];
-
-  /* A compute-policy change is also a different identity; a scalar-only
-   * electronic temperature change cannot consume the old checkpoint. */
-  h2.options.electronic_temperature = 0.02;
-  CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(h2.energies[0] == pre_temperature_reject_energy);
-  h2.options.electronic_temperature = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
-  CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) == GPUXTB_STATUS_SUCCESS);
-  CHECK(h2.statuses[0] == GPUXTB_STATUS_SUCCESS);
-  CHECK(near(h2.energies[0], fresh_energy, 1.0e-5));
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(methane.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  methane.bind(flags);
+  methane.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_compute(context.get(), &methane.batch, &methane.options, &methane.result) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(methane.statuses[0] == GPUXTB_STATUS_SUCCESS);
 
   /* A FRESH call that does not converge (one SCC iteration) must not advertise
-   * a checkpoint; the next strict WARM with the same identity is rejected. */
+   * a checkpoint; the next strict WARM is rejected atomically. */
   ContextHandle nonconverged_context = make_cpu_context();
   CHECK(nonconverged_context != nullptr);
   PublicBatch forced = h2;
@@ -914,9 +1021,108 @@ int test_public_warm_start_transactions() {
   forced.bind(flags);
   forced.options.max_scc_iterations = 1;
   forced.options.scc_start_mode = GPUXTB_SCC_START_WARM;
-  CHECK(gpuxtb_compute(nonconverged_context.get(), &forced.batch, &forced.options,
-                       &forced.result) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(forced.energies[0] == -71.0);
+  CHECK(warm_rejection_is_atomic(nonconverged_context.get(), forced));
+
+  /* Ragged restricted/unrestricted systems share the same whole-batch WARM
+   * transaction and retain independent per-system electronic checkpoints. */
+  ContextHandle mixed_context = make_cpu_context(2);
+  CHECK(mixed_context != nullptr);
+  PublicBatch mixed;
+  mixed.atom_offsets = {0, 2, 4};
+  mixed.atomic_numbers = {1, 1, 8, 1};
+  mixed.positions = {-0.71, 0.0, 0.0, 0.71, 0.0, 0.0, 0.0, 0.0, 0.0, 1.8, 0.0, 0.0};
+  mixed.molecular_charges = {0.0, 0.0};
+  mixed.unpaired_electrons = {0, 1};
+  mixed.spin_channels = {1, 2};
+  mixed.bind(flags);
+  CHECK(gpuxtb_compute(mixed_context.get(), &mixed.batch, &mixed.options, &mixed.result) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(mixed.statuses ==
+        std::vector<std::int32_t>({GPUXTB_STATUS_SUCCESS, GPUXTB_STATUS_SUCCESS}));
+  mixed.bind(flags);
+  mixed.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_compute(mixed_context.get(), &mixed.batch, &mixed.options, &mixed.result) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(mixed.statuses ==
+        std::vector<std::int32_t>({GPUXTB_STATUS_SUCCESS, GPUXTB_STATUS_SUCCESS}));
+
+  /* Point-charge values/coordinates and periodic operators are numerical
+   * inputs, while their ragged/enablement structure is identity. */
+  ContextHandle embedded_context = make_cpu_context();
+  CHECK(embedded_context != nullptr);
+  PublicBatch embedded;
+  embedded.atom_offsets = {0, 2};
+  embedded.atomic_numbers = {1, 1};
+  embedded.positions = {-0.71, 0.0, 0.0, 0.71, 0.0, 0.0};
+  embedded.molecular_charges = {0.0};
+  embedded.unpaired_electrons = {0};
+  embedded.point_offsets = {0, 1};
+  embedded.point_positions = {0.2, 1.8, -0.7};
+  embedded.point_values = {0.25};
+  embedded.point_gammas = {0.82};
+  embedded.periodic_shifts = {0.003, -0.002};
+  embedded.response_offsets = {0, 4};
+  embedded.response_matrix = {0.02, 0.001, 0.001, 0.018};
+  const std::uint32_t embedded_flags = flags | GPUXTB_COMPUTE_POINT_CHARGE_FORCES;
+  embedded.bind(embedded_flags);
+  CHECK(gpuxtb_compute(embedded_context.get(), &embedded.batch, &embedded.options,
+                       &embedded.result) == GPUXTB_STATUS_SUCCESS);
+  embedded.point_positions[1] += 0.01;
+  embedded.point_values[0] -= 0.002;
+  embedded.periodic_shifts[0] += 0.0001;
+  embedded.response_matrix[0] += 0.0002;
+  embedded.bind(embedded_flags);
+  embedded.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_compute(embedded_context.get(), &embedded.batch, &embedded.options,
+                       &embedded.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK((embedded.result.flags & GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES) != 0u);
+
+  PublicBatch changed_points = embedded;
+  changed_points.point_offsets = {0, 2};
+  changed_points.point_positions.insert(changed_points.point_positions.end(), {1.2, -0.4, 0.3});
+  changed_points.point_values.push_back(-0.1);
+  changed_points.point_gammas.push_back(0.9);
+  changed_points.bind(embedded_flags);
+  changed_points.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(embedded_context.get(), changed_points));
+
+  PublicBatch disabled_periodic = embedded;
+  disabled_periodic.periodic_shifts.clear();
+  disabled_periodic.response_offsets.clear();
+  disabled_periodic.response_matrix.clear();
+  disabled_periodic.bind(embedded_flags);
+  disabled_periodic.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(embedded_context.get(), disabled_periodic));
+
+  embedded.bind(embedded_flags);
+  embedded.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_compute(embedded_context.get(), &embedded.batch, &embedded.options,
+                       &embedded.result) == GPUXTB_STATUS_SUCCESS);
+
+  /* One data-level peer failure revokes whole-batch readiness even though the
+   * successful peer remains independently published. */
+  ContextHandle peer_context = make_cpu_context(2);
+  CHECK(peer_context != nullptr);
+  PublicBatch peers;
+  peers.atom_offsets = {0, 2, 4};
+  peers.atomic_numbers = {1, 1, 1, 1};
+  peers.positions = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0, 3.30, 0.0, 0.0, 4.70, 0.0, 0.0};
+  peers.molecular_charges = {0.0, 0.0};
+  peers.unpaired_electrons = {0, 0};
+  peers.bind(flags);
+  CHECK(gpuxtb_compute(peer_context.get(), &peers.batch, &peers.options, &peers.result) ==
+        GPUXTB_STATUS_SUCCESS);
+  peers.positions[9] = peers.positions[6] + 1.1e-6;
+  peers.bind(flags);
+  peers.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_compute(peer_context.get(), &peers.batch, &peers.options, &peers.result) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(peers.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(peers.statuses[1] == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+  peers.positions[9] = 4.70;
+  peers.bind(flags);
+  peers.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(peer_context.get(), peers));
   return 0;
 }
 

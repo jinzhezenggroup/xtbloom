@@ -445,6 +445,7 @@ struct SystemKey {
   std::int32_t spin_channels = 1;
   std::int64_t point_count = 0;
   bool periodic_enabled = false;
+  std::uint32_t compute_flags = 0u;
   std::int32_t maximum_iterations = 0;
   double charge_tolerance = 0.0;
   double energy_tolerance = 0.0;
@@ -455,7 +456,7 @@ struct SystemKey {
            lhs.molecular_charge == rhs.molecular_charge &&
            lhs.unpaired_electrons == rhs.unpaired_electrons &&
            lhs.spin_channels == rhs.spin_channels && lhs.point_count == rhs.point_count &&
-           lhs.periodic_enabled == rhs.periodic_enabled &&
+           lhs.periodic_enabled == rhs.periodic_enabled && lhs.compute_flags == rhs.compute_flags &&
            lhs.maximum_iterations == rhs.maximum_iterations &&
            lhs.charge_tolerance == rhs.charge_tolerance &&
            lhs.energy_tolerance == rhs.energy_tolerance &&
@@ -481,6 +482,7 @@ void make_system_keys(const HostRequest& request, const gpuxtb_compute_options_t
     key.spin_channels = request.spin_channels[index];
     key.point_count = point_end - point_begin;
     key.periodic_enabled = periodic_enabled;
+    key.compute_flags = options.flags;
     key.maximum_iterations = options.max_scc_iterations;
     key.charge_tolerance = options.charge_tolerance;
     key.energy_tolerance = options.energy_tolerance;
@@ -1359,18 +1361,27 @@ gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
         return GPUXTB_STATUS_INVALID_ARGUMENT;
       }
     }
-    implementation.systems_ready_for_warm = false;
-
     status = implementation.ensure_backend(error);
     if (status != GPUXTB_STATUS_SUCCESS) {
       return status;
     }
+
+    /* Keep the currently published checkpoint consumable until every
+     * pre-execution staging/setup step succeeds. prepare_staging only mutates
+     * transaction scratch, while ensure_systems builds a different identity
+     * into a local candidate before replacing the retained systems. A failure
+     * in either step therefore leaves both the old systems and their
+     * whole-batch readiness token intact for a later compatible WARM call. */
+    implementation.prepare_staging(options.flags);
     status = implementation.ensure_systems(implementation.requested_keys, error);
     if (status != GPUXTB_STATUS_SUCCESS) {
       return status;
     }
 
-    implementation.prepare_staging(options.flags);
+    /* Numerical execution is the predecessor attempt for strict WARM
+     * semantics. From this point onward, a failed or non-converged call must
+     * not expose the older checkpoint as though the attempt never occurred. */
+    implementation.systems_ready_for_warm = false;
     Gfn2CpuExecutionCache::Impl::InferenceJob job{implementation, options};
     implementation.workers.parallel_for(static_cast<std::size_t>(implementation.request.batch_size),
                                         &job, &Gfn2CpuExecutionCache::Impl::infer_system);

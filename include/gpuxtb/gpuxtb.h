@@ -234,15 +234,16 @@ typedef struct gpuxtb_batch {
  * to FRESH. A V1/short prefix means FRESH.
  *
  * A compatible identity is a batch whose topology and compute policy
- * (molecular charges, unpaired electrons, spin channels, point-charge and
- * periodic structure, SCC tolerances, maximum iterations, and electronic
- * temperature) exactly match the previous fully converged call on the same
- * context. Geometry is not part of the identity: a WARM call reuses the
- * previous converged electronic state as the initial SCC guess for the new
- * coordinates and reconverges. A WARM request with no such compatible fully
- * converged predecessor (first call, changed topology or policy, or a
- * preceding non-converged batch) is rejected with GPUXTB_STATUS_INVALID_ARGUMENT
- * before any caller output is modified.
+ * (requested-property flags, molecular charges, unpaired electrons, spin
+ * channels, point-charge and periodic structure, SCC tolerances, maximum
+ * iterations, and electronic temperature) exactly match the previous fully
+ * converged call on the same context. This is the same compute-options
+ * identity used by CPU and CUDA. Geometry is not part of the identity: a WARM
+ * call reuses the previous converged electronic state as the initial SCC guess
+ * for the new coordinates and reconverges. A WARM request with no such
+ * compatible fully converged predecessor (first call, changed topology or
+ * policy, or a preceding non-converged batch) is rejected with
+ * GPUXTB_STATUS_INVALID_ARGUMENT before any caller output is modified.
  */
 typedef struct gpuxtb_compute_options {
   uint32_t struct_size;
