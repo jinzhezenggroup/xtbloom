@@ -46,6 +46,19 @@ bool near(double actual, double expected, double tolerance) {
          tolerance * std::max({1.0, std::abs(actual), std::abs(expected)});
 }
 
+bool within_ulps(double actual, double expected, int ulps) {
+  if (!std::isfinite(actual) || !std::isfinite(expected) || ulps < 0) {
+    return false;
+  }
+  double lower = expected;
+  double upper = expected;
+  for (int step = 0; step < ulps; ++step) {
+    lower = std::nextafter(lower, -std::numeric_limits<double>::infinity());
+    upper = std::nextafter(upper, std::numeric_limits<double>::infinity());
+  }
+  return actual >= lower && actual <= upper;
+}
+
 template <typename T>
 class DeviceBuffer {
  public:
@@ -490,6 +503,384 @@ int test_cpu_parity_ragged_batches_and_custom_stream() {
   return 0;
 }
 
+/* Degenerate finite-temperature representability policy parity (#31).
+ *
+ * Exactly degenerate blocks whose single-hole/electron surplus cannot be
+ * expressed as equal binary64 occupations are relaxed to the nearest
+ * representable symmetric state instead of failing, with an absolute error
+ * bounded by count * 2 * eps_double. Both the CPU reference and the device
+ * kernel must agree on the published (equal-member) occupations. */
+HostCase make_representability_case() {
+  HostCase host;
+  const std::vector<std::vector<double>> levels{{
+      {1.0, 1.0, 1.0},
+      {1.0, 1.0, 1.0},
+      {1.0, 1.0},
+      {0.0, 1.0, 1.0, 2.0},
+      {1.0, 1.0, 1.0, 1.0},
+      {0.0, 1.0, 2.0},
+      {0.0, 0.0, 0.0, 1.0, 1.0, 1.0},
+      {std::numeric_limits<double>::max(), std::numeric_limits<double>::max(),
+       std::numeric_limits<double>::max()},
+      {1.0, 1.0},
+      {0.0, 1.0, 1.0, 1.0},
+      {0.0, 1.0, 1.0, 1.0, 1.0, 1.0},
+      {0.0, 1.0, 1.0},
+      {0.0, 0.0, 1.0},
+      {0.0, 0.0, 1.0},
+  }};
+  const std::vector<double> electron0{{
+      std::nextafter(3.0, 0.0),
+      std::nextafter(0.0, 1.0),
+      std::nextafter(2.0, 0.0),
+      1.3,
+      std::nextafter(4.0, 0.0),
+      std::nextafter(3.0, 0.0),
+      std::nextafter(6.0, 0.0),
+      std::nextafter(0.0, 1.0),
+      9.0 * std::numeric_limits<double>::denorm_min(),
+      std::nextafter(4.0, 0.0),
+      std::nextafter(3.0, 0.0),
+      std::nextafter(1.5, 0.0),
+      std::nextafter(1.5, 3.0),
+      std::numeric_limits<double>::denorm_min(),
+  }};
+  const std::size_t systems = levels.size();
+  host.offsets.assign(systems + 1u, 0);
+  host.electron_counts.resize(2u * systems);
+  host.temperatures.resize(systems);
+  host.active.assign(systems, 1u);
+  std::int64_t total = 0;
+  for (std::size_t system = 0u; system < systems; ++system) {
+    host.offsets[system] = total;
+    total += static_cast<std::int64_t>(levels[system].size());
+  }
+  host.offsets[systems] = total;
+  host.eigenvalues.resize(static_cast<std::size_t>(total));
+  for (std::size_t system = 0u; system < systems; ++system) {
+    const std::int64_t begin = host.offsets[system];
+    for (std::size_t orbital = 0u; orbital < levels[system].size(); ++orbital) {
+      host.eigenvalues[static_cast<std::size_t>(begin + orbital)] = levels[system][orbital];
+    }
+    /* finite temperature everywhere so the Fermi (not Aufbau) path runs */
+    host.temperatures[system] = system == 7u    ? std::numeric_limits<double>::max()
+                                : system >= 10u ? 1.0e-7
+                                                : GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+    host.electron_counts[2u * system] = electron0[system];
+    host.electron_counts[2u * system + 1u] = electron0[system];
+  }
+  return host;
+}
+
+int test_degenerate_representability_policy_parity() {
+  HostCase host = make_representability_case();
+  std::string error;
+  CHECK(build_cpu_reference(host, error));
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host, nullptr));
+  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+      static_cast<std::int64_t>(host.batch_size()), device.system_errors.get(),
+      device.device_error.get()));
+  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+      device.batch(host), device.eigenvalues.get(),
+      static_cast<std::int64_t>(device.eigenvalues.size()), device.results(host),
+      device.workspace(), device.system_errors.get(), device.device_error.get()));
+  Results actual;
+  CUDA_CHECK(copy_results(host, device, actual, nullptr));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(actual.device_error == 0u);
+  CHECK(std::all_of(actual.system_errors.begin(), actual.system_errors.end(),
+                    [](std::uint32_t value) { return value == 0u; }));
+
+  const double eps = std::numeric_limits<double>::epsilon();
+  for (std::size_t system = 0u; system < host.batch_size(); ++system) {
+    const std::int64_t begin = host.offsets[system];
+    const std::int64_t count = host.offsets[system + 1u] - host.offsets[system];
+    const double target = host.electron_counts[2u * system];
+    /* Only a fully degenerate spectrum is governed by the representability
+     * quantization bound; mixed spectra keep ordinary fractional accuracy. */
+    bool fully_degenerate = true;
+    for (std::int64_t orbital = 1u; orbital < count; ++orbital) {
+      fully_degenerate =
+          fully_degenerate && host.eigenvalues[static_cast<std::size_t>(begin + orbital)] ==
+                                  host.eigenvalues[static_cast<std::size_t>(begin + orbital - 1u)];
+    }
+    for (int spin = 0; spin < 2; ++spin) {
+      long double host_sum = 0.0L;
+      long double device_sum = 0.0L;
+      /* Degenerate members must share one value: for every orbital pair with
+       * equal eigenvalues, the published (host and device) occupations agree. */
+      bool block_uniform = true;
+      bool occupations_match = true;
+      for (std::int64_t orbital = 0; orbital < count; ++orbital) {
+        const std::size_t element = 2u * static_cast<std::size_t>(begin) +
+                                    static_cast<std::size_t>(spin) * count +
+                                    static_cast<std::size_t>(orbital);
+        host_sum += static_cast<long double>(host.expected_occupations[element]);
+        device_sum += static_cast<long double>(actual.occupations[element]);
+        occupations_match = occupations_match && near(actual.occupations[element],
+                                                      host.expected_occupations[element], 4.0e-13);
+        for (std::int64_t other = 0; other < orbital; ++other) {
+          const double left = host.eigenvalues[static_cast<std::size_t>(begin + other)];
+          const double right = host.eigenvalues[static_cast<std::size_t>(begin + orbital)];
+          if (left == right) {
+            const std::size_t other_element = 2u * static_cast<std::size_t>(begin) +
+                                              static_cast<std::size_t>(spin) * count +
+                                              static_cast<std::size_t>(other);
+            block_uniform =
+                block_uniform &&
+                host.expected_occupations[element] == host.expected_occupations[other_element] &&
+                actual.occupations[element] == actual.occupations[other_element];
+          }
+        }
+      }
+      CHECK(occupations_match);
+      /* Exactly degenerate blocks publish equal, symmetric occupations. */
+      CHECK(block_uniform);
+      /* Fully degenerate relaxation systems must satisfy the documented
+       * electron/hole quantization bound count * 2 * eps_double; mixed
+       * spectra keep the ordinary fractional-filling accuracy. */
+      if (fully_degenerate) {
+        CHECK(std::abs(host_sum - static_cast<long double>(target)) <=
+              2.0L * static_cast<long double>(eps) * static_cast<long double>(count));
+        CHECK(std::abs(device_sum - static_cast<long double>(target)) <=
+              2.0L * static_cast<long double>(eps) * static_cast<long double>(count));
+      } else {
+        CHECK(std::abs(host_sum - static_cast<long double>(target)) <=
+              2.0e-13L * static_cast<long double>(std::max(1.0, target)));
+        CHECK(std::abs(device_sum - static_cast<long double>(target)) <=
+              2.0e-13L * static_cast<long double>(std::max(1.0, target)));
+      }
+      CHECK(near(actual.electron_sums[2u * system + spin],
+                 host.expected_electron_sums[2u * system + spin], 4.0e-13));
+      /* The analytic equal-level logit defines a canonical root when the
+       * per-member subnormal target underflows. Ordinary targets retain the
+       * established absolute parity tolerance. */
+      const double device_mu = actual.chemical_potentials[2u * system + spin];
+      const double host_mu = host.expected_chemical_potentials[2u * system + spin];
+      const bool subnormal_target = target != 0.0 && std::fpclassify(target) == FP_SUBNORMAL;
+      const bool canonical_subnormal_mu =
+          fully_degenerate && subnormal_target && target / static_cast<double>(count) == 0.0;
+      if (canonical_subnormal_mu) {
+        CHECK(within_ulps(device_mu, host_mu, 8));
+      } else if (subnormal_target) {
+        /* A mixed-spectrum strict rescue need not be a direct Fermi vector,
+         * so its root is noncanonical; #31 requires finite diagnostics while
+         * exact broader chemical-potential parity remains part of #54. */
+        CHECK(std::isfinite(device_mu) && std::isfinite(host_mu));
+      } else {
+        CHECK(near(device_mu, host_mu, 8.0e-12));
+      }
+    }
+    CHECK(near(actual.entropies[system], host.expected_entropies[system], 8.0e-12));
+  }
+
+  /* The canonical three-orbital corner must choose the one-hole-ulp state on
+   * both backends. The previous CUDA root selected the adjacent two-hole-ulp
+   * state, which stayed inside the coarse error bound but was not nearest. */
+  const double one_hole_state = 0x1.fffffffffffffp-1;
+  CHECK(std::nextafter(1.0, 0.0) == one_hole_state);
+  for (int spin = 0; spin < 2; ++spin) {
+    const std::size_t system = 0u;
+    const std::int64_t begin = host.offsets[system];
+    for (std::int64_t orbital = 0; orbital < 3; ++orbital) {
+      const std::size_t element = 2u * static_cast<std::size_t>(begin) +
+                                  static_cast<std::size_t>(spin) * 3u +
+                                  static_cast<std::size_t>(orbital);
+      CHECK(host.expected_occupations[element] == one_hole_state);
+      CHECK(actual.occupations[element] == one_hole_state);
+    }
+  }
+  CHECK(std::abs(actual.entropies[0] - host.expected_entropies[0]) <= 2.0e-15);
+
+  /* System 5 has no multi-orbital degeneracy block, so it must conserve the
+   * near-capacity target at the strict publication tolerance rather than using
+   * the relaxed block tolerance. */
+  for (int spin = 0; spin < 2; ++spin) {
+    const std::size_t system = 5u;
+    const std::int64_t begin = host.offsets[system];
+    long double holes = 0.0L;
+    for (std::int64_t orbital = 0; orbital < 3; ++orbital) {
+      const std::size_t element = 2u * static_cast<std::size_t>(begin) +
+                                  static_cast<std::size_t>(spin) * 3u +
+                                  static_cast<std::size_t>(orbital);
+      holes += 1.0L - static_cast<long double>(actual.occupations[element]);
+    }
+    const long double target_holes =
+        3.0L - static_cast<long double>(host.electron_counts[2u * system + spin]);
+    CHECK(std::abs(holes - target_holes) <= 64.0L * static_cast<long double>(eps) * target_holes);
+  }
+
+  /* System 6 contains two exact-degeneracy blocks. The three frontier members
+   * must select the three-hole-ulp state, which is closer to the target than
+   * the adjacent two-hole-ulp state, identically on CPU and CUDA. */
+  const double three_hole_state =
+      std::nextafter(std::nextafter(std::nextafter(1.0, 0.0), 0.0), 0.0);
+  CHECK(three_hole_state == 0x1.ffffffffffffdp-1);
+  const double two_hole_state = std::nextafter(std::nextafter(1.0, 0.0), 0.0);
+  for (int spin = 0; spin < 2; ++spin) {
+    const std::size_t system = 6u;
+    const std::int64_t begin = host.offsets[system];
+    long double sum = 0.0L;
+    for (std::int64_t orbital = 0; orbital < 6; ++orbital) {
+      const std::size_t element = 2u * static_cast<std::size_t>(begin) +
+                                  static_cast<std::size_t>(spin) * 6u +
+                                  static_cast<std::size_t>(orbital);
+      const double occupation = actual.occupations[element];
+      CHECK(occupation == host.expected_occupations[element]);
+      CHECK(occupation == (orbital < 3 ? 1.0 : three_hole_state));
+      sum += static_cast<long double>(occupation);
+    }
+    const long double target = static_cast<long double>(host.electron_counts[2u * system + spin]);
+    const long double selected_error = std::abs(sum - target);
+    const long double adjacent_error =
+        std::abs(3.0L + 3.0L * static_cast<long double>(two_hole_state) - target);
+    CHECK(selected_error < adjacent_error);
+    CHECK(selected_error <= 2.0L * static_cast<long double>(eps) * 3.0L);
+  }
+  CHECK(std::abs(actual.entropies[6] - host.expected_entropies[6]) <= 2.0e-15);
+  CHECK(host.expected_chemical_potentials[14] == -std::numeric_limits<double>::max());
+  CHECK(actual.chemical_potentials[14] == -std::numeric_limits<double>::max());
+  CHECK(host.expected_chemical_potentials[15] == -std::numeric_limits<double>::max());
+  CHECK(actual.chemical_potentials[15] == -std::numeric_limits<double>::max());
+
+  /* System 8 is an exact half-subnormal tie. Both neighboring symmetric
+   * states have the same long-double count error, so the canonical tuple
+   * chooses the lower per-member occupation on CPU and CUDA. */
+  const double denorm = std::numeric_limits<double>::denorm_min();
+  const double lower_tie_occupation = 4.0 * denorm;
+  const double upper_tie_occupation = 5.0 * denorm;
+  const long double tie_target = 9.0L * static_cast<long double>(denorm);
+  const long double lower_tie_error =
+      std::abs(2.0L * static_cast<long double>(lower_tie_occupation) - tie_target);
+  const long double upper_tie_error =
+      std::abs(2.0L * static_cast<long double>(upper_tie_occupation) - tie_target);
+  CHECK(lower_tie_error == upper_tie_error);
+  for (int spin = 0; spin < 2; ++spin) {
+    const std::size_t system = 8u;
+    const std::int64_t begin = host.offsets[system];
+    for (std::int64_t orbital = 0; orbital < 2; ++orbital) {
+      const std::size_t element = 2u * static_cast<std::size_t>(begin) +
+                                  static_cast<std::size_t>(spin) * 2u +
+                                  static_cast<std::size_t>(orbital);
+      CHECK(host.expected_occupations[element] == lower_tie_occupation);
+      CHECK(actual.occupations[element] == lower_tie_occupation);
+    }
+    CHECK(within_ulps(actual.chemical_potentials[2u * system + spin],
+                      host.expected_chemical_potentials[2u * system + spin], 8));
+  }
+  const double tie_hole = 1.0 - lower_tie_occupation;
+  const double tie_contribution =
+      -lower_tie_occupation * std::log(lower_tie_occupation) - tie_hole * std::log(tie_hole);
+  const double expected_tie_entropy =
+      (tie_contribution + tie_contribution) + (tie_contribution + tie_contribution);
+  CHECK(actual.entropies[8] == expected_tie_entropy);
+  CHECK(host.expected_entropies[8] == expected_tie_entropy);
+
+  /* System 9 has a strict global solution even though the three-member upper
+   * block also offers a relaxed state. All four orbitals must publish the
+   * exact one-hole state, including the lower singleton. */
+  for (int spin = 0; spin < 2; ++spin) {
+    const std::size_t system = 9u;
+    const std::int64_t begin = host.offsets[system];
+    long double holes = 0.0L;
+    for (std::int64_t orbital = 0; orbital < 4; ++orbital) {
+      const std::size_t element = 2u * static_cast<std::size_t>(begin) +
+                                  static_cast<std::size_t>(spin) * 4u +
+                                  static_cast<std::size_t>(orbital);
+      CHECK(host.expected_occupations[element] == one_hole_state);
+      CHECK(actual.occupations[element] == one_hole_state);
+      holes += 1.0L - static_cast<long double>(actual.occupations[element]);
+    }
+    CHECK(holes == 4.0L - static_cast<long double>(host.electron_counts[2u * system + spin]));
+    CHECK(within_ulps(actual.chemical_potentials[2u * system + spin],
+                      host.expected_chemical_potentials[2u * system + spin], 8));
+  }
+  const long double partial_occupation = static_cast<long double>(one_hole_state);
+  const double expected_partial_entropy = static_cast<double>(
+      -8.0L * (partial_occupation * std::log(partial_occupation) +
+               (1.0L - partial_occupation) * std::log(1.0L - partial_occupation)));
+  CHECK(within_ulps(actual.entropies[9], expected_partial_entropy, 8));
+  CHECK(within_ulps(actual.entropies[9], host.expected_entropies[9], 8));
+
+  /* System 10 exhausts binary64 chemical-potential spacing across a sharp
+   * low-temperature degenerate frontier. The final adjacent root bracket
+   * still contains the target, so CUDA must reach the same correction path as
+   * the CPU instead of rejecting the system before publication. */
+  for (int spin = 0; spin < 2; ++spin) {
+    const std::size_t system = 10u;
+    const std::int64_t begin = host.offsets[system];
+    long double sum = 0.0L;
+    double frontier_occupation = -1.0;
+    for (std::int64_t orbital = 0; orbital < 6; ++orbital) {
+      const std::size_t element = 2u * static_cast<std::size_t>(begin) +
+                                  static_cast<std::size_t>(spin) * 6u +
+                                  static_cast<std::size_t>(orbital);
+      CHECK(std::isfinite(actual.occupations[element]));
+      if (orbital == 1) {
+        frontier_occupation = actual.occupations[element];
+      } else if (orbital > 1) {
+        CHECK(actual.occupations[element] == frontier_occupation);
+      }
+      sum += static_cast<long double>(actual.occupations[element]);
+    }
+    const long double target = static_cast<long double>(host.electron_counts[2u * system + spin]);
+    CHECK(std::abs(sum - target) <= 64.0L * static_cast<long double>(eps) * std::max(1.0L, target));
+  }
+
+  /* Systems 11 and 12 are the exact electron/hole retry mirrors. Their
+   * initial translated references sit on opposite singleton sides of the
+   * fractional degenerate frontier, but the shared retry and publication
+   * policy must produce bit-identical CPU/CUDA observables. */
+  for (const std::size_t system : {11u, 12u}) {
+    const std::int64_t begin = host.offsets[system];
+    const bool solve_holes = system == 12u;
+    for (int spin = 0; spin < 2; ++spin) {
+      long double quantity = 0.0L;
+      for (std::int64_t orbital = 0; orbital < 3; ++orbital) {
+        const std::size_t element = 2u * static_cast<std::size_t>(begin) +
+                                    static_cast<std::size_t>(spin) * 3u +
+                                    static_cast<std::size_t>(orbital);
+        CHECK(actual.occupations[element] == host.expected_occupations[element]);
+        quantity += solve_holes ? 1.0L - static_cast<long double>(actual.occupations[element])
+                                : static_cast<long double>(actual.occupations[element]);
+      }
+      const std::size_t first_frontier = solve_holes ? 0u : 1u;
+      const std::size_t first_element = 2u * static_cast<std::size_t>(begin) +
+                                        static_cast<std::size_t>(spin) * 3u + first_frontier;
+      CHECK(actual.occupations[first_element] == actual.occupations[first_element + 1u]);
+      const double requested = host.electron_counts[2u * system + spin];
+      const long double target = solve_holes ? 3.0L - static_cast<long double>(requested)
+                                             : static_cast<long double>(requested);
+      CHECK(std::abs(quantity - target) <=
+            64.0L * static_cast<long double>(eps) * static_cast<long double>(target));
+      CHECK(within_ulps(actual.chemical_potentials[2u * system + spin],
+                        host.expected_chemical_potentials[2u * system + spin], 8));
+    }
+    CHECK(actual.entropies[system] == host.expected_entropies[system]);
+  }
+
+  /* System 13 exhausts spacing at the causal lower pair, then conserves
+   * strictly by publishing the denormal electron on the upper singleton. */
+  for (int spin = 0; spin < 2; ++spin) {
+    const std::size_t system = 13u;
+    const std::int64_t begin = host.offsets[system];
+    const std::size_t spin_begin =
+        2u * static_cast<std::size_t>(begin) + static_cast<std::size_t>(spin) * 3u;
+    CHECK(actual.occupations[spin_begin] == 0.0);
+    CHECK(actual.occupations[spin_begin + 1u] == 0.0);
+    CHECK(actual.occupations[spin_begin + 2u] == std::numeric_limits<double>::denorm_min());
+    for (std::size_t orbital = 0u; orbital < 3u; ++orbital) {
+      CHECK(actual.occupations[spin_begin + orbital] ==
+            host.expected_occupations[spin_begin + orbital]);
+    }
+    CHECK(std::isfinite(actual.chemical_potentials[2u * system + spin]));
+    CHECK(std::isfinite(host.expected_chemical_potentials[2u * system + spin]));
+  }
+  CHECK(actual.entropies[13] == host.expected_entropies[13]);
+  return 0;
+}
+
 HostCase make_mixed_spin_case(std::size_t batch_size) {
   HostCase host;
   host.offsets.assign(batch_size + 1u, 0);
@@ -713,6 +1104,7 @@ int test_peer_isolated_failures_inactive_mask_and_hostile_offsets() {
   /* Invalid values hidden behind an inactive member are never inspected. */
   host.active[2] = 0u;
   CUDA_CHECK(device.active.copy_from(host.active.data(), host.active.size()));
+  CUDA_CHECK(device.eigenvalues.copy_from(bad_eigenvalues.data(), bad_eigenvalues.size()));
   CUDA_CHECK(
       device.electron_counts.copy_from(host.electron_counts.data(), host.electron_counts.size()));
   CUDA_CHECK(device.temperatures.copy_from(host.temperatures.data(), host.temperatures.size()));
@@ -877,6 +1269,9 @@ int test_host_argument_alias_and_alignment_validation() {
 
 int main() {
   if (const int line = test_cpu_parity_ragged_batches_and_custom_stream(); line != 0) {
+    return line;
+  }
+  if (const int line = test_degenerate_representability_policy_parity(); line != 0) {
     return line;
   }
   if (const int line = test_boundary_degenerate_translated_and_extreme_spectra(); line != 0) {

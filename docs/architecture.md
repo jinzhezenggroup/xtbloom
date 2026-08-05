@@ -32,6 +32,43 @@ energy `F = E_internal - T*S_electronic`, including the Fermi-occupation entropy
 tblite. Forces are `-dF/dR`, which preserves the stationary finite-temperature SCC derivative. At
 zero electronic temperature, `F` reduces to the internal energy.
 
+Finite-temperature occupations of an exactly degenerate eigenspace are published symmetrically:
+every orbital in an equal-energy block shares one binary64 value, keeping the populations unitary-
+and permutation-invariant. When the requested electron/hole count falls strictly between two such
+symmetric states (for example three exactly degenerate orbitals with `nel = nextafter(3, 0)`, whose
+single residual hole cannot be split equally across the three published occupations), the solver
+relaxes to the nearest representable symmetric state instead of failing the system. The published
+electron/hole error is then bounded absolutely by the block quantization scale
+`2 * eps_double * block_count` (a few ULPs of an electron, where `eps_double` is `2^-52` and
+`block_count` is the number of orbitals in the selected exact-degeneracy block). Relaxation is never
+authorized by a singleton or by the total spectrum size. The solver collects candidates across all
+energy blocks before selecting: any state inside the strict publication tolerance globally precedes
+every relaxed state. Within either class, it minimizes the binary64 compensated-sum count error,
+then prefers a fractional candidate, the lower occupation at an exact error tie, and finally the
+lower block index. Candidate evaluation includes the directly solved block occupation, its two
+nearest binary64 neighbors on each side, and the original publication value with its immediate
+neighbors. CPU reconstructs this rare-path candidate baseline with the same translated binary64
+root and compensated summation order used by CUDA; its long-double root remains the independent
+ideal-conservation check. If binary64 root spacing is exhausted outside the ordinary root tolerance,
+the final bracket still straddles the target, and exactly one multi-orbital degenerate block changes
+electron or hole contribution across that bracket, both backends may retry once with that frontier
+as the translated reference. A failed or non-improving retry leaves the original root unchanged.
+Only that uniquely identified causal frontier can supply the block-quantization floor for root
+acceptance, including when publication subsequently finds a strict singleton rescue; an unrelated
+degeneracy cannot widen the root gate. If the first phase must select a relaxed block, one bounded
+second phase searches strict candidates only from that vector; if none exists, the first relaxed
+state remains. Every shared rare-path final strict or relaxed decision is audited with the same
+double-double residual interval comparison. The reported entropy is derived from those same
+published occupations. When an exactly degenerate block's valid subnormal total cannot be divided
+into a nonzero binary64 per-member fraction, CPU and CUDA use the same analytic equal-level logit for
+the finite chemical potential. Outside that fully degenerate analytic override, a mixed-spectrum
+subnormal jump has no canonical cross-backend binary64 chemical potential: both backends require a
+finite diagnostic while the shared publication, count, and entropy remain deterministic; broader
+chemical-potential parity remains tracked by #54. A residual beyond the selected block's quantization
+bound indicates genuine electron non-conservation and still fails deterministically. Nondegenerate
+spectra retain the strict publication tolerance, and the zero-temperature Aufbau path is unaffected.
+See issue #31 for the original representability question.
+
 The public batch call has two failure levels. Any failure detected before the final caller-output
 commit begins leaves every result buffer and result flag unchanged. Once a CUDA caller-output
 commit has begun, a later catastrophic failure returns `INTERNAL_ERROR` with an explicit diagnostic;
@@ -71,6 +108,27 @@ descriptor for now.
 
 Immutable element and pair parameters should be packed once per device. Per-call allocations are
 forbidden on the steady-state inference path; the context grows and reuses workspace instead.
+
+### Optional host-runtime loading
+
+libgpuxtb does not require a proprietary BLAS or CUDA host shared library merely to load. The CPU
+eigensolver dlopens an LP64 BLAS/LAPACK runtime (Intel MKL or OpenBLAS) by SONAME on first use
+(`src/model/gfn2/eigensolver.cpp`), so a machine without a compatible provider still loads the
+library. On Linux the CUDA build generates one ELF trampoline shim per wrapped host library
+(cudart, cuBLAS, cuSOLVER, and libcuda) from the byte-pinned
+`cmake/3rdparty/implib` source and compiles those shims into libgpuxtb itself
+(`src/runtime/cuda_dlopen.c`). An early ELF constructor opens the exact build-major SONAMEs and
+pre-resolves each complete symbol cohort before ordinary NVCC registration constructors run. The
+resolved tables are then immutable, avoiding races on concurrent CUDA calls. A host without the
+NVIDIA runtime can therefore load libgpuxtb and receive a backend-unavailable diagnostic instead
+of failing at the ELF loader boundary.
+
+This host-library indirection is narrower than a claim that the CUDA-enabled binary contains no
+proprietary linked code. nvcc's separable-compilation/device-link pipeline may embed NVIDIA
+device-runtime code such as cudadevrt in libgpuxtb even when the inspected dynamic section has no
+ordinary `DT_NEEDED` entry for the wrapped host libraries. The source provenance and packaging
+contract are recorded in `cmake/3rdparty/implib_manifest.json` and
+`THIRD_PARTY_NOTICES.md`; the owner/legal distribution decision remains open in Issue #162.
 
 ## Correctness strategy
 
