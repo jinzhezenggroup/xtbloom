@@ -39,9 +39,11 @@ dependencies = [
   # preloads it on import.
   "mkl; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "scipy-openblas32; sys_platform == 'linux' and platform_machine == 'aarch64'",
-  # Published Linux wheels are CUDA-enabled, so their DT_NEEDED runtime must
-  # be installed by an ordinary ``pip install gpuxtb`` rather than hidden
-  # behind an optional extra that leaves the native library unloadable.
+  # Published Linux wheels are CUDA-enabled. libgpuxtb has no DT_NEEDED entry
+  # on the NVIDIA libraries (they are loaded lazily with dlopen by the CUDA
+  # backend; see src/runtime/cuda_dlopen.c), but the runtime is still required
+  # by an ordinary ``pip install gpuxtb`` so the GPU backend works out of the
+  # box rather than being hidden behind an optional extra.
   "nvidia-cublas-cu12>=12.9.1.4; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
   "nvidia-cusolver-cu12>=11.7.5.82; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
   "nvidia-cusparse-cu12>=12.5.10.65; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",

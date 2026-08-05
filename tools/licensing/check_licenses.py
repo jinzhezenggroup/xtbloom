@@ -23,6 +23,7 @@ SOURCE_FILES = (
     "THIRD_PARTY_NOTICES.md",
     "LICENSES/LGPL-3.0-or-later.txt",
     "LICENSES/Apache-2.0.txt",
+    "LICENSES/MIT.txt",
     "data/parameters/d4.NOTICE",
     "data/parameters/licenses/dftd4-COPYING",
     "data/parameters/licenses/dftd4-COPYING.LESSER",
@@ -31,12 +32,14 @@ SOURCE_FILES = (
     "data/parameters/spin_manifest.json",
     "data/parameters/d4_manifest.json",
     "data/parameters/mctc_manifest.json",
+    "cmake/3rdparty/implib/implib-gen.py",
 )
 COMMON_ARCHIVE_SUFFIXES = (
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "LICENSES/LGPL-3.0-or-later.txt",
     "LICENSES/Apache-2.0.txt",
+    "LICENSES/MIT.txt",
 )
 SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/d4.NOTICE",
@@ -47,6 +50,7 @@ SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/spin_manifest.json",
     "data/parameters/d4_manifest.json",
     "data/parameters/mctc_manifest.json",
+    "cmake/3rdparty/implib/implib-gen.py",
 )
 WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/gpuxtb/THIRD_PARTY_NOTICES.md",
@@ -54,6 +58,7 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/gpuxtb/provenance/spin_manifest.json",
     "share/licenses/gpuxtb/provenance/d4_manifest.json",
     "share/licenses/gpuxtb/provenance/mctc_manifest.json",
+    "share/licenses/gpuxtb/third-party/MIT.txt",
     "share/licenses/gpuxtb/third-party/d4/d4.NOTICE",
     "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING",
     "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING.LESSER",
@@ -65,6 +70,7 @@ INSTALL_FILES = (
     "share/licenses/gpuxtb/THIRD_PARTY_NOTICES.md",
     "share/licenses/gpuxtb/third-party/LGPL-3.0-or-later.txt",
     "share/licenses/gpuxtb/third-party/Apache-2.0.txt",
+    "share/licenses/gpuxtb/third-party/MIT.txt",
     "share/licenses/gpuxtb/provenance/manifest.json",
     "share/licenses/gpuxtb/provenance/spin_manifest.json",
     "share/licenses/gpuxtb/provenance/d4_manifest.json",
@@ -88,6 +94,7 @@ NOTICE_TOKENS = (
     "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d",
     "edcfbbe39d411edc225e27315fbda3a204ddb023",
     "9ab8ca565e0f71d967587e0bca2015f7d689f19f",
+    "6f4fc02ae058ef11848046af01a1a756f3229c29",
     "No LAMMPS source code",
 )
 

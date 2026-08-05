@@ -69,6 +69,25 @@ contracts, and the origin of the QM/MM fixtures are recorded in
 `b + A q` interface convention. No LAMMPS source code, binary, or numerical
 table is redistributed by gpuxtb.
 
+## implib.so (CUDA loader shim generator)
+
+Repository: <https://github.com/yugr/Implib.so>
+
+License: `MIT` (`LICENSES/MIT.txt`).
+
+`cmake/3rdparty/implib/` vendors the `implib-gen.py` generator and its `arch/`
+templates as a build-time tool (MIT, Copyright 2017-2023 Yury Gribov), copied
+from the vendored revision in deepmd-kit
+`6f4fc02ae058ef11848046af01a1a756f3229c29` (which includes the upstream fix
+for yugr/Implib.so#34 and a small modification to tolerate a missing CUDA
+library). The generator runs at CMake configure time and produces
+build-tree-only ELF trampoline/initializer sources; no generated artifact is
+redistributed. gpuxtb uses the shims to load the proprietary NVIDIA CUDA
+runtime/math/driver libraries (cudart, cuBLAS, cuSOLVER, libcuda) lazily with
+dlopen instead of linking them, so libgpuxtb carries no `DT_NEEDED` entry on a
+GPL-incompatible library. The legal basis for that loading model is the
+subject of Issue #162 and is decided and recorded by the project owner.
+
 ## Distribution policy
 
 Generated artifacts remain accompanied by their upstream SPDX identifier,

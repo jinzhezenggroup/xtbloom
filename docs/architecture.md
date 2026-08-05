@@ -72,6 +72,20 @@ descriptor for now.
 Immutable element and pair parameters should be packed once per device. Per-call allocations are
 forbidden on the steady-state inference path; the context grows and reuses workspace instead.
 
+### Optional runtime loading
+
+libgpuxtb never requires a proprietary BLAS or CUDA library at load time. The CPU eigensolver
+dlopens an LP64 BLAS/LAPACK runtime (Intel MKL or OpenBLAS) by SONAME on first use
+(`src/model/gfn2/eigensolver.cpp`), so a machine without a compatible runtime still loads the
+library. The CUDA backend is built in but likewise never linked: on Linux the build generates one
+ELF trampoline shim per wrapped NVIDIA library (cudart, cuBLAS, cuSOLVER, libcuda) from
+`cmake/3rdparty/implib` and links the shims into libgpuxtb.so itself
+(`src/runtime/cuda_dlopen.c`). The first call to any wrapped symbol lazily dlopens the real
+library with `RTLD_LOCAL` and resolves it with dlsym, so libgpuxtb.so carries no `DT_NEEDED` on a
+GPL-incompatible library and a host without the NVIDIA runtime degrades to clean "GPU backend
+disabled" errors. The packaging policy that relies on this loading model is recorded in
+`THIRD_PARTY_NOTICES.md` and tracked by Issue #162.
+
 ## Correctness strategy
 
 Correctness gates optimization. Golden cases will be generated independently with tblite and xtb,
