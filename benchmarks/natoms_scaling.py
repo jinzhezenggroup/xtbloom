@@ -1930,7 +1930,7 @@ def _serialize_csv(document: dict[str, Any]) -> str:
             if key not in fieldnames:
                 fieldnames.append(key)
     output = io.StringIO(newline="")
-    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer = csv.DictWriter(output, fieldnames=fieldnames, lineterminator="\n")
     writer.writeheader()
     for row in rows:
         writer.writerow(

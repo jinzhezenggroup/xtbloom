@@ -591,6 +591,33 @@ class NatomsScalingTest(unittest.TestCase):
                     json_path, csv_path, document, allow_overwrite=False
                 )
 
+    def test_csv_serialization_uses_lf_and_remains_parseable(self) -> None:
+        document = {
+            "schema_version": 1,
+            "rows": [{"label": "sample", "values": [1, 2]}],
+        }
+        serialized = natoms_scaling._serialize_csv(document)
+        self.assertNotIn("\r", serialized)
+        self.assertEqual(
+            next(csv.DictReader(io.StringIO(serialized))),
+            {"label": "sample", "values": "[1, 2]"},
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            json_path = root / "result.json"
+            csv_path = root / "result.csv"
+            natoms_scaling.write_artifacts(
+                json_path, csv_path, document, allow_overwrite=False
+            )
+            csv_bytes = csv_path.read_bytes()
+            self.assertNotIn(b"\r", csv_bytes)
+            with csv_path.open(newline="", encoding="utf-8") as handle:
+                self.assertEqual(
+                    next(csv.DictReader(handle)),
+                    {"label": "sample", "values": "[1, 2]"},
+                )
+
     def test_artifact_pair_rolls_back_when_second_publish_fails(self) -> None:
         document = {"schema_version": 1, "rows": [{"value": 1}]}
         with tempfile.TemporaryDirectory() as directory:
