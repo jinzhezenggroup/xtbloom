@@ -97,3 +97,14 @@ jobs:
             -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/gpuxtb-install"
           cmake --build build-consumer --parallel
           "${PWD}/build-consumer/gpuxtb_install_consumer" cpu
+
+  pass:
+    name: Pass CI checks
+    needs: [cpu, licensing-source-distribution, static-cpu-package, public-cpu-release]
+    runs-on: ubuntu-24.04
+    if: always()
+    steps:
+      - name: Decide whether the needed jobs succeeded or failed
+        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}
