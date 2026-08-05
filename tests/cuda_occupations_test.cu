@@ -233,6 +233,84 @@ HostCase make_regular_case(std::size_t batch_size) {
   return host;
 }
 
+/* Exercise both sides of the 64-orbital parallelization threshold and a
+ * multi-stride spectrum. Values are strictly increasing so these systems take
+ * the cooperative root path rather than the exact-degeneracy fallback. */
+HostCase make_parallel_case(std::size_t batch_size) {
+  HostCase host;
+  constexpr std::array<std::int64_t, 4> counts{{63, 64, 65, 129}};
+  host.offsets.assign(batch_size + 1u, 0);
+  host.electron_counts.resize(2u * batch_size);
+  host.temperatures.resize(batch_size);
+  host.active.assign(batch_size, 1u);
+  for (std::size_t system = 0u; system < batch_size; ++system) {
+    const std::int64_t count = batch_size == 1u ? 64 : counts[system % counts.size()];
+    host.offsets[system + 1u] = host.offsets[system] + count;
+  }
+  host.eigenvalues.resize(host.total_orbitals());
+  for (std::size_t system = 0u; system < batch_size; ++system) {
+    const std::int64_t begin = host.offsets[system];
+    const std::int64_t count = host.offsets[system + 1u] - begin;
+    for (std::int64_t orbital = 0; orbital < count; ++orbital) {
+      host.eigenvalues[static_cast<std::size_t>(begin + orbital)] =
+          -2.0 + 0.031 * static_cast<double>(orbital) + 1.0e-4 * static_cast<double>(system);
+    }
+    const double capacity = static_cast<double>(count);
+    switch (system % 4u) {
+      case 0u:
+        host.temperatures[system] = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+        host.electron_counts[2u * system] = 0.37 * capacity;
+        host.electron_counts[2u * system + 1u] = 0.23 * capacity;
+        break;
+      case 1u:
+        host.temperatures[system] = 0.02;
+        host.electron_counts[2u * system] = std::nextafter(capacity, 0.0);
+        host.electron_counts[2u * system + 1u] = 0.0;
+        break;
+      case 2u:
+        host.temperatures[system] = 0.0;
+        host.electron_counts[2u * system] = 0.5 * capacity + 0.5;
+        host.electron_counts[2u * system + 1u] = capacity;
+        break;
+      default:
+        host.temperatures[system] = 1.0e-7;
+        host.electron_counts[2u * system] = 1.0e-16;
+        host.electron_counts[2u * system + 1u] = capacity - 0.75;
+        break;
+    }
+  }
+  return host;
+}
+
+HostCase make_parallel_mixed_spin_case(std::size_t batch_size) {
+  HostCase host = make_parallel_case(batch_size);
+  host.spin_channels.resize(batch_size);
+  host.spin_channel_offsets.assign(batch_size + 1u, 0);
+  host.spin_orbital_offsets.assign(batch_size + 1u, 0);
+  for (std::size_t system = 0u; system < batch_size; ++system) {
+    const std::int32_t channels = system % 3u == 0u ? 1 : 2;
+    const std::int64_t count = host.offsets[system + 1u] - host.offsets[system];
+    host.spin_channels[system] = channels;
+    host.spin_channel_offsets[system + 1u] = host.spin_channel_offsets[system] + channels;
+    host.spin_orbital_offsets[system + 1u] =
+        host.spin_orbital_offsets[system] + static_cast<std::int64_t>(channels) * count;
+  }
+  host.eigenvalues.resize(static_cast<std::size_t>(host.spin_orbital_offsets.back()));
+  for (std::size_t system = 0u; system < batch_size; ++system) {
+    const std::int64_t count = host.offsets[system + 1u] - host.offsets[system];
+    const std::int64_t spectrum_begin = host.spin_orbital_offsets[system];
+    for (std::int32_t spin = 0; spin < host.spin_channels[system]; ++spin) {
+      for (std::int64_t orbital = 0; orbital < count; ++orbital) {
+        host.eigenvalues[static_cast<std::size_t>(
+            spectrum_begin + static_cast<std::int64_t>(spin) * count + orbital)] =
+            -2.0 + 0.031 * static_cast<double>(orbital) + 0.017 * static_cast<double>(spin) +
+            1.0e-4 * static_cast<double>(system);
+      }
+    }
+  }
+  return host;
+}
+
 struct DeviceFixture {
   DeviceBuffer<std::int64_t> offsets;
   DeviceBuffer<std::int32_t> spin_channels;
@@ -499,6 +577,124 @@ int test_cpu_parity_ragged_batches_and_custom_stream() {
     const int comparison = compare_success(host, actual);
     CHECK(comparison == 0);
     CUDA_CHECK(cudaStreamDestroy(stream));
+  }
+  return 0;
+}
+
+int test_parallel_threshold_parity_and_determinism() {
+  for (const std::size_t batch_size : {1u, 8u, 32u, 128u}) {
+    for (const bool mixed_spin : {false, true}) {
+      HostCase host =
+          mixed_spin ? make_parallel_mixed_spin_case(batch_size) : make_parallel_case(batch_size);
+      std::string error;
+      CHECK(build_cpu_reference(host, error));
+      cudaStream_t stream = nullptr;
+      CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+      DeviceFixture device;
+      CUDA_CHECK(device.initialize(host, stream));
+      CUDA_CHECK(cudaStreamSynchronize(stream));
+
+      Results first;
+      for (int repetition = 0; repetition < 2; ++repetition) {
+        CUDA_CHECK(device.reset_outputs(host, stream));
+        CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+            static_cast<std::int64_t>(batch_size), device.system_errors.get(),
+            device.device_error.get(), stream));
+        const cudaError_t status =
+            mixed_spin ? gpuxtb::detail::cuda::evaluate_gfn2_occupations_cuda(
+                             device.batch(host), device.layout(host), device.eigenvalues.get(),
+                             static_cast<std::int64_t>(device.eigenvalues.size()),
+                             device.results(host), device.workspace(), device.system_errors.get(),
+                             device.device_error.get(), stream)
+                       : gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+                             device.batch(host), device.eigenvalues.get(),
+                             static_cast<std::int64_t>(device.eigenvalues.size()),
+                             device.results(host), device.workspace(), device.system_errors.get(),
+                             device.device_error.get(), stream);
+        CUDA_CHECK(status);
+        Results actual;
+        CUDA_CHECK(copy_results(host, device, actual, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        CHECK(compare_success(host, actual) == 0);
+        if (repetition == 0) {
+          first = std::move(actual);
+        } else {
+          CHECK(actual.occupations == first.occupations);
+          CHECK(actual.chemical_potentials == first.chemical_potentials);
+          CHECK(actual.electron_sums == first.electron_sums);
+          CHECK(actual.entropies == first.entropies);
+        }
+      }
+      CUDA_CHECK(cudaStreamDestroy(stream));
+    }
+  }
+
+  /* A large exact-degeneracy case must retain #31's canonical serial policy
+   * even though its width exceeds the cooperative threshold. */
+  HostCase degenerate;
+  degenerate.offsets = {0, 65};
+  degenerate.eigenvalues.assign(65u, 1.0);
+  degenerate.electron_counts = {std::nextafter(65.0, 0.0),
+                                std::numeric_limits<double>::denorm_min()};
+  degenerate.temperatures = {GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE};
+  degenerate.active = {1u};
+  std::string error;
+  CHECK(build_cpu_reference(degenerate, error));
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(degenerate, nullptr));
+  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+      1, device.system_errors.get(), device.device_error.get()));
+  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+      device.batch(degenerate), device.eigenvalues.get(), 65, device.results(degenerate),
+      device.workspace(), device.system_errors.get(), device.device_error.get()));
+  Results actual;
+  CUDA_CHECK(copy_results(degenerate, device, actual, nullptr));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(compare_success(degenerate, actual) == 0);
+  CHECK(actual.occupations == degenerate.expected_occupations);
+  CHECK(actual.electron_sums == degenerate.expected_electron_sums);
+  CHECK(actual.entropies == degenerate.expected_entropies);
+  return 0;
+}
+
+int test_parallel_validation_priority_and_failure_isolation() {
+  HostCase host = make_parallel_case(8u);
+  std::string error;
+  CHECK(build_cpu_reference(host, error));
+  constexpr std::size_t failed_system = 1u;
+  const std::int64_t begin = host.offsets[failed_system];
+  std::vector<double> poisoned = host.eigenvalues;
+  poisoned[static_cast<std::size_t>(begin + 1)] = poisoned[static_cast<std::size_t>(begin)] - 1.0;
+  poisoned[static_cast<std::size_t>(begin + 40)] = std::numeric_limits<double>::quiet_NaN();
+
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host, nullptr));
+  CUDA_CHECK(device.eigenvalues.copy_from(poisoned.data(), poisoned.size()));
+  for (int repetition = 0; repetition < 5; ++repetition) {
+    CUDA_CHECK(device.reset_outputs(host, nullptr));
+    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+        8, device.system_errors.get(), device.device_error.get()));
+    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+        device.batch(host), device.eigenvalues.get(),
+        static_cast<std::int64_t>(device.eigenvalues.size()), device.results(host),
+        device.workspace(), device.system_errors.get(), device.device_error.get()));
+    Results actual;
+    CUDA_CHECK(copy_results(host, device, actual, nullptr));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CHECK(actual.system_errors[failed_system] ==
+          static_cast<std::uint32_t>(Gfn2OccupationsDeviceError::kUnsortedEigenvalues));
+    CHECK(actual.device_error ==
+          static_cast<std::uint32_t>(Gfn2OccupationsDeviceError::kUnsortedEigenvalues));
+    for (std::int64_t element = 2 * host.offsets[failed_system];
+         element < 2 * host.offsets[failed_system + 1u]; ++element) {
+      CHECK(actual.occupations[static_cast<std::size_t>(element)] == kSentinel);
+    }
+    CHECK(actual.chemical_potentials[2u * failed_system] == kSentinel);
+    CHECK(actual.chemical_potentials[2u * failed_system + 1u] == kSentinel);
+    CHECK(actual.electron_sums[2u * failed_system] == kSentinel);
+    CHECK(actual.electron_sums[2u * failed_system + 1u] == kSentinel);
+    CHECK(actual.entropies[failed_system] == kSentinel);
+    CHECK(actual.system_errors[0] == 0u && actual.entropies[0] != kSentinel);
   }
   return 0;
 }
@@ -1188,7 +1384,7 @@ int test_peer_isolated_failures_inactive_mask_and_hostile_offsets() {
 }
 
 int test_cuda_graph_capture_and_replay() {
-  HostCase host = make_regular_case(32u);
+  HostCase host = make_parallel_case(32u);
   std::string error;
   CHECK(build_cpu_reference(host, error));
   cudaStream_t stream = nullptr;
@@ -1269,6 +1465,12 @@ int test_host_argument_alias_and_alignment_validation() {
 
 int main() {
   if (const int line = test_cpu_parity_ragged_batches_and_custom_stream(); line != 0) {
+    return line;
+  }
+  if (const int line = test_parallel_threshold_parity_and_determinism(); line != 0) {
+    return line;
+  }
+  if (const int line = test_parallel_validation_priority_and_failure_isolation(); line != 0) {
     return line;
   }
   if (const int line = test_degenerate_representability_policy_parity(); line != 0) {
