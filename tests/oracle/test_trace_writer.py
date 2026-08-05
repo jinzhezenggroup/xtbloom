@@ -197,6 +197,7 @@ class TraceWriterTest(unittest.TestCase):
         }
         for fixture in (
             _fixture(),
+            self._restricted_open_shell_fixture(),
             point_charge,
             _setup_failure(),
             _eigensolver_failure(),
@@ -290,14 +291,27 @@ class TraceWriterTest(unittest.TestCase):
         with self.assertRaisesRegex(TRACE.TraceError, "unsupported trace format"):
             TRACE.validate(fixture)
 
+    @staticmethod
+    def _restricted_open_shell_fixture() -> dict:
+        """Build a shared-orbital open-shell trace with one spin channel."""
+        fixture = _fixture()
+        fixture["input"]["unpaired_electrons"] = 1
+        return fixture
+
+    def test_accepts_restricted_open_shell_inputs(self) -> None:
+        fixture = self._restricted_open_shell_fixture()
+        TRACE.validate(fixture)
+
     def test_rejects_unrestricted_v1_inputs(self) -> None:
         fixture = _fixture()
         fixture["input"]["spin_channels"] = 2
         with self.assertRaisesRegex(TRACE.TraceError, "restricted-only"):
             TRACE.validate(fixture)
+
+    def test_rejects_negative_unpaired_electron_count(self) -> None:
         fixture = _fixture()
-        fixture["input"]["unpaired_electrons"] = 1
-        with self.assertRaisesRegex(TRACE.TraceError, "restricted-only"):
+        fixture["input"]["unpaired_electrons"] = -1
+        with self.assertRaisesRegex(TRACE.TraceError, "must be nonnegative"):
             TRACE.validate(fixture)
 
     def test_rejects_malformed_molecular_input(self) -> None:
@@ -460,6 +474,12 @@ class TraceWriterTest(unittest.TestCase):
         self.assertEqual(schema["properties"]["format"]["const"], TRACE.FORMAT)
         self.assertEqual(
             schema["properties"]["input"]["properties"]["spin_channels"]["const"], 1
+        )
+        self.assertEqual(
+            schema["properties"]["input"]["properties"]["unpaired_electrons"][
+                "minimum"
+            ],
+            0,
         )
         self.assertEqual(schema["definitions"]["restricted_occupations"]["minItems"], 2)
 

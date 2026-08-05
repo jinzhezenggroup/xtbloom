@@ -398,8 +398,8 @@ def validate(trace: Any) -> None:
     _as_float(molecule["molecular_charge"], "input.molecular_charge")
     unpaired = _as_int(molecule["unpaired_electrons"], "input.unpaired_electrons")
     _require(
-        unpaired == 0,
-        "gpuxtb-scc-trace-v1 is restricted-only; input.unpaired_electrons must be 0",
+        unpaired >= 0,
+        "input.unpaired_electrons must be nonnegative",
     )
     spin_channels = _as_int(molecule["spin_channels"], "input.spin_channels")
     _require(

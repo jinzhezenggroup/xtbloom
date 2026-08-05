@@ -167,11 +167,12 @@ Fortran reference is built.
     decimal digits per float, trailing newline) so that reading and re-writing
     a trace is byte-identical.
 
-Version 1 is deliberately restricted-only: `input.spin_channels` is one and
-`input.unpaired_electrons` is zero. Matrices use logical
-`[spin=1][row][column]` order. The exception is occupations: tblite allocates
-`focc[nao,max(2,nspin)]`, so restricted traces retain both alpha and beta
-channels as `[2][nao]`. Issue #51 will extend the contract for unrestricted
+Version 1 is deliberately restricted-only: `input.spin_channels` is one.
+`input.unpaired_electrons` is a nonnegative integer and may be nonzero for
+tblite's restricted shared-orbital open-shell calculations. Matrices use
+logical `[spin=1][row][column]` order. The exception is occupations: tblite
+allocates `focc[nao,max(2,nspin)]`, so restricted traces retain both alpha and
+beta channels as `[2][nao]`. Issue #51 will extend the contract for unrestricted
 charge/magnetization arrays and distinct assembled/solver Hamiltonians while
 keeping restricted v1 documents valid.
 

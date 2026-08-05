@@ -65,8 +65,8 @@
         },
         "unpaired_electrons": {
           "type": "integer",
-          "const": 0,
-          "description": "Restricted v1 traces contain no unpaired electrons."
+          "minimum": 0,
+          "description": "Number of unpaired electrons. Restricted shared-orbital open-shell traces keep spin_channels equal to one."
         },
         "spin_channels": {
           "type": "integer",
