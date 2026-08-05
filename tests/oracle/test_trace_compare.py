@@ -44,7 +44,10 @@ def _iteration(index: int, converged: bool) -> dict:
         + [value for atom in raw_dipoles[0] for value in atom]
         + [value for atom in raw_quadrupoles[0] for value in atom]
     )
-    residual = [raw_value - mixed_value for raw_value, mixed_value in zip(raw, mixed)]
+    residual = [
+        raw_value - mixed_value
+        for raw_value, mixed_value in zip(raw, mixed, strict=True)
+    ]
     residual_rms = math.sqrt(sum(value * value / len(residual) for value in residual))
     return {
         "index": index,

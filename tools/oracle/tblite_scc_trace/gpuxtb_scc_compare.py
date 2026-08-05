@@ -351,7 +351,9 @@ class _Comparator:
                     )
                 )
                 return
-            for index, (actual_item, expected_item) in enumerate(zip(actual, expected)):
+            for index, (actual_item, expected_item) in enumerate(
+                zip(actual, expected, strict=True)
+            ):
                 self.compare(
                     f"{parent}[{index}]", actual_item, expected_item, mismatches
                 )

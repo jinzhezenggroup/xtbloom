@@ -218,7 +218,9 @@ class DxtbAdapter:
         padded_numbers: list[list[int]] = []
         padded_positions: list[list[list[float]]] = []
         self._force_flat_indices: list[int] = []
-        for system, (numbers, positions) in enumerate(zip(number_rows, position_rows)):
+        for system, (numbers, positions) in enumerate(
+            zip(number_rows, position_rows, strict=True)
+        ):
             padding = self.max_atoms - len(numbers)
             padded_numbers.append(numbers + [0] * padding)
             padded_positions.append(positions + [[0.0, 0.0, 0.0]] * padding)

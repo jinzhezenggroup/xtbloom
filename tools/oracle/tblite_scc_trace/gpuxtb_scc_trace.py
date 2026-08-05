@@ -570,10 +570,11 @@ def validate(trace: Any) -> None:
         mixed = _flatten_population(entry, "mixed")
         raw = _flatten_population(entry, "raw")
         reconstructed = [
-            raw_value - mixed_value for raw_value, mixed_value in zip(raw, mixed)
+            raw_value - mixed_value
+            for raw_value, mixed_value in zip(raw, mixed, strict=True)
         ]
         for residual_index, (actual, expected) in enumerate(
-            zip(validated_residual, reconstructed)
+            zip(validated_residual, reconstructed, strict=True)
         ):
             _require(
                 actual == expected,

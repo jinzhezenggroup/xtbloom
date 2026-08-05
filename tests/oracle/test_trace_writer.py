@@ -64,7 +64,10 @@ def _iteration(index: int = 1, *, converged: bool = True) -> dict:
         + [value for atom in raw_dipoles[0] for value in atom]
         + [value for atom in raw_quadrupoles[0] for value in atom]
     )
-    residual = [raw_value - mixed_value for raw_value, mixed_value in zip(raw, mixed)]
+    residual = [
+        raw_value - mixed_value
+        for raw_value, mixed_value in zip(raw, mixed, strict=True)
+    ]
     residual_rms = math.sqrt(sum(value * value / len(residual) for value in residual))
     return {
         "index": index,
@@ -244,7 +247,10 @@ class TraceWriterTest(unittest.TestCase):
         )
         self.assertEqual(
             iteration["residual"],
-            [raw_value - mixed_value for raw_value, mixed_value in zip(raw, mixed)],
+            [
+                raw_value - mixed_value
+                for raw_value, mixed_value in zip(raw, mixed, strict=True)
+            ],
         )
         self.assertEqual(len(iteration["residual"]), 3 + 2 * 3 + 2 * 6)
         TRACE.validate(fixture)

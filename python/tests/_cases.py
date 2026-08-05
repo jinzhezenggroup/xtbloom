@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 import numpy as np
 from gpuxtb import numbers_to_symbols  # noqa: F401 - re-exported test helper
@@ -32,7 +31,7 @@ def manifest() -> dict:
     return load_json(MANIFEST_PATH)
 
 
-def case_ids() -> List[str]:
+def case_ids() -> list[str]:
     return [case["id"] for case in manifest()["cases"]]
 
 
@@ -47,10 +46,10 @@ def golden(case: dict) -> dict:
     return load_json(REPOSITORY_ROOT / case["golden"])["properties"]
 
 
-def _parse_coord(path: Path) -> Tuple[List[int], np.ndarray]:
+def _parse_coord(path: Path) -> tuple[list[int], np.ndarray]:
     """Parse a Turbomole ``$coord`` file into numbers and bohr positions."""
-    numbers: List[int] = []
-    positions: List[float] = []
+    numbers: list[int] = []
+    positions: list[float] = []
     elements = {
         "h": 1,
         "he": 2,
@@ -96,7 +95,7 @@ def _parse_coord(path: Path) -> Tuple[List[int], np.ndarray]:
     return numbers, np.asarray(positions, dtype=np.float64).reshape(-1, 3)
 
 
-def structure_inputs(case: dict) -> Tuple[np.ndarray, np.ndarray, float, int, int]:
+def structure_inputs(case: dict) -> tuple[np.ndarray, np.ndarray, float, int, int]:
     """Return per-case numbers, positions (bohr), charge, uhf, spin_channels.
 
     A missing ``spin_channels`` key in the manifest means restricted (1); the
@@ -120,7 +119,7 @@ def structure_inputs(case: dict) -> Tuple[np.ndarray, np.ndarray, float, int, in
     )
 
 
-def qmmm_points(case: dict) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+def qmmm_points(case: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
     """Return external point charge (positions, values, gammas) for QM/MM cases."""
     if case.get("input_schema") != "qmmm-v1":
         return None

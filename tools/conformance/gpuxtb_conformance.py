@@ -427,7 +427,7 @@ def load_qmmm_input(
                 ) from exc
         if any(
             not math.isclose(actual, expected, rel_tol=0.0, abs_tol=1.0e-12)
-            for actual, expected in zip(gammas, expected_gammas)
+            for actual, expected in zip(gammas, expected_gammas, strict=True)
         ):
             raise ConformanceError(
                 f"QMMM input {path} element-hardness gammas do not match "
@@ -444,7 +444,7 @@ def materialize_xtb_qmmm(document: dict[str, Any]) -> dict[str, str]:
     """Serialize a validated QMMM document into deterministic xTB CLI files."""
     qm = document["qm"]
     coord_lines = ["$coord"]
-    for position, symbol in zip(qm["positions_bohr"], qm["symbols"]):
+    for position, symbol in zip(qm["positions_bohr"], qm["symbols"], strict=True):
         coord_lines.append(
             " ".join([*(f"{float(value):.17g}" for value in position), symbol.lower()])
         )
@@ -456,6 +456,7 @@ def materialize_xtb_qmmm(document: dict[str, Any]) -> dict[str, str]:
         point_charges["charges_e"],
         point_charges["positions_bohr"],
         point_charges["gammas_hartree"],
+        strict=True,
     ):
         pcharge_lines.append(
             " ".join(
@@ -876,7 +877,7 @@ def check_manifest(manifest_path: Path) -> None:
             )
         if any(
             not math.isclose(float(force), -float(grad), abs_tol=0.0)
-            for force, grad in zip(forces, gradient)
+            for force, grad in zip(forces, gradient, strict=True)
         ):
             raise ConformanceError(f"golden {golden_path} violates force = -gradient")
         point_charge_count = int(case.get("point_charge_count", 0))
@@ -901,7 +902,7 @@ def check_manifest(manifest_path: Path) -> None:
                 )
             if any(
                 not math.isclose(float(force), -float(grad), abs_tol=0.0)
-                for force, grad in zip(pc_forces, pc_gradient)
+                for force, grad in zip(pc_forces, pc_gradient, strict=True)
             ):
                 raise ConformanceError(
                     f"golden {golden_path} violates point-charge force = -gradient"
@@ -1516,7 +1517,7 @@ def compare_values(
     worst_limit = 0.0
     passed = True
     for index, (expected_value, actual_value) in enumerate(
-        zip(expected_values, actual_values)
+        zip(expected_values, actual_values, strict=True)
     ):
         expected_float = float(expected_value)
         actual_float = float(actual_value)

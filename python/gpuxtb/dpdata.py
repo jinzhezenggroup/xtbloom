@@ -20,7 +20,7 @@ Net charge and spin multiplicity are handled per frame:
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Sequence, Union
+from collections.abc import Sequence
 
 import numpy as np
 from dpdata.driver import Driver
@@ -38,8 +38,10 @@ class _SymbolMap:
     """Convert dpdata atom names to atomic numbers."""
 
     def __init__(self, atom_names: Sequence[str]) -> None:
-        self._numbers: Dict[str, int] = {}
-        for symbol, number in zip(atom_names, symbols_to_numbers(atom_names)):
+        self._numbers: dict[str, int] = {}
+        for symbol, number in zip(
+            atom_names, symbols_to_numbers(atom_names), strict=True
+        ):
             if symbol in self._numbers:
                 raise GPUxtbValueError(f"duplicate dpdata atom name {symbol!r}")
             self._numbers[symbol] = number
@@ -79,10 +81,10 @@ class GPUxtbDriver(Driver):
     def __init__(
         self,
         method: str = "GFN2-xTB",
-        charge: Optional[float] = None,
-        uhf: Optional[int] = None,
-        multiplicity: Optional[int] = None,
-        spin_channels: Optional[int] = None,
+        charge: float | None = None,
+        uhf: int | None = None,
+        multiplicity: int | None = None,
+        spin_channels: int | None = None,
         **kwargs,
     ) -> None:
         self.method = method
@@ -177,11 +179,11 @@ class GPUxtbDriver(Driver):
 def _frame_value(
     data: dict,
     key: str,
-    fixed: Optional[Union[int, float]],
+    fixed: int | float | None,
     frame: int,
     nframes: int,
-    default: Optional[Union[int, float]],
-) -> Optional[Union[int, float]]:
+    default: int | float | None,
+) -> int | float | None:
     """Return a fixed scalar, a per-frame value, or the default."""
     if fixed is not None:
         return fixed

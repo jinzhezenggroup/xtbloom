@@ -16,16 +16,15 @@ _HARTREE_TO_EV = 27.211386245988
 def _case_data_dict(case_id, nframes=1, distort=False):
     """Build a dpdata System data dict (coords in Angstrom) from a conformance case."""
     case = _cases.case_by_id(case_id)
-    numbers, positions, charge, uhf, spin = _cases.structure_inputs(case)
+    numbers, positions, _, _, _ = _cases.structure_inputs(case)
     coords = np.stack([np.asarray(positions) for _ in range(nframes)])
     if distort:
         coords[1] = coords[1].copy()
         coords[1, 0, 0] += 0.5
     coords = coords * _BOHR  # bohr -> Angstrom (dpdata convention)
-    atom_names = _cases.numbers_to_symbols(sorted(set(int(z) for z in numbers)))
+    atom_names = _cases.numbers_to_symbols(sorted({int(z) for z in numbers}))
     type_map = {
-        number: index
-        for index, number in enumerate(sorted(set(int(z) for z in numbers)))
+        number: index for index, number in enumerate(sorted({int(z) for z in numbers}))
     }
     atom_types = np.array([type_map[int(z)] for z in numbers], dtype=np.int64)
     atom_numbs = [int(sum(int(z) == number for z in numbers)) for number in type_map]

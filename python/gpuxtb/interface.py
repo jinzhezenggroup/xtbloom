@@ -26,8 +26,9 @@ import ctypes
 import math
 import operator
 import weakref
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, List, Optional, Sequence, Union
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -100,12 +101,12 @@ def _as_integer(name: str, value: Any) -> int:
         raise GPUxtbValueError(f"{name} must be an integer") from None
 
 
-def symbols_to_numbers(symbols: Sequence[str]) -> List[int]:
+def symbols_to_numbers(symbols: Sequence[str]) -> list[int]:
     """Convert a list of atomic symbols to atomic numbers."""
     return [SYMBOL_TO_NUMBER[symbol] for symbol in symbols]
 
 
-def numbers_to_symbols(numbers: Sequence[int]) -> List[str]:
+def numbers_to_symbols(numbers: Sequence[int]) -> list[str]:
     """Convert a list of atomic numbers to atomic symbols."""
     symbols = []
     for value in numbers:
@@ -135,7 +136,7 @@ def _default_spin_channels(uhf: int) -> int:
     return 2 if uhf != 0 else 1
 
 
-def _resolve_uhf(uhf: Optional[int], multiplicity: Optional[int]) -> int:
+def _resolve_uhf(uhf: int | None, multiplicity: int | None) -> int:
     """Resolve the number of unpaired electrons from ``uhf`` and/or ``multiplicity``."""
     if multiplicity is not None:
         multiplicity = _as_integer("multiplicity", multiplicity)
@@ -251,14 +252,14 @@ class Structure:
 
     def __init__(
         self,
-        numbers: Union[np.ndarray, List[int], Sequence[str]],
+        numbers: np.ndarray | list[int] | Sequence[str],
         positions: np.ndarray,
         charge: float = 0.0,
-        uhf: Optional[int] = None,
-        multiplicity: Optional[int] = None,
-        spin_channels: Optional[int] = None,
-        point_charges: Optional[PointCharge] = None,
-        charge_response: Optional[ChargeResponse] = None,
+        uhf: int | None = None,
+        multiplicity: int | None = None,
+        spin_channels: int | None = None,
+        point_charges: PointCharge | None = None,
+        charge_response: ChargeResponse | None = None,
     ):
         object_numbers = np.asarray(numbers, dtype=object)
         raw_numbers = np.asarray(numbers)
@@ -357,22 +358,22 @@ class Structure:
         return self._spin_channels
 
     @property
-    def point_charges(self) -> Optional[PointCharge]:
+    def point_charges(self) -> PointCharge | None:
         """External point charges attached to this structure, if any."""
         return self._point_charges
 
     @property
-    def charge_response(self) -> Optional[ChargeResponse]:
+    def charge_response(self) -> ChargeResponse | None:
         """Periodic SCC shift ``b`` and response matrix ``A``, if any."""
         return self._charge_response
 
     def update(
         self,
-        positions: Optional[np.ndarray] = None,
-        charge: Optional[float] = None,
-        uhf: Optional[int] = None,
-        multiplicity: Optional[int] = None,
-        spin_channels: Optional[int] = None,
+        positions: np.ndarray | None = None,
+        charge: float | None = None,
+        uhf: int | None = None,
+        multiplicity: int | None = None,
+        spin_channels: int | None = None,
     ) -> None:
         """Update coordinates and electronic/spin state in place.
 
@@ -444,8 +445,8 @@ class Context:
 
     def __init__(
         self,
-        backend: Union[str, int] = "auto",
-        device_id: Optional[int] = None,
+        backend: str | int = "auto",
+        device_id: int | None = None,
         cpu_threads: int = 1,
     ) -> None:
         if isinstance(backend, str):
@@ -466,8 +467,8 @@ class Context:
         if self._cpu_threads < 0:
             raise GPUxtbValueError("cpu_threads must be nonnegative")
         self._handle = None
-        self._backend: Optional[int] = None
-        self._finalizer: Optional[weakref.finalize] = None
+        self._backend: int | None = None
+        self._finalizer: weakref.finalize | None = None
 
     def _create(self) -> None:
         if self._handle is not None:
@@ -526,7 +527,7 @@ class Context:
             self._backend = None
             self._finalizer = None
 
-    def __enter__(self) -> "Context":
+    def __enter__(self) -> Context:
         self._create()
         return self
 
@@ -544,13 +545,13 @@ class _ComputedBatch:
     energies: np.ndarray
     forces: np.ndarray
     charges: np.ndarray
-    point_charge_forces: Optional[np.ndarray]
+    point_charge_forces: np.ndarray | None
     scc_iterations: np.ndarray
     scc_converged: np.ndarray
     per_system_status: np.ndarray
     result_flags: int
     atom_offsets: np.ndarray
-    point_offsets: Optional[np.ndarray]
+    point_offsets: np.ndarray | None
     keepalive: list
 
 
@@ -573,7 +574,7 @@ def _pack_charge_responses(
     offsets = [0]
     shifts: list[float] = []
     matrices: list[float] = []
-    for structure, response in zip(structures, responses):
+    for structure, response in zip(structures, responses, strict=True):
         atom_count = len(structure)
         if response is None:
             shifts.extend(0.0 for _ in range(atom_count))
@@ -936,7 +937,7 @@ def _raise_on_failure(computed: _ComputedBatch) -> None:
     """
     failed = []
     for index, (status, converged) in enumerate(
-        zip(computed.per_system_status, computed.scc_converged)
+        zip(computed.per_system_status, computed.scc_converged, strict=True)
     ):
         if int(status) != library.STATUS_SUCCESS or int(converged) != 1:
             failed.append(
@@ -956,7 +957,7 @@ def _raise_on_failure(computed: _ComputedBatch) -> None:
 class Result:
     """Single-system results container, similar to ``tblite.interface.Result``."""
 
-    _getter = {
+    _getter: ClassVar[dict[str, Callable[[Result], Any]]] = {
         "energy": lambda self: self.energy,
         "energies": lambda self: np.asarray([self.energy]),
         "forces": lambda self: self.forces,
@@ -1080,14 +1081,13 @@ class BatchResult:
 
     def raise_for_status(self) -> None:
         """Raise a combined exception while retaining peer-local results."""
-        failed = []
-        for index in self.failed_indices:
-            failed.append(
-                f"system {int(index)}: "
-                f"{library.status_string(int(self.per_system_status[index]))}, "
-                f"scc_converged={int(self.scc_converged[index])}, "
-                f"iterations={int(self.scc_iterations[index])}"
-            )
+        failed = [
+            f"system {int(index)}: "
+            f"{library.status_string(int(self.per_system_status[index]))}, "
+            f"scc_converged={int(self.scc_converged[index])}, "
+            f"iterations={int(self.scc_iterations[index])}"
+            for index in self.failed_indices
+        ]
         if failed:
             raise GPUxtbRuntimeError(
                 "gpuxtb batch inference produced failed systems: " + "; ".join(failed)
@@ -1114,7 +1114,7 @@ class BatchResult:
 # --- calculators -------------------------------------------------------------------
 
 
-def _validated_compute_setting(attribute: str, value: Any) -> Union[int, float]:
+def _validated_compute_setting(attribute: str, value: Any) -> int | float:
     """Validate one compute setting and return its normalized scalar value."""
     if attribute == "max_scc_iterations":
         candidate = _as_integer(attribute, value)
@@ -1138,11 +1138,11 @@ def _validated_compute_setting(attribute: str, value: Any) -> Union[int, float]:
 
 class _ComputeSettings:
     __slots__ = (
-        "model",
-        "max_scc_iterations",
         "charge_tolerance",
-        "energy_tolerance",
         "electronic_temperature",
+        "energy_tolerance",
+        "max_scc_iterations",
+        "model",
     )
 
     def __init__(
@@ -1202,17 +1202,17 @@ class Calculator(Structure):
     def __init__(
         self,
         method: str,
-        numbers: Union[np.ndarray, List[int], Sequence[str]],
+        numbers: np.ndarray | list[int] | Sequence[str],
         positions: np.ndarray,
         charge: float = 0.0,
-        uhf: Optional[int] = None,
-        multiplicity: Optional[int] = None,
-        spin_channels: Optional[int] = None,
-        point_charges: Optional[PointCharge] = None,
-        charge_response: Optional[ChargeResponse] = None,
+        uhf: int | None = None,
+        multiplicity: int | None = None,
+        spin_channels: int | None = None,
+        point_charges: PointCharge | None = None,
+        charge_response: ChargeResponse | None = None,
         *,
-        backend: Union[str, int] = "auto",
-        device_id: Optional[int] = None,
+        backend: str | int = "auto",
+        device_id: int | None = None,
         cpu_threads: int = 1,
         max_scc_iterations: int = 250,
         charge_tolerance: float = 1.0e-6,
@@ -1252,11 +1252,11 @@ class Calculator(Structure):
 
     def update(
         self,
-        positions: Optional[np.ndarray] = None,
-        charge: Optional[float] = None,
-        uhf: Optional[int] = None,
-        multiplicity: Optional[int] = None,
-        spin_channels: Optional[int] = None,
+        positions: np.ndarray | None = None,
+        charge: float | None = None,
+        uhf: int | None = None,
+        multiplicity: int | None = None,
+        spin_channels: int | None = None,
     ) -> None:
         """Update the structure geometry and/or electronic state in place."""
         Structure.update(
@@ -1301,7 +1301,7 @@ class Calculator(Structure):
     def close(self) -> None:
         self._context.close()
 
-    def __enter__(self) -> "Calculator":
+    def __enter__(self) -> Calculator:
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
@@ -1320,8 +1320,8 @@ class BatchCalculator:
         structures: Sequence[Structure],
         method: str = "GFN2-xTB",
         *,
-        backend: Union[str, int] = "auto",
-        device_id: Optional[int] = None,
+        backend: str | int = "auto",
+        device_id: int | None = None,
         cpu_threads: int = 1,
         max_scc_iterations: int = 250,
         charge_tolerance: float = 1.0e-6,
@@ -1354,7 +1354,7 @@ class BatchCalculator:
         self,
         *,
         raise_on_failure: bool = False,
-        auto_batch_size: Optional[Union[bool, int]] = None,
+        auto_batch_size: bool | int | None = None,
     ) -> BatchResult:
         """Run the batch while preserving successful peers.
 
@@ -1443,7 +1443,7 @@ class BatchCalculator:
     def close(self) -> None:
         self._context.close()
 
-    def __enter__(self) -> "BatchCalculator":
+    def __enter__(self) -> BatchCalculator:
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
@@ -1453,14 +1453,14 @@ class BatchCalculator:
 __all__ = [
     "ELEMENT_SYMBOLS",
     "SYMBOL_TO_NUMBER",
-    "symbols_to_numbers",
-    "numbers_to_symbols",
-    "PointCharge",
-    "ChargeResponse",
-    "Structure",
-    "Context",
-    "Result",
+    "BatchCalculator",
     "BatchResult",
     "Calculator",
-    "BatchCalculator",
+    "ChargeResponse",
+    "Context",
+    "PointCharge",
+    "Result",
+    "Structure",
+    "numbers_to_symbols",
+    "symbols_to_numbers",
 ]

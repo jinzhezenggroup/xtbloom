@@ -134,12 +134,26 @@ before-build = "bash {package}/python/ci/install-cuda-wheel-deps.sh"
 repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel} --exclude libcublas.so.12 --exclude libcublasLt.so.12 --exclude libcusolver.so.11 --exclude libcusparse.so.12 --exclude libcudart.so.12 --exclude libnvJitLink.so.12 --exclude libcufft.so.11 --exclude libcurand.so.10 --exclude libcuda.so.1"
 
 [tool.ruff]
-# Deliberately small scope: ruff-format owns formatting and ruff's I rule owns
-# import ordering (kept in the same tool as the formatter so they can never
-# disagree), so linting here only catches real defects (F), the meaningful
-# pycodestyle classes (E4/E7/E9), and unsorted imports (I).
+# ruff-format owns formatting and ruff's I rule owns import ordering (kept in
+# the same tool as the formatter so they can never disagree), so linting catches
+# real defects and modernization without fighting the formatter:
+#   E4/E7/E9  - meaningful pycodestyle classes (imports, statement, runtime)
+#   F         - pyflakes (undefined names, unused imports/variables, ...)
+#   I         - unsorted imports
+#   B         - flake8-bugbear (likely bugs and design gotchas, e.g. zip
+#               without explicit strict=)
+#   C4        - flake8-comprehensions (cleaner dict/set/list constructions)
+#   RUF       - ruff-specific rules (mutable defaults, sorted dunders, ...)
+#   SIM       - flake8-simplify (readable simplifications)
+#   UP        - pyupgrade (modern idiomatic Python for the >=3.10 baseline)
+#   PERF      - perflint (small, uncontroversial performance patterns)
 extend-exclude = ["cmake/3rdparty/implib/implib-gen.py"]
-lint.select = ["E4", "E7", "E9", "F", "I"]
+lint.select = ["E4", "E7", "E9", "F", "I", "B", "C4", "RUF", "SIM", "UP", "PERF"]
+# PERF203 complains about try/except inside loops. The two places it fires here
+# are semantically required: probing candidate runtime library directories for
+# the one loadable provider, and validation that raises a context-rich
+# ConformanceError from the failure. Restructuring either would obscure intent.
+lint.ignore = ["PERF203"]
 
 [tool.ruff.lint.per-file-ignores]
 # benchmarks/run.py appends a tools path to sys.path before importing

@@ -313,7 +313,7 @@ def test_auto_batch_charge_response_is_bit_identical_on_cpu():
     structures = [
         Structure([1, 1], positions),
         Structure([1, 1], positions, charge_response=response),
-        Structure([1, 1], positions + [0.0, 0.1, 0.0]),
+        Structure([1, 1], positions + np.array([0.0, 0.1, 0.0])),
     ]
     unsliced = BatchCalculator(structures, backend="cpu").compute()
     sliced = BatchCalculator(structures, backend="cpu").compute(auto_batch_size=1)

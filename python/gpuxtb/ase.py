@@ -20,7 +20,7 @@ try:
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError("This submodule requires ASE installed") from e
 
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -51,9 +51,17 @@ class GPUxtb(ase.calculators.calculator.Calculator):
     ======================== ================= =========================================
     """
 
-    implemented_properties = ["energy", "free_energy", "forces", "charges"]
+    # Class-level defaults in the ASE calculator convention. ASE reads them
+    # (and `set()` validates against them); instances receive their own copy
+    # through ``Calculator.__init__``, so they must never be mutated here.
+    implemented_properties: ClassVar[list[str]] = [
+        "energy",
+        "free_energy",
+        "forces",
+        "charges",
+    ]
 
-    default_parameters = {
+    default_parameters: ClassVar[dict[str, Any]] = {
         "method": "GFN2-xTB",
         "charge": None,
         "multiplicity": None,
@@ -76,7 +84,7 @@ class GPUxtb(ase.calculators.calculator.Calculator):
     def set(self, **kwargs) -> dict:
         """Update parameters and reset cached results when they change."""
 
-        def _validate(kwargs: Dict[str, Any]) -> None:
+        def _validate(kwargs: dict[str, Any]) -> None:
             allowed = set(self.default_parameters)
             unknown = set(kwargs) - allowed
             if unknown:
@@ -142,8 +150,8 @@ class GPUxtb(ase.calculators.calculator.Calculator):
     def calculate(
         self,
         atoms=None,
-        properties: Optional[List[str]] = None,
-        system_changes: List[str] = ase.calculators.calculator.all_changes,
+        properties: list[str] | None = None,
+        system_changes: list[str] = ase.calculators.calculator.all_changes,
     ) -> None:
         if not properties:
             properties = ["energy"]

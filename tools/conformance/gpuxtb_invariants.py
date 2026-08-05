@@ -367,7 +367,9 @@ def _compare(
             )
         expected_values = [float(value) for value in expected]
         actual_values = [float(value) for value in actual]
-        for index, (left, right) in enumerate(zip(expected_values, actual_values)):
+        for index, (left, right) in enumerate(
+            zip(expected_values, actual_values, strict=True)
+        ):
             if not math.isfinite(left) or not math.isfinite(right):
                 return (
                     False,
@@ -375,7 +377,10 @@ def _compare(
                     f"expected={left} actual={right}",
                 )
         error = max(
-            (abs(left - right) for left, right in zip(expected_values, actual_values)),
+            (
+                abs(left - right)
+                for left, right in zip(expected_values, actual_values, strict=True)
+            ),
             default=0.0,
         )
         location = "component"
@@ -410,7 +415,7 @@ def gate_batch_versus_sequential(
     failures: list[str],
 ) -> None:
     """A ragged batch must not change any per-system property of its members."""
-    for expected, actual in zip(sequential, batched):
+    for expected, actual in zip(sequential, batched, strict=True):
         for label, expected_value, actual_value in (
             ("energy_hartree", expected.energy, actual.energy),
             ("forces_hartree_per_bohr", expected.forces, actual.forces),
@@ -468,7 +473,7 @@ def gate_translation_invariance(
     failures: list[str],
 ) -> None:
     """Energy, forces, and charges must not change under a rigid translation."""
-    for expected, actual in zip(baseline, translated_results):
+    for expected, actual in zip(baseline, translated_results, strict=True):
         for label, expected_value, actual_value, tolerance in (
             ("energy_hartree", expected.energy, actual.energy, atol_energy),
             ("forces_hartree_per_bohr", expected.forces, actual.forces, atol_force),
@@ -501,7 +506,7 @@ def gate_rotation_covariance(
     failures: list[str],
 ) -> None:
     """Energy and charges are invariant; forces rotate with the structure."""
-    for expected, actual in zip(baseline, rotated_results):
+    for expected, actual in zip(baseline, rotated_results, strict=True):
         passed, message = _compare(
             actual.case_id,
             f"energy_hartree rotation_{label_suffix}",

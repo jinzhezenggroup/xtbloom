@@ -381,16 +381,12 @@ class GpuxtbAdapter:
         """Download device outputs after timing and validate SCC publication."""
         self.synchronize()
         self.memory.download_outputs()
-        failures = []
-        for index in range(self.systems):
-            if (
-                self.statuses[index] != public_api.GPUXTB_STATUS_SUCCESS
-                or self.converged[index] != 1
-            ):
-                failures.append(
-                    f"system {index}: status={self.statuses[index]}, "
-                    f"converged={self.converged[index]}, iterations={self.iterations[index]}"
-                )
+        failures = [
+            f"system {index}: status={self.statuses[index]}, converged={self.converged[index]}, iterations={self.iterations[index]}"
+            for index in range(self.systems)
+            if self.statuses[index] != public_api.GPUXTB_STATUS_SUCCESS
+            or self.converged[index] != 1
+        ]
         if failures:
             raise BenchmarkError("; ".join(failures))
         output: dict[str, Any] = {
@@ -448,7 +444,9 @@ def correctness(
             expected = [
                 float(value) for value in item.expected["forces_hartree_per_bohr"]
             ]
-            force_errors.append(max(abs(a - b) for a, b in zip(actual, expected)))
+            force_errors.append(
+                max(abs(a - b) for a, b in zip(actual, expected, strict=True))
+            )
         if point_forces is not None:
             actual_points = point_forces[3 * item.point_begin : 3 * item.point_end]
             expected_points = [
@@ -456,7 +454,10 @@ def correctness(
                 for value in item.expected["point_charge_forces_hartree_per_bohr"]
             ]
             point_force_errors.append(
-                max(abs(a - b) for a, b in zip(actual_points, expected_points))
+                max(
+                    abs(a - b)
+                    for a, b in zip(actual_points, expected_points, strict=True)
+                )
             )
     tolerances = manifest[tolerance_profile]
     energy_limit = float(tolerances["energy"]["atol"])
@@ -986,18 +987,15 @@ def reference_rows(
     executable = metadata["references"][engine]["executable"]
     if executable is None:
         reason = f"{engine} executable unavailable; " + reason
-    rows = []
-    for workload in args.workloads:
-        for property_name in args.properties:
-            for batch_size in args.batch_sizes:
-                rows.append(
-                    unavailable_row(
-                        Cell(
-                            engine, "cpu", "host", workload, property_name, batch_size
-                        ),
-                        reason,
-                    )
-                )
+    rows = [
+        unavailable_row(
+            Cell(engine, "cpu", "host", workload, property_name, batch_size),
+            reason,
+        )
+        for workload in args.workloads
+        for property_name in args.properties
+        for batch_size in args.batch_sizes
+    ]
     return rows
 
 
