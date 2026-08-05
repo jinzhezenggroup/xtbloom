@@ -474,49 +474,73 @@ def device_memory_info(device_id: int = 0) -> Optional[tuple[int, int]]:
     """Return ``(free_bytes, total_bytes)`` for one CUDA device, or ``None``.
 
     Used by the auto-batch-size controller to budget a batch slice from actual
-    device memory instead of a hard-coded atom limit.  The query is best-effort:
-    a CUDA-less host, a loader stub without a real driver, or a failed
-    ``cudaSetDevice`` all return ``None`` so the caller falls back to a
-    conservative default.  The caller's current device is restored afterwards.
+    device memory instead of only a hard-coded atom limit. The query binds the
+    exact CUDA-12 runtime cohort used by gpuxtb, never an arbitrary system CUDA
+    major. A CUDA-less host, a loader stub without a real driver, a failed
+    query, or a failed device restoration returns ``None``. The function
+    attempts to restore the caller's current CUDA device on every changed-device
+    exit, including query failure.
     """
     try:
-        import ctypes.util
+        cudart = ctypes.CDLL("libcudart.so.12")
+    except OSError:
+        for directory in _runtime_search_dirs():
+            candidate = directory / "libcudart.so.12"
+            if not candidate.is_file():
+                continue
+            try:
+                cudart = ctypes.CDLL(str(candidate))
+                break
+            except OSError:
+                continue
+        else:
+            return None
 
-        cudart_name = ctypes.util.find_library("cudart") or "libcudart.so.12"
-        cudart = ctypes.CDLL(cudart_name)
-    except (OSError, AttributeError):
-        return None
     try:
-        cudart.cudaGetDevice.argtypes = [ctypes.POINTER(ctypes.c_int)]
-        cudart.cudaGetDevice.restype = ctypes.c_int
-        cudart.cudaSetDevice.argtypes = [ctypes.c_int]
-        cudart.cudaSetDevice.restype = ctypes.c_int
-        cudart.cudaMemGetInfo.argtypes = [
-            ctypes.POINTER(ctypes.c_size_t),
-            ctypes.POINTER(ctypes.c_size_t),
-        ]
-        cudart.cudaMemGetInfo.restype = ctypes.c_int
-
-        current = ctypes.c_int()
-        if cudart.cudaGetDevice(ctypes.byref(current)) != 0:
-            return None
-        if cudart.cudaSetDevice(int(device_id)) != 0:
-            return None
-        try:
-            free_bytes = ctypes.c_size_t()
-            total_bytes = ctypes.c_size_t()
-            if (
-                cudart.cudaMemGetInfo(
-                    ctypes.byref(free_bytes), ctypes.byref(total_bytes)
-                )
-                != 0
-            ):
-                return None
-            return int(free_bytes.value), int(total_bytes.value)
-        finally:
-            cudart.cudaSetDevice(int(current.value))
-    except (AttributeError, OSError):
+        cuda_get_device = cudart.cudaGetDevice
+        cuda_set_device = cudart.cudaSetDevice
+        cuda_mem_get_info = cudart.cudaMemGetInfo
+    except AttributeError:
         return None
+
+    cuda_get_device.argtypes = [ctypes.POINTER(ctypes.c_int)]
+    cuda_get_device.restype = ctypes.c_int
+    cuda_set_device.argtypes = [ctypes.c_int]
+    cuda_set_device.restype = ctypes.c_int
+    cuda_mem_get_info.argtypes = [
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    cuda_mem_get_info.restype = ctypes.c_int
+
+    current = ctypes.c_int()
+    if cuda_get_device(ctypes.byref(current)) != 0:
+        return None
+    changed_device = current.value != int(device_id)
+    if changed_device and cuda_set_device(int(device_id)) != 0:
+        return None
+
+    free_bytes = ctypes.c_size_t()
+    total_bytes = ctypes.c_size_t()
+    query_ok = False
+    try:
+        try:
+            query_ok = (
+                cuda_mem_get_info(ctypes.byref(free_bytes), ctypes.byref(total_bytes))
+                == 0
+            )
+        except (OSError, ValueError, ctypes.ArgumentError):
+            query_ok = False
+    finally:
+        restored = not changed_device or cuda_set_device(int(current.value)) == 0
+
+    if not query_ok or not restored:
+        return None
+    free = int(free_bytes.value)
+    total = int(total_bytes.value)
+    if total <= 0 or free < 0 or free > total:
+        return None
+    return free, total
 
 
 def compute_checked(
@@ -630,6 +654,7 @@ __all__ = [
     "get_version",
     "status_string",
     "get_last_error",
+    "device_memory_info",
     "compute_checked",
     "host_const",
     "empty_result_shape",
