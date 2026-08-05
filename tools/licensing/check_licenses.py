@@ -10,7 +10,9 @@ drifting between CMake installs, source distributions, and Python wheels.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import stat
 import tarfile
 import zipfile
 from pathlib import Path
@@ -18,6 +20,10 @@ from pathlib import Path
 import tomllib
 
 PROJECT_LICENSE = "GPL-3.0-or-later"
+IMPLIB_MANIFEST_PATH = "cmake/3rdparty/implib_manifest.json"
+IMPLIB_VENDOR_PATH = "cmake/3rdparty/implib"
+IMPLIB_REVISION = "6f4fc02ae058ef11848046af01a1a756f3229c29"
+IMPLIB_TREE = "5fbe7e9f2c4efe0c2be4d2eed409e81f35458ba4"
 SOURCE_FILES = (
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
@@ -32,7 +38,7 @@ SOURCE_FILES = (
     "data/parameters/spin_manifest.json",
     "data/parameters/d4_manifest.json",
     "data/parameters/mctc_manifest.json",
-    "cmake/3rdparty/implib/implib-gen.py",
+    IMPLIB_MANIFEST_PATH,
 )
 COMMON_ARCHIVE_SUFFIXES = (
     "LICENSE",
@@ -50,7 +56,7 @@ SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/spin_manifest.json",
     "data/parameters/d4_manifest.json",
     "data/parameters/mctc_manifest.json",
-    "cmake/3rdparty/implib/implib-gen.py",
+    IMPLIB_MANIFEST_PATH,
 )
 WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/gpuxtb/THIRD_PARTY_NOTICES.md",
@@ -58,6 +64,7 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/gpuxtb/provenance/spin_manifest.json",
     "share/licenses/gpuxtb/provenance/d4_manifest.json",
     "share/licenses/gpuxtb/provenance/mctc_manifest.json",
+    "share/licenses/gpuxtb/provenance/implib_manifest.json",
     "share/licenses/gpuxtb/third-party/MIT.txt",
     "share/licenses/gpuxtb/third-party/d4/d4.NOTICE",
     "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING",
@@ -75,6 +82,7 @@ INSTALL_FILES = (
     "share/licenses/gpuxtb/provenance/spin_manifest.json",
     "share/licenses/gpuxtb/provenance/d4_manifest.json",
     "share/licenses/gpuxtb/provenance/mctc_manifest.json",
+    "share/licenses/gpuxtb/provenance/implib_manifest.json",
     "share/licenses/gpuxtb/third-party/d4/d4.NOTICE",
     "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING",
     "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING.LESSER",
@@ -109,6 +117,152 @@ def _require_files(root: Path, relative_paths: tuple[str, ...], context: str) ->
         raise LicenseCheckError(f"{context} is missing: {', '.join(missing)}")
 
 
+def _git_object_id(kind: str, data: bytes) -> str:
+    """Return the Git SHA-1 object ID for canonical object bytes."""
+
+    header = f"{kind} {len(data)}\0".encode()
+    # SHA-1 is part of the pinned Git object format here, not a security check.
+    return hashlib.sha1(header + data, usedforsecurity=False).hexdigest()
+
+
+def _git_tree_id(entries: dict[str, tuple[str, str]]) -> str:
+    """Reconstruct a Git tree ID from relative paths and (mode, blob) pairs."""
+
+    root: dict[str, object] = {}
+    for path, leaf in entries.items():
+        node = root
+        parts = path.split("/")
+        for component in parts[:-1]:
+            child = node.setdefault(component, {})
+            if not isinstance(child, dict):
+                raise LicenseCheckError(f"implib manifest path collision at {path}")
+            node = child
+        if parts[-1] in node:
+            raise LicenseCheckError(f"implib manifest duplicates {path}")
+        node[parts[-1]] = leaf
+
+    def digest_tree(node: dict[str, object]) -> str:
+        records: list[tuple[bytes, bytes]] = []
+        for name, value in node.items():
+            encoded_name = name.encode()
+            if isinstance(value, dict):
+                mode = "40000"
+                object_id = digest_tree(value)
+                sort_key = encoded_name + b"/"
+            else:
+                mode, object_id = value
+                sort_key = encoded_name
+            record = (
+                f"{mode} ".encode() + encoded_name + b"\0" + bytes.fromhex(object_id)
+            )
+            records.append((sort_key, record))
+        payload = b"".join(record for _key, record in sorted(records))
+        return _git_object_id("tree", payload)
+
+    return digest_tree(root)
+
+
+def _check_implib_manifest(manifest: object) -> dict[str, tuple[str, str, str]]:
+    """Validate pinned implib metadata and return its declared file mapping."""
+
+    if not isinstance(manifest, dict):
+        raise LicenseCheckError("implib manifest root must be an object")
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("license") != "MIT"
+        or manifest.get("repository") != "https://github.com/deepmodeling/deepmd-kit"
+        or manifest.get("revision") != IMPLIB_REVISION
+        or manifest.get("source_path") != "source/3rdparty/implib"
+        or manifest.get("tree") != IMPLIB_TREE
+        or manifest.get("upstream_repository") != "https://github.com/yugr/Implib.so"
+    ):
+        raise LicenseCheckError("implib manifest has incorrect pinned provenance")
+
+    declared: dict[str, tuple[str, str, str]] = {}
+    files = manifest.get("files")
+    if not isinstance(files, list) or len(files) != 24:
+        raise LicenseCheckError("implib manifest must describe exactly 24 files")
+    for entry in files:
+        if not isinstance(entry, dict):
+            raise LicenseCheckError("implib manifest contains a non-object file entry")
+        path = entry.get("path")
+        mode = entry.get("mode")
+        blob = entry.get("git_blob")
+        sha256 = entry.get("sha256")
+        if (
+            not isinstance(path, str)
+            or not path
+            or Path(path).is_absolute()
+            or ".." in Path(path).parts
+            or mode not in ("100644", "100755")
+            or not isinstance(blob, str)
+            or len(blob) != 40
+            or not isinstance(sha256, str)
+            or len(sha256) != 64
+        ):
+            raise LicenseCheckError("implib manifest contains an invalid file entry")
+        if path in declared:
+            raise LicenseCheckError(f"implib manifest duplicates {path}")
+        declared[path] = (mode, blob, sha256)
+
+    declared_tree = _git_tree_id(
+        {path: (mode, blob) for path, (mode, blob, _sha256) in declared.items()}
+    )
+    if declared_tree != IMPLIB_TREE:
+        raise LicenseCheckError(
+            "implib manifest file entries do not match the pinned tree"
+        )
+    return declared
+
+
+def _check_implib_provenance(root: Path) -> None:
+    """Verify the vendored implib tree is exactly the pinned DeepMD copy."""
+
+    manifest = json.loads((root / IMPLIB_MANIFEST_PATH).read_text(encoding="utf-8"))
+    declared = _check_implib_manifest(manifest)
+
+    vendor_root = root / IMPLIB_VENDOR_PATH
+    observed_paths = {
+        path.relative_to(vendor_root).as_posix()
+        for path in vendor_root.rglob("*")
+        if path.is_file() or path.is_symlink()
+    }
+    if observed_paths != set(declared):
+        missing = sorted(set(declared) - observed_paths)
+        unexpected = sorted(observed_paths - set(declared))
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected " + ", ".join(unexpected))
+        raise LicenseCheckError(
+            "implib vendored file set differs: " + "; ".join(details)
+        )
+
+    observed_tree: dict[str, tuple[str, str]] = {}
+    for relative, (expected_mode, expected_blob, expected_sha256) in declared.items():
+        path = vendor_root / relative
+        if path.is_symlink():
+            raise LicenseCheckError(
+                f"implib vendored file must not be a symlink: {relative}"
+            )
+        data = path.read_bytes()
+        observed_mode = "100755" if path.stat().st_mode & stat.S_IXUSR else "100644"
+        observed_blob = _git_object_id("blob", data)
+        observed_sha256 = hashlib.sha256(data).hexdigest()
+        if (
+            observed_mode != expected_mode
+            or observed_blob != expected_blob
+            or observed_sha256 != expected_sha256
+        ):
+            raise LicenseCheckError(
+                f"implib vendored file differs from pinned bytes: {relative}"
+            )
+        observed_tree[relative] = (observed_mode, observed_blob)
+    if _git_tree_id(observed_tree) != IMPLIB_TREE:
+        raise LicenseCheckError("implib vendored tree does not match the pinned tree")
+
+
 def check_source(root: Path) -> None:
     """Validate project metadata, provenance, and derived-file SPDX tags."""
 
@@ -133,6 +287,8 @@ def check_source(root: Path) -> None:
     for token in NOTICE_TOKENS:
         if token not in notice:
             raise LicenseCheckError(f"THIRD_PARTY_NOTICES.md omits {token}")
+
+    _check_implib_provenance(root)
 
     gfn2 = json.loads(
         (root / "data/parameters/manifest.json").read_text(encoding="utf-8")
@@ -201,11 +357,83 @@ def check_install(prefix: Path) -> None:
 def _archive_names(path: Path) -> set[str]:
     if path.suffix == ".whl" or zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
-            return set(archive.namelist())
+            return {info.filename for info in archive.infolist() if not info.is_dir()}
     if tarfile.is_tarfile(path):
         with tarfile.open(path, "r:*") as archive:
-            return set(archive.getnames())
+            return {info.name for info in archive.getmembers() if info.isfile()}
     raise LicenseCheckError(f"unsupported distribution archive: {path}")
+
+
+def _read_archive_members(path: Path, names: set[str]) -> dict[str, bytes]:
+    """Read only selected legal/provenance payloads, not a wheel's large DSO."""
+
+    if path.suffix == ".whl" or zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            return {name: archive.read(name) for name in names}
+    if tarfile.is_tarfile(path):
+        with tarfile.open(path, "r:*") as archive:
+            payloads: dict[str, bytes] = {}
+            for name in names:
+                info = archive.getmember(name)
+                extracted = archive.extractfile(info)
+                if extracted is None:
+                    raise LicenseCheckError(f"cannot read archived file: {name}")
+                payloads[name] = extracted.read()
+            return payloads
+    raise LicenseCheckError(f"unsupported distribution archive: {path}")
+
+
+def _find_archive_name(names: set[str], suffix: str) -> str:
+    matches = [name for name in names if name == suffix or name.endswith(f"/{suffix}")]
+    if len(matches) != 1:
+        raise LicenseCheckError(
+            f"archive must contain exactly one {suffix}; found {len(matches)}"
+        )
+    return matches[0]
+
+
+def _check_archived_implib(path: Path, names: set[str], wheel: bool) -> None:
+    """Validate the installed manifest and the complete sdist vendor payload."""
+
+    manifest_suffix = (
+        "share/licenses/gpuxtb/provenance/implib_manifest.json"
+        if wheel
+        else IMPLIB_MANIFEST_PATH
+    )
+    manifest_name = _find_archive_name(names, manifest_suffix)
+    manifest_bytes = _read_archive_members(path, {manifest_name})[manifest_name]
+    declared = _check_implib_manifest(json.loads(manifest_bytes.decode("utf-8")))
+    if wheel:
+        return
+
+    archive_root = manifest_name[: -len(IMPLIB_MANIFEST_PATH)]
+    vendor_prefix = archive_root + IMPLIB_VENDOR_PATH + "/"
+    archived_vendor = {
+        name.removeprefix(vendor_prefix): name
+        for name in names
+        if name.startswith(vendor_prefix)
+    }
+    if set(archived_vendor) != set(declared):
+        missing = sorted(set(declared) - set(archived_vendor))
+        unexpected = sorted(set(archived_vendor) - set(declared))
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected " + ", ".join(unexpected))
+        raise LicenseCheckError(
+            "sdist implib vendored file set differs: " + "; ".join(details)
+        )
+    vendor_payloads = _read_archive_members(path, set(archived_vendor.values()))
+    for relative, (_mode, expected_blob, expected_sha256) in declared.items():
+        data = vendor_payloads[archived_vendor[relative]]
+        if (
+            _git_object_id("blob", data) != expected_blob
+            or hashlib.sha256(data).hexdigest() != expected_sha256
+        ):
+            raise LicenseCheckError(
+                f"sdist implib vendored file differs from pinned bytes: {relative}"
+            )
 
 
 def check_archive(path: Path) -> None:
@@ -224,6 +452,7 @@ def check_archive(path: Path) -> None:
         raise LicenseCheckError(
             f"{path} is missing archived legal files: {', '.join(missing)}"
         )
+    _check_archived_implib(path, names, wheel=path.suffix == ".whl")
     leaked = sorted(
         name
         for name in names

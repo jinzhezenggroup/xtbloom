@@ -39,11 +39,10 @@ dependencies = [
   # preloads it on import.
   "mkl; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "scipy-openblas32; sys_platform == 'linux' and platform_machine == 'aarch64'",
-  # Published Linux wheels are CUDA-enabled. libgpuxtb has no DT_NEEDED entry
-  # on the NVIDIA libraries (they are loaded lazily with dlopen by the CUDA
-  # backend; see src/runtime/cuda_dlopen.c), but the runtime is still required
-  # by an ordinary ``pip install gpuxtb`` so the GPU backend works out of the
-  # box rather than being hidden behind an optional extra.
+  # Published Linux wheels are CUDA-enabled. The CUDA host APIs are resolved
+  # dynamically (see src/runtime/cuda_dlopen.c), but an ordinary
+  # ``pip install gpuxtb`` still installs their providers so the GPU backend
+  # works out of the box rather than being hidden behind an optional extra.
   "nvidia-cublas-cu12>=12.9.1.4; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
   "nvidia-cusolver-cu12>=11.7.5.82; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
   "nvidia-cusparse-cu12>=12.5.10.65; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
@@ -69,6 +68,8 @@ gpuxtb = "gpuxtb.dpdata"
 [tool.scikit-build]
 minimum-version = "build-system.requires"
 sdist.include = [
+  "cmake/3rdparty/implib/**",
+  "cmake/3rdparty/implib_manifest.json",
   "data/parameters/*_manifest.json",
   "data/parameters/manifest.json",
 ]
@@ -124,10 +125,12 @@ test-command = "python -c 'import gpuxtb; print(gpuxtb.library.get_version())'"
 
 [tool.cibuildwheel.linux]
 before-build = "bash {package}/python/ci/install-cuda-wheel-deps.sh"
-# The CUDA runtime libraries (cublas/cusolver/cudart/...) are intentionally not
-# bundled: a CUDA-enabled wheel relies on the system CUDA driver plus the
+# CUDA host shared libraries (cublas/cusolver/cudart/...) are intentionally not
+# bundled: the trampolines resolve the system CUDA driver plus the
 # PyPI-distributed nvidia-* packages at runtime. libcuda.so.1 is the NVIDIA
 # driver interface and is likewise provided by the system, never bundled.
+# nvcc may still embed CUDA device-runtime code in libgpuxtb itself; Issue #162
+# owns the unresolved legal distribution determination.
 repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel} --exclude libcublas.so.12 --exclude libcublasLt.so.12 --exclude libcusolver.so.11 --exclude libcusparse.so.12 --exclude libcudart.so.12 --exclude libnvJitLink.so.12 --exclude libcufft.so.11 --exclude libcurand.so.10 --exclude libcuda.so.1"
 
 [tool.ruff]
@@ -135,6 +138,7 @@ repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel} --exclude libcub
 # import ordering (kept in the same tool as the formatter so they can never
 # disagree), so linting here only catches real defects (F), the meaningful
 # pycodestyle classes (E4/E7/E9), and unsorted imports (I).
+extend-exclude = ["cmake/3rdparty/implib/implib-gen.py"]
 lint.select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.ruff.lint.per-file-ignores]

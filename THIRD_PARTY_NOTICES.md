@@ -80,18 +80,26 @@ templates as a build-time tool (MIT, Copyright 2017-2023 Yury Gribov), copied
 from the vendored revision in deepmd-kit
 `6f4fc02ae058ef11848046af01a1a756f3229c29` (which includes the upstream fix
 for yugr/Implib.so#34 and a small modification to tolerate a missing CUDA
-library). The generator runs at CMake configure time and produces
-build-tree-only ELF trampoline/initializer sources; no generated artifact is
-redistributed. gpuxtb uses the shims to load the proprietary NVIDIA CUDA
-runtime/math/driver libraries (cudart, cuBLAS, cuSOLVER, libcuda) lazily with
-dlopen instead of linking them, so libgpuxtb carries no `DT_NEEDED` entry on a
-GPL-incompatible library. The legal basis for that loading model is the
-subject of Issue #162 and is decided and recorded by the project owner.
+library). Exact file paths, modes, Git blobs, SHA-256 digests, and the source
+tree are recorded in `cmake/3rdparty/implib_manifest.json`.
+
+The generator runs at CMake configure time. Its generated C and assembly
+sources remain in the build tree, but their compiled trampoline and initializer
+code is embedded in the distributed `libgpuxtb` binary. Those trampolines
+dynamically resolve the CUDA host runtime, math, and driver APIs (cudart,
+cuBLAS, cuSOLVER, and libcuda) rather than retaining ordinary shared-library
+`DT_NEEDED` entries for those host libraries. CUDA compiler and device-link
+steps may still embed NVIDIA device-runtime code such as `cudadevrt`; therefore
+this mechanism must not be described as eliminating all proprietary linking or
+code from the binary. Whether the resulting distribution is legally permitted
+remains an open owner/legal determination in Issue #162 and continues to block
+the release gate tracked by Issue #129.
 
 ## Distribution policy
 
 Generated artifacts remain accompanied by their upstream SPDX identifier,
-pinned provenance manifest, and applicable license text. Source archives,
-Python wheels, and native CMake installs must retain this file, the project
-license, the compatible third-party license texts, and the parameter
+pinned provenance manifest, and applicable license text. Source archives must
+also retain the complete pinned implib source tree used by the build. Source
+archives, Python wheels, and native CMake installs must retain this file, the
+project license, compatible third-party license texts, and all applicable
 provenance manifests.

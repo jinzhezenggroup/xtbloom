@@ -1,0 +1,155 @@
+{
+  "files": [
+    {
+      "git_blob": "0c2ea99ee5d95593814c50e3aecb25eb1a355bd6",
+      "mode": "100644",
+      "path": "arch/aarch64/config.ini",
+      "sha256": "6307ba9fb0c16ef15e015444b8d36a215ab7a95a8f147c154e23dae57658e1b4"
+    },
+    {
+      "git_blob": "936855427c8c69442c3105a85d8f8b358af4f95a",
+      "mode": "100644",
+      "path": "arch/aarch64/table.S.tpl",
+      "sha256": "d8360921c6c5298f3ff3dd2e84783d151af6abd0d4db17c8b099b2e4e27d2ad5"
+    },
+    {
+      "git_blob": "18b9e4f0306625ec044d50a50d615098e5738934",
+      "mode": "100644",
+      "path": "arch/aarch64/trampoline.S.tpl",
+      "sha256": "8b0611b5115eb9445342c38cc52e5b1ed939e157982b5720859a37ed5a842f1f"
+    },
+    {
+      "git_blob": "4f0870a2b2ee51ca935118e1309ea6f7884c2307",
+      "mode": "100644",
+      "path": "arch/arm/config.ini",
+      "sha256": "649b22c925abef0e4ee9168488fef43a71ac4da93f8534b7128a915634266092"
+    },
+    {
+      "git_blob": "7b99071368a9c616cdef45e8785fca01fff0f583",
+      "mode": "100644",
+      "path": "arch/arm/table.S.tpl",
+      "sha256": "302a817ac991c6662d14610704f20def6fcac32c48ccb9163262f8022649bfe3"
+    },
+    {
+      "git_blob": "12a51df0176040e5c8b79112628dcfd1a2a282d8",
+      "mode": "100644",
+      "path": "arch/arm/trampoline.S.tpl",
+      "sha256": "f2d69cf13b40bfb806c074332102382bc3e805670e778c09c30482c85f365fe3"
+    },
+    {
+      "git_blob": "ad8b19b3e1e830b2a1a5060b0de8d687964e6246",
+      "mode": "100644",
+      "path": "arch/common/init.c.tpl",
+      "sha256": "f0b1b1235cc7e180c52354c556a2b79200dec9143b8eba87cc67286a68412bea"
+    },
+    {
+      "git_blob": "eb87f54f8595ed185a39cd16c8fc21cea0cbdd5d",
+      "mode": "100644",
+      "path": "arch/e2k/README.md",
+      "sha256": "cdab332e631548ded8fde4e6a5d1d77f5ccecd9a6d12d82188fb9c5746a298e0"
+    },
+    {
+      "git_blob": "e34cbe2713613a0305cb8962eecf42ed58e3f244",
+      "mode": "100644",
+      "path": "arch/e2k/config.ini",
+      "sha256": "baeaa2f63bf964a44fc139fd76efd2fe961e9c53363f12f0117e9d731abb182e"
+    },
+    {
+      "git_blob": "9f28f517917fc49480e56b47dc065d2c8221a9a0",
+      "mode": "100644",
+      "path": "arch/e2k/table.S.tpl",
+      "sha256": "6df91c9ca515df762821ff6f1aafb4e7609435d0d5c51d6f61e62d23d0ac3bae"
+    },
+    {
+      "git_blob": "dcd385713beb6db3e85acd47edd31229177bd53c",
+      "mode": "100644",
+      "path": "arch/e2k/trampoline.S.tpl",
+      "sha256": "8765f59bc46ac6055e47b8b4a83ca335b047b0613af1d54a9030c57e012c87e9"
+    },
+    {
+      "git_blob": "f93835df744bd30896324ea0b65e01fd59b6d53a",
+      "mode": "100644",
+      "path": "arch/i386/config.ini",
+      "sha256": "21b05e6d714b77dabaab82c172f3688be4f36b18e479dad0400d34a80b50f43e"
+    },
+    {
+      "git_blob": "ed7944a1e332db7c474ccf00917234b8c37e09db",
+      "mode": "100644",
+      "path": "arch/i386/table.S.tpl",
+      "sha256": "6e8a8a1505ebbcdca5f44098ecd33cee59a460fff3472258a47b0b6f042e270d"
+    },
+    {
+      "git_blob": "98b07c4a5ca2a80b7d6c217e378c67c22b25e04c",
+      "mode": "100644",
+      "path": "arch/i386/trampoline.S.tpl",
+      "sha256": "1a7f3086d69135f9eb95f83ff8efa897d1e42046af27bb57cde35c4a0298c902"
+    },
+    {
+      "git_blob": "941fcd17a6a8fe918d6e4faf3e3a58bc64f563da",
+      "mode": "100644",
+      "path": "arch/mips/config.ini",
+      "sha256": "3defc8be6edef38ce5fc6964318234e73ea58c7803a7d69754a8390461135359"
+    },
+    {
+      "git_blob": "8a0cbb4dd0001090378d0bc369532cd02526ee9d",
+      "mode": "100644",
+      "path": "arch/mips/table.S.tpl",
+      "sha256": "83a509f3d81d2e79fa7887b100c2ec46ac25e6de812919a7934073203bb7ba4d"
+    },
+    {
+      "git_blob": "a37ec5636f4008cf74ea141cbf29af71e215aad1",
+      "mode": "100644",
+      "path": "arch/mips/trampoline.S.tpl",
+      "sha256": "1baaa2acb375deb61c07ec80e295b72e992b5b5426d42a0100139bbc61c3251a"
+    },
+    {
+      "git_blob": "1714eb58fdd4cf3374cafbca51c346efee7e94bc",
+      "mode": "100644",
+      "path": "arch/mips64/config.ini",
+      "sha256": "1c248cd1ede02b2cee807e6a6a0cdc623027d59010aa327346e6ba4a7f8f8c27"
+    },
+    {
+      "git_blob": "aa2fd35ccedb19dc50332fe534ff42e8fa17406a",
+      "mode": "100644",
+      "path": "arch/mips64/table.S.tpl",
+      "sha256": "2b6b9a43d8571d78e05539767c30ad4107b22ca75fba0b490e864cdd70e40027"
+    },
+    {
+      "git_blob": "057e87d6ff6cdfbf65ec2d342d29f8c6576cf653",
+      "mode": "100644",
+      "path": "arch/mips64/trampoline.S.tpl",
+      "sha256": "b8351e66d02e94e97215901bb5acaf5b18e988186cb94ee2685c6eec60e871a4"
+    },
+    {
+      "git_blob": "6c9087a89cb80ff80480ea6605e2f4b99220d531",
+      "mode": "100644",
+      "path": "arch/x86_64/config.ini",
+      "sha256": "6c7bd3a3d6c7146906af089a6c99d8eb53d30b8245acb63e3cc2a7b5148c004e"
+    },
+    {
+      "git_blob": "620d8f3334336341bc18c971c984be9baf823920",
+      "mode": "100644",
+      "path": "arch/x86_64/table.S.tpl",
+      "sha256": "338cda48e1441fc497774c11831ee32584b0c956ad5a302728e4a4f09650fbfc"
+    },
+    {
+      "git_blob": "d2bbf103468e9d2c8c46e6405cc0bbf7d61d6428",
+      "mode": "100644",
+      "path": "arch/x86_64/trampoline.S.tpl",
+      "sha256": "c0b1a9b254f99c62e87626f3de26dcf2c6fd47c2e55ca0e6814564d141054be7"
+    },
+    {
+      "git_blob": "86cfa773787cbbee41650ac8b6c78faee7927269",
+      "mode": "100755",
+      "path": "implib-gen.py",
+      "sha256": "f2bea1d4b8befbd3c042b2f51e6850b18cb2e0ef505ccb3be76ba9e99f0688ad"
+    }
+  ],
+  "license": "MIT",
+  "repository": "https://github.com/deepmodeling/deepmd-kit",
+  "revision": "6f4fc02ae058ef11848046af01a1a756f3229c29",
+  "schema_version": 1,
+  "source_path": "source/3rdparty/implib",
+  "tree": "5fbe7e9f2c4efe0c2be4d2eed409e81f35458ba4",
+  "upstream_repository": "https://github.com/yugr/Implib.so"
+}
