@@ -772,10 +772,9 @@ def check_manifest(manifest_path: Path) -> None:
             )
         reference = references[reference_engine]
         expected_accuracy = reference_accuracy(reference, reference_engine)
-        if (
-            provenance.get("generation_mode") != "live-cli"
-            or provenance.get("accuracy") != float(expected_accuracy)
-        ):
+        if provenance.get("generation_mode") != "live-cli" or provenance.get(
+            "accuracy"
+        ) != float(expected_accuracy):
             raise ConformanceError(
                 f"golden {golden_path} does not pin the primary oracle accuracy"
             )
@@ -1203,7 +1202,9 @@ def generate_with_tblite(
             f"version {reference['version']}, got:\n{version}"
         )
     executable_digest = sha256_file(resolved_executable)
-    runtime = discover_tblite_runtime(resolved_executable, reference["runtime_artifacts"])
+    runtime = discover_tblite_runtime(
+        resolved_executable, reference["runtime_artifacts"]
+    )
     environment, environment_provenance = tblite_environment()
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1287,9 +1288,7 @@ def generate_with_xtb(
         selected
         if case_names
         else [
-            case
-            for case in selected
-            if case.get("reference_engine", "tblite") == "xtb"
+            case for case in selected if case.get("reference_engine", "tblite") == "xtb"
         ]
     )
     resolved_executable = Path(shutil.which(str(executable)) or executable).resolve()

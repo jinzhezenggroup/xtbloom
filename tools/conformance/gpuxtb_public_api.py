@@ -43,6 +43,7 @@ CUDA_SUCCESS = 0
 CUDA_MEMCPY_HOST_TO_DEVICE = 1
 CUDA_MEMCPY_DEVICE_TO_HOST = 2
 
+
 class ContextOptions(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_context_options_t`` ABI version 1."""
 

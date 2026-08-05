@@ -25,7 +25,9 @@ EXPECTED_SYMBOLS = {
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--nm", required=True, help="nm-compatible executable")
-    parser.add_argument("--library", required=True, type=Path, help="shared library to inspect")
+    parser.add_argument(
+        "--library", required=True, type=Path, help="shared library to inspect"
+    )
     args = parser.parse_args()
 
     completed = subprocess.run(

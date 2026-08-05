@@ -128,6 +128,18 @@ before-build = "bash {package}/python/ci/install-cuda-wheel-deps.sh"
 # driver interface and is likewise provided by the system, never bundled.
 repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel} --exclude libcublas.so.12 --exclude libcublasLt.so.12 --exclude libcusolver.so.11 --exclude libcusparse.so.12 --exclude libcudart.so.12 --exclude libnvJitLink.so.12 --exclude libcufft.so.11 --exclude libcurand.so.10 --exclude libcuda.so.1"
 
+[tool.ruff]
+# Deliberately small scope: ruff-format owns formatting and ruff's I rule owns
+# import ordering (kept in the same tool as the formatter so they can never
+# disagree), so linting here only catches real defects (F), the meaningful
+# pycodestyle classes (E4/E7/E9), and unsorted imports (I).
+lint.select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# benchmarks/run.py appends a tools path to sys.path before importing
+# gpuxtb_conformance/gpuxtb_public_api; those imports cannot move to the top.
+"benchmarks/run.py" = ["E402"]
+
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
 addopts = "-ra"

@@ -242,16 +242,15 @@ gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* 
                     "CPU context does not own a GFN2 execution cache");
       }
       std::string error;
-      const gpuxtb_status_t status = gpuxtb::detail::execute_restricted_gfn2_cpu(
-          *cache, *batch, *options, *result, error);
+      const gpuxtb_status_t status =
+          gpuxtb::detail::execute_restricted_gfn2_cpu(*cache, *batch, *options, *result, error);
       if (status != GPUXTB_STATUS_SUCCESS) {
         return fail(status, std::move(error));
       }
       last_error.clear();
       return GPUXTB_STATUS_SUCCESS;
     } catch (const std::bad_alloc&) {
-      return fail(GPUXTB_STATUS_ALLOCATION_FAILED,
-                  "failed to allocate CPU GFN2 execution state");
+      return fail(GPUXTB_STATUS_ALLOCATION_FAILED, "failed to allocate CPU GFN2 execution state");
     } catch (const std::exception& exception) {
       return fail(GPUXTB_STATUS_INTERNAL_ERROR, exception.what());
     } catch (...) {
@@ -265,20 +264,18 @@ gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* 
     const std::shared_ptr<gpuxtb::detail::Gfn2CudaExecutionCache>& cache =
         context->implementation->gfn2_cuda_execution_cache;
     if (cache == nullptr) {
-      return fail(GPUXTB_STATUS_INTERNAL_ERROR,
-                  "CUDA context does not own a GFN2 execution cache");
+      return fail(GPUXTB_STATUS_INTERNAL_ERROR, "CUDA context does not own a GFN2 execution cache");
     }
     std::string error;
-    const gpuxtb_status_t status = gpuxtb::detail::execute_restricted_gfn2_cuda(
-        *cache, *batch, *options, *result, error);
+    const gpuxtb_status_t status =
+        gpuxtb::detail::execute_restricted_gfn2_cuda(*cache, *batch, *options, *result, error);
     if (status != GPUXTB_STATUS_SUCCESS) {
       return fail(status, std::move(error));
     }
     last_error.clear();
     return GPUXTB_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
-    return fail(GPUXTB_STATUS_ALLOCATION_FAILED,
-                "failed to allocate CUDA GFN2 execution state");
+    return fail(GPUXTB_STATUS_ALLOCATION_FAILED, "failed to allocate CUDA GFN2 execution state");
   } catch (const std::exception& exception) {
     return fail(GPUXTB_STATUS_INTERNAL_ERROR, exception.what());
   } catch (...) {

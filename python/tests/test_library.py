@@ -97,17 +97,13 @@ def test_host_const_returns_consistent_buffer_and_owner():
     assert np.allclose(owner, [1.0, 2.0, 3.0])
     assert int(buf.data) == owner.ctypes.data
 
-    buf_empty, owner_empty = library.host_const(
-        None, ctypes.c_double, np.float64
-    )
+    buf_empty, owner_empty = library.host_const(None, ctypes.c_double, np.float64)
     assert isinstance(buf_empty, library.ConstBuffer)
     assert buf_empty.data is None
     assert buf_empty.size_bytes == 0
     assert owner_empty.size == 0
 
-    buf_empty_seq, owner_empty_seq = library.host_const(
-        [], ctypes.c_double, np.float64
-    )
+    buf_empty_seq, owner_empty_seq = library.host_const([], ctypes.c_double, np.float64)
     assert isinstance(buf_empty_seq, library.ConstBuffer)
     assert buf_empty_seq.data is None
     assert buf_empty_seq.size_bytes == 0

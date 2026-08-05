@@ -92,10 +92,9 @@ gpuxtb_status_t make_spin_polarization_plan(const BasisPlan& basis,
  * batch-atomic failure without dynamic allocation or caller scratch.
  */
 gpuxtb_status_t evaluate_spin_polarization_cpu(SpinPolarizationView view,
-                                                const double* shell_populations,
-                                                double* spin_energies,
-                                                double* shell_potentials,
-                                                std::string& error);
+                                               const double* shell_populations,
+                                               double* spin_energies, double* shell_potentials,
+                                               std::string& error);
 
 /*
  * Accumulate the spin energy of one packed system. Only the target population
@@ -103,9 +102,11 @@ gpuxtb_status_t evaluate_spin_polarization_cpu(SpinPolarizationView view,
  * multipoles while failed or inactive peers remain untouched. The accumulator
  * is unchanged on every failure.
  */
-gpuxtb_status_t add_spin_polarization_energy_system_cpu(
-    SpinPolarizationView view, std::int64_t system, const double* shell_populations,
-    double& accumulated_energy, std::string& error);
+gpuxtb_status_t add_spin_polarization_energy_system_cpu(SpinPolarizationView view,
+                                                        std::int64_t system,
+                                                        const double* shell_populations,
+                                                        double& accumulated_energy,
+                                                        std::string& error);
 
 }  // namespace gpuxtb::detail::gfn2
 

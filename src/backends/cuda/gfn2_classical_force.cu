@@ -330,8 +330,7 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
       !append_range(reads, &read_count, input.atomic_charges, plan.total_atoms)) {
     return false;
   }
-  if (geometry_epoch != nullptr &&
-      !append_range(reads, &read_count, geometry_epoch->value, 1)) {
+  if (geometry_epoch != nullptr && !append_range(reads, &read_count, geometry_epoch->value, 1)) {
     return false;
   }
 

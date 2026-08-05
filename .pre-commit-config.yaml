@@ -1,0 +1,38 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        # These exact generated or hash-pinned artifacts have canonical bytes.
+        # In particular, unified-diff blank context lines retain one leading
+        # space. Read-only syntax/integrity tests still cover the files.
+        exclude: ^(?:data/parameters/(?:gfn2\.(?:toml|json|hpp)|manifest\.json|d4\.hpp|d4_manifest\.json)|tools/oracle/tblite_scc_trace/tblite-e9abc395-scc-observer\.patch)$
+      - id: end-of-file-fixer
+        exclude: ^(?:data/parameters/(?:gfn2\.(?:toml|json|hpp)|manifest\.json|d4\.hpp|d4_manifest\.json)|tools/oracle/tblite_scc_trace/tblite-e9abc395-scc-observer\.patch)$
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: ["--maxkb=1024", "--enforce-all"]
+        # Canonical generated tblite parameter export; tracked and pinned.
+        exclude: ^data/parameters/d4\.hpp$
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-toml
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: cb8c523fd4835aba42af70f4cad5568db4df0b6c # v0.16.0
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+        types_or: [python, pyi, jupyter]
+      - id: ruff-format
+        types_or: [python, pyi, jupyter]
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: f4d7745e17a28aad7eed2f4874ca8d1568c11c4c # v22.1.8
+    hooks:
+      - id: clang-format
+        types_or: [c++, c, cuda]
+        # Only the two generated parameter headers are canonical exports;
+        # future hand-written C/C++ files under data must still be formatted.
+        exclude: ^data/parameters/(?:gfn2|d4)\.hpp$

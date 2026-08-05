@@ -18,7 +18,6 @@ import re
 import subprocess
 from pathlib import Path
 
-
 DFTD4_REPOSITORY = "https://github.com/dftd4/dftd4"
 DFTD4_LICENSE = "LGPL-3.0-or-later"
 MCTC_REVISION = "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d"
@@ -130,7 +129,9 @@ def parameter_array(source: str, name: str, expected: int = 118) -> list[float]:
     return values
 
 
-def parse_reference_data(source: str) -> tuple[dict[tuple[str, int, int], float], dict[tuple[str, int, int], list[float]]]:
+def parse_reference_data(
+    source: str,
+) -> tuple[dict[tuple[str, int, int], float], dict[tuple[str, int, int], list[float]]]:
     """Parse scalar and rank-one ``data`` initializers from reference.inc."""
 
     scalars: dict[tuple[str, int, int], float] = {}
@@ -190,10 +191,15 @@ def format_double(value: float) -> str:
     return text
 
 
-def format_array(values: list[float] | list[int], indent: str = "    ", columns: int = 4) -> str:
+def format_array(
+    values: list[float] | list[int], indent: str = "    ", columns: int = 4
+) -> str:
     """Format a constexpr initializer with bounded line length."""
 
-    rendered = [format_double(value) if isinstance(value, float) else str(value) for value in values]
+    rendered = [
+        format_double(value) if isinstance(value, float) else str(value)
+        for value in values
+    ]
     lines = []
     for start in range(0, len(rendered), columns):
         lines.append(indent + ", ".join(rendered[start : start + columns]) + ",")
@@ -206,12 +212,16 @@ def build_tables(
     """Construct packed element/reference records and their dense C6 matrix."""
 
     scalars, arrays = parse_reference_data(sources["src/dftd4/reference.inc"])
-    covalent = parameter_array(sources["src/dftd4/data/covrad.f90"], "covalent_rad_2009")
+    covalent = parameter_array(
+        sources["src/dftd4/data/covrad.f90"], "covalent_rad_2009"
+    )
     electronegativity = parameter_array(sources["src/dftd4/data/en.f90"], "pauling_en")
     effective_charge = parameter_array(
         sources["src/dftd4/data/zeff.f90"], "effective_nuclear_charge"
     )
-    hardness = parameter_array(sources["src/dftd4/data/hardness.f90"], "chemical_hardness")
+    hardness = parameter_array(
+        sources["src/dftd4/data/hardness.f90"], "chemical_hardness"
+    )
     r4_over_r2 = parameter_array(sources["src/dftd4/data/r4r2.f90"], "r4_over_r2")
 
     elements: list[dict[str, float | int]] = []
@@ -220,7 +230,9 @@ def build_tables(
     for atomic_number in range(1, ELEMENT_COUNT + 1):
         ref_count = int(scalars.get(("refn", atomic_number, 0), 0.0))
         if not 1 <= ref_count <= 7:
-            raise D4DataError(f"element {atomic_number} has invalid reference count {ref_count}")
+            raise D4DataError(
+                f"element {atomic_number} has invalid reference count {ref_count}"
+            )
         reference_offset = len(references)
         for reference_index in range(1, ref_count + 1):
             required_scalars = {
@@ -280,7 +292,9 @@ def build_tables(
             {
                 "reference_offset": reference_offset,
                 "reference_count": ref_count,
-                "covalent_radius": (4.0 / 3.0) * ANGSTROM_TO_BOHR * covalent[atomic_number - 1],
+                "covalent_radius": (4.0 / 3.0)
+                * ANGSTROM_TO_BOHR
+                * covalent[atomic_number - 1],
                 "electronegativity": electronegativity[atomic_number - 1],
                 "effective_charge": effective_charge[atomic_number - 1],
                 "hardness": hardness[atomic_number - 1],
@@ -292,7 +306,9 @@ def build_tables(
     factor = 3.0 / math.pi
     for first in polarizabilities:
         for second in polarizabilities:
-            c6.append(factor * trapzd([a * b for a, b in zip(first, second, strict=True)]))
+            c6.append(
+                factor * trapzd([a * b for a, b in zip(first, second, strict=True)])
+            )
     return elements, references, c6
 
 
@@ -308,7 +324,8 @@ def render_header(
     element_rows = []
     for element in elements:
         element_rows.append(
-            "    D4ElementData{" + ", ".join(
+            "    D4ElementData{"
+            + ", ".join(
                 (
                     str(element["reference_offset"]),
                     str(element["reference_count"]),
@@ -318,18 +335,21 @@ def render_header(
                     format_double(float(element["hardness"])),
                     format_double(float(element["r4r2"])),
                 )
-            ) + "},"
+            )
+            + "},"
         )
     reference_rows = []
     for reference in references:
         reference_rows.append(
-            "    D4ReferenceData{" + ", ".join(
+            "    D4ReferenceData{"
+            + ", ".join(
                 (
                     format_double(float(reference["coordination_number"])),
                     format_double(float(reference["charge"])),
                     str(reference["gaussian_count"]),
                 )
-            ) + "},"
+            )
+            + "},"
         )
     return f"""// Generated by tools/parameters/generate_d4.py; do not edit.
 // SPDX-License-Identifier: LGPL-3.0-or-later
@@ -388,13 +408,18 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
 
-    sources = {path: git_show(args.source_git_dir, args.revision, path) for path in SOURCE_PATHS}
+    sources = {
+        path: git_show(args.source_git_dir, args.revision, path)
+        for path in SOURCE_PATHS
+    }
     digest = source_digest(sources)
     elements, references, c6 = build_tables(sources)
     header = render_header(args.revision, digest, elements, references, c6)
     source_records = [
         {
-            "git_blob": git_value(args.source_git_dir, "rev-parse", f"{args.revision}:{path}"),
+            "git_blob": git_value(
+                args.source_git_dir, "rev-parse", f"{args.revision}:{path}"
+            ),
             "path": path,
             "sha256": hashlib.sha256(sources[path].encode("utf-8")).hexdigest(),
             "size": len(sources[path].encode("utf-8")),
@@ -411,13 +436,17 @@ def main() -> int:
         "revision": args.revision,
         "source_digest": digest,
         "sources": source_records,
-        "tree": git_value(args.source_git_dir, "rev-parse", f"{args.revision}^{{tree}}"),
+        "tree": git_value(
+            args.source_git_dir, "rev-parse", f"{args.revision}^{{tree}}"
+        ),
     }
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "d4.hpp").write_text(header, encoding="utf-8", newline="\n")
     (args.output_dir / "d4_manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
     )
     return 0
 

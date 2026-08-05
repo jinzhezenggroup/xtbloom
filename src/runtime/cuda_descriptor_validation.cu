@@ -99,12 +99,11 @@ gpuxtb_status_t validate_basic_descriptor(const char* name, const void* data,
 }
 
 gpuxtb_status_t validate_device_allocation_range(const char* name, const void* data,
-                                                  std::size_t declared_bytes,
-                                                  std::string& error) {
+                                                 std::size_t declared_bytes, std::string& error) {
   CUdeviceptr allocation_base = 0u;
   std::size_t allocation_bytes = 0u;
-  const CUresult range_status = cuMemGetAddressRange(
-      &allocation_base, &allocation_bytes, reinterpret_cast<CUdeviceptr>(data));
+  const CUresult range_status = cuMemGetAddressRange(&allocation_base, &allocation_bytes,
+                                                     reinterpret_cast<CUdeviceptr>(data));
   if (range_status != CUDA_SUCCESS) {
     error = cuda_driver_error_message("cuMemGetAddressRange", range_status);
     if (range_status == CUDA_ERROR_INVALID_VALUE || range_status == CUDA_ERROR_NOT_FOUND) {
@@ -323,8 +322,7 @@ gpuxtb_status_t validate_cuda_const_buffer(std::int32_t device_id, const char* n
   PointerFacts facts{};
   status = validate_pointer_facts(device_id, name, buffer.data, buffer.memory_space, managed_policy,
                                   false, facts, error);
-  if (status == GPUXTB_STATUS_SUCCESS &&
-      buffer.memory_space == GPUXTB_MEMORY_CUDA_DEVICE) {
+  if (status == GPUXTB_STATUS_SUCCESS && buffer.memory_space == GPUXTB_MEMORY_CUDA_DEVICE) {
     status = validate_device_allocation_range(name, buffer.data, buffer.size_bytes, error);
   }
   status = finish_with_restore(device, status, error);
@@ -351,8 +349,7 @@ gpuxtb_status_t validate_cuda_buffer(std::int32_t device_id, const char* name,
   PointerFacts facts{};
   status = validate_pointer_facts(device_id, name, buffer.data, buffer.memory_space, managed_policy,
                                   true, facts, error);
-  if (status == GPUXTB_STATUS_SUCCESS &&
-      buffer.memory_space == GPUXTB_MEMORY_CUDA_DEVICE) {
+  if (status == GPUXTB_STATUS_SUCCESS && buffer.memory_space == GPUXTB_MEMORY_CUDA_DEVICE) {
     status = validate_device_allocation_range(name, buffer.data, buffer.size_bytes, error);
   }
   status = finish_with_restore(device, status, error);

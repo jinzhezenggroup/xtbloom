@@ -445,8 +445,7 @@ bool validate_common(const Gfn2PostSccPotentialDevicePlan& plan,
 
 __global__ void initialize_activity_kernel(Gfn2ForceDeviceActivity source,
                                            Gfn2GeometryEpochConsumerDevice geometry,
-                                           int dynamic_epoch,
-                                           std::uint8_t* active_mask,
+                                           int dynamic_epoch, std::uint8_t* active_mask,
                                            std::uint32_t* sequence_active,
                                            std::uint32_t* system_errors,
                                            std::uint32_t* device_error) {
@@ -458,13 +457,12 @@ __global__ void initialize_activity_kernel(Gfn2ForceDeviceActivity source,
     invalid_geometry = dynamic_epoch != 0 && epoch == 0u ? 1 : 0;
   }
   __syncthreads();
-  for (std::int64_t system = threadIdx.x; system < source.batch_elements;
-       system += blockDim.x) {
+  for (std::int64_t system = threadIdx.x; system < source.batch_elements; system += blockDim.x) {
     active_mask[system] = 0u;
     const std::uint8_t requested = source.requested_mask[system];
     if (requested > 1u) {
-      system_errors[system] = gfn2_post_scc_potential_error(
-          Gfn2PostSccPotentialStage::kActivity, kInvalidRequestedMask);
+      system_errors[system] = gfn2_post_scc_potential_error(Gfn2PostSccPotentialStage::kActivity,
+                                                            kInvalidRequestedMask);
     } else if (requested == 1u && source.system_statuses[system] == GPUXTB_STATUS_SUCCESS) {
       if (dynamic_epoch == 0) {
         active_mask[system] = 1u;
@@ -474,11 +472,11 @@ __global__ void initialize_activity_kernel(Gfn2ForceDeviceActivity source,
       if (eligible > 1u) {
         atomicExch(&invalid_geometry, 1);
       } else if (eligible == 0u) {
-        system_errors[system] = gfn2_post_scc_potential_error(
-            Gfn2PostSccPotentialStage::kActivity, kIneligibleGeometry);
+        system_errors[system] = gfn2_post_scc_potential_error(Gfn2PostSccPotentialStage::kActivity,
+                                                              kIneligibleGeometry);
       } else if (geometry.committed_generations[system] != epoch) {
-        system_errors[system] = gfn2_post_scc_potential_error(
-            Gfn2PostSccPotentialStage::kActivity, kStaleGeometry);
+        system_errors[system] =
+            gfn2_post_scc_potential_error(Gfn2PostSccPotentialStage::kActivity, kStaleGeometry);
       } else {
         active_mask[system] = 1u;
       }
