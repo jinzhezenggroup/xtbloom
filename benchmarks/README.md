@@ -111,6 +111,17 @@ attempt to exceed the committed primary or live cross-engine tolerances. A
 supplied FRESH artifact is also rejected if its recorded protocol used wider
 energy or force gates.
 
+gpuxtb benchmark rows pin the same SCC convergence settings as the conformance
+oracle: 500 iterations, `1e-10` charge tolerance, and `1e-12` energy tolerance,
+while retaining the public 300 K electronic-temperature default. A FRESH
+artifact is accepted only when those options are present and every measured
+raw sample is intact. The loader checks the repetition count, consecutive
+sample indices, complete finite energy/force vectors, and recomputes the
+recorded reference and maximum-drift summaries from those samples. Dependent
+WARM and cross-engine comparisons likewise inspect every measured raw sample
+and report the maximum delta across the entire run, not just the seed or cold
+snapshot.
+
 The deterministic all-trans-like alkane builder uses tetrahedral terminal and
 interior C-H directions. Its hardware-free test checks the full pair-distance
 matrix for 32, 62, 98, and 122 atoms and rejects nonbonded separations below

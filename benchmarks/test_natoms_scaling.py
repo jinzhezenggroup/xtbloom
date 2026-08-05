@@ -74,10 +74,12 @@ def make_reference_document(
         "engine": "gpuxtb",
         "model": natoms_scaling.public_api.GPUXTB_MODEL_GFN2_XTB,
         "flags": flags,
-        "max_scc_iterations": 0,
-        "charge_tolerance": 1.0e-5,
-        "energy_tolerance": 1.0e-6,
-        "electronic_temperature_hartree": 0.0,
+        "max_scc_iterations": natoms_scaling.GPUXTB_CONFORMANCE_MAX_SCC_ITERATIONS,
+        "charge_tolerance": natoms_scaling.GPUXTB_CONFORMANCE_CHARGE_TOLERANCE,
+        "energy_tolerance": natoms_scaling.GPUXTB_CONFORMANCE_ENERGY_TOLERANCE,
+        "electronic_temperature_hartree": (
+            natoms_scaling.GPUXTB_CONFORMANCE_ELECTRONIC_TEMPERATURE
+        ),
         "cpu_threads": 1,
         "device_id": 0,
         "total_atoms": natoms * batch_size,
@@ -112,9 +114,23 @@ def make_reference_document(
         "batch_size": batch_size,
         "property": property_name,
         "start_mode": "fresh",
+        "warmups": 3,
+        "repetitions": 5,
         "compute_options": options,
         "workload_identity": natoms_scaling.workload_identity(cell),
         "run_identity": identity,
+        "raw_samples": [
+            {
+                "sample_index": sample_index,
+                "start_mode": "fresh",
+                "latency_ms": 1.0,
+                "energies_hartree": [-10.0] * batch_size,
+                "forces_hartree_per_bohr": (
+                    list(force_reference) if force_reference is not None else None
+                ),
+            }
+            for sample_index in range(5)
+        ],
         "correctness": {
             "status": "pass",
             "energy_reference_hartree": [-10.0] * batch_size,
@@ -132,6 +148,29 @@ def make_reference_document(
         identity,
         natoms_scaling.Protocol("fresh", 3, 5, 1.0e-8, 1.0e-7),
     )
+
+
+def set_measured_observables(
+    row: dict[str, Any],
+    energy_samples: list[list[float]],
+    force_samples: list[list[float] | None],
+) -> None:
+    """Replace a dependent row's measured vectors without changing its summary."""
+    if len(energy_samples) != len(force_samples):
+        raise ValueError("energy and force samples must have equal length")
+    row["repetitions"] = len(energy_samples)
+    row["raw_samples"] = [
+        {
+            "sample_index": sample_index,
+            "start_mode": row["start_mode"],
+            "latency_ms": 1.0,
+            "energies_hartree": energies,
+            "forces_hartree_per_bohr": forces,
+        }
+        for sample_index, (energies, forces) in enumerate(
+            zip(energy_samples, force_samples)
+        )
+    ]
 
 
 class NatomsScalingTest(unittest.TestCase):
@@ -163,6 +202,31 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertEqual(arguments.cross_engine_force_atol, 5.0e-6)
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             parser.parse_args(["--library", "libgpuxtb.so"])
+
+    def test_gpuxtb_benchmark_pins_conformance_scc_and_retains_300k(self) -> None:
+        options = SimpleNamespace(
+            max_scc_iterations=250,
+            charge_tolerance=1.0e-6,
+            energy_tolerance=1.0e-8,
+            electronic_temperature=(
+                natoms_scaling.GPUXTB_CONFORMANCE_ELECTRONIC_TEMPERATURE
+            ),
+        )
+        original_temperature = options.electronic_temperature
+        natoms_scaling.configure_gpuxtb_conformance_scc(options)
+        self.assertEqual(
+            options.max_scc_iterations,
+            natoms_scaling.GPUXTB_CONFORMANCE_MAX_SCC_ITERATIONS,
+        )
+        self.assertEqual(
+            options.charge_tolerance,
+            natoms_scaling.GPUXTB_CONFORMANCE_CHARGE_TOLERANCE,
+        )
+        self.assertEqual(
+            options.energy_tolerance,
+            natoms_scaling.GPUXTB_CONFORMANCE_ENERGY_TOLERANCE,
+        )
+        self.assertEqual(options.electronic_temperature, original_temperature)
 
     def test_nonfresh_runs_require_reference_and_gates_cannot_be_widened(self) -> None:
         parser = natoms_scaling.build_parser()
@@ -681,6 +745,45 @@ class NatomsScalingTest(unittest.TestCase):
             "options": lambda document: document["rows"][0]["compute_options"].pop(
                 "charge_tolerance"
             ),
+            "unpinned_options": lambda document: document["rows"][0][
+                "compute_options"
+            ].update(charge_tolerance=1.0e-6),
+            "missing_raw_samples": lambda document: document["rows"][0].pop(
+                "raw_samples"
+            ),
+            "missing_measured_sample": lambda document: document["rows"][0][
+                "raw_samples"
+            ].pop(),
+            "nonconsecutive_sample_index": lambda document: document["rows"][0][
+                "raw_samples"
+            ][1].update(sample_index=4),
+            "short_sample_energy": lambda document: document["rows"][0]["raw_samples"][
+                0
+            ].update(energies_hartree=[]),
+            "string_sample_energy": lambda document: document["rows"][0]["raw_samples"][
+                0
+            ].update(energies_hartree=["-10.0"]),
+            "nonfinite_sample_force": lambda document: document["rows"][0][
+                "raw_samples"
+            ][0]["forces_hartree_per_bohr"].__setitem__(0, math.nan),
+            "tampered_later_force_sample": lambda document: document["rows"][0][
+                "raw_samples"
+            ][4]["forces_hartree_per_bohr"].__setitem__(0, 1.0e-9),
+            "row_repetition_mismatch": lambda document: document["rows"][0].update(
+                repetitions=4
+            ),
+            "tampered_energy_reference": lambda document: document["rows"][0][
+                "correctness"
+            ].update(energy_reference_hartree=[-10.0 + 1.0e-9]),
+            "tampered_energy_drift": lambda document: document["rows"][0][
+                "correctness"
+            ].update(max_abs_energy_drift_hartree=1.0e-9),
+            "tampered_force_reference": lambda document: document["rows"][0][
+                "correctness"
+            ]["force_reference_hartree_per_bohr"].__setitem__(0, 1.0),
+            "tampered_force_drift": lambda document: document["rows"][0][
+                "correctness"
+            ].update(max_abs_force_drift_hartree_per_bohr=1.0e-9),
             "dirty_reference": lambda document: document["run_identity"][
                 "repository"
             ].update(dirty=True),
@@ -726,6 +829,19 @@ class NatomsScalingTest(unittest.TestCase):
                     ],
                 },
             }
+            set_measured_observables(
+                row,
+                [[-10.0 + 1.0e-7], [-10.0 + 4.0e-7]],
+                [
+                    [
+                        value + offset
+                        for value in reference_row["correctness"][
+                            "force_reference_hartree_per_bohr"
+                        ]
+                    ]
+                    for offset in (1.0e-6, 4.0e-6)
+                ],
+            )
             failed = natoms_scaling.apply_cross_engine_correctness(
                 [row],
                 artifact,
@@ -742,6 +858,66 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertAlmostEqual(
             comparison["force"]["max_abs_delta_hartree_per_bohr"], 4e-6
         )
+        self.assertEqual(comparison["measured_samples"]["count"], 2)
+
+    def test_cross_engine_checks_later_samples_not_only_cold_summary(self) -> None:
+        document = make_reference_document()
+        reference_row = document["rows"][0]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fresh.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            artifact = natoms_scaling.load_reference_artifact(path)
+            row = json.loads(json.dumps(reference_row))
+            row["engine"] = "tblite"
+            row["compute_options"] = {"engine": "tblite"}
+            oracle_forces = reference_row["correctness"][
+                "force_reference_hartree_per_bohr"
+            ]
+            set_measured_observables(
+                row,
+                [[-10.0], [-10.0]],
+                [list(oracle_forces), [value + 6.0e-6 for value in oracle_forces]],
+            )
+            failed = natoms_scaling.apply_cross_engine_correctness(
+                [row],
+                artifact,
+                natoms_scaling.DEFAULT_CROSS_ENGINE_ENERGY_ATOL,
+                natoms_scaling.DEFAULT_CROSS_ENGINE_FORCE_ATOL,
+            )
+        comparison = row["correctness"]["fresh_reference_comparison"]
+        self.assertTrue(failed)
+        self.assertEqual(comparison["status"], "fail")
+        self.assertAlmostEqual(
+            comparison["force"]["max_abs_delta_hartree_per_bohr"], 6.0e-6
+        )
+
+    def test_cross_engine_malformed_measured_vectors_fail_cleanly(self) -> None:
+        document = make_reference_document()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fresh.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            artifact = natoms_scaling.load_reference_artifact(path)
+            for mutation in ("missing_samples", "missing_force", "nonfinite_energy"):
+                with self.subTest(mutation=mutation):
+                    row = json.loads(json.dumps(document["rows"][0]))
+                    row["engine"] = "tblite"
+                    row["compute_options"] = {"engine": "tblite"}
+                    if mutation == "missing_samples":
+                        row.pop("raw_samples")
+                    elif mutation == "missing_force":
+                        row["raw_samples"][1].pop("forces_hartree_per_bohr")
+                    else:
+                        row["raw_samples"][1]["energies_hartree"][0] = math.inf
+                    failed = natoms_scaling.apply_cross_engine_correctness(
+                        [row],
+                        artifact,
+                        natoms_scaling.DEFAULT_CROSS_ENGINE_ENERGY_ATOL,
+                        natoms_scaling.DEFAULT_CROSS_ENGINE_FORCE_ATOL,
+                    )
+                    comparison = row["correctness"]["fresh_reference_comparison"]
+                    self.assertTrue(failed)
+                    self.assertEqual(comparison["status"], "fail")
+                    self.assertEqual(comparison["measured_samples"]["status"], "fail")
 
     def test_gpuxtb_reference_requires_exact_compute_option_identity(self) -> None:
         document = make_reference_document()
@@ -812,6 +988,18 @@ class NatomsScalingTest(unittest.TestCase):
                     ],
                 },
             }
+            set_measured_observables(
+                row,
+                [[-10.0]],
+                [
+                    [
+                        value + 7.9e-4
+                        for value in reference_row["correctness"][
+                            "force_reference_hartree_per_bohr"
+                        ]
+                    ]
+                ],
+            )
             failed = natoms_scaling.apply_cross_engine_correctness(
                 [row],
                 artifact,

@@ -96,6 +96,10 @@ PRIMARY_ENERGY_TOLERANCE_SOURCE = {
     **CROSS_ENGINE_TOLERANCE_SOURCE,
     "json_field": "tolerances.energy",
 }
+GPUXTB_CONFORMANCE_MAX_SCC_ITERATIONS = 500
+GPUXTB_CONFORMANCE_CHARGE_TOLERANCE = 1.0e-10
+GPUXTB_CONFORMANCE_ENERGY_TOLERANCE = 1.0e-12
+GPUXTB_CONFORMANCE_ELECTRONIC_TEMPERATURE = 300.0 * public_api.GPUXTB_KELVIN_TO_HARTREE
 
 
 class BenchmarkError(RuntimeError):
@@ -186,6 +190,17 @@ class BatchStorage:
     point_charge_gammas: list[float]
     slices: list[SystemSlice]
     keepalive: list[Any]
+
+
+def configure_gpuxtb_conformance_scc(options: Any) -> None:
+    """Pin the SCC convergence controls used by the conformance oracle.
+
+    ``gpuxtb_compute_options_init`` already supplies the public 300 K default,
+    which is deliberately retained rather than overwritten here.
+    """
+    options.max_scc_iterations = GPUXTB_CONFORMANCE_MAX_SCC_ITERATIONS
+    options.charge_tolerance = GPUXTB_CONFORMANCE_CHARGE_TOLERANCE
+    options.energy_tolerance = GPUXTB_CONFORMANCE_ENERGY_TOLERANCE
 
 
 @dataclass(frozen=True)
@@ -816,6 +831,7 @@ class GpuxtbRunner:
         self.options.flags = public_api.GPUXTB_COMPUTE_ENERGY
         if cell.property_name == "force":
             self.options.flags |= public_api.GPUXTB_COMPUTE_FORCES
+        configure_gpuxtb_conformance_scc(self.options)
 
         systems = cell.batch_size
         atoms = molecule_atoms = cell.molecule.natoms * systems
@@ -1401,9 +1417,9 @@ def _validated_reference_options(
         or options["model"] != public_api.GPUXTB_MODEL_GFN2_XTB
         or options["flags"] != expected_flags
         or options["total_atoms"] != natoms * batch_size
-        or not isinstance(options["cpu_threads"], int)
+        or type(options["cpu_threads"]) is not int
         or options["cpu_threads"] <= 0
-        or not isinstance(options["device_id"], int)
+        or type(options["device_id"]) is not int
         or options["device_id"] < 0
     ):
         raise BenchmarkError("reference row has inconsistent gpuxtb compute options")
@@ -1413,32 +1429,95 @@ def _validated_reference_options(
         "electronic_temperature_hartree",
     )
     if not all(
-        isinstance(options[name], (int, float)) and math.isfinite(options[name])
+        type(options[name]) in (int, float) and math.isfinite(options[name])
         for name in numeric_fields
     ):
         raise BenchmarkError("reference row has nonfinite gpuxtb compute options")
-    if not isinstance(options["max_scc_iterations"], int):
+    if type(options["max_scc_iterations"]) is not int:
         raise BenchmarkError("reference row max_scc_iterations is not an integer")
+    if (
+        options["max_scc_iterations"] != GPUXTB_CONFORMANCE_MAX_SCC_ITERATIONS
+        or options["charge_tolerance"] != GPUXTB_CONFORMANCE_CHARGE_TOLERANCE
+        or options["energy_tolerance"] != GPUXTB_CONFORMANCE_ENERGY_TOLERANCE
+        or options["electronic_temperature_hartree"]
+        != GPUXTB_CONFORMANCE_ELECTRONIC_TEMPERATURE
+    ):
+        raise BenchmarkError(
+            "reference row does not use the pinned gpuxtb conformance SCC options"
+        )
     return dict(options)
 
 
 def _validated_finite_vector(
-    value: Any, expected_count: int, field_name: str
+    value: Any,
+    expected_count: int,
+    field_name: str,
+    source: str = "reference row",
 ) -> tuple[float, ...]:
     """Normalize one exact-length finite reference vector."""
     if not isinstance(value, list) or len(value) != expected_count:
         raise BenchmarkError(
-            f"reference row {field_name} must contain {expected_count} values"
+            f"{source} {field_name} must contain {expected_count} values"
         )
-    try:
-        vector = tuple(float(item) for item in value)
-    except (TypeError, ValueError) as exc:
+    if not all(type(item) in (int, float) and math.isfinite(item) for item in value):
         raise BenchmarkError(
-            f"reference row {field_name} contains nonnumeric values"
-        ) from exc
-    if not all(math.isfinite(item) for item in vector):
-        raise BenchmarkError(f"reference row {field_name} contains nonfinite values")
-    return vector
+            f"{source} {field_name} contains nonnumeric or nonfinite values"
+        )
+    return tuple(float(item) for item in value)
+
+
+def _validated_raw_sample_vectors(
+    value: Any,
+    expected_repetitions: int,
+    expected_energy_count: int,
+    expected_force_count: int | None,
+    source: str,
+    expected_start_mode: str | None = None,
+) -> tuple[tuple[tuple[float, ...], ...], tuple[tuple[float, ...], ...] | None]:
+    """Validate and normalize every measured observable vector in one row."""
+    if not isinstance(value, list) or len(value) != expected_repetitions:
+        raise BenchmarkError(
+            f"{source} raw_samples must contain {expected_repetitions} measured samples"
+        )
+    energy_samples: list[tuple[float, ...]] = []
+    force_samples: list[tuple[float, ...]] = []
+    for sample_index, sample in enumerate(value):
+        sample_source = f"{source} raw sample {sample_index}"
+        if not isinstance(sample, dict):
+            raise BenchmarkError(f"{sample_source} is not an object")
+        if (
+            type(sample.get("sample_index")) is not int
+            or sample["sample_index"] != sample_index
+        ):
+            raise BenchmarkError(f"{sample_source} has a nonconsecutive sample_index")
+        if (
+            expected_start_mode is not None
+            and sample.get("start_mode") != expected_start_mode
+        ):
+            raise BenchmarkError(
+                f"{sample_source} does not use {expected_start_mode.upper()} start mode"
+            )
+        energy_samples.append(
+            _validated_finite_vector(
+                sample.get("energies_hartree"),
+                expected_energy_count,
+                "energies_hartree",
+                sample_source,
+            )
+        )
+        if expected_force_count is None:
+            if sample.get("forces_hartree_per_bohr") is not None:
+                raise BenchmarkError(f"{sample_source} contains unrequested forces")
+        else:
+            force_samples.append(
+                _validated_finite_vector(
+                    sample.get("forces_hartree_per_bohr"),
+                    expected_force_count,
+                    "forces_hartree_per_bohr",
+                    sample_source,
+                )
+            )
+    return tuple(energy_samples), (tuple(force_samples) if force_samples else None)
 
 
 def load_reference_artifact(path: Path) -> ReferenceArtifact:
@@ -1459,14 +1538,17 @@ def load_reference_artifact(path: Path) -> ReferenceArtifact:
     protocol = document.get("protocol")
     if not isinstance(protocol, dict) or protocol.get("start_mode") != "fresh":
         raise BenchmarkError("reference artifact protocol must use FRESH start mode")
+    protocol_repetitions = protocol.get("repetitions")
+    if type(protocol_repetitions) is not int or protocol_repetitions <= 0:
+        raise BenchmarkError("reference artifact protocol repetitions must be positive")
     protocol_energy_atol = protocol.get("energy_atol_hartree")
     protocol_force_atol = protocol.get("force_atol_hartree_per_bohr")
     if (
-        not isinstance(protocol_energy_atol, (int, float))
+        type(protocol_energy_atol) not in (int, float)
         or not math.isfinite(protocol_energy_atol)
         or protocol_energy_atol < 0.0
         or protocol_energy_atol > DEFAULT_ENERGY_ATOL_LIMIT
-        or not isinstance(protocol_force_atol, (int, float))
+        or type(protocol_force_atol) not in (int, float)
         or not math.isfinite(protocol_force_atol)
         or protocol_force_atol < 0.0
         or protocol_force_atol > DEFAULT_FORCE_ATOL
@@ -1490,6 +1572,7 @@ def load_reference_artifact(path: Path) -> ReferenceArtifact:
         if (
             row.get("engine") != "gpuxtb"
             or row.get("start_mode") != "fresh"
+            or row.get("repetitions") != protocol_repetitions
             or row.get("availability") != "available"
             or row.get("run_identity") != run_identity
             or correctness.get("status") != "pass"
@@ -1544,22 +1627,31 @@ def load_reference_artifact(path: Path) -> ReferenceArtifact:
         options = _validated_reference_options(
             row.get("compute_options"), property_name, natoms, batch_size
         )
+        energy_samples, force_samples = _validated_raw_sample_vectors(
+            row.get("raw_samples"),
+            protocol_repetitions,
+            batch_size,
+            3 * natoms * batch_size if property_name == "force" else None,
+            f"reference row {index}",
+            expected_start_mode="fresh",
+        )
         energy_drift = correctness.get("max_abs_energy_drift_hartree")
         force_drift = correctness.get("max_abs_force_drift_hartree_per_bohr")
         if (
-            not isinstance(energy_drift, (int, float))
+            type(energy_drift) not in (int, float)
             or not math.isfinite(energy_drift)
             or energy_drift < 0.0
             or energy_drift > protocol_energy_atol
             or (
                 property_name == "force"
                 and (
-                    not isinstance(force_drift, (int, float))
+                    type(force_drift) not in (int, float)
                     or not math.isfinite(force_drift)
                     or force_drift < 0.0
                     or force_drift > protocol_force_atol
                 )
             )
+            or (property_name == "energy" and force_drift is not None)
         ):
             raise BenchmarkError(
                 f"reference row {index} drift does not satisfy its strict protocol"
@@ -1569,6 +1661,15 @@ def load_reference_artifact(path: Path) -> ReferenceArtifact:
             batch_size,
             "energy_reference_hartree",
         )
+        calculated_energy_drift = max(
+            abs(observed - reference)
+            for sample in energy_samples
+            for observed, reference in zip(sample, energy_samples[0])
+        )
+        if energies != energy_samples[0] or energy_drift != calculated_energy_drift:
+            raise BenchmarkError(
+                f"reference row {index} energy summary does not match raw samples"
+            )
         forces = None
         if property_name == "force":
             forces = _validated_finite_vector(
@@ -1576,6 +1677,16 @@ def load_reference_artifact(path: Path) -> ReferenceArtifact:
                 3 * natoms * batch_size,
                 "force_reference_hartree_per_bohr",
             )
+            assert force_samples is not None
+            calculated_force_drift = max(
+                abs(observed - reference)
+                for sample in force_samples
+                for observed, reference in zip(sample, force_samples[0])
+            )
+            if forces != force_samples[0] or force_drift != calculated_force_drift:
+                raise BenchmarkError(
+                    f"reference row {index} force summary does not match raw samples"
+                )
         elif correctness.get("force_reference_hartree_per_bohr") is not None:
             raise BenchmarkError(
                 f"reference row {index} contains forces for an energy-only workload"
@@ -1622,6 +1733,7 @@ def apply_cross_engine_correctness(
                 "max_abs_delta_hartree_per_bohr": None,
                 "status": "not_requested",
             },
+            "measured_samples": {"status": "not_requested", "count": None},
             "gpuxtb_option_identity": "not_comparable_cross_engine",
             "gpuxtb_binary_identity": "not_comparable_cross_engine",
             "gpuxtb_repository_revision": "not_comparable_cross_engine",
@@ -1634,37 +1746,58 @@ def apply_cross_engine_correctness(
                 comparison["status"] = "missing_reference"
                 failed = True
             else:
-                actual_energies = row["correctness"]["energy_reference_hartree"]
-                if not isinstance(actual_energies, list) or len(actual_energies) != len(
-                    expected.energies_hartree
-                ):
+                expected_force_count = (
+                    len(expected.forces_hartree_per_bohr)
+                    if row["property"] == "force"
+                    and expected.forces_hartree_per_bohr is not None
+                    else None
+                )
+                repetitions = row.get("repetitions")
+                try:
+                    if type(repetitions) is not int or repetitions <= 0:
+                        raise BenchmarkError(
+                            "dependent row repetitions must be a positive integer"
+                        )
+                    energy_samples, force_samples = _validated_raw_sample_vectors(
+                        row.get("raw_samples"),
+                        repetitions,
+                        len(expected.energies_hartree),
+                        expected_force_count,
+                        "dependent row",
+                    )
+                except BenchmarkError as exc:
                     energy_passed = False
+                    force_passed = row["property"] != "force"
+                    comparison["measured_samples"] = {
+                        "status": "fail",
+                        "count": (
+                            len(row["raw_samples"])
+                            if isinstance(row.get("raw_samples"), list)
+                            else None
+                        ),
+                        "error": str(exc),
+                    }
+                    if row["property"] == "force":
+                        comparison["force"]["status"] = "fail"
                 else:
                     energy_delta = max(
                         abs(observed - reference)
+                        for sample in energy_samples
                         for observed, reference in zip(
-                            actual_energies, expected.energies_hartree
+                            sample, expected.energies_hartree
                         )
                     )
                     comparison["energy"]["max_abs_delta_hartree"] = energy_delta
                     energy_passed = energy_delta <= energy_atol_hartree
-                force_passed = True
-                if row["property"] == "force":
-                    actual_forces = row["correctness"].get(
-                        "force_reference_hartree_per_bohr"
-                    )
-                    if (
-                        expected.forces_hartree_per_bohr is None
-                        or not isinstance(actual_forces, list)
-                        or len(actual_forces) != len(expected.forces_hartree_per_bohr)
-                    ):
-                        comparison["force"]["status"] = "missing_reference"
-                        force_passed = False
-                    else:
+                    force_passed = True
+                    if row["property"] == "force":
+                        assert expected.forces_hartree_per_bohr is not None
+                        assert force_samples is not None
                         force_delta = max(
                             abs(observed - reference)
+                            for sample in force_samples
                             for observed, reference in zip(
-                                actual_forces, expected.forces_hartree_per_bohr
+                                sample, expected.forces_hartree_per_bohr
                             )
                         )
                         comparison["force"]["max_abs_delta_hartree_per_bohr"] = (
@@ -1674,6 +1807,10 @@ def apply_cross_engine_correctness(
                         comparison["force"]["status"] = (
                             "pass" if force_passed else "fail"
                         )
+                    comparison["measured_samples"] = {
+                        "status": "pass",
+                        "count": repetitions,
+                    }
                 option_passed = True
                 binary_passed = True
                 revision_passed = True
