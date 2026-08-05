@@ -198,6 +198,45 @@ class PointCharge:
         object.__setattr__(self, "gammas", np.ascontiguousarray(gammas))
 
 
+@dataclass(frozen=True)
+class ChargeResponse:
+    """A periodic per-atom SCC shift ``b`` and symmetric response matrix ``A``.
+
+    For each molecule the periodic QM/MM coupling contributes an SCC shift
+    ``b + A q`` on the atomic-charge channel and a variational energy
+    ``q^T b + 0.5 q^T A q``, where ``q`` is the atomic charge vector. ``b`` is
+    a per-atom potential shift (length ``n``) and ``A`` is the row-major
+    symmetric response matrix with shape ``(n, n)``.  Both are treated as
+    constant operators: derivatives of ``b`` and ``A`` with respect to
+    coordinates are outside gpuxtb and are not included in the forces.
+
+    Parameters
+    ----------
+    shifts : (n,) array, Hartree/e
+        Per-atom SCC potential shift ``b``.
+    matrix : (n, n) array, Hartree/e^2
+        Symmetric charge-response matrix ``A`` (validated for exact symmetry
+        by the native compute call).
+    """
+
+    shifts: np.ndarray
+    matrix: np.ndarray
+
+    def __post_init__(self) -> None:
+        shifts = np.asarray(self.shifts, dtype=float)
+        matrix = np.asarray(self.matrix, dtype=float)
+        if shifts.ndim != 1:
+            raise GPUxtbValueError("charge response shifts must be one-dimensional")
+        if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+            raise GPUxtbValueError("charge response matrix must be square")
+        if matrix.shape[0] != shifts.size:
+            raise GPUxtbValueError("charge response matrix must match the shift count")
+        if not (np.isfinite(shifts).all() and np.isfinite(matrix).all()):
+            raise GPUxtbValueError("charge response inputs must be finite")
+        object.__setattr__(self, "shifts", np.ascontiguousarray(shifts))
+        object.__setattr__(self, "matrix", np.ascontiguousarray(matrix))
+
+
 # --- structures --------------------------------------------------------------------
 
 
@@ -218,6 +257,7 @@ class Structure:
         multiplicity: Optional[int] = None,
         spin_channels: Optional[int] = None,
         point_charges: Optional[PointCharge] = None,
+        charge_response: Optional[ChargeResponse] = None,
     ):
         object_numbers = np.asarray(numbers, dtype=object)
         raw_numbers = np.asarray(numbers)
@@ -280,6 +320,7 @@ class Structure:
         self._uhf = unpaired
         self._spin_channels = resolved_spin
         self._point_charges = point_charges
+        self._charge_response = charge_response
 
     def __len__(self) -> int:
         return int(self._numbers.size)
@@ -318,6 +359,11 @@ class Structure:
     def point_charges(self) -> Optional[PointCharge]:
         """External point charges attached to this structure, if any."""
         return self._point_charges
+
+    @property
+    def charge_response(self) -> Optional[ChargeResponse]:
+        """Periodic SCC shift ``b`` and response matrix ``A``, if any."""
+        return self._charge_response
 
     def update(
         self,
@@ -507,6 +553,41 @@ class _ComputedBatch:
     keepalive: list
 
 
+def _pack_charge_responses(
+    structures: Sequence[Structure],
+) -> tuple[list[int], list[float], list[float]] | None:
+    """Pack optional per-system response operators without penalizing common batches.
+
+    Most callers do not provide periodic charge-response operators. Detect
+    that case before constructing dense square matrices so ordinary inference
+    remains linear in the input size. When any system has a response, systems
+    without one receive explicit zero operators because the public C ABI uses
+    one batch-wide descriptor set.
+    """
+
+    responses = [structure.charge_response for structure in structures]
+    if not any(response is not None for response in responses):
+        return None
+
+    offsets = [0]
+    shifts: list[float] = []
+    matrices: list[float] = []
+    for structure, response in zip(structures, responses):
+        atom_count = len(structure)
+        if response is None:
+            shifts.extend(0.0 for _ in range(atom_count))
+            matrices.extend(0.0 for _ in range(atom_count * atom_count))
+        else:
+            if response.shifts.size != atom_count:
+                raise GPUxtbValueError(
+                    "charge response shifts must match the atom count"
+                )
+            shifts.extend(float(value) for value in response.shifts)
+            matrices.extend(float(value) for value in response.matrix.ravel())
+        offsets.append(len(matrices))
+    return offsets, shifts, matrices
+
+
 def _compute_batch(
     context: Context,
     structures: Sequence[Structure],
@@ -532,6 +613,7 @@ def _compute_batch(
     point_positions: list[float] = []
     point_values: list[float] = []
     point_gammas: list[float] = []
+    packed_responses = _pack_charge_responses(structures)
     keepalive: list = []
 
     for structure in structures:
@@ -561,7 +643,9 @@ def _compute_batch(
     batch.batch_size = len(structures)
     batch.total_atoms = total_atoms
     batch.total_point_charges = total_points
-    batch.total_charge_response_elements = 0
+    batch.total_charge_response_elements = (
+        len(packed_responses[2]) if packed_responses is not None else 0
+    )
 
     def bind(descriptor_name, values, ctype, dtype):
         if not values:
@@ -595,6 +679,11 @@ def _compute_batch(
         bind("point_charge_positions", point_positions, ctypes.c_double, np.float64)
         bind("point_charge_values", point_values, ctypes.c_double, np.float64)
         bind("point_charge_gammas", point_gammas, ctypes.c_double, np.float64)
+    if packed_responses is not None:
+        response_offsets, response_shifts, response_matrix = packed_responses
+        bind("atomic_potential_shifts", response_shifts, ctypes.c_double, np.float64)
+        bind("charge_response_offsets", response_offsets, ctypes.c_int64, np.int64)
+        bind("charge_response_matrix", response_matrix, ctypes.c_double, np.float64)
 
     # --- compute options -------------------------------------------------------
     options = library.ComputeOptions()
@@ -966,6 +1055,7 @@ class Calculator(Structure):
         multiplicity: Optional[int] = None,
         spin_channels: Optional[int] = None,
         point_charges: Optional[PointCharge] = None,
+        charge_response: Optional[ChargeResponse] = None,
         *,
         backend: Union[str, int] = "auto",
         device_id: Optional[int] = None,
@@ -984,6 +1074,7 @@ class Calculator(Structure):
             multiplicity=multiplicity,
             spin_channels=spin_channels,
             point_charges=point_charges,
+            charge_response=charge_response,
         )
         self._model = _resolve_method(method)
         self._settings = _ComputeSettings(
@@ -1151,6 +1242,7 @@ __all__ = [
     "symbols_to_numbers",
     "numbers_to_symbols",
     "PointCharge",
+    "ChargeResponse",
     "Structure",
     "Context",
     "Result",
