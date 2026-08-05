@@ -1,7 +1,10 @@
 name: CI
 
 on:
+  # Pull requests already run the full workflow. Limit push runs to main so a
+  # same-repository PR branch does not schedule the same jobs twice.
   push:
+    branches: [main]
   pull_request:
 
 permissions:
