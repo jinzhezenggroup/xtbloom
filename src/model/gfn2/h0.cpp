@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "model/gfn2/h0.hpp"
 
 #include <array>
@@ -19,9 +21,11 @@ constexpr double kAngstromToBohr = 1.8897261246204404;
 constexpr double kMinimumDistanceSquared = 1.0e-24;
 
 /*
- * Mantina et al. atomic radii in angstrom, as exposed by mctc-lib v0.5.2.
- * tblite's generic tb_h0spec uses these radii for the H0 shell polynomial;
- * they are distinct from GFN2's multipole damping radii.
+ * Mantina et al. atomic radii in angstrom from mctc-lib
+ * src/mctc/data/atomicrad.f90 at revision
+ * e9de066d89f250d1cfb6de3a33f0c27c0e2f855d (Apache-2.0). tblite's generic
+ * tb_h0spec uses these radii for the H0 shell polynomial; they are distinct
+ * from GFN2's multipole damping radii. See data/parameters/mctc_manifest.json.
  */
 constexpr std::array<double, parameters::gfn2::kElementCount> kAtomicRadiiAngstrom{{
     0.32, 0.37, 1.30, 0.99, 0.84, 0.75, 0.71, 0.64, 0.60, 0.62, 1.60, 1.40, 1.24, 1.14, 1.09,

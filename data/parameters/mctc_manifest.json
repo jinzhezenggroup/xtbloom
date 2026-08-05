@@ -1,0 +1,44 @@
+{
+  "consumers": [
+    {
+      "description": "Mantina atomic radii used by the GFN2 H0 shell polynomial",
+      "git_blob": "f72b137328f24dc2abb0b709f8803be0cb616fef",
+      "path": "src/mctc/data/atomicrad.f90",
+      "sha256": "2c25924d89215c1810e61a1f38f67781e5083d15678de4bf326a071bc27d827c",
+      "used_by": "src/model/gfn2/h0.cpp"
+    },
+    {
+      "description": "Pyykko-Atsumi covalent radii used by GFN2 coordination numbers",
+      "git_blob": "b3cb9cefd702169d6be662eb438932525990a1ac",
+      "path": "src/mctc/data/covrad.f90",
+      "sha256": "fdbd599664a7f113633d96110531d810fdc8e54b6db26d4f584120d9c7cec314",
+      "used_by": "src/model/gfn2/coordination.cpp"
+    },
+    {
+      "description": "CODATA conversion constants used to pin evaluated binary64 factors",
+      "git_blob": "2fd35c66ce80a47aa88d12952f0cce2886cd753f",
+      "path": "src/mctc/io/constants.f90",
+      "sha256": "6ee2b599fc2d338f1a7e07b5b46e984e2612b4cfc58110d1203ecf19ebde2385",
+      "used_by": "src/model/gfn2/coordination.cpp"
+    },
+    {
+      "description": "Double-exponential coordination-number convention",
+      "git_blob": "307e84898387fcddf77f54daecf24b6ce28a27b1",
+      "path": "src/mctc/ncoord/dexp.f90",
+      "sha256": "c35fc4694621dd86c016cc4496d87e43ed32bd5539d2700aea5b42cb698396dc",
+      "used_by": "src/model/gfn2/coordination.cpp"
+    },
+    {
+      "description": "Electronegativity-weighted error-function coordination convention used by D4",
+      "git_blob": "80d2ea15a262731c395b62d388601520a9db8547",
+      "path": "src/mctc/ncoord/erf/en.f90",
+      "sha256": "5435fd884bc28418f1917e5b6a47e685c4f4ae4fe4ddab55ed7eb1abf739339e",
+      "used_by": "src/model/gfn2/d4.cpp"
+    }
+  ],
+  "license": "Apache-2.0",
+  "repository": "https://github.com/grimme-lab/mctc-lib",
+  "revision": "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d",
+  "schema_version": 1,
+  "tree": "ff26e808ccd00be0ca221656c8de9ce0da4c9265"
+}

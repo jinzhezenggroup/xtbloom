@@ -64,6 +64,8 @@ jobs:
           extras: "uv"
       - name: Enforce PyPI wheel size limit
         run: python python/ci/check-wheel-size.py wheelhouse
+      - name: Verify wheel licenses
+        run: python tools/licensing/check_licenses.py --source-root . wheelhouse/*.whl
       - uses: actions/upload-artifact@v4
         with:
           name: gpuxtb-wheels-${{ matrix.platform_id }}
