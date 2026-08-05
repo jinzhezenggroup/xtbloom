@@ -129,6 +129,7 @@ _BACKENDS = {
     "cuda": library.BACKEND_CUDA,
 }
 
+
 def _default_spin_channels(uhf: int) -> int:
     """Pick the tblite-compatible spin-polarization default for a spin state."""
     return 2 if uhf != 0 else 1
@@ -272,8 +273,7 @@ class Structure:
         else:
             if raw_numbers.dtype.kind in "bc" or (
                 any(
-                    isinstance(value, (bool, np.bool_))
-                    for value in object_numbers.flat
+                    isinstance(value, (bool, np.bool_)) for value in object_numbers.flat
                 )
             ):
                 raise GPUxtbValueError("atomic numbers must be exact integers")
@@ -283,9 +283,10 @@ class Structure:
                 raise GPUxtbValueError(
                     "atomic numbers must be exact integers"
                 ) from None
-            if not np.isfinite(numeric_numbers).all() or not np.equal(
-                numeric_numbers, np.floor(numeric_numbers)
-            ).all():
+            if (
+                not np.isfinite(numeric_numbers).all()
+                or not np.equal(numeric_numbers, np.floor(numeric_numbers)).all()
+            ):
                 raise GPUxtbValueError("atomic numbers must be exact integers")
             if (numeric_numbers < 1).any() or (numeric_numbers > 118).any():
                 raise GPUxtbValueError("atomic numbers must lie between 1 and 118")

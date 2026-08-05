@@ -292,12 +292,11 @@ struct Fixture {
     }
     if (status == cudaSuccess) {
       status = d_committed_generations.upload(
-          std::vector<std::uint64_t>(static_cast<std::size_t>(count), kGeometryGeneration),
-          stream);
+          std::vector<std::uint64_t>(static_cast<std::size_t>(count), kGeometryGeneration), stream);
     }
     if (status == cudaSuccess) {
-      status = d_eligible.upload(
-          std::vector<std::uint8_t>(static_cast<std::size_t>(count), 1u), stream);
+      status =
+          d_eligible.upload(std::vector<std::uint8_t>(static_cast<std::size_t>(count), 1u), stream);
     }
     const auto doubles = [&](DeviceBuffer<double>& buffer, std::int64_t elements,
                              double value = 0.0) {
@@ -590,8 +589,11 @@ struct Fixture {
   }
 
   Gfn2GeometryEpochConsumerDevice geometry_consumer() {
-    return {{d_geometry_epoch.get(), 1, kPlanToken}, d_committed_generations.get(),
-            d_eligible.get(), batch_size, kPlanToken};
+    return {{d_geometry_epoch.get(), 1, kPlanToken},
+            d_committed_generations.get(),
+            d_eligible.get(),
+            batch_size,
+            kPlanToken};
   }
 
   double expected_shell(std::int64_t system, std::int64_t local,
@@ -815,17 +817,16 @@ int test_device_epoch_graph_replay() {
     }
     return status;
   };
-  const auto download_public = [&](std::vector<double>& shell, std::vector<double>& atomic,
-                                   std::vector<double>& scalar,
-                                   std::vector<std::uint32_t>& system_errors,
-                                   std::vector<std::uint32_t>& device_error) {
-    cudaError_t status = fixture.d_result_shell.download(shell, stream);
-    if (status == cudaSuccess) status = fixture.d_result_atomic.download(atomic, stream);
-    if (status == cudaSuccess) status = fixture.d_result_shell_scalar.download(scalar, stream);
-    if (status == cudaSuccess) status = fixture.d_system_errors.download(system_errors, stream);
-    if (status == cudaSuccess) status = fixture.d_device_error.download(device_error, stream);
-    return status;
-  };
+  const auto download_public =
+      [&](std::vector<double>& shell, std::vector<double>& atomic, std::vector<double>& scalar,
+          std::vector<std::uint32_t>& system_errors, std::vector<std::uint32_t>& device_error) {
+        cudaError_t status = fixture.d_result_shell.download(shell, stream);
+        if (status == cudaSuccess) status = fixture.d_result_atomic.download(atomic, stream);
+        if (status == cudaSuccess) status = fixture.d_result_shell_scalar.download(scalar, stream);
+        if (status == cudaSuccess) status = fixture.d_system_errors.download(system_errors, stream);
+        if (status == cudaSuccess) status = fixture.d_device_error.download(device_error, stream);
+        return status;
+      };
 
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t executable = nullptr;
@@ -871,8 +872,7 @@ int test_device_epoch_graph_replay() {
     const bool suppressed = system == 1 || system == 2;
     if (suppressed) {
       CHECK(system_errors[static_cast<std::size_t>(system)] != 0u);
-      CHECK(gfn2_post_scc_potential_error_stage(
-                system_errors[static_cast<std::size_t>(system)]) ==
+      CHECK(gfn2_post_scc_potential_error_stage(system_errors[static_cast<std::size_t>(system)]) ==
             Gfn2PostSccPotentialStage::kActivity);
     }
     for (std::int64_t local = 0; local < 2; ++local) {
@@ -917,8 +917,8 @@ int test_device_epoch_graph_replay() {
   Gfn2GeometryEpochConsumerDevice cross_plan = consumer;
   cross_plan.plan_token ^= 1u;
   CHECK(refresh_gfn2_post_scc_potentials_cuda(plan, input, results, intermediates, workspace,
-                                              diagnostics, cross_plan, stream) ==
-        cudaErrorInvalidValue);
+                                              diagnostics, cross_plan,
+                                              stream) == cudaErrorInvalidValue);
 
   CUDA_CHECK(cudaGraphExecDestroy(executable));
   CUDA_CHECK(cudaGraphDestroy(graph));

@@ -6,10 +6,7 @@ import _cases
 import numpy as np
 import pytest
 from gpuxtb import Calculator, Context, Structure, library, numbers_to_symbols
-from gpuxtb.exceptions import (
-    GPUxtbRuntimeError,
-    GPUxtbValueError,
-)
+from gpuxtb.exceptions import GPUxtbRuntimeError, GPUxtbValueError
 
 
 def test_multiplicity_maps_to_unpaired_electrons():

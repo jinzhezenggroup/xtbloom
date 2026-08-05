@@ -215,8 +215,8 @@ bool overlaps_plan_storage(const SccDriverPlanData& data, const AddressRange& ra
     }
   }
   const std::array<const std::vector<std::int32_t>*, 4> int32_vectors{
-      {&wavefunction.atomic_numbers, &wavefunction.unpaired_electrons,
-       &wavefunction.spin_channels, &data.spin.spin_channels}};
+      {&wavefunction.atomic_numbers, &wavefunction.unpaired_electrons, &wavefunction.spin_channels,
+       &data.spin.spin_channels}};
   for (const std::vector<std::int32_t>* values : int32_vectors) {
     if (overlaps_vector(range, *values)) {
       return true;
@@ -1099,8 +1099,8 @@ gpuxtb_status_t make_scc_driver_plan(
                                  error);
   }
   if (status == GPUXTB_STATUS_SUCCESS) {
-    status = make_spin_polarization_plan(expected_basis, expected_wavefunction, expected_spin,
-                                         error);
+    status =
+        make_spin_polarization_plan(expected_basis, expected_wavefunction, expected_spin, error);
   }
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
@@ -2049,9 +2049,9 @@ gpuxtb_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
   }
 
   double spin_energy = 0.0;
-  status = add_spin_polarization_energy_system_cpu(
-      make_spin_polarization_view(data.spin), static_cast<std::int64_t>(system),
-      workspace.raw_qsh, spin_energy, error);
+  status = add_spin_polarization_energy_system_cpu(make_spin_polarization_view(data.spin),
+                                                   static_cast<std::int64_t>(system),
+                                                   workspace.raw_qsh, spin_energy, error);
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
   }
@@ -2108,8 +2108,7 @@ gpuxtb_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
   double internal_energy = core_energy;
   if (!add_finite(es2_energy, internal_energy) || !add_finite(es3_energy, internal_energy) ||
       !add_finite(aes2_energy, internal_energy) || !add_finite(spin_energy, internal_energy) ||
-      !add_finite(d4_energy, internal_energy) ||
-      !add_finite(explicit_pc_energy, internal_energy) ||
+      !add_finite(d4_energy, internal_energy) || !add_finite(explicit_pc_energy, internal_energy) ||
       !add_finite(periodic_energy, internal_energy)) {
     error = "SCC driver complete internal energy overflowed";
     return GPUXTB_STATUS_INTERNAL_ERROR;

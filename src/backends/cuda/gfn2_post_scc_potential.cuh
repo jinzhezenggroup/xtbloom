@@ -188,8 +188,7 @@ cudaError_t refresh_gfn2_post_scc_potentials_cuda(
     const Gfn2PostSccPotentialDeviceIntermediates& intermediates,
     const Gfn2PostSccPotentialDeviceWorkspace& workspace,
     const Gfn2PostSccPotentialDeviceDiagnostics& diagnostics,
-    const Gfn2GeometryEpochConsumerDevice& geometry,
-    cudaStream_t stream = nullptr) noexcept;
+    const Gfn2GeometryEpochConsumerDevice& geometry, cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
 

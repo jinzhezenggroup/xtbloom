@@ -1,0 +1,22 @@
+name: Pre-commit
+
+# Runs the project's pre-commit hooks on every push and pull request. On PRs
+# from this repository, the pre-commit-with-autofix action applies any
+# autofixable changes directly back to the branch (a separate autofix commit),
+# so contributors only need to run pre-commit locally (or prek, its Rust
+# reimplementation) before pushing. Autofixes push with `contents: write`.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pre_commit:
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Run pre-commit
+        uses: njzjz/pre-commit-action@master

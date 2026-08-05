@@ -67,6 +67,22 @@ electrons / spin channels), an ASE calculator (`gpuxtb.ase.GPUxtb`), and a
 dpdata driver plugin registered as `gpuxtb`. Full details are in
 [python/README.md](python/README.md).
 
+## Development
+
+Contributions must pass the repository pre-commit hooks (trailing whitespace,
+end-of-file, YAML/JSON/TOML checks, ruff lint and format for Python, and
+clang-format for C/C++/CUDA). Install [pre-commit](https://pre-commit.com), or
+prek (its Rust reimplementation), and run:
+
+```console
+pre-commit install        # or: prek install
+pre-commit run --all-files  # or: prek run --all-files
+```
+
+On pull requests, the
+[pre-commit-with-autofix](https://github.com/marketplace/actions/pre-commit-with-autofix)
+action applies any autofixable changes directly to the branch.
+
 ## Design goals
 
 - Match established GFN2-xTB energies and analytic forces before performance tuning.

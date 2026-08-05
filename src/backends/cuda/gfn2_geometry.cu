@@ -301,14 +301,11 @@ __global__ void publish_geometry_kernel(Gfn2GeometryDeviceBatch batch,
   }
 }
 
-__global__ void coordination_vjp_kernel(Gfn2GeometryDeviceBatch batch,
-                                        Gfn2GeometryDeviceCache cache,
-                                        std::uint64_t scalar_generation,
-                                        const std::uint64_t* device_generation,
-                                        const double* dE_dcn,
-                                        const double* gradients, double* gradient_scratch,
-                                        const std::uint32_t* sequence_active,
-                                        std::uint32_t* system_errors, std::uint32_t* device_error) {
+__global__ void coordination_vjp_kernel(
+    Gfn2GeometryDeviceBatch batch, Gfn2GeometryDeviceCache cache, std::uint64_t scalar_generation,
+    const std::uint64_t* device_generation, const double* dE_dcn, const double* gradients,
+    double* gradient_scratch, const std::uint32_t* sequence_active, std::uint32_t* system_errors,
+    std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   __shared__ SystemRanges ranges;
   __shared__ int valid;
@@ -317,11 +314,10 @@ __global__ void coordination_vjp_kernel(Gfn2GeometryDeviceBatch batch,
   }
   __syncthreads();
   const std::uint64_t geometry_generation =
-      device_generation == nullptr
-          ? scalar_generation
-          : atomicAdd(reinterpret_cast<unsigned long long*>(
-                          const_cast<std::uint64_t*>(device_generation)),
-                      0ULL);
+      device_generation == nullptr ? scalar_generation
+                                   : atomicAdd(reinterpret_cast<unsigned long long*>(
+                                                   const_cast<std::uint64_t*>(device_generation)),
+                                               0ULL);
   if (threadIdx.x == 0 && cache.geometry_generations[system] != geometry_generation) {
     record_system_error(system_errors, system, device_error,
                         Gfn2GeometryDeviceError::kStaleGeometry);
@@ -589,9 +585,9 @@ cudaError_t validate_vjp(const Gfn2GeometryDeviceBatch& batch, const Gfn2Geometr
   if (status != cudaSuccess) {
     return status;
   }
-  if ((device_generation == nullptr ? scalar_generation == 0u
-                                    : scalar_generation != 0u ||
-                                          !is_aligned(device_generation, alignof(std::uint64_t))) ||
+  if ((device_generation == nullptr
+           ? scalar_generation == 0u
+           : scalar_generation != 0u || !is_aligned(device_generation, alignof(std::uint64_t))) ||
       cache.pair_data_elements < required.pair_data ||
       cache.coordination_elements < batch.total_atoms ||
       !required_pointer(cache.pair_data, required.pair_data) ||
@@ -705,9 +701,8 @@ cudaError_t update_gfn2_geometry_cache_cuda(
 static cudaError_t add_coordination_vjp_impl(
     const Gfn2GeometryDeviceBatch& batch, const Gfn2GeometryDeviceCache& cache,
     std::uint64_t scalar_generation, const Gfn2GeometryEpochDevice* geometry_epoch,
-    const double* dE_dcn, double* gradients,
-    const Gfn2GeometryDeviceWorkspace& workspace, std::uint32_t* system_errors,
-    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+    const double* dE_dcn, double* gradients, const Gfn2GeometryDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
   if (geometry_epoch != nullptr &&
       (geometry_epoch->value_elements != 1 || geometry_epoch->plan_token != batch.plan_token)) {
     return cudaErrorInvalidValue;
@@ -732,8 +727,7 @@ static cudaError_t add_coordination_vjp_impl(
   const unsigned int blocks = static_cast<unsigned int>(batch.batch_size);
   coordination_vjp_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
       batch, cache, scalar_generation, device_generation, dE_dcn, gradients,
-      workspace.gradient_scratch,
-      workspace.sequence_active, system_errors, device_error);
+      workspace.gradient_scratch, workspace.sequence_active, system_errors, device_error);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;

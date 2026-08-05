@@ -116,8 +116,9 @@ bool representable_as_size(std::int64_t value) {
 }
 
 bool count_bytes(std::int64_t count, std::size_t element_size, std::size_t& bytes) {
-  if (count < 0 || static_cast<std::uint64_t>(count) >
-                       static_cast<std::uint64_t>(std::numeric_limits<std::ptrdiff_t>::max()) ||
+  if (count < 0 ||
+      static_cast<std::uint64_t>(count) >
+          static_cast<std::uint64_t>(std::numeric_limits<std::ptrdiff_t>::max()) ||
       static_cast<std::uint64_t>(count) >
           static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() / element_size)) {
     return false;
@@ -304,7 +305,8 @@ gpuxtb_status_t make_spin_polarization_plan(const BasisPlan& basis,
       const std::int64_t shell_end = basis.atom_shell_offsets[static_cast<std::size_t>(atom) + 1u];
       const std::int64_t shells = shell_end - shell_begin;
       if (shell_begin < 0 || shell_begin >= shell_end || shell_end > basis.total_shells ||
-          shells > 3 || coupling_count > std::numeric_limits<std::int64_t>::max() - shells * shells) {
+          shells > 3 ||
+          coupling_count > std::numeric_limits<std::int64_t>::max() - shells * shells) {
         error = "spin-polarization basis has an unsupported atom-local shell partition";
         return GPUXTB_STATUS_INVALID_ARGUMENT;
       }
@@ -318,7 +320,8 @@ gpuxtb_status_t make_spin_polarization_plan(const BasisPlan& basis,
     created.coupling_matrices.resize(static_cast<std::size_t>(coupling_count));
 
     for (std::int64_t atom = 0; atom < basis.total_atoms; ++atom) {
-      const std::int32_t atomic_number = wavefunction.atomic_numbers[static_cast<std::size_t>(atom)];
+      const std::int32_t atomic_number =
+          wavefunction.atomic_numbers[static_cast<std::size_t>(atom)];
       if (atomic_number <= 0 || static_cast<std::size_t>(atomic_number) > kSpinConstants.size()) {
         error = "spin-polarization plan contains an unsupported element";
         return GPUXTB_STATUS_INVALID_ARGUMENT;
@@ -328,7 +331,8 @@ gpuxtb_status_t make_spin_polarization_plan(const BasisPlan& basis,
       const std::int64_t shells = shell_end - shell_begin;
       const std::int64_t matrix_begin = created.coupling_offsets[static_cast<std::size_t>(atom)];
       for (std::int64_t row = 0; row < shells; ++row) {
-        const std::uint8_t row_l = basis.angular_momenta[static_cast<std::size_t>(shell_begin + row)];
+        const std::uint8_t row_l =
+            basis.angular_momenta[static_cast<std::size_t>(shell_begin + row)];
         if (row_l > 2u) {
           error = "spin-polarization plan supports only GFN2 s, p, and d shells";
           return GPUXTB_STATUS_INVALID_ARGUMENT;
@@ -340,8 +344,8 @@ gpuxtb_status_t make_spin_polarization_plan(const BasisPlan& basis,
             error = "spin-polarization plan supports only GFN2 s, p, and d shells";
             return GPUXTB_STATUS_INVALID_ARGUMENT;
           }
-          created.coupling_matrices[static_cast<std::size_t>(
-              matrix_begin + row * shells + column)] =
+          created
+              .coupling_matrices[static_cast<std::size_t>(matrix_begin + row * shells + column)] =
               kSpinConstants[static_cast<std::size_t>(atomic_number - 1)]
                             [coupling_index(row_l, column_l)];
         }
@@ -393,10 +397,9 @@ SpinPolarizationView make_spin_polarization_view(const SpinPolarizationPlan& pla
 }
 
 gpuxtb_status_t evaluate_spin_polarization_cpu(SpinPolarizationView view,
-                                                const double* shell_populations,
-                                                double* spin_energies,
-                                                double* shell_potentials,
-                                                std::string& error) {
+                                               const double* shell_populations,
+                                               double* spin_energies, double* shell_potentials,
+                                               std::string& error) {
   gpuxtb_status_t status = validate_view(view, error);
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
@@ -445,9 +448,11 @@ gpuxtb_status_t evaluate_spin_polarization_cpu(SpinPolarizationView view,
   return GPUXTB_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t add_spin_polarization_energy_system_cpu(
-    SpinPolarizationView view, std::int64_t system, const double* shell_populations,
-    double& accumulated_energy, std::string& error) {
+gpuxtb_status_t add_spin_polarization_energy_system_cpu(SpinPolarizationView view,
+                                                        std::int64_t system,
+                                                        const double* shell_populations,
+                                                        double& accumulated_energy,
+                                                        std::string& error) {
   gpuxtb_status_t status = validate_view(view, error);
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;

@@ -127,9 +127,7 @@ def test_driver_raises_instead_of_publishing_failed_frame_nans():
 
     system = dpdata.System(data=_case_data_dict("sif5_minus"))
     with pytest.raises(GPUxtbRuntimeError, match="failed systems"):
-        system.predict(
-            driver="gpuxtb", charge=-1, backend="cpu", max_scc_iterations=1
-        )
+        system.predict(driver="gpuxtb", charge=-1, backend="cpu", max_scc_iterations=1)
 
 
 def test_driver_rejects_periodic():

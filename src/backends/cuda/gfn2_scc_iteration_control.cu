@@ -173,8 +173,7 @@ __device__ void close_plan_sequence(const Gfn2SccIterationDeviceLedger& ledger,
 __global__ void derive_activity_kernel(Gfn2SccIterationDevicePolicy policy,
                                        Gfn2SccIterationDeviceStateInput state,
                                        Gfn2SccIterationDeviceProvenance provenance,
-                                       Gfn2GeometryEpochConsumerDevice geometry,
-                                       int dynamic_epoch,
+                                       Gfn2GeometryEpochConsumerDevice geometry, int dynamic_epoch,
                                        Gfn2SccIterationDeviceLedger ledger) {
   __shared__ int invalid_state;
   __shared__ int invalid_geometry;
@@ -187,8 +186,8 @@ __global__ void derive_activity_kernel(Gfn2SccIterationDevicePolicy policy,
     invalid_geometry = 0;
     any_active = 0;
     plan_record = 0u;
-    expected_generation = dynamic_epoch != 0 ? *geometry.epoch.value
-                                             : provenance.expected_geometry_generation;
+    expected_generation =
+        dynamic_epoch != 0 ? *geometry.epoch.value : provenance.expected_geometry_generation;
     if (dynamic_epoch != 0 && expected_generation == 0u) {
       invalid_geometry = 1;
     }
@@ -202,8 +201,7 @@ __global__ void derive_activity_kernel(Gfn2SccIterationDevicePolicy policy,
   for (std::int64_t system = threadIdx.x; system < policy.batch_size; system += blockDim.x) {
     /* The refresh gate may exact-alias ledger.active_mask.  Snapshot it before
      * this kernel resets the canonical SCC activity byte. */
-    const std::uint8_t refresh_eligible =
-        dynamic_epoch != 0 ? geometry.eligible_mask[system] : 1u;
+    const std::uint8_t refresh_eligible = dynamic_epoch != 0 ? geometry.eligible_mask[system] : 1u;
     const gpuxtb_status_t status = state.system_statuses[system];
     const std::uint8_t converged = state.converged[system];
     const std::uint64_t iterations = state.iterations[system];
@@ -265,9 +263,8 @@ __global__ void derive_activity_kernel(Gfn2SccIterationDevicePolicy policy,
                                 !cross_plan && view.batch_size == policy.batch_size;
       bool scope_valid = false;
       if (view.generation_scope == Gfn2GenerationScope::kBatch) {
-        scope_valid =
-            dynamic_epoch == 0 && view.system_geometry_generations == nullptr &&
-            view.system_generation_count == 0;
+        scope_valid = dynamic_epoch == 0 && view.system_geometry_generations == nullptr &&
+                      view.system_generation_count == 0;
       } else if (view.generation_scope == Gfn2GenerationScope::kPerSystem) {
         scope_valid =
             view.geometry_generation == 0u && view.system_generation_count == policy.batch_size &&
@@ -450,11 +447,12 @@ __global__ void normalize_stage_kernel(Gfn2SccStageDeviceReport report,
 
 }  // namespace
 
-static cudaError_t derive_activity_impl(
-    const Gfn2SccIterationDevicePolicy& policy, const Gfn2SccIterationDeviceStateInput& state,
-    const Gfn2SccIterationDeviceProvenance& provenance,
-    const Gfn2GeometryEpochConsumerDevice* geometry,
-    const Gfn2SccIterationDeviceLedger& ledger, cudaStream_t stream) noexcept {
+static cudaError_t derive_activity_impl(const Gfn2SccIterationDevicePolicy& policy,
+                                        const Gfn2SccIterationDeviceStateInput& state,
+                                        const Gfn2SccIterationDeviceProvenance& provenance,
+                                        const Gfn2GeometryEpochConsumerDevice* geometry,
+                                        const Gfn2SccIterationDeviceLedger& ledger,
+                                        cudaStream_t stream) noexcept {
   const bool dynamic_epoch = geometry != nullptr;
   if (policy.batch_size <= 0 || policy.maximum_iterations == 0u || policy.plan_token == 0u ||
       state.batch_elements != policy.batch_size || state.plan_token != policy.plan_token ||
@@ -476,8 +474,9 @@ static cudaError_t derive_activity_impl(
     return cudaErrorInvalidValue;
   }
   if (dynamic_epoch &&
-      (geometry->plan_token != policy.plan_token || geometry->epoch.plan_token != policy.plan_token ||
-       geometry->epoch.value_elements != 1 || geometry->batch_elements != policy.batch_size ||
+      (geometry->plan_token != policy.plan_token ||
+       geometry->epoch.plan_token != policy.plan_token || geometry->epoch.value_elements != 1 ||
+       geometry->batch_elements != policy.batch_size ||
        !is_aligned(geometry->epoch.value, alignof(std::uint64_t)) ||
        !is_aligned(geometry->committed_generations, alignof(std::uint64_t)) ||
        !is_aligned(geometry->eligible_mask, alignof(std::uint8_t)))) {
@@ -542,8 +541,8 @@ cudaError_t derive_gfn2_scc_iteration_activity_cuda(
 cudaError_t derive_gfn2_scc_iteration_activity_cuda(
     const Gfn2SccIterationDevicePolicy& policy, const Gfn2SccIterationDeviceStateInput& state,
     const Gfn2SccIterationDeviceProvenance& provenance,
-    const Gfn2GeometryEpochConsumerDevice& geometry,
-    const Gfn2SccIterationDeviceLedger& ledger, cudaStream_t stream) noexcept {
+    const Gfn2GeometryEpochConsumerDevice& geometry, const Gfn2SccIterationDeviceLedger& ledger,
+    cudaStream_t stream) noexcept {
   return derive_activity_impl(policy, state, provenance, &geometry, ledger, stream);
 }
 

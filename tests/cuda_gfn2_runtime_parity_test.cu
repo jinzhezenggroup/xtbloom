@@ -358,10 +358,9 @@ int download_device_result(const Gfn2CudaExecutionIdentity& identity, cudaStream
       cudaMemcpyAsync(&result.publication_plan_error,
                       reinterpret_cast<const void*>(identity.inference_publication_plan_error),
                       sizeof(result.publication_plan_error), cudaMemcpyDeviceToHost, stream));
-  CUDA_CHECK(cudaMemcpyAsync(
-      &result.numerical_body_count,
-      reinterpret_cast<const void*>(identity.scc_loop_numerical_body_count),
-      sizeof(result.numerical_body_count), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaMemcpyAsync(&result.numerical_body_count,
+                             reinterpret_cast<const void*>(identity.scc_loop_numerical_body_count),
+                             sizeof(result.numerical_body_count), cudaMemcpyDeviceToHost, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   return 0;
 }
@@ -846,8 +845,7 @@ int execute_and_compare(Gfn2CudaExecutionCache& cache, cudaStream_t stream,
   CHECK(maximum_peer_iterations > 0);
   /* Each WHILE body publishes exactly one attempted peer iteration. The loop
    * therefore stops after the slowest active peer becomes terminal. */
-  CHECK(result.numerical_body_count ==
-        static_cast<std::uint64_t>(maximum_peer_iterations));
+  CHECK(result.numerical_body_count == static_cast<std::uint64_t>(maximum_peer_iterations));
   return compare_device_to_reference(result, reference, expected_epoch, options);
 }
 

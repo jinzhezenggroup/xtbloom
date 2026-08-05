@@ -141,7 +141,9 @@ class ConformanceToolTest(unittest.TestCase):
         self.assertIn("shared library is missing", completed.stderr)
         self.assertNotIn("SKIP oh_radical", completed.stdout)
 
-    def test_public_open_shell_comparison_requires_force_energy_and_charge(self) -> None:
+    def test_public_open_shell_comparison_requires_force_energy_and_charge(
+        self,
+    ) -> None:
         """The standard xTB OH golden gates every public property it contains."""
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         cases = PUBLIC_API.supported_cases(manifest, ["oh_radical"])

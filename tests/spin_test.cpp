@@ -52,12 +52,10 @@ bool near(double actual, double expected, double tolerance = 2.0e-15) {
 }
 
 bool make_plan(const std::vector<std::int64_t>& atom_offsets,
-               const std::vector<std::int32_t>& atomic_numbers,
-               const std::vector<double>& charges,
+               const std::vector<std::int32_t>& atomic_numbers, const std::vector<double>& charges,
                const std::vector<std::int32_t>& unpaired,
                const std::vector<std::int32_t>& spin_channels, BasisPlan& basis,
-               WavefunctionLayout& wavefunction, SpinPolarizationPlan& spin,
-               std::string& error) {
+               WavefunctionLayout& wavefunction, SpinPolarizationPlan& spin, std::string& error) {
   const std::int64_t batch = static_cast<std::int64_t>(charges.size());
   return gpuxtb::detail::gfn2::make_basis_plan(
              batch, static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
@@ -84,13 +82,20 @@ int test_hydrogen_literal_and_chromium_shell_order() {
   CHECK(error.empty());
   CHECK(basis.angular_momenta.size() == 5u);
   CHECK((std::array<std::uint8_t, 3>{basis.angular_momenta[2], basis.angular_momenta[3],
-                                    basis.angular_momenta[4]} ==
+                                     basis.angular_momenta[4]} ==
          std::array<std::uint8_t, 3>{2u, 0u, 1u}));
 
   /* Cr must use its actual d,s,p shell order, not an assumed s,p,d order. */
   const std::array<double, 9> expected_cr{{
-      -0.015775, -0.003725, -0.001463, -0.003725, -0.014475,
-      -0.011612, -0.001463, -0.011612, -0.016000,
+      -0.015775,
+      -0.003725,
+      -0.001463,
+      -0.003725,
+      -0.014475,
+      -0.011612,
+      -0.001463,
+      -0.011612,
+      -0.016000,
   }};
   CHECK(plan.coupling_offsets == std::vector<std::int64_t>({0, 1, 2, 11}));
   CHECK(std::equal(expected_cr.begin(), expected_cr.end(), plan.coupling_matrices.begin() + 2));
@@ -104,9 +109,9 @@ int test_hydrogen_literal_and_chromium_shell_order() {
 
   std::array<double, 3> energies{{91.0, 91.0, 91.0}};
   std::vector<double> potentials(populations.size(), 91.0);
-  CHECK(gpuxtb::detail::gfn2::evaluate_spin_polarization_cpu(
-            view, populations.data(), energies.data(), potentials.data(), error) ==
-        GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb::detail::gfn2::evaluate_spin_polarization_cpu(view, populations.data(),
+                                                             energies.data(), potentials.data(),
+                                                             error) == GPUXTB_STATUS_SUCCESS);
   CHECK(energies[0] == 0.0);
   CHECK(energies[1] == -0.0358125);
   CHECK(potentials[0] == 0.0 && potentials[1] == 0.0);
@@ -120,11 +125,10 @@ int test_hydrogen_literal_and_chromium_shell_order() {
   for (std::size_t row = 0; row < 3u; ++row) {
     for (std::size_t column = 0; column < 3u; ++column) {
       expected_cr_potential[row] = std::fma(expected_cr[row * 3u + column],
-                                            cr_magnetization[column],
-                                            expected_cr_potential[row]);
+                                            cr_magnetization[column], expected_cr_potential[row]);
     }
-    expected_cr_energy = std::fma(0.5 * cr_magnetization[row], expected_cr_potential[row],
-                                  expected_cr_energy);
+    expected_cr_energy =
+        std::fma(0.5 * cr_magnetization[row], expected_cr_potential[row], expected_cr_energy);
     CHECK(potentials[6u + row] == expected_cr_potential[row]);
   }
   CHECK(energies[2] == expected_cr_energy);

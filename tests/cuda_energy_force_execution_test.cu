@@ -977,7 +977,7 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
   std::vector<std::uint8_t> all_converged(batch, 1u);
   std::vector<std::uint64_t> generations(batch, kGeometryGeneration);
   std::vector<std::uint8_t> geometry_eligible(batch, 1u);
-  const std::vector<std::uint64_t> geometry_epoch{ kGeometryGeneration };
+  const std::vector<std::uint64_t> geometry_epoch{kGeometryGeneration};
   /* Deliberately stale last-mixed potentials. The execution must rebuild
    * Hamiltonian force inputs from the final raw SCC multipoles below. */
   std::vector<double> last_mixed_shell_scalar(shells);
@@ -1667,8 +1667,11 @@ cudaError_t launch_execution(DeviceFixture& d, cudaStream_t stream) {
 }
 
 Gfn2GeometryEpochConsumerDevice geometry_consumer(DeviceFixture& d, std::size_t batch_size) {
-  return {{d.geometry_epoch.get(), 1, kPlanToken}, d.geometry_generations.get(),
-          d.geometry_eligible.get(), static_cast<std::int64_t>(batch_size), kPlanToken};
+  return {{d.geometry_epoch.get(), 1, kPlanToken},
+          d.geometry_generations.get(),
+          d.geometry_eligible.get(),
+          static_cast<std::int64_t>(batch_size),
+          kPlanToken};
 }
 
 cudaError_t launch_execution_device_epoch(DeviceFixture& d, std::size_t batch_size,
@@ -2008,7 +2011,7 @@ int test_device_epoch_graph_replay() {
   CUDA_CHECK(device.public_qm_force.copy_to(qm.data(), qm.size(), stream));
   CUDA_CHECK(device.public_point_force.copy_to(point.data(), point.size(), stream));
   CUDA_CHECK(device.execution_system_errors.copy_to(execution_errors.data(),
-                                                     execution_errors.size(), stream));
+                                                    execution_errors.size(), stream));
   CUDA_CHECK(device.plan_failure.copy_to(&plan_failure, 1u, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   CHECK(plan_failure == 0u);

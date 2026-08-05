@@ -1,0 +1,41 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        # Unified-diff context blank lines must keep their leading space;
+        # stripping it changes the patch bytes and breaks the pinned hash.
+        exclude: tools/oracle/.*\.patch$
+      - id: end-of-file-fixer
+        # The tblite exporter byte stream, including its final blank line, is
+        # canonical and must be preserved (see .gitattributes), and the pinned
+        # observer patch is covered by an integrity hash.
+        exclude: ^(data/parameters/gfn2\.toml|tools/oracle/.*\.patch)$
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: ["--maxkb=1024", "--enforce-all"]
+        # Canonical generated tblite parameter export; tracked and pinned.
+        exclude: ^data/parameters/d4\.hpp$
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-toml
+        exclude: ^data/
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+        types_or: [python, pyi, jupyter]
+      - id: ruff-format
+        types_or: [python, pyi, jupyter]
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v22.1.8
+    hooks:
+      - id: clang-format
+        types_or: [c++, c, cuda]
+        # The generated tblite parameter headers under data/parameters are
+        # canonical exports and must not be rewritten.
+        exclude: ^data/parameters/

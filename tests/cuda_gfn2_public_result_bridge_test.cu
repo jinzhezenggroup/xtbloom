@@ -16,7 +16,6 @@
 namespace {
 
 using gpuxtb::detail::cuda::commit_gfn2_public_results_cuda;
-using gpuxtb::detail::cuda::prepare_gfn2_public_results_cuda;
 using gpuxtb::detail::cuda::Gfn2PublicResultBridgeControl;
 using gpuxtb::detail::cuda::Gfn2PublicResultBridgeDestination;
 using gpuxtb::detail::cuda::Gfn2PublicResultBridgeDeviceDestinations;
@@ -28,6 +27,7 @@ using gpuxtb::detail::cuda::Gfn2PublicResultBridgeError;
 using gpuxtb::detail::cuda::Gfn2PublicResultBridgeHostBuffer;
 using gpuxtb::detail::cuda::Gfn2PublicResultBridgeHostStaging;
 using gpuxtb::detail::cuda::Gfn2PublicResultRoute;
+using gpuxtb::detail::cuda::prepare_gfn2_public_results_cuda;
 
 #define CHECK(condition)                                                                           \
   do {                                                                                             \
@@ -362,8 +362,7 @@ struct Fixture {
     device_staging.atomic_charges = shadow_charges.get();
     device_staging.atomic_charge_elements = static_cast<std::int64_t>(host_charges.size());
     device_staging.point_forces = shadow_point_forces.get();
-    device_staging.point_force_elements =
-        static_cast<std::int64_t>(host_point_forces.size());
+    device_staging.point_force_elements = static_cast<std::int64_t>(host_point_forces.size());
     device_staging.iterations = shadow_iterations.get();
     device_staging.converged = shadow_converged.get();
     device_staging.system_statuses = shadow_statuses.get();
@@ -399,10 +398,8 @@ struct Fixture {
       return false;
     }
     if (!shadow_energies.fill(kDoubleSentinel) || !shadow_forces.fill(kDoubleSentinel) ||
-        !shadow_charges.fill(kDoubleSentinel) ||
-        !shadow_point_forces.fill(kDoubleSentinel) ||
-        !shadow_iterations.fill(kIterationSentinel) ||
-        !shadow_converged.fill(kConvergedSentinel) ||
+        !shadow_charges.fill(kDoubleSentinel) || !shadow_point_forces.fill(kDoubleSentinel) ||
+        !shadow_iterations.fill(kIterationSentinel) || !shadow_converged.fill(kConvergedSentinel) ||
         !shadow_statuses.fill(kStatusSentinel)) {
       return false;
     }
@@ -552,9 +549,9 @@ bool run_success_case(std::int64_t batch,
   Fixture fixture(batch, kAllProperties);
   CHECK(fixture.initialize());
   fixture.configure(routes);
-  CUDA_CHECK(prepare_gfn2_public_results_cuda(
-      fixture.plan, fixture.input, fixture.device_staging, fixture.destinations, fixture.staging,
-      fixture.diagnostics, stream));
+  CUDA_CHECK(prepare_gfn2_public_results_cuda(fixture.plan, fixture.input, fixture.device_staging,
+                                              fixture.destinations, fixture.staging,
+                                              fixture.diagnostics, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   CHECK(fixture.verify_prepared_shadow());
   CHECK(fixture.all_device_outputs_are_sentinels());
@@ -586,9 +583,9 @@ bool run_aggregate_failure(Mutator&& mutate, Gfn2PublicResultBridgeError expecte
                                                     kStatusSentinel);
   std::uint32_t caller_flags = kFlagsSentinel;
 
-  CUDA_CHECK(prepare_gfn2_public_results_cuda(
-      fixture.plan, fixture.input, fixture.device_staging, fixture.destinations, fixture.staging,
-      fixture.diagnostics, stream));
+  CUDA_CHECK(prepare_gfn2_public_results_cuda(fixture.plan, fixture.input, fixture.device_staging,
+                                              fixture.destinations, fixture.staging,
+                                              fixture.diagnostics, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   if (fixture.host_control.get()->aggregate_error ==
       static_cast<std::uint32_t>(Gfn2PublicResultBridgeError::kSuccess)) {
@@ -678,9 +675,9 @@ bool test_unrequested_outputs(cudaStream_t stream) {
                      Gfn2PublicResultRoute::kAbsent, Gfn2PublicResultRoute::kAbsent,
                      Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice,
                      Gfn2PublicResultRoute::kHost});
-  CUDA_CHECK(prepare_gfn2_public_results_cuda(
-      fixture.plan, fixture.input, fixture.device_staging, fixture.destinations, fixture.staging,
-      fixture.diagnostics, stream));
+  CUDA_CHECK(prepare_gfn2_public_results_cuda(fixture.plan, fixture.input, fixture.device_staging,
+                                              fixture.destinations, fixture.staging,
+                                              fixture.diagnostics, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   CHECK(fixture.all_device_outputs_are_sentinels());
   CUDA_CHECK(commit_gfn2_public_results_cuda(fixture.plan, fixture.device_staging,
@@ -708,10 +705,9 @@ bool test_staging_enqueue_failure_precedes_device_writes(cudaStream_t stream) {
    * synchronously. No device caller copy may have entered the stream then.
    */
   fixture.staging.energies.data = fixture.staging_energies.get() + 1;
-  const cudaError_t status =
-      prepare_gfn2_public_results_cuda(fixture.plan, fixture.input, fixture.device_staging,
-                                       fixture.destinations, fixture.staging, fixture.diagnostics,
-                                       stream);
+  const cudaError_t status = prepare_gfn2_public_results_cuda(
+      fixture.plan, fixture.input, fixture.device_staging, fixture.destinations, fixture.staging,
+      fixture.diagnostics, stream);
   CHECK(status != cudaSuccess);
   (void)cudaGetLastError();
   CUDA_CHECK(cudaStreamSynchronize(stream));

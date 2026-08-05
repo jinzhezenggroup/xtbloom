@@ -233,10 +233,11 @@ class Gfn2CudaExecutionCache {
   [[nodiscard]] Gfn2CudaExecutionIdentity identity() const noexcept;
 
  private:
-  friend gpuxtb_status_t execute_restricted_gfn2_cuda(
-      Gfn2CudaExecutionCache& cache, const gpuxtb_batch_t& batch,
-      const gpuxtb_compute_options_t& options, gpuxtb_batch_result_t& result,
-      std::string& error);
+  friend gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
+                                                      const gpuxtb_batch_t& batch,
+                                                      const gpuxtb_compute_options_t& options,
+                                                      gpuxtb_batch_result_t& result,
+                                                      std::string& error);
 
   struct Impl;
   std::unique_ptr<Impl> impl_;
@@ -252,10 +253,11 @@ class Gfn2CudaExecutionCache {
  * separate exit boundary and may fail before or after output commit, as
  * documented by the public API.
  */
-[[nodiscard]] gpuxtb_status_t execute_restricted_gfn2_cuda(
-    Gfn2CudaExecutionCache& cache, const gpuxtb_batch_t& batch,
-    const gpuxtb_compute_options_t& options, gpuxtb_batch_result_t& result,
-    std::string& error);
+[[nodiscard]] gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
+                                                           const gpuxtb_batch_t& batch,
+                                                           const gpuxtb_compute_options_t& options,
+                                                           gpuxtb_batch_result_t& result,
+                                                           std::string& error);
 
 }  // namespace gpuxtb::detail
 
