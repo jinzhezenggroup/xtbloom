@@ -14,3 +14,7 @@ __pycache__/
 *.profdata
 *.gcda
 *.gcno
+/coverage.xml
+/coverage.info
+/.coverage
+/htmlcov/
