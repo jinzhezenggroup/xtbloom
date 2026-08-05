@@ -32,6 +32,19 @@ energy `F = E_internal - T*S_electronic`, including the Fermi-occupation entropy
 tblite. Forces are `-dF/dR`, which preserves the stationary finite-temperature SCC derivative. At
 zero electronic temperature, `F` reduces to the internal energy.
 
+Finite-temperature occupations of an exactly degenerate eigenspace are published symmetrically:
+every orbital in an equal-energy block shares one binary64 value, keeping the populations unitary-
+and permutation-invariant. When the requested electron/hole count falls strictly between two such
+symmetric states (for example three exactly degenerate orbitals with `nel = nextafter(3, 0)`, whose
+single residual hole cannot be split equally across the three published occupations), the solver
+relaxes to the nearest representable symmetric state instead of failing the system. The published
+electron/hole error is then bounded absolutely by the block quantization scale
+`2 * eps_double * count` (a few ULPs of an electron, where `eps_double` is `2^-52`), and the
+reported entropy is derived from those same published occupations. CPU and CUDA follow this same
+deterministic policy; a residual beyond that quantization bound would indicate genuine electron
+non-conservation and still fails deterministically. The zero-temperature Aufbau path is unaffected.
+See issue #31 for the original representability question.
+
 The public batch call has two failure levels. Any failure detected before the final caller-output
 commit begins leaves every result buffer and result flag unchanged. Once a CUDA caller-output
 commit has begun, a later catastrophic failure returns `INTERNAL_ERROR` with an explicit diagnostic;

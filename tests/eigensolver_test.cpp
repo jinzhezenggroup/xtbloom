@@ -573,6 +573,88 @@ int test_occupations_degeneracy_and_fractional_filling() {
   return 0;
 }
 
+/* Degenerate finite-temperature representability policy (#31).
+ *
+ * A symmetric (unitary- and permutation-invariant) description of an exactly
+ * degenerate block requires every equal-energy orbital to share one binary64
+ * occupation. When the requested electron/hole count falls between two such
+ * symmetric states (three exactly degenerate orbitals with
+ * nel = nextafter(3, 0)), the solver relaxes to the nearest representable
+ * symmetric state instead of failing, with an absolute electron/hole error
+ * bounded by the block quantization scale count * 2 * eps_double. */
+int test_occupation_representability_policy() {
+  std::string error;
+  std::array<double, 3> occupations{{-1.0, -1.0, -1.0}};
+  double chemical_potential = 7.0;
+  double entropy = 7.0;
+  const double eps = std::numeric_limits<double>::epsilon();
+
+  /* Near-capacity limit: three exactly degenerate orbitals whose single-hole
+   * count cannot be expressed as an equal triple of binary64 values. */
+  const std::array<double, 3> near_capacity{{1.0, 1.0, 1.0}};
+  const double near_capacity_nel = std::nextafter(3.0, 0.0);
+  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+            3, near_capacity.data(), near_capacity_nel, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
+            occupations.data(), chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(occupations[0] == occupations[1] && occupations[1] == occupations[2]);
+  CHECK(occupations[0] > 0.0 && occupations[0] <= 1.0);
+  const double near_capacity_error =
+      std::abs((occupations[0] + occupations[1] + occupations[2]) - near_capacity_nel);
+  CHECK(near_capacity_error <= 2.0 * eps * 3.0);
+  /* Entropy is derived from the published occupations, never from an idealized
+   * occupation that differs from what fill_occupations_cpu publishes. */
+  double published_entropy = 0.0;
+  for (const double occupation : occupations) {
+    if (occupation > 0.0 && occupation < 1.0) {
+      published_entropy -=
+          occupation * std::log(occupation) + (1.0 - occupation) * std::log(1.0 - occupation);
+    }
+  }
+  CHECK(std::isfinite(entropy) && std::abs(entropy - published_entropy) <= 1.0e-15);
+
+  /* Electron-poor limit: a subnormal electron target on the same degenerate
+   * block is also relaxed to the nearest symmetric (all-zero) state. */
+  std::array<double, 3> poor{{-1.0, -1.0, -1.0}};
+  const double electron_poor_nel = std::nextafter(0.0, 1.0);
+  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+            3, near_capacity.data(), electron_poor_nel, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
+            poor.data(), chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(poor[0] == poor[1] && poor[1] == poor[2]);
+  const double electron_poor_error = std::abs((poor[0] + poor[1] + poor[2]) - electron_poor_nel);
+  CHECK(electron_poor_error <= 2.0 * eps * 3.0);
+  CHECK(entropy == 0.0 && std::isfinite(chemical_potential));
+
+  /* An exactly representable symmetric target keeps its exact arithmetic
+   * (this path pre-dates the relaxation and must stay byte-identical). */
+  const std::array<double, 2> exact_pair{{1.0, 1.0}};
+  std::array<double, 2> exact_occupations{{-1.0, -1.0}};
+  const double exact_nel = std::nextafter(2.0, 0.0);
+  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+            2, exact_pair.data(), exact_nel, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
+            exact_occupations.data(), chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(exact_occupations[0] == exact_occupations[1]);
+  CHECK(std::abs((exact_occupations[0] + exact_occupations[1]) - exact_nel) == 0.0);
+
+  /* Degenerate members embedded among non-degenerate levels keep equal
+   * occupations, so relabelling the block cannot change published values. */
+  const std::array<double, 4> mixed{{0.0, 1.0, 1.0, 2.0}};
+  std::array<double, 4> mixed_occupations{{-1.0, -1.0, -1.0, -1.0}};
+  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+            4, mixed.data(), 1.3, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE, mixed_occupations.data(),
+            chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(mixed_occupations[1] == mixed_occupations[2]);
+
+  /* The relaxation must not fabricate success for an impossible input: inputs
+   * that are structurally invalid remain deterministic invalid arguments. */
+  const std::array<double, 3> reversed{{1.0, 0.0, -1.0}};
+  const auto saved = occupations;
+  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(3, reversed.data(), 1.5, 0.0, occupations.data(),
+                                                   chemical_potential, entropy,
+                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(occupations == saved);
+  return 0;
+}
+
 int test_production_lp64_factory() {
   CpuLinearAlgebraBackend production;
   std::string error;
@@ -1276,6 +1358,9 @@ int main(int argc, char** argv) {
   /* Complete the injected backend's numerical preflight before call-count tests. */
   static_cast<void>(backend());
   if (const int status = test_occupations_degeneracy_and_fractional_filling(); status != 0) {
+    return status;
+  }
+  if (const int status = test_occupation_representability_policy(); status != 0) {
     return status;
   }
   if (const int status = test_mkl_ilp64_rejection_in_fresh_process(); status != 0) {

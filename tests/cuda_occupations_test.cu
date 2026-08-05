@@ -490,6 +490,152 @@ int test_cpu_parity_ragged_batches_and_custom_stream() {
   return 0;
 }
 
+/* Degenerate finite-temperature representability policy parity (#31).
+ *
+ * Exactly degenerate blocks whose single-hole/electron surplus cannot be
+ * expressed as equal binary64 occupations are relaxed to the nearest
+ * representable symmetric state instead of failing, with an absolute error
+ * bounded by count * 2 * eps_double. Both the CPU reference and the device
+ * kernel must agree on the published (equal-member) occupations. */
+HostCase make_representability_case() {
+  HostCase host;
+  constexpr std::size_t kSystems = 5u;
+  const std::int64_t counts[kSystems] = {3, 3, 2, 4, 4};
+  const std::array<std::array<double, 4>, kSystems> levels{{
+      {{1.0, 1.0, 1.0, 0.0}},
+      {{1.0, 1.0, 1.0, 0.0}},
+      {{1.0, 1.0, 0.0, 0.0}},
+      {{0.0, 1.0, 1.0, 2.0}},
+      {{1.0, 1.0, 1.0, 1.0}},
+  }};
+  const std::array<double, kSystems> electron0{{
+      std::nextafter(3.0, 0.0),
+      std::nextafter(0.0, 1.0),
+      std::nextafter(2.0, 0.0),
+      1.3,
+      std::nextafter(4.0, 0.0),
+  }};
+  host.offsets.assign(kSystems + 1u, 0);
+  host.electron_counts.resize(2u * kSystems);
+  host.temperatures.resize(kSystems);
+  host.active.assign(kSystems, 1u);
+  std::int64_t total = 0;
+  for (std::size_t system = 0u; system < kSystems; ++system) {
+    host.offsets[system] = total;
+    total += counts[system];
+  }
+  host.offsets[kSystems] = total;
+  host.eigenvalues.resize(static_cast<std::size_t>(total));
+  for (std::size_t system = 0u; system < kSystems; ++system) {
+    const std::int64_t begin = host.offsets[system];
+    for (std::int64_t orbital = 0; orbital < counts[system]; ++orbital) {
+      host.eigenvalues[static_cast<std::size_t>(begin + orbital)] =
+          levels[system][static_cast<std::size_t>(orbital)];
+    }
+    /* finite temperature everywhere so the Fermi (not Aufbau) path runs */
+    host.temperatures[system] = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+    host.electron_counts[2u * system] = electron0[system];
+    host.electron_counts[2u * system + 1u] = electron0[system];
+  }
+  return host;
+}
+
+int test_degenerate_representability_policy_parity() {
+  HostCase host = make_representability_case();
+  std::string error;
+  CHECK(build_cpu_reference(host, error));
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host, nullptr));
+  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+      static_cast<std::int64_t>(host.batch_size()), device.system_errors.get(),
+      device.device_error.get()));
+  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+      device.batch(host), device.eigenvalues.get(),
+      static_cast<std::int64_t>(device.eigenvalues.size()), device.results(host),
+      device.workspace(), device.system_errors.get(), device.device_error.get()));
+  Results actual;
+  CUDA_CHECK(copy_results(host, device, actual, nullptr));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(actual.device_error == 0u);
+  CHECK(std::all_of(actual.system_errors.begin(), actual.system_errors.end(),
+                    [](std::uint32_t value) { return value == 0u; }));
+
+  const double eps = std::numeric_limits<double>::epsilon();
+  for (std::size_t system = 0u; system < host.batch_size(); ++system) {
+    const std::int64_t begin = host.offsets[system];
+    const std::int64_t count = host.offsets[system + 1u] - host.offsets[system];
+    const double target = host.electron_counts[2u * system];
+    const bool subnormal_target = target != 0.0 && std::fpclassify(target) == FP_SUBNORMAL;
+    /* Only a fully degenerate spectrum is governed by the representability
+     * quantization bound; mixed spectra keep ordinary fractional accuracy. */
+    bool fully_degenerate = true;
+    for (std::int64_t orbital = 1u; orbital < count; ++orbital) {
+      fully_degenerate =
+          fully_degenerate && host.eigenvalues[static_cast<std::size_t>(begin + orbital)] ==
+                                  host.eigenvalues[static_cast<std::size_t>(begin + orbital - 1u)];
+    }
+    for (int spin = 0; spin < 2; ++spin) {
+      double host_sum = 0.0;
+      double device_sum = 0.0;
+      /* Degenerate members must share one value: for every orbital pair with
+       * equal eigenvalues, the published (host and device) occupations agree. */
+      bool block_uniform = true;
+      bool occupations_match = true;
+      for (std::int64_t orbital = 0; orbital < count; ++orbital) {
+        const std::size_t element = 2u * static_cast<std::size_t>(begin) +
+                                    static_cast<std::size_t>(spin) * count +
+                                    static_cast<std::size_t>(orbital);
+        host_sum += host.expected_occupations[element];
+        device_sum += actual.occupations[element];
+        occupations_match = occupations_match && near(actual.occupations[element],
+                                                      host.expected_occupations[element], 4.0e-13);
+        for (std::int64_t other = 0; other < orbital; ++other) {
+          const double left = host.eigenvalues[static_cast<std::size_t>(begin + other)];
+          const double right = host.eigenvalues[static_cast<std::size_t>(begin + orbital)];
+          if (left == right) {
+            const std::size_t other_element = 2u * static_cast<std::size_t>(begin) +
+                                              static_cast<std::size_t>(spin) * count +
+                                              static_cast<std::size_t>(other);
+            block_uniform =
+                block_uniform &&
+                host.expected_occupations[element] == host.expected_occupations[other_element] &&
+                actual.occupations[element] == actual.occupations[other_element];
+          }
+        }
+      }
+      CHECK(occupations_match);
+      /* Exactly degenerate blocks publish equal, symmetric occupations. */
+      CHECK(block_uniform);
+      /* Fully degenerate relaxation systems must satisfy the documented
+       * electron/hole quantization bound count * 2 * eps_double; mixed
+       * spectra keep the ordinary fractional-filling accuracy. */
+      if (fully_degenerate) {
+        CHECK(std::abs(host_sum - target) <= 2.0 * eps * static_cast<double>(count));
+        CHECK(std::abs(device_sum - target) <= 2.0 * eps * static_cast<double>(count));
+      } else {
+        CHECK(std::abs(host_sum - target) <= 2.0e-13 * std::max(1.0, target));
+        CHECK(std::abs(device_sum - target) <= 2.0e-13 * std::max(1.0, target));
+      }
+      CHECK(near(actual.electron_sums[2u * system + spin],
+                 host.expected_electron_sums[2u * system + spin], 4.0e-13));
+      /* The electron count is a true double check on the physical quantity
+       * that feeds density and forces; the chemical potential for an
+       * atomically tiny (subnormal) electron target is ill-conditioned on the
+       * double-precision device root path and is only required to stay finite.
+       * Normal targets keep the standard tight mu parity. */
+      const double device_mu = actual.chemical_potentials[2u * system + spin];
+      const double host_mu = host.expected_chemical_potentials[2u * system + spin];
+      if (subnormal_target) {
+        CHECK(std::isfinite(device_mu) && std::isfinite(host_mu));
+      } else {
+        CHECK(near(device_mu, host_mu, 8.0e-12));
+      }
+    }
+    CHECK(near(actual.entropies[system], host.expected_entropies[system], 8.0e-12));
+  }
+  return 0;
+}
+
 HostCase make_mixed_spin_case(std::size_t batch_size) {
   HostCase host;
   host.offsets.assign(batch_size + 1u, 0);
@@ -877,6 +1023,9 @@ int test_host_argument_alias_and_alignment_validation() {
 
 int main() {
   if (const int line = test_cpu_parity_ragged_batches_and_custom_stream(); line != 0) {
+    return line;
+  }
+  if (const int line = test_degenerate_representability_policy_parity(); line != 0) {
     return line;
   }
   if (const int line = test_boundary_degenerate_translated_and_extreme_spectra(); line != 0) {

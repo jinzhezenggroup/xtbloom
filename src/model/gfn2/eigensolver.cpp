@@ -801,6 +801,39 @@ bool compute_occupations(const double* eigenvalues, std::size_t count, double el
   const long double publication_tolerance =
       64.0L * static_cast<long double>(std::numeric_limits<double>::epsilon()) * quantity_target;
   const long double quantity_residual = quantity_target - published_quantity;
+
+  /*
+   * Representability policy for exactly degenerate finite-temperature
+   * occupations.
+   *
+   * Occupations are published as binary64 values. A symmetric (unitary- and
+   * permutation-invariant) description of a degenerate eigenspace requires
+   * every orbital in an exactly equal-energy block to share one double, so the
+   * total electron/hole count such a block can express is quantized to
+   * block_count * f for the representable doubles f in [0, 1]. When the
+   * requested count falls strictly between two symmetric states (for example
+   * three exactly degenerate orbitals with nel = nextafter(3, 0), whose hole
+   * count cannot be split across the three published occupations), no equal-
+   * membership correction can land within publication_tolerance.
+   *
+   * In that case the solver does not break symmetry by promoting an arbitrary
+   * orbital and does not fail the system. It relaxes to the nearest
+   * representable symmetric state: it keeps the equal Fermi-derived block
+   * occupations and records a documented absolute electron/hole error no
+   * larger than the quantization bound of the published block
+   * (count * 2 * eps_double, a few ULPs of an electron). tblite performs no
+   * strict block correction and publishes the same quantization-limited
+   * occupations without failing, so this matches its practical semantics.
+   *
+   * Relaxation applies only while the residual can be attributed to this
+   * binary64 quantization. A residual beyond the same bound is genuine
+   * electron non-conservation and still fails deterministically.
+   */
+  const long double representable_error_scale =
+      2.0L * static_cast<long double>(std::numeric_limits<double>::epsilon());
+  const long double representable_tolerance =
+      representable_error_scale * static_cast<long double>(count);
+  bool representability_relaxed = false;
   std::size_t corrected_begin = count;
   std::size_t corrected_end = count;
   double corrected_occupation = 0.0;
@@ -855,7 +888,14 @@ bool compute_occupations(const double* eigenvalues, std::size_t count, double el
       break;
     }
     if (!corrected) {
-      return false;
+      if (std::abs(quantity_residual) > representable_tolerance) {
+        return false;
+      }
+      /* Nearest representable symmetric state: the unmodified equal Fermi-
+       * derived occupations already satisfy the documented quantization bound,
+       * so nothing is rewritten and the electron/hole error is bounded by
+       * representable_tolerance. */
+      representability_relaxed = true;
     }
   }
   /* Report entropy for the actual published doubles, including any block correction. */
@@ -873,8 +913,10 @@ bool compute_occupations(const double* eigenvalues, std::size_t count, double el
     }
   }
   entropy = static_cast<double>(entropy_value);
+  const long double published_error = std::abs(published_quantity - quantity_target);
   return std::isfinite(chemical_potential) && std::isfinite(entropy) &&
-         std::abs(published_quantity - quantity_target) <= publication_tolerance;
+         (published_error <= publication_tolerance ||
+          (representability_relaxed && published_error <= representable_tolerance));
 }
 
 NumericalResult solve_one_spin(const CpuLinearAlgebraBackend& backend,

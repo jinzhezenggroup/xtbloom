@@ -14,6 +14,16 @@ constexpr int kMaximumRootIterations = 4096;
 constexpr double kDoubleMaximum = 1.79769313486231570814527423731704357e308;
 constexpr double kDoubleEpsilon = 2.220446049250313080847263336181640625e-16;
 
+/*
+ * Maximum absolute electron/hole error accepted when a symmetric binary64
+ * occupation block cannot reproduce the requested count exactly. A degenerate
+ * block publishes one double per equal-energy orbital, so its achievable total
+ * is quantized; the accumulated rounding bound of count doubles is at most
+ * count * 2 * eps_double. This mirrors the CPU representability policy and the
+ * entropy is always derived from the same published occupations.
+ */
+constexpr double kRepresentableErrorScale = 2.0 * kDoubleEpsilon;
+
 __device__ bool system_is_valid(const std::uint32_t* system_errors, std::int64_t system) {
   return atomicAdd(const_cast<std::uint32_t*>(system_errors) + system, 0u) ==
          static_cast<std::uint32_t>(Gfn2OccupationsDeviceError::kSuccess);
@@ -275,8 +285,16 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
    * several double ulps even though the occupation itself remains correctable.
    * Keep that root only within a conservative bound, then require the strict
    * CPU publication tolerance below after correcting an invariant energy block.
+   *
+   * For atomically tiny (subnormal) electron targets the 1024-eps-relative
+   * product underflows to zero and would reject every such root. Floor the
+   * root tolerance at the published-block quantization scale
+   * (kRepresentableErrorScale * count) so an exactly degenerate block can still
+   * reach the symmetric relaxation path below instead of failing the system.
    */
-  const double representable_root_tolerance = 1024.0 * kDoubleEpsilon * quantity_target;
+  const double representable_root_tolerance =
+      max(1024.0 * kDoubleEpsilon * quantity_target,
+          kRepresentableErrorScale * static_cast<double>(count));
   if (!isfinite(result->chemical_potential) || !isfinite(ideal_quantity) ||
       fabs(ideal_quantity - quantity_target) > representable_root_tolerance) {
     *error = Gfn2OccupationsDeviceError::kElectronConservationFailure;
@@ -284,6 +302,7 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
   }
 
   const double residual = quantity_target - published_quantity;
+  bool representability_relaxed = false;
   if (fabs(residual) > tolerance) {
     /* Any material correction is uniform over a complete equal-energy block. */
     const double occupation_delta = solve_holes ? -residual : residual;
@@ -315,8 +334,17 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
       block_begin = block_end;
     }
     if (!corrected) {
-      *error = Gfn2OccupationsDeviceError::kElectronConservationFailure;
-      return false;
+      /* Representable but unquantizable symmetric block: when the residual is
+       * attributable to binary64 quantization of the equal-membership block
+       * (matching the CPU policy, bounded by count * 2 * eps_double), relax to
+       * the nearest representable symmetric state by keeping the published
+       * occupations. Anything larger is genuine electron non-conservation. */
+      const double representable_tolerance = kRepresentableErrorScale * static_cast<double>(count);
+      if (fabs(residual) > representable_tolerance) {
+        *error = Gfn2OccupationsDeviceError::kElectronConservationFailure;
+        return false;
+      }
+      representability_relaxed = true;
     }
   }
 
@@ -333,7 +361,12 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
       entropy = updated;
     }
   }
-  if (!isfinite(entropy) || fabs(published_quantity - quantity_target) > tolerance) {
+  const double published_error = fabs(published_quantity - quantity_target);
+  const bool published_acceptable =
+      published_error <= tolerance ||
+      (representability_relaxed &&
+       published_error <= kRepresentableErrorScale * static_cast<double>(count));
+  if (!isfinite(entropy) || !published_acceptable) {
     *error = !isfinite(entropy) ? Gfn2OccupationsDeviceError::kNonfiniteEntropy
                                 : Gfn2OccupationsDeviceError::kElectronConservationFailure;
     return false;
