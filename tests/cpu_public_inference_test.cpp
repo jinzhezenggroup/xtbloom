@@ -1291,6 +1291,30 @@ int test_plan_create_query_workspace_and_reuse() {
   CHECK(energy_query.host_required_bytes > 0u);
   CHECK(query.host_required_bytes > energy_query.host_required_bytes);
 
+  /* CPU staging canonicalizes a missing zero-point-charge offset vector to
+   * the same all-zero cache image as an explicit vector. The latter plan owns
+   * one additional topology snapshot, which must still appear in the public
+   * aggregate even though the execution-cache reservation is otherwise equal. */
+  PublicBatch explicit_zero_point_offsets = request;
+  explicit_zero_point_offsets.point_offsets.assign(
+      static_cast<std::size_t>(explicit_zero_point_offsets.batch.batch_size) + 1u, 0);
+  explicit_zero_point_offsets.bind(flags);
+  gpuxtb_plan_t* raw_explicit_offsets_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &explicit_zero_point_offsets.batch,
+                           &explicit_zero_point_offsets.options,
+                           &raw_explicit_offsets_plan) == GPUXTB_STATUS_SUCCESS);
+  PlanHandle explicit_offsets_plan(raw_explicit_offsets_plan);
+  gpuxtb_workspace_query_t explicit_offsets_query{};
+  CHECK(gpuxtb_workspace_query_init(&explicit_offsets_query, sizeof(explicit_offsets_query)) ==
+        GPUXTB_STATUS_SUCCESS);
+  explicit_offsets_query.compute_flags = flags;
+  CHECK(gpuxtb_plan_query_workspace(explicit_offsets_plan.get(), &explicit_offsets_query) ==
+        GPUXTB_STATUS_SUCCESS);
+  const std::uint64_t point_offset_snapshot_bytes =
+      explicit_zero_point_offsets.point_offsets.size() * sizeof(std::int64_t);
+  CHECK(explicit_offsets_query.host_required_bytes >=
+        query.host_required_bytes + point_offset_snapshot_bytes);
+
   /* Creating a second plan on the same context is independent. */
   gpuxtb_plan_t* second_plan = nullptr;
   CHECK(gpuxtb_plan_create(context.get(), &request.batch, &request.options, &second_plan) ==

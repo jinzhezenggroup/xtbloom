@@ -50,6 +50,19 @@ struct FixedTopology {
   bool potential_shifts_present = false;
   bool response_matrix_present = false;
 
+  [[nodiscard]] std::size_t retained_host_bytes() const noexcept {
+    /* Plan compute reads these canonical snapshots on every topology match.
+     * Count capacities because their complete heap reservations remain owned
+     * by the plan even when a vector's logical size is smaller. */
+    const auto vector_bytes = [](const auto& values) noexcept {
+      return values.capacity() * sizeof(values[0]);
+    };
+    return vector_bytes(atom_offsets) + vector_bytes(atomic_numbers) +
+           vector_bytes(molecular_charges) + vector_bytes(unpaired_electrons) +
+           vector_bytes(spin_channels) + vector_bytes(point_charge_offsets) +
+           vector_bytes(charge_response_offsets);
+  }
+
   void capture(const gpuxtb_batch_t& batch) {
     batch_size = batch.batch_size;
     total_atoms = batch.total_atoms;
@@ -269,7 +282,9 @@ gpuxtb_status_t Gfn2Plan::create(Context& context, const gpuxtb_batch_t& batch,
       impl_->context = nullptr;
       return status;
     }
-    impl_->cpu_persistent_bytes = persistent_workspace_bytes_restricted_gfn2_cpu(*impl_->cpu_cache);
+    impl_->cpu_persistent_bytes =
+        persistent_workspace_bytes_restricted_gfn2_cpu(*impl_->cpu_cache) +
+        impl_->topology.retained_host_bytes();
     error.clear();
     return GPUXTB_STATUS_SUCCESS;
   }
