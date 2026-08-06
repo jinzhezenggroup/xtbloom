@@ -1,0 +1,36 @@
+{
+  "corpus": [
+    "C40H82"
+  ],
+  "rows": [
+    {
+      "backend": "cuda",
+      "batch_size": 128,
+      "converged": 1,
+      "count": 1,
+      "energy_max_hartree": -119.30484557472731,
+      "energy_min_hartree": -119.30484557472731,
+      "energy_std_hartree": 0.0,
+      "engine": "gpuxtb",
+      "mean_ms": 12508.623550999999,
+      "median_ms": 12508.623550999999,
+      "memory_mode": "host",
+      "min_ms": 12508.623550999999,
+      "molecule": "C40H82",
+      "natoms": 122,
+      "p95_ms": 12508.623550999999,
+      "property": "force",
+      "samples_ms": [
+        12508.623550999999
+      ],
+      "scc_iterations_median": 13.0,
+      "status_failures": [],
+      "systems_per_second_at_median": 10.232940457286931
+    }
+  ],
+  "schema_version": 1,
+  "units": {
+    "latency": "ms",
+    "throughput": "systems/s"
+  }
+}

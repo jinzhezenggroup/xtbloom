@@ -1,0 +1,116 @@
+{
+  "corpus": [
+    "C40H82"
+  ],
+  "rows": [
+    {
+      "backend": "cuda",
+      "batch_size": 1,
+      "converged": 1,
+      "count": 3,
+      "energy_max_hartree": -119.30484557472732,
+      "energy_min_hartree": -119.30484557472732,
+      "energy_std_hartree": 0.0,
+      "engine": "gpuxtb",
+      "mean_ms": 2274.363019666667,
+      "median_ms": 2274.290093,
+      "memory_mode": "host",
+      "min_ms": 2274.201344,
+      "molecule": "C40H82",
+      "natoms": 122,
+      "p95_ms": 2274.597622,
+      "property": "force",
+      "samples_ms": [
+        2274.290093,
+        2274.201344,
+        2274.597622
+      ],
+      "scc_iterations_median": 13,
+      "status_failures": [],
+      "systems_per_second_at_median": 0.43969764590624716
+    },
+    {
+      "backend": "cuda",
+      "batch_size": 8,
+      "converged": 1,
+      "count": 3,
+      "energy_max_hartree": -119.30484557472721,
+      "energy_min_hartree": -119.30484557472721,
+      "energy_std_hartree": 0.0,
+      "engine": "gpuxtb",
+      "mean_ms": 3684.546959,
+      "median_ms": 3684.501285,
+      "memory_mode": "host",
+      "min_ms": 3684.419321,
+      "molecule": "C40H82",
+      "natoms": 122,
+      "p95_ms": 3684.7202709999997,
+      "property": "force",
+      "samples_ms": [
+        3684.501285,
+        3684.419321,
+        3684.7202709999997
+      ],
+      "scc_iterations_median": 13.0,
+      "status_failures": [],
+      "systems_per_second_at_median": 2.1712572153438674
+    },
+    {
+      "backend": "cuda",
+      "batch_size": 32,
+      "converged": 1,
+      "count": 3,
+      "energy_max_hartree": -119.30484557472728,
+      "energy_min_hartree": -119.30484557472728,
+      "energy_std_hartree": 0.0,
+      "engine": "gpuxtb",
+      "mean_ms": 4834.258485666666,
+      "median_ms": 4834.290427,
+      "memory_mode": "host",
+      "min_ms": 4834.0926119999995,
+      "molecule": "C40H82",
+      "natoms": 122,
+      "p95_ms": 4834.392417999999,
+      "property": "force",
+      "samples_ms": [
+        4834.290427,
+        4834.392417999999,
+        4834.0926119999995
+      ],
+      "scc_iterations_median": 13.0,
+      "status_failures": [],
+      "systems_per_second_at_median": 6.6193788898732215
+    },
+    {
+      "backend": "cuda",
+      "batch_size": 128,
+      "converged": 1,
+      "count": 3,
+      "energy_max_hartree": -119.30484557472731,
+      "energy_min_hartree": -119.30484557472731,
+      "energy_std_hartree": 0.0,
+      "engine": "gpuxtb",
+      "mean_ms": 9542.638086666666,
+      "median_ms": 9542.290477,
+      "memory_mode": "host",
+      "min_ms": 9542.235936,
+      "molecule": "C40H82",
+      "natoms": 122,
+      "p95_ms": 9543.387847,
+      "property": "force",
+      "samples_ms": [
+        9542.290477,
+        9543.387847,
+        9542.235936
+      ],
+      "scc_iterations_median": 13.0,
+      "status_failures": [],
+      "systems_per_second_at_median": 13.413970189706687
+    }
+  ],
+  "schema_version": 1,
+  "units": {
+    "latency": "ms",
+    "throughput": "systems/s"
+  }
+}
