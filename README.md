@@ -1,106 +1,215 @@
 # gpuxtb
 
-gpuxtb is a new C++ library for high-throughput GFN-xTB energy and force inference on CPUs and
-GPUs. GFN2-xTB is the first implementation target. The public C ABI is designed for ragged batches,
-host or CUDA device pointers, and external point charges that participate in SCC iterations.
+gpuxtb is a native GFN2-xTB inference library for workloads made of many
+small and medium molecular systems. It combines a C++17 implementation, CPU
+and CUDA backends, one stable C ABI, and Python interfaces built on that same
+ABI.
 
-gpuxtb is licensed under GPL-3.0-or-later with a narrowly scoped
+The current pre-release implements restricted and unrestricted GFN2-xTB
+energies, analytic forces, and atomic charges. It is designed for reusable
+contexts and ragged batches rather than wrapping a command-line calculation
+once per molecule.
+
+## Features
+
+- **Native ragged batches.** Molecules share one call without padding every
+  system to the largest atom or orbital count.
+- **CPU and CUDA parity.** Both backends implement restricted and unrestricted
+  GFN2-xTB. The CUDA ABI accepts caller-owned host, device, or mixed buffers.
+- **Failure isolation.** SCC or eigensolver failure in one molecule publishes
+  NaNs and diagnostics for that molecule without discarding successful peers.
+- **Analytic derivatives.** Energies, QM forces, atomic charges, and optional
+  point-charge forces are available through the public API.
+- **QM/MM inputs inside SCC.** Explicit point charges and caller-supplied
+  periodic charge-response operators participate in every SCC iteration.
+- **Reusable execution state.** Contexts retain CPU workers, CUDA workspaces,
+  fixed-topology plans, and strict compatible electronic warm starts.
+- **One deployment boundary.** C, C++, Python, ASE, and dpdata all call the
+  same versioned, caller-buffer C ABI.
+
+GFN1-xTB and ROCm have reserved ABI values but are **not implemented**.
+gpuxtb also does not currently provide geometry optimization, molecular
+dynamics, solvation, Hessians, or a lattice/PBC descriptor.
+
+## Choosing an xTB implementation
+
+The projects below serve different workflows. This is a capability comparison,
+not a general performance ranking.
+
+| Project | Best fit | Methods | Batch and accelerator model |
+| --- | --- | --- | --- |
+| **gpuxtb** | Native high-throughput inference embedded in C/C++ or Python applications | GFN2-xTB | Ragged C-ABI batches; CPU and CUDA; caller-owned host/device buffers |
+| [xTB](https://github.com/grimme-lab/xtb) | Broad end-user computational chemistry workflows | GFN0/1/2-xTB, GFN-FF, and more | Mature CLI and per-system library APIs; OpenMP and optional NVIDIA build paths |
+| [tblite](https://github.com/tblite/tblite) | Lightweight, extensible single-point library | GFN1-xTB, GFN2-xTB, IPEA1-xTB | Fortran/C/Python per-structure APIs; CPU/OpenMP; molecular and periodic inputs |
+| [dxtb](https://github.com/grimme-lab/dxtb) | Differentiable xTB in PyTorch and ML workflows | GFN1-xTB, GFN2-xTB | Batched PyTorch tensors on CPU/CUDA; autodiff forces and response properties |
+
+Choose xTB for its broad CLI workflows, optimizers, dynamics, solvation, and
+method coverage. Choose tblite for a mature reusable single-point library with
+periodic structures and customizable components. Choose dxtb when PyTorch
+autodiff and differentiable response properties are central. Choose gpuxtb
+when the application needs a native ragged batch, a stable deployment ABI,
+direct CUDA buffers, or peer-local failure handling.
+
+Published benchmark claims are deliberately workload-specific. Reproducible
+protocols and raw results live under [`benchmarks/evidence`](benchmarks/evidence/).
+
+## Python quickstart
+
+gpuxtb is being prepared for publication on PyPI. Once a release is published,
+install the CPU runtime with:
+
+```console
+python -m pip install gpuxtb
+```
+
+Optional integrations and CUDA 12 host libraries are extras:
+
+```console
+python -m pip install "gpuxtb[ase,dpdata]"
+python -m pip install "gpuxtb[cuda12]"
+```
+
+Until the first PyPI release, install a source checkout as a non-editable
+package. `GPUXTB_ENABLE_CUDA=OFF` makes the intended backend explicit:
+
+```console
+GPUXTB_ENABLE_CUDA=OFF python -m pip install .
+```
+
+Positions are in bohr. Energies and forces are returned in Hartree and
+Hartree/bohr; the high-level Python `electronic_temperature` argument is the
+temperature in kelvin.
+
+```python
+import numpy as np
+from gpuxtb import Calculator
+
+numbers = np.array([8, 1, 1])
+positions = np.array(
+    [
+        [0.0000000000, 0.0000000000, -0.7357858611],
+        [1.4418315287, 0.0000000000, 0.3678929305],
+        [-1.4418315287, 0.0000000000, 0.3678929305],
+    ]
+)
+
+with Calculator("GFN2-xTB", numbers, positions, backend="auto") as calc:
+    result = calc.singlepoint()
+
+print(result["energy"])
+print(result["forces"])
+print(result["charges"])
+```
+
+`BatchCalculator` submits multiple `Structure` objects in one native call.
+The high-level Python API uses host NumPy arrays even when the selected backend
+is CUDA; direct CUDA-device descriptors are available through the low-level C
+ABI.
+
+See the [Python user guide](docs/user-guide/python.md) for batching, spin,
+point charges, ASE, and dpdata, or the concise
+[PyPI package page](python/README.md).
+
+## C and C++ quickstart
+
+Native consumers need CMake 3.24 or newer, a C++17 compiler to build gpuxtb,
+and one dlopen-able monolithic LP64 LAPACKE+CBLAS runtime for CPU inference.
+The public consumer API itself is C11-compatible and is wrapped in `extern "C"`
+for C++.
+
+```console
+cmake -S . -B build/release -G Ninja \
+  -DGPUXTB_ENABLE_CUDA=OFF \
+  -DBUILD_SHARED_LIBS=ON \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build/release --parallel
+cmake --install build/release --prefix "$PWD/build/install"
+```
+
+If auto-discovery cannot find the CPU numerical runtime, configure its absolute
+path with `-DGPUXTB_CPU_LINALG_LIBRARY=/path/to/libopenblas.so` or a compatible
+LP64 `libmkl_rt`.
+
+Installed CMake consumers use the exported target:
+
+```cmake
+find_package(gpuxtb CONFIG REQUIRED)
+target_link_libraries(my_program PRIVATE gpuxtb::gpuxtb)
+```
+
+Every extensible descriptor must be initialized before its fields are set.
+The complete request and all caller-owned output buffers are then submitted in
+one synchronous call:
+
+```c
+#include <gpuxtb/gpuxtb.h>
+
+gpuxtb_context_options_t context_options;
+gpuxtb_batch_t batch;
+gpuxtb_compute_options_t compute_options;
+gpuxtb_batch_result_t result;
+
+gpuxtb_context_options_init(&context_options, sizeof(context_options));
+gpuxtb_batch_init(&batch, sizeof(batch));
+gpuxtb_compute_options_init(&compute_options, sizeof(compute_options));
+gpuxtb_batch_result_init(&result, sizeof(result));
+
+/* Populate batch and result with caller-owned buffers. */
+compute_options.flags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES;
+
+gpuxtb_context_t *context = NULL;
+gpuxtb_context_create(&context_options, &context);
+gpuxtb_status_t status = gpuxtb_compute(context, &batch, &compute_options, &result);
+gpuxtb_context_destroy(context);
+```
+
+The [C API guide](docs/user-guide/c-api.md) contains a complete runnable
+single-molecule example plus descriptor, units, CUDA-memory, and failure
+semantics. The installed header
+[`include/gpuxtb/gpuxtb.h`](include/gpuxtb/gpuxtb.h) is the normative API.
+
+## Documentation
+
+- [Documentation index](docs/index.md)
+- [User guide](docs/user-guide/index.md)
+- [Theory guide](docs/theory/index.md)
+- [Developer guide](docs/developer-guide/index.md)
+- [Python package documentation](python/README.md)
+
+## Acknowledgements and provenance
+
+gpuxtb exists because the xTB and tblite communities made both the scientific
+method and high-quality reference implementations available. During gpuxtb's
+design and implementation, coding agents studied the xTB and tblite source
+code to understand equations, numerical conventions, edge cases, and public
+interface behavior. xTB also serves as an executable numerical oracle and the
+reference for explicit point-charge coupling. tblite supplies pinned GFN2
+parameter material and strongly influenced the familiar shape of the Python
+interface. We thank their authors and contributors.
+
+This acknowledgement is not a substitute for legal provenance. Redistributed
+or derived parameter data, oracle outputs, source material, revisions, hashes,
+and license terms are recorded in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and the linked manifests.
+
+## AI authorship
+
+gpuxtb is an AI-first software project. The core library architecture,
+scientific implementation, CUDA backend, bindings, tests, and documentation
+were designed and written primarily by AI coding agents rather than as a
+conventional manually authored implementation. Humans provide project goals,
+scientific and release decisions, review, infrastructure, and legal ownership.
+Git commits, pull requests, and issue checkpoints record the exact coding
+agent, client version, model, and reasoning effort used for agent-authored work.
+
+This development model does not relax the correctness standard: conformance
+uses pinned independent xTB/tblite evidence, CPU/CUDA parity, analytic-force
+finite differences, ABI tests, sanitizers, install consumers, and package
+inspection.
+
+## License
+
+gpuxtb is licensed under `GPL-3.0-or-later`, with the narrowly scoped
 [CUDA and Intel MKL additional permission](CUDA_MKL_LINKING_EXCEPTION).
-Redistributed tblite, dftd4, mctc-lib, and numerical-oracle material remains
-under the separate terms documented in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) with pinned provenance.
-
-> [!IMPORTANT]
-> Restricted and unrestricted GFN2-xTB inference is available through `gpuxtb_compute` on CPU and
-> CUDA, including energies, analytic QM forces, atomic charges, external point charges in SCC,
-> and point-charge forces. The CUDA backend accepts host, CUDA-device, or mixed input/output
-> descriptors for ragged batches. Its fixed-topology
-> runtime reuses device arenas across changed geometries and includes explicit point charges and
-> caller-supplied periodic `b + A*q` operators in SCC. The public call is synchronous and rejects
-> CUDA stream capture; a future asynchronous ABI remains a separate extension. GFN1-xTB and ROCm
-> remain reserved but not implemented.
-
-## Build
-
-```console
-cmake -S . -B build -G Ninja -DGPUXTB_ENABLE_CUDA=AUTO
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
-
-`GPUXTB_ENABLE_CUDA` accepts `AUTO`, `ON`, or `OFF`. `AUTO` enables CUDA when a CUDA compiler is
-available and otherwise produces a CPU-only library. The ROCm enum is reserved in the ABI, but the
-backend is not implemented yet.
-
-CPU contexts use `gpuxtb_context_options_t::cpu_threads` as the outer batch-parallelism ceiling.
-Set it to one for deterministic serial execution, to a positive value for that many available CPU
-workers, or to zero for an affinity-aware automatic choice (currently capped at 64). The CPU
-runtime keeps its workers and numerical staging for the lifetime of the context; the selected LP64
-BLAS remains one-thread-per-worker so batch parallelism does not create nested oversubscription.
-
-On the current development machine, CUDA 12.9.1 can be selected explicitly with:
-
-```console
-cmake -S . -B build-cuda \
-  -DGPUXTB_ENABLE_CUDA=ON \
-  -DCMAKE_CUDA_COMPILER=/group/software/cuda-12.9.1/bin/nvcc \
-  -DCMAKE_CUDA_ARCHITECTURES=120
-```
-
-A CUDA-enabled install does not require a CUDA toolkit merely to link a CMake
-consumer. At execution time, the backend dynamically resolves compatible CUDA
-12 host runtime/math libraries and the system NVIDIA driver. Install the
-`cuda12` Python extra to obtain the matching, separately distributed
-`nvidia-*` runtime packages; the package preloads their SONAMEs.
-gpuxtb does not embed build-host CUDA paths in the installed library's RPATH.
-For a native deployment whose compatible CUDA host libraries are outside the
-system loader path, expose that library directory through `LD_LIBRARY_PATH` or
-preload the SONAMEs before loading libgpuxtb.
-The device link explicitly disables the unused static `cudadevrt` input.
-Compiler-inserted NVIDIA libdevice code may still be present and remains under
-NVIDIA's terms through the project's additional permission.
-
-## Python package
-
-A Python package wrapping the public C ABI is provided under `python/` and is
-packaged with scikit-build-core:
-
-```console
-uv sync --no-editable                # CPU runtime
-uv sync --no-editable --extra cuda12 # CUDA 12 host runtimes
-```
-
-It offers a tblite-like single-molecule interface (`gpuxtb.Calculator`,
-`gpuxtb.Structure`, `gpuxtb.Result`), native ragged-batch inference
-(`gpuxtb.BatchCalculator`), net charge and spin multiplicity (unpaired
-electrons / spin channels), an ASE calculator (`gpuxtb.ase.GPUxtb`), and a
-dpdata driver plugin registered as `gpuxtb`. Full details are in
-[python/README.md](python/README.md).
-
-## Development
-
-Contributions must pass the repository pre-commit hooks (trailing whitespace,
-end-of-file, YAML/JSON/TOML checks, ruff lint and format for Python, and
-clang-format for C/C++/CUDA). Install [pre-commit](https://pre-commit.com), or
-prek (its Rust reimplementation), and run:
-
-```console
-pre-commit install        # or: prek install
-pre-commit run --all-files  # or: prek run --all-files
-```
-
-Pull requests run the same hooks in read-only CI. If a hook reports an
-autofixable change, run the command locally and commit the resulting diff.
-
-## Design goals
-
-- Match established GFN2-xTB energies and analytic forces before performance tuning.
-- Make batched inference the primary execution model, rather than a wrapper around serial calls.
-- Accept caller-owned host and CUDA memory through the same stable C API.
-- Include external point charges in SCC and return forces on both QM atoms and point charges.
-- Reuse workspaces and immutable device-resident parameters on steady-state inference paths.
-- Maintain an optimized CPU backend and a backend boundary suitable for a future ROCm port.
-
-The detailed design and correctness/performance strategy are in [docs/architecture.md](docs/architecture.md).
-Implementation progress is tracked in [GitHub Epic #1](https://github.com/njzjz/gpuxtb/issues/1)
-and its sub-issues.
+Upstream material remains under the separate terms in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

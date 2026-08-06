@@ -130,7 +130,7 @@ int test_xtb_671_water_golden() {
 
   /*
    * Converged qsh values were read from the Fortran unformatted xtbrestart
-   * written by xTB 6.7.1 revision edcfbbe for docs/qmmm.md's water case.
+   * written by xTB 6.7.1 revision edcfbbe for docs/theory/qmmm.md's water case.
    * They are ordered O(2s), O(2p), H(1s), H(1s).
    */
   const std::vector<double> shell_charges{
@@ -190,7 +190,7 @@ int test_xtb_671_water_golden() {
   CHECK(qm_only == qm_forces);
   CHECK(point_only == point_forces);
 
-  /* docs/qmmm.md records the xTB gradient, which is minus our force. */
+  /* docs/theory/qmmm.md records the xTB gradient, which is minus our force. */
   CHECK(near(-point_forces[0], 0.0024674453618603, 3.0e-16));
   CHECK(near(-point_forces[2], 0.0033308918783968, 3.0e-16));
   for (std::size_t axis = 0; axis < 3u; ++axis) {
