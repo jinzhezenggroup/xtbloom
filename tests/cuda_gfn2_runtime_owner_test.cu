@@ -806,7 +806,7 @@ int test_device_refresh_and_peer_rollback(cudaStream_t stream, std::int32_t devi
 
 /*
  * Production path with the sparse pair-list consistency gate active.  A single
- * 64-atom carbon slab crosses the 40-atom dense-fallback crossover, so the
+ * 62-atom C20H42 chain crosses the 40-atom dense-fallback crossover, so the
  * runtime provisioning enables the bucketed CN gate.  A fresh numerical
  * refresh and full inference must complete with no peer failure: the sparse
  * coordination numbers agree bitwise with the dense geometry cache, and any
@@ -818,7 +818,7 @@ int test_large_system_sparse_gate(cudaStream_t stream, std::int32_t device_id) {
   HostSccCase host;
   std::string error;
   HostSccCaseOptions case_options =
-      homogeneous_case_options(1, SmallSystemKind::kCarbonSlab, false, false, false);
+      homogeneous_case_options(1, SmallSystemKind::kC20H42, false, false, false);
   case_options.maximum_iterations = 100u;
   case_options.electronic_temperature = 300.0 * 3.166811563e-06;
   CHECK(HostSccCase::create(case_options, host, error) == GPUXTB_STATUS_SUCCESS);
@@ -859,7 +859,7 @@ int test_large_system_sparse_gate(cudaStream_t stream, std::int32_t device_id) {
   /* The sparse consistency gate is applied during the numerical-refresh
    * transaction; a peer that disagreed with the dense geometry cache would
    * already fail closed there.  The inference therefore must publish normally
-   * and report a finite energy; SCC convergence on this 64-atom slab within
+   * and report a finite energy; SCC convergence on this 62-atom chain within
    * the fixture's bounded iteration budget is not the gate's concern. */
   CHECK(result.statuses[0] == GPUXTB_STATUS_SUCCESS);
   CHECK(std::isnan(result.energies[0]) == false);

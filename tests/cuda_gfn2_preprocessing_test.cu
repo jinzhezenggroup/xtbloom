@@ -608,9 +608,10 @@ struct DeviceFixture {
     PL_ALLOC(pairlist_generations, batch);
     PL_ALLOC(pairlist_meta, batch);
     PL_ALLOC(pairlist_atom_cells, atoms);
-    PL_ALLOC(pairlist_cell_counts, batch * max_cells_per_system + 1u);
-    PL_ALLOC(pairlist_cell_offsets, batch * max_cells_per_system + 1u);
-    PL_ALLOC(pairlist_cell_fill, batch * max_cells_per_system + 1u);
+    const std::int64_t cell_storage = batch * (max_cells_per_system + 1);
+    PL_ALLOC(pairlist_cell_counts, cell_storage);
+    PL_ALLOC(pairlist_cell_offsets, cell_storage);
+    PL_ALLOC(pairlist_cell_fill, cell_storage);
     PL_ALLOC(pairlist_cell_atoms, atoms);
     PL_ALLOC(pairlist_neighbor_cursor, atoms);
     PL_ALLOC(pairlist_neighbor_scratch, atoms * max_neighbors_per_atom);
@@ -649,11 +650,11 @@ struct DeviceFixture {
                                   pairlist_atom_cells.get(),
                                   atoms,
                                   pairlist_cell_counts.get(),
-                                  batch * max_cells_per_system + 1u,
+                                  cell_storage,
                                   pairlist_cell_offsets.get(),
-                                  batch * max_cells_per_system + 1u,
+                                  cell_storage,
                                   pairlist_cell_fill.get(),
-                                  batch * max_cells_per_system + 1u,
+                                  cell_storage,
                                   pairlist_cell_atoms.get(),
                                   atoms,
                                   pairlist_neighbor_cursor.get(),
@@ -665,17 +666,7 @@ struct DeviceFixture {
                                   pairlist_sequence.get(),
                                   1,
                                   kPlanToken};
-    binding.output.pairlist = {pairlist_pairs.get(),
-                               batch * max_pairs_per_system,
-                               pairlist_offsets.get(),
-                               batch + 1,
-                               pairlist_neighbor_offsets.get(),
-                               atoms + 1,
-                               pairlist_neighbors.get(),
-                               atoms * max_neighbors_per_atom,
-                               pairlist_generations.get(),
-                               batch,
-                               kPlanToken};
+    binding.output.pairlist = {};
     return cudaSuccess;
   }
 
@@ -1128,8 +1119,30 @@ int test_sparse_pairlist_gate() {
     CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
     DeviceFixture device;
     CUDA_CHECK(device.initialize(host, stream));
+    CHECK(seal_gfn2_preprocessing_binding_cuda(device.binding).success());
+    const Gfn2PreprocessingLaunchDiagnostic disabled_gate_diagnostic =
+        gate_gfn2_sparse_coordination_cuda(device.binding, stream);
+    CHECK(!disabled_gate_diagnostic.success());
+    CHECK(disabled_gate_diagnostic.binding.error ==
+          Gfn2PreprocessingBindingError::kInvalidWorkspace);
+    CHECK(disabled_gate_diagnostic.binding.field == Gfn2PreprocessingBindingField::kPairlist);
+    CHECK(disabled_gate_diagnostic.cuda_status == cudaErrorInvalidValue);
     CUDA_CHECK(device.enable_pairlist(host, stream));
     CHECK(seal_gfn2_preprocessing_binding_cuda(device.binding).success());
+    /* Pair-generation storage is a stable binding field, even though the
+     * device values change per refresh.  Changing its extent after sealing
+     * must invalidate the seal rather than silently changing the graph view. */
+    Gfn2PreprocessingDeviceBinding stale_generation = device.binding;
+    stale_generation.workspace.pairlist_candidate.generation_elements += 1;
+    CHECK(validate_gfn2_preprocessing_binding_cuda(stale_generation).error ==
+          Gfn2PreprocessingBindingError::kStaleSeal);
+    /* A short cell-atom arena must fail during descriptor validation, before
+     * any preprocessing kernel is queued. */
+    Gfn2PreprocessingDeviceBinding short_cell_atoms = device.binding;
+    short_cell_atoms.workspace.pairlist.cell_atom_elements = host.basis.total_atoms - 1;
+    short_cell_atoms.binding_seal = 0u;
+    CHECK(seal_gfn2_preprocessing_binding_cuda(short_cell_atoms).error ==
+          Gfn2PreprocessingBindingError::kInvalidWorkspace);
     CHECK(compose_gfn2_preprocessing_cuda(device.binding, 61u, stream).success());
     CUDA_CHECK(cudaStreamSynchronize(stream));
     Downloaded first;
@@ -1141,6 +1154,27 @@ int test_sparse_pairlist_gate() {
             static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSuccess));
       CHECK(first.published[static_cast<std::size_t>(system)] == 1u);
     }
+
+    Gfn2PreprocessingDeviceBinding aliased = device.binding;
+    aliased.binding_seal = 0u;
+    aliased.workspace.pairlist_candidate.pairs = reinterpret_cast<gpuxtb::detail::Gfn2AtomPair*>(
+        const_cast<double*>(aliased.input.positions));
+    const Gfn2PreprocessingBindingDiagnostic alias_diagnostic =
+        seal_gfn2_preprocessing_binding_cuda(aliased);
+    CHECK(alias_diagnostic.error == Gfn2PreprocessingBindingError::kInvalidAlias);
+    CHECK(alias_diagnostic.field == Gfn2PreprocessingBindingField::kWorkspace);
+
+    /* The standalone gate is an execution entry point too.  A sealed binding
+     * whose pairlist scalar is mutated must be rejected before the gate kernel
+     * is queued, just like the full composer. */
+    Gfn2PreprocessingDeviceBinding stale_gate = device.binding;
+    stale_gate.plan.pairlist.cutoff += 1.0;
+    const Gfn2PreprocessingLaunchDiagnostic stale_gate_diagnostic =
+        gate_gfn2_sparse_coordination_cuda(stale_gate, stream);
+    CHECK(!stale_gate_diagnostic.success());
+    CHECK(stale_gate_diagnostic.binding.error == Gfn2PreprocessingBindingError::kStaleSeal);
+    CHECK(stale_gate_diagnostic.binding.field == Gfn2PreprocessingBindingField::kSeal);
+    CHECK(stale_gate_diagnostic.cuda_status == cudaErrorInvalidValue);
 
     /* Run the gate in isolation with a deliberately clobbered sparse output
      * to prove the fail-closed flag: the composed dense geometry candidate is

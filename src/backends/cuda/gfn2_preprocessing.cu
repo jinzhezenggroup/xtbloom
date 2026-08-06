@@ -134,20 +134,39 @@ bool all_tokens_match(const Gfn2PreprocessingDeviceBinding& binding) noexcept {
                        binding.plan.pairlist.atom_offsets == binding.plan.geometry.atom_offsets &&
                        binding.workspace.pairlist_candidate.plan_token == token &&
                        binding.workspace.pairlist.plan_token == token &&
-                       binding.output.pairlist.plan_token == token &&
+                       binding.output.pairlist.plan_token == 0u &&
+                       binding.output.pairlist.pairs == nullptr &&
+                       binding.output.pairlist.pair_offsets == nullptr &&
+                       binding.output.pairlist.neighbor_offsets == nullptr &&
+                       binding.output.pairlist.neighbors == nullptr &&
+                       binding.output.pairlist.pair_generations == nullptr &&
+                       binding.output.pairlist.pair_elements == 0 &&
+                       binding.output.pairlist.pair_offset_elements == 0 &&
+                       binding.output.pairlist.neighbor_offset_elements == 0 &&
+                       binding.output.pairlist.neighbor_elements == 0 &&
+                       binding.output.pairlist.generation_elements == 0 &&
                        binding.diagnostics.sparse_system_errors != nullptr &&
                        binding.diagnostics.sparse_device_error != nullptr;
   } else {
-    pairlist_matches = binding.plan.pairlist.plan_token == 0u &&
-                       binding.plan.pairlist.atom_offsets == nullptr &&
-                       binding.workspace.pairlist_candidate.plan_token == 0u &&
-                       binding.workspace.pairlist.plan_token == 0u &&
-                       binding.workspace.pairlist_candidate.pairs == nullptr &&
-                       binding.workspace.pairlist.system_meta == nullptr &&
-                       binding.workspace.sparse_coordination == nullptr &&
-                       binding.output.pairlist.plan_token == 0u &&
-                       binding.diagnostics.sparse_system_errors == nullptr &&
-                       binding.diagnostics.sparse_device_error == nullptr;
+    pairlist_matches =
+        binding.plan.pairlist.plan_token == 0u && binding.plan.pairlist.atom_offsets == nullptr &&
+        binding.workspace.pairlist_candidate.plan_token == 0u &&
+        binding.workspace.pairlist.plan_token == 0u &&
+        binding.workspace.pairlist_candidate.pairs == nullptr &&
+        binding.workspace.pairlist.system_meta == nullptr &&
+        binding.workspace.sparse_coordination == nullptr &&
+        binding.output.pairlist.plan_token == 0u && binding.output.pairlist.pairs == nullptr &&
+        binding.output.pairlist.pair_offsets == nullptr &&
+        binding.output.pairlist.neighbor_offsets == nullptr &&
+        binding.output.pairlist.neighbors == nullptr &&
+        binding.output.pairlist.pair_generations == nullptr &&
+        binding.output.pairlist.pair_elements == 0 &&
+        binding.output.pairlist.pair_offset_elements == 0 &&
+        binding.output.pairlist.neighbor_offset_elements == 0 &&
+        binding.output.pairlist.neighbor_elements == 0 &&
+        binding.output.pairlist.generation_elements == 0 &&
+        binding.diagnostics.sparse_system_errors == nullptr &&
+        binding.diagnostics.sparse_device_error == nullptr;
   }
   return token != 0u && binding.plan.plan_token == token &&
          binding.plan.geometry.plan_token == token && binding.plan.integrals.plan_token == token &&
@@ -175,10 +194,6 @@ std::uint64_t binding_seal(const Gfn2PreprocessingDeviceBinding& binding) noexce
   normalized.output.aes2.geometry_generation = 0u;
   normalized.workspace.es2_candidate.geometry_generation = 0u;
   normalized.workspace.aes2_candidate.geometry_generation = 0u;
-  normalized.output.pairlist.pair_generations = nullptr;
-  normalized.output.pairlist.generation_elements = 0;
-  normalized.workspace.pairlist_candidate.pair_generations = nullptr;
-  normalized.workspace.pairlist_candidate.generation_elements = 0;
 
   constexpr std::uint64_t kOffsetBasis = 1469598103934665603ULL;
   constexpr std::uint64_t kPrime = 1099511628211ULL;
@@ -434,17 +449,25 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
   const Gfn2PairListDeviceBatch& pairlist = binding.plan.pairlist;
   const bool pairlist_enabled = pairlist.batch_size > 0;
   if (pairlist_enabled) {
-    const std::int64_t pairlist_neighbors_capacity = atoms * pairlist.max_neighbors_per_atom;
-    const std::int64_t pairlist_cells_capacity = batch * pairlist.max_cells_per_system;
-    const std::int64_t pairlist_pairs_capacity = batch * pairlist.max_pairs_per_system;
+    std::int64_t pairlist_neighbors_capacity = 0;
+    std::int64_t pairlist_cells_capacity = 0;
+    std::int64_t pairlist_pairs_capacity = 0;
+    const bool pairlist_capacity_products =
+        checked_multiply(atoms, pairlist.max_neighbors_per_atom, pairlist_neighbors_capacity) &&
+        checked_multiply(batch, pairlist.max_cells_per_system, pairlist_cells_capacity) &&
+        checked_multiply(batch, pairlist.max_pairs_per_system, pairlist_pairs_capacity) &&
+        pairlist.max_cells_per_system < std::numeric_limits<std::int64_t>::max() &&
+        checked_multiply(batch, pairlist.max_cells_per_system + 1, pairlist_cells_capacity);
     std::int64_t pairlist_scratch = 0;
     const bool pairlist_extents =
-        pairlist.plan_token == binding.plan_token && pairlist.batch_size == batch &&
-        pairlist.total_atoms == atoms && pairlist.atom_offset_elements == batch + 1 &&
+        pairlist_capacity_products && pairlist.plan_token == binding.plan_token &&
+        pairlist.batch_size == batch && pairlist.total_atoms == atoms &&
+        pairlist.atom_offset_elements == batch + 1 &&
         pairlist.atom_offsets == geometry.atom_offsets && pairlist.cutoff > 0.0 &&
         std::isfinite(pairlist.cutoff) && pairlist.max_cells_per_system > 0 &&
         pairlist.max_neighbors_per_atom > 0 && pairlist.max_pairs_per_system > 0 &&
         (pairlist.mode == Gfn2PairListMode::kSparse || pairlist.mode == Gfn2PairListMode::kDense) &&
+        (pairlist.flags & ~kGfn2PairListAllowDenseFallback) == 0u &&
         checked_multiply(atoms, pairlist.max_neighbors_per_atom, pairlist_scratch) &&
         workspace.sparse_coordination_elements == atoms &&
         canonical_pointer(workspace.sparse_coordination, atoms) &&
@@ -466,10 +489,10 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
                           workspace.pairlist_candidate.generation_elements) &&
         workspace.pairlist.system_meta_elements >= batch &&
         workspace.pairlist.atom_cell_elements >= atoms &&
-        workspace.pairlist.cell_count_elements >= pairlist_cells_capacity + 1 &&
-        workspace.pairlist.cell_offset_elements >= pairlist_cells_capacity + 1 &&
-        workspace.pairlist.cell_fill_elements >= pairlist_cells_capacity + 1 &&
-        workspace.pairlist.cell_atom_elements != 0 &&
+        workspace.pairlist.cell_count_elements >= pairlist_cells_capacity &&
+        workspace.pairlist.cell_offset_elements >= pairlist_cells_capacity &&
+        workspace.pairlist.cell_fill_elements >= pairlist_cells_capacity &&
+        workspace.pairlist.cell_atom_elements >= atoms &&
         workspace.pairlist.neighbor_cursor_elements >= atoms &&
         workspace.pairlist.neighbor_scratch_elements >= pairlist_neighbors_capacity &&
         workspace.pairlist.pair_cursor_elements >= batch &&
@@ -477,20 +500,14 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
         workspace.pairlist.plan_token == binding.plan_token &&
         canonical_pointer(workspace.pairlist.system_meta, batch) &&
         canonical_pointer(workspace.pairlist.atom_cells, atoms) &&
-        canonical_pointer(workspace.pairlist.cell_counts, pairlist_cells_capacity + 1) &&
-        canonical_pointer(workspace.pairlist.cell_offsets, pairlist_cells_capacity + 1) &&
-        canonical_pointer(workspace.pairlist.cell_fill, pairlist_cells_capacity + 1) &&
+        canonical_pointer(workspace.pairlist.cell_counts, pairlist_cells_capacity) &&
+        canonical_pointer(workspace.pairlist.cell_offsets, pairlist_cells_capacity) &&
+        canonical_pointer(workspace.pairlist.cell_fill, pairlist_cells_capacity) &&
         canonical_pointer(workspace.pairlist.cell_atoms, workspace.pairlist.cell_atom_elements) &&
         canonical_pointer(workspace.pairlist.neighbor_cursor, atoms) &&
         canonical_pointer(workspace.pairlist.neighbor_scratch, pairlist_neighbors_capacity) &&
         canonical_pointer(workspace.pairlist.pair_cursor, batch) &&
         canonical_pointer(workspace.pairlist.sequence_active, 1) &&
-        output.pairlist.pair_elements >= pairlist_pairs_capacity &&
-        output.pairlist.pair_offset_elements == batch + 1 &&
-        output.pairlist.neighbor_offset_elements == atoms + 1 &&
-        output.pairlist.neighbor_elements >= pairlist_neighbors_capacity &&
-        output.pairlist.generation_elements >= batch &&
-        output.pairlist.plan_token == binding.plan_token &&
         diagnostics.sparse_system_elements == batch &&
         canonical_pointer(diagnostics.sparse_system_errors, batch) &&
         canonical_pointer(diagnostics.sparse_device_error, 1);
@@ -500,7 +517,7 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
   }
 
   RangeList<40> reads;
-  RangeList<52> writes;
+  RangeList<80> writes;
   const bool ranges_valid =
       reads.add(geometry.atom_offsets, batch + 1) && reads.add(geometry.pair_offsets, batch + 1) &&
       reads.add(geometry.covalent_radii, atoms) &&
@@ -560,10 +577,36 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
       writes.add(diagnostics.aes2_system_errors, batch) &&
       writes.add(diagnostics.aes2_device_error, 1) &&
       writes.add(diagnostics.system_stages, batch) && writes.add(diagnostics.plan_error, 1);
+  const bool sparse_ranges_valid =
+      !pairlist_enabled ||
+      (writes.add(workspace.sparse_coordination, workspace.sparse_coordination_elements) &&
+       writes.add(workspace.pairlist_candidate.pairs, workspace.pairlist_candidate.pair_elements) &&
+       writes.add(workspace.pairlist_candidate.pair_offsets,
+                  workspace.pairlist_candidate.pair_offset_elements) &&
+       writes.add(workspace.pairlist_candidate.neighbor_offsets,
+                  workspace.pairlist_candidate.neighbor_offset_elements) &&
+       writes.add(workspace.pairlist_candidate.neighbors,
+                  workspace.pairlist_candidate.neighbor_elements) &&
+       writes.add(workspace.pairlist_candidate.pair_generations,
+                  workspace.pairlist_candidate.generation_elements) &&
+       writes.add(workspace.pairlist.system_meta, workspace.pairlist.system_meta_elements) &&
+       writes.add(workspace.pairlist.atom_cells, workspace.pairlist.atom_cell_elements) &&
+       writes.add(workspace.pairlist.cell_counts, workspace.pairlist.cell_count_elements) &&
+       writes.add(workspace.pairlist.cell_offsets, workspace.pairlist.cell_offset_elements) &&
+       writes.add(workspace.pairlist.cell_fill, workspace.pairlist.cell_fill_elements) &&
+       writes.add(workspace.pairlist.cell_atoms, workspace.pairlist.cell_atom_elements) &&
+       writes.add(workspace.pairlist.neighbor_cursor,
+                  workspace.pairlist.neighbor_cursor_elements) &&
+       writes.add(workspace.pairlist.neighbor_scratch,
+                  workspace.pairlist.neighbor_scratch_elements) &&
+       writes.add(workspace.pairlist.pair_cursor, workspace.pairlist.pair_cursor_elements) &&
+       writes.add(workspace.pairlist.sequence_active, workspace.pairlist.sequence_elements) &&
+       writes.add(diagnostics.sparse_system_errors, diagnostics.sparse_system_elements) &&
+       writes.add(diagnostics.sparse_device_error, 1));
   const bool epoch_range_valid =
       epoch_disabled ||
       writes.add(binding.geometry_epoch.value, binding.geometry_epoch.value_elements);
-  if (!ranges_valid || !epoch_range_valid) {
+  if (!ranges_valid || !sparse_ranges_valid || !epoch_range_valid) {
     return binding_failure(BindingError::kInvalidExtent, BindingField::kWorkspace);
   }
   if (!writes_are_disjoint(reads, writes)) {
@@ -758,6 +801,7 @@ __global__ void gate_sparse_coordination_kernel(Gfn2GeometryDeviceBatch geometry
                                                 Gfn2PairListDeviceBatch pairlist,
                                                 const double* dense_coordination,
                                                 const double* sparse_coordination,
+                                                const std::uint32_t* sparse_sequence_active,
                                                 Gfn2PreprocessingDeviceActivity activity,
                                                 Gfn2PreprocessingDeviceDiagnostics diagnostics) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
@@ -768,7 +812,18 @@ __global__ void gate_sparse_coordination_kernel(Gfn2GeometryDeviceBatch geometry
   const bool sparse_healthy =
       atomicAdd(const_cast<std::uint32_t*>(diagnostics.sparse_system_errors + system), 0u) ==
       static_cast<std::uint32_t>(Gfn2PairListDeviceError::kSuccess);
-  if (!requested || !geometry_healthy || !sparse_healthy) {
+  if (!requested || !geometry_healthy) {
+    return;
+  }
+  const bool sparse_sequence_ok =
+      atomicAdd(const_cast<std::uint32_t*>(sparse_sequence_active), 0u) == 1u;
+  if (!sparse_sequence_ok || !sparse_healthy) {
+    /* A peer-local sparse error is folded into the existing geometry
+     * publication gate; a topology-wide sequence failure closes every
+     * requested healthy peer. */
+    atomicCAS(diagnostics.geometry_system_errors + system,
+              static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSuccess),
+              static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSparseCoordinationMismatch));
     return;
   }
   if (pairlist.batch_size != geometry.batch_size || pairlist.total_atoms != geometry.total_atoms ||
@@ -929,25 +984,10 @@ __global__ void publish_preprocessing_kernel(Gfn2PreprocessingDevicePlan plan,
   for (std::int64_t element = es2_begin + threadIdx.x; element < es2_end; element += blockDim.x) {
     output.es2.coulomb_matrix[element] = workspace.es2_candidate.coulomb_matrix[element];
   }
-  if (plan.pairlist.batch_size > 0) {
-    const std::int64_t pairlist_pair_begin = output.pairlist.pair_offsets[system];
-    const std::int64_t pairlist_pair_end = output.pairlist.pair_offsets[system + 1];
-    for (std::int64_t pair = pairlist_pair_begin + threadIdx.x; pair < pairlist_pair_end;
-         pair += blockDim.x) {
-      output.pairlist.pairs[pair] = workspace.pairlist_candidate.pairs[pair];
-    }
-    for (std::int64_t neighbor = pairlist_pair_begin + threadIdx.x; neighbor < pairlist_pair_end;
-         neighbor += blockDim.x) {
-      output.pairlist.neighbors[neighbor] = workspace.pairlist_candidate.neighbors[neighbor];
-    }
-    for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
-      output.pairlist.neighbor_offsets[atom + 1] =
-          workspace.pairlist_candidate.neighbor_offsets[atom + 1];
-    }
-    if (threadIdx.x == 0) {
-      output.pairlist.pair_generations[system] = generation;
-    }
-  }
+  /* The sparse list remains an internal candidate for the dense/CN gate.  It
+   * is deliberately not copied into output: compact pair/neighbor offsets
+   * cannot be published independently per peer without exposing partial
+   * slices when a later operator fails. */
   if (threadIdx.x == 0) {
     output.geometry.geometry_generations[system] = generation;
     output.operator_generations[system] = generation;
@@ -1081,7 +1121,8 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
     gate_sparse_coordination_kernel<<<sparse_blocks, kThreadsPerBlock, 0, stream>>>(
         binding.plan.geometry, binding.plan.pairlist,
         binding.workspace.geometry_candidate.coordination_numbers,
-        binding.workspace.sparse_coordination, binding.activity, binding.diagnostics);
+        binding.workspace.sparse_coordination, binding.workspace.pairlist.sequence_active,
+        binding.activity, binding.diagnostics);
     status = check_launch();
     if (status != cudaSuccess) return launch_failure({}, status);
   }
@@ -1174,7 +1215,11 @@ Gfn2PreprocessingLaunchDiagnostic compose_gfn2_preprocessing_epoch_cuda(
 
 Gfn2PreprocessingLaunchDiagnostic gate_gfn2_sparse_coordination_cuda(
     Gfn2PreprocessingDeviceBinding& binding, cudaStream_t stream) noexcept {
-  if (binding.plan.pairlist.batch_size <= 0 || binding.workspace.sparse_coordination == nullptr) {
+  const BindingDiagnostic descriptor = validate_structure(binding, true);
+  if (descriptor.error != BindingError::kSuccess) {
+    return launch_failure(descriptor, cudaErrorInvalidValue);
+  }
+  if (binding.plan.pairlist.batch_size <= 0) {
     return launch_failure(binding_failure(BindingError::kInvalidWorkspace, BindingField::kPairlist),
                           cudaErrorInvalidValue);
   }
@@ -1183,7 +1228,8 @@ Gfn2PreprocessingLaunchDiagnostic gate_gfn2_sparse_coordination_cuda(
   gate_sparse_coordination_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
       binding.plan.geometry, binding.plan.pairlist,
       binding.workspace.geometry_candidate.coordination_numbers,
-      binding.workspace.sparse_coordination, binding.activity, binding.diagnostics);
+      binding.workspace.sparse_coordination, binding.workspace.pairlist.sequence_active,
+      binding.activity, binding.diagnostics);
   return {binding_failure(BindingError::kSuccess, BindingField::kNone), check_launch()};
 }
 

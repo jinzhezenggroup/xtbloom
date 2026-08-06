@@ -16,6 +16,7 @@ inline constexpr std::uint32_t kGfn2PairListAbiVersion = 1u;
 
 /* Default sparse cutoff matching the GFN2 coordination/reference cutoffs. */
 inline constexpr double kDefaultPairlistCutoffBohr = 25.0;
+inline constexpr std::uint32_t kGfn2PairListAllowDenseFallback = 1u << 0;
 
 /*
  * Pair-list strategy for one fixed-topology batch.
@@ -52,7 +53,10 @@ enum class Gfn2PairListDeviceError : std::uint32_t {
  * origin is the minimum corner; nx/ny/nz are the bucket counts; cells is the
  * product.  A system with at most one atom still owns one cell so the builder
  * has a well-defined stride.  cell_base offsets into the flat per-system cell
- * arrays (each system is provisioned max_cells_per_system cells).
+ * arrays; each system owns max_cells_per_system entries plus one exclusive-end
+ * sentinel slot so adjacent systems never alias their prefix boundaries.  A
+ * zero cell count is an explicit dense-scan fallback for callers that opt in
+ * to unbounded coordinate extents.
  */
 struct Gfn2PairListSystemMeta {
   double origin[3] = {0.0, 0.0, 0.0};
@@ -68,7 +72,8 @@ struct Gfn2PairListSystemMeta {
  * batch partition.  cutoff is a pair inclusion radius in bohr (meaningful only
  * in kSparse mode but validated in both).  The three maxima are the documented
  * fixed-topology capacities; exceeding any of them fails that system closed
- * and never publishes a partial slice.
+ * and never publishes a partial slice unless the caller opts into the
+ * coordinate-unbounded dense fallback flag.
  */
 struct Gfn2PairListDeviceBatch {
   std::int64_t batch_size = 0;
@@ -81,6 +86,7 @@ struct Gfn2PairListDeviceBatch {
   Gfn2PairListMode mode = Gfn2PairListMode::kSparse;
   std::uint64_t plan_token = 0u;
   const std::int64_t* atom_offsets = nullptr;
+  std::uint32_t flags = 0u;
 };
 
 /*
@@ -154,8 +160,8 @@ static_assert(std::is_standard_layout_v<Gfn2PairListDeviceWorkspace>);
  * neighbor indices = total_atoms*max_neighbors_per_atom; offsets = batch+1;
  * generations = batch.
  * workspace elements: meta = batch; atom_cells/cell_atoms/neighbor_cursor =
- * total_atoms; each cell array (counts, offsets, fill) = batch*max_cells + 1
- * (offsets owns a trailing end slot); neighbor scratch =
+ * total_atoms; each cell array (counts, offsets, fill) =
+ * batch*(max_cells + 1) (one trailing slot per system); neighbor scratch =
  * total_atoms*max_neighbors_per_atom; pair_cursor = batch.
  */
 [[nodiscard]] bool query_gfn2_pairlist_requirements_cuda(
@@ -178,11 +184,13 @@ cudaError_t reset_gfn2_pairlist_device_errors_cuda(std::int64_t batch_size,
  * positions in bohr and publish them transactionally.  Invalid device topology,
  * capacities, or a pre-existing device_error make the whole call a no-op;
  * numerical or capacity failure in one system does not prevent healthy peers
- * committing.  In kSparse mode only pairs with squared distance <= cutoff^2 are
- * retained; kDense retains the complete triangle.  The published pair list is
- * canonically ordered (first ascending, then second) and the per-atom neighbor
- * ranges are ascending, matching the dense packed-triangle reduction order so
- * downstream reductions reproduce dense results for the retained pairs.
+ * committing.  Offset arrays are batch-wide CSR metadata and are repacked on
+ * every active update; a failed peer contributes an empty range and its
+ * generation is reset to zero, so its prior list must not be reused.  In
+ * kSparse mode only pairs with squared distance <= cutoff^2 are retained; kDense retains the
+ * complete triangle.  The published pair list is canonically ordered (first ascending, then second)
+ * and the per-atom neighbor ranges are ascending, matching the dense packed-triangle reduction
+ * order so downstream reductions reproduce dense results for the retained pairs.
  */
 cudaError_t update_gfn2_pairlist_cache_cuda(const Gfn2PairListDeviceBatch& batch,
                                             const double* positions, std::uint64_t pair_generation,
@@ -196,9 +204,10 @@ cudaError_t update_gfn2_pairlist_cache_cuda(const Gfn2PairListDeviceBatch& batch
  * Consume the published pair list to accumulate coordination numbers per atom
  * in the exact dense order (ascending neighbors), so sparse results equal the
  * dense geometry cache bitwise for the retained pairs.  radii are the
- * already-scaled GFN2 dexp CN radii.  The primitive validates the generation
- * pairing like the geometry VJP and never writes partial outputs for a failed
- * system.
+ * already-scaled GFN2 dexp CN radii.  A sparse list cutoff must cover the
+ * model's 25-bohr CN cutoff; larger list cutoffs are accepted and their extra
+ * pairs contribute exact zero.  The primitive validates the generation pairing
+ * like the geometry VJP and never writes partial outputs for a failed system.
  */
 cudaError_t evaluate_gfn2_pairlist_coordination_cuda(
     const Gfn2PairListDeviceBatch& batch, const double* positions, const double* covalent_radii,

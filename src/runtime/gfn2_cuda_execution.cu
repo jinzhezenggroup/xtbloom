@@ -111,6 +111,21 @@ bool checked_elements(std::int64_t elements, std::int64_t factor, std::int64_t& 
   return true;
 }
 
+bool checked_triangle(std::int64_t atoms, std::int64_t& pairs) noexcept {
+  if (atoms < 0) {
+    return false;
+  }
+  if (atoms <= 1) {
+    pairs = 0;
+    return true;
+  }
+  const std::int64_t lower = atoms - 1;
+  if ((atoms & 1) == 0) {
+    return checked_elements(atoms / 2, lower, pairs);
+  }
+  return checked_elements(atoms, lower / 2, pairs);
+}
+
 template <typename T>
 gpuxtb_status_t copy_host_buffer(const char* name, const gpuxtb_const_buffer_t& buffer,
                                  std::int64_t elements, std::vector<T>& output, std::string& error,
@@ -2038,10 +2053,9 @@ struct Gfn2CudaExecutionCache::Impl {
     std::int64_t d4_pair_elements = 0;
     std::int64_t dipole_elements = 0;
     std::int64_t quadrupole_elements = 0;
-    /* Fixed-topology capacities for the optional sparse pair-list gate.  These
-     * are conservative: cells scale with the largest box (bounded by atoms),
-     * while neighbors and pairs use safe all-pairs upper bounds, so the
-     * documented overflow detection never triggers for a valid system. */
+    /* Fixed-topology capacities for the optional sparse pair-list gate.  The
+     * cell arrays use a per-system trailing slot so adjacent systems never
+     * race on the exclusive-end sentinel. */
     std::int64_t maximum_system_atoms = 0;
     for (std::int64_t system = 0; system < batch; ++system) {
       maximum_system_atoms =
@@ -2049,15 +2063,25 @@ struct Gfn2CudaExecutionCache::Impl {
                    candidate.host.basis.atom_offsets[static_cast<std::size_t>(system + 1)] -
                        candidate.host.basis.atom_offsets[static_cast<std::size_t>(system)]);
     }
-    std::int64_t sparse_cells_per_system = std::max<std::int64_t>(16, 8 * maximum_system_atoms);
+    std::int64_t scaled_cells = 0;
+    if (!checked_elements(maximum_system_atoms, 8, scaled_cells)) {
+      error = "numerical refresh sparse cell capacity overflows int64_t";
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
+    std::int64_t sparse_cells_per_system = std::max<std::int64_t>(16, scaled_cells);
     std::int64_t sparse_neighbors_per_atom = maximum_system_atoms;
-    std::int64_t sparse_pairs_per_system = maximum_system_atoms * (maximum_system_atoms - 1) / 2;
+    std::int64_t sparse_pairs_per_system = 0;
+    if (!checked_triangle(maximum_system_atoms, sparse_pairs_per_system)) {
+      error = "numerical refresh sparse pair capacity overflows int64_t";
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
     std::int64_t sparse_cell_capacity = 0;
     std::int64_t sparse_neighbor_capacity = 0;
     std::int64_t sparse_pair_capacity = 0;
     if (!checked_elements(batch, sparse_cells_per_system, sparse_cell_capacity) ||
         !checked_elements(atoms, sparse_neighbors_per_atom, sparse_neighbor_capacity) ||
-        !checked_elements(batch, sparse_pairs_per_system, sparse_pair_capacity)) {
+        !checked_elements(batch, sparse_pairs_per_system, sparse_pair_capacity) ||
+        sparse_cell_capacity > std::numeric_limits<std::int64_t>::max() - batch) {
       error = "numerical refresh sparse pair-list capacity overflows int64_t";
       return GPUXTB_STATUS_ALLOCATION_FAILED;
     }
@@ -2293,9 +2317,10 @@ struct Gfn2CudaExecutionCache::Impl {
     offset.pairlist_generations = layout.append<std::uint64_t>(batch);
     offset.pairlist_meta = layout.append<gpuxtb::detail::cuda::Gfn2PairListSystemMeta>(batch);
     offset.pairlist_atom_cells = layout.append<std::int64_t>(atoms);
-    offset.pairlist_cell_counts = layout.append<std::int64_t>(sparse_cell_capacity + 1);
-    offset.pairlist_cell_offsets = layout.append<std::int64_t>(sparse_cell_capacity + 1);
-    offset.pairlist_cell_fill = layout.append<std::int64_t>(sparse_cell_capacity + 1);
+    const std::int64_t sparse_cell_storage = sparse_cell_capacity + batch;
+    offset.pairlist_cell_counts = layout.append<std::int64_t>(sparse_cell_storage);
+    offset.pairlist_cell_offsets = layout.append<std::int64_t>(sparse_cell_storage);
+    offset.pairlist_cell_fill = layout.append<std::int64_t>(sparse_cell_storage);
     offset.pairlist_cell_atoms = layout.append<std::int64_t>(atoms);
     offset.pairlist_neighbor_cursor = layout.append<std::int64_t>(atoms);
     offset.pairlist_neighbor_scratch = layout.append<std::int64_t>(sparse_neighbor_capacity);
@@ -2555,6 +2580,7 @@ struct Gfn2CudaExecutionCache::Impl {
           token,
           candidate.device_topology.atom_offsets,
       };
+      binding.plan.pairlist.flags = gpuxtb::detail::cuda::kGfn2PairListAllowDenseFallback;
     }
     binding.diagnostics = {
         arena_pointer<std::uint32_t>(arena, offset.geometry_system_errors),
@@ -2623,12 +2649,12 @@ struct Gfn2CudaExecutionCache::Impl {
         pairlist_enabled ? atoms : 0,
         pairlist_enabled ? arena_pointer<std::int64_t>(arena, offset.pairlist_cell_counts)
                          : nullptr,
-        pairlist_enabled ? sparse_cell_capacity + 1 : 0,
+        pairlist_enabled ? sparse_cell_capacity + batch : 0,
         pairlist_enabled ? arena_pointer<std::int64_t>(arena, offset.pairlist_cell_offsets)
                          : nullptr,
-        pairlist_enabled ? sparse_cell_capacity + 1 : 0,
+        pairlist_enabled ? sparse_cell_capacity + batch : 0,
         pairlist_enabled ? arena_pointer<std::int64_t>(arena, offset.pairlist_cell_fill) : nullptr,
-        pairlist_enabled ? sparse_cell_capacity + 1 : 0,
+        pairlist_enabled ? sparse_cell_capacity + batch : 0,
         pairlist_enabled ? arena_pointer<std::int64_t>(arena, offset.pairlist_cell_atoms) : nullptr,
         pairlist_enabled ? atoms : 0,
         pairlist_enabled ? arena_pointer<std::int64_t>(arena, offset.pairlist_neighbor_cursor)
@@ -2643,21 +2669,10 @@ struct Gfn2CudaExecutionCache::Impl {
         pairlist_enabled ? arena_pointer<std::uint32_t>(arena, offset.pairlist_sequence) : nullptr,
         pairlist_enabled ? 1 : 0,
         pairlist_enabled ? token : 0u};
-    binding.output.pairlist = {
-        pairlist_enabled ? arena_pointer<gpuxtb::detail::Gfn2AtomPair>(arena, offset.pairlist_pairs)
-                         : nullptr,
-        pairlist_enabled ? sparse_pair_capacity : 0,
-        pairlist_enabled ? arena_pointer<std::int64_t>(arena, offset.pairlist_offsets) : nullptr,
-        pairlist_enabled ? batch + 1 : 0,
-        pairlist_enabled ? arena_pointer<std::int64_t>(arena, offset.pairlist_neighbor_offsets)
-                         : nullptr,
-        pairlist_enabled ? atoms + 1 : 0,
-        pairlist_enabled ? arena_pointer<std::int64_t>(arena, offset.pairlist_neighbors) : nullptr,
-        pairlist_enabled ? sparse_neighbor_capacity : 0,
-        pairlist_enabled ? arena_pointer<std::uint64_t>(arena, offset.pairlist_generations)
-                         : nullptr,
-        pairlist_enabled ? batch : 0,
-        pairlist_enabled ? token : 0u};
+    /* The optional pair-list is an internal candidate for the sparse/CN gate.
+     * Keep the output cache empty until a future fixed-stride publication
+     * design can preserve per-peer transactionality. */
+    binding.output.pairlist = {};
     binding.workspace.overlap_candidate = arena_pointer<double>(arena, offset.overlap_candidate);
     binding.workspace.overlap_elements = matrices;
     binding.workspace.dipole_candidate = arena_pointer<double>(arena, offset.dipole_candidate);

@@ -153,7 +153,9 @@ struct Gfn2PreprocessingDeviceOutput {
    * path must use operator_generations and published_mask as the commit record. */
   Gfn2ES2DeviceCache es2{};
   Gfn2AES2DeviceCache aes2{};
-  /* Published sparse pair-list state when the pairlist plan leaf is enabled. */
+  /* Reserved for a future independently transactional public pair-list cache.
+   * The current production gate keeps its list in workspace candidate storage;
+   * this field must remain empty so a peer failure cannot expose partial offsets. */
   Gfn2PairListDeviceCache pairlist{};
   /* Per-system generation for the complete S/D/Q/H0/ES2/AES2 transaction. */
   std::uint64_t* operator_generations = nullptr;

@@ -5,6 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
 #include <limits>
 #include <string>
 #include <type_traits>
@@ -32,6 +35,7 @@ using gpuxtb::detail::cuda::Gfn2PairListDeviceCache;
 using gpuxtb::detail::cuda::Gfn2PairListDeviceError;
 using gpuxtb::detail::cuda::Gfn2PairListDeviceWorkspace;
 using gpuxtb::detail::cuda::Gfn2PairListMode;
+using gpuxtb::detail::cuda::Gfn2PairListSystemMeta;
 using gpuxtb::detail::cuda::kGfn2GeometryPairDataElements;
 using gpuxtb::detail::gfn2::CoordinationPlan;
 
@@ -700,6 +704,41 @@ int test_pair_capacity_overflow_isolated() {
   return 0;
 }
 
+int test_cell_capacity_dense_fallback() {
+  HostCase host;
+  std::string error;
+  host.atom_offsets = {0, 3};
+  host.atomic_numbers = {6, 6, 6};
+  host.positions = {0.0, 0.0, 0.0, 1000.0, 0.0, 0.0, 2000.0, 0.0, 0.0};
+  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(1, 3, host.atom_offsets.data(),
+                                                     host.atomic_numbers.data(), host.plan,
+                                                     error) == GPUXTB_STATUS_SUCCESS);
+  host.expected_coordination.resize(3u);
+  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(host.plan, host.positions.data(),
+                                                        host.expected_coordination.data(),
+                                                        error) == GPUXTB_STATUS_SUCCESS);
+
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, nullptr));
+  Gfn2PairListDeviceBatch batch = device.batch(host, Gfn2PairListMode::kSparse);
+  batch.max_cells_per_system = 1;
+  batch.flags = gpuxtb::detail::cuda::kGfn2PairListAllowDenseFallback;
+  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+      1, device.system_errors.get(), device.device_error.get()));
+  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+      batch, device.positions.get(), kGeneration, device.cache(), device.workspace(),
+      device.system_errors.get(), device.device_error.get()));
+  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+      batch, device.positions.get(), device.radii.get(), kGeneration, device.cache(),
+      device.coordination.get(), device.workspace(), device.system_errors.get(),
+      device.device_error.get()));
+  Results results;
+  CUDA_CHECK(copy_results(host, device, results, nullptr));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(compare_sparse_success(host, results, batch.cutoff) == 0);
+  return 0;
+}
+
 int test_stale_generation_rejected() {
   HostCase host;
   std::string error;
@@ -831,6 +870,15 @@ int test_peer_failure_isolation() {
   CHECK(make_case(8u, true, host, error));
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, nullptr));
+  /* Seed a previously published generation so a failed peer cannot be hidden
+   * by the fixture's zero-initialized generation array. */
+  CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+            8, device.system_errors.get(), device.device_error.get()) == cudaSuccess);
+  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+      device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
+      device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get()));
+  CUDA_CHECK(cudaDeviceSynchronize());
+
   /* Poison system 3 with a NaN position so only that system fails. */
   constexpr std::size_t failed_system = 3u;
   const std::size_t failed_atom = static_cast<std::size_t>(host.atom_offsets[failed_system]);
@@ -840,8 +888,14 @@ int test_peer_failure_isolation() {
   CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
             8, device.system_errors.get(), device.device_error.get()) == cudaSuccess);
   CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
-      device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
+      device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration + 1u,
       device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get()));
+  /* The builder's sticky diagnostic records the failed peer.  Coordination
+   * must still consume the sequence snapshot and evaluate every healthy peer. */
+  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+      device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
+      kGeneration + 1u, device.cache(), device.coordination.get(), device.workspace(),
+      device.system_errors.get(), device.device_error.get()));
   Results results;
   CUDA_CHECK(copy_results(host, device, results, nullptr));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -849,11 +903,24 @@ int test_peer_failure_isolation() {
         static_cast<std::uint32_t>(Gfn2PairListDeviceError::kNonfinitePosition));
   CHECK(results.system_errors[failed_system] ==
         static_cast<std::uint32_t>(Gfn2PairListDeviceError::kNonfinitePosition));
+  CHECK(results.pair_generations[failed_system] == 0u);
+  CHECK(results.pair_offsets[failed_system + 1u] == results.pair_offsets[failed_system]);
+  for (std::int64_t atom = host.atom_offsets[failed_system];
+       atom < host.atom_offsets[failed_system + 1u]; ++atom) {
+    CHECK(results.neighbor_offsets[static_cast<std::size_t>(atom + 1)] ==
+          results.neighbor_offsets[static_cast<std::size_t>(atom)]);
+  }
   /* Healthy peers still committed their retained pair sets. */
   for (std::size_t system = 0u; system < host.batch_size(); ++system) {
     if (system != failed_system) {
       CHECK(results.system_errors[system] == 0u);
-      CHECK(results.pair_generations[system] == kGeneration);
+      CHECK(results.pair_generations[system] == kGeneration + 1u);
+      const std::int64_t begin = host.atom_offsets[system];
+      const std::int64_t end = host.atom_offsets[system + 1u];
+      for (std::int64_t atom = begin; atom < end; ++atom) {
+        CHECK(near(results.coordination[static_cast<std::size_t>(atom)],
+                   host.expected_coordination[static_cast<std::size_t>(atom)], 5.0e-13));
+      }
     }
   }
   return 0;
@@ -881,6 +948,14 @@ int test_host_validation_rejects_hostile_views() {
             device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
   workspace = device.workspace();
 
+  /* system_meta is initialized and rewritten by the builder, so aliasing it
+   * with the read-only positions view must be rejected before launch. */
+  workspace.system_meta = reinterpret_cast<Gfn2PairListSystemMeta*>(device.positions.get());
+  CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+            batch, device.positions.get(), kGeneration, cache, workspace,
+            device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
+  workspace = device.workspace();
+
   cache.pair_offsets = workspace.pair_cursor;
   CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
             batch, device.positions.get(), kGeneration, cache, workspace,
@@ -892,6 +967,118 @@ int test_host_validation_rejects_hostile_views() {
   CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
             batch, device.positions.get(), kGeneration, cache, workspace,
             device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
+  return 0;
+}
+
+int test_invalid_radius_is_peer_local() {
+  HostCase host;
+  std::string error;
+  CHECK(make_case(8u, true, host, error));
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, nullptr));
+  CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+            8, device.system_errors.get(), device.device_error.get()) == cudaSuccess);
+  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+      device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
+      device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get()));
+  const std::size_t failed_system = 2u;
+  const std::size_t failed_atom = static_cast<std::size_t>(host.atom_offsets[failed_system]);
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  CUDA_CHECK(
+      cudaMemcpy(device.radii.get() + failed_atom, &nan, sizeof(nan), cudaMemcpyHostToDevice));
+  const std::vector<double> sentinel(host.total_atoms(), kPairSentinel);
+  CUDA_CHECK(device.coordination.copy_from(sentinel.data(), sentinel.size()));
+  CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+            8, device.system_errors.get(), device.device_error.get()) == cudaSuccess);
+  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+      device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
+      kGeneration, device.cache(), device.coordination.get(), device.workspace(),
+      device.system_errors.get(), device.device_error.get()));
+  Results results;
+  CUDA_CHECK(copy_results(host, device, results, nullptr));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(results.device_error == static_cast<std::uint32_t>(Gfn2PairListDeviceError::kInvalidCache));
+  CHECK(results.system_errors[failed_system] ==
+        static_cast<std::uint32_t>(Gfn2PairListDeviceError::kInvalidCache));
+  for (std::size_t system = 0u; system < host.batch_size(); ++system) {
+    const std::int64_t begin = host.atom_offsets[system];
+    const std::int64_t end = host.atom_offsets[system + 1u];
+    for (std::int64_t atom = begin; atom < end; ++atom) {
+      if (system == failed_system) {
+        CHECK(results.coordination[static_cast<std::size_t>(atom)] == kPairSentinel);
+      } else {
+        CHECK(near(results.coordination[static_cast<std::size_t>(atom)],
+                   host.expected_coordination[static_cast<std::size_t>(atom)], 5.0e-13));
+      }
+    }
+  }
+  return 0;
+}
+
+int test_pair_level_preflight_is_peer_local() {
+  HostCase host;
+  std::string error;
+  CHECK(make_case(8u, true, host, error));
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, nullptr));
+  CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+            8, device.system_errors.get(), device.device_error.get()) == cudaSuccess);
+  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+      device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
+      device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get()));
+
+  constexpr std::size_t failed_system = 2u;
+  const std::size_t failed_atom = static_cast<std::size_t>(host.atom_offsets[failed_system]);
+  const std::size_t failed_peer = failed_atom + 1u;
+  const std::vector<double> sentinel(host.total_atoms(), kPairSentinel);
+  const auto evaluate_and_check = [&]() -> int {
+    CUDA_CHECK(device.coordination.copy_from(sentinel.data(), sentinel.size()));
+    CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+              8, device.system_errors.get(), device.device_error.get()) == cudaSuccess);
+    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+        device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
+        kGeneration, device.cache(), device.coordination.get(), device.workspace(),
+        device.system_errors.get(), device.device_error.get()));
+    Results results;
+    CUDA_CHECK(copy_results(host, device, results, nullptr));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CHECK(results.device_error ==
+          static_cast<std::uint32_t>(Gfn2PairListDeviceError::kInvalidCache));
+    CHECK(results.system_errors[failed_system] ==
+          static_cast<std::uint32_t>(Gfn2PairListDeviceError::kInvalidCache));
+    for (std::size_t system = 0u; system < host.batch_size(); ++system) {
+      const std::int64_t begin = host.atom_offsets[system];
+      const std::int64_t end = host.atom_offsets[system + 1u];
+      for (std::int64_t atom = begin; atom < end; ++atom) {
+        if (system == failed_system) {
+          CHECK(results.coordination[static_cast<std::size_t>(atom)] == kPairSentinel);
+        } else {
+          CHECK(near(results.coordination[static_cast<std::size_t>(atom)],
+                     host.expected_coordination[static_cast<std::size_t>(atom)], 5.0e-13));
+        }
+      }
+    }
+    return 0;
+  };
+
+  /* Mutating the positions after list construction makes one cached pair
+   * coincident.  The read-only preflight must reject the whole peer before any
+   * of its atom threads can publish coordination. */
+  CUDA_CHECK(cudaMemcpy(device.positions.get() + failed_peer * 3u,
+                        host.positions.data() + failed_atom * 3u, 3u * sizeof(double),
+                        cudaMemcpyHostToDevice));
+  CHECK(evaluate_and_check() == 0);
+  CUDA_CHECK(cudaMemcpy(device.positions.get() + failed_peer * 3u,
+                        host.positions.data() + failed_peer * 3u, 3u * sizeof(double),
+                        cudaMemcpyHostToDevice));
+
+  /* Each radius is finite, but their pair sum overflows.  This must have the
+   * same peer-local, no-partial-publication behavior. */
+  const double huge_radii[2] = {std::numeric_limits<double>::max(),
+                                std::numeric_limits<double>::max()};
+  CUDA_CHECK(cudaMemcpy(device.radii.get() + failed_atom, huge_radii, sizeof(huge_radii),
+                        cudaMemcpyHostToDevice));
+  CHECK(evaluate_and_check() == 0);
   return 0;
 }
 
@@ -1041,14 +1228,140 @@ int test_bitwise_dense_sparse_parity() {
  * dispatch crossover is anchored by reproducible profiling.  Each system holds
  * atoms in a sparse crystal-like layout (12 bohr spacing) where only nearby
  * pairs are retained and the bucketed path avoids the all-pairs work of the
- * dense fallback.  Emits a CSV row: batch, atoms_per_system, sparse_build_ms,
- * dense_build_ms, reuse_ms (median).
+ * dense fallback.  With --json and --csv, emits one audit JSON containing every
+ * raw sample plus a compact median CSV from the same measurement.
  */
-int benchmark_build_vs_reuse() {
+struct BenchmarkSamples {
+  std::vector<float> values;
+  float median = 0.0F;
+};
+
+struct BenchmarkRow {
+  std::size_t batch_size = 0u;
+  std::int64_t atoms_per_system = 0;
+  BenchmarkSamples sparse_build;
+  BenchmarkSamples dense_build;
+  BenchmarkSamples reuse;
+};
+
+std::string json_escape(const std::string& value) {
+  std::string escaped;
+  escaped.reserve(value.size() + 2u);
+  for (const char character : value) {
+    switch (character) {
+      case '\\':
+        escaped += "\\\\";
+        break;
+      case '"':
+        escaped += "\\\"";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\t':
+        escaped += "\\t";
+        break;
+      default:
+        escaped += character;
+        break;
+    }
+  }
+  return escaped;
+}
+
+void write_samples_json(std::ostream& output, const std::vector<BenchmarkRow>& rows, int argc,
+                        char** argv, int device_id, int runtime_version,
+                        const std::string& source_revision, const std::string& executable_sha256,
+                        const std::string& build_identity_sha256) {
+  output << std::setprecision(9);
+  output << "{\n  \"schema_version\": 1,\n"
+         << "  \"benchmark\": \"gpuxtb_cuda_pairlist_benchmark\",\n"
+         << "  \"warmups\": 3,\n  \"samples_per_cell\": 20,\n"
+         << "  \"cuda_runtime_version\": " << runtime_version << ",\n"
+         << "  \"device_id\": " << device_id << ",\n"
+         << "  \"cuda_header_version\": " << CUDART_VERSION << ",\n"
+         << "  \"source_revision\": \"" << json_escape(source_revision) << "\",\n"
+         << "  \"executable_sha256\": \"" << json_escape(executable_sha256) << "\",\n"
+         << "  \"build_identity_sha256\": \"" << json_escape(build_identity_sha256) << "\",\n"
+         << "  \"argv\": [";
+  for (int index = 0; index < argc; ++index) {
+    if (index != 0) output << ", ";
+    output << "\"" << json_escape(argv[index]) << "\"";
+  }
+  output << "],\n  \"rows\": [\n";
+  for (std::size_t row_index = 0u; row_index < rows.size(); ++row_index) {
+    const BenchmarkRow& row = rows[row_index];
+    if (row_index != 0u) output << ",\n";
+    output << "    {\"batch\": " << row.batch_size << ", \"atoms\": " << row.atoms_per_system;
+    const auto write_samples = [&](const char* name, const BenchmarkSamples& samples) {
+      output << ", \"" << name << "\": {\"median_ms\": " << samples.median << ", \"samples_ms\": [";
+      for (std::size_t sample = 0u; sample < samples.values.size(); ++sample) {
+        if (sample != 0u) output << ", ";
+        output << samples.values[sample];
+      }
+      output << "]}";
+    };
+    write_samples("sparse_build", row.sparse_build);
+    write_samples("dense_build", row.dense_build);
+    write_samples("reuse", row.reuse);
+    output << "}";
+  }
+  output << "\n  ]\n}\n";
+}
+
+void write_samples_csv(std::ostream& output, const std::vector<BenchmarkRow>& rows) {
+  output << "batch,atoms,sparse_build_ms,dense_build_ms,reuse_ms\n";
+  output << std::setprecision(9);
+  for (const BenchmarkRow& row : rows) {
+    output << row.batch_size << ',' << row.atoms_per_system << ',' << row.sparse_build.median << ','
+           << row.dense_build.median << ',' << row.reuse.median << '\n';
+  }
+}
+
+int benchmark_build_vs_reuse(int argc, char** argv) {
   constexpr int kWarmup = 3;
   constexpr int kSamples = 20;
   constexpr double kBenchSpacing = 12.0;
-  std::puts("batch,atoms,sparse_build_ms,dense_build_ms,reuse_ms");
+  std::string json_path;
+  std::string csv_path;
+  std::string source_revision;
+  std::string executable_sha256;
+  std::string build_identity_sha256;
+  for (int index = 1; index < argc; ++index) {
+    const std::string argument = argv[index];
+    if ((argument == "--json" || argument == "--csv" || argument == "--source-revision" ||
+         argument == "--executable-sha256" || argument == "--build-identity-sha256") &&
+        index + 1 >= argc) {
+      fprintf(stderr, "%s requires a value\n", argument.c_str());
+      return 2;
+    }
+    if (argument == "--json") {
+      json_path = argv[++index];
+    } else if (argument == "--csv") {
+      csv_path = argv[++index];
+    } else if (argument == "--source-revision") {
+      source_revision = argv[++index];
+    } else if (argument == "--executable-sha256") {
+      executable_sha256 = argv[++index];
+    } else if (argument == "--build-identity-sha256") {
+      build_identity_sha256 = argv[++index];
+    } else {
+      fprintf(stderr, "unknown benchmark option: %s\n", argument.c_str());
+      return 2;
+    }
+  }
+  if (!json_path.empty() &&
+      (source_revision.empty() || executable_sha256.empty() || build_identity_sha256.empty())) {
+    fprintf(stderr,
+            "JSON evidence requires --source-revision, --executable-sha256, and "
+            "--build-identity-sha256\n");
+    return 2;
+  }
+  std::vector<BenchmarkRow> rows;
+  rows.reserve(24u);
   for (const std::int64_t atoms_per_system : {16, 32, 48, 64, 96, 128}) {
     for (const std::size_t batch_size : {1u, 8u, 32u, 128u}) {
       const std::int64_t total_atoms = atoms_per_system * static_cast<std::int64_t>(batch_size);
@@ -1096,7 +1409,7 @@ int benchmark_build_vs_reuse() {
                    device.device_error.get(), stream) == cudaSuccess;
       };
 
-      const auto measure_build = [&](Gfn2PairListMode mode, float* median) -> int {
+      const auto measure_build = [&](Gfn2PairListMode mode, BenchmarkSamples* result) -> int {
         std::vector<float> samples;
         for (int sample = -kWarmup; sample < kSamples; ++sample) {
           CHECK(reset_errors());
@@ -1112,12 +1425,14 @@ int benchmark_build_vs_reuse() {
             samples.push_back(elapsed_ms);
           }
         }
-        std::sort(samples.begin(), samples.end());
-        *median = samples[kSamples / 2];
+        std::vector<float> ordered = samples;
+        std::sort(ordered.begin(), ordered.end());
+        result->values = std::move(samples);
+        result->median = ordered[kSamples / 2];
         return 0;
       };
 
-      const auto measure_reuse = [&](float* median) -> int {
+      const auto measure_reuse = [&](BenchmarkSamples* result) -> int {
         std::vector<float> samples;
         for (int sample = -kWarmup; sample < kSamples; ++sample) {
           CHECK(reset_errors());
@@ -1134,14 +1449,16 @@ int benchmark_build_vs_reuse() {
             samples.push_back(elapsed_ms);
           }
         }
-        std::sort(samples.begin(), samples.end());
-        *median = samples[kSamples / 2];
+        std::vector<float> ordered = samples;
+        std::sort(ordered.begin(), ordered.end());
+        result->values = std::move(samples);
+        result->median = ordered[kSamples / 2];
         return 0;
       };
 
-      float sparse_build = 0.0F;
-      float dense_build = 0.0F;
-      float reuse = 0.0F;
+      BenchmarkRow row;
+      row.batch_size = batch_size;
+      row.atoms_per_system = atoms_per_system;
       /* First build once in sparse so the coordination reuse path is valid. */
       CHECK(reset_errors());
       CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
@@ -1149,15 +1466,47 @@ int benchmark_build_vs_reuse() {
           device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
           stream));
       CUDA_CHECK(cudaStreamSynchronize(stream));
-      CHECK(measure_build(Gfn2PairListMode::kSparse, &sparse_build) == 0);
-      CHECK(measure_build(Gfn2PairListMode::kDense, &dense_build) == 0);
-      CHECK(measure_reuse(&reuse) == 0);
-      std::printf("%llu,%lld,%.6f,%.6f,%.6f\n", static_cast<unsigned long long>(batch_size),
-                  static_cast<long long>(atoms_per_system), static_cast<double>(sparse_build),
-                  static_cast<double>(dense_build), static_cast<double>(reuse));
+      CHECK(measure_build(Gfn2PairListMode::kSparse, &row.sparse_build) == 0);
+      CHECK(measure_build(Gfn2PairListMode::kDense, &row.dense_build) == 0);
+      /* The dense timing overwrites the reusable cache.  Rebuild sparse once
+       * outside the timed interval so reuse_ms measures the advertised sparse
+       * list rather than an all-pairs cache. */
+      CHECK(reset_errors());
+      CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+          device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
+          device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
+          stream));
+      CUDA_CHECK(cudaStreamSynchronize(stream));
+      CHECK(measure_reuse(&row.reuse) == 0);
+      rows.push_back(std::move(row));
       CUDA_CHECK(cudaEventDestroy(stop));
       CUDA_CHECK(cudaEventDestroy(start));
       CUDA_CHECK(cudaStreamDestroy(stream));
+    }
+  }
+  if (json_path.empty() && csv_path.empty()) {
+    write_samples_csv(std::cout, rows);
+  } else {
+    int runtime_version = 0;
+    int device_id = 0;
+    CUDA_CHECK(cudaGetDevice(&device_id));
+    CUDA_CHECK(cudaRuntimeGetVersion(&runtime_version));
+    if (!json_path.empty()) {
+      std::ofstream output(json_path);
+      if (!output) {
+        fprintf(stderr, "failed to open JSON output: %s\n", json_path.c_str());
+        return 2;
+      }
+      write_samples_json(output, rows, argc, argv, device_id, runtime_version, source_revision,
+                         executable_sha256, build_identity_sha256);
+    }
+    if (!csv_path.empty()) {
+      std::ofstream output(csv_path);
+      if (!output) {
+        fprintf(stderr, "failed to open CSV output: %s\n", csv_path.c_str());
+        return 2;
+      }
+      write_samples_csv(output, rows);
     }
   }
   return 0;
@@ -1165,12 +1514,12 @@ int benchmark_build_vs_reuse() {
 }  // namespace
 
 #ifdef GPUXTB_PAIRLIST_BENCHMARK_ONLY
-int main() {
+int main(int argc, char** argv) {
   int device_count = 0;
   if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
     return 77;
   }
-  return benchmark_build_vs_reuse();
+  return benchmark_build_vs_reuse(argc, argv);
 }
 #else
 
@@ -1199,6 +1548,10 @@ int main() {
     fprintf(stderr, "FAIL test_pair_capacity_overflow_isolated line %d\n", line);
     return line;
   }
+  if (const int line = test_cell_capacity_dense_fallback(); line != 0) {
+    fprintf(stderr, "FAIL test_cell_capacity_dense_fallback line %d\n", line);
+    return line;
+  }
   if (const int line = test_stale_generation_rejected(); line != 0) {
     fprintf(stderr, "FAIL test_stale_generation_rejected line %d\n", line);
     return line;
@@ -1217,6 +1570,14 @@ int main() {
   }
   if (const int line = test_host_validation_rejects_hostile_views(); line != 0) {
     fprintf(stderr, "FAIL test_host_validation_rejects_hostile_views line %d\n", line);
+    return line;
+  }
+  if (const int line = test_invalid_radius_is_peer_local(); line != 0) {
+    fprintf(stderr, "FAIL test_invalid_radius_is_peer_local line %d\n", line);
+    return line;
+  }
+  if (const int line = test_pair_level_preflight_is_peer_local(); line != 0) {
+    fprintf(stderr, "FAIL test_pair_level_preflight_is_peer_local line %d\n", line);
     return line;
   }
   if (const int line = test_dispatch_policy(); line != 0) {

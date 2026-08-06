@@ -92,6 +92,12 @@ struct PairValues {
 };
 
 __device__ bool evaluate_pair(double dx, double dy, double dz, double radius, PairValues* values) {
+  /* A non-positive/non-finite radius is invalid input, not a zero-weight pair:
+   * silently accepting it would publish a successful but physically undefined
+   * coordination result. */
+  if (!isfinite(radius) || !(radius > 0.0)) {
+    return false;
+  }
   const double distance_squared = dx * dx + dy * dy + dz * dz;
   if (!isfinite(distance_squared) || distance_squared < kMinimumDistanceSquared) {
     return false;
@@ -127,13 +133,24 @@ __device__ bool evaluate_pair(double dx, double dy, double dz, double radius, Pa
 
 /* Validate all offset endpoints before any later kernel subtracts them. */
 __global__ void topology_preflight_kernel(Gfn2PairListDeviceBatch batch,
-                                          std::uint32_t* device_error) {
-  if (atomicAdd(device_error, 0u) !=
-      static_cast<std::uint32_t>(Gfn2PairListDeviceError::kSuccess)) {
+                                          std::uint32_t* sequence_active,
+                                          std::uint32_t* device_error,
+                                          bool reject_preexisting_error) {
+  /* Peer-local failures must not make the rest of the batch a no-op. */
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    *sequence_active = (!reject_preexisting_error ||
+                        atomicAdd(device_error, 0u) ==
+                            static_cast<std::uint32_t>(Gfn2PairListDeviceError::kSuccess))
+                           ? 1u
+                           : 0u;
+  }
+  __syncthreads();
+  if (atomicAdd(const_cast<std::uint32_t*>(sequence_active), 0u) == 0u) {
     return;
   }
   if (threadIdx.x == 0 &&
       (batch.atom_offsets[0] != 0 || batch.atom_offsets[batch.batch_size] != batch.total_atoms)) {
+    atomicExch(sequence_active, 0u);
     record_error(device_error, Gfn2PairListDeviceError::kInvalidOffsets);
   }
   for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
@@ -141,19 +158,9 @@ __global__ void topology_preflight_kernel(Gfn2PairListDeviceBatch batch,
     const std::int64_t end = batch.atom_offsets[system + 1];
     const bool valid = begin >= 0 && begin <= end && end <= batch.total_atoms;
     if (!valid) {
+      atomicExch(sequence_active, 0u);
       record_error(device_error, Gfn2PairListDeviceError::kInvalidOffsets);
     }
-  }
-}
-
-/* Snapshot topology/upstream validity before peer-local errors set device_error. */
-__global__ void capture_sequence_kernel(const std::uint32_t* device_error,
-                                        std::uint32_t* sequence_active) {
-  if (blockIdx.x == 0 && threadIdx.x == 0) {
-    *sequence_active = atomicAdd(const_cast<std::uint32_t*>(device_error), 0u) ==
-                               static_cast<std::uint32_t>(Gfn2PairListDeviceError::kSuccess)
-                           ? 1u
-                           : 0u;
   }
 }
 
@@ -165,7 +172,7 @@ __device__ bool load_system(const Gfn2PairListDeviceBatch& batch, std::int64_t s
     if (*valid != 0) {
       ranges->atom_begin = batch.atom_offsets[system];
       ranges->atom_end = batch.atom_offsets[system + 1];
-      ranges->cell_base = system * batch.max_cells_per_system;
+      ranges->cell_base = system * (batch.max_cells_per_system + 1);
       ranges->cells = 1;
     }
   }
@@ -217,7 +224,7 @@ __global__ void build_buckets_kernel(Gfn2PairListDeviceBatch batch, const double
   __syncthreads();
 
   if (atom_count > 0 && threadIdx.x == 0) {
-    constexpr double edge = kDefaultCutoffBohr;
+    const double edge = batch.cutoff;
     double min_value[3] = {0.0, 0.0, 0.0};
     double max_value[3] = {0.0, 0.0, 0.0};
     const std::int64_t first_index = ranges.atom_begin;
@@ -225,24 +232,35 @@ __global__ void build_buckets_kernel(Gfn2PairListDeviceBatch batch, const double
       min_value[axis] = positions[first_index * 3 + axis];
       max_value[axis] = positions[first_index * 3 + axis];
     }
+    bool all_finite = true;
     for (std::int64_t atom = ranges.atom_begin; atom < ranges.atom_end; ++atom) {
+      if (!finite_position(positions, atom * 3)) {
+        all_finite = false;
+        break;
+      }
       for (int axis = 0; axis < 3; ++axis) {
         const double value = positions[atom * 3 + axis];
         min_value[axis] = fmin(min_value[axis], value);
         max_value[axis] = fmax(max_value[axis], value);
       }
     }
-    if (!finite_position(positions, first_index * 3)) {
+    if (!all_finite) {
       record_system_error(system_errors, system, device_error,
                           Gfn2PairListDeviceError::kNonfinitePosition);
       valid = 0;
     }
     if (valid != 0) {
+      bool dense_fallback = false;
       for (int axis = 0; axis < 3; ++axis) {
         const double extent = max_value[axis] - min_value[axis];
         meta.origin[axis] = min_value[axis];
+        const double bucket_count = extent / edge;
+        if (!isfinite(bucket_count) || bucket_count > static_cast<double>(kInt64Maximum - 1)) {
+          dense_fallback = true;
+          break;
+        }
         const std::int64_t buckets =
-            extent <= 0.0 ? 1 : static_cast<std::int64_t>(extent / edge) + 1;
+            extent <= 0.0 ? 1 : static_cast<std::int64_t>(bucket_count) + 1;
         if (axis == 0) {
           meta.nx = buckets;
         } else if (axis == 1) {
@@ -251,19 +269,27 @@ __global__ void build_buckets_kernel(Gfn2PairListDeviceBatch batch, const double
           meta.nz = buckets;
         }
       }
-      if (meta.nx > kInt64Maximum / meta.ny || (meta.nx * meta.ny) > kInt64Maximum / meta.nz) {
-        record_system_error(system_errors, system, device_error,
-                            Gfn2PairListDeviceError::kCellCapacityExceeded);
-        valid = 0;
-      } else {
+      if (!dense_fallback &&
+          (meta.nx > kInt64Maximum / meta.ny || (meta.nx * meta.ny) > kInt64Maximum / meta.nz)) {
+        dense_fallback = true;
+      }
+      if (!dense_fallback) {
         const std::int64_t cells = meta.nx * meta.ny * meta.nz;
         if (cells > batch.max_cells_per_system) {
-          record_system_error(system_errors, system, device_error,
-                              Gfn2PairListDeviceError::kCellCapacityExceeded);
-          valid = 0;
+          dense_fallback = true;
         } else {
           meta.cells = cells;
           system_meta[system] = meta;
+        }
+      }
+      if (dense_fallback) {
+        if ((batch.flags & kGfn2PairListAllowDenseFallback) != 0u) {
+          meta.cells = 0;
+          system_meta[system] = meta;
+        } else {
+          record_system_error(system_errors, system, device_error,
+                              Gfn2PairListDeviceError::kCellCapacityExceeded);
+          valid = 0;
         }
       }
     }
@@ -274,6 +300,9 @@ __global__ void build_buckets_kernel(Gfn2PairListDeviceBatch batch, const double
   }
 
   const Gfn2PairListSystemMeta settled = system_meta[system];
+  if (settled.cells == 0) {
+    return;
+  }
   for (std::int64_t cell = threadIdx.x; cell < settled.cells; cell += blockDim.x) {
     cell_counts[settled.cell_base + cell] = 0;
   }
@@ -288,11 +317,11 @@ __global__ void build_buckets_kernel(Gfn2PairListDeviceBatch batch, const double
       continue;
     }
     std::int64_t cx =
-        static_cast<std::int64_t>((positions[coordinate] - settled.origin[0]) / kDefaultCutoffBohr);
-    std::int64_t cy = static_cast<std::int64_t>((positions[coordinate + 1] - settled.origin[1]) /
-                                                kDefaultCutoffBohr);
-    std::int64_t cz = static_cast<std::int64_t>((positions[coordinate + 2] - settled.origin[2]) /
-                                                kDefaultCutoffBohr);
+        static_cast<std::int64_t>((positions[coordinate] - settled.origin[0]) / batch.cutoff);
+    std::int64_t cy =
+        static_cast<std::int64_t>((positions[coordinate + 1] - settled.origin[1]) / batch.cutoff);
+    std::int64_t cz =
+        static_cast<std::int64_t>((positions[coordinate + 2] - settled.origin[2]) / batch.cutoff);
     cx = cx < 0 ? 0 : (cx >= settled.nx ? settled.nx - 1 : cx);
     cy = cy < 0 ? 0 : (cy >= settled.ny ? settled.ny - 1 : cy);
     cz = cz < 0 ? 0 : (cz >= settled.nz ? settled.nz - 1 : cz);
@@ -343,7 +372,7 @@ __global__ void prefix_cells_kernel(Gfn2PairListDeviceBatch batch,
     return;
   }
   __syncthreads();
-  if (valid == 0) {
+  if (valid == 0 || threadIdx.x != 0) {
     return;
   }
   const Gfn2PairListSystemMeta meta = system_meta[system];
@@ -373,6 +402,9 @@ __global__ void scatter_atoms_kernel(Gfn2PairListDeviceBatch batch,
     return;
   }
   const Gfn2PairListSystemMeta meta = system_meta[system];
+  if (meta.cells == 0) {
+    return;
+  }
   for (std::int64_t atom = ranges.atom_begin + threadIdx.x; atom < ranges.atom_end;
        atom += blockDim.x) {
     const std::int64_t cell = atom_cells[atom];
@@ -403,10 +435,13 @@ __global__ void build_neighbors_kernel(
   __syncthreads();
 
   const bool mode_sparse = batch.mode == Gfn2PairListMode::kSparse;
+  Gfn2PairListSystemMeta meta{};
   if (mode_sparse) {
+    meta = system_meta[system];
+  }
+  if (mode_sparse && meta.cells > 0) {
     /* Bucketed sweep: the per-system meta is only valid here because the
      * sparse launch runs the bucket construction before this kernel. */
-    const Gfn2PairListSystemMeta meta = system_meta[system];
     const double cutoff_squared = batch.cutoff * batch.cutoff;
     for (std::int64_t atom = ranges.atom_begin + threadIdx.x; atom < ranges.atom_end;
          atom += blockDim.x) {
@@ -482,7 +517,10 @@ __global__ void build_neighbors_kernel(
     return;
   }
 
-  /* Dense fallback: full triangle, no bucket state is consulted or required. */
+  /* Dense fallback: no bucket state is consulted.  Explicit kDense retains
+   * the full triangle; an opted-in sparse overflow scans the same triangle but
+   * still retains only cutoff pairs. */
+  const double cutoff_squared = batch.cutoff * batch.cutoff;
   for (std::int64_t atom = ranges.atom_begin + threadIdx.x; atom < ranges.atom_end;
        atom += blockDim.x) {
     const std::int64_t coordinate = atom * 3;
@@ -497,6 +535,9 @@ __global__ void build_neighbors_kernel(
                             Gfn2PairListDeviceError::kNonfiniteArithmetic);
         atomicExch(&valid, 0);
         return;
+      }
+      if (mode_sparse && distance_squared > cutoff_squared) {
+        continue;
       }
       if (distance_squared < kMinimumDistanceSquared) {
         record_system_error(system_errors, system, device_error,
@@ -595,8 +636,11 @@ __global__ void count_pairs_kernel(Gfn2PairListDeviceBatch batch,
 
 /*
  * Global exclusive prefix of the per-system pair counts into the public
- * pair_offsets.  The whole call is a no-op when the sequence is inactive, so
- * caller outputs are never touched before publication.
+ * pair_offsets.  Failed peers contribute a zero-length range and invalidate
+ * their prior generation; the batch-wide CSR arrays are therefore repacked,
+ * while publish_kernel only writes pair bytes for healthy peers.  The whole
+ * call is a no-op when the sequence is inactive, so caller outputs are never
+ * touched before publication.
  */
 __global__ void prefix_pair_offsets_kernel(Gfn2PairListDeviceBatch batch,
                                            const std::int64_t* pair_cursor,
@@ -610,6 +654,9 @@ __global__ void prefix_pair_offsets_kernel(Gfn2PairListDeviceBatch batch,
       for (std::int64_t system = 0; system < batch.batch_size; ++system) {
         cache.pair_offsets[system] = running;
         running += pair_cursor[system];
+        if (!system_is_valid(system_errors, system)) {
+          cache.pair_generations[system] = 0u;
+        }
       }
       cache.pair_offsets[batch.batch_size] = running;
     }
@@ -724,6 +771,21 @@ __global__ void evaluate_coordination_kernel(
     valid = 0;
   }
   __syncthreads();
+  /* Validate all atom-local inputs before any thread publishes coordination.
+   * This keeps an invalid radius (including one on an otherwise isolated atom)
+   * peer-local and prevents a partial system slice from escaping. */
+  if (valid != 0) {
+    for (std::int64_t atom = ranges.atom_begin + threadIdx.x; atom < ranges.atom_end;
+         atom += blockDim.x) {
+      if (!finite_position(positions, atom * 3) || !isfinite(covalent_radii[atom]) ||
+          !(covalent_radii[atom] > 0.0)) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2PairListDeviceError::kInvalidCache);
+        atomicExch(&valid, 0);
+      }
+    }
+  }
+  __syncthreads();
   if (valid == 0) {
     return;
   }
@@ -758,6 +820,74 @@ __global__ void evaluate_coordination_kernel(
     }
     if (finite_result) {
       coordination[atom] = cn;
+    }
+  }
+}
+
+/*
+ * Validate every cached pair before the consumer writes any coordination
+ * output.  The cache is normally produced from the same positions/radii, but
+ * callers may update device inputs between launches.  A pair-level failure
+ * must therefore be discovered in a read-only pass; otherwise another thread
+ * could publish a partial slice for the failed peer before this consumer sees
+ * the bad distance or radius sum.
+ */
+__global__ void preflight_coordination_pairs_kernel(
+    Gfn2PairListDeviceBatch batch, const double* positions, const double* covalent_radii,
+    std::uint64_t scalar_generation, const Gfn2PairListDeviceCache& cache,
+    const std::uint32_t* sequence_active, std::uint32_t* system_errors,
+    std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  __shared__ SystemRanges ranges;
+  __shared__ int valid;
+  if (!load_system(batch, system, sequence_active, system_errors, &ranges, &valid)) {
+    return;
+  }
+  __syncthreads();
+  if (threadIdx.x == 0 && cache.pair_generations[system] != scalar_generation) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2PairListDeviceError::kStaleGeometry);
+    valid = 0;
+  }
+  __syncthreads();
+  if (valid == 0) {
+    return;
+  }
+  const std::int64_t neighbor_capacity = batch.total_atoms * batch.max_neighbors_per_atom;
+  for (std::int64_t atom = ranges.atom_begin + threadIdx.x; atom < ranges.atom_end;
+       atom += blockDim.x) {
+    const std::int64_t coordinate = atom * 3;
+    if (!finite_position(positions, coordinate) || !isfinite(covalent_radii[atom]) ||
+        !(covalent_radii[atom] > 0.0)) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2PairListDeviceError::kInvalidCache);
+      continue;
+    }
+    const std::int64_t begin = cache.neighbor_offsets[atom];
+    const std::int64_t end = cache.neighbor_offsets[atom + 1];
+    if (begin < 0 || end < begin || end > neighbor_capacity) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2PairListDeviceError::kInvalidCache);
+      continue;
+    }
+    for (std::int64_t index = begin; index < end; ++index) {
+      const std::int64_t peer = cache.neighbors[index];
+      if (peer < ranges.atom_begin || peer >= ranges.atom_end) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2PairListDeviceError::kInvalidCache);
+        break;
+      }
+      const std::int64_t peer_coordinate = peer * 3;
+      const double dx = positions[peer_coordinate] - positions[coordinate];
+      const double dy = positions[peer_coordinate + 1] - positions[coordinate + 1];
+      const double dz = positions[peer_coordinate + 2] - positions[coordinate + 2];
+      PairValues values{};
+      if (!finite_position(positions, peer_coordinate) ||
+          !evaluate_pair(dx, dy, dz, covalent_radii[atom] + covalent_radii[peer], &values)) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2PairListDeviceError::kInvalidCache);
+        break;
+      }
     }
   }
 }
@@ -822,9 +952,12 @@ cudaError_t validate_batch(const Gfn2PairListDeviceBatch& batch) noexcept {
       batch.batch_size == std::numeric_limits<std::int64_t>::max() ||
       batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
       batch.total_atoms > kInt64Maximum / 3 || batch.atom_offset_elements != batch.batch_size + 1 ||
-      batch.max_cells_per_system <= 0 || batch.max_neighbors_per_atom <= 0 ||
-      batch.max_pairs_per_system <= 0 || !(batch.cutoff > 0.0) || !isfinite(batch.cutoff) ||
-      batch.plan_token == 0u || !is_aligned(batch.atom_offsets, alignof(std::int64_t))) {
+      batch.max_cells_per_system <= 0 || batch.max_cells_per_system == kInt64Maximum ||
+      batch.max_neighbors_per_atom <= 0 || batch.max_pairs_per_system <= 0 ||
+      !(batch.cutoff > 0.0) || !isfinite(batch.cutoff) ||
+      (batch.mode != Gfn2PairListMode::kSparse && batch.mode != Gfn2PairListMode::kDense) ||
+      (batch.flags & ~kGfn2PairListAllowDenseFallback) != 0u || batch.plan_token == 0u ||
+      !is_aligned(batch.atom_offsets, alignof(std::int64_t))) {
     return batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max())
                ? cudaErrorInvalidConfiguration
                : cudaErrorInvalidValue;
@@ -842,8 +975,10 @@ cudaError_t validate_update(const Gfn2PairListDeviceBatch& batch, const double* 
   }
   if (pair_generation == 0u || !required_pointer(positions, batch.total_atoms * 3) ||
       cache.plan_token != batch.plan_token || workspace.plan_token != batch.plan_token ||
+      batch.batch_size > kInt64Maximum / batch.max_pairs_per_system ||
       cache.pair_elements < batch.max_pairs_per_system * batch.batch_size ||
-      cache.pair_offset_elements != batch.batch_size + 1 ||
+      cache.pair_offset_elements != batch.batch_size + 1 || batch.total_atoms == kInt64Maximum ||
+      batch.total_atoms > kInt64Maximum / batch.max_neighbors_per_atom ||
       cache.neighbor_offset_elements != batch.total_atoms + 1 ||
       cache.neighbor_elements < batch.total_atoms * batch.max_neighbors_per_atom ||
       cache.generation_elements < batch.batch_size ||
@@ -854,12 +989,11 @@ cudaError_t validate_update(const Gfn2PairListDeviceBatch& batch, const double* 
       !required_pointer(cache.pair_generations, cache.generation_elements) ||
       workspace.system_meta_elements < batch.batch_size ||
       workspace.atom_cell_elements < batch.total_atoms ||
-      batch.batch_size > kInt64Maximum / batch.max_cells_per_system ||
-      workspace.cell_count_elements < batch.batch_size * batch.max_cells_per_system + 1 ||
-      workspace.cell_offset_elements < batch.batch_size * batch.max_cells_per_system + 1 ||
-      workspace.cell_fill_elements < batch.batch_size * batch.max_cells_per_system + 1 ||
+      batch.batch_size > kInt64Maximum / (batch.max_cells_per_system + 1) ||
+      workspace.cell_count_elements < batch.batch_size * (batch.max_cells_per_system + 1) ||
+      workspace.cell_offset_elements < batch.batch_size * (batch.max_cells_per_system + 1) ||
+      workspace.cell_fill_elements < batch.batch_size * (batch.max_cells_per_system + 1) ||
       workspace.cell_atom_elements < batch.total_atoms ||
-      batch.total_atoms > kInt64Maximum / batch.max_neighbors_per_atom ||
       workspace.neighbor_cursor_elements < batch.total_atoms ||
       workspace.neighbor_scratch_elements < batch.total_atoms * batch.max_neighbors_per_atom ||
       workspace.pair_cursor_elements < batch.batch_size || workspace.sequence_elements < 1 ||
@@ -881,13 +1015,11 @@ cudaError_t validate_update(const Gfn2PairListDeviceBatch& batch, const double* 
   const std::int64_t neighbor_capacity = batch.total_atoms * batch.max_neighbors_per_atom;
   const std::int64_t pair_capacity = batch.batch_size * batch.max_pairs_per_system;
 
-  std::array<AddressRange, 3> reads;
-  std::array<AddressRange, 16> writes;
+  std::array<AddressRange, 2> reads;
+  std::array<AddressRange, 17> writes;
   if (!make_address_range(batch.atom_offsets, batch.atom_offset_elements,
                           sizeof(*batch.atom_offsets), &reads[0]) ||
       !make_address_range(positions, batch.total_atoms * 3, sizeof(*positions), &reads[1]) ||
-      !make_address_range(workspace.system_meta, batch.batch_size, sizeof(*workspace.system_meta),
-                          &reads[2]) ||
       !make_address_range(cache.pairs, pair_capacity, sizeof(*cache.pairs), &writes[0]) ||
       !make_address_range(cache.pair_offsets, cache.pair_offset_elements,
                           sizeof(*cache.pair_offsets), &writes[1]) ||
@@ -917,6 +1049,8 @@ cudaError_t validate_update(const Gfn2PairListDeviceBatch& batch, const double* 
                           sizeof(*workspace.sequence_active), &writes[13]) ||
       !make_address_range(system_errors, batch.batch_size, sizeof(*system_errors), &writes[14]) ||
       !make_address_range(device_error, 1, sizeof(*device_error), &writes[15]) ||
+      !make_address_range(workspace.system_meta, batch.batch_size, sizeof(*workspace.system_meta),
+                          &writes[16]) ||
       !writable_ranges_are_disjoint(reads, writes)) {
     return cudaErrorInvalidValue;
   }
@@ -956,19 +1090,24 @@ bool query_gfn2_pairlist_requirements_cuda(
   if (!safe_product(batch_size, max_pairs_per_system, &pairs)) {
     return false;
   }
-  /* The three per-system cell arrays share one allocation; cell_offsets needs
-   * a trailing end slot, so every cell array is sized cells + 1. */
-  cells += 1;
+  /* Every system owns a trailing end slot.  This keeps the prefix sentinel
+   * disjoint from the next system even when it uses its full cell capacity. */
+  if (cells > kInt64Maximum - batch_size) {
+    return false;
+  }
+  cells += batch_size;
   if (cache_pairs != nullptr) {
     *cache_pairs = pairs;
   }
   if (cache_neighbor_offsets != nullptr) {
+    if (total_atoms == kInt64Maximum) return false;
     *cache_neighbor_offsets = total_atoms + 1;
   }
   if (cache_neighbors != nullptr) {
     *cache_neighbors = neighbors;
   }
   if (cache_pair_offsets != nullptr) {
+    if (batch_size == kInt64Maximum) return false;
     *cache_pair_offsets = batch_size + 1;
   }
   if (cache_generations != nullptr) {
@@ -1032,12 +1171,8 @@ cudaError_t update_gfn2_pairlist_cache_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, device_error);
-  status = check_launch();
-  if (status != cudaSuccess) {
-    return status;
-  }
-  capture_sequence_kernel<<<1, 1, 0, stream>>>(device_error, workspace.sequence_active);
+  topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, workspace.sequence_active,
+                                                                device_error, true);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;
@@ -1118,29 +1253,60 @@ cudaError_t evaluate_gfn2_pairlist_coordination_cuda(
     std::uint64_t pair_generation, const Gfn2PairListDeviceCache& cache, double* coordination,
     const Gfn2PairListDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream) noexcept {
-  if (batch.plan_token != cache.plan_token || batch.plan_token != workspace.plan_token ||
-      batch.batch_size <= 0 || !required_pointer(coordination, batch.total_atoms) ||
+  cudaError_t status = validate_batch(batch);
+  if (status != cudaSuccess) {
+    return status;
+  }
+  if (pair_generation == 0u || batch.plan_token != cache.plan_token ||
+      batch.plan_token != workspace.plan_token || batch.cutoff < kDefaultCutoffBohr ||
+      batch.total_atoms > kInt64Maximum / batch.max_neighbors_per_atom ||
+      !required_pointer(coordination, batch.total_atoms) ||
       !required_pointer(covalent_radii, batch.total_atoms) ||
       !required_pointer(positions, batch.total_atoms * 3) ||
       cache.generation_elements < batch.batch_size ||
       cache.neighbor_offset_elements != batch.total_atoms + 1 ||
       cache.neighbor_elements < batch.total_atoms * batch.max_neighbors_per_atom ||
-      cache.pair_generations == nullptr || cache.neighbor_offsets == nullptr ||
-      cache.neighbors == nullptr || !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !required_pointer(cache.pair_generations, cache.generation_elements) ||
+      !required_pointer(cache.neighbor_offsets, cache.neighbor_offset_elements) ||
+      !required_pointer(cache.neighbors, cache.neighbor_elements) ||
+      workspace.sequence_elements < 1 ||
+      !required_pointer(workspace.sequence_active, workspace.sequence_elements) ||
+      !is_aligned(system_errors, alignof(std::uint32_t)) ||
       !is_aligned(device_error, alignof(std::uint32_t))) {
     return cudaErrorInvalidValue;
   }
-  topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, device_error);
-  cudaError_t status = check_launch();
-  if (status != cudaSuccess) {
-    return status;
+  const std::int64_t neighbor_capacity = batch.total_atoms * batch.max_neighbors_per_atom;
+  std::array<AddressRange, 7> reads;
+  std::array<AddressRange, 3> writes;
+  if (!make_address_range(batch.atom_offsets, batch.atom_offset_elements,
+                          sizeof(*batch.atom_offsets), &reads[0]) ||
+      !make_address_range(positions, batch.total_atoms * 3, sizeof(*positions), &reads[1]) ||
+      !make_address_range(covalent_radii, batch.total_atoms, sizeof(*covalent_radii), &reads[2]) ||
+      !make_address_range(cache.pair_generations, cache.generation_elements,
+                          sizeof(*cache.pair_generations), &reads[3]) ||
+      !make_address_range(cache.neighbor_offsets, cache.neighbor_offset_elements,
+                          sizeof(*cache.neighbor_offsets), &reads[4]) ||
+      !make_address_range(cache.neighbors, neighbor_capacity, sizeof(*cache.neighbors),
+                          &reads[5]) ||
+      !make_address_range(workspace.sequence_active, 1, sizeof(*workspace.sequence_active),
+                          &reads[6]) ||
+      !make_address_range(coordination, batch.total_atoms, sizeof(*coordination), &writes[0]) ||
+      !make_address_range(system_errors, batch.batch_size, sizeof(*system_errors), &writes[1]) ||
+      !make_address_range(device_error, 1, sizeof(*device_error), &writes[2]) ||
+      !writable_ranges_are_disjoint(reads, writes)) {
+    return cudaErrorInvalidValue;
   }
-  capture_sequence_kernel<<<1, 1, 0, stream>>>(device_error, workspace.sequence_active);
+  /* Evaluation consumes the sequence snapshot produced by the preceding
+   * update.  Re-running topology preflight here would erase a batch-wide
+   * invalid-offset marker while peer-local errors are intentionally sticky. */
+  const unsigned int blocks = static_cast<unsigned int>(batch.batch_size);
+  preflight_coordination_pairs_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+      batch, positions, covalent_radii, pair_generation, cache, workspace.sequence_active,
+      system_errors, device_error);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;
   }
-  const unsigned int blocks = static_cast<unsigned int>(batch.batch_size);
   evaluate_coordination_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
       batch, positions, covalent_radii, pair_generation, cache, coordination,
       workspace.sequence_active, system_errors, device_error);

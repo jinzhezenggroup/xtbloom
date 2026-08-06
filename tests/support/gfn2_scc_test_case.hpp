@@ -26,11 +26,10 @@ enum class SmallSystemKind {
    * default 300 K electronic temperature, producing genuinely fractional and
    * near-degenerate occupations through the composed SCC iteration. */
   kH2Stretched,
-  /* A 64-atom carbon 8x8 slab; the largest single system in the fixture.  It
+  /* A 62-atom C20H42 chain, the largest single system in this fixture.  It
    * crosses the sparse pair-list dense-fallback crossover so the production
-   * runtime path exercises the bucketed consistency gate, not only the
-   * all-pairs reference. */
-  kCarbonSlab,
+   * runtime path exercises the bucketed consistency gate. */
+  kC20H42,
 };
 
 /*
