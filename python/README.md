@@ -8,8 +8,12 @@ the C API.
 
 ## Install
 
+The package is installed with uv (the repository commits `uv.lock` generated
+against `https://pypi.org/simple`; do not point uv at a mirror index for this
+project or the lock will be rewritten):
+
 ```console
-pip install .
+uv pip install .
 ```
 
 This builds `libgpuxtb` from the repository CMake project and bundles it inside
@@ -23,10 +27,10 @@ suffixes such as unrestricted `spin_channels`.
 Optional extras:
 
 ```console
-pip install ".[ase]"        # ASE calculator
-pip install ".[dpdata]"     # dpdata driver plugin
-pip install ".[cuda12]"     # CUDA 12 host runtime/math providers
-pip install ".[test]"       # pytest suite dependencies
+uv pip install ".[ase]"     # ASE calculator
+uv pip install ".[dpdata]"  # dpdata driver plugin
+uv pip install ".[cuda12]"  # CUDA 12 host runtime/math providers
+uv pip install ".[test]"    # pytest suite dependencies
 ```
 
 ### CUDA wheels
@@ -39,13 +43,13 @@ when it is not already on `PATH`:
 ```console
 PATH=/path/to/cuda/bin:$PATH \
 CUDACXX=/path/to/cuda/bin/nvcc \
-GPUXTB_ENABLE_CUDA=ON pip install .
+GPUXTB_ENABLE_CUDA=ON uv pip install .
 ```
 
 A CUDA-enabled wheel does **not** bundle the CUDA runtime libraries; at runtime
 it needs the system CUDA driver plus compatible system libraries or the PyPI
 CUDA packages. Install ``gpuxtb[cuda12]`` to obtain those optional
-``nvidia-*`` providers. An ordinary ``pip install gpuxtb`` remains a complete
+``nvidia-*`` providers. An ordinary ``uv pip install gpuxtb`` remains a complete
 CPU installation without the proprietary CUDA stack.
 The published CUDA 12.9 wheels contain SASS for sm_80, sm_89, sm_90, and
 sm_120; source builds can override this with ``GPUXTB_CUDA_ARCHITECTURES``.
@@ -211,9 +215,12 @@ eV/Angstrom, matching dpdata conventions. Periodic systems are not supported
 
 ## Tests
 
+The tests must resolve the bundled native library, so install the project
+non-editable and prevent `uv run` from re-syncing it as editable:
+
 ```console
-pip install ".[test]"
-python -m pytest python/tests
+GPUXTB_ENABLE_CUDA=OFF uv sync --no-editable --extra test
+uv run --no-sync pytest python/tests
 ```
 
 The suite validates the bindings against the committed conformance goldens in

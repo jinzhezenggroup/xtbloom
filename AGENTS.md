@@ -212,6 +212,7 @@ so an old `CMakeCache.txt` cannot hide which tests were enabled.
 
 ```bash
 uvx prek@0.3.1 run --show-diff-on-failure --color=always --all-files
+uv lock --check
 git diff --check
 ```
 
@@ -243,13 +244,21 @@ absent. Treat that smaller CTest set as partial validation, not a full pass.
 
 ### Python
 
+The Python dependencies are managed with uv. `uv.lock` is the canonical,
+committed resolution against PyPI; resolve or install only against
+`https://pypi.org/simple` (uv records the index URL in the lock, so a mirror
+index makes `uv lock --check` fail and `uv sync` rewrite `uv.lock`). After
+changing `pyproject.toml`, run `uv lock` and commit the lock with the change.
+
 In a clean isolated environment, build/install the local native package with
 the test extras before running the suite; a missing native library is a test
-failure, not a supported skip:
+failure, not a supported skip. Install non-editable (`--no-editable`) so
+`library_path()` finds the bundled `libgpuxtb` inside the wheel, and run with
+`--no-sync` so `uv run` does not re-sync the environment as editable:
 
 ```bash
-GPUXTB_ENABLE_CUDA=OFF python -m pip install '.[test]'
-python -m pytest python/tests -q
+GPUXTB_ENABLE_CUDA=OFF uv sync --no-editable --extra test
+uv run --no-sync pytest python/tests -q
 ```
 
 Run the relevant focused file first for wrapper changes. Python tests that need
@@ -317,7 +326,7 @@ cmake --build build/cpu-public-consumer --parallel
 For source-distribution changes:
 
 ```bash
-python -m build --sdist --outdir build/dist-license
+uv build --sdist --out-dir build/dist-license
 python tools/licensing/check_licenses.py --source-root . \
   build/dist-license/*.tar.gz
 ```

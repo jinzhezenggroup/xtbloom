@@ -25,6 +25,9 @@ jobs:
           key: prek-0.3.1-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
           restore-keys: prek-0.3.1-${{ runner.os }}-
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          # Cache uv's package cache (uvx prek downloads) across runs.
+          enable-cache: true
       - name: Run pre-commit hooks
         # Pin the runner as well as every hook revision so CI behavior cannot
         # change merely because a new prek release is published.
