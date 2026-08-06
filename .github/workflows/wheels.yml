@@ -72,9 +72,12 @@ jobs:
           # cibuildwheel docs, "Caching cibuildwheel's downloaded tools"); it is
           # always a host-directory path, unlike the ccache directory.
           path: ${{ runner.temp }}/cibw-cache
-          key: cibw-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+          # The x86_64 and aarch64 jobs run concurrently. Keep their immutable
+          # cache keys distinct so both jobs can persist architecture-specific
+          # tool downloads instead of racing to save the same Linux key.
+          key: cibw-${{ runner.os }}-${{ matrix.platform_id }}-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
-            cibw-${{ runner.os }}-
+            cibw-${{ runner.os }}-${{ matrix.platform_id }}-
       - name: Build wheels
         uses: pypa/cibuildwheel@v4.1
         env:
