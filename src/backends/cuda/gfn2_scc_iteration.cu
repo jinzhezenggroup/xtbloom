@@ -7,7 +7,7 @@
 #include <limits>
 #include <utility>
 
-#include "backends/cuda/gfn2_scc_iteration.cuh"
+#include "backends/cuda/gfn2_scc_iteration_test.cuh"
 
 namespace gpuxtb::detail::cuda {
 namespace {
@@ -2663,6 +2663,31 @@ cudaError_t normalize_stage(const Gfn2SccStageDeviceReport& report,
   return normalize_gfn2_scc_stage_cuda(report, ledger, stream);
 }
 
+#if defined(GPUXTB_CUDA_TEST_HOOKS)
+__global__ void inject_test_stage_fault_kernel(Gfn2SccStageDeviceReport report, std::int64_t system,
+                                               std::uint32_t raw_code) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) {
+    return;
+  }
+  if (report.system_code_format == Gfn2SccStageCodeFormat::kGpuxtbStatus) {
+    auto* statuses =
+        const_cast<gpuxtb_status_t*>(static_cast<const gpuxtb_status_t*>(report.system_codes));
+    statuses[system] = static_cast<gpuxtb_status_t>(raw_code);
+  } else {
+    auto* codes =
+        const_cast<std::uint32_t*>(static_cast<const std::uint32_t*>(report.system_codes));
+    codes[system] = raw_code;
+  }
+}
+
+cudaError_t inject_test_stage_fault(const Gfn2SccStageDeviceReport& report,
+                                    const Gfn2SccIterationTestFault& fault,
+                                    cudaStream_t stream) noexcept {
+  inject_test_stage_fault_kernel<<<1, 1, 0, stream>>>(report, fault.system, fault.raw_code);
+  return cudaPeekAtLastError();
+}
+#endif
+
 }  // namespace
 
 Gfn2SccIterationBindingDiagnostic validate_gfn2_scc_iteration_binding_cuda(
@@ -2712,9 +2737,11 @@ Gfn2SccIterationBindingDiagnostic bind_gfn2_scc_iteration_cuda(
   return diagnostic;
 }
 
+template <bool EnableTestFault>
 static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
     const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice* geometry,
-    cudaStream_t stream, bool derive_activity, bool launch_numerical_body) noexcept {
+    cudaStream_t stream, bool derive_activity, bool launch_numerical_body,
+    const Gfn2SccIterationTestFault* test_fault = nullptr) noexcept {
   const auto& plan = binding.plan;
   const auto& input = binding.input;
   const auto& state = binding.state;
@@ -2725,6 +2752,26 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
       workspace.plan_token != plan.plan_token) {
     return invalid_launch_binding();
   }
+#if defined(GPUXTB_CUDA_TEST_HOOKS)
+  if constexpr (EnableTestFault) {
+    const Gfn2SccStageDeviceReport* fault_report =
+        test_fault == nullptr ? nullptr : find_stage_report(plan, test_fault->stage);
+    if (test_fault == nullptr || fault_report == nullptr || test_fault->system < 0 ||
+        test_fault->system >= plan.topology.batch_size || test_fault->raw_code == 0u ||
+        test_fault->raw_code >= 64u ||
+        (fault_report->peer_error_mask & (std::uint64_t{1} << test_fault->raw_code)) == 0u ||
+        fault_report->system_codes == nullptr ||
+        fault_report->system_code_elements != plan.topology.batch_size) {
+      return invalid_launch_binding(test_fault == nullptr ? Gfn2SccStageId::kNone
+                                                          : test_fault->stage);
+    }
+  } else {
+    (void)test_fault;
+  }
+#else
+  static_assert(!EnableTestFault, "test-fault launchers require GPUXTB_CUDA_TEST_HOOKS");
+  (void)test_fault;
+#endif
   if (geometry != nullptr &&
       (geometry->plan_token != plan.plan_token || geometry->epoch.plan_token != plan.plan_token ||
        geometry->epoch.value_elements != 1 ||
@@ -2774,6 +2821,15 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
     return check_cuda(stage_report->stage, open_stage_sequence(*stage_report, stream));
   };
   const auto finish_stage = [&](const Gfn2SccStageDeviceReport& stage_report) {
+#if defined(GPUXTB_CUDA_TEST_HOOKS)
+    if constexpr (EnableTestFault) {
+      if (stage_report.stage == test_fault->stage &&
+          !check_cuda(stage_report.stage,
+                      inject_test_stage_fault(stage_report, *test_fault, stream))) {
+        return false;
+      }
+    }
+#endif
     return check_cuda(stage_report.stage, normalize_stage(stage_report, workspace.ledger, stream));
   };
 
@@ -3326,35 +3382,43 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
 
 Gfn2SccIterationLaunchResult launch_gfn2_scc_iteration_cuda(const Gfn2SccIterationBinding& binding,
                                                             cudaStream_t stream) noexcept {
-  return launch_scc_iteration_impl(binding, nullptr, stream, true, true);
+  return launch_scc_iteration_impl<false>(binding, nullptr, stream, true, true);
 }
 
 Gfn2SccIterationLaunchResult launch_gfn2_scc_iteration_cuda(
     const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream) noexcept {
-  return launch_scc_iteration_impl(binding, &geometry, stream, true, true);
+  return launch_scc_iteration_impl<false>(binding, &geometry, stream, true, true);
 }
+
+#if defined(GPUXTB_CUDA_TEST_HOOKS)
+Gfn2SccIterationLaunchResult launch_gfn2_scc_iteration_test_fault_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2SccIterationTestFault& fault,
+    cudaStream_t stream) noexcept {
+  return launch_scc_iteration_impl<true>(binding, nullptr, stream, true, true, &fault);
+}
+#endif
 
 Gfn2SccIterationLaunchResult launch_gfn2_scc_activity_cuda(const Gfn2SccIterationBinding& binding,
                                                            cudaStream_t stream) noexcept {
-  return launch_scc_iteration_impl(binding, nullptr, stream, true, false);
+  return launch_scc_iteration_impl<false>(binding, nullptr, stream, true, false);
 }
 
 Gfn2SccIterationLaunchResult launch_gfn2_scc_activity_cuda(
     const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream) noexcept {
-  return launch_scc_iteration_impl(binding, &geometry, stream, true, false);
+  return launch_scc_iteration_impl<false>(binding, &geometry, stream, true, false);
 }
 
 Gfn2SccIterationLaunchResult launch_gfn2_scc_numerical_body_cuda(
     const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
-  return launch_scc_iteration_impl(binding, nullptr, stream, false, true);
+  return launch_scc_iteration_impl<false>(binding, nullptr, stream, false, true);
 }
 
 Gfn2SccIterationLaunchResult launch_gfn2_scc_numerical_body_cuda(
     const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream) noexcept {
-  return launch_scc_iteration_impl(binding, &geometry, stream, false, true);
+  return launch_scc_iteration_impl<false>(binding, &geometry, stream, false, true);
 }
 
 Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(

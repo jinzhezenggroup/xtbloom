@@ -47,6 +47,12 @@ constexpr std::uint64_t kPlanToken = 0x105105105ULL;
 constexpr std::uint64_t kGeometryGeneration = 105u;
 constexpr std::uint64_t kInitializationGeneration = 1u;
 
+struct CouplingSelection {
+  bool d4 = false;
+  bool point_charges = false;
+  bool periodic = false;
+};
+
 template <typename T>
 Gfn2SccSetupHostArray<T> setup_view(const std::vector<T>& values) noexcept {
   return {values.empty() ? nullptr : values.data(), static_cast<std::int64_t>(values.size())};
@@ -403,34 +409,106 @@ bool compare_doubles(const char* field, const std::vector<double>& actual, const
   return true;
 }
 
-bool compare_coefficients(const HostSccCase& host, std::vector<double> actual, double tolerance) {
+/* Generalized eigenvectors are unique only up to sign for isolated roots and
+ * up to an orthogonal rotation within a degenerate eigenspace. Compare those
+ * two invariants separately so LAPACK/cuSOLVER provider choices cannot make a
+ * scientifically equivalent solution fail parity. */
+bool compare_coefficients(const HostSccCase& host, const std::vector<double>& actual_eigenvalues,
+                          std::vector<double> actual, double eigenvalue_tolerance,
+                          double coefficient_tolerance) {
   const auto& layout = host.wavefunction_layout();
+  const double* expected_eigenvalues = host.wavefunction().eigenvalues;
   const double* expected = host.wavefunction().coefficients;
+  if (actual_eigenvalues.size() != static_cast<std::size_t>(layout.eigenvalues.element_count) ||
+      actual.size() != static_cast<std::size_t>(layout.coefficients.element_count)) {
+    std::fprintf(stderr, "eigenpairs have an invalid parity extent\n");
+    return false;
+  }
   for (std::int64_t system = 0; system < layout.batch_size; ++system) {
     const std::int64_t orbital_begin = layout.batch_orbital_offsets[system];
     const std::int64_t orbital_end = layout.batch_orbital_offsets[system + 1];
     const std::int64_t n = orbital_end - orbital_begin;
+    const std::int64_t eigenvalue_system_begin = layout.eigenvalues.system_offsets[system];
     const std::int64_t system_matrix_begin = layout.coefficients.system_offsets[system];
     const std::int64_t matrix_elements = n * n;
     for (std::int32_t spin = 0; spin < host.spin_channels()[system]; ++spin) {
+      const std::int64_t eigenvalue_begin = eigenvalue_system_begin + spin * n;
       const std::int64_t matrix_begin = system_matrix_begin + spin * matrix_elements;
-      for (std::int64_t orbital = 0; orbital < n; ++orbital) {
-        double dot = 0.0;
-        for (std::int64_t row = 0; row < n; ++row) {
-          const std::int64_t index = matrix_begin + row * n + orbital;
-          dot += actual[static_cast<std::size_t>(index)] * expected[index];
+      for (std::int64_t cluster_begin = 0; cluster_begin < n;) {
+        std::int64_t cluster_end = cluster_begin + 1;
+        while (cluster_end < n) {
+          const std::int64_t previous = eigenvalue_begin + cluster_end - 1;
+          const std::int64_t next = eigenvalue_begin + cluster_end;
+          const double scale = std::max(
+              {1.0, std::abs(expected_eigenvalues[previous]), std::abs(expected_eigenvalues[next]),
+               std::abs(actual_eigenvalues[static_cast<std::size_t>(previous)]),
+               std::abs(actual_eigenvalues[static_cast<std::size_t>(next)])});
+          const double expected_gap =
+              std::abs(expected_eigenvalues[next] - expected_eigenvalues[previous]);
+          const double actual_gap =
+              std::abs(actual_eigenvalues[static_cast<std::size_t>(next)] -
+                       actual_eigenvalues[static_cast<std::size_t>(previous)]);
+          if (std::max(expected_gap, actual_gap) > 2.0 * eigenvalue_tolerance * scale) {
+            break;
+          }
+          ++cluster_end;
         }
-        if (dot < 0.0) {
+
+        if (cluster_end == cluster_begin + 1) {
+          double dot = 0.0;
           for (std::int64_t row = 0; row < n; ++row) {
-            const std::int64_t index = matrix_begin + row * n + orbital;
-            actual[static_cast<std::size_t>(index)] = -actual[static_cast<std::size_t>(index)];
+            const std::int64_t index = matrix_begin + row * n + cluster_begin;
+            dot += actual[static_cast<std::size_t>(index)] * expected[index];
+          }
+          if (dot < 0.0) {
+            for (std::int64_t row = 0; row < n; ++row) {
+              const std::int64_t index = matrix_begin + row * n + cluster_begin;
+              actual[static_cast<std::size_t>(index)] = -actual[static_cast<std::size_t>(index)];
+            }
+          }
+          for (std::int64_t row = 0; row < n; ++row) {
+            const std::int64_t index = matrix_begin + row * n + cluster_begin;
+            if (!near(actual[static_cast<std::size_t>(index)], expected[index],
+                      coefficient_tolerance)) {
+              std::fprintf(stderr,
+                           "coefficient mismatch system=%lld spin=%d orbital=%lld row=%lld "
+                           "CUDA=%.17g CPU=%.17g\n",
+                           static_cast<long long>(system), static_cast<int>(spin),
+                           static_cast<long long>(cluster_begin), static_cast<long long>(row),
+                           actual[static_cast<std::size_t>(index)], expected[index]);
+              return false;
+            }
+          }
+        } else {
+          for (std::int64_t row = 0; row < n; ++row) {
+            for (std::int64_t column = 0; column < n; ++column) {
+              double actual_projector = 0.0;
+              double expected_projector = 0.0;
+              for (std::int64_t orbital = cluster_begin; orbital < cluster_end; ++orbital) {
+                actual_projector +=
+                    actual[static_cast<std::size_t>(matrix_begin + row * n + orbital)] *
+                    actual[static_cast<std::size_t>(matrix_begin + column * n + orbital)];
+                expected_projector += expected[matrix_begin + row * n + orbital] *
+                                      expected[matrix_begin + column * n + orbital];
+              }
+              if (!near(actual_projector, expected_projector, coefficient_tolerance)) {
+                std::fprintf(stderr,
+                             "coefficient projector mismatch system=%lld spin=%d "
+                             "cluster=[%lld,%lld) row=%lld column=%lld CUDA=%.17g CPU=%.17g\n",
+                             static_cast<long long>(system), static_cast<int>(spin),
+                             static_cast<long long>(cluster_begin),
+                             static_cast<long long>(cluster_end), static_cast<long long>(row),
+                             static_cast<long long>(column), actual_projector, expected_projector);
+                return false;
+              }
+            }
           }
         }
+        cluster_begin = cluster_end;
       }
     }
   }
-  return compare_doubles("coefficients", actual, expected, layout.coefficients.element_count,
-                         tolerance);
+  return true;
 }
 
 bool generalized_eigensystems_match_overlap(const HostSccCase& host,
@@ -793,7 +871,7 @@ struct ProductionFixture {
   Gfn2SccIterationBinding binding{};
   bool create(bool optional_components, std::int64_t batch_size = 4, bool unrestricted_spin = false,
               bool mixed_spin_batch = false, const std::vector<SmallSystemKind>& systems = {},
-              double electronic_temperature = 0.0) {
+              double electronic_temperature = 0.0, CouplingSelection coupling = {}) {
     if (batch_size <= 0) {
       return false;
     }
@@ -840,9 +918,9 @@ struct ProductionFixture {
     options.maximum_iterations = 8u;
     options.mixer_history = 3;
     options.electronic_temperature = electronic_temperature;
-    options.enable_d4 = optional_components;
-    options.enable_explicit_point_charges = optional_components;
-    options.enable_periodic_embedding = optional_components;
+    options.enable_d4 = optional_components || coupling.d4;
+    options.enable_explicit_point_charges = optional_components || coupling.point_charges;
+    options.enable_periodic_embedding = optional_components || coupling.periodic;
 
     std::string error;
     if (HostSccCase::create(options, host, error) != GPUXTB_STATUS_SUCCESS) {
@@ -1224,10 +1302,11 @@ int test_production_iteration_cpu_parity(bool optional_components, std::int64_t 
                                          bool unrestricted_spin = false, bool one_step_only = false,
                                          bool mixed_spin_batch = false,
                                          const std::vector<SmallSystemKind>& systems = {},
-                                         double electronic_temperature = 0.0) {
+                                         double electronic_temperature = 0.0,
+                                         CouplingSelection coupling = {}) {
   ProductionFixture fixture;
   CHECK(fixture.create(optional_components, batch_size, unrestricted_spin, mixed_spin_batch,
-                       systems, electronic_temperature));
+                       systems, electronic_temperature, coupling));
 
   /* The first transition is only comparable when fresh initialization packs
    * every ragged system into the same mixer vector used by the CPU oracle. */
@@ -1334,7 +1413,7 @@ int test_production_iteration_cpu_parity(bool optional_components, std::int64_t 
 
   CHECK(compare_doubles("eigenvalues", eigenvalues, fixture.host.wavefunction().eigenvalues,
                         layout.eigenvalues.element_count, 3.0e-9));
-  CHECK(compare_coefficients(fixture.host, coefficients, 3.0e-8));
+  CHECK(compare_coefficients(fixture.host, eigenvalues, coefficients, 3.0e-9, 3.0e-8));
   CHECK(compare_doubles("occupations", occupations, fixture.host.wavefunction().occupations,
                         layout.occupations.element_count, 3.0e-10));
   CHECK(compare_doubles("density", density, fixture.host.wavefunction().density,
@@ -1549,6 +1628,28 @@ int test_production_iteration_finite_temperature_cpu_parity() {
         true, 8, false, true, false, finite_temperature_systems(), kDefaultTemperature);
     if (status != 0) {
       std::fprintf(stderr, "finite-temperature optional-coupling one-step parity failed\n");
+      return status;
+    }
+  }
+  return 0;
+}
+
+int test_individual_coupling_cpu_parity() {
+  struct CouplingCase {
+    const char* name;
+    CouplingSelection selection;
+  };
+  constexpr CouplingCase cases[]{
+      {"D4", {true, false, false}},
+      {"explicit point charge", {false, true, false}},
+      {"periodic", {false, false, true}},
+      {"combined", {true, true, true}},
+  };
+  for (const CouplingCase& coupling : cases) {
+    const int status = test_production_iteration_cpu_parity(false, 8, false, true, false, {}, 0.0,
+                                                            coupling.selection);
+    if (status != 0) {
+      std::fprintf(stderr, "%s one-step CPU parity failed\n", coupling.name);
       return status;
     }
   }
@@ -2808,6 +2909,10 @@ int main(int argc, char** argv) {
     return status;
   }
   status = test_production_iteration_cpu_parity(true);
+  if (status != 0) {
+    return status;
+  }
+  status = test_individual_coupling_cpu_parity();
   if (status != 0) {
     return status;
   }
