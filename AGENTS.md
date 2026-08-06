@@ -75,9 +75,10 @@ legal, or conformance evidence is still missing.
 - `.github/workflows/`: CPU/package CI, read-only pre-commit checks, and Linux
   x86_64/aarch64 CUDA wheel builds.
 
-Read `README.md`, `docs/architecture.md`, `docs/qmmm.md`,
-`tools/conformance/README.md`, and `tools/parameters/README.md` before changing
-the corresponding subsystem.
+Read `README.md`, `docs/developer-guide/architecture.md`,
+`docs/user-guide/qmmm.md`, `docs/theory/qmmm.md`,
+`tools/conformance/README.md`, and `tools/parameters/README.md` before
+changing the corresponding subsystem.
 
 ## Non-negotiable scientific and ABI invariants
 
