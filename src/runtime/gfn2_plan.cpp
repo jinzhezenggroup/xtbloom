@@ -25,87 +25,122 @@ constexpr std::size_t kHostWorkspaceAlignment = 64u;
 constexpr std::size_t kDeviceWorkspaceAlignment = 256u;
 #endif
 
-gpuxtb_compute_options_t default_plan_options() noexcept {
-  gpuxtb_compute_options_t options{};
-  options.struct_size = GPUXTB_COMPUTE_OPTIONS_V2_SIZE;
-  options.api_version = GPUXTB_API_VERSION;
-  options.model = GPUXTB_MODEL_GFN2_XTB;
-  options.flags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES;
-  options.max_scc_iterations = 250;
-  options.charge_tolerance = 1.0e-6;
-  options.energy_tolerance = 1.0e-8;
-  options.electronic_temperature = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
-  options.scc_start_mode = GPUXTB_SCC_START_FRESH;
-  return options;
-}
-
-void hash_append(std::uint64_t& hash, const void* bytes, std::size_t count) noexcept {
-  const auto* cursor = static_cast<const std::uint8_t*>(bytes);
-  for (std::size_t index = 0u; index < count; ++index) {
-    hash ^= cursor[index];
-    hash *= 0x100000001b3ULL;
-  }
-}
-
-void hash_append_u64(std::uint64_t& hash, std::uint64_t value) noexcept {
-  hash_append(hash, &value, sizeof(value));
-}
-
-void hash_append_i64(std::uint64_t& hash, std::int64_t value) noexcept {
-  const auto raw = static_cast<std::uint64_t>(value);
-  hash_append(hash, &raw, sizeof(raw));
-}
-
-void hash_append_i32(std::uint64_t& hash, std::int32_t value) noexcept {
-  const auto raw = static_cast<std::uint32_t>(value);
-  hash_append(hash, &raw, sizeof(raw));
-}
-
 template <typename T>
-void hash_elements(std::uint64_t& hash, const void* data, std::int64_t count) noexcept {
-  hash_append_i64(hash, count);
-  if (count > 0) {
-    hash_append(hash, data, static_cast<std::size_t>(count) * sizeof(T));
+void copy_host_elements(const void* source, std::size_t count, std::vector<T>& destination) {
+  destination.resize(count);
+  if (count != 0u) {
+    std::memcpy(destination.data(), source, count * sizeof(T));
   }
 }
 
-/* FNV-1a fingerprint of the immutable topology (atom offsets, element numbers,
- * charges, unpaired electrons, spin channels, point and response structure).
- * Geometry and periodic numerical values are excluded. Uses only scalar reads
- * so repeated plan_compute calls perform zero steady-state allocations. */
-std::uint64_t topology_fingerprint(const gpuxtb_batch_t& batch) noexcept {
-  std::uint64_t hash = 0xcbf29ce484222325ULL;
-  hash_append_u64(hash, 1u); /* fingerprint schema version */
-  hash_append_i64(hash, batch.batch_size);
-  hash_append_i64(hash, batch.total_atoms);
-  hash_append_i64(hash, batch.total_point_charges);
-  hash_append_i64(hash, batch.total_charge_response_elements);
-  hash_elements<std::int64_t>(hash, batch.atom_offsets.data, batch.batch_size + 1);
-  hash_elements<std::int32_t>(hash, batch.atomic_numbers.data, batch.total_atoms);
-  hash_elements<double>(hash, batch.molecular_charges.data, batch.batch_size);
-  hash_elements<std::int32_t>(hash, batch.unpaired_electrons.data, batch.batch_size);
-  const bool spin_present = batch.struct_size >= GPUXTB_BATCH_V2_SIZE &&
-                            batch.spin_channels.data != nullptr &&
-                            batch.spin_channels.size_bytes != 0u;
-  if (spin_present) {
-    hash_elements<std::int32_t>(hash, batch.spin_channels.data, batch.batch_size);
-  } else {
-    hash_append_i64(hash, batch.batch_size);
-    for (std::int64_t system = 0; system < batch.batch_size; ++system) {
-      hash_append_i32(hash, 1);
+struct FixedTopology {
+  std::int64_t batch_size = 0;
+  std::int64_t total_atoms = 0;
+  std::int64_t total_point_charges = 0;
+  std::int64_t total_charge_response_elements = 0;
+  std::vector<std::int64_t> atom_offsets;
+  std::vector<std::int32_t> atomic_numbers;
+  std::vector<double> molecular_charges;
+  std::vector<std::int32_t> unpaired_electrons;
+  std::vector<std::int32_t> spin_channels;
+  std::vector<std::int64_t> point_charge_offsets;
+  std::vector<std::int64_t> charge_response_offsets;
+  bool point_offsets_present = false;
+  bool response_offsets_present = false;
+  bool potential_shifts_present = false;
+  bool response_matrix_present = false;
+
+  void capture(const gpuxtb_batch_t& batch) {
+    batch_size = batch.batch_size;
+    total_atoms = batch.total_atoms;
+    total_point_charges = batch.total_point_charges;
+    total_charge_response_elements = batch.total_charge_response_elements;
+    copy_host_elements(batch.atom_offsets.data, static_cast<std::size_t>(batch_size + 1),
+                       atom_offsets);
+    copy_host_elements(batch.atomic_numbers.data, static_cast<std::size_t>(total_atoms),
+                       atomic_numbers);
+    copy_host_elements(batch.molecular_charges.data, static_cast<std::size_t>(batch_size),
+                       molecular_charges);
+    copy_host_elements(batch.unpaired_electrons.data, static_cast<std::size_t>(batch_size),
+                       unpaired_electrons);
+    const bool spin_present = batch.struct_size >= GPUXTB_BATCH_V2_SIZE &&
+                              batch.spin_channels.data != nullptr &&
+                              batch.spin_channels.size_bytes != 0u;
+    if (spin_present) {
+      copy_host_elements(batch.spin_channels.data, static_cast<std::size_t>(batch_size),
+                         spin_channels);
+    } else {
+      spin_channels.assign(static_cast<std::size_t>(batch_size), 1);
     }
+    point_offsets_present = batch.point_charge_offsets.data != nullptr;
+    if (point_offsets_present) {
+      copy_host_elements(batch.point_charge_offsets.data, static_cast<std::size_t>(batch_size + 1),
+                         point_charge_offsets);
+    } else {
+      point_charge_offsets.clear();
+    }
+    response_offsets_present = batch.charge_response_offsets.data != nullptr;
+    if (response_offsets_present) {
+      copy_host_elements(batch.charge_response_offsets.data,
+                         static_cast<std::size_t>(batch_size + 1), charge_response_offsets);
+    } else {
+      charge_response_offsets.clear();
+    }
+    potential_shifts_present = batch.atomic_potential_shifts.data != nullptr;
+    response_matrix_present = batch.charge_response_matrix.data != nullptr;
   }
-  /* A missing point-charge or response structure is distinct from any real
-   * structure; hash a presence marker and the offsets only when supplied. */
-  hash_append_u64(hash, batch.point_charge_offsets.data != nullptr ? 1u : 0u);
-  if (batch.point_charge_offsets.data != nullptr) {
-    hash_elements<std::int64_t>(hash, batch.point_charge_offsets.data, batch.batch_size + 1);
+
+  [[nodiscard]] bool matches(const gpuxtb_batch_t& batch) const noexcept {
+    if (batch.batch_size != batch_size || batch.total_atoms != total_atoms ||
+        batch.total_point_charges != total_point_charges ||
+        batch.total_charge_response_elements != total_charge_response_elements ||
+        (batch.point_charge_offsets.data != nullptr) != point_offsets_present ||
+        (batch.charge_response_offsets.data != nullptr) != response_offsets_present ||
+        (batch.atomic_potential_shifts.data != nullptr) != potential_shifts_present ||
+        (batch.charge_response_matrix.data != nullptr) != response_matrix_present) {
+      return false;
+    }
+    const bool spin_present = batch.struct_size >= GPUXTB_BATCH_V2_SIZE &&
+                              batch.spin_channels.data != nullptr &&
+                              batch.spin_channels.size_bytes != 0u;
+    const auto bytes_equal = [](const void* data, const auto& expected) {
+      return expected.empty() ||
+             std::memcmp(data, expected.data(), expected.size() * sizeof(expected[0])) == 0;
+    };
+    if (!bytes_equal(batch.atom_offsets.data, atom_offsets) ||
+        !bytes_equal(batch.atomic_numbers.data, atomic_numbers) ||
+        !bytes_equal(batch.molecular_charges.data, molecular_charges) ||
+        !bytes_equal(batch.unpaired_electrons.data, unpaired_electrons) ||
+        (point_offsets_present &&
+         !bytes_equal(batch.point_charge_offsets.data, point_charge_offsets)) ||
+        (response_offsets_present &&
+         !bytes_equal(batch.charge_response_offsets.data, charge_response_offsets))) {
+      return false;
+    }
+    if (spin_present) {
+      return bytes_equal(batch.spin_channels.data, spin_channels);
+    }
+    return std::all_of(spin_channels.begin(), spin_channels.end(),
+                       [](std::int32_t channels) { return channels == 1; });
   }
-  hash_append_u64(hash, batch.charge_response_offsets.data != nullptr ? 1u : 0u);
-  if (batch.charge_response_offsets.data != nullptr) {
-    hash_elements<std::int64_t>(hash, batch.charge_response_offsets.data, batch.batch_size + 1);
-  }
-  return hash;
+};
+
+gpuxtb_compute_options_t normalize_plan_policy(const gpuxtb_compute_options_t& options) noexcept {
+  gpuxtb_compute_options_t policy = options;
+  policy.struct_size = GPUXTB_COMPUTE_OPTIONS_V2_SIZE;
+  policy.api_version = GPUXTB_API_VERSION;
+  policy.scc_start_mode = GPUXTB_SCC_START_FRESH;
+  policy.reserved_v2 = 0u;
+  return policy;
+}
+
+bool plan_policy_matches(const gpuxtb_compute_options_t& policy,
+                         const gpuxtb_compute_options_t& options) noexcept {
+  return options.model == policy.model && options.flags == policy.flags &&
+         options.max_scc_iterations == policy.max_scc_iterations &&
+         options.charge_tolerance == policy.charge_tolerance &&
+         options.energy_tolerance == policy.energy_tolerance &&
+         options.electronic_temperature == policy.electronic_temperature;
 }
 
 /* Plan identity compares host-readable topology bytes on every plan compute.
@@ -165,14 +200,15 @@ std::size_t host_output_staging_bytes(std::int64_t batch_size, std::int64_t tota
 struct Gfn2Plan::Impl {
   gpuxtb_backend_t backend = GPUXTB_BACKEND_CPU;
   Context* context = nullptr;
-  std::uint64_t topology_fingerprint = 0u;
-  std::int64_t batch_size = 0;
-  std::int64_t total_atoms = 0;
-  std::int64_t total_point_charges = 0;
-  /* Host and device staging reserved for the pre-warmed identity, used by the
-   * workspace query until a CUDA runtime is measured after compute. CPU values
-   * are captured at plan creation (topology + spin only) so they stay correct
-   * even after another topology replaced the shared cache's prepared systems. */
+  gpuxtb_compute_options_t policy{};
+  FixedTopology topology;
+  std::shared_ptr<Gfn2CpuExecutionCache> cpu_cache;
+#if defined(GPUXTB_HAS_CUDA)
+  std::shared_ptr<Gfn2CudaExecutionCache> cuda_cache;
+#endif
+  /* Retained host and device storage is captured from the plan-owned prepared
+   * cache at creation, so workspace queries remain stable across computes and
+   * across independent plans on the same context. */
   std::size_t cpu_persistent_bytes = 0u;
   std::uint64_t cuda_host_workspace_bytes = 0u;
   std::uint64_t cuda_base_device_bytes = 0u;
@@ -186,14 +222,15 @@ Gfn2Plan::~Gfn2Plan() = default;
 bool Gfn2Plan::valid() const noexcept { return impl_ != nullptr && impl_->context != nullptr; }
 
 void Gfn2Plan::destroy() noexcept {
-  /* The plan borrows the context's execution caches; destruction only clears
-   * our reference. The caller is required to destroy the plan before the
-   * context. */
+  /* Prepared caches belong to the plan, while the context pointer remains a
+   * borrowed lifetime binding. Callers must still destroy the plan first. */
   impl_->context = nullptr;
-  impl_->topology_fingerprint = 0u;
-  impl_->batch_size = 0;
-  impl_->total_atoms = 0;
-  impl_->total_point_charges = 0;
+  impl_->cpu_cache.reset();
+#if defined(GPUXTB_HAS_CUDA)
+  impl_->cuda_cache.reset();
+#endif
+  impl_->policy = {};
+  impl_->topology = {};
   impl_->cpu_persistent_bytes = 0u;
   impl_->cuda_host_workspace_bytes = 0u;
   impl_->cuda_base_device_bytes = 0u;
@@ -202,7 +239,7 @@ void Gfn2Plan::destroy() noexcept {
 }
 
 gpuxtb_status_t Gfn2Plan::create(Context& context, const gpuxtb_batch_t& batch,
-                                 std::string& error) {
+                                 const gpuxtb_compute_options_t& options, std::string& error) {
   if (impl_->context != nullptr) {
     error = "plan has already been created";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
@@ -216,13 +253,8 @@ gpuxtb_status_t Gfn2Plan::create(Context& context, const gpuxtb_batch_t& batch,
     return GPUXTB_STATUS_NOT_SUPPORTED;
   }
 
-  /* Validate the complete descriptor set exactly like gpuxtb_compute would,
-   * so a plan is never created from a corrupted or inconsistent request. A
-   * plan has no result descriptor at creation, so the plan-specific structure
-   * validation skips output-buffer checks. */
-  const gpuxtb_compute_options_t setup_options = default_plan_options();
   DescriptorValidationResult validation =
-      validate_plan_descriptor_structure(context.backend, &batch, &setup_options);
+      validate_plan_descriptor_structure(context.backend, &batch, &options);
   if (!validation.ok()) {
     error = std::move(validation.error);
     return validation.status;
@@ -236,46 +268,33 @@ gpuxtb_status_t Gfn2Plan::create(Context& context, const gpuxtb_batch_t& batch,
 
   impl_->backend = context.backend;
   impl_->context = &context;
-  impl_->topology_fingerprint = topology_fingerprint(batch);
-  impl_->batch_size = batch.batch_size;
-  impl_->total_atoms = batch.total_atoms;
-  impl_->total_point_charges = batch.total_point_charges;
+  impl_->policy = normalize_plan_policy(options);
+  impl_->topology.capture(batch);
   impl_->cuda_prepared = false;
 
   if (context.backend == GPUXTB_BACKEND_CPU) {
-    if (context.gfn2_cpu_execution_cache == nullptr) {
-      error = "CPU context does not own a GFN2 execution cache";
-      impl_->context = nullptr;
-      return GPUXTB_STATUS_INTERNAL_ERROR;
-    }
+    impl_->cpu_cache = std::make_shared<Gfn2CpuExecutionCache>(context.cpu_threads);
     bool reused = false;
-    gpuxtb_status_t status = prepare_restricted_gfn2_cpu(*context.gfn2_cpu_execution_cache, batch,
-                                                         setup_options, reused, error);
+    gpuxtb_status_t status =
+        prepare_restricted_gfn2_cpu(*impl_->cpu_cache, batch, impl_->policy, reused, error);
     if (status != GPUXTB_STATUS_SUCCESS) {
       impl_->context = nullptr;
       return status;
     }
-    impl_->cpu_persistent_bytes =
-        persistent_workspace_bytes_restricted_gfn2_cpu(*context.gfn2_cpu_execution_cache);
+    impl_->cpu_persistent_bytes = persistent_workspace_bytes_restricted_gfn2_cpu(*impl_->cpu_cache);
     error.clear();
     return GPUXTB_STATUS_SUCCESS;
   }
 
 #if defined(GPUXTB_HAS_CUDA)
-  if (context.gfn2_cuda_execution_cache == nullptr) {
-    error = "CUDA context does not own a GFN2 execution cache";
-    impl_->context = nullptr;
-    return GPUXTB_STATUS_INTERNAL_ERROR;
-  }
+  impl_->cuda_cache = std::make_shared<Gfn2CudaExecutionCache>(context.device_id, context.stream);
   {
-    bool reused = false;
-    gpuxtb_status_t status =
-        context.gfn2_cuda_execution_cache->prepare_host(batch, setup_options, reused, error);
+    gpuxtb_status_t status = impl_->cuda_cache->prepare_topology_only(batch, impl_->policy, error);
     if (status != GPUXTB_STATUS_SUCCESS) {
       impl_->context = nullptr;
       return status;
     }
-    const Gfn2CudaExecutionIdentity identity = context.gfn2_cuda_execution_cache->identity();
+    const Gfn2CudaExecutionIdentity identity = impl_->cuda_cache->identity();
     impl_->cuda_host_workspace_bytes = identity.provider_host_workspace_bytes;
     impl_->cuda_base_device_bytes =
         identity.topology_arena_bytes + identity.input_arena_bytes +
@@ -300,15 +319,25 @@ gpuxtb_status_t Gfn2Plan::query_workspace(std::uint32_t compute_flags,
     error = "plan is not created or has been destroyed";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
+  constexpr std::uint32_t kKnownComputeFlags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES |
+                                               GPUXTB_COMPUTE_ATOMIC_CHARGES |
+                                               GPUXTB_COMPUTE_POINT_CHARGE_FORCES;
+  if (query.reserved != 0u || query.reserved_v2 != 0u || compute_flags == 0u ||
+      (compute_flags & ~kKnownComputeFlags) != 0u) {
+    error = "workspace query contains unknown flags or nonzero reserved fields";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  if (compute_flags != impl_->policy.flags) {
+    error = "workspace query flags do not match the plan compute policy";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
   if (impl_->backend == GPUXTB_BACKEND_CPU) {
-    /* Persistent bytes are captured at plan creation (topology + spin only),
-     * so the answer stays valid even after another topology replaced the
-     * shared cache's prepared systems. Add only the flag-dependent output
-     * staging on top. */
+    /* Persistent bytes are captured at plan creation. Add only the
+     * flag-dependent publication staging on top. */
     std::size_t host_bytes = impl_->cpu_persistent_bytes;
-    const std::size_t batch = static_cast<std::size_t>(impl_->batch_size);
-    const std::size_t atoms = static_cast<std::size_t>(impl_->total_atoms);
-    const std::size_t points = static_cast<std::size_t>(impl_->total_point_charges);
+    const std::size_t batch = static_cast<std::size_t>(impl_->topology.batch_size);
+    const std::size_t atoms = static_cast<std::size_t>(impl_->topology.total_atoms);
+    const std::size_t points = static_cast<std::size_t>(impl_->topology.total_point_charges);
     if ((compute_flags & GPUXTB_COMPUTE_ENERGY) != 0u) {
       host_bytes += batch * sizeof(double);
     }
@@ -322,7 +351,6 @@ gpuxtb_status_t Gfn2Plan::query_workspace(std::uint32_t compute_flags,
       host_bytes += 3u * points * sizeof(double);
     }
     host_bytes += batch * (sizeof(std::int32_t) + sizeof(std::uint8_t) + sizeof(std::int32_t));
-    host_bytes += batch * (3u * (atoms == 0u ? 1u : atoms) * sizeof(double));
     query.host_required_bytes = static_cast<std::uint64_t>(host_bytes);
     query.host_required_alignment = static_cast<std::uint32_t>(kHostWorkspaceAlignment);
     query.device_required_bytes = 0u;
@@ -331,11 +359,11 @@ gpuxtb_status_t Gfn2Plan::query_workspace(std::uint32_t compute_flags,
     return GPUXTB_STATUS_SUCCESS;
   }
 #if defined(GPUXTB_HAS_CUDA)
-  if (impl_->context->gfn2_cuda_execution_cache == nullptr) {
-    error = "CUDA context does not own a GFN2 execution cache";
+  if (impl_->cuda_cache == nullptr) {
+    error = "plan does not own a CUDA GFN2 execution cache";
     return GPUXTB_STATUS_INTERNAL_ERROR;
   }
-  const Gfn2CudaExecutionIdentity identity = impl_->context->gfn2_cuda_execution_cache->identity();
+  const Gfn2CudaExecutionIdentity identity = impl_->cuda_cache->identity();
   const std::uint64_t base_device =
       impl_->cuda_prepared
           ? impl_->cuda_base_device_bytes
@@ -351,8 +379,9 @@ gpuxtb_status_t Gfn2Plan::query_workspace(std::uint32_t compute_flags,
   const std::uint64_t host_bytes =
       (impl_->cuda_prepared ? impl_->cuda_host_workspace_bytes
                             : static_cast<std::uint64_t>(identity.provider_host_workspace_bytes)) +
-      static_cast<std::uint64_t>(host_output_staging_bytes(
-          impl_->batch_size, impl_->total_atoms, impl_->total_point_charges, compute_flags));
+      static_cast<std::uint64_t>(
+          host_output_staging_bytes(impl_->topology.batch_size, impl_->topology.total_atoms,
+                                    impl_->topology.total_point_charges, compute_flags));
   query.host_required_bytes = host_bytes;
   query.host_required_alignment = static_cast<std::uint32_t>(kHostWorkspaceAlignment);
   query.device_required_bytes = device_bytes;
@@ -403,8 +432,13 @@ gpuxtb_status_t Gfn2Plan::compute(const gpuxtb_batch_t& batch,
         "charges, spin channels)";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
-  if (topology_fingerprint(batch) != impl_->topology_fingerprint) {
+  if (!impl_->topology.matches(batch)) {
     error = "the batch topology does not match the fixed plan topology";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  if (!plan_policy_matches(impl_->policy, options)) {
+    error = "the compute options do not match the fixed plan policy";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
 
@@ -413,20 +447,18 @@ gpuxtb_status_t Gfn2Plan::compute(const gpuxtb_batch_t& batch,
   }
 
   if (impl_->backend == GPUXTB_BACKEND_CPU) {
-    if (impl_->context->gfn2_cpu_execution_cache == nullptr) {
-      error = "CPU context does not own a GFN2 execution cache";
+    if (impl_->cpu_cache == nullptr) {
+      error = "plan does not own a CPU GFN2 execution cache";
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
-    return execute_restricted_gfn2_cpu(*impl_->context->gfn2_cpu_execution_cache, batch, options,
-                                       result, error);
+    return execute_restricted_gfn2_cpu(*impl_->cpu_cache, batch, options, result, error);
   }
 #if defined(GPUXTB_HAS_CUDA)
-  if (impl_->context->gfn2_cuda_execution_cache == nullptr) {
-    error = "CUDA context does not own a GFN2 execution cache";
+  if (impl_->cuda_cache == nullptr) {
+    error = "plan does not own a CUDA GFN2 execution cache";
     return GPUXTB_STATUS_INTERNAL_ERROR;
   }
-  return execute_restricted_gfn2_cuda(*impl_->context->gfn2_cuda_execution_cache, batch, options,
-                                      result, error);
+  return execute_restricted_gfn2_cuda(*impl_->cuda_cache, batch, options, result, error);
 #else
   error = "the gpuxtb library was built without CUDA support";
   return GPUXTB_STATUS_BACKEND_UNAVAILABLE;

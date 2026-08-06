@@ -20,12 +20,13 @@ struct Context;
 /*
  * Opaque fixed-topology GFN2 plan.
  *
- * A plan is created from one validated batch descriptor and binds the
- * immutable ragged topology (atom offsets, element numbers, molecular
- * charges, unpaired electrons, spin channels, point-charge and response
- * structure) to the context backend. Geometry (positions and point-charge
- * positions/values) is intentionally excluded: it may change on every
- * gpuxtb_plan_compute call while the plan is reused.
+ * A plan is created from one validated batch descriptor and compute policy. It
+ * binds the immutable ragged topology (atom offsets, element numbers,
+ * molecular charges, unpaired electrons, spin channels, point-charge and
+ * response structure) and owns a prepared cache for the selected backend.
+ * Geometry (positions and point-charge positions/values) is intentionally
+ * excluded: it may change on every gpuxtb_plan_compute call while the plan is
+ * reused.
  *
  * Creating a plan validates the topology and pre-warms the backend runtime so
  * repeated gpuxtb_plan_compute calls for the same fixed topology perform zero
@@ -42,7 +43,8 @@ class Gfn2Plan {
   Gfn2Plan(const Gfn2Plan&) = delete;
   Gfn2Plan& operator=(const Gfn2Plan&) = delete;
 
-  gpuxtb_status_t create(Context& context, const gpuxtb_batch_t& batch, std::string& error);
+  gpuxtb_status_t create(Context& context, const gpuxtb_batch_t& batch,
+                         const gpuxtb_compute_options_t& options, std::string& error);
   gpuxtb_status_t query_workspace(std::uint32_t compute_flags, gpuxtb_workspace_query_t& query,
                                   std::string& error);
   gpuxtb_status_t compute(const gpuxtb_batch_t& batch, const gpuxtb_compute_options_t& options,

@@ -1333,6 +1333,20 @@ struct Gfn2CpuExecutionCache::Impl {
     const double nan = std::numeric_limits<double>::quiet_NaN();
 
     outputs.resize(batch_size);
+    /* Plan creation calls prepare_staging before the first inference. Reserve
+     * the per-system publication vectors here so the first plan call has the
+     * same allocation-free behavior as later calls. */
+    for (std::size_t index = 0u; index < batch_size; ++index) {
+      const std::int64_t atom_begin = request.atom_offsets[index];
+      const std::int64_t atom_end = request.atom_offsets[index + 1u];
+      const std::int64_t point_begin = request.point_offsets[index];
+      const std::int64_t point_end = request.point_offsets[index + 1u];
+      const std::size_t atoms = static_cast<std::size_t>(atom_end - atom_begin);
+      const std::size_t points = static_cast<std::size_t>(point_end - point_begin);
+      outputs[index].forces.reserve(3u * atoms);
+      outputs[index].atomic_charges.reserve(atoms);
+      outputs[index].point_forces.reserve(3u * points);
+    }
     system_errors.resize(batch_size);
     inference_statuses.assign(batch_size, GPUXTB_STATUS_INTERNAL_ERROR);
     task_failures.assign(batch_size, TaskFailure::kNone);
@@ -1583,6 +1597,7 @@ gpuxtb_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
     if (status != GPUXTB_STATUS_SUCCESS) {
       return status;
     }
+    implementation.prepare_staging(options.flags);
     error.clear();
     return GPUXTB_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {

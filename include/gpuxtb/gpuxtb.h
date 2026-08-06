@@ -330,18 +330,17 @@ typedef struct gpuxtb_batch_result {
  * Caller-friendly workspace sizing for one fixed-topology plan.
  *
  * compute_flags is an input carrying the properties the caller plans to
- * request on the fixed topology. host_required_bytes / host_required_alignment
+ * request on the fixed topology and policy. It must equal the flags supplied
+ * to gpuxtb_plan_create. host_required_bytes / host_required_alignment
  * and device_required_bytes / device_required_alignment are outputs describing
- * the reusable, caller-owned workspace gpuxtb_plan_compute needs in host and
+ * the reusable plan-owned workspace gpuxtb_plan_compute reserves in host and
  * device memory. A backend that uses no device workspace reports zero device
  * bytes with alignment one. Sizes can differ between backends and between
  * property sets; the returned values cover one steady-state plan compute.
  *
- * This is an estimation/sizing contract for reusable caller-owned scratch. It
- * is not a promise that every backend derives the bytes from a live prepared
- * runtime: CPU values are derived from the immutable topology and the requested
- * properties, while CUDA values are measured from the prepared runtime when one
- * is available.
+ * This is an accounting query for the plan's retained scratch. CPU values are
+ * derived from the immutable topology and policy, while CUDA values are
+ * measured from the prepared runtime.
  */
 typedef struct gpuxtb_workspace_query {
   uint32_t struct_size;
@@ -357,6 +356,26 @@ typedef struct gpuxtb_workspace_query {
 
 #define GPUXTB_WORKSPACE_QUERY_V1_SIZE \
   (offsetof(gpuxtb_workspace_query_t, reserved_v2) + sizeof(uint32_t))
+
+#if defined(__cplusplus)
+static_assert(offsetof(gpuxtb_workspace_query_t, host_required_bytes) == 16u,
+              "gpuxtb_workspace_query_t host byte count must start at byte 16");
+static_assert(offsetof(gpuxtb_workspace_query_t, device_required_bytes) == 32u,
+              "gpuxtb_workspace_query_t device byte count must start at byte 32");
+static_assert(GPUXTB_WORKSPACE_QUERY_V1_SIZE == 48u,
+              "gpuxtb_workspace_query_t ABI-v1 image must remain 48 bytes");
+static_assert(sizeof(gpuxtb_workspace_query_t) == GPUXTB_WORKSPACE_QUERY_V1_SIZE,
+              "gpuxtb_workspace_query_t must not add trailing ABI padding");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(offsetof(gpuxtb_workspace_query_t, host_required_bytes) == 16u,
+               "gpuxtb_workspace_query_t host byte count must start at byte 16");
+_Static_assert(offsetof(gpuxtb_workspace_query_t, device_required_bytes) == 32u,
+               "gpuxtb_workspace_query_t device byte count must start at byte 32");
+_Static_assert(GPUXTB_WORKSPACE_QUERY_V1_SIZE == 48u,
+               "gpuxtb_workspace_query_t ABI-v1 image must remain 48 bytes");
+_Static_assert(sizeof(gpuxtb_workspace_query_t) == GPUXTB_WORKSPACE_QUERY_V1_SIZE,
+               "gpuxtb_workspace_query_t must not add trailing ABI padding");
+#endif
 
 GPUXTB_API const char* gpuxtb_version_string(void);
 GPUXTB_API const char* gpuxtb_status_string(gpuxtb_status_t status);
@@ -402,10 +421,12 @@ GPUXTB_API gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxt
 
 /*
  * Create a fixed-topology plan from one already-validated-shaped batch
- * descriptor. The plan binds the immutable topology (atom offsets, element
- * numbers, spin channels, point-charge and response structure) to the context
- * backend and reserves its reusable host/device workspace. Geometry (positions
- * and point-charge positions/values) is intentionally not part of the plan and
+ * descriptor and a compute policy. The plan binds the immutable topology (atom
+ * offsets, element numbers, spin channels, point-charge and response structure)
+ * and the numerical policy (model, requested properties, SCC tolerances,
+ * iteration limit, and electronic temperature) to the context backend and
+ * reserves its reusable host/device workspace. Geometry (positions and
+ * point-charge positions/values) is intentionally not part of the plan and
  * may change per gpuxtb_plan_compute call.
  *
  * The plan is a setup-with-allocation-permitted path: creating it performs
@@ -419,15 +440,17 @@ GPUXTB_API gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxt
  * different context, fails before any caller output is modified.
  */
 GPUXTB_API gpuxtb_status_t gpuxtb_plan_create(gpuxtb_context_t* context,
-                                              const gpuxtb_batch_t* batch, gpuxtb_plan_t** plan);
+                                              const gpuxtb_batch_t* batch,
+                                              const gpuxtb_compute_options_t* options,
+                                              gpuxtb_plan_t** plan);
 GPUXTB_API void gpuxtb_plan_destroy(gpuxtb_plan_t* plan);
 
 /*
- * Query the reusable caller-owned workspace gpuxtb_plan_compute needs on the
- * plan's backend for the requested properties. On return query.compute_flags
- * is preserved and the four sizing fields are populated as documented on
- * gpuxtb_workspace_query_t. Callers that want device sizing must use a CUDA
- * plan; CPU plans always report zero device bytes.
+ * Query the reusable plan-owned workspace gpuxtb_plan_compute reserves on the
+ * plan's backend for its requested properties. On return query.compute_flags
+ * is preserved and must match the plan policy; the four sizing fields are populated as documented
+ * on gpuxtb_workspace_query_t. Callers that want device sizing must use a CUDA plan; CPU plans
+ * always report zero device bytes.
  */
 GPUXTB_API gpuxtb_status_t gpuxtb_plan_query_workspace(const gpuxtb_plan_t* plan,
                                                        gpuxtb_workspace_query_t* query);
@@ -436,9 +459,10 @@ GPUXTB_API gpuxtb_status_t gpuxtb_plan_query_workspace(const gpuxtb_plan_t* plan
  * Execute one synchronous batched inference on a fixed-topology plan.
  *
  * geometry-only descriptors: positions and point-charge positions/values may
- * change between calls, but the immutable topology must match the plan exactly
- * or the call fails with GPUXTB_STATUS_INVALID_ARGUMENT before any caller
- * output is modified. Otherwise semantics match gpuxtb_compute: complete
+ * change between calls, but the immutable topology and creation-time compute
+ * policy must match the plan exactly or the call fails with
+ * GPUXTB_STATUS_INVALID_ARGUMENT before any caller output is modified.
+ * Otherwise semantics match gpuxtb_compute: complete
  * validation before execution, per-system SCC/eigensolver failures recorded in
  * per_system_status, and failed systems' floating-point slices filled with
  * quiet NaNs.

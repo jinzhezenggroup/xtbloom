@@ -301,7 +301,7 @@ gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* 
 }
 
 gpuxtb_status_t gpuxtb_plan_create(gpuxtb_context_t* context, const gpuxtb_batch_t* batch,
-                                   gpuxtb_plan_t** plan) {
+                                   const gpuxtb_compute_options_t* options, gpuxtb_plan_t** plan) {
   if (plan == nullptr) {
     return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "plan output pointer is NULL");
   }
@@ -309,13 +309,17 @@ gpuxtb_status_t gpuxtb_plan_create(gpuxtb_context_t* context, const gpuxtb_batch
   if (context == nullptr || context->implementation == nullptr) {
     return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "context is NULL");
   }
+  if (batch == nullptr || options == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "batch or compute options is NULL");
+  }
   try {
     gpuxtb::detail::Gfn2Plan* implementation = new (std::nothrow) gpuxtb::detail::Gfn2Plan{};
     if (implementation == nullptr) {
       return fail(GPUXTB_STATUS_ALLOCATION_FAILED, "failed to allocate a plan implementation");
     }
     std::string error;
-    const gpuxtb_status_t status = implementation->create(*context->implementation, *batch, error);
+    const gpuxtb_status_t status =
+        implementation->create(*context->implementation, *batch, *options, error);
     if (status != GPUXTB_STATUS_SUCCESS) {
       implementation->destroy();
       delete implementation;
@@ -381,6 +385,9 @@ gpuxtb_status_t gpuxtb_plan_compute(gpuxtb_plan_t* plan, const gpuxtb_batch_t* b
                                     gpuxtb_batch_result_t* result) {
   if (plan == nullptr || plan->implementation == nullptr) {
     return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "plan is NULL");
+  }
+  if (batch == nullptr || options == nullptr || result == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "batch, compute options, or batch result is NULL");
   }
   try {
     std::string error;

@@ -82,7 +82,8 @@ static int run_installed_inference(gpuxtb_context_t* context, const char* mode_n
 
   /* Exercise the installed fixed-topology plan and workspace-query ABI. */
   gpuxtb_plan_t* plan = NULL;
-  if (gpuxtb_plan_create(context, &batch, &plan) != GPUXTB_STATUS_SUCCESS || plan == NULL) {
+  if (gpuxtb_plan_create(context, &batch, &options, &plan) != GPUXTB_STATUS_SUCCESS ||
+      plan == NULL) {
     fprintf(stderr, "installed %s plan creation failed: %s\n", mode_name, gpuxtb_get_last_error());
     return 12;
   }

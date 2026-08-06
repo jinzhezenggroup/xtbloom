@@ -475,6 +475,7 @@ class Context:
         self._handle = None
         self._backend: int | None = None
         self._finalizer: weakref.finalize | None = None
+        self._plans: weakref.WeakSet[library.Plan] = weakref.WeakSet()
 
     def _create(self) -> None:
         if self._handle is not None:
@@ -528,13 +529,17 @@ class Context:
     def close(self) -> None:
         """Release the native context and its persistent resources."""
         if self._handle is not None:
+            for plan in list(self._plans):
+                plan.destroy()
             if self._finalizer is not None and self._finalizer.alive:
                 self._finalizer()
             self._handle = None
             self._backend = None
             self._finalizer = None
 
-    def create_plan(self, batch: library.Batch) -> library.Plan:
+    def create_plan(
+        self, batch: library.Batch, options: library.ComputeOptions
+    ) -> library.Plan:
         """Create a fixed-topology plan bound to this context.
 
         The low-level ``batch`` descriptor fixes the immutable topology; the
@@ -543,7 +548,9 @@ class Context:
         destroyed before the context.
         """
         self._create()
-        return library.Plan(self._handle, batch)
+        plan = library.Plan(self._handle, batch, options, self)
+        self._plans.add(plan)
+        return plan
 
     def __enter__(self) -> Context:  # noqa: PYI034 - Python 3.10 lacks typing.Self
         """Create the native context and return this owner."""

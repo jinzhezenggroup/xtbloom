@@ -286,6 +286,7 @@ def _configure_library(library: ctypes.CDLL) -> None:
     library.gpuxtb_plan_create.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(Batch),
+        ctypes.POINTER(ComputeOptions),
         ctypes.POINTER(ctypes.c_void_p),
     ]
     library.gpuxtb_plan_create.restype = ctypes.c_int32
@@ -630,11 +631,17 @@ class Plan:
     from.
     """
 
-    def __init__(self, context: ctypes.c_void_p, batch: Batch) -> None:
+    def __init__(
+        self,
+        context: ctypes.c_void_p,
+        batch: Batch,
+        options: ComputeOptions,
+        context_owner: object | None = None,
+    ) -> None:
         library = load_library()
         handle = ctypes.c_void_p()
         status = library.gpuxtb_plan_create(
-            context, ctypes.byref(batch), ctypes.byref(handle)
+            context, ctypes.byref(batch), ctypes.byref(options), ctypes.byref(handle)
         )
         if status != STATUS_SUCCESS:
             raise GPUxtbRuntimeError(
@@ -645,6 +652,9 @@ class Plan:
         self._handle = handle
         self._library = library
         self._closed = False
+        # The native plan borrows the context lifetime. Retaining the Python
+        # owner prevents garbage collection from invalidating a live plan.
+        self._context_owner = context_owner
 
     @property
     def handle(self) -> ctypes.c_void_p:
@@ -653,6 +663,7 @@ class Plan:
 
     def query_workspace(self, compute_flags: int) -> WorkspaceQuery:
         """Query reserved host/device workspace for the requested properties."""
+        self._ensure_open()
         query = WorkspaceQuery()
         self._check_init(query, "gpuxtb_workspace_query_init")
         query.compute_flags = int(compute_flags)
@@ -674,6 +685,7 @@ class Plan:
         result: BatchResult,
     ) -> None:
         """Run one fixed-topology inference; raises on a non-success status."""
+        self._ensure_open()
         status = self._library.gpuxtb_plan_compute(
             self._handle,
             ctypes.byref(batch),
@@ -693,6 +705,8 @@ class Plan:
             return
         self._closed = True
         self._library.gpuxtb_plan_destroy(self._handle)
+        self._handle = ctypes.c_void_p()
+        self._context_owner = None
 
     def __del__(self) -> None:
         """Best-effort native cleanup when the wrapper is garbage-collected."""
@@ -708,6 +722,12 @@ class Plan:
             raise GPUxtbRuntimeError(
                 f"{operation} failed with {status_string(status)}: {get_last_error()}",
                 status,
+            )
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise GPUxtbRuntimeError(
+                "fixed-topology plan is closed", STATUS_INVALID_ARGUMENT
             )
 
 

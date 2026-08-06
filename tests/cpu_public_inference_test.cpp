@@ -1214,7 +1214,8 @@ int test_plan_create_query_workspace_and_reuse() {
   PublicBatch request = make_repeated_h2_he_batch(8u);
   request.bind(flags);
   gpuxtb_plan_t* raw_plan = nullptr;
-  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &raw_plan) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &request.options, &raw_plan) ==
+        GPUXTB_STATUS_SUCCESS);
   CHECK(raw_plan != nullptr);
   CHECK(gpuxtb_context_get_backend(context.get()) == GPUXTB_BACKEND_CPU);
   PlanHandle plan(raw_plan);
@@ -1230,18 +1231,37 @@ int test_plan_create_query_workspace_and_reuse() {
   CHECK(query.device_required_bytes == 0u);
   CHECK(query.device_required_alignment == 1u);
 
+  gpuxtb_workspace_query_t invalid_query = query;
+  invalid_query.compute_flags = 0u;
+  invalid_query.host_required_bytes = UINT64_C(0x1122334455667788);
+  CHECK(gpuxtb_plan_query_workspace(plan.get(), &invalid_query) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(invalid_query.host_required_bytes == UINT64_C(0x1122334455667788));
+  invalid_query = query;
+  invalid_query.reserved = 1u;
+  CHECK(gpuxtb_plan_query_workspace(plan.get(), &invalid_query) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  invalid_query = query;
+  invalid_query.compute_flags = GPUXTB_COMPUTE_ENERGY;
+  CHECK(gpuxtb_plan_query_workspace(plan.get(), &invalid_query) == GPUXTB_STATUS_INVALID_ARGUMENT);
+
   /* Requested properties change the reported host workspace: forces and
    * charges keep additional output staging alive. */
+  PublicBatch energy_request = request;
+  energy_request.bind(GPUXTB_COMPUTE_ENERGY);
+  gpuxtb_plan_t* raw_energy_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &energy_request.batch, &energy_request.options,
+                           &raw_energy_plan) == GPUXTB_STATUS_SUCCESS);
+  PlanHandle energy_plan(raw_energy_plan);
   gpuxtb_workspace_query_t energy_query{};
   CHECK(gpuxtb_workspace_query_init(&energy_query, sizeof(energy_query)) == GPUXTB_STATUS_SUCCESS);
   energy_query.compute_flags = GPUXTB_COMPUTE_ENERGY;
-  CHECK(gpuxtb_plan_query_workspace(plan.get(), &energy_query) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_plan_query_workspace(energy_plan.get(), &energy_query) == GPUXTB_STATUS_SUCCESS);
   CHECK(energy_query.host_required_bytes > 0u);
   CHECK(query.host_required_bytes > energy_query.host_required_bytes);
 
   /* Creating a second plan on the same context is independent. */
   gpuxtb_plan_t* second_plan = nullptr;
-  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &second_plan) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &request.options, &second_plan) ==
+        GPUXTB_STATUS_SUCCESS);
   CHECK(second_plan != nullptr);
   gpuxtb_plan_destroy(second_plan);
 
@@ -1273,20 +1293,28 @@ int test_plan_fixed_topology_zero_steady_state_allocations() {
   PublicBatch request = make_repeated_h2_he_batch(4u);
   request.bind(flags);
   gpuxtb_plan_t* raw_plan = nullptr;
-  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &raw_plan) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &request.options, &raw_plan) ==
+        GPUXTB_STATUS_SUCCESS);
   PlanHandle plan(raw_plan);
 
-  /* Plan creation pre-warms the topology; two plan calls with changed geometry
-   * warm every plan-owned vector so the third must not allocate. */
-  CHECK(gpuxtb_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+  PublicBatch other;
+  other.atom_offsets = {0, 5};
+  other.atomic_numbers = {6, 1, 1, 1, 1};
+  other.positions = {0.0,   0.0,   0.0,  1.09,  1.09,  1.09,  1.09, -1.09,
+                     -1.09, -1.09, 1.09, -1.09, -1.09, -1.09, 1.09};
+  other.molecular_charges = {0.0};
+  other.unpaired_electrons = {0};
+  other.bind(flags);
+  gpuxtb_plan_t* raw_other_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &other.batch, &other.options, &raw_other_plan) ==
         GPUXTB_STATUS_SUCCESS);
+  PlanHandle other_plan(raw_other_plan);
+
+  /* Plan creation pre-warms every plan-owned vector. The first call, already
+   * using changed geometry, must therefore perform no host allocations. */
   request.positions[0] -= 0.011;
   request.positions[3] += 0.011;
   request.bind(flags);
-  CHECK(gpuxtb_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
-        GPUXTB_STATUS_SUCCESS);
-  CHECK(request.statuses[0] == GPUXTB_STATUS_SUCCESS);
-  CHECK(std::isfinite(request.energies[0]));
 
   allocation_test::count.store(0u, std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_release);
@@ -1295,6 +1323,8 @@ int test_plan_fixed_topology_zero_steady_state_allocations() {
   allocation_test::enabled.store(false, std::memory_order_release);
   CHECK(status == GPUXTB_STATUS_SUCCESS);
   CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
+  CHECK(request.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(std::isfinite(request.energies[0]));
   return 0;
 }
 
@@ -1306,8 +1336,17 @@ int test_plan_topology_mismatch_fails_before_output_mutation() {
 
   PublicBatch request = make_repeated_h2_he_batch(2u);
   request.bind(flags);
+  gpuxtb_plan_t* null_batch_plan = reinterpret_cast<gpuxtb_plan_t*>(UINTPTR_MAX);
+  CHECK(gpuxtb_plan_create(context.get(), nullptr, &request.options, &null_batch_plan) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(null_batch_plan == nullptr);
+  gpuxtb_plan_t* null_options_plan = reinterpret_cast<gpuxtb_plan_t*>(UINTPTR_MAX);
+  CHECK(gpuxtb_plan_create(context.get(), &request.batch, nullptr, &null_options_plan) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(null_options_plan == nullptr);
   gpuxtb_plan_t* raw_plan = nullptr;
-  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &raw_plan) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &request.options, &raw_plan) ==
+        GPUXTB_STATUS_SUCCESS);
   PlanHandle plan(raw_plan);
 
   /* A different topology (methane) against the H2/He plan is a corrupted
@@ -1349,6 +1388,21 @@ int test_plan_topology_mismatch_fails_before_output_mutation() {
   CHECK(gpuxtb_plan_compute(nullptr, &request.batch, &request.options, &request.result) ==
         GPUXTB_STATUS_INVALID_ARGUMENT);
   CHECK(request.result.flags == UINT32_C(0x12345678));
+  CHECK(gpuxtb_plan_compute(plan.get(), nullptr, &request.options, &request.result) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(request.result.flags == UINT32_C(0x12345678));
+  CHECK(gpuxtb_plan_compute(plan.get(), &request.batch, nullptr, &request.result) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(request.result.flags == UINT32_C(0x12345678));
+  CHECK(gpuxtb_plan_compute(plan.get(), &request.batch, &request.options, nullptr) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+
+  PublicBatch mismatched_policy = request;
+  mismatched_policy.bind(GPUXTB_COMPUTE_ENERGY);
+  mismatched_policy.result.flags = UINT32_C(0x87654321);
+  CHECK(gpuxtb_plan_compute(plan.get(), &mismatched_policy.batch, &mismatched_policy.options,
+                            &mismatched_policy.result) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(mismatched_policy.result.flags == UINT32_C(0x87654321));
   return 0;
 }
 
@@ -1361,7 +1415,8 @@ int test_plan_multi_threaded_reuse() {
   PublicBatch request = make_repeated_h2_he_batch(4u);
   request.bind(flags);
   gpuxtb_plan_t* raw_plan = nullptr;
-  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &raw_plan) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &request.options, &raw_plan) ==
+        GPUXTB_STATUS_SUCCESS);
   PlanHandle plan(raw_plan);
 
   const std::size_t workers = 4u;

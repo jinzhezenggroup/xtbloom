@@ -107,16 +107,18 @@ persistent warm policy is exposed only by the low-level C/ctypes descriptor for 
 
 `gpuxtb_compute` remains the convenience path: it validates the descriptor set, prepares the
 per-system plans, runs the batch, and publishes outputs on one context transaction. For workloads
-that reuse one ragged topology across many geometries, `gpuxtb_plan_create` binds the immutable
-topology (atom offsets, element numbers, molecular charges, unpaired electrons, spin channels, and
-point-charge/response structure) to the context backend at creation time. Geometry is not part of
-the plan, so repeated `gpuxtb_plan_compute` calls can change positions, point-charge positions and
-values, and periodic `b/A` values freely.
+that reuse one ragged topology and compute policy across many geometries, `gpuxtb_plan_create`
+binds the immutable topology (atom offsets, element numbers, molecular charges, unpaired electrons,
+spin channels, and point-charge/response structure) plus the model, requested properties, SCC
+tolerances, iteration limit, and electronic temperature at creation time. `FRESH` versus `WARM`
+remains a per-call choice. Geometry is not part of the plan, so repeated `gpuxtb_plan_compute`
+calls can change positions, point-charge positions and values, and periodic `b/A` values freely.
 
 Plan creation is the allocation-permitted setup path: it validates the request and pre-warms the
-backend execution cache so a subsequent `gpuxtb_plan_compute` for the same topology performs zero
-steady-state allocations. `gpuxtb_plan_query_workspace` returns the reusable host/device workspace
-bytes and alignment the backend keeps alive for the requested property set; sizes differ by backend
+plan-owned backend execution cache so the first and subsequent `gpuxtb_plan_compute` calls for the
+same topology and policy perform zero steady-state allocations. Independent plans cannot evict one
+another through the context convenience cache. `gpuxtb_plan_query_workspace` returns the reusable
+host/device workspace bytes and alignment the plan keeps alive for its property set; sizes differ by backend
 (the CPU backend uses no device memory) and by requested properties (forces reserve device arenas
 and CPU output staging). A plan is bound to its creating context, must be destroyed before that
 context, and a batch whose immutable topology differs from the plan fails with

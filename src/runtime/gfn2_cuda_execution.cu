@@ -6054,6 +6054,107 @@ gpuxtb_status_t Gfn2CudaExecutionCache::prepare_host(const gpuxtb_batch_t& batch
   return GPUXTB_STATUS_SUCCESS;
 }
 
+gpuxtb_status_t Gfn2CudaExecutionCache::prepare_topology_only(
+    const gpuxtb_batch_t& batch, const gpuxtb_compute_options_t& options, std::string& error) {
+  if (impl_ == nullptr) {
+    error = "CUDA GFN2 execution cache has no implementation";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  ScopedCudaDevice device(impl_->device_id, error);
+  if (!device.ok()) return device.status();
+  const auto finish = [&](gpuxtb_status_t status) {
+    std::string restore_error;
+    const gpuxtb_status_t restore_status = device.restore(restore_error);
+    if (restore_status == GPUXTB_STATUS_SUCCESS) return status;
+    if (status != GPUXTB_STATUS_SUCCESS && !error.empty()) {
+      error += "; additionally, " + restore_error;
+    } else {
+      error = std::move(restore_error);
+    }
+    return restore_status;
+  };
+
+  const gpuxtb_status_t setup_status = [&]() -> gpuxtb_status_t {
+    gpuxtb_status_t status = impl_->ensure_handles(error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+
+    const Gfn2CudaTopologyStagingDiagnostic staged =
+        impl_->topology_staging.stage_and_validate(batch, error);
+    if (!staged.success()) return staged.status;
+    bool candidate_pending = staged.disposition == Gfn2CudaTopologyStageDisposition::kCandidate;
+    const auto abort_candidate = [&]() noexcept {
+      if (candidate_pending) {
+        impl_->topology_staging.abort_candidate();
+        candidate_pending = false;
+      }
+    };
+    const Gfn2CudaTopologyHostSnapshot* topology =
+        candidate_pending ? impl_->topology_staging.candidate_snapshot()
+                          : impl_->topology_staging.committed_snapshot();
+    if (topology == nullptr) {
+      abort_candidate();
+      error = "CUDA plan setup did not expose a canonical topology snapshot";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
+    if (impl_->prepared != nullptr &&
+        topology_snapshot_matches(*topology, options, impl_->prepared->host.key)) {
+      if (candidate_pending) {
+        const Gfn2CudaTopologyStagingDiagnostic committed =
+            impl_->topology_staging.commit_candidate(error);
+        candidate_pending = false;
+        if (!committed.success()) return committed.status;
+      }
+      error.clear();
+      return GPUXTB_STATUS_SUCCESS;
+    }
+
+    TopologyKey key;
+    std::vector<double> positions;
+    std::vector<double> point_positions;
+    std::vector<double> point_values;
+    std::vector<double> point_gammas;
+    std::vector<double> periodic_shifts;
+    std::vector<double> periodic_response;
+    std::unique_ptr<Impl::Prepared> candidate;
+    try {
+      status =
+          make_topology_only_seed(*topology, options, key, positions, point_positions, point_values,
+                                  point_gammas, periodic_shifts, periodic_response, error);
+      if (status == GPUXTB_STATUS_SUCCESS) {
+        status = impl_->build_candidate(std::move(key), std::move(positions),
+                                        std::move(point_positions), std::move(point_values),
+                                        std::move(point_gammas), std::move(periodic_shifts),
+                                        std::move(periodic_response), candidate, error);
+      }
+    } catch (const std::bad_alloc&) {
+      error = "failed to allocate host metadata for the CUDA GFN2 runtime candidate";
+      status = GPUXTB_STATUS_ALLOCATION_FAILED;
+    } catch (const std::exception& exception) {
+      error = exception.what();
+      status = GPUXTB_STATUS_INTERNAL_ERROR;
+    } catch (...) {
+      error = "unknown exception while constructing CUDA GFN2 runtime candidate";
+      status = GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      abort_candidate();
+      return status;
+    }
+    if (candidate_pending) {
+      const Gfn2CudaTopologyStagingDiagnostic committed =
+          impl_->topology_staging.commit_candidate(error);
+      candidate_pending = false;
+      if (!committed.success()) return committed.status;
+    }
+    impl_->prepared = std::move(candidate);
+    error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  }();
+  return finish(setup_status);
+}
+
 gpuxtb_status_t Gfn2CudaExecutionCache::refresh_numerical_async(
     const Gfn2CudaNumericalInputView& input, std::string& error) {
   if (impl_ == nullptr) {

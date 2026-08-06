@@ -215,6 +215,14 @@ class Gfn2CudaExecutionCache {
                                              const gpuxtb_compute_options_t& options, bool& reused,
                                              std::string& error);
 
+  /* Prepare a plan-owned runtime from topology metadata without reading the
+   * caller's numerical buffers. This permits device-resident geometry during
+   * plan creation; the first compute refreshes the prepared seed from the real
+   * descriptor before executing or publishing results. */
+  [[nodiscard]] gpuxtb_status_t prepare_topology_only(const gpuxtb_batch_t& batch,
+                                                      const gpuxtb_compute_options_t& options,
+                                                      std::string& error);
+
   /* Enqueue one allocation-free fixed-topology numerical transaction. */
   [[nodiscard]] gpuxtb_status_t refresh_numerical_async(const Gfn2CudaNumericalInputView& input,
                                                         std::string& error);

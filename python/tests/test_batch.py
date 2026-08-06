@@ -216,20 +216,9 @@ def test_fixed_topology_plan_matches_compute_and_exposes_workspace() -> None:
     batch.unpaired_electrons = unpaired_electrons
     batch.spin_channels = spin_channels
 
-    plan = context.create_plan(batch)
-    assert plan.handle
-
     full_flags = (
         library.COMPUTE_ENERGY | library.COMPUTE_FORCES | library.COMPUTE_ATOMIC_CHARGES
     )
-    workspace = plan.query_workspace(full_flags)
-    assert workspace.host_required_bytes > 0
-    assert workspace.host_required_alignment >= 8
-    assert workspace.device_required_bytes == 0  # CPU backend has no device memory
-
-    energy_only = plan.query_workspace(library.COMPUTE_ENERGY)
-    assert workspace.host_required_bytes >= energy_only.host_required_bytes
-
     options = library.ComputeOptions()
     library._check_init(
         "gpuxtb_compute_options_init",
@@ -238,6 +227,25 @@ def test_fixed_topology_plan_matches_compute_and_exposes_workspace() -> None:
         ),
     )
     options.flags = full_flags
+    plan = context.create_plan(batch, options)
+    assert plan.handle
+
+    workspace = plan.query_workspace(full_flags)
+    assert workspace.host_required_bytes > 0
+    assert workspace.host_required_alignment >= 8
+    assert workspace.device_required_bytes == 0  # CPU backend has no device memory
+
+    energy_options = library.ComputeOptions()
+    library._check_init(
+        "gpuxtb_compute_options_init",
+        library.load_library().gpuxtb_compute_options_init(
+            ctypes.byref(energy_options), ctypes.sizeof(energy_options)
+        ),
+    )
+    energy_options.flags = library.COMPUTE_ENERGY
+    energy_plan = context.create_plan(batch, energy_options)
+    energy_only = energy_plan.query_workspace(library.COMPUTE_ENERGY)
+    assert workspace.host_required_bytes >= energy_only.host_required_bytes
     result = library.BatchResult()
     library._check_init(
         "gpuxtb_batch_result_init",
@@ -294,4 +302,8 @@ def test_fixed_topology_plan_matches_compute_and_exposes_workspace() -> None:
     assert np.isfinite(energy2_owner[0])
 
     plan.destroy()
+    with pytest.raises(GPUxtbRuntimeError, match="plan is closed"):
+        plan.query_workspace(full_flags)
     context.close()
+    with pytest.raises(GPUxtbRuntimeError, match="plan is closed"):
+        energy_plan.query_workspace(library.COMPUTE_ENERGY)

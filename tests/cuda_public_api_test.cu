@@ -1087,10 +1087,16 @@ int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
   MaterializedResult reference;
   CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
 
-  /* Plan creation requires host-resident topology (offsets/element numbers),
-   * so bind the host fixture rather than the device upload here. */
+  /* Keep topology host-readable for exact plan identity, but place geometry on
+   * the CUDA device. Plan creation must support this mixed public descriptor
+   * rather than requiring an initial host geometry copy. */
+  DeviceBatchInputs device_inputs;
+  CUDA_CHECK(device_inputs.upload_numerical(batch));
+  batch.descriptor.positions = device_inputs.positions_.descriptor();
+
   gpuxtb_plan_t* raw_plan = nullptr;
-  CHECK(gpuxtb_plan_create(context.get(), &batch.descriptor, &raw_plan) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
+        GPUXTB_STATUS_SUCCESS);
   CHECK(raw_plan != nullptr);
   PlanHandle plan(raw_plan);
 
@@ -1105,10 +1111,18 @@ int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
   CHECK(query.device_required_bytes > 0u);
   CHECK(query.device_required_alignment >= 8u);
 
+  gpuxtb_compute_options_t energy_options = options;
+  energy_options.flags = GPUXTB_COMPUTE_ENERGY;
+  gpuxtb_plan_t* raw_energy_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &batch.descriptor, &energy_options, &raw_energy_plan) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(raw_energy_plan != nullptr);
+  PlanHandle energy_plan(raw_energy_plan);
+
   gpuxtb_workspace_query_t energy_query{};
   CHECK(gpuxtb_workspace_query_init(&energy_query, sizeof(energy_query)) == GPUXTB_STATUS_SUCCESS);
   energy_query.compute_flags = GPUXTB_COMPUTE_ENERGY;
-  CHECK(gpuxtb_plan_query_workspace(plan.get(), &energy_query) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_plan_query_workspace(energy_plan.get(), &energy_query) == GPUXTB_STATUS_SUCCESS);
   CHECK(energy_query.host_required_bytes > 0u);
   CHECK(query.device_required_bytes >= energy_query.device_required_bytes);
 
@@ -1127,6 +1141,8 @@ int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
   batch.perturb(0.003);
   MaterializedResult changed_reference;
   CHECK(run_cpu_reference(cpu_context, batch, options, changed_reference) == 0);
+  CUDA_CHECK(device_inputs.upload_numerical(batch));
+  batch.descriptor.positions = device_inputs.positions_.descriptor();
   {
     ResultOwner owner;
     CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
