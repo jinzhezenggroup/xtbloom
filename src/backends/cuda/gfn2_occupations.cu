@@ -1,18 +1,22 @@
 #include <array>
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 
 #include "backends/cuda/gfn2_occupations.cuh"
+#include "model/gfn2/occupation_binary64_policy.hpp"
 
 namespace gpuxtb::detail::cuda {
 namespace {
 
 constexpr int kPublishThreads = 128;
-constexpr int kMaximumRootIterations = 4096;
-constexpr double kDoubleMaximum = 1.79769313486231570814527423731704357e308;
-constexpr double kDoubleEpsilon = 2.220446049250313080847263336181640625e-16;
+constexpr int kOccupationsThreads = 128;
+/* Below this width, block-wide barriers cost more than the orbital work. */
+constexpr std::int64_t kSerialOccupationThreshold = 64;
+namespace occupation_policy = gpuxtb::detail::gfn2::binary64_policy;
 
 __device__ bool system_is_valid(const std::uint32_t* system_errors, std::int64_t system) {
   return atomicAdd(const_cast<std::uint32_t*>(system_errors) + system, 0u) ==
@@ -37,103 +41,6 @@ __global__ void capture_sequence_kernel(const std::uint32_t* device_error,
                            ? 1u
                            : 0u;
   }
-}
-
-/* Saturation keeps translated-energy arithmetic usable for opposite DBL_MAX endpoints. */
-__device__ double saturated_add(double first, double second) {
-  const double result = first + second;
-  if (isfinite(result)) {
-    return result;
-  }
-  return signbit(first) == signbit(second) && signbit(first) ? -kDoubleMaximum : kDoubleMaximum;
-}
-
-__device__ double saturated_subtract(double first, double second) {
-  const double result = first - second;
-  if (isfinite(result)) {
-    return result;
-  }
-  return first < second ? -kDoubleMaximum : kDoubleMaximum;
-}
-
-__device__ double saturated_multiply_nonnegative(double first, double second) {
-  if (first == 0.0 || second == 0.0) {
-    return 0.0;
-  }
-  return first > kDoubleMaximum / second ? kDoubleMaximum : first * second;
-}
-
-__device__ double saturated_affine(double reference, double multiplier, double scale) {
-  const double product = multiplier * scale;
-  if (isfinite(product)) {
-    return saturated_add(reference, product);
-  }
-  /* Normalize only on the overflow path, retaining ordinary-case subtraction accuracy. */
-  const double normalized = reference / kDoubleMaximum + multiplier * (scale / kDoubleMaximum);
-  if (normalized >= 1.0) {
-    return kDoubleMaximum;
-  }
-  if (normalized <= -1.0) {
-    return -kDoubleMaximum;
-  }
-  return normalized * kDoubleMaximum;
-}
-
-/* Evaluate (energy-reference)/kBT without overflowing an opposite-sign subtraction. */
-__device__ double scaled_energy_difference(double energy, double reference, double temperature) {
-  if (signbit(energy) == signbit(reference)) {
-    const double result = (energy - reference) / temperature;
-    if (isfinite(result)) {
-      return result;
-    }
-    return energy < reference ? -kDoubleMaximum : kDoubleMaximum;
-  }
-  const double scaled_energy = energy / temperature;
-  const double scaled_reference = reference / temperature;
-  const double result = scaled_energy - scaled_reference;
-  if (isfinite(result)) {
-    return result;
-  }
-  return energy < reference ? -kDoubleMaximum : kDoubleMaximum;
-}
-
-__device__ double stable_middle(double lower, double upper) { return 0.5 * lower + 0.5 * upper; }
-
-__device__ double fermi_value(double scaled_energy, double scaled_mu) {
-  const double argument = saturated_subtract(scaled_energy, scaled_mu);
-  if (argument >= 0.0) {
-    const double exponential = exp(-argument);
-    return exponential / (1.0 + exponential);
-  }
-  return 1.0 / (exp(argument) + 1.0);
-}
-
-__device__ double fermi_hole_value(double scaled_energy, double scaled_mu) {
-  const double argument = saturated_subtract(scaled_energy, scaled_mu);
-  if (argument >= 0.0) {
-    return 1.0 / (exp(-argument) + 1.0);
-  }
-  const double exponential = exp(argument);
-  return exponential / (1.0 + exponential);
-}
-
-__device__ double fermi_quantity(const double* eigenvalues, std::int64_t count,
-                                 double energy_reference, double scaled_mu, double temperature,
-                                 bool solve_holes) {
-  /* Kahan summation is deterministic and protects small populations in wide spectra. */
-  double sum = 0.0;
-  double compensation = 0.0;
-  for (std::int64_t orbital = 0; orbital < count; ++orbital) {
-    const double scaled_energy =
-        scaled_energy_difference(eigenvalues[orbital], energy_reference, temperature);
-    const double value = solve_holes ? fermi_hole_value(scaled_energy, scaled_mu)
-                                     : fermi_value(scaled_energy, scaled_mu);
-    const double corrected = value - compensation;
-    const double updated = sum + corrected;
-    compensation = (updated - sum) - corrected;
-    sum = updated;
-  }
-  return sum;
 }
 
 __device__ double actual_electron_sum(const double* occupations, std::int64_t count) {
@@ -183,7 +90,8 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
     for (std::int64_t orbital = 0; orbital < count; ++orbital) {
       occupations[orbital] = 1.0;
     }
-    result->chemical_potential = saturated_affine(eigenvalues[count - 1], 50.0, temperature);
+    result->chemical_potential =
+        occupation_policy::saturated_affine(eigenvalues[count - 1], 50.0, temperature);
     result->electron_sum = capacity;
     return isfinite(result->chemical_potential);
   }
@@ -194,148 +102,56 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
     *error = Gfn2OccupationsDeviceError::kElectronConservationFailure;
     return false;
   }
-  /* log(target)-log(capacity) avoids underflow in target/capacity. */
-  const double log_fraction = log(quantity_target) - log(capacity);
-  const double thermal_steps = max(64.0, -log_fraction + 8.0);
-  const double energy_reference = solve_holes ? eigenvalues[count - 1] : eigenvalues[0];
-  const double scaled_minimum =
-      scaled_energy_difference(eigenvalues[0], energy_reference, temperature);
-  const double scaled_maximum =
-      scaled_energy_difference(eigenvalues[count - 1], energy_reference, temperature);
-  const double scaled_span = saturated_subtract(scaled_maximum, scaled_minimum);
-  const double energy_scale = max(1.0, fabs(scaled_span));
-  const double representation_margin =
-      saturated_multiply_nonnegative(64.0 * kDoubleEpsilon, energy_scale);
-  const double margin = saturated_add(thermal_steps, representation_margin);
-  double lower = saturated_subtract(scaled_minimum, margin);
-  double upper = saturated_add(scaled_maximum, margin);
-  const double lower_quantity =
-      fermi_quantity(eigenvalues, count, energy_reference, lower, temperature, solve_holes);
-  const double upper_quantity =
-      fermi_quantity(eigenvalues, count, energy_reference, upper, temperature, solve_holes);
-  const bool bracketed =
-      solve_holes ? lower_quantity >= quantity_target && upper_quantity <= quantity_target
-                  : lower_quantity <= quantity_target && upper_quantity >= quantity_target;
-  if (!isfinite(lower) || !isfinite(upper) || !(lower < upper) || !isfinite(lower_quantity) ||
-      !isfinite(upper_quantity) || !bracketed) {
+  occupation_policy::Root root{};
+  if (!occupation_policy::solve_root(eigenvalues, count, quantity_target, temperature, solve_holes,
+                                     root)) {
     *error = Gfn2OccupationsDeviceError::kChemicalPotentialBracketFailure;
     return false;
   }
-
-  const double tolerance = 64.0 * kDoubleEpsilon * quantity_target;
-  for (int iteration = 0; iteration < kMaximumRootIterations; ++iteration) {
-    const double middle = stable_middle(lower, upper);
-    const double quantity =
-        fermi_quantity(eigenvalues, count, energy_reference, middle, temperature, solve_holes);
-    if (!isfinite(quantity)) {
-      *error = Gfn2OccupationsDeviceError::kChemicalPotentialBracketFailure;
-      return false;
-    }
-    if (fabs(quantity - quantity_target) <= tolerance) {
-      lower = middle;
-      upper = middle;
-      break;
-    }
-    if (middle == lower || middle == upper) {
-      break;
-    }
-    if ((!solve_holes && quantity < quantity_target) ||
-        (solve_holes && quantity > quantity_target)) {
-      lower = middle;
-    } else {
-      upper = middle;
-    }
-  }
-
-  const double scaled_mu = stable_middle(lower, upper);
-  result->chemical_potential = saturated_affine(energy_reference, scaled_mu, temperature);
-  double ideal_quantity = 0.0;
-  double ideal_compensation = 0.0;
-  double published_quantity = 0.0;
-  double published_compensation = 0.0;
-  for (std::int64_t orbital = 0; orbital < count; ++orbital) {
-    const double scaled_energy =
-        scaled_energy_difference(eigenvalues[orbital], energy_reference, temperature);
-    const double occupation = fermi_value(scaled_energy, scaled_mu);
-    const double ideal = solve_holes ? fermi_hole_value(scaled_energy, scaled_mu) : occupation;
-    const double ideal_corrected = ideal - ideal_compensation;
-    const double ideal_updated = ideal_quantity + ideal_corrected;
-    ideal_compensation = (ideal_updated - ideal_quantity) - ideal_corrected;
-    ideal_quantity = ideal_updated;
-    occupations[orbital] = occupation;
-    const double published = solve_holes ? 1.0 - occupation : occupation;
-    const double published_corrected = published - published_compensation;
-    const double published_updated = published_quantity + published_corrected;
-    published_compensation = (published_updated - published_quantity) - published_corrected;
-    published_quantity = published_updated;
-  }
   /*
-   * CUDA has no wider device long double. The nearest representable scaled
-   * chemical potential can move a tiny population by
-   * several double ulps even though the occupation itself remains correctable.
-   * Keep that root only within a conservative bound, then require the strict
-   * CPU publication tolerance below after correcting an invariant energy block.
+   * The shared binary64 solver retries only after adjacent root spacing is
+   * exhausted, the ordinary root tolerance is still unmet, the final bracket
+   * straddles the target, and exactly one multi-member degenerate block changes
+   * occupation across it. The retry merely changes the translated reference;
+   * this ordinary acceptance gate still decides whether the root is usable.
    */
-  const double representable_root_tolerance = 1024.0 * kDoubleEpsilon * quantity_target;
-  if (!isfinite(result->chemical_potential) || !isfinite(ideal_quantity) ||
-      fabs(ideal_quantity - quantity_target) > representable_root_tolerance) {
+  occupation_policy::Publication publication{};
+  if (!occupation_policy::select_publication(eigenvalues, count, quantity_target, temperature,
+                                             solve_holes, root, publication)) {
     *error = Gfn2OccupationsDeviceError::kElectronConservationFailure;
     return false;
   }
-
-  const double residual = quantity_target - published_quantity;
-  if (fabs(residual) > tolerance) {
-    /* Any material correction is uniform over a complete equal-energy block. */
-    const double occupation_delta = solve_holes ? -residual : residual;
-    bool corrected = false;
-    for (std::int64_t block_begin = 0; block_begin < count;) {
-      std::int64_t block_end = block_begin + 1;
-      while (block_end < count && eigenvalues[block_end] == eigenvalues[block_begin]) {
-        ++block_end;
-      }
-      const std::int64_t block_count = block_end - block_begin;
-      const double old_occupation = occupations[block_begin];
-      const double candidate = old_occupation + occupation_delta / static_cast<double>(block_count);
-      if (candidate >= 0.0 && candidate <= 1.0) {
-        const double block_scale = static_cast<double>(block_count);
-        const double old_quantity =
-            block_scale * (solve_holes ? 1.0 - old_occupation : old_occupation);
-        const double new_quantity = block_scale * (solve_holes ? 1.0 - candidate : candidate);
-        const double corrected_quantity = published_quantity + new_quantity - old_quantity;
-        if (new_quantity != old_quantity && isfinite(corrected_quantity) &&
-            fabs(corrected_quantity - quantity_target) <= tolerance) {
-          for (std::int64_t orbital = block_begin; orbital < block_end; ++orbital) {
-            occupations[orbital] = candidate;
-          }
-          published_quantity = corrected_quantity;
-          corrected = true;
-          break;
-        }
-      }
-      block_begin = block_end;
-    }
-    if (!corrected) {
-      *error = Gfn2OccupationsDeviceError::kElectronConservationFailure;
-      return false;
-    }
+  const double root_tolerance = occupation_policy::root_acceptance_tolerance(quantity_target, root);
+  if (!isfinite(root.quantity) ||
+      occupation_policy::absolute(root.quantity - quantity_target) > root_tolerance) {
+    *error = Gfn2OccupationsDeviceError::kElectronConservationFailure;
+    return false;
   }
-
-  double entropy = 0.0;
-  double entropy_compensation = 0.0;
+  result->chemical_potential =
+      occupation_policy::saturated_affine(root.energy_reference, root.scaled_mu, temperature);
+  const std::int64_t largest_degenerate_block =
+      occupation_policy::largest_degenerate_block(eigenvalues, count);
+  if (largest_degenerate_block == count && quantity_target / capacity == 0.0) {
+    /* Match the CPU's canonical analytic root when a valid subnormal total
+     * population cannot be divided into a nonzero binary64 per-member value.
+     * This avoids choosing an arbitrary side of the device Fermi jump. */
+    const double log_fraction =
+        occupation_policy::logarithm(quantity_target) - occupation_policy::logarithm(capacity);
+    const double log_complement =
+        occupation_policy::logarithm_one_plus(-occupation_policy::exponential(log_fraction));
+    const double canonical_scaled_mu =
+        solve_holes ? log_complement - log_fraction : log_fraction - log_complement;
+    result->chemical_potential = occupation_policy::saturated_affine(
+        root.energy_reference, canonical_scaled_mu, temperature);
+  }
   for (std::int64_t orbital = 0; orbital < count; ++orbital) {
-    const double occupation = occupations[orbital];
-    if (occupation > 0.0 && occupation < 1.0) {
-      const double hole = 1.0 - occupation;
-      const double contribution = -occupation * log(occupation) - hole * log(hole);
-      const double corrected = contribution - entropy_compensation;
-      const double updated = entropy + corrected;
-      entropy_compensation = (updated - entropy) - corrected;
-      entropy = updated;
-    }
+    occupations[orbital] = occupation_policy::published_occupation(eigenvalues, orbital,
+                                                                   temperature, root, publication);
   }
-  if (!isfinite(entropy) || fabs(published_quantity - quantity_target) > tolerance) {
-    *error = !isfinite(entropy) ? Gfn2OccupationsDeviceError::kNonfiniteEntropy
-                                : Gfn2OccupationsDeviceError::kElectronConservationFailure;
+  const double entropy =
+      occupation_policy::publication_entropy(eigenvalues, count, temperature, root, publication);
+  if (!isfinite(result->chemical_potential) || !isfinite(entropy)) {
+    *error = Gfn2OccupationsDeviceError::kNonfiniteEntropy;
     return false;
   }
   result->electron_sum = actual_electron_sum(occupations, count);
@@ -343,118 +159,441 @@ __device__ bool fill_one_spin(const double* eigenvalues, std::int64_t count, dou
   return isfinite(result->electron_sum);
 }
 
+/* One CUDA block owns one system. Thread zero retains policy decisions while
+ * every thread contributes a fixed strided orbital subsequence to reductions.
+ * Exact-degeneracy and root-spacing corner cases deliberately fall back to the
+ * shared serial binary64 policy so #31 semantics remain identical to CPU. */
+struct OccupationsSharedState {
+  int error;
+  bool silent_skip;
+  bool use_serial;
+  bool done;
+  bool spacing_exhausted;
+  std::int64_t begin;
+  std::int64_t count;
+  std::int64_t spin_orbital_begin;
+  std::uint8_t spin_channels;
+  double temperature;
+  double quantity_target;
+  double energy_reference;
+  double lower;
+  double upper;
+  double middle;
+  double reduced_value;
+  bool solve_holes;
+  occupation_policy::Root root;
+  occupation_policy::Publication publication;
+  double partial_value[kOccupationsThreads];
+  double partial_compensation[kOccupationsThreads];
+  SpinResult spin_results[2];
+};
+
+template <typename ValueAt>
+__device__ double cooperative_compensated_sum(ValueAt value_at, std::int64_t count, int tid,
+                                              OccupationsSharedState& state) {
+  occupation_policy::CompensatedSum partial{};
+  for (std::int64_t orbital = tid; orbital < count; orbital += kOccupationsThreads) {
+    occupation_policy::add_compensated(partial, value_at(orbital));
+  }
+  state.partial_value[tid] = partial.value;
+  state.partial_compensation[tid] = partial.compensation;
+  __syncthreads();
+  if (tid == 0) {
+    occupation_policy::CompensatedSum total{};
+    for (int thread = 0; thread < kOccupationsThreads; ++thread) {
+      occupation_policy::add_compensated(
+          total, state.partial_value[thread] - state.partial_compensation[thread]);
+    }
+    state.reduced_value = total.value;
+  }
+  __syncthreads();
+  return state.reduced_value;
+}
+
+__device__ double cooperative_quantity(const double* eigenvalues, std::int64_t count,
+                                       double energy_reference, double scaled_mu,
+                                       double temperature, bool solve_holes, int tid,
+                                       OccupationsSharedState& state) {
+  const auto value_at = [&](std::int64_t orbital) {
+    const double scaled_energy = occupation_policy::scaled_energy_difference(
+        eigenvalues[orbital], energy_reference, temperature);
+    return solve_holes ? occupation_policy::fermi_hole_value(scaled_energy, scaled_mu)
+                       : occupation_policy::fermi_value(scaled_energy, scaled_mu);
+  };
+  return cooperative_compensated_sum(value_at, count, tid, state);
+}
+
+__device__ void serial_fill_cooperatively(const double* eigenvalues, std::int64_t count,
+                                          double electron_count, double temperature,
+                                          double* occupations, int spin, int tid,
+                                          OccupationsSharedState& state) {
+  if (tid == 0) {
+    Gfn2OccupationsDeviceError error = Gfn2OccupationsDeviceError::kSuccess;
+    if (!fill_one_spin(eigenvalues, count, electron_count, temperature, occupations,
+                       state.spin_results + spin, &error)) {
+      state.error = static_cast<int>(error == Gfn2OccupationsDeviceError::kSuccess
+                                         ? Gfn2OccupationsDeviceError::kElectronConservationFailure
+                                         : error);
+    }
+  }
+  __syncthreads();
+}
+
+__device__ void fill_one_spin_cooperatively(const double* eigenvalues, std::int64_t count,
+                                            double electron_count, double temperature,
+                                            double* occupations, int spin, int tid,
+                                            OccupationsSharedState& state) {
+  if (tid == 0) {
+    state.spin_results[spin] = {};
+    state.done = false;
+    state.spacing_exhausted = false;
+  }
+  __syncthreads();
+
+  if (state.use_serial) {
+    serial_fill_cooperatively(eigenvalues, count, electron_count, temperature, occupations, spin,
+                              tid, state);
+    return;
+  }
+
+  if (temperature == 0.0) {
+    const std::int64_t full = min(static_cast<std::int64_t>(floor(electron_count)), count);
+    for (std::int64_t orbital = tid; orbital < count; orbital += kOccupationsThreads) {
+      occupations[orbital] =
+          orbital < full ? 1.0
+                         : (orbital == full ? electron_count - static_cast<double>(full) : 0.0);
+    }
+    __syncthreads();
+    const auto occupation_at = [&](std::int64_t orbital) { return occupations[orbital]; };
+    const double electron_sum = cooperative_compensated_sum(occupation_at, count, tid, state);
+    if (tid == 0) {
+      state.spin_results[spin].electron_sum = electron_sum;
+    }
+    __syncthreads();
+    return;
+  }
+
+  if (electron_count == 0.0) {
+    for (std::int64_t orbital = tid; orbital < count; orbital += kOccupationsThreads) {
+      occupations[orbital] = 0.0;
+    }
+    __syncthreads();
+    return;
+  }
+
+  const double capacity = static_cast<double>(count);
+  if (electron_count == capacity) {
+    for (std::int64_t orbital = tid; orbital < count; orbital += kOccupationsThreads) {
+      occupations[orbital] = 1.0;
+    }
+    if (tid == 0) {
+      state.spin_results[spin].chemical_potential =
+          occupation_policy::saturated_affine(eigenvalues[count - 1], 50.0, temperature);
+      state.spin_results[spin].electron_sum = capacity;
+      if (!isfinite(state.spin_results[spin].chemical_potential)) {
+        state.error = static_cast<int>(Gfn2OccupationsDeviceError::kElectronConservationFailure);
+      }
+    }
+    __syncthreads();
+    return;
+  }
+
+  if (tid == 0) {
+    state.solve_holes = electron_count > 0.5 * capacity;
+    state.quantity_target = state.solve_holes ? capacity - electron_count : electron_count;
+    if (!(state.quantity_target > 0.0) || !isfinite(state.quantity_target)) {
+      state.error = static_cast<int>(Gfn2OccupationsDeviceError::kElectronConservationFailure);
+    } else {
+      state.energy_reference = state.solve_holes ? eigenvalues[count - 1] : eigenvalues[0];
+      const double log_fraction = occupation_policy::logarithm(state.quantity_target) -
+                                  occupation_policy::logarithm(capacity);
+      const double thermal_steps = occupation_policy::maximum(64.0, -log_fraction + 8.0);
+      const double scaled_minimum = occupation_policy::scaled_energy_difference(
+          eigenvalues[0], state.energy_reference, temperature);
+      const double scaled_maximum = occupation_policy::scaled_energy_difference(
+          eigenvalues[count - 1], state.energy_reference, temperature);
+      const double scaled_span =
+          occupation_policy::saturated_subtract(scaled_maximum, scaled_minimum);
+      const double energy_scale =
+          occupation_policy::maximum(1.0, occupation_policy::absolute(scaled_span));
+      const double representation_margin = occupation_policy::saturated_multiply_nonnegative(
+          64.0 * occupation_policy::kEpsilon, energy_scale);
+      const double margin = occupation_policy::saturated_add(thermal_steps, representation_margin);
+      state.lower = occupation_policy::saturated_subtract(scaled_minimum, margin);
+      state.upper = occupation_policy::saturated_add(scaled_maximum, margin);
+    }
+  }
+  __syncthreads();
+  if (state.error != 0) {
+    return;
+  }
+
+  const double lower_quantity =
+      cooperative_quantity(eigenvalues, count, state.energy_reference, state.lower, temperature,
+                           state.solve_holes, tid, state);
+  const double upper_quantity =
+      cooperative_quantity(eigenvalues, count, state.energy_reference, state.upper, temperature,
+                           state.solve_holes, tid, state);
+  if (tid == 0) {
+    const bool bracketed =
+        state.solve_holes
+            ? lower_quantity >= state.quantity_target && upper_quantity <= state.quantity_target
+            : lower_quantity <= state.quantity_target && upper_quantity >= state.quantity_target;
+    if (!isfinite(state.lower) || !isfinite(state.upper) || !(state.lower < state.upper) ||
+        !isfinite(lower_quantity) || !isfinite(upper_quantity) || !bracketed) {
+      /* Preserve the shared policy's exact diagnostic before reporting failure. */
+      state.use_serial = true;
+    }
+  }
+  __syncthreads();
+  if (state.use_serial) {
+    serial_fill_cooperatively(eigenvalues, count, electron_count, temperature, occupations, spin,
+                              tid, state);
+    return;
+  }
+
+  const double tolerance = 64.0 * occupation_policy::kEpsilon * state.quantity_target;
+  for (int iteration = 0; iteration < occupation_policy::kMaximumRootIterations; ++iteration) {
+    if (tid == 0) {
+      state.middle = occupation_policy::stable_middle(state.lower, state.upper);
+    }
+    __syncthreads();
+    const double quantity =
+        cooperative_quantity(eigenvalues, count, state.energy_reference, state.middle, temperature,
+                             state.solve_holes, tid, state);
+    if (tid == 0) {
+      if (!isfinite(quantity)) {
+        state.use_serial = true;
+        state.done = true;
+      } else if (occupation_policy::absolute(quantity - state.quantity_target) <= tolerance) {
+        state.lower = state.middle;
+        state.upper = state.middle;
+        state.done = true;
+      } else if (state.middle == state.lower || state.middle == state.upper) {
+        state.spacing_exhausted = true;
+        state.done = true;
+      } else if ((!state.solve_holes && quantity < state.quantity_target) ||
+                 (state.solve_holes && quantity > state.quantity_target)) {
+        state.lower = state.middle;
+      } else {
+        state.upper = state.middle;
+      }
+    }
+    __syncthreads();
+    if (state.done) {
+      break;
+    }
+  }
+
+  if (tid == 0) {
+    state.root = {};
+    state.root.energy_reference = state.energy_reference;
+    state.root.lower = state.lower;
+    state.root.upper = state.upper;
+    state.root.scaled_mu = occupation_policy::stable_middle(state.lower, state.upper);
+    state.root.spacing_exhausted = state.spacing_exhausted;
+  }
+  __syncthreads();
+  const double solved_quantity =
+      cooperative_quantity(eigenvalues, count, state.root.energy_reference, state.root.scaled_mu,
+                           temperature, state.solve_holes, tid, state);
+  if (tid == 0) {
+    state.root.quantity = solved_quantity;
+    state.publication = {};
+    if (state.use_serial || state.root.spacing_exhausted || !isfinite(solved_quantity) ||
+        !occupation_policy::select_publication(eigenvalues, count, state.quantity_target,
+                                               temperature, state.solve_holes, state.root,
+                                               state.publication) ||
+        state.publication.correction_count != 0 || state.publication.relaxed) {
+      state.use_serial = true;
+    } else {
+      const double root_tolerance =
+          occupation_policy::root_acceptance_tolerance(state.quantity_target, state.root);
+      if (occupation_policy::absolute(solved_quantity - state.quantity_target) > root_tolerance) {
+        state.use_serial = true;
+      } else {
+        state.spin_results[spin].chemical_potential = occupation_policy::saturated_affine(
+            state.root.energy_reference, state.root.scaled_mu, temperature);
+      }
+    }
+  }
+  __syncthreads();
+  if (state.use_serial) {
+    serial_fill_cooperatively(eigenvalues, count, electron_count, temperature, occupations, spin,
+                              tid, state);
+    return;
+  }
+
+  for (std::int64_t orbital = tid; orbital < count; orbital += kOccupationsThreads) {
+    occupations[orbital] = occupation_policy::published_occupation(
+        eigenvalues, orbital, temperature, state.root, state.publication);
+  }
+  __syncthreads();
+  const auto entropy_at = [&](std::int64_t orbital) {
+    const double occupation = occupations[orbital];
+    if (occupation > 0.0 && occupation < 1.0) {
+      const double hole = 1.0 - occupation;
+      return -occupation * occupation_policy::logarithm(occupation) -
+             hole * occupation_policy::logarithm(hole);
+    }
+    return 0.0;
+  };
+  const double entropy = cooperative_compensated_sum(entropy_at, count, tid, state);
+  const auto occupation_at = [&](std::int64_t orbital) { return occupations[orbital]; };
+  const double electron_sum = cooperative_compensated_sum(occupation_at, count, tid, state);
+  if (tid == 0) {
+    if (!isfinite(state.spin_results[spin].chemical_potential) || !isfinite(entropy)) {
+      state.error = static_cast<int>(Gfn2OccupationsDeviceError::kNonfiniteEntropy);
+    } else if (!isfinite(electron_sum)) {
+      state.error = static_cast<int>(Gfn2OccupationsDeviceError::kElectronConservationFailure);
+    } else {
+      state.spin_results[spin].electron_sum = electron_sum;
+      state.spin_results[spin].entropy = entropy;
+    }
+  }
+  __syncthreads();
+}
+
 __global__ void evaluate_kernel(Gfn2OccupationsDeviceBatch batch, Gfn2WavefunctionLayoutView layout,
                                 const double* eigenvalues, Gfn2OccupationsDeviceWorkspace workspace,
                                 std::uint32_t* system_errors, std::uint32_t* device_error) {
+  __shared__ OccupationsSharedState state;
+  const int tid = threadIdx.x;
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
-  if (threadIdx.x != 0 || atomicAdd(workspace.sequence_active, 0u) == 0u ||
-      !system_is_valid(system_errors, system)) {
+  if (tid == 0) {
+    state.error = 0;
+    state.silent_skip = false;
+    state.use_serial = false;
+    if (atomicAdd(workspace.sequence_active, 0u) == 0u || !system_is_valid(system_errors, system)) {
+      state.silent_skip = true;
+    } else {
+      const std::uint8_t active = batch.active[system];
+      if (active == 0u) {
+        state.silent_skip = true;
+      } else if (active != 1u) {
+        state.error = static_cast<int>(Gfn2OccupationsDeviceError::kInvalidActiveMask);
+      } else {
+        const std::int64_t begin = batch.orbital_offsets[system];
+        const std::int64_t end = batch.orbital_offsets[system + 1];
+        if (begin < 0 || begin >= end || end > batch.total_orbitals ||
+            (system == 0 && begin != 0) ||
+            (system + 1 == batch.batch_size && end != batch.total_orbitals)) {
+          state.error = static_cast<int>(Gfn2OccupationsDeviceError::kInvalidOffsets);
+        } else {
+          state.begin = begin;
+          state.count = end - begin;
+          state.spin_orbital_begin = begin;
+          state.spin_channels = 1u;
+          state.use_serial = state.count < kSerialOccupationThreshold;
+          const bool spin_layout = layout.spin_channels != nullptr;
+          if (spin_layout) {
+            const std::int32_t configured_channels = layout.spin_channels[system];
+            if (configured_channels != 1 && configured_channels != 2) {
+              state.error = static_cast<int>(Gfn2OccupationsDeviceError::kInvalidSpinLayout);
+            } else {
+              state.spin_channels = static_cast<std::uint8_t>(configured_channels);
+              const std::int64_t channel_begin = layout.spin_channel_offsets[system];
+              const std::int64_t channel_end = layout.spin_channel_offsets[system + 1];
+              state.spin_orbital_begin = layout.spin_orbital_offsets[system];
+              const std::int64_t spin_orbital_end = layout.spin_orbital_offsets[system + 1];
+              if (channel_begin < 0 || channel_end - channel_begin != state.spin_channels ||
+                  channel_end > layout.total_spin_channels || state.spin_orbital_begin < 0 ||
+                  spin_orbital_end - state.spin_orbital_begin !=
+                      static_cast<std::int64_t>(state.spin_channels) * state.count ||
+                  spin_orbital_end > layout.total_spin_orbitals ||
+                  (system == 0 && (channel_begin != 0 || state.spin_orbital_begin != 0)) ||
+                  (system + 1 == batch.batch_size &&
+                   (channel_end != layout.total_spin_channels ||
+                    spin_orbital_end != layout.total_spin_orbitals))) {
+                state.error = static_cast<int>(Gfn2OccupationsDeviceError::kInvalidSpinLayout);
+              }
+            }
+          }
+          state.temperature = batch.temperatures[system];
+          if (state.error == 0 && (!(state.temperature >= 0.0) || !isfinite(state.temperature))) {
+            state.error = static_cast<int>(Gfn2OccupationsDeviceError::kInvalidTemperature);
+          }
+          if (state.error == 0) {
+            for (int spin = 0; spin < 2; ++spin) {
+              const double electron_count = batch.electron_counts[system * 2 + spin];
+              if (!(electron_count >= 0.0) || electron_count > static_cast<double>(state.count) ||
+                  !isfinite(electron_count)) {
+                state.error = static_cast<int>(Gfn2OccupationsDeviceError::kInvalidElectronCount);
+                break;
+              }
+            }
+          }
+          if (state.error == 0) {
+            /* Keep the historic orbital-order/error priority deterministic. */
+            for (std::uint8_t spin = 0u; spin < state.spin_channels; ++spin) {
+              const std::int64_t spectrum_begin =
+                  state.spin_orbital_begin + static_cast<std::int64_t>(spin) * state.count;
+              for (std::int64_t orbital = 0; orbital < state.count; ++orbital) {
+                const double eigenvalue = eigenvalues[spectrum_begin + orbital];
+                if (!isfinite(eigenvalue)) {
+                  state.error = static_cast<int>(Gfn2OccupationsDeviceError::kNonfiniteEigenvalue);
+                  break;
+                }
+                if (orbital != 0 && eigenvalue < eigenvalues[spectrum_begin + orbital - 1]) {
+                  state.error = static_cast<int>(Gfn2OccupationsDeviceError::kUnsortedEigenvalues);
+                  break;
+                }
+                if (orbital != 0 && eigenvalue == eigenvalues[spectrum_begin + orbital - 1]) {
+                  state.use_serial = true;
+                }
+              }
+              if (state.error != 0) {
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  __syncthreads();
+  if (state.silent_skip) {
     return;
   }
-  const std::uint8_t active = batch.active[system];
-  if (active == 0u) {
-    return;
-  }
-  if (active != 1u) {
-    record_system_error(system_errors, system, device_error,
-                        Gfn2OccupationsDeviceError::kInvalidActiveMask);
+  if (state.error != 0) {
+    if (tid == 0) {
+      record_system_error(system_errors, system, device_error,
+                          static_cast<Gfn2OccupationsDeviceError>(state.error));
+    }
     return;
   }
 
-  const std::int64_t begin = batch.orbital_offsets[system];
-  const std::int64_t end = batch.orbital_offsets[system + 1];
-  if (begin < 0 || begin >= end || end > batch.total_orbitals || (system == 0 && begin != 0) ||
-      (system + 1 == batch.batch_size && end != batch.total_orbitals)) {
-    record_system_error(system_errors, system, device_error,
-                        Gfn2OccupationsDeviceError::kInvalidOffsets);
-    return;
-  }
-  const std::int64_t count = end - begin;
-  const bool spin_layout = layout.spin_channels != nullptr;
-  std::int64_t spin_orbital_begin = begin;
-  std::uint8_t spin_channels = 1u;
-  if (spin_layout) {
-    const std::int32_t configured_channels = layout.spin_channels[system];
-    if (configured_channels != 1 && configured_channels != 2) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2OccupationsDeviceError::kInvalidSpinLayout);
-      return;
-    }
-    spin_channels = static_cast<std::uint8_t>(configured_channels);
-    const std::int64_t channel_begin = layout.spin_channel_offsets[system];
-    const std::int64_t channel_end = layout.spin_channel_offsets[system + 1];
-    spin_orbital_begin = layout.spin_orbital_offsets[system];
-    const std::int64_t spin_orbital_end = layout.spin_orbital_offsets[system + 1];
-    if (channel_begin < 0 || channel_end - channel_begin != spin_channels ||
-        channel_end > layout.total_spin_channels || spin_orbital_begin < 0 ||
-        spin_orbital_end - spin_orbital_begin != static_cast<std::int64_t>(spin_channels) * count ||
-        spin_orbital_end > layout.total_spin_orbitals ||
-        (system == 0 && (channel_begin != 0 || spin_orbital_begin != 0)) ||
-        (system + 1 == batch.batch_size && (channel_end != layout.total_spin_channels ||
-                                            spin_orbital_end != layout.total_spin_orbitals))) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2OccupationsDeviceError::kInvalidSpinLayout);
-      return;
-    }
-  }
-  const double temperature = batch.temperatures[system];
-  if (!(temperature >= 0.0) || !isfinite(temperature)) {
-    record_system_error(system_errors, system, device_error,
-                        Gfn2OccupationsDeviceError::kInvalidTemperature);
-    return;
-  }
-  for (int spin = 0; spin < 2; ++spin) {
-    const double electron_count = batch.electron_counts[system * 2 + spin];
-    if (!(electron_count >= 0.0) || electron_count > static_cast<double>(count) ||
-        !isfinite(electron_count)) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2OccupationsDeviceError::kInvalidElectronCount);
-      return;
-    }
-  }
-  for (std::uint8_t spin = 0u; spin < spin_channels; ++spin) {
-    const std::int64_t spectrum_begin =
-        spin_orbital_begin + static_cast<std::int64_t>(spin) * count;
-    for (std::int64_t orbital = 0; orbital < count; ++orbital) {
-      const double eigenvalue = eigenvalues[spectrum_begin + orbital];
-      if (!isfinite(eigenvalue)) {
-        record_system_error(system_errors, system, device_error,
-                            Gfn2OccupationsDeviceError::kNonfiniteEigenvalue);
-        return;
-      }
-      if (orbital != 0 && eigenvalue < eigenvalues[spectrum_begin + orbital - 1]) {
-        record_system_error(system_errors, system, device_error,
-                            Gfn2OccupationsDeviceError::kUnsortedEigenvalues);
-        return;
-      }
-    }
-  }
-
-  const std::int64_t occupation_base = begin * 2;
-  SpinResult spin_results[2];
+  const std::int64_t occupation_base = state.begin * 2;
   for (int spin = 0; spin < 2; ++spin) {
     const std::int64_t spectrum_begin =
-        spin_orbital_begin + (spin_channels == 2u ? static_cast<std::int64_t>(spin) * count : 0);
-    Gfn2OccupationsDeviceError error = Gfn2OccupationsDeviceError::kSuccess;
-    if (!fill_one_spin(eigenvalues + spectrum_begin, count,
-                       batch.electron_counts[system * 2 + spin], temperature,
-                       workspace.occupation_scratch + occupation_base + spin * count,
-                       spin_results + spin, &error)) {
-      record_system_error(system_errors, system, device_error, error);
+        state.spin_orbital_begin +
+        (state.spin_channels == 2u ? static_cast<std::int64_t>(spin) * state.count : 0);
+    fill_one_spin_cooperatively(eigenvalues + spectrum_begin, state.count,
+                                batch.electron_counts[system * 2 + spin], state.temperature,
+                                workspace.occupation_scratch + occupation_base + spin * state.count,
+                                spin, tid, state);
+    if (state.error != 0) {
+      if (tid == 0) {
+        record_system_error(system_errors, system, device_error,
+                            static_cast<Gfn2OccupationsDeviceError>(state.error));
+      }
       return;
     }
   }
-  const double total_entropy = spin_results[0].entropy + spin_results[1].entropy;
-  if (!isfinite(total_entropy)) {
-    record_system_error(system_errors, system, device_error,
-                        Gfn2OccupationsDeviceError::kNonfiniteEntropy);
-    return;
+  if (tid == 0) {
+    const double total_entropy = state.spin_results[0].entropy + state.spin_results[1].entropy;
+    if (!isfinite(total_entropy)) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2OccupationsDeviceError::kNonfiniteEntropy);
+      return;
+    }
+    for (int spin = 0; spin < 2; ++spin) {
+      workspace.chemical_potential_scratch[system * 2 + spin] =
+          state.spin_results[spin].chemical_potential;
+      workspace.electron_sum_scratch[system * 2 + spin] = state.spin_results[spin].electron_sum;
+    }
+    workspace.entropy_scratch[system] = total_entropy;
   }
-  for (int spin = 0; spin < 2; ++spin) {
-    workspace.chemical_potential_scratch[system * 2 + spin] = spin_results[spin].chemical_potential;
-    workspace.electron_sum_scratch[system * 2 + spin] = spin_results[spin].electron_sum;
-  }
-  workspace.entropy_scratch[system] = total_entropy;
 }
 
 /* Lowest active system index wins, making diagnostics reproducible across block schedules. */
@@ -705,7 +844,7 @@ cudaError_t evaluate_gfn2_restricted_occupations_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  evaluate_kernel<<<static_cast<unsigned int>(batch.batch_size), 1, 0, stream>>>(
+  evaluate_kernel<<<static_cast<unsigned int>(batch.batch_size), kOccupationsThreads, 0, stream>>>(
       batch, {}, eigenvalues, workspace, system_errors, device_error);
   status = cudaGetLastError();
   if (status != cudaSuccess) {
@@ -736,7 +875,7 @@ cudaError_t evaluate_gfn2_occupations_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  evaluate_kernel<<<static_cast<unsigned int>(batch.batch_size), 1, 0, stream>>>(
+  evaluate_kernel<<<static_cast<unsigned int>(batch.batch_size), kOccupationsThreads, 0, stream>>>(
       batch, layout, eigenvalues, workspace, system_errors, device_error);
   status = cudaGetLastError();
   if (status != cudaSuccess) {

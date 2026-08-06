@@ -735,20 +735,19 @@ def _compare_case(
     return failures
 
 
-def run_backend(
+def pinned_compute_options(
     library: ctypes.CDLL,
-    manifest_path: Path,
-    manifest: dict[str, Any],
-    cases: Sequence[dict[str, Any]],
-    backend: str,
-    actual_root: Path,
-    device_id: int,
-    cpu_threads: int,
-    memory_mode: str,
     request_forces: bool,
-) -> None:
-    """Execute and compare one property-compatible public ragged batch."""
-    storage = assemble_batch(manifest_path, manifest, cases)
+    request_charges: bool,
+    request_point_forces: bool,
+) -> ComputeOptions:
+    """Build the strict single-shot GFN2 options shared by every conformance run.
+
+    Conformance cases must remain independent so reference comparisons never
+    depend on execution order or an earlier checkpoint. The SCC solve is pinned
+    stricter than the public convenience defaults so the gates measure
+    model/property agreement rather than loose convergence.
+    """
     options = ComputeOptions()
     _call_ok(
         library,
@@ -757,32 +756,62 @@ def run_backend(
         ),
         "gpuxtb_compute_options_init",
     )
-    # Conformance cases must remain independent so reference comparisons never
-    # depend on execution order or an earlier checkpoint.
     options.scc_start_mode = GPUXTB_SCC_START_FRESH
     options.model = GPUXTB_MODEL_GFN2_XTB
     options.flags = GPUXTB_COMPUTE_ENERGY
     if request_forces:
         options.flags |= GPUXTB_COMPUTE_FORCES
-    # Pin a stricter SCC solve than the public convenience defaults so this
-    # gate measures model/property agreement rather than loose convergence.
+    if request_charges:
+        options.flags |= GPUXTB_COMPUTE_ATOMIC_CHARGES
+    if request_forces and request_point_forces:
+        options.flags |= GPUXTB_COMPUTE_POINT_CHARGE_FORCES
     options.max_scc_iterations = 500
     options.charge_tolerance = 1.0e-10
     options.energy_tolerance = 1.0e-12
     options.electronic_temperature = 300.0 * GPUXTB_KELVIN_TO_HARTREE
-    if any("partial_charges_e" in item.expected for item in storage.slices):
-        options.flags |= GPUXTB_COMPUTE_ATOMIC_CHARGES
-    if request_forces and storage.point_charge_values:
-        options.flags |= GPUXTB_COMPUTE_POINT_CHARGE_FORCES
+    return options
 
+
+@dataclass
+class RawBatchOutputs:
+    """Raw public batch outputs shared by golden comparison and invariance gates."""
+
+    energies: Any
+    forces: Any | None
+    charges: Any | None
+    point_forces: Any | None
+    iterations: Any
+    converged: Any
+    statuses: Any
+    flags: int
+
+
+def run_compute(
+    library: ctypes.CDLL,
+    storage: PublicBatchStorage,
+    options: ComputeOptions,
+    backend: str,
+    device_id: int,
+    cpu_threads: int,
+    memory_mode: str,
+) -> RawBatchOutputs:
+    """Execute one public ragged batch and materialize every requested output.
+
+    This is the single ABI execution path shared by the golden comparison runner
+    and the invariance checks, so both gates necessarily exercise the identical
+    descriptor binding, publication, and failure semantics.
+    """
     systems = len(storage.slices)
     atoms = len(storage.atomic_numbers)
     points = len(storage.point_charge_values)
+    request_forces = bool(options.flags & GPUXTB_COMPUTE_FORCES)
+    request_charges = bool(options.flags & GPUXTB_COMPUTE_ATOMIC_CHARGES)
+    request_point_forces = bool(options.flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES)
     energies = (ctypes.c_double * systems)()
     forces = (ctypes.c_double * (3 * atoms))() if request_forces else None
-    charges = (ctypes.c_double * atoms)()
+    charges = (ctypes.c_double * atoms)() if request_charges else None
     point_forces = (
-        (ctypes.c_double * (3 * points))() if request_forces and points else None
+        (ctypes.c_double * (3 * points))() if request_point_forces and points else None
     )
     iterations = (ctypes.c_int32 * systems)()
     converged = (ctypes.c_uint8 * systems)()
@@ -807,7 +836,7 @@ def run_backend(
             result.energies = memory.output(energies, "energies")
             if forces is not None:
                 result.forces = memory.output(forces, "forces")
-            if options.flags & GPUXTB_COMPUTE_ATOMIC_CHARGES:
+            if charges is not None:
                 result.atomic_charges = memory.output(charges, "atomic_charges")
             if point_forces is not None:
                 result.point_charge_forces = memory.output(
@@ -830,19 +859,58 @@ def run_backend(
     finally:
         library.gpuxtb_context_destroy(context)
 
-    diagnostic_failures = []
     for index, item in enumerate(storage.slices):
         if statuses[index] != GPUXTB_STATUS_SUCCESS or converged[index] != 1:
-            diagnostic_failures.append(
-                f"{item.case['id']}: per_system_status="
+            raise conformance.ConformanceError(
+                f"{backend}/{memory_mode} public inference produced a failed "
+                f"system {item.case['id']}: per_system_status="
                 f"{_decode(library.gpuxtb_status_string(statuses[index]))}, "
                 f"scc_converged={converged[index]}, iterations={iterations[index]}"
             )
-    if diagnostic_failures:
-        raise conformance.ConformanceError(
-            f"{backend}/{memory_mode} public inference produced failed systems: "
-            + "; ".join(diagnostic_failures)
-        )
+    return RawBatchOutputs(
+        energies=energies,
+        forces=forces,
+        charges=charges,
+        point_forces=point_forces,
+        iterations=iterations,
+        converged=converged,
+        statuses=statuses,
+        flags=int(result.flags),
+    )
+
+
+def run_backend(
+    library: ctypes.CDLL,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    cases: Sequence[dict[str, Any]],
+    backend: str,
+    actual_root: Path,
+    device_id: int,
+    cpu_threads: int,
+    memory_mode: str,
+    request_forces: bool,
+) -> None:
+    """Execute and compare one property-compatible public ragged batch."""
+    storage = assemble_batch(manifest_path, manifest, cases)
+    request_charges = any(
+        "partial_charges_e" in item.expected for item in storage.slices
+    )
+    options = pinned_compute_options(
+        library,
+        request_forces,
+        request_charges,
+        request_point_forces=bool(storage.point_charge_values),
+    )
+    outputs = run_compute(
+        library, storage, options, backend, device_id, cpu_threads, memory_mode
+    )
+    energies, forces, charges, point_forces = (
+        outputs.energies,
+        outputs.forces,
+        outputs.charges,
+        outputs.point_forces,
+    )
 
     artifact_name = backend if memory_mode == "host" else f"{backend}-{memory_mode}"
     backend_dir = actual_root / artifact_name
@@ -871,9 +939,9 @@ def run_backend(
             "backend": backend,
             "case_id": item.case["id"],
             "diagnostics": {
-                "per_system_status": int(statuses[index]),
-                "scc_converged": int(converged[index]),
-                "scc_iterations": int(iterations[index]),
+                "per_system_status": int(outputs.statuses[index]),
+                "scc_converged": int(outputs.converged[index]),
+                "scc_iterations": int(outputs.iterations[index]),
             },
             "memory_mode": memory_mode,
             "method": manifest["method"],
@@ -884,7 +952,7 @@ def run_backend(
                 "memory_mode": memory_mode,
                 "spin_channels": storage.spin_channels[index],
             },
-            "result_flags": int(result.flags),
+            "result_flags": int(outputs.flags),
             "schema_version": manifest["golden_schema_version"],
             "unsupported_properties": unsupported_properties,
             "units": manifest["units"],
@@ -905,8 +973,8 @@ def run_backend(
         )
     print(
         f"public C API conformance OK: backend={backend}, "
-        f"memory_mode={memory_mode}, cases={systems}, forces={request_forces}, "
-        f"actual_dir={backend_dir}"
+        f"memory_mode={memory_mode}, cases={len(storage.slices)}, "
+        f"forces={request_forces}, actual_dir={backend_dir}"
     )
 
 

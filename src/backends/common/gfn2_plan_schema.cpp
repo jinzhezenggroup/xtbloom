@@ -1,4 +1,5 @@
 #include "backends/common/gfn2_plan_schema.hpp"
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <array>
 #include <cstddef>

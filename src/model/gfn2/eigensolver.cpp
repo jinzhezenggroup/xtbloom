@@ -1,4 +1,7 @@
 #include "model/gfn2/eigensolver.hpp"
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+
+#include "model/gfn2/occupation_binary64_policy.hpp"
 
 #if !defined(_WIN32)
 #include <dlfcn.h>
@@ -794,87 +797,81 @@ bool compute_occupations(const double* eigenvalues, std::size_t count, double el
     }
   }
 
-  if (std::abs(ideal_quantity - quantity_target) > tolerance) {
+  const long double publication_tolerance =
+      64.0L * static_cast<long double>(std::numeric_limits<double>::epsilon()) * quantity_target;
+  const bool ideal_acceptable = std::abs(ideal_quantity - quantity_target) <= tolerance;
+  const bool publication_acceptable =
+      std::abs(published_quantity - quantity_target) <= publication_tolerance;
+
+  if (ideal_acceptable && publication_acceptable) {
+    /* Keep the established long-double path byte-identical when the directly
+     * rounded publication already satisfies strict conservation. */
+    long double entropy_value = 0.0L;
+    for (std::size_t orbital = 0u; orbital < count; ++orbital) {
+      const long double occupation = static_cast<long double>(static_cast<double>(fermi_value(
+          static_cast<long double>(eigenvalues[orbital]) - energy_reference, mu, thermal)));
+      if (occupation > 0.0L && occupation < 1.0L) {
+        entropy_value -=
+            occupation * std::log(occupation) + (1.0L - occupation) * std::log(1.0L - occupation);
+      }
+    }
+    entropy = static_cast<double>(entropy_value);
+    return std::isfinite(chemical_potential) && std::isfinite(entropy);
+  }
+
+  namespace policy = binary64_policy;
+  const std::int64_t binary64_count = static_cast<std::int64_t>(count);
+  const std::int64_t largest_degenerate_block =
+      policy::largest_degenerate_block(eigenvalues, binary64_count);
+  if (!ideal_acceptable && largest_degenerate_block <= 1) {
+    /* A wider-precision root failure without a real degenerate frontier is not
+     * a publication representability case and must remain a data failure. */
     return false;
   }
 
-  const long double publication_tolerance =
-      64.0L * static_cast<long double>(std::numeric_limits<double>::epsilon()) * quantity_target;
-  const long double quantity_residual = quantity_target - published_quantity;
-  std::size_t corrected_begin = count;
-  std::size_t corrected_end = count;
-  double corrected_occupation = 0.0;
-  if (std::abs(quantity_residual) > publication_tolerance) {
-    /*
-     * Preserve the unitary invariance of an exactly degenerate eigenspace:
-     * any correction large enough to matter must be shared uniformly by the
-     * complete equal-energy block instead of selecting an arbitrary orbital.
-     */
-    const long double occupation_delta = solve_holes ? -quantity_residual : quantity_residual;
-    bool corrected = false;
-    for (std::size_t block_begin = 0u; block_begin < count;) {
-      std::size_t block_end = block_begin + 1u;
-      while (block_end < count && eigenvalues[block_end] == eigenvalues[block_begin]) {
-        ++block_end;
-      }
-      const std::size_t block_count = block_end - block_begin;
-      const long double shifted_energy =
-          static_cast<long double>(eigenvalues[block_begin]) - energy_reference;
-      const double published = static_cast<double>(fermi_value(shifted_energy, mu, thermal));
-      const long double candidate = static_cast<long double>(published) +
-                                    occupation_delta / static_cast<long double>(block_count);
-      if (candidate < 0.0L || candidate > 1.0L) {
-        block_begin = block_end;
-        continue;
-      }
-      const double block_occupation = static_cast<double>(candidate);
-      const long double block_scale = static_cast<long double>(block_count);
-      const long double old_quantity =
-          block_scale * (solve_holes ? 1.0L - static_cast<long double>(published)
-                                     : static_cast<long double>(published));
-      const long double new_quantity =
-          block_scale * (solve_holes ? 1.0L - static_cast<long double>(block_occupation)
-                                     : static_cast<long double>(block_occupation));
-      if (new_quantity == old_quantity) {
-        block_begin = block_end;
-        continue;
-      }
-      const long double corrected_quantity = published_quantity + new_quantity - old_quantity;
-      if (std::abs(corrected_quantity - quantity_target) > publication_tolerance) {
-        block_begin = block_end;
-        continue;
-      }
-      published_quantity = corrected_quantity;
-      if (occupations != nullptr) {
-        std::fill(occupations + block_begin, occupations + block_end, block_occupation);
-      }
-      corrected_begin = block_begin;
-      corrected_end = block_end;
-      corrected_occupation = block_occupation;
-      corrected = true;
-      break;
-    }
-    if (!corrected) {
-      return false;
+  const double binary64_capacity = static_cast<double>(count);
+  const double binary64_target = solve_holes ? binary64_capacity - electron_count : electron_count;
+  policy::Root root{};
+  if (!(binary64_target > 0.0) || !std::isfinite(binary64_target) ||
+      !policy::solve_root(eigenvalues, binary64_count, binary64_target, temperature, solve_holes,
+                          root)) {
+    return false;
+  }
+  policy::Publication publication{};
+  if (!policy::select_publication(eigenvalues, binary64_count, binary64_target, temperature,
+                                  solve_holes, root, publication)) {
+    return false;
+  }
+  const double root_tolerance = policy::root_acceptance_tolerance(binary64_target, root);
+  if (!std::isfinite(root.quantity) ||
+      policy::absolute(root.quantity - binary64_target) > root_tolerance) {
+    return false;
+  }
+  chemical_potential = policy::saturated_affine(root.energy_reference, root.scaled_mu, temperature);
+  if (largest_degenerate_block == binary64_count && binary64_target / binary64_capacity == 0.0) {
+    /* A valid subnormal total can underflow when divided across a fully
+     * degenerate block. The analytic equal-level logit is the only deliberate
+     * chemical-potential override; all other rare cases use the shared root. */
+    const double log_fraction =
+        policy::logarithm(binary64_target) - policy::logarithm(binary64_capacity);
+    const double log_complement = policy::logarithm_one_plus(-policy::exponential(log_fraction));
+    const double canonical_scaled_mu =
+        solve_holes ? log_complement - log_fraction : log_fraction - log_complement;
+    chemical_potential =
+        policy::saturated_affine(root.energy_reference, canonical_scaled_mu, temperature);
+  }
+  entropy =
+      policy::publication_entropy(eigenvalues, binary64_count, temperature, root, publication);
+  if (!std::isfinite(chemical_potential) || !std::isfinite(entropy)) {
+    return false;
+  }
+  if (occupations != nullptr) {
+    for (std::int64_t orbital = 0; orbital < binary64_count; ++orbital) {
+      occupations[orbital] =
+          policy::published_occupation(eigenvalues, orbital, temperature, root, publication);
     }
   }
-  /* Report entropy for the actual published doubles, including any block correction. */
-  long double entropy_value = 0.0L;
-  for (std::size_t orbital = 0u; orbital < count; ++orbital) {
-    const double published =
-        orbital >= corrected_begin && orbital < corrected_end
-            ? corrected_occupation
-            : static_cast<double>(fermi_value(
-                  static_cast<long double>(eigenvalues[orbital]) - energy_reference, mu, thermal));
-    const long double occupation = static_cast<long double>(published);
-    if (occupation > 0.0L && occupation < 1.0L) {
-      entropy_value -=
-          occupation * std::log(occupation) + (1.0L - occupation) * std::log(1.0L - occupation);
-    }
-  }
-  entropy = static_cast<double>(entropy_value);
-  return std::isfinite(chemical_potential) && std::isfinite(entropy) &&
-         std::abs(published_quantity - quantity_target) <= publication_tolerance;
+  return true;
 }
 
 NumericalResult solve_one_spin(const CpuLinearAlgebraBackend& backend,
@@ -1197,12 +1194,11 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
     using SetInterfaceLayer = int (*)(int layer);
     using OpenBlasGetConfig = const char* (*)();
     /* dlopen candidates in preference order: the absolute path CMake baked in
-     * (GPUXTB_MKL_RT_LIBRARY / find_package(BLAS) in CMakeLists.txt) first,
-     * then known MKL sonames (which the Python layer may already have
-     * preloaded), then OpenBLAS sonames for platforms without MKL: aarch64
-     * wheels ship a prefixed LP64 libscipy_openblas.so runtime. Skipping a
-     * candidate never fails the factory, so a loaded library that is not a
-     * usable LP64 BLAS just yields the next one. */
+     * (GPUXTB_CPU_LINALG_LIBRARY / find_package(BLAS) in CMakeLists.txt) first,
+     * then known MKL and OpenBLAS sonames that the Python layer may already
+     * have preloaded. Linux wheels use a prefixed LP64 libscipy_openblas.so
+     * runtime. Skipping a candidate never fails the factory, so a loaded
+     * library that is not a usable sequential LP64 BLAS yields the next one. */
     const char* const runtime_names[] = {
         kConfiguredRuntime, "libmkl_rt.so.2",       "libmkl_rt.so.3",          "libmkl_rt.so.4",
         "libmkl_rt.so",     "libscipy_openblas.so", "libscipy_openblas32_.so", "libopenblas.so.0",
@@ -1261,7 +1257,17 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
         saw_ilp64_mkl = true; /* Never accept an ILP64 MKL; try other runtimes. */
         continue;
       }
-      static_cast<void>(load_symbol(handle, "MKL_Set_Num_Threads_Local", set_threads));
+      if (is_mkl) {
+        static_cast<void>(load_symbol(handle, "MKL_Set_Num_Threads_Local", set_threads));
+      } else if (!load_symbol(handle, "openblas_set_num_threads_local", set_threads)) {
+        /* scipy-openblas32 currently retains the unprefixed local-control
+         * symbol, while other prefixed builds may follow the public header. */
+        static_cast<void>(load_symbol(handle, "scipy_openblas_set_num_threads_local", set_threads));
+      }
+      if (set_threads == nullptr) {
+        static_cast<void>(dlclose(handle));
+        continue;
+      }
       CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
           is_mkl ? CpuLinearAlgebraBackend::Origin::kMklRtLp64
                  : CpuLinearAlgebraBackend::Origin::kOpenBlasLp64,

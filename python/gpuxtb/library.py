@@ -282,9 +282,9 @@ def _runtime_search_dirs() -> list[Path]:
     """Return directories that may contain gpuxtb's optional host runtimes.
 
     The CUDA host-API shims and CPU eigensolver resolve their providers by
-    SONAME. Those providers live in the ``mkl``/``nvidia-*`` PyPI packages, an
-    installed CUDA toolkit, or the ``scipy-openblas*`` PyPI wheels (the LP64
-    ``scipy-openblas32`` is what numpy uses on aarch64). Collecting them lets
+    SONAME. Those providers live in optional ``mkl``/``nvidia-*`` packages, an
+    installed CUDA toolkit, or the ``scipy-openblas*`` PyPI wheels (gpuxtb's
+    Linux dependency is the LP64 ``scipy-openblas32`` build). Collecting them lets
     the package register those SONAMEs before libgpuxtb is loaded without
     forcing users to set ``LD_LIBRARY_PATH`` (or ``PATH`` on Windows).
     """
@@ -358,7 +358,7 @@ _RUNTIME_LIBRARY_GROUPS = (
     ("libcusolver.so.11",),
     # MKL changes its SONAME between releases; load exactly one runtime.
     ("libmkl_rt.so.4", "libmkl_rt.so.3", "libmkl_rt.so.2", "libmkl_rt.so"),
-    # OpenBLAS is the LP64 BLAS used on platforms without Intel MKL builds
+    # OpenBLAS is gpuxtb's default LP64 BLAS on supported Linux platforms
     # (the scipy-openblas32 wheel ships libscipy_openblas.so with scipy_-prefixed
     # symbols). Preload at most one instance by SONAME so the eigensolver's
     # by-name dlopen reuses it instead of loading a second, conflicting BLAS.
@@ -468,6 +468,79 @@ def _check_init(operation: str, status: int) -> None:
             f"{operation} failed with {status_string(status)}: {get_last_error()}",
             status,
         )
+
+
+def device_memory_info(device_id: int = 0) -> Optional[tuple[int, int]]:
+    """Return ``(free_bytes, total_bytes)`` for one CUDA device, or ``None``.
+
+    Used by the auto-batch-size controller to budget a batch slice from actual
+    device memory instead of only a hard-coded atom limit. The query binds the
+    exact CUDA-12 runtime cohort used by gpuxtb, never an arbitrary system CUDA
+    major. A CUDA-less host, a loader stub without a real driver, a failed
+    query, or a failed device restoration returns ``None``. The function
+    attempts to restore the caller's current CUDA device on every changed-device
+    exit, including query failure.
+    """
+    try:
+        cudart = ctypes.CDLL("libcudart.so.12")
+    except OSError:
+        for directory in _runtime_search_dirs():
+            candidate = directory / "libcudart.so.12"
+            if not candidate.is_file():
+                continue
+            try:
+                cudart = ctypes.CDLL(str(candidate))
+                break
+            except OSError:
+                continue
+        else:
+            return None
+
+    try:
+        cuda_get_device = cudart.cudaGetDevice
+        cuda_set_device = cudart.cudaSetDevice
+        cuda_mem_get_info = cudart.cudaMemGetInfo
+    except AttributeError:
+        return None
+
+    cuda_get_device.argtypes = [ctypes.POINTER(ctypes.c_int)]
+    cuda_get_device.restype = ctypes.c_int
+    cuda_set_device.argtypes = [ctypes.c_int]
+    cuda_set_device.restype = ctypes.c_int
+    cuda_mem_get_info.argtypes = [
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    cuda_mem_get_info.restype = ctypes.c_int
+
+    current = ctypes.c_int()
+    if cuda_get_device(ctypes.byref(current)) != 0:
+        return None
+    changed_device = current.value != int(device_id)
+    if changed_device and cuda_set_device(int(device_id)) != 0:
+        return None
+
+    free_bytes = ctypes.c_size_t()
+    total_bytes = ctypes.c_size_t()
+    query_ok = False
+    try:
+        try:
+            query_ok = (
+                cuda_mem_get_info(ctypes.byref(free_bytes), ctypes.byref(total_bytes))
+                == 0
+            )
+        except (OSError, ValueError, ctypes.ArgumentError):
+            query_ok = False
+    finally:
+        restored = not changed_device or cuda_set_device(int(current.value)) == 0
+
+    if not query_ok or not restored:
+        return None
+    free = int(free_bytes.value)
+    total = int(total_bytes.value)
+    if total <= 0 or free < 0 or free > total:
+        return None
+    return free, total
 
 
 def compute_checked(
@@ -581,6 +654,7 @@ __all__ = [
     "get_version",
     "status_string",
     "get_last_error",
+    "device_memory_info",
     "compute_checked",
     "host_const",
     "empty_result_shape",

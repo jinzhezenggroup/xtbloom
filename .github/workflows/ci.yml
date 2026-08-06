@@ -17,14 +17,10 @@ jobs:
       matrix:
         compiler: [gcc, clang]
     runs-on: ubuntu-24.04
-    # The gcc matrix entry reports coverage to GitHub's code coverage API, which
-    # requires the code-quality scope; clang needs only read access. The scope
-    # is granted job-wide because GitHub permissions are job-level.
-    permissions:
-      contents: read
-      code-quality: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - name: Configure
         env:
           CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
@@ -51,27 +47,26 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes lcov
-          python3 -m pip install lcov_cobertura
+          python3 -m pip install 'lcov_cobertura==2.1.1'
           lcov --capture --directory build --output-file coverage.info \
             --exclude '/usr/*' --exclude '*/tests/*' \
             --ignore-errors mismatch,unused
           lcov_cobertura coverage.info --output "${COVERAGE_XML}"
-      - name: Upload C++ coverage
-        if: matrix.compiler == 'gcc' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-        uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1 # v1.4.1
+      - name: Preserve C++ coverage for the upload-only job
+        if: matrix.compiler == 'gcc'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          file: coverage-cpp.xml
-          language: C++
-          label: code-coverage/cpp
+          name: coverage-report-cpp
+          path: coverage-cpp.xml
+          retention-days: 1
 
   python:
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      code-quality: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
       - name: Install package with test extras
@@ -79,16 +74,72 @@ jobs:
           GPUXTB_ENABLE_CUDA: "OFF"
         run: python -m pip install '.[test]'
       - name: Run Python tests with coverage
-        # pytest-cov is part of the [test] extras; the coverage config in
-        # pyproject.toml keeps the command consistent with local development.
-        run: python -m pytest python/tests -q --cov=gpuxtb --cov-report=xml:coverage-python.xml
-      - name: Upload Python coverage
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          installed_library="$(python -c 'from gpuxtb.library import library_path; print(library_path())')"
+          test -f "${installed_library}"
+          GPUXTB_LIBRARY="${installed_library}" PYTHONPATH="${PWD}/python" \
+            python -m pytest python/tests -q --cov \
+              --cov-report=xml:coverage-python.xml
+      - name: Validate repository-relative Python coverage paths
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          expected = {
+              path.as_posix() for path in Path("python/gpuxtb").rglob("*.py")
+          }
+          report = ElementTree.parse("coverage-python.xml")
+          reported = {
+              node.attrib["filename"] for node in report.findall(".//class")
+          }
+          if reported != expected:
+              missing = sorted(expected - reported)
+              unexpected = sorted(reported - expected)
+              raise SystemExit(
+                  "Python coverage paths must match repository sources; "
+                  f"missing={missing}, unexpected={unexpected}"
+              )
+          PY
+      - name: Preserve Python coverage for the upload-only job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage-report-python
+          path: coverage-python.xml
+          retention-days: 1
+
+  upload-coverage:
+    needs: [cpu, python]
+    if: ${{ !cancelled() && needs.cpu.result == 'success' && needs.python.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact: coverage-report-cpp
+            file: coverage-cpp.xml
+            language: C++
+            label: code-coverage/cpp
+          - artifact: coverage-report-python
+            file: coverage-python.xml
+            language: Python
+            label: code-coverage/python
+    runs-on: ubuntu-24.04
+    # No pull-request code or dependencies execute with this write-scoped token.
+    permissions:
+      contents: read
+      pull-requests: read
+      code-quality: write
+    steps:
+      - name: Download coverage report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ matrix.artifact }}
+      - name: Upload coverage to GitHub
         uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1 # v1.4.1
         with:
-          file: coverage-python.xml
-          language: Python
-          label: code-coverage/python
+          file: ${{ matrix.file }}
+          language: ${{ matrix.language }}
+          label: ${{ matrix.label }}
 
   licensing-source-distribution:
     runs-on: ubuntu-24.04
@@ -132,17 +183,18 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
       - name: Install LP64 eigensolver runtime
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes libmkl-rt
+        run: python -m pip install 'scipy-openblas32>=0.3.34.0.0'
       - name: Configure shared public inference build
         run: |
-          mkl_rt="$(dpkg -L libmkl-rt | awk '/\/libmkl_rt\.so$/ { print; exit }')"
-          test -n "${mkl_rt}"
+          openblas="$(python -c 'from pathlib import Path; import scipy_openblas32; print(Path(scipy_openblas32.get_lib_dir()) / scipy_openblas32.get_library(fullname=True))')"
+          test -f "${openblas}"
           cmake -S . -B build-public -G Ninja \
             -DGPUXTB_ENABLE_CUDA=OFF \
-            -DGPUXTB_MKL_RT_LIBRARY="${mkl_rt}" \
+            -DGPUXTB_CPU_LINALG_LIBRARY="${openblas}" \
             -DBUILD_SHARED_LIBS=ON \
             -DCMAKE_BUILD_TYPE=Release
       - name: Build
@@ -161,7 +213,7 @@ jobs:
 
   pass:
     name: Pass CI checks
-    needs: [cpu, python, licensing-source-distribution, static-cpu-package, public-cpu-release]
+    needs: [cpu, python, upload-coverage, licensing-source-distribution, static-cpu-package, public-cpu-release]
     runs-on: ubuntu-24.04
     if: always()
     steps:

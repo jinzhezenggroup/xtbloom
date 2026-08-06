@@ -425,8 +425,6 @@ bool test_compute_options() {
        [](Fixture& f) { f.options.scc_start_mode = std::numeric_limits<std::int32_t>::max(); },
        "scc_start_mode"},
       {"options ABI-v2 reserved", [](Fixture& f) { f.options.reserved_v2 = 1; }, "reserved_v2"},
-      {"CPU WARM SCC start", [](Fixture& f) { f.options.scc_start_mode = GPUXTB_SCC_START_WARM; },
-       "CPU backend", GPUXTB_STATUS_NOT_SUPPORTED},
       {"result reserved", [](Fixture& f) { f.result.reserved = 1; }, "reserved"},
   };
   for (const InvalidCase& test : cases) {
@@ -443,6 +441,9 @@ bool test_compute_options() {
   fixture.options.model = GPUXTB_MODEL_GFN2_XTB;
   fixture.options.scc_start_mode = GPUXTB_SCC_START_WARM;
   CHECK(validate_compute_descriptors(GPUXTB_BACKEND_CUDA, &fixture.batch, &fixture.options,
+                                     &fixture.result)
+            .ok());
+  CHECK(validate_compute_descriptors(GPUXTB_BACKEND_CPU, &fixture.batch, &fixture.options,
                                      &fixture.result)
             .ok());
   return true;

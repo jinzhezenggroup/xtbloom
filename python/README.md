@@ -14,7 +14,8 @@ pip install .
 
 This builds `libgpuxtb` from the repository CMake project and bundles it inside
 the wheel under `gpuxtb/lib`. Requires Python >= 3.10, a C++17 compiler, a
-working BLAS/MKL runtime (the CPU eigensolver dlopens `libmkl_rt`), and `numpy`.
+working LP64 LAPACKE+CBLAS runtime, and `numpy`. Linux installs use the
+BSD-licensed `scipy-openblas32` runtime by default.
 If `GPUXTB_LIBRARY` overrides the bundled native library, keep it version-matched
 with the Python package; older libraries may not implement newer optional ABI
 suffixes such as unrestricted `spin_channels`.
@@ -24,6 +25,7 @@ Optional extras:
 ```console
 pip install ".[ase]"        # ASE calculator
 pip install ".[dpdata]"     # dpdata driver plugin
+pip install ".[cuda12]"     # CUDA 12 host runtime/math providers
 pip install ".[test]"       # pytest suite dependencies
 ```
 
@@ -41,9 +43,10 @@ GPUXTB_ENABLE_CUDA=ON pip install .
 ```
 
 A CUDA-enabled wheel does **not** bundle the CUDA runtime libraries; at runtime
-it needs the system CUDA driver plus the PyPI CUDA packages. Published Linux
-wheels declare those ``nvidia-*`` packages as normal dependencies, so an
-ordinary ``pip install gpuxtb`` installs a loadable runtime automatically.
+it needs the system CUDA driver plus compatible system libraries or the PyPI
+CUDA packages. Install ``gpuxtb[cuda12]`` to obtain those optional
+``nvidia-*`` providers. An ordinary ``pip install gpuxtb`` remains a complete
+CPU installation without the proprietary CUDA stack.
 The published CUDA 12.9 wheels contain SASS for sm_80, sm_89, sm_90, and
 sm_120; source builds can override this with ``GPUXTB_CUDA_ARCHITECTURES``.
 
@@ -53,11 +56,10 @@ You never need to set ``LD_LIBRARY_PATH``. On import,
 :func:`gpuxtb.library` locates and preloads the runtime libraries the native
 library depends on:
 
-* the **BLAS** runtime for the CPU eigensolver — Intel MKL (`libmkl_rt`) via a
-  platform-tagged dependency on linux x86_64, and the LP64 OpenBLAS wheel
-  `scipy-openblas32` on linux aarch64 (Intel MKL has no aarch64 builds). On
-  other platforms, compatible system MKL or OpenBLAS runtimes are discovered
-  when available; and
+* the **BLAS** runtime for the CPU eigensolver — the LP64 OpenBLAS wheel
+  `scipy-openblas32` on linux x86_64 and aarch64. On other platforms,
+  compatible system OpenBLAS or MKL runtimes are discovered when available;
+  and
 * the **CUDA** runtime libraries (cuBLAS, cuSOLVER, ...) — resolved from the
   installed ``nvidia-*`` PyPI packages or a CUDA toolkit.
 
@@ -72,8 +74,8 @@ them through cibuildwheel's own test feature:
   compiled in (aarch64 natively on a GitHub ARM runner, no QEMU). cuSOLVER,
   which those images do not ship, is pulled from PyPI into the container before
   the build. x86_64 additionally runs the full conformance suite as the
-  cibuildwheel test (deps from the package ``[test]`` extra through
-  ``test-extras``, MKL included).
+  cibuildwheel test (deps from the package ``[test,cuda12]`` extras through
+  ``test-extras``).
 * **macOS and Windows** wheels are not published yet. Their CPU eigensolver
   runtime is not functional, and gpuxtb does not ship import-only artifacts
   that cannot perform inference.
@@ -129,6 +131,26 @@ result = BatchCalculator(structures).compute()
 print(result.energies)   # per-system
 print(result[0].forces)  # per-system via Result
 ```
+
+Large ragged batches can be split into several synchronous C calls while
+preserving system order and peer-local diagnostics:
+
+```python
+# Query current CUDA free memory and choose a conservative grouping target.
+result = BatchCalculator(structures, backend="cuda").compute(auto_batch_size=True)
+
+# Or set an explicit target maximum total atom count per call.
+result = BatchCalculator(structures).compute(auto_batch_size=20_000)
+```
+
+The integer is a grouping target rather than a promise that an individual
+system can be subdivided: a system larger than the target is attempted alone.
+Automatic CUDA sizing re-queries current free memory for each call, retains a
+fixed reserve, and retries native allocation failures by splitting only
+multi-system chunks. Other native failures, and allocation failure for one
+indivisible system, are returned unchanged. When CUDA memory cannot be queried,
+a conservative fixed target is used. ``None`` (the default) or ``False`` keeps
+the historical single-call behavior.
 
 Batch failures are peer-local: failed slices contain NaNs and are listed by
 ``result.failed_indices``, while successful peer results remain accessible.
@@ -196,5 +218,6 @@ python -m pytest python/tests
 
 The suite validates the bindings against the committed conformance goldens in
 `data/conformance` (neutral, charged, open-shell, and QM/MM point-charge cases).
-On a machine without MKL the tests should be run with the MKL runtime on
-`LD_LIBRARY_PATH`, e.g. `LD_LIBRARY_PATH=/path/to/mkl python -m pytest python/tests`.
+On Linux, installing the package supplies `scipy-openblas32`; no loader-path
+setup is required. Native builds may instead select an absolute compatible
+runtime with `GPUXTB_CPU_LINALG_LIBRARY`.

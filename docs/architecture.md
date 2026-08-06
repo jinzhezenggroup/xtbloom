@@ -32,6 +32,43 @@ energy `F = E_internal - T*S_electronic`, including the Fermi-occupation entropy
 tblite. Forces are `-dF/dR`, which preserves the stationary finite-temperature SCC derivative. At
 zero electronic temperature, `F` reduces to the internal energy.
 
+Finite-temperature occupations of an exactly degenerate eigenspace are published symmetrically:
+every orbital in an equal-energy block shares one binary64 value, keeping the populations unitary-
+and permutation-invariant. When the requested electron/hole count falls strictly between two such
+symmetric states (for example three exactly degenerate orbitals with `nel = nextafter(3, 0)`, whose
+single residual hole cannot be split equally across the three published occupations), the solver
+relaxes to the nearest representable symmetric state instead of failing the system. The published
+electron/hole error is then bounded absolutely by the block quantization scale
+`2 * eps_double * block_count` (a few ULPs of an electron, where `eps_double` is `2^-52` and
+`block_count` is the number of orbitals in the selected exact-degeneracy block). Relaxation is never
+authorized by a singleton or by the total spectrum size. The solver collects candidates across all
+energy blocks before selecting: any state inside the strict publication tolerance globally precedes
+every relaxed state. Within either class, it minimizes the binary64 compensated-sum count error,
+then prefers a fractional candidate, the lower occupation at an exact error tie, and finally the
+lower block index. Candidate evaluation includes the directly solved block occupation, its two
+nearest binary64 neighbors on each side, and the original publication value with its immediate
+neighbors. CPU reconstructs this rare-path candidate baseline with the same translated binary64
+root and compensated summation order used by CUDA; its long-double root remains the independent
+ideal-conservation check. If binary64 root spacing is exhausted outside the ordinary root tolerance,
+the final bracket still straddles the target, and exactly one multi-orbital degenerate block changes
+electron or hole contribution across that bracket, both backends may retry once with that frontier
+as the translated reference. A failed or non-improving retry leaves the original root unchanged.
+Only that uniquely identified causal frontier can supply the block-quantization floor for root
+acceptance, including when publication subsequently finds a strict singleton rescue; an unrelated
+degeneracy cannot widen the root gate. If the first phase must select a relaxed block, one bounded
+second phase searches strict candidates only from that vector; if none exists, the first relaxed
+state remains. Every shared rare-path final strict or relaxed decision is audited with the same
+double-double residual interval comparison. The reported entropy is derived from those same
+published occupations. When an exactly degenerate block's valid subnormal total cannot be divided
+into a nonzero binary64 per-member fraction, CPU and CUDA use the same analytic equal-level logit for
+the finite chemical potential. Outside that fully degenerate analytic override, a mixed-spectrum
+subnormal jump has no canonical cross-backend binary64 chemical potential: both backends require a
+finite diagnostic while the shared publication, count, and entropy remain deterministic; broader
+chemical-potential parity remains tracked by #54. A residual beyond the selected block's quantization
+bound indicates genuine electron non-conservation and still fails deterministically. Nondegenerate
+spectra retain the strict publication tolerance, and the zero-temperature Aufbau path is unaffected.
+See issue #31 for the original representability question.
+
 The public batch call has two failure levels. Any failure detected before the final caller-output
 commit begins leaves every result buffer and result flag unchanged. Once a CUDA caller-output
 commit has begun, a later catastrophic failure returns `INTERNAL_ERROR` with an explicit diagnostic;
@@ -52,13 +89,19 @@ not per-system SCC failures.
 
 The ABI-v2 `scc_start_mode` suffix controls the electronic initial state for one call. `FRESH`
 restores the immutable setup state and is also the meaning of every ABI-v1 or short options
-prefix. CUDA `WARM` strictly consumes the checkpoint from the latest fully converged compatible
-batch call, including across one successful changed-coordinate refresh. It never falls back to a
-fresh solve: a missing checkpoint or any topology, charge, spin, temperature, tolerance,
-iteration-limit, or requested-property change is a call-level invalid argument and leaves caller
-outputs unchanged. CPU contexts report `NOT_SUPPORTED` for `WARM`. High-level Python calculators
-intentionally select `FRESH`; persistent warm policy is exposed only by the low-level C/ctypes
-descriptor for now.
+prefix. CPU and CUDA both support strict `WARM`: it consumes the checkpoint from the latest fully
+converged compatible batch call on the same context and never falls back to a fresh solve. A
+compatible identity covers the complete topology and compute policy (requested-property flags;
+molecular charge, spin, and unpaired electrons; point-charge and periodic structure; SCC tolerances;
+iteration limit; and electronic temperature). Geometry is not part of the identity, so a WARM call
+reuses the previous converged electronic state as the initial SCC guess for the new coordinates and
+reconverges;
+CUDA additionally keys its checkpoint to a geometry epoch and keeps modifying-Broyden history only
+for a same-epoch reuse, while the CPU always restarts a fresh mixing window from the converged
+state. A missing checkpoint or any identity change is a call-level invalid argument and leaves
+caller outputs unchanged. CPU and CUDA use the same compute-options identity, including
+requested-property/output flags. High-level Python calculators intentionally select `FRESH`;
+persistent warm policy is exposed only by the low-level C/ctypes descriptor for now.
 
 ## Layering
 
@@ -86,12 +129,13 @@ resolved tables are then immutable, avoiding races on concurrent CUDA calls. A h
 NVIDIA runtime can therefore load libgpuxtb and receive a backend-unavailable diagnostic instead
 of failing at the ELF loader boundary.
 
-This host-library indirection is narrower than a claim that the CUDA-enabled binary contains no
-proprietary linked code. nvcc's separable-compilation/device-link pipeline may embed NVIDIA
-device-runtime code such as cudadevrt in libgpuxtb even when the inspected dynamic section has no
-ordinary `DT_NEEDED` entry for the wrapped host libraries. The source provenance and packaging
-contract are recorded in `cmake/3rdparty/implib_manifest.json` and
-`THIRD_PARTY_NOTICES.md`; the owner/legal distribution decision remains open in Issue #162.
+This host-library indirection is not a GPL compatibility claim: dynamic loading can still combine
+works under copyright law. The distribution basis is instead the GPLv3 Section 7 additional
+permission in `CUDA_MKL_LINKING_EXCEPTION`. gpuxtb passes `--cudadevrt=none` at device link because
+it uses no CUDA Dynamic Parallelism, but nvcc may still incorporate NVIDIA libdevice code. That
+code and every separately installed CUDA or MKL provider remain under vendor terms. The source
+provenance and packaging contract are recorded in `cmake/3rdparty/implib_manifest.json` and
+`THIRD_PARTY_NOTICES.md`.
 
 ## Correctness strategy
 
@@ -129,12 +173,12 @@ runs first, never the arithmetic order within a system.
 greater than one is clamped to the CPUs available in the process affinity mask; the calling thread
 participates and the context retains the other workers. `cpu_threads=0` selects the affinity count
 capped at 64, which avoids silently constructing an unbounded pool on large shared hosts. The
-verified MKL provider remains LP64 and every factorization/eigensolve installs a thread-local MKL
-limit of one, making the outer system scheduler the sole CPU parallel layer.
+verified BLAS provider remains LP64 and every factorization/eigensolve installs a provider-local
+thread limit of one, making the outer system scheduler the sole CPU parallel layer.
 
 The reproducible CPU benchmark protocol compares identical warm public-C-API runs using
 `cpu_threads=1` and an explicit affinity-constrained worker count, recording compiler, ISA,
-affinity, MKL runtime, warm-up count, raw samples, and batch size. Batch-one latency is reported
+affinity, BLAS runtime, warm-up count, raw samples, and batch size. Batch-one latency is reported
 separately and is not combined with throughput. A pinned regression threshold will be promoted to
 CI only after the benchmark corpus includes gas, QM/MM, homogeneous, and heterogeneous workloads
 on a named runner; local development measurements are evidence, not a portable CI gate.
