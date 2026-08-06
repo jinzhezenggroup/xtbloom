@@ -97,6 +97,13 @@ GPUXTB_ENABLE_CUDA = { env = "GPUXTB_ENABLE_CUDA", default = "AUTO" }
 # Ship optimized SASS for the main data-center/consumer generations plus
 # Blackwell instead of relying on nvcc's legacy default architecture/PTX JIT.
 CMAKE_CUDA_ARCHITECTURES = { env = "GPUXTB_CUDA_ARCHITECTURES", default = "80;89;90;120" }
+# ccache compiler launchers: CI sets the GPUXTB_*_COMPILER_LAUNCHER variables to
+# "ccache" (see ci.yml and wheels.yml) to reuse compiled C, C++, and CUDA
+# objects across runs. An empty default keeps local builds launcher-free when
+# the variables are unset.
+CMAKE_C_COMPILER_LAUNCHER = { env = "GPUXTB_C_COMPILER_LAUNCHER", default = "" }
+CMAKE_CXX_COMPILER_LAUNCHER = { env = "GPUXTB_CXX_COMPILER_LAUNCHER", default = "" }
+CMAKE_CUDA_COMPILER_LAUNCHER = { env = "GPUXTB_CUDA_COMPILER_LAUNCHER", default = "" }
 
 # cibuildwheel: build wheels across platforms. The .github/workflows/wheels.yml
 # matrix drives exactly which build each runner produces via CIBW_BUILD and
@@ -120,7 +127,10 @@ manylinux-aarch64-image = "quay.io/manylinux_cuda/manylinux_2_28_aarch64_cuda12_
 test-command = "python -c 'import gpuxtb; print(gpuxtb.library.get_version())'"
 
 [tool.cibuildwheel.linux]
-before-build = "bash {package}/python/ci/install-cuda-wheel-deps.sh"
+# before-build runs inside the build container (once per container, idempotent
+# scripts). CUDA deps come first, then a CUDA-capable ccache (>= 4.1, needed
+# for nvcc; the manylinux_2_28 distro ccache 3.7 cannot cache CUDA).
+before-build = "bash {package}/python/ci/install-cuda-wheel-deps.sh && bash {package}/python/ci/install-ccache.sh"
 # CUDA host shared libraries (cublas/cusolver/cudart/...) are intentionally not
 # bundled: the trampolines resolve the system CUDA driver plus the
 # PyPI-distributed nvidia-* packages at runtime. libcuda.so.1 is the NVIDIA
