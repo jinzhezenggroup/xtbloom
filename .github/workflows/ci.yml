@@ -17,17 +17,78 @@ jobs:
       matrix:
         compiler: [gcc, clang]
     runs-on: ubuntu-24.04
+    # The gcc matrix entry reports coverage to GitHub's code coverage API, which
+    # requires the code-quality scope; clang needs only read access. The scope
+    # is granted job-wide because GitHub permissions are job-level.
+    permissions:
+      contents: read
+      code-quality: write
     steps:
       - uses: actions/checkout@v5
       - name: Configure
         env:
           CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
           CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
-        run: cmake -S . -B build -G Ninja -DGPUXTB_ENABLE_CUDA=OFF -DCMAKE_BUILD_TYPE=Release
+          # Instrument the gcc build with gcov coverage flags so the same
+          # build+ctest run that validates correctness also produces coverage.
+          COVERAGE_FLAGS: ${{ matrix.compiler == 'gcc' && '--coverage' || '' }}
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DGPUXTB_ENABLE_CUDA=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="${COVERAGE_FLAGS}" \
+            -DCMAKE_CXX_FLAGS="${COVERAGE_FLAGS}" \
+            -DCMAKE_EXE_LINKER_FLAGS="${COVERAGE_FLAGS}"
       - name: Build
         run: cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Collect C++ coverage
+        if: matrix.compiler == 'gcc'
+        env:
+          # Cobertura is the XML schema accepted by actions/upload-code-coverage.
+          COVERAGE_XML: coverage-cpp.xml
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lcov
+          python3 -m pip install lcov_cobertura
+          lcov --capture --directory build --output-file coverage.info \
+            --exclude '/usr/*' --exclude '*/tests/*' \
+            --ignore-errors mismatch,unused
+          lcov_cobertura coverage.info --output "${COVERAGE_XML}"
+      - name: Upload C++ coverage
+        if: matrix.compiler == 'gcc' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1 # v1.4.1
+        with:
+          file: coverage-cpp.xml
+          language: C++
+          label: code-coverage/cpp
+
+  python:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      code-quality: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package with test extras
+        env:
+          GPUXTB_ENABLE_CUDA: "OFF"
+        run: python -m pip install '.[test]'
+      - name: Run Python tests with coverage
+        # pytest-cov is part of the [test] extras; the coverage config in
+        # pyproject.toml keeps the command consistent with local development.
+        run: python -m pytest python/tests -q --cov=gpuxtb --cov-report=xml:coverage-python.xml
+      - name: Upload Python coverage
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1 # v1.4.1
+        with:
+          file: coverage-python.xml
+          language: Python
+          label: code-coverage/python
 
   licensing-source-distribution:
     runs-on: ubuntu-24.04
@@ -100,7 +161,7 @@ jobs:
 
   pass:
     name: Pass CI checks
-    needs: [cpu, licensing-source-distribution, static-cpu-package, public-cpu-release]
+    needs: [cpu, python, licensing-source-distribution, static-cpu-package, public-cpu-release]
     runs-on: ubuntu-24.04
     if: always()
     steps:
