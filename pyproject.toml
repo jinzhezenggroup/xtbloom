@@ -17,7 +17,9 @@ license-files = [
   "data/parameters/licenses/*",
 ]
 requires-python = ">=3.10"
-authors = [{ name = "gpuxtb developers" }]
+# Although most of the work is conducted by the coding agents,
+# I don't think they could be authors - they are still tools. -- JZ
+authors = [{ name = "Jinzhe Zeng", email = "jinzhe.zeng@ustc.edu.cn" }]
 keywords = ["xtb", "tight-binding", "semiempirical", "qm", "gpu"]
 classifiers = [
   "Intended Audience :: Science/Research",
