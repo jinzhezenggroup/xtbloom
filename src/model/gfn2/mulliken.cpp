@@ -1683,7 +1683,7 @@ gpuxtb_status_t add_mulliken_hamiltonian_system_cpu(
     const double value = hamiltonian.matrix[static_cast<std::size_t>(hamiltonian_base) + element];
     if (!std::isfinite(value)) {
       error = "Mulliken target Hamiltonian input contains NaN or infinity";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return GPUXTB_STATUS_INTERNAL_ERROR;
     }
     hamiltonian_scratch[static_cast<std::size_t>(hamiltonian_base) + element] = value;
   }
@@ -1695,7 +1695,7 @@ gpuxtb_status_t add_mulliken_hamiltonian_system_cpu(
         const std::size_t index = static_cast<std::size_t>(base + element);
         const double value = source[index];
         if (!std::isfinite(value)) {
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
+          return GPUXTB_STATUS_INTERNAL_ERROR;
         }
         destination[index] = value;
       }
@@ -1708,7 +1708,7 @@ gpuxtb_status_t add_mulliken_hamiltonian_system_cpu(
       const double charge = source[charge_index];
       const double magnetization = source[magnetization_index];
       if (!std::isfinite(charge) || !std::isfinite(magnetization)) {
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return GPUXTB_STATUS_INTERNAL_ERROR;
       }
       /* Half-before-add matches tblite's magnet_to_updown conversion. */
       const double alpha = 0.5 * charge + 0.5 * magnetization;
@@ -1730,14 +1730,7 @@ gpuxtb_status_t add_mulliken_hamiltonian_system_cpu(
       convert_potential(potential.quadrupole, quadrupole_scratch, quadrupole_base, atoms * 6);
   if (vat_status != GPUXTB_STATUS_SUCCESS || vsh_status != GPUXTB_STATUS_SUCCESS ||
       dipole_status != GPUXTB_STATUS_SUCCESS || quadrupole_status != GPUXTB_STATUS_SUCCESS) {
-    if (vat_status == GPUXTB_STATUS_INVALID_ARGUMENT ||
-        vsh_status == GPUXTB_STATUS_INVALID_ARGUMENT ||
-        dipole_status == GPUXTB_STATUS_INVALID_ARGUMENT ||
-        quadrupole_status == GPUXTB_STATUS_INVALID_ARGUMENT) {
-      error = "Mulliken target potentials contain NaN or infinity";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
-    }
-    error = "Mulliken target potential spin conversion exceeded floating-point range";
+    error = "Mulliken target potential data or spin conversion is not finite";
     return GPUXTB_STATUS_INTERNAL_ERROR;
   }
 
@@ -1777,7 +1770,7 @@ gpuxtb_status_t add_mulliken_hamiltonian_system_cpu(
         const double half_overlap = -0.5 * overlap;
         if (!std::isfinite(overlap) || !std::isfinite(reverse_overlap)) {
           error = "Mulliken target overlap input contains NaN or infinity";
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
+          return GPUXTB_STATUS_INTERNAL_ERROR;
         }
         if (!std::isfinite(half_overlap) || !add_product(half_overlap, row_vat, shift) ||
             !add_product(half_overlap, row_vsh, shift) ||
@@ -1800,7 +1793,7 @@ gpuxtb_status_t add_mulliken_hamiltonian_system_cpu(
                                                                reverse_matrix)];
           if (!std::isfinite(forward_integral) || !std::isfinite(reverse_integral)) {
             error = "Mulliken target dipole integral input contains NaN or infinity";
-            return GPUXTB_STATUS_INVALID_ARGUMENT;
+            return GPUXTB_STATUS_INTERNAL_ERROR;
           }
           if (!std::isfinite(row_potential) || !std::isfinite(column_potential) ||
               !add_product(forward_integral, column_potential, shift) ||
@@ -1823,7 +1816,7 @@ gpuxtb_status_t add_mulliken_hamiltonian_system_cpu(
                          component * data.matrix_elements + reverse_matrix)];
           if (!std::isfinite(forward_integral) || !std::isfinite(reverse_integral)) {
             error = "Mulliken target quadrupole integral input contains NaN or infinity";
-            return GPUXTB_STATUS_INVALID_ARGUMENT;
+            return GPUXTB_STATUS_INTERNAL_ERROR;
           }
           if (!std::isfinite(row_potential) || !std::isfinite(column_potential) ||
               !add_product(forward_integral, column_potential, shift) ||

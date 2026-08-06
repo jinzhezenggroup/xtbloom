@@ -2192,7 +2192,7 @@ gpuxtb_status_t gather_mixed_multipoles_system(const SccDriverPlanData& data, st
         workspace.staged_wavefunction.qsh[static_cast<std::size_t>(qsh_base + local_shell)];
     if (!std::isfinite(value)) {
       error = "SCC driver mixed shell charges contain NaN or infinity";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return GPUXTB_STATUS_INTERNAL_ERROR;
     }
     workspace.shell_charges[static_cast<std::size_t>(shell_begin + local_shell)] = value;
   }
@@ -2202,7 +2202,7 @@ gpuxtb_status_t gather_mixed_multipoles_system(const SccDriverPlanData& data, st
         workspace.staged_wavefunction.qat[static_cast<std::size_t>(qat_base + local_atom)];
     if (!std::isfinite(charge)) {
       error = "SCC driver mixed atomic charges contain NaN or infinity";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return GPUXTB_STATUS_INTERNAL_ERROR;
     }
     workspace.atomic_charges[atom] = charge;
     for (std::size_t component = 0u; component < 3u; ++component) {
@@ -2210,7 +2210,7 @@ gpuxtb_status_t gather_mixed_multipoles_system(const SccDriverPlanData& data, st
           dipole_base + local_atom * 3 + static_cast<std::int64_t>(component))];
       if (!std::isfinite(value)) {
         error = "SCC driver mixed atomic dipoles contain NaN or infinity";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return GPUXTB_STATUS_INTERNAL_ERROR;
       }
       workspace.atomic_dipoles[atom * 3u + component] = value;
     }
@@ -2219,7 +2219,7 @@ gpuxtb_status_t gather_mixed_multipoles_system(const SccDriverPlanData& data, st
           quadrupole_base + local_atom * 6 + static_cast<std::int64_t>(component))];
       if (!std::isfinite(value)) {
         error = "SCC driver mixed atomic quadrupoles contain NaN or infinity";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return GPUXTB_STATUS_INTERNAL_ERROR;
       }
       workspace.atomic_quadrupoles[atom * 6u + component] = value;
     }
@@ -2306,7 +2306,7 @@ gpuxtb_status_t prepare_system_potentials_and_hamiltonian(const SccDriverPlanDat
                         shell_begin + local_shell)],
                     target)) {
       error = "SCC driver explicit point-charge potential is not finite";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return GPUXTB_STATUS_INTERNAL_ERROR;
     }
   }
   for (std::size_t element = 0u; element < qsh_slice; ++element) {
@@ -2329,7 +2329,7 @@ gpuxtb_status_t prepare_system_potentials_and_hamiltonian(const SccDriverPlanDat
   if (data.d4.sealed()) {
     status = evaluate_d4_two_body_system_cpu(
         data.d4, geometry.d4_cache, static_cast<std::int64_t>(system), workspace.atomic_charges,
-        workspace.d4_two_body_energies[system], workspace.d4_atomic_potentials + atom_begin,
+        workspace.d4_two_body_energies[system], workspace.d4_atomic_potentials,
         workspace.d4_workspace, error);
     if (status != GPUXTB_STATUS_SUCCESS) {
       return status;
@@ -2428,7 +2428,7 @@ gpuxtb_status_t prepare_system_potentials_and_hamiltonian(const SccDriverPlanDat
   for (std::int64_t element = matrix_begin; element < matrix_end; ++element) {
     if (!std::isfinite(geometry.h0[static_cast<std::size_t>(element)])) {
       error = "SCC driver H0 contains NaN or infinity";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return GPUXTB_STATUS_INTERNAL_ERROR;
     }
   }
   for (std::int32_t spin = 0; spin < layout.spin_channels[system]; ++spin) {

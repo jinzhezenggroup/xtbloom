@@ -373,11 +373,12 @@ gpuxtb_status_t evaluate_spin_polarization_system_cpu(SpinPolarizationView view,
     error = "spin-polarization one-system inputs and outputs must not be NULL or misaligned";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
-  if (ranges_overlap(shell_populations,
-                     static_cast<std::size_t>(view.shell_population_elements) * sizeof(double),
-                     shell_potentials,
-                     static_cast<std::size_t>(view.shell_population_elements) * sizeof(double))) {
-    error = "spin-polarization one-system potentials must not overlap their inputs";
+  const std::size_t population_bytes =
+      static_cast<std::size_t>(view.shell_population_elements) * sizeof(double);
+  if (ranges_overlap(shell_populations, population_bytes, shell_potentials, population_bytes) ||
+      ranges_overlap(shell_populations, population_bytes, &spin_energy, sizeof(spin_energy)) ||
+      ranges_overlap(shell_potentials, population_bytes, &spin_energy, sizeof(spin_energy))) {
+    error = "spin-polarization one-system outputs must be disjoint from their inputs";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
   const std::int64_t population_begin = view.shell_population_offsets[system];

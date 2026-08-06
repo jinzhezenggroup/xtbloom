@@ -301,6 +301,13 @@ int test_one_system_energy_potential_and_failure_isolation() {
             view, view.batch_size, populations.data(), unchanged_energy, system_potentials.data(),
             error) == GPUXTB_STATUS_INVALID_ARGUMENT);
 
+  CHECK(gpuxtb::detail::gfn2::evaluate_spin_polarization_system_cpu(
+            view, 0, populations.data(), system_potentials[0], system_potentials.data(), error) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gpuxtb::detail::gfn2::evaluate_spin_polarization_system_cpu(
+            view, 0, populations.data(), populations[0], system_potentials.data(), error) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+
   /* No per-call allocation. */
   const std::size_t before = allocation_test::count.load(std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);

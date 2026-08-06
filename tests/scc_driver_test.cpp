@@ -879,6 +879,56 @@ int test_complete_energy_failure_isolated_from_ragged_peer() {
   return 0;
 }
 
+int test_preparation_numerical_failure_isolated_from_ragged_peer() {
+  Fixture fixture;
+  std::string error;
+  CHECK(make_fixture(2, fixture, error));
+  std::vector<double> explicit_pc(
+      static_cast<std::size_t>(fixture.wavefunction_layout.total_shells), 0.0);
+  const std::int64_t failed_shell = fixture.wavefunction_layout.batch_shell_offsets[1];
+  explicit_pc[static_cast<std::size_t>(failed_shell)] = std::numeric_limits<double>::quiet_NaN();
+  fixture.geometry.explicit_point_charge_shell_potential = explicit_pc.data();
+  fixture.geometry.explicit_point_charge_shell_elements =
+      static_cast<std::int64_t>(explicit_pc.size());
+  const double failed_qsh_before =
+      fixture.wavefunction
+          .qsh[static_cast<std::size_t>(fixture.wavefunction_layout.qsh.system_offsets[1])];
+  diagonalizations.store(0, std::memory_order_relaxed);
+
+  CHECK(iterate_scc_driver_batch_cpu(
+            fixture.driver_plan, fixture.geometry, backend(), fixture.overlap_cache,
+            fixture.wavefunction, fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
+            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(diagonalizations.load(std::memory_order_relaxed) == 1);
+  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.iterations[0] == 1u);
+  CHECK(fixture.driver_state.converged[0] == 1u);
+  CHECK(fixture.driver_state.system_statuses[1] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.driver_state.iterations[1] == 0u);
+  CHECK(fixture.wavefunction
+            .qsh[static_cast<std::size_t>(fixture.wavefunction_layout.qsh.system_offsets[1])] ==
+        failed_qsh_before);
+
+  /* H0 is likewise target numerical data after the complete geometry view has
+   * passed structural validation, so poisoning one system must not roll back
+   * the healthy peer. */
+  Fixture h0_failure;
+  CHECK(make_fixture(2, h0_failure, error));
+  const std::int64_t failed_matrix = h0_failure.mulliken_plan.matrix_offsets()[1];
+  h0_failure.h0[static_cast<std::size_t>(failed_matrix)] = std::numeric_limits<double>::quiet_NaN();
+  diagonalizations.store(0, std::memory_order_relaxed);
+  CHECK(iterate_scc_driver_batch_cpu(
+            h0_failure.driver_plan, h0_failure.geometry, backend(), h0_failure.overlap_cache,
+            h0_failure.wavefunction, h0_failure.mixer_state, h0_failure.driver_state,
+            h0_failure.driver_scratch, error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(diagonalizations.load(std::memory_order_relaxed) == 1);
+  CHECK(h0_failure.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(h0_failure.driver_state.iterations[0] == 1u);
+  CHECK(h0_failure.driver_state.system_statuses[1] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(h0_failure.driver_state.iterations[1] == 0u);
+  return 0;
+}
+
 int test_ragged_failure_isolation_restart_and_skip() {
   Fixture fixture;
   std::string error;
@@ -1402,6 +1452,51 @@ int test_optional_d4_potential_energy_restart_and_zero_allocation() {
   return 0;
 }
 
+int test_d4_system_potential_uses_full_output_layout() {
+  const FixtureTopology topology{
+      {0, 2, 4},  {1, 1, 1, 1}, {-1.1, 0.0, 0.0, 1.1, 0.0, 0.0, 3.0, 0.0, 0.0, 5.2, 0.0, 0.0},
+      {0.0, 0.0}, {},           {}};
+  Fixture fixture;
+  std::string error;
+  CHECK(make_fixture(2, fixture, error, 1u, 1.0e100, false, &topology, false, true, 1.0e100));
+
+  /* The one-system D4 API receives full-layout output storage and applies the
+   * target atom offset itself. Re-evaluate the second member into an
+   * independent buffer to guard the driver's call site against double-offset
+   * writes that would corrupt or overrun the first/second member boundary. */
+  std::vector<double> mixed_charges(static_cast<std::size_t>(fixture.d4_plan.total_atoms()), 0.0);
+  for (std::size_t system = 0; system < 2u; ++system) {
+    const std::int64_t shell_begin = fixture.wavefunction_layout.batch_shell_offsets[system];
+    const std::int64_t shell_end = fixture.wavefunction_layout.batch_shell_offsets[system + 1u];
+    const std::int64_t qsh_base = fixture.wavefunction_layout.qsh.system_offsets[system];
+    for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
+      const std::int64_t atom =
+          fixture.mulliken_plan.shell_to_atom()[static_cast<std::size_t>(shell)];
+      mixed_charges[static_cast<std::size_t>(atom)] +=
+          fixture.wavefunction.qsh[static_cast<std::size_t>(qsh_base + shell - shell_begin)];
+    }
+  }
+  const std::int64_t atom_begin = fixture.d4_plan.atom_offsets()[1];
+  const std::int64_t atom_end = fixture.d4_plan.atom_offsets()[2];
+  std::vector<double> expected(static_cast<std::size_t>(fixture.d4_plan.total_atoms()), 0.0);
+  double expected_energy = 0.0;
+  CHECK(evaluate_d4_two_body_system_cpu(
+            fixture.d4_plan, fixture.d4_cache, 1, mixed_charges.data(), expected_energy,
+            expected.data(), fixture.driver_scratch.d4_workspace, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(std::any_of(expected.begin() + atom_begin, expected.begin() + atom_end,
+                    [](double value) { return std::abs(value) > 1.0e-18; }));
+
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+  for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+    CHECK(fixture.driver_scratch.d4_atomic_potentials[static_cast<std::size_t>(atom)] ==
+          expected[static_cast<std::size_t>(atom)]);
+  }
+  return 0;
+}
+
 int test_d4_atm_is_not_part_of_scc() {
   const FixtureTopology topology{
       {0, 3}, {6, 6, 6}, {0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 1.5, 2.598076211353316, 0.0},
@@ -1788,6 +1883,10 @@ int main() {
   if (const int status = test_complete_energy_failure_isolated_from_ragged_peer(); status != 0) {
     return status;
   }
+  if (const int status = test_preparation_numerical_failure_isolated_from_ragged_peer();
+      status != 0) {
+    return status;
+  }
   if (const int status = test_component_chemistry_and_layout_mismatches_are_rejected();
       status != 0) {
     return status;
@@ -1818,6 +1917,9 @@ int main() {
   }
   if (const int status = test_optional_d4_potential_energy_restart_and_zero_allocation();
       status != 0) {
+    return status;
+  }
+  if (const int status = test_d4_system_potential_uses_full_output_layout(); status != 0) {
     return status;
   }
   if (const int status = test_d4_atm_is_not_part_of_scc(); status != 0) {

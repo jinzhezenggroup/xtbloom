@@ -1187,7 +1187,31 @@ int test_one_system_population_and_hamiltonian() {
   CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
             hamiltonian_poison.plan, integral_view(hamiltonian_poison),
             potential_view(hamiltonian_poison), hamiltonian_view(hamiltonian_poison), 1,
-            workspace_view(hamiltonian_poison), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace_view(hamiltonian_poison), error) == GPUXTB_STATUS_INTERNAL_ERROR);
+
+  /* Target potentials and integrals follow the same data-level failure
+   * contract, and staging keeps the Hamiltonian unchanged on either path. */
+  hamiltonian_poison.hamiltonian[static_cast<std::size_t>(h1)] =
+      initial_hamiltonian[static_cast<std::size_t>(h1)];
+  const std::int64_t vsh1 = batch.wavefunction.qsh.system_offsets[1];
+  hamiltonian_poison.vsh[static_cast<std::size_t>(vsh1)] = std::numeric_limits<double>::quiet_NaN();
+  const std::vector<double> before_potential_failure = hamiltonian_poison.hamiltonian;
+  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+            hamiltonian_poison.plan, integral_view(hamiltonian_poison),
+            potential_view(hamiltonian_poison), hamiltonian_view(hamiltonian_poison), 1,
+            workspace_view(hamiltonian_poison), error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(hamiltonian_poison.hamiltonian == before_potential_failure);
+
+  hamiltonian_poison.vsh[static_cast<std::size_t>(vsh1)] = 0.0;
+  const std::int64_t matrix1 = hamiltonian_poison.plan.matrix_offsets()[1];
+  hamiltonian_poison.overlap[static_cast<std::size_t>(matrix1)] =
+      std::numeric_limits<double>::quiet_NaN();
+  const std::vector<double> before_integral_failure = hamiltonian_poison.hamiltonian;
+  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+            hamiltonian_poison.plan, integral_view(hamiltonian_poison),
+            potential_view(hamiltonian_poison), hamiltonian_view(hamiltonian_poison), 1,
+            workspace_view(hamiltonian_poison), error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(hamiltonian_poison.hamiltonian == before_integral_failure);
   return 0;
 }
 
