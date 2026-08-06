@@ -250,6 +250,7 @@ __global__ void evaluate_spin_kernel(Gfn2SpinDeviceBatch batch, Gfn2SpinDeviceIn
   const std::int64_t system_shells = ranges.shell_end - ranges.shell_begin;
   const std::int64_t magnetization_base = ranges.population_begin + system_shells;
   if (threadIdx.x == 0) {
+    bool arithmetic_valid = true;
     double energy = 0.0;
     for (std::int64_t atom = ranges.atom_begin; atom < ranges.atom_end; ++atom) {
       const std::int64_t shell_begin = batch.atom_shell_offsets[atom];
@@ -267,7 +268,7 @@ __global__ void evaluate_spin_kernel(Gfn2SpinDeviceBatch batch, Gfn2SpinDeviceIn
         if (!isfinite(potential)) {
           record_system_error(system_errors, system, device_error,
                               Gfn2SpinDeviceError::kNonfinitePotentialArithmetic);
-          valid = 0;
+          arithmetic_valid = false;
           break;
         }
         const std::int64_t population = magnetization_base + shell_begin - ranges.shell_begin + row;
@@ -276,15 +277,15 @@ __global__ void evaluate_spin_kernel(Gfn2SpinDeviceBatch batch, Gfn2SpinDeviceIn
         if (!isfinite(energy)) {
           record_system_error(system_errors, system, device_error,
                               Gfn2SpinDeviceError::kNonfiniteEnergyArithmetic);
-          valid = 0;
+          arithmetic_valid = false;
           break;
         }
       }
-      if (valid == 0) {
+      if (!arithmetic_valid) {
         break;
       }
     }
-    if (valid != 0) {
+    if (arithmetic_valid) {
       workspace.energy_scratch[system] = energy;
     }
   }

@@ -16,6 +16,7 @@
 #include "backends/cuda/gfn2_scc_iteration_arena.cuh"
 #include "backends/cuda/gfn2_scc_iteration_initialize.cuh"
 #include "backends/cuda/gfn2_scc_iteration_reports.cuh"
+#include "backends/cuda/gfn2_scc_iteration_test.cuh"
 #include "backends/cuda/gfn2_scc_loop.cuh"
 #include "backends/cuda/gfn2_scc_setup_eigensolver.cuh"
 #include "backends/cuda/gfn2_scc_setup_inputs.cuh"
@@ -1177,9 +1178,477 @@ int test_cross_plan_and_capture_fail_closed() {
   return 0;
 }
 
+/*
+ * Systematic injected-failure coverage for every potential and population
+ * stage that owns a directly reachable immutable or persisted input. Each
+ * injection poisons only one peer's slice of a device array that the named
+ * stage is the FIRST to consume, so the failure record is attributed exactly.
+ * Stages whose inputs are fresh outputs of earlier stages in the same launch
+ * (raw-energy and energy-sink stages) cannot be reached by pre-launch
+ * poisoning without shadowing upstream attribution; their primitive error
+ * detection stays covered by the dedicated kernel tests.
+ */
+int test_potential_population_stage_injections() {
+  constexpr std::int64_t kTarget = 0;
+  constexpr std::int64_t kHealthy = 1;
+
+  struct Injection {
+    const char* name;
+    Gfn2SccStageId expected_stage;
+    std::uint32_t expected_code;
+    bool optional_components;
+    std::uint64_t expected_iterations;
+    gpuxtb_status_t expected_status;
+    enum class Kind {
+      kMixedShellCharge,
+      kES2Cache,
+      kES3Gamma,
+      kAES2Cache,
+      kOverlapFactor,
+      kMullikenReference,
+      kD4PairData,
+      kPeriodicShift,
+      kPointChargeCache,
+    } kind;
+  };
+  const Injection injections[]{
+      {"mixed shell charge", Gfn2SccStageId::kMixedGather,
+       static_cast<std::uint32_t>(Gfn2SccPotentialDeviceError::kNonfiniteMixedShellCharge), false,
+       0u, GPUXTB_STATUS_INTERNAL_ERROR, Injection::Kind::kMixedShellCharge},
+      {"ES2 cache", Gfn2SccStageId::kES2Potential,
+       static_cast<std::uint32_t>(Gfn2ES2DeviceError::kInvalidCacheMatrix), false, 0u,
+       GPUXTB_STATUS_INTERNAL_ERROR, Injection::Kind::kES2Cache},
+      {"ES3 gamma3", Gfn2SccStageId::kES3Potential,
+       static_cast<std::uint32_t>(Gfn2ES3DeviceError::kNonfiniteGamma3), false, 0u,
+       GPUXTB_STATUS_INTERNAL_ERROR, Injection::Kind::kES3Gamma},
+      {"AES2 cache", Gfn2SccStageId::kAES2Potential,
+       static_cast<std::uint32_t>(Gfn2AES2DeviceError::kInvalidCache), false, 0u,
+       GPUXTB_STATUS_INTERNAL_ERROR, Injection::Kind::kAES2Cache},
+      {"overlap factor", Gfn2SccStageId::kEigensolver,
+       static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kStaleOverlapCache), false, 1u,
+       GPUXTB_STATUS_EIGENSOLVER_FAILED, Injection::Kind::kOverlapFactor},
+      {"Mulliken reference occupation", Gfn2SccStageId::kMulliken,
+       static_cast<std::uint32_t>(Gfn2MullikenDeviceError::kNonfiniteReferenceOccupation), false,
+       1u, GPUXTB_STATUS_INTERNAL_ERROR, Injection::Kind::kMullikenReference},
+      {"D4 pair data", Gfn2SccStageId::kD4Potential,
+       static_cast<std::uint32_t>(Gfn2D4DeviceError::kNonfiniteArithmetic), true, 0u,
+       GPUXTB_STATUS_INTERNAL_ERROR, Injection::Kind::kD4PairData},
+      {"periodic shift", Gfn2SccStageId::kPeriodicPotential,
+       static_cast<std::uint32_t>(Gfn2PeriodicEmbeddingDeviceError::kNonfiniteShift), true, 0u,
+       GPUXTB_STATUS_INTERNAL_ERROR, Injection::Kind::kPeriodicShift},
+      {"explicit point-charge cache potential", Gfn2SccStageId::kPotentialCompose,
+       static_cast<std::uint32_t>(
+           Gfn2SccPotentialDeviceError::kNonfiniteExplicitPointChargePotential),
+       true, 0u, GPUXTB_STATUS_INTERNAL_ERROR, Injection::Kind::kPointChargeCache},
+  };
+
+  for (const Injection& injection : injections) {
+    ProductionFixture fixture;
+    CHECK(fixture.create(injection.optional_components));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+    struct Snapshot {
+      std::vector<double> qsh;
+      std::vector<double> eigenvalues;
+      std::vector<double> free_energies;
+    };
+    Snapshot before;
+    CHECK(download(fixture.binding.state.raw_population.qsh,
+                   fixture.binding.state.raw_population.qsh_elements, before.qsh,
+                   fixture.handles.stream()));
+    CHECK(download(fixture.binding.state.eigenpairs.eigenvalues,
+                   fixture.binding.state.eigenpairs.eigenvalue_elements, before.eigenvalues,
+                   fixture.handles.stream()));
+    CHECK(download(fixture.binding.state.scc.free_energies,
+                   fixture.binding.state.scc.batch_elements, before.free_energies,
+                   fixture.handles.stream()));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    switch (injection.kind) {
+      case Injection::Kind::kMixedShellCharge:
+        CHECK(upload(&nan,
+                     const_cast<double*>(fixture.binding.state.scc.current_inputs.shell_charges), 1,
+                     fixture.handles.stream()));
+        break;
+      case Injection::Kind::kES2Cache:
+        CHECK(upload(&nan, const_cast<double*>(fixture.binding.plan.es2_cache.coulomb_matrix), 1,
+                     fixture.handles.stream()));
+        break;
+      case Injection::Kind::kES3Gamma:
+        CHECK(upload(&nan, const_cast<double*>(fixture.binding.plan.es3_batch.shell_gamma3), 1,
+                     fixture.handles.stream()));
+        break;
+      case Injection::Kind::kAES2Cache:
+        CHECK(upload(&nan, const_cast<double*>(fixture.binding.plan.aes2_cache.pair_data), 1,
+                     fixture.handles.stream()));
+        break;
+      case Injection::Kind::kOverlapFactor:
+        CHECK(upload(&nan, const_cast<double*>(fixture.binding.plan.overlap_cache.cholesky_factors),
+                     1, fixture.handles.stream()));
+        break;
+      case Injection::Kind::kMullikenReference:
+        CHECK(upload(
+            &nan,
+            const_cast<double*>(fixture.binding.plan.mulliken_batch.reference_shell_occupations), 1,
+            fixture.handles.stream()));
+        break;
+      case Injection::Kind::kD4PairData:
+        CHECK(upload(&nan, const_cast<double*>(fixture.binding.plan.d4_cache.pair_data), 1,
+                     fixture.handles.stream()));
+        break;
+      case Injection::Kind::kPeriodicShift:
+        CHECK(upload(&nan, const_cast<double*>(fixture.binding.plan.periodic_batch.shifts), 1,
+                     fixture.handles.stream()));
+        break;
+      case Injection::Kind::kPointChargeCache:
+        CHECK(upload(
+            &nan,
+            const_cast<double*>(fixture.binding.plan.explicit_point_charge_cache.shell_potentials),
+            1, fixture.handles.stream()));
+        break;
+    }
+    CHECK(launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream())
+              .success());
+
+    Snapshot after;
+    std::vector<std::uint64_t> iterations;
+    std::vector<gpuxtb_status_t> statuses;
+    std::vector<std::uint64_t> failures;
+    std::uint64_t plan_failure = 1u;
+    const auto& layout = fixture.host.wavefunction_layout();
+    CHECK(download(fixture.binding.state.raw_population.qsh,
+                   fixture.binding.state.raw_population.qsh_elements, after.qsh,
+                   fixture.handles.stream()));
+    CHECK(download(fixture.binding.state.eigenpairs.eigenvalues,
+                   fixture.binding.state.eigenpairs.eigenvalue_elements, after.eigenvalues,
+                   fixture.handles.stream()));
+    CHECK(download(fixture.binding.state.scc.free_energies,
+                   fixture.binding.state.scc.batch_elements, after.free_energies,
+                   fixture.handles.stream()));
+    CHECK(download(fixture.binding.state.scc.iterations, fixture.binding.state.scc.batch_elements,
+                   iterations, fixture.handles.stream()));
+    CHECK(download(fixture.binding.state.scc.system_statuses,
+                   fixture.binding.state.scc.batch_elements, statuses, fixture.handles.stream()));
+    CHECK(download(fixture.binding.workspace.ledger.system_failure_records,
+                   fixture.binding.state.scc.batch_elements, failures, fixture.handles.stream()));
+    CHECK(download_value(fixture.binding.workspace.ledger.plan_failure_record, plan_failure,
+                         fixture.handles.stream()));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+    if (iterations[static_cast<std::size_t>(kTarget)] != injection.expected_iterations ||
+        statuses[static_cast<std::size_t>(kTarget)] != injection.expected_status ||
+        failures[static_cast<std::size_t>(kTarget)] !=
+            failure_record(injection.expected_stage, injection.expected_code) ||
+        !system_slice_is_byte_stable(before.qsh, after.qsh, layout.qsh.system_offsets, kTarget) ||
+        !system_slice_is_byte_stable(before.eigenvalues, after.eigenvalues,
+                                     layout.eigenvalues.system_offsets, kTarget) ||
+        !std::isnan(after.free_energies[static_cast<std::size_t>(kTarget)]) ||
+        iterations[static_cast<std::size_t>(kHealthy)] != 1u ||
+        statuses[static_cast<std::size_t>(kHealthy)] != GPUXTB_STATUS_SUCCESS ||
+        failures[static_cast<std::size_t>(kHealthy)] != 0u ||
+        !system_slice_is_finite(after.qsh, layout.qsh.system_offsets, kHealthy) ||
+        !system_slice_is_finite(after.eigenvalues, layout.eigenvalues.system_offsets, kHealthy) ||
+        system_slice_is_byte_stable(before.eigenvalues, after.eigenvalues,
+                                    layout.eigenvalues.system_offsets, kHealthy) ||
+        plan_failure != 0u) {
+      std::fprintf(stderr,
+                   "%s injection failed: iterations=%llu status=%d record=%llu "
+                   "healthy_iterations=%llu healthy_status=%d healthy_record=%llu "
+                   "plan_failure=%llu\n",
+                   injection.name,
+                   static_cast<unsigned long long>(iterations[static_cast<std::size_t>(kTarget)]),
+                   static_cast<int>(statuses[static_cast<std::size_t>(kTarget)]),
+                   static_cast<unsigned long long>(failures[static_cast<std::size_t>(kTarget)]),
+                   static_cast<unsigned long long>(iterations[static_cast<std::size_t>(kHealthy)]),
+                   static_cast<int>(statuses[static_cast<std::size_t>(kHealthy)]),
+                   static_cast<unsigned long long>(failures[static_cast<std::size_t>(kHealthy)]),
+                   static_cast<unsigned long long>(plan_failure));
+      return __LINE__;
+    }
+  }
+  return 0;
+}
+
+std::uint32_t first_classified_peer_code(std::uint64_t mask) {
+  for (std::uint32_t code = 1u; code < 64u; ++code) {
+    if ((mask & (std::uint64_t{1} << code)) != 0u) {
+      return code;
+    }
+  }
+  return 0u;
+}
+
+/*
+ * Exercise the composed normalizer/publication path for every stage report,
+ * including sinks whose inputs are necessarily fresh outputs of an earlier
+ * kernel. The production launch specialization contains no injection branch;
+ * this dedicated test launcher inserts one classified peer code after the
+ * stage has run and immediately before normalization.
+ */
+int test_every_composed_stage_failure_is_transactional() {
+  constexpr std::int64_t kTarget = 0;
+  constexpr std::int64_t kHealthy = 1;
+  constexpr double kFiniteEnergySentinel = 19.25;
+
+  struct Snapshot {
+    std::vector<double> qsh;
+    std::vector<double> eigenvalues;
+    std::vector<double> mixer_inputs;
+    std::vector<double> free_energies;
+  };
+  const auto capture = [](ProductionFixture& fixture, Snapshot& snapshot) {
+    return download(fixture.binding.state.raw_population.qsh,
+                    fixture.binding.state.raw_population.qsh_elements, snapshot.qsh,
+                    fixture.handles.stream()) &&
+           download(fixture.binding.state.eigenpairs.eigenvalues,
+                    fixture.binding.state.eigenpairs.eigenvalue_elements, snapshot.eigenvalues,
+                    fixture.handles.stream()) &&
+           download(fixture.binding.state.mixer.current_inputs,
+                    fixture.binding.state.mixer.total_vector_elements, snapshot.mixer_inputs,
+                    fixture.handles.stream()) &&
+           download(fixture.binding.state.scc.free_energies,
+                    fixture.binding.state.scc.batch_elements, snapshot.free_energies,
+                    fixture.handles.stream());
+  };
+
+  ProductionFixture stage_catalog;
+  CHECK(stage_catalog.create(true));
+  const std::int64_t report_count = stage_catalog.binding.plan.report_count;
+  /* All-component restricted execution has 26 normalized stages. Keep this
+   * count explicit so accidentally dropping a report cannot shrink the loop
+   * and make the every-stage gate pass vacuously. */
+  CHECK(report_count == 26);
+  std::vector<Gfn2SccStageId> stages;
+  stages.reserve(static_cast<std::size_t>(report_count));
+  for (std::int64_t index = 0; index < report_count; ++index) {
+    const Gfn2SccStageId stage = stage_catalog.binding.plan.reports[index].stage;
+    CHECK(std::find(stages.begin(), stages.end(), stage) == stages.end());
+    stages.push_back(stage);
+  }
+
+  for (const Gfn2SccStageId stage : stages) {
+    ProductionFixture fixture;
+    CHECK(fixture.create(true));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+    const Gfn2SccStageDeviceReport* report = nullptr;
+    for (std::int64_t index = 0; index < fixture.binding.plan.report_count; ++index) {
+      if (fixture.binding.plan.reports[index].stage == stage) {
+        report = fixture.binding.plan.reports + index;
+        break;
+      }
+    }
+    CHECK(report != nullptr);
+    const std::uint32_t raw_code = first_classified_peer_code(report->peer_error_mask);
+    CHECK(raw_code != 0u);
+
+    CHECK(upload(&kFiniteEnergySentinel, fixture.binding.state.scc.free_energies + kTarget, 1,
+                 fixture.handles.stream()));
+    Snapshot before;
+    CHECK(capture(fixture, before));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    CHECK(before.free_energies[static_cast<std::size_t>(kTarget)] == kFiniteEnergySentinel);
+
+    const Gfn2SccIterationTestFault fault{stage, kTarget, raw_code};
+    CHECK(
+        launch_gfn2_scc_iteration_test_fault_cuda(fixture.binding, fault, fixture.handles.stream())
+            .success());
+
+    Snapshot after;
+    std::vector<std::uint64_t> iterations;
+    std::vector<gpuxtb_status_t> statuses;
+    std::vector<std::uint64_t> failures;
+    std::uint64_t plan_failure = 1u;
+    CHECK(capture(fixture, after));
+    CHECK(download(fixture.binding.state.scc.iterations, fixture.host.batch_size(), iterations,
+                   fixture.handles.stream()));
+    CHECK(download(fixture.binding.state.scc.system_statuses, fixture.host.batch_size(), statuses,
+                   fixture.handles.stream()));
+    CHECK(download(fixture.binding.workspace.ledger.system_failure_records,
+                   fixture.host.batch_size(), failures, fixture.handles.stream()));
+    CHECK(download_value(fixture.binding.workspace.ledger.plan_failure_record, plan_failure,
+                         fixture.handles.stream()));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+    const auto& layout = fixture.host.wavefunction_layout();
+    const auto mixer_offset = [&](std::int64_t system) {
+      return layout.qsh.system_offsets[system] + 9 * layout.qat.system_offsets[system];
+    };
+    std::vector<std::int64_t> mixer_system_offsets;
+    mixer_system_offsets.reserve(static_cast<std::size_t>(layout.batch_size + 1));
+    for (std::int64_t system = 0; system <= layout.batch_size; ++system) {
+      mixer_system_offsets.push_back(mixer_offset(system));
+    }
+    if (statuses[static_cast<std::size_t>(kTarget)] != report->peer_failure_status ||
+        failures[static_cast<std::size_t>(kTarget)] != failure_record(stage, raw_code) ||
+        !system_slice_is_byte_stable(before.qsh, after.qsh, layout.qsh.system_offsets, kTarget) ||
+        !system_slice_is_byte_stable(before.eigenvalues, after.eigenvalues,
+                                     layout.eigenvalues.system_offsets, kTarget) ||
+        !system_slice_is_byte_stable(before.mixer_inputs, after.mixer_inputs, mixer_system_offsets,
+                                     kTarget) ||
+        !std::isnan(after.free_energies[static_cast<std::size_t>(kTarget)]) ||
+        iterations[static_cast<std::size_t>(kHealthy)] != 1u ||
+        statuses[static_cast<std::size_t>(kHealthy)] != GPUXTB_STATUS_SUCCESS ||
+        failures[static_cast<std::size_t>(kHealthy)] != 0u ||
+        !std::isfinite(after.free_energies[static_cast<std::size_t>(kHealthy)]) ||
+        system_slice_is_byte_stable(before.eigenvalues, after.eigenvalues,
+                                    layout.eigenvalues.system_offsets, kHealthy) ||
+        plan_failure != 0u) {
+      std::fprintf(stderr,
+                   "composed stage %u injection failed: code=%u target_status=%d "
+                   "target_record=%llu healthy_iteration=%llu healthy_status=%d "
+                   "healthy_record=%llu plan_failure=%llu\n",
+                   static_cast<unsigned>(stage), raw_code,
+                   static_cast<int>(statuses[static_cast<std::size_t>(kTarget)]),
+                   static_cast<unsigned long long>(failures[static_cast<std::size_t>(kTarget)]),
+                   static_cast<unsigned long long>(iterations[static_cast<std::size_t>(kHealthy)]),
+                   static_cast<int>(statuses[static_cast<std::size_t>(kHealthy)]),
+                   static_cast<unsigned long long>(failures[static_cast<std::size_t>(kHealthy)]),
+                   static_cast<unsigned long long>(plan_failure));
+      return __LINE__;
+    }
+  }
+  return 0;
+}
+
+int test_persisted_mixer_and_publication_failures() {
+  constexpr std::int64_t kTarget = 0;
+  constexpr std::int64_t kHealthy = 1;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+
+  struct Snapshot {
+    std::vector<double> qsh;
+    std::vector<double> eigenvalues;
+    std::vector<double> mixer_inputs;
+    std::vector<double> free_energies;
+    std::vector<std::uint64_t> iterations;
+    std::vector<gpuxtb_status_t> statuses;
+  };
+  const auto capture = [](ProductionFixture& fixture, Snapshot& snapshot) {
+    return download(fixture.binding.state.raw_population.qsh,
+                    fixture.binding.state.raw_population.qsh_elements, snapshot.qsh,
+                    fixture.handles.stream()) &&
+           download(fixture.binding.state.eigenpairs.eigenvalues,
+                    fixture.binding.state.eigenpairs.eigenvalue_elements, snapshot.eigenvalues,
+                    fixture.handles.stream()) &&
+           download(fixture.binding.state.mixer.current_inputs,
+                    fixture.binding.state.mixer.total_vector_elements, snapshot.mixer_inputs,
+                    fixture.handles.stream()) &&
+           download(fixture.binding.state.scc.free_energies,
+                    fixture.binding.state.scc.batch_elements, snapshot.free_energies,
+                    fixture.handles.stream()) &&
+           download(fixture.binding.state.scc.iterations, fixture.binding.state.scc.batch_elements,
+                    snapshot.iterations, fixture.handles.stream()) &&
+           download(fixture.binding.state.scc.system_statuses,
+                    fixture.binding.state.scc.batch_elements, snapshot.statuses,
+                    fixture.handles.stream());
+  };
+
+  /* A persisted Broyden residual is first consumed by Mixer on the second
+   * transition. Its peer-local failure must preserve the target's public
+   * numerical state while the healthy peer completes iteration two. */
+  {
+    ProductionFixture fixture;
+    CHECK(fixture.create(false));
+    CHECK(launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream())
+              .success());
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    CHECK(
+        upload(&nan, fixture.binding.state.mixer.previous_residuals, 1, fixture.handles.stream()));
+    Snapshot before;
+    CHECK(capture(fixture, before));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    CHECK(std::isfinite(before.free_energies[static_cast<std::size_t>(kTarget)]));
+
+    CHECK(launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream())
+              .success());
+    Snapshot after;
+    std::vector<std::uint64_t> failures;
+    std::uint64_t plan_failure = 1u;
+    CHECK(capture(fixture, after));
+    CHECK(download(fixture.binding.workspace.ledger.system_failure_records,
+                   fixture.host.batch_size(), failures, fixture.handles.stream()));
+    CHECK(download_value(fixture.binding.workspace.ledger.plan_failure_record, plan_failure,
+                         fixture.handles.stream()));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+    const auto& layout = fixture.host.wavefunction_layout();
+    std::vector<std::int64_t> mixer_offsets;
+    mixer_offsets.reserve(static_cast<std::size_t>(layout.batch_size + 1));
+    for (std::int64_t system = 0; system <= layout.batch_size; ++system) {
+      mixer_offsets.push_back(layout.qsh.system_offsets[system] +
+                              9 * layout.qat.system_offsets[system]);
+    }
+    CHECK(after.statuses[static_cast<std::size_t>(kTarget)] == GPUXTB_STATUS_INTERNAL_ERROR);
+    CHECK(failures[static_cast<std::size_t>(kTarget)] ==
+          failure_record(Gfn2SccStageId::kMixer,
+                         static_cast<std::uint32_t>(GPUXTB_STATUS_INTERNAL_ERROR)));
+    CHECK(system_slice_is_byte_stable(before.qsh, after.qsh, layout.qsh.system_offsets, kTarget));
+    CHECK(system_slice_is_byte_stable(before.eigenvalues, after.eigenvalues,
+                                      layout.eigenvalues.system_offsets, kTarget));
+    CHECK(system_slice_is_byte_stable(before.mixer_inputs, after.mixer_inputs, mixer_offsets,
+                                      kTarget));
+    CHECK(std::isnan(after.free_energies[static_cast<std::size_t>(kTarget)]));
+    CHECK(before.iterations[static_cast<std::size_t>(kHealthy)] == 1u);
+    CHECK(after.iterations[static_cast<std::size_t>(kHealthy)] == 2u);
+    CHECK(after.statuses[static_cast<std::size_t>(kHealthy)] == GPUXTB_STATUS_SUCCESS);
+    CHECK(failures[static_cast<std::size_t>(kHealthy)] == 0u);
+    CHECK(std::isfinite(after.free_energies[static_cast<std::size_t>(kHealthy)]));
+    CHECK(plan_failure == 0u);
+  }
+
+  /* A non-finite prior SCC energy is invalid whole-batch state, not a peer
+   * numerical failure. Publication must close the plan transaction and leave
+   * every other public field byte-stable. */
+  {
+    ProductionFixture fixture;
+    CHECK(fixture.create(false));
+    CHECK(launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream())
+              .success());
+    Snapshot before;
+    CHECK(capture(fixture, before));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    CHECK(upload(&nan, fixture.binding.state.scc.free_energies + kTarget, 1,
+                 fixture.handles.stream()));
+
+    CHECK(launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream())
+              .success());
+    Snapshot after;
+    std::vector<std::uint64_t> failures;
+    std::uint64_t plan_failure = 0u;
+    std::uint32_t sequence_active = 1u;
+    CHECK(capture(fixture, after));
+    CHECK(download(fixture.binding.workspace.ledger.system_failure_records,
+                   fixture.host.batch_size(), failures, fixture.handles.stream()));
+    CHECK(download_value(fixture.binding.workspace.ledger.plan_failure_record, plan_failure,
+                         fixture.handles.stream()));
+    CHECK(download_value(fixture.binding.workspace.ledger.sequence_active, sequence_active,
+                         fixture.handles.stream()));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+    CHECK(after.qsh == before.qsh);
+    CHECK(after.eigenvalues == before.eigenvalues);
+    CHECK(after.mixer_inputs == before.mixer_inputs);
+    CHECK(after.iterations == before.iterations);
+    CHECK(after.statuses == before.statuses);
+    CHECK(std::isnan(after.free_energies[static_cast<std::size_t>(kTarget)]));
+    for (std::size_t system = 1u; system < after.free_energies.size(); ++system) {
+      CHECK(after.free_energies[system] == before.free_energies[system]);
+    }
+    CHECK(std::all_of(failures.begin(), failures.end(),
+                      [](std::uint64_t value) { return value == 0u; }));
+    CHECK(plan_failure ==
+          failure_record(Gfn2SccStageId::kStatePublication,
+                         static_cast<std::uint32_t>(Gfn2SccPublicationDeviceError::kInvalidState)));
+    CHECK(sequence_active == 0u);
+  }
+  return 0;
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   int device_count = 0;
   const cudaError_t count_status = cudaGetDeviceCount(&device_count);
   if (count_status == cudaErrorNoDevice || count_status == cudaErrorInsufficientDriver ||
@@ -1189,6 +1658,26 @@ int main() {
   }
   CUDA_CHECK(count_status);
   CUDA_CHECK(cudaSetDevice(0));
+
+  if (argc == 2 && std::strcmp(argv[1], "--potential-population-injections") == 0) {
+    return test_potential_population_stage_injections();
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--spin-stage-injections") == 0) {
+    return test_spin_stage_peer_failures_are_transactional();
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--all-stage-injections") == 0) {
+    return test_every_composed_stage_failure_is_transactional();
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--persisted-state-failures") == 0) {
+    return test_persisted_mixer_and_publication_failures();
+  }
+  if (argc != 1) {
+    std::fprintf(stderr,
+                 "usage: %s [--potential-population-injections|--spin-stage-injections|"
+                 "--all-stage-injections|--persisted-state-failures]\n",
+                 argv[0]);
+    return 2;
+  }
 
   int status = test_terminal_peer_cpu_parity();
   if (status != 0) {
@@ -1215,6 +1704,18 @@ int main() {
     return status;
   }
   status = test_batch_plan_failure_is_transactional();
+  if (status != 0) {
+    return status;
+  }
+  status = test_potential_population_stage_injections();
+  if (status != 0) {
+    return status;
+  }
+  status = test_every_composed_stage_failure_is_transactional();
+  if (status != 0) {
+    return status;
+  }
+  status = test_persisted_mixer_and_publication_failures();
   if (status != 0) {
     return status;
   }

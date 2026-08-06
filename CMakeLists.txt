@@ -651,7 +651,8 @@ if(GPUXTB_HAS_CUDA)
   )
   if(GPUXTB_BUILD_TESTS)
     # White-box CUDA kernels exercise otherwise unreachable transactional
-    # overflow boundaries without shipping test entry points in release builds.
+    # failure and overflow boundaries without shipping test entry points in
+    # release builds.
     target_compile_definitions(gpuxtb_cuda_backend PRIVATE GPUXTB_CUDA_TEST_HOOKS=1)
   endif()
   set_target_properties(gpuxtb_cuda_backend PROPERTIES

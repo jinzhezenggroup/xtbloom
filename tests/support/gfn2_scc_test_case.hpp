@@ -22,6 +22,10 @@ enum class SmallSystemKind {
   kHe,
   kLiH,
   kCH2,
+  /* H2 at an 8 bohr bond. The sigma/sigma* frontier gap is then below the
+   * default 300 K electronic temperature, producing genuinely fractional and
+   * near-degenerate occupations through the composed SCC iteration. */
+  kH2Stretched,
 };
 
 /*

@@ -47,6 +47,12 @@ constexpr std::uint64_t kPlanToken = 0x105105105ULL;
 constexpr std::uint64_t kGeometryGeneration = 105u;
 constexpr std::uint64_t kInitializationGeneration = 1u;
 
+struct CouplingSelection {
+  bool d4 = false;
+  bool point_charges = false;
+  bool periodic = false;
+};
+
 template <typename T>
 Gfn2SccSetupHostArray<T> setup_view(const std::vector<T>& values) noexcept {
   return {values.empty() ? nullptr : values.data(), static_cast<std::int64_t>(values.size())};
@@ -403,34 +409,106 @@ bool compare_doubles(const char* field, const std::vector<double>& actual, const
   return true;
 }
 
-bool compare_coefficients(const HostSccCase& host, std::vector<double> actual, double tolerance) {
+/* Generalized eigenvectors are unique only up to sign for isolated roots and
+ * up to an orthogonal rotation within a degenerate eigenspace. Compare those
+ * two invariants separately so LAPACK/cuSOLVER provider choices cannot make a
+ * scientifically equivalent solution fail parity. */
+bool compare_coefficients(const HostSccCase& host, const std::vector<double>& actual_eigenvalues,
+                          std::vector<double> actual, double eigenvalue_tolerance,
+                          double coefficient_tolerance) {
   const auto& layout = host.wavefunction_layout();
+  const double* expected_eigenvalues = host.wavefunction().eigenvalues;
   const double* expected = host.wavefunction().coefficients;
+  if (actual_eigenvalues.size() != static_cast<std::size_t>(layout.eigenvalues.element_count) ||
+      actual.size() != static_cast<std::size_t>(layout.coefficients.element_count)) {
+    std::fprintf(stderr, "eigenpairs have an invalid parity extent\n");
+    return false;
+  }
   for (std::int64_t system = 0; system < layout.batch_size; ++system) {
     const std::int64_t orbital_begin = layout.batch_orbital_offsets[system];
     const std::int64_t orbital_end = layout.batch_orbital_offsets[system + 1];
     const std::int64_t n = orbital_end - orbital_begin;
+    const std::int64_t eigenvalue_system_begin = layout.eigenvalues.system_offsets[system];
     const std::int64_t system_matrix_begin = layout.coefficients.system_offsets[system];
     const std::int64_t matrix_elements = n * n;
     for (std::int32_t spin = 0; spin < host.spin_channels()[system]; ++spin) {
+      const std::int64_t eigenvalue_begin = eigenvalue_system_begin + spin * n;
       const std::int64_t matrix_begin = system_matrix_begin + spin * matrix_elements;
-      for (std::int64_t orbital = 0; orbital < n; ++orbital) {
-        double dot = 0.0;
-        for (std::int64_t row = 0; row < n; ++row) {
-          const std::int64_t index = matrix_begin + row * n + orbital;
-          dot += actual[static_cast<std::size_t>(index)] * expected[index];
+      for (std::int64_t cluster_begin = 0; cluster_begin < n;) {
+        std::int64_t cluster_end = cluster_begin + 1;
+        while (cluster_end < n) {
+          const std::int64_t previous = eigenvalue_begin + cluster_end - 1;
+          const std::int64_t next = eigenvalue_begin + cluster_end;
+          const double scale = std::max(
+              {1.0, std::abs(expected_eigenvalues[previous]), std::abs(expected_eigenvalues[next]),
+               std::abs(actual_eigenvalues[static_cast<std::size_t>(previous)]),
+               std::abs(actual_eigenvalues[static_cast<std::size_t>(next)])});
+          const double expected_gap =
+              std::abs(expected_eigenvalues[next] - expected_eigenvalues[previous]);
+          const double actual_gap =
+              std::abs(actual_eigenvalues[static_cast<std::size_t>(next)] -
+                       actual_eigenvalues[static_cast<std::size_t>(previous)]);
+          if (std::max(expected_gap, actual_gap) > 2.0 * eigenvalue_tolerance * scale) {
+            break;
+          }
+          ++cluster_end;
         }
-        if (dot < 0.0) {
+
+        if (cluster_end == cluster_begin + 1) {
+          double dot = 0.0;
           for (std::int64_t row = 0; row < n; ++row) {
-            const std::int64_t index = matrix_begin + row * n + orbital;
-            actual[static_cast<std::size_t>(index)] = -actual[static_cast<std::size_t>(index)];
+            const std::int64_t index = matrix_begin + row * n + cluster_begin;
+            dot += actual[static_cast<std::size_t>(index)] * expected[index];
+          }
+          if (dot < 0.0) {
+            for (std::int64_t row = 0; row < n; ++row) {
+              const std::int64_t index = matrix_begin + row * n + cluster_begin;
+              actual[static_cast<std::size_t>(index)] = -actual[static_cast<std::size_t>(index)];
+            }
+          }
+          for (std::int64_t row = 0; row < n; ++row) {
+            const std::int64_t index = matrix_begin + row * n + cluster_begin;
+            if (!near(actual[static_cast<std::size_t>(index)], expected[index],
+                      coefficient_tolerance)) {
+              std::fprintf(stderr,
+                           "coefficient mismatch system=%lld spin=%d orbital=%lld row=%lld "
+                           "CUDA=%.17g CPU=%.17g\n",
+                           static_cast<long long>(system), static_cast<int>(spin),
+                           static_cast<long long>(cluster_begin), static_cast<long long>(row),
+                           actual[static_cast<std::size_t>(index)], expected[index]);
+              return false;
+            }
+          }
+        } else {
+          for (std::int64_t row = 0; row < n; ++row) {
+            for (std::int64_t column = 0; column < n; ++column) {
+              double actual_projector = 0.0;
+              double expected_projector = 0.0;
+              for (std::int64_t orbital = cluster_begin; orbital < cluster_end; ++orbital) {
+                actual_projector +=
+                    actual[static_cast<std::size_t>(matrix_begin + row * n + orbital)] *
+                    actual[static_cast<std::size_t>(matrix_begin + column * n + orbital)];
+                expected_projector += expected[matrix_begin + row * n + orbital] *
+                                      expected[matrix_begin + column * n + orbital];
+              }
+              if (!near(actual_projector, expected_projector, coefficient_tolerance)) {
+                std::fprintf(stderr,
+                             "coefficient projector mismatch system=%lld spin=%d "
+                             "cluster=[%lld,%lld) row=%lld column=%lld CUDA=%.17g CPU=%.17g\n",
+                             static_cast<long long>(system), static_cast<int>(spin),
+                             static_cast<long long>(cluster_begin),
+                             static_cast<long long>(cluster_end), static_cast<long long>(row),
+                             static_cast<long long>(column), actual_projector, expected_projector);
+                return false;
+              }
+            }
           }
         }
+        cluster_begin = cluster_end;
       }
     }
   }
-  return compare_doubles("coefficients", actual, expected, layout.coefficients.element_count,
-                         tolerance);
+  return true;
 }
 
 bool generalized_eigensystems_match_overlap(const HostSccCase& host,
@@ -792,7 +870,8 @@ struct ProductionFixture {
   Gfn2SccIterationInitializationReady ready{};
   Gfn2SccIterationBinding binding{};
   bool create(bool optional_components, std::int64_t batch_size = 4, bool unrestricted_spin = false,
-              bool mixed_spin_batch = false) {
+              bool mixed_spin_batch = false, const std::vector<SmallSystemKind>& systems = {},
+              double electronic_temperature = 0.0, CouplingSelection coupling = {}) {
     if (batch_size <= 0) {
       return false;
     }
@@ -821,9 +900,13 @@ struct ProductionFixture {
       }
     } else {
       for (std::int64_t system = 0; system < batch_size; ++system) {
-        options.systems.push_back(
-            unrestricted_spin ? SmallSystemKind::kHe
-                              : kSystems[static_cast<std::size_t>(system) % kSystems.size()]);
+        if (!systems.empty()) {
+          options.systems.push_back(systems[static_cast<std::size_t>(system) % systems.size()]);
+        } else {
+          options.systems.push_back(
+              unrestricted_spin ? SmallSystemKind::kHe
+                                : kSystems[static_cast<std::size_t>(system) % kSystems.size()]);
+        }
       }
     }
     if (unrestricted_spin) {
@@ -834,10 +917,10 @@ struct ProductionFixture {
     options.geometry_generation = kGeometryGeneration;
     options.maximum_iterations = 8u;
     options.mixer_history = 3;
-    options.electronic_temperature = 0.0;
-    options.enable_d4 = optional_components;
-    options.enable_explicit_point_charges = optional_components;
-    options.enable_periodic_embedding = optional_components;
+    options.electronic_temperature = electronic_temperature;
+    options.enable_d4 = optional_components || coupling.d4;
+    options.enable_explicit_point_charges = optional_components || coupling.point_charges;
+    options.enable_periodic_embedding = optional_components || coupling.periodic;
 
     std::string error;
     if (HostSccCase::create(options, host, error) != GPUXTB_STATUS_SUCCESS) {
@@ -1217,9 +1300,13 @@ int test_unrestricted_mixed_production_iteration_smoke() {
 
 int test_production_iteration_cpu_parity(bool optional_components, std::int64_t batch_size = 4,
                                          bool unrestricted_spin = false, bool one_step_only = false,
-                                         bool mixed_spin_batch = false) {
+                                         bool mixed_spin_batch = false,
+                                         const std::vector<SmallSystemKind>& systems = {},
+                                         double electronic_temperature = 0.0,
+                                         CouplingSelection coupling = {}) {
   ProductionFixture fixture;
-  CHECK(fixture.create(optional_components, batch_size, unrestricted_spin, mixed_spin_batch));
+  CHECK(fixture.create(optional_components, batch_size, unrestricted_spin, mixed_spin_batch,
+                       systems, electronic_temperature, coupling));
 
   /* The first transition is only comparable when fresh initialization packs
    * every ragged system into the same mixer vector used by the CPU oracle. */
@@ -1326,7 +1413,7 @@ int test_production_iteration_cpu_parity(bool optional_components, std::int64_t 
 
   CHECK(compare_doubles("eigenvalues", eigenvalues, fixture.host.wavefunction().eigenvalues,
                         layout.eigenvalues.element_count, 3.0e-9));
-  CHECK(compare_coefficients(fixture.host, coefficients, 3.0e-8));
+  CHECK(compare_coefficients(fixture.host, eigenvalues, coefficients, 3.0e-9, 3.0e-8));
   CHECK(compare_doubles("occupations", occupations, fixture.host.wavefunction().occupations,
                         layout.occupations.element_count, 3.0e-10));
   CHECK(compare_doubles("density", density, fixture.host.wavefunction().density,
@@ -1436,6 +1523,155 @@ int test_mixed_spin_batch_one_step_cpu_parity() {
                    static_cast<long long>(batch_size));
       return status;
     }
+  }
+  return 0;
+}
+
+/* Finite-temperature system set that always places a near-degenerate stretched
+ * H2 first so the composed iteration exercises the difficult frontier Fermi
+ * path while the remaining peers provide ordinary finite-T fractional filling. */
+const std::vector<SmallSystemKind>& finite_temperature_systems() {
+  static const std::vector<SmallSystemKind> systems{SmallSystemKind::kH2Stretched,
+                                                    SmallSystemKind::kHe, SmallSystemKind::kLiH,
+                                                    SmallSystemKind::kCH2};
+  return systems;
+}
+
+/* The stretched-H2 peer (always system 0) must publish genuinely fractional
+ * frontier occupations and keep its HOMO/LUMO gap below the electronic
+ * temperature. This proves the parity case is actually exercising the
+ * near-degenerate/difficult occupation regime rather than a trivial
+ * T -> 0 fill, and that CPU/CUDA agree on both the splitting and the fill. */
+int verify_near_degenerate_fractional_frontier(const HostSccCase& host) {
+  constexpr std::int64_t kStretchedSystem = 0;
+  const auto& layout = host.wavefunction_layout();
+  if (host.batch_size() <= kStretchedSystem) {
+    return __LINE__;
+  }
+  const auto& eigenvalues = host.wavefunction().eigenvalues;
+  const std::int64_t n = layout.batch_orbital_offsets[kStretchedSystem + 1] -
+                         layout.batch_orbital_offsets[kStretchedSystem];
+  if (n < 2 || layout.batch_orbital_offsets[kStretchedSystem] != 0) {
+    return __LINE__;
+  }
+  /* Restricted closed-shell stretched H2: the sigma_g/sigma_u* pair is the
+   * sole frontier and must be genuinely near-degenerate (exact binary64
+   * degeneracy is acceptable and even stronger). */
+  const double homu_gap = eigenvalues[1] - eigenvalues[0];
+  if (!(homu_gap >= 0.0) || !(homu_gap < 5.0e-3)) {
+    std::fprintf(stderr, "stretched-H2 frontier gap %.6e is not near-degenerate\n", homu_gap);
+    return __LINE__;
+  }
+  const double temperature = host.options().electronic_temperature;
+  if (!(homu_gap < temperature)) {
+    std::fprintf(stderr, "stretched-H2 gap %.6e exceeds kT %.6e\n", homu_gap, temperature);
+    return __LINE__;
+  }
+  const auto& occupations = host.wavefunction().occupations;
+  bool fractional = false;
+  for (std::int64_t orbital = 0; orbital < n; ++orbital) {
+    const double value = occupations[static_cast<std::size_t>(orbital)];
+    if (value > 1.0e-3 && value < 1.0 - 1.0e-3) {
+      fractional = true;
+      break;
+    }
+  }
+  if (!fractional) {
+    std::fprintf(stderr, "stretched-H2 frontier occupations are not fractional at kT=%.6e\n",
+                 temperature);
+    for (std::int64_t orbital = 0; orbital < n; ++orbital) {
+      std::fprintf(stderr, "  occ[%lld]=%.17g\n", static_cast<long long>(orbital),
+                   occupations[static_cast<std::size_t>(orbital)]);
+    }
+    return __LINE__;
+  }
+  return 0;
+}
+
+int test_production_iteration_finite_temperature_cpu_parity() {
+  const double kDefaultTemperature = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    const int status = test_production_iteration_cpu_parity(
+        false, batch_size, false, true, false, finite_temperature_systems(), kDefaultTemperature);
+    if (status != 0) {
+      std::fprintf(stderr, "finite-temperature one-step CPU parity failed for B=%lld\n",
+                   static_cast<long long>(batch_size));
+      return status;
+    }
+    ProductionFixture fixture;
+    CHECK(fixture.create(false, batch_size, false, false, finite_temperature_systems(),
+                         kDefaultTemperature));
+    std::string error;
+    CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(verify_near_degenerate_fractional_frontier(fixture.host) == 0);
+  }
+  /* A hotter finite-temperature regime spreads fractional occupations over
+   * every peer while the stretched-H2 frontier stays genuinely difficult. */
+  constexpr double kHotTemperature = 2.0e-2;
+  {
+    const int status = test_production_iteration_cpu_parity(
+        false, 8, false, true, false, finite_temperature_systems(), kHotTemperature);
+    if (status != 0) {
+      std::fprintf(stderr, "hot-temperature one-step CPU parity failed\n");
+      return status;
+    }
+    ProductionFixture fixture;
+    CHECK(fixture.create(false, 8, false, false, finite_temperature_systems(), kHotTemperature));
+    std::string error;
+    CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(verify_near_degenerate_fractional_frontier(fixture.host) == 0);
+  }
+  /* Optional couplings at finite temperature compose all charge-dependent
+   * environments with a fractional density in one parity run. */
+  {
+    const int status = test_production_iteration_cpu_parity(
+        true, 8, false, true, false, finite_temperature_systems(), kDefaultTemperature);
+    if (status != 0) {
+      std::fprintf(stderr, "finite-temperature optional-coupling one-step parity failed\n");
+      return status;
+    }
+  }
+  return 0;
+}
+
+int test_individual_coupling_cpu_parity() {
+  struct CouplingCase {
+    const char* name;
+    CouplingSelection selection;
+  };
+  constexpr CouplingCase cases[]{
+      {"D4", {true, false, false}},
+      {"explicit point charge", {false, true, false}},
+      {"periodic", {false, false, true}},
+      {"combined", {true, true, true}},
+  };
+  for (const CouplingCase& coupling : cases) {
+    const int status = test_production_iteration_cpu_parity(false, 8, false, true, false, {}, 0.0,
+                                                            coupling.selection);
+    if (status != 0) {
+      std::fprintf(stderr, "%s one-step CPU parity failed\n", coupling.name);
+      return status;
+    }
+  }
+  return 0;
+}
+
+/* Defined later in this translation unit; declared here for the finite-
+ * temperature loop parity cover below. Default arguments live on the
+ * definition only. */
+int test_production_loop_cpu_parity(std::int64_t batch_size, bool optional_components,
+                                    bool use_default_stream, bool use_ordered_stream,
+                                    std::uint64_t resumed_iterations, bool mixed_spin_batch,
+                                    const std::vector<SmallSystemKind>& systems,
+                                    double electronic_temperature);
+
+int test_production_loop_finite_temperature_cpu_parity() {
+  const double kDefaultTemperature = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+  const int status = test_production_loop_cpu_parity(
+      8, false, false, false, 0u, false, finite_temperature_systems(), kDefaultTemperature);
+  if (status != 0) {
+    std::fprintf(stderr, "finite-temperature full-loop CPU parity failed\n");
+    return status;
   }
   return 0;
 }
@@ -2035,9 +2271,10 @@ std::vector<double> changed_core_hamiltonian(const HostSccCase& host) {
 }
 
 int test_production_graph_changed_input_replay(std::int64_t batch_size,
-                                               bool mixed_spin_batch = false) {
+                                               bool mixed_spin_batch = false,
+                                               bool optional_components = false) {
   ProductionFixture fixture;
-  CHECK(fixture.create(false, batch_size, false, mixed_spin_batch));
+  CHECK(fixture.create(optional_components, batch_size, false, mixed_spin_batch));
   CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
         Gfn2SccIterationProviderCaptureMode::kGraphSupported);
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
@@ -2228,9 +2465,12 @@ int test_production_graph_device_epoch_replay() {
 int test_production_loop_cpu_parity(std::int64_t batch_size, bool optional_components,
                                     bool use_default_stream, bool use_ordered_stream = false,
                                     std::uint64_t resumed_iterations = 0u,
-                                    bool mixed_spin_batch = false) {
+                                    bool mixed_spin_batch = false,
+                                    const std::vector<SmallSystemKind>& systems = {},
+                                    double electronic_temperature = 0.0) {
   ProductionFixture fixture;
-  CHECK(fixture.create(optional_components, batch_size, false, mixed_spin_batch));
+  CHECK(fixture.create(optional_components, batch_size, false, mixed_spin_batch, systems,
+                       electronic_temperature));
   CHECK(fixture.host.batch_size() == batch_size);
   CHECK(!(use_default_stream && use_ordered_stream));
 
@@ -2628,6 +2868,10 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::strcmp(argv[1], "--mixed-bounded") == 0) {
     return test_mixed_spin_bounded_acceptance();
   }
+  if (argc == 2 && std::strcmp(argv[1], "--finite-temperature-parity") == 0) {
+    int status = test_production_iteration_finite_temperature_cpu_parity();
+    return status == 0 ? test_production_loop_finite_temperature_cpu_parity() : status;
+  }
   if (argc == 2 && std::strcmp(argv[1], "--mixed-conditional") == 0) {
     return test_mixed_spin_conditional_acceptance();
   }
@@ -2635,7 +2879,8 @@ int main(int argc, char** argv) {
     std::fprintf(stderr,
                  "usage: %s "
                  "[--benchmark|--unrestricted-smoke|--unrestricted-parity|--mixed-parity|"
-                 "--mixed-acceptance|--mixed-bounded|--mixed-conditional]\n",
+                 "--mixed-acceptance|--mixed-bounded|--mixed-conditional|"
+                 "--finite-temperature-parity]\n",
                  argv[0]);
     return 2;
   }
@@ -2655,11 +2900,19 @@ int main(int argc, char** argv) {
   if (status != 0) {
     return status;
   }
+  status = test_production_iteration_finite_temperature_cpu_parity();
+  if (status != 0) {
+    return status;
+  }
   status = test_production_iteration_cpu_parity(false);
   if (status != 0) {
     return status;
   }
   status = test_production_iteration_cpu_parity(true);
+  if (status != 0) {
+    return status;
+  }
+  status = test_individual_coupling_cpu_parity();
   if (status != 0) {
     return status;
   }
@@ -2672,6 +2925,11 @@ int main(int argc, char** argv) {
     if (status != 0) {
       return status;
     }
+  }
+  status = test_production_graph_changed_input_replay(8, false, true);
+  if (status != 0) {
+    std::fprintf(stderr, "optional-coupled changed-input Graph replay failed\n");
+    return status;
   }
   for (const std::int64_t batch_size : {1, 8, 32, 128}) {
     status = test_conditional_graph_exact_body_count(batch_size);
@@ -2720,6 +2978,10 @@ int main(int argc, char** argv) {
     return status;
   }
   status = test_production_loop_cpu_parity(8, true, false, true);
+  if (status != 0) {
+    return status;
+  }
+  status = test_production_loop_finite_temperature_cpu_parity();
   if (status != 0) {
     return status;
   }
