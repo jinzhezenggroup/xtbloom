@@ -977,4 +977,22 @@ Gfn2CudaTopologyStagingIdentity Gfn2CudaTopologyStaging::identity() const noexce
   return result;
 }
 
+Gfn2CudaTopologyStagingWorkspaceBytes Gfn2CudaTopologyStaging::workspace_bytes() const noexcept {
+  Gfn2CudaTopologyStagingWorkspaceBytes result{};
+  if (!impl_) return result;
+
+  if (impl_->device_report != nullptr) result.device_bytes += sizeof(DeviceReport);
+  if (impl_->pinned_report != nullptr) result.host_bytes += sizeof(DeviceReport);
+  const auto add_backing = [&result](const std::unique_ptr<Backing>& backing) noexcept {
+    if (!backing) return;
+    /* Each backing owns staging and canonical device images plus one pinned
+     * image used to materialize the canonical host snapshot. */
+    result.device_bytes += 2u * backing->layout.bytes;
+    result.host_bytes += backing->layout.bytes;
+  };
+  add_backing(impl_->active);
+  add_backing(impl_->pending);
+  return result;
+}
+
 }  // namespace gpuxtb::detail

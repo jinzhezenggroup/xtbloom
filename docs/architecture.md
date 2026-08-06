@@ -120,7 +120,9 @@ same topology and policy perform zero steady-state allocations. Independent plan
 another through the context convenience cache. `gpuxtb_plan_query_workspace` returns the reusable
 host/device workspace bytes and alignment the plan keeps alive for its property set; sizes differ by backend
 (the CPU backend uses no device memory) and by requested properties (forces reserve device arenas
-and CPU output staging). A plan is bound to its creating context, must be destroyed before that
+and CPU output staging). CUDA accounting measures every prepared numerical, result, validation, and
+mixed-memory topology staging arena instead of reconstructing their layouts at the public boundary.
+A plan is bound to its creating context, must be destroyed before that
 context, and a batch whose immutable topology differs from the plan fails with
 `GPUXTB_STATUS_INVALID_ARGUMENT` before any caller output is modified, giving the corruption gate
 for reused handles. The plan handle and workspace query are ABI-versioned in `gpuxtb.h` and are

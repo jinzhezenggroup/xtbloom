@@ -179,30 +179,6 @@ bool topology_host_resident(const gpuxtb_batch_t& batch) noexcept {
                                    batch.charge_response_offsets.memory_space)));
 }
 
-#if defined(GPUXTB_HAS_CUDA)
-std::size_t host_output_staging_bytes(std::int64_t batch_size, std::int64_t total_atoms,
-                                      std::int64_t total_points, std::uint32_t flags) noexcept {
-  const std::size_t batch = static_cast<std::size_t>(batch_size);
-  const std::size_t atoms = static_cast<std::size_t>(total_atoms);
-  const std::size_t points = static_cast<std::size_t>(total_points);
-  std::size_t bytes = 0u;
-  if ((flags & GPUXTB_COMPUTE_ENERGY) != 0u) {
-    bytes += batch * sizeof(double);
-  }
-  if ((flags & GPUXTB_COMPUTE_FORCES) != 0u) {
-    bytes += 3u * atoms * sizeof(double);
-  }
-  if ((flags & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0u) {
-    bytes += atoms * sizeof(double);
-  }
-  if ((flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0u) {
-    bytes += 3u * points * sizeof(double);
-  }
-  bytes += batch * (sizeof(std::int32_t) + sizeof(std::uint8_t) + sizeof(std::int32_t));
-  return bytes;
-}
-#endif  // GPUXTB_HAS_CUDA
-
 }  // namespace
 
 struct Gfn2Plan::Impl {
@@ -219,9 +195,7 @@ struct Gfn2Plan::Impl {
    * across independent plans on the same context. */
   std::size_t cpu_persistent_bytes = 0u;
   std::uint64_t cuda_host_workspace_bytes = 0u;
-  std::uint64_t cuda_base_device_bytes = 0u;
-  std::uint64_t cuda_force_device_bytes = 0u;
-  bool cuda_prepared = false;
+  std::uint64_t cuda_device_workspace_bytes = 0u;
 };
 
 Gfn2Plan::Gfn2Plan() : impl_(std::make_unique<Impl>()) {}
@@ -241,9 +215,7 @@ void Gfn2Plan::destroy() noexcept {
   impl_->topology = {};
   impl_->cpu_persistent_bytes = 0u;
   impl_->cuda_host_workspace_bytes = 0u;
-  impl_->cuda_base_device_bytes = 0u;
-  impl_->cuda_force_device_bytes = 0u;
-  impl_->cuda_prepared = false;
+  impl_->cuda_device_workspace_bytes = 0u;
 }
 
 gpuxtb_status_t Gfn2Plan::create(Context& context, const gpuxtb_batch_t& batch,
@@ -279,7 +251,6 @@ gpuxtb_status_t Gfn2Plan::create(Context& context, const gpuxtb_batch_t& batch,
   impl_->topology.total_atoms = batch.total_atoms;
   impl_->topology.total_point_charges = batch.total_point_charges;
   impl_->topology.total_charge_response_elements = batch.total_charge_response_elements;
-  impl_->cuda_prepared = false;
 
   if (context.backend == GPUXTB_BACKEND_CPU) {
     if (!topology_host_resident(batch)) {
@@ -312,14 +283,8 @@ gpuxtb_status_t Gfn2Plan::create(Context& context, const gpuxtb_batch_t& batch,
       return status;
     }
     const Gfn2CudaExecutionIdentity identity = impl_->cuda_cache->identity();
-    impl_->cuda_host_workspace_bytes = identity.provider_host_workspace_bytes;
-    impl_->cuda_base_device_bytes =
-        identity.topology_arena_bytes + identity.input_arena_bytes +
-        identity.iteration_arena_bytes + identity.eigensolver_setup_arena_bytes +
-        identity.numerical_refresh_arena_bytes + identity.inference_arena_bytes;
-    impl_->cuda_force_device_bytes =
-        identity.force_immutable_arena_bytes + identity.force_execution_arena_bytes;
-    impl_->cuda_prepared = true;
+    impl_->cuda_host_workspace_bytes = identity.retained_host_workspace_bytes;
+    impl_->cuda_device_workspace_bytes = identity.retained_device_workspace_bytes;
     error.clear();
     return GPUXTB_STATUS_SUCCESS;
   }
@@ -363,29 +328,9 @@ gpuxtb_status_t Gfn2Plan::query_workspace(std::uint32_t compute_flags,
     error = "plan does not own a CUDA GFN2 execution cache";
     return GPUXTB_STATUS_INTERNAL_ERROR;
   }
-  const Gfn2CudaExecutionIdentity identity = impl_->cuda_cache->identity();
-  const std::uint64_t base_device =
-      impl_->cuda_prepared
-          ? impl_->cuda_base_device_bytes
-          : identity.topology_arena_bytes + identity.input_arena_bytes +
-                identity.iteration_arena_bytes + identity.eigensolver_setup_arena_bytes +
-                identity.numerical_refresh_arena_bytes + identity.inference_arena_bytes;
-  const std::uint64_t force_device =
-      impl_->cuda_prepared
-          ? impl_->cuda_force_device_bytes
-          : identity.force_immutable_arena_bytes + identity.force_execution_arena_bytes;
-  const bool force_mode =
-      (compute_flags & (GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_POINT_CHARGE_FORCES)) != 0u;
-  const std::uint64_t device_bytes = base_device + (force_mode ? force_device : 0u);
-  const std::uint64_t host_bytes =
-      (impl_->cuda_prepared ? impl_->cuda_host_workspace_bytes
-                            : static_cast<std::uint64_t>(identity.provider_host_workspace_bytes)) +
-      static_cast<std::uint64_t>(
-          host_output_staging_bytes(impl_->topology.batch_size, impl_->topology.total_atoms,
-                                    impl_->topology.total_point_charges, compute_flags));
-  query.host_required_bytes = host_bytes;
+  query.host_required_bytes = impl_->cuda_host_workspace_bytes;
   query.host_required_alignment = static_cast<std::uint32_t>(kHostWorkspaceAlignment);
-  query.device_required_bytes = device_bytes;
+  query.device_required_bytes = impl_->cuda_device_workspace_bytes;
   query.device_required_alignment = static_cast<std::uint32_t>(kDeviceWorkspaceAlignment);
   error.clear();
   return GPUXTB_STATUS_SUCCESS;

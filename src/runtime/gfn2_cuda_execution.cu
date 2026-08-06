@@ -5792,6 +5792,24 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.force_execution_arena_bytes = current.force_execution_arena.bytes();
     identity.numerical_refresh_arena_bytes = current.numerical_refresh_arena.bytes();
     identity.inference_arena_bytes = current.inference_arena.bytes();
+    identity.numerical_host_staging_arena_bytes = current.numerical_host_staging_arena.bytes();
+    identity.public_result_device_arena_bytes = current.public_result_device_arena.bytes();
+    identity.public_result_host_arena_bytes = current.public_result_host_arena.bytes();
+    identity.candidate_validation_arena_bytes = current.candidate_validation_arena.bytes();
+    const Gfn2CudaTopologyStagingWorkspaceBytes topology_workspace =
+        topology_staging.workspace_bytes();
+    identity.topology_staging_host_bytes = topology_workspace.host_bytes;
+    identity.topology_staging_device_bytes = topology_workspace.device_bytes;
+    identity.retained_host_workspace_bytes =
+        identity.provider_host_workspace_bytes + identity.numerical_host_staging_arena_bytes +
+        identity.public_result_host_arena_bytes + identity.candidate_validation_arena_bytes +
+        identity.topology_staging_host_bytes;
+    identity.retained_device_workspace_bytes =
+        identity.topology_arena_bytes + identity.input_arena_bytes +
+        identity.iteration_arena_bytes + identity.eigensolver_setup_arena_bytes +
+        identity.force_immutable_arena_bytes + identity.force_execution_arena_bytes +
+        identity.numerical_refresh_arena_bytes + identity.inference_arena_bytes +
+        identity.public_result_device_arena_bytes + identity.topology_staging_device_bytes;
     return identity;
   }
 
