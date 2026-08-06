@@ -142,13 +142,15 @@ repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel} --exclude libcub
 #   I         - unsorted imports
 #   B         - flake8-bugbear (likely bugs and design gotchas, e.g. zip
 #               without explicit strict=)
+#   BLE001    - no blind `except Exception` (deliberate broad catches carry a
+#               documented noqa)
 #   C4        - flake8-comprehensions (cleaner dict/set/list constructions)
 #   RUF       - ruff-specific rules (mutable defaults, sorted dunders, ...)
 #   SIM       - flake8-simplify (readable simplifications)
 #   UP        - pyupgrade (modern idiomatic Python for the >=3.10 baseline)
 #   PERF      - perflint (small, uncontroversial performance patterns)
 extend-exclude = ["cmake/3rdparty/implib/implib-gen.py"]
-lint.select = ["E4", "E7", "E9", "F", "I", "B", "C4", "RUF", "SIM", "UP", "PERF"]
+lint.select = ["E4", "E7", "E9", "F", "I", "B", "BLE001", "C4", "RUF", "SIM", "UP", "PERF"]
 # PERF203 complains about try/except inside loops. The two places it fires here
 # are semantically required: probing candidate runtime library directories for
 # the one loadable provider, and validation that raises a context-rich

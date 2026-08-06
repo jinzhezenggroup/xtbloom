@@ -168,7 +168,7 @@ def set_measured_observables(
             "forces_hartree_per_bohr": forces,
         }
         for sample_index, (energies, forces) in enumerate(
-            zip(energy_samples, force_samples)
+            zip(energy_samples, force_samples, strict=True)
         )
     ]
 
@@ -269,7 +269,8 @@ class NatomsScalingTest(unittest.TestCase):
                         parser.parse_args(arguments(engine, mode))
                     )
 
-            strict = arguments("gpuxtb", "warm") + [
+            strict = [
+                *arguments("gpuxtb", "warm"),
                 "--energy-reference-json",
                 str(reference),
             ]
@@ -720,13 +721,15 @@ class NatomsScalingTest(unittest.TestCase):
                     raise OSError("synthetic CSV publication failure")
                 real_link(source, destination)
 
-            with mock.patch.object(
-                natoms_scaling.os, "link", side_effect=fail_second_link
+            with (
+                mock.patch.object(
+                    natoms_scaling.os, "link", side_effect=fail_second_link
+                ),
+                self.assertRaisesRegex(OSError, "synthetic CSV"),
             ):
-                with self.assertRaisesRegex(OSError, "synthetic CSV"):
-                    natoms_scaling.write_artifacts(
-                        json_path, csv_path, document, allow_overwrite=False
-                    )
+                natoms_scaling.write_artifacts(
+                    json_path, csv_path, document, allow_overwrite=False
+                )
             self.assertFalse(json_path.exists())
             self.assertFalse(csv_path.exists())
             self.assertEqual(list(root.glob("*.tmp")), [])
@@ -750,13 +753,15 @@ class NatomsScalingTest(unittest.TestCase):
                     raise OSError("synthetic replacement failure")
                 real_replace(source, destination)
 
-            with mock.patch.object(
-                natoms_scaling.os, "replace", side_effect=fail_second_publication
+            with (
+                mock.patch.object(
+                    natoms_scaling.os, "replace", side_effect=fail_second_publication
+                ),
+                self.assertRaisesRegex(OSError, "synthetic replacement"),
             ):
-                with self.assertRaisesRegex(OSError, "synthetic replacement"):
-                    natoms_scaling.write_artifacts(
-                        json_path, csv_path, document, allow_overwrite=True
-                    )
+                natoms_scaling.write_artifacts(
+                    json_path, csv_path, document, allow_overwrite=True
+                )
             self.assertEqual(json_path.read_text(encoding="utf-8"), "old-json")
             self.assertEqual(csv_path.read_text(encoding="utf-8"), "old-csv")
             self.assertEqual(list(root.glob("*.backup")), [])

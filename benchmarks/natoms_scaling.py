@@ -776,10 +776,10 @@ def make_alkane(natoms: int) -> Molecule:
                 tuple(axial * bisector[i] + radial * normal[i] for i in range(3)),
                 tuple(axial * bisector[i] - radial * normal[i] for i in range(3)),
             )
-        for direction in directions:
-            atoms.append(
-                (1, tuple(position[axis] + ch * direction[axis] for axis in range(3)))
-            )
+        atoms.extend(
+            (1, tuple(position[axis] + ch * direction[axis] for axis in range(3)))
+            for direction in directions
+        )
     atoms.extend((6, position) for position in carbon_positions)
     if len(atoms) != natoms:
         raise BenchmarkError(
@@ -1190,7 +1190,9 @@ def measure_runner(
     energy_drift = max(
         abs(actual - expected)
         for sample in raw_samples
-        for actual, expected in zip(sample["energies_hartree"], reference_energies)
+        for actual, expected in zip(
+            sample["energies_hartree"], reference_energies, strict=True
+        )
     )
     reference_forces = (
         seed_snapshot["forces_hartree_per_bohr"]
@@ -1203,7 +1205,7 @@ def measure_runner(
             abs(actual - expected)
             for sample in raw_samples
             for actual, expected in zip(
-                sample["forces_hartree_per_bohr"], reference_forces
+                sample["forces_hartree_per_bohr"], reference_forces, strict=True
             )
         )
     iteration_nonregression = True
@@ -1212,7 +1214,7 @@ def measure_runner(
             warm <= fresh
             for sample in raw_samples
             for warm, fresh in zip(
-                sample["scc_iterations"], seed_snapshot["scc_iterations"]
+                sample["scc_iterations"], seed_snapshot["scc_iterations"], strict=True
             )
         )
     correctness_passed = (
@@ -1296,7 +1298,9 @@ def measure_reference_runner(
     energy_drift = max(
         abs(actual - expected)
         for sample in raw_samples
-        for actual, expected in zip(sample["energies_hartree"], reference_energies)
+        for actual, expected in zip(
+            sample["energies_hartree"], reference_energies, strict=True
+        )
     )
     reference_forces = cold_snapshot["forces_hartree_per_bohr"]
     force_drift = None
@@ -1305,7 +1309,7 @@ def measure_reference_runner(
             abs(actual - expected)
             for sample in raw_samples
             for actual, expected in zip(
-                sample["forces_hartree_per_bohr"], reference_forces
+                sample["forces_hartree_per_bohr"], reference_forces, strict=True
             )
         )
     correctness_passed = energy_drift <= protocol.energy_atol_hartree and (
@@ -1711,7 +1715,7 @@ def load_reference_artifact(path: Path) -> ReferenceArtifact:
         calculated_energy_drift = max(
             abs(observed - reference)
             for sample in energy_samples
-            for observed, reference in zip(sample, energy_samples[0])
+            for observed, reference in zip(sample, energy_samples[0], strict=True)
         )
         if energies != energy_samples[0] or energy_drift != calculated_energy_drift:
             raise BenchmarkError(
@@ -1728,7 +1732,7 @@ def load_reference_artifact(path: Path) -> ReferenceArtifact:
             calculated_force_drift = max(
                 abs(observed - reference)
                 for sample in force_samples
-                for observed, reference in zip(sample, force_samples[0])
+                for observed, reference in zip(sample, force_samples[0], strict=True)
             )
             if forces != force_samples[0] or force_drift != calculated_force_drift:
                 raise BenchmarkError(
@@ -1831,7 +1835,7 @@ def apply_cross_engine_correctness(
                         abs(observed - reference)
                         for sample in energy_samples
                         for observed, reference in zip(
-                            sample, expected.energies_hartree
+                            sample, expected.energies_hartree, strict=True
                         )
                     )
                     comparison["energy"]["max_abs_delta_hartree"] = energy_delta
@@ -1844,7 +1848,7 @@ def apply_cross_engine_correctness(
                             abs(observed - reference)
                             for sample in force_samples
                             for observed, reference in zip(
-                                sample, expected.forces_hartree_per_bohr
+                                sample, expected.forces_hartree_per_bohr, strict=True
                             )
                         )
                         comparison["force"]["max_abs_delta_hartree_per_bohr"] = (
@@ -2104,7 +2108,7 @@ def _replace_pair(
             backup = _unused_backup_path(final_path)
             os.replace(final_path, backup)
             backups[final_path] = backup
-        for final_path, staged_path in zip(finals, stages):
+        for final_path, staged_path in zip(finals, stages, strict=True):
             os.replace(staged_path, final_path)
             published.append(final_path)
     except BaseException:

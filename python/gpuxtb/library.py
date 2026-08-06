@@ -293,8 +293,9 @@ def _runtime_search_dirs() -> list[Path]:
 
     try:
         import site
-    except Exception:  # pragma: no cover - defensive
-        site = None
+    except Exception:  # noqa: BLE001 - defensive: probe environments where
+        # `site` is unavailable without aborting library discovery
+        site = None  # pragma: no cover - defensive
     site_packages = (
         getattr(site, "getsitepackages", lambda: [])() if site is not None else []
     )
