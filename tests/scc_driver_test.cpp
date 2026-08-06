@@ -1309,6 +1309,53 @@ int test_inactive_peer_history_untouched_by_active_only_commit() {
   return 0;
 }
 
+int test_energy_history_failure_isolated_from_peer_commit() {
+  /* Two H2 systems with 2 electrons: with a strict complete free-energy
+   * tolerance every member stays active after the first iteration (the
+   * first energy change |E1 - 0| is far above 1e-14), so old_iteration is 1
+   * on the next call. */
+  const FixtureTopology topology{
+      {0, 2, 4},  {1, 1, 1, 1}, {0.0, 0.0, 0.0, 1.4, 0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 0.0, 0.0},
+      {0.0, 0.0}, {},           {}};
+  Fixture fixture;
+  std::string error;
+  CHECK(make_fixture(2, fixture, error, 5u, 1.0e-10, false, &topology, false, false, 1.0e-14));
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.iterations[0] == 1u);
+  CHECK(fixture.driver_state.iterations[1] == 1u);
+  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.system_statuses[1] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.converged[0] == 0u);
+  CHECK(fixture.driver_state.converged[1] == 0u);
+  CHECK(std::isfinite(fixture.driver_state.free_energies[0]));
+  CHECK(std::isfinite(fixture.driver_state.free_energies[1]));
+
+  /* Corrupt system 0's committed energy history directly: its next transition
+   * is a per-system data-level failure that must discard its staged mixer
+   * transaction while system 1 still commits. */
+  fixture.driver_state.free_energies[0] = std::numeric_limits<double>::quiet_NaN();
+  CHECK(fixture.mixer_state.iterations[1] == 1u);
+  CHECK(iterate_scc_driver_batch_cpu(
+            fixture.driver_plan, fixture.geometry, backend(), fixture.overlap_cache,
+            fixture.wavefunction, fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
+            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(std::isnan(fixture.driver_state.free_energies[0]));
+  /* The failed system's public mixer history is not advanced: the attempt was
+   * counted only in the driver trace, mirroring the mix-failure contract. */
+  CHECK(fixture.mixer_state.iterations[0] == 1u);
+  CHECK(fixture.driver_state.iterations[0] == 2u);
+  /* The peer committed normally. */
+  CHECK(fixture.driver_state.system_statuses[1] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.iterations[1] == 2u);
+  CHECK(fixture.mixer_state.iterations[1] == 2u);
+  CHECK(std::isfinite(fixture.driver_state.free_energies[1]));
+  return 0;
+}
+
 int test_converged_wavefunction_publishes_raw_mulliken_multipoles() {
   Fixture fixture;
   std::string error;
@@ -2072,6 +2119,9 @@ int main() {
     return status;
   }
   if (const int status = test_ragged_mixer_failure_isolated_from_peer_commit(); status != 0) {
+    return status;
+  }
+  if (const int status = test_energy_history_failure_isolated_from_peer_commit(); status != 0) {
     return status;
   }
   if (const int status = test_inactive_peer_history_untouched_by_active_only_commit();
