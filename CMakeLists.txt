@@ -600,6 +600,7 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/gfn2_integrals.cu
     src/backends/cuda/gfn2_mulliken.cu
     src/backends/cuda/gfn2_occupations.cu
+    src/backends/cuda/gfn2_pairlist.cu
     src/backends/cuda/gfn2_parameters.cu
     src/backends/cuda/gfn2_plan_schema.cu
     src/backends/cuda/gfn2_periodic_embedding.cu
@@ -1087,6 +1088,47 @@ if(GPUXTB_BUILD_TESTS)
       CUDA_SEPARABLE_COMPILATION ON
     )
     add_test(NAME gpuxtb.cuda.geometry COMMAND gpuxtb_cuda_geometry_test)
+
+    add_executable(gpuxtb_cuda_pairlist_test tests/cuda_pairlist_test.cu)
+    target_link_libraries(gpuxtb_cuda_pairlist_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_pairlist_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_pairlist_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_pairlist_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.pairlist COMMAND gpuxtb_cuda_pairlist_test)
+
+    # Focused #70 benchmark.  It measures the sparse bucket build, the dense
+    # fallback build, and the coordination reuse cost at batch 1/8/32/128 so
+    # the dispatch crossover is anchored by reproducible profiling.
+    add_executable(gpuxtb_cuda_pairlist_benchmark tests/cuda_pairlist_test.cu)
+    target_link_libraries(gpuxtb_cuda_pairlist_benchmark PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_pairlist_benchmark PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_pairlist_benchmark PRIVATE
+      GPUXTB_HAS_CUDA=1
+      GPUXTB_PAIRLIST_BENCHMARK_ONLY=1
+    )
+    set_target_properties(gpuxtb_cuda_pairlist_benchmark PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
 
     add_executable(gpuxtb_cuda_integrals_test tests/cuda_integrals_test.cu)
     target_link_libraries(gpuxtb_cuda_integrals_test PRIVATE
