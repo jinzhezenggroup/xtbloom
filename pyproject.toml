@@ -129,12 +129,54 @@ before-build = "bash {package}/python/ci/install-cuda-wheel-deps.sh"
 repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel} --exclude libcublas.so.12 --exclude libcublasLt.so.12 --exclude libcusolver.so.11 --exclude libcusparse.so.12 --exclude libcudart.so.12 --exclude libnvJitLink.so.12 --exclude libcufft.so.11 --exclude libcurand.so.10 --exclude libcuda.so.1"
 
 [tool.ruff]
-# Deliberately small scope: ruff-format owns formatting and ruff's I rule owns
-# import ordering (kept in the same tool as the formatter so they can never
-# disagree), so linting here only catches real defects (F), the meaningful
-# pycodestyle classes (E4/E7/E9), and unsorted imports (I).
+# Ruff owns both formatting and import ordering so those policies cannot drift.
+# The remaining families enforce docstrings, typing, NumPy compatibility, safe
+# exceptions, explicit iteration semantics, and focused simplification checks.
 extend-exclude = ["cmake/3rdparty/implib/implib-gen.py"]
-lint.select = ["E4", "E7", "E9", "F", "I"]
+lint.select = [
+  "E",
+  "W",
+  "F",
+  "I",
+  "D",
+  "UP",
+  "C4",
+  "RUF",
+  "NPY",
+  "TID251",
+  "TID253",
+  "T20",
+  "B",
+  "BLE001",
+  "N804",
+  "N805",
+  "DTZ",
+  "TCH",
+  "PYI",
+  "ANN",
+  "PIE808",
+  "PT022",
+  "RET502",
+  "SIM",
+  "TD006",
+  "PLR1711",
+  "PLR1733",
+  "PLR2044",
+  "PERF",
+]
+
+[tool.ruff.lint.pydocstyle]
+# The Python API and scientific tooling already use NumPy-style sections.
+convention = "numpy"
+
+[tool.ruff.lint.flake8-tidy-imports]
+# PyTorch is an optional benchmark dependency with significant import cost.
+# Production adapters already load it lazily through importlib.
+banned-module-level-imports = ["torch"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# Matrix multiplication and broadcasting must use explicit ndarray semantics.
+"numpy.matrix".msg = "Use numpy.ndarray; numpy.matrix has implicit 2-D and multiplication semantics."
 
 [tool.ruff.lint.per-file-ignores]
 # benchmarks/run.py appends a tools path to sys.path before importing

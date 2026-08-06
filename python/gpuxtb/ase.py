@@ -20,7 +20,7 @@ try:
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError("This submodule requires ASE installed") from e
 
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -51,9 +51,17 @@ class GPUxtb(ase.calculators.calculator.Calculator):
     ======================== ================= =========================================
     """
 
-    implemented_properties = ["energy", "free_energy", "forces", "charges"]
+    # Class-level defaults in the ASE calculator convention. ASE reads them
+    # (and `set()` validates against them); instances receive their own copy
+    # through ``Calculator.__init__``, so they must never be mutated here.
+    implemented_properties: ClassVar[list[str]] = [
+        "energy",
+        "free_energy",
+        "forces",
+        "charges",
+    ]
 
-    default_parameters = {
+    default_parameters: ClassVar[dict[str, Any]] = {
         "method": "GFN2-xTB",
         "charge": None,
         "multiplicity": None,
@@ -70,13 +78,13 @@ class GPUxtb(ase.calculators.calculator.Calculator):
     _res = None
     _xtb = None
 
-    def __init__(self, atoms=None, **kwargs):
+    def __init__(self, atoms: ase.Atoms | None = None, **kwargs: object) -> None:
         ase.calculators.calculator.Calculator.__init__(self, atoms=atoms, **kwargs)
 
-    def set(self, **kwargs) -> dict:
+    def set(self, **kwargs: object) -> dict[str, object]:
         """Update parameters and reset cached results when they change."""
 
-        def _validate(kwargs: Dict[str, Any]) -> None:
+        def _validate(kwargs: dict[str, Any]) -> None:
             allowed = set(self.default_parameters)
             unknown = set(kwargs) - allowed
             if unknown:
@@ -123,6 +131,7 @@ class GPUxtb(ase.calculators.calculator.Calculator):
         return changed
 
     def reset(self) -> None:
+        """Clear calculated properties and optional native API state."""
         ase.calculators.calculator.Calculator.reset(self)
         if not self.parameters.cache_api:
             self._close_api_calculator()
@@ -141,10 +150,11 @@ class GPUxtb(ase.calculators.calculator.Calculator):
 
     def calculate(
         self,
-        atoms=None,
-        properties: Optional[List[str]] = None,
-        system_changes: List[str] = ase.calculators.calculator.all_changes,
+        atoms: ase.Atoms | None = None,
+        properties: list[str] | None = None,
+        system_changes: list[str] = ase.calculators.calculator.all_changes,
     ) -> None:
+        """Calculate the requested ASE properties for a molecular structure."""
         if not properties:
             properties = ["energy"]
         ase.calculators.calculator.Calculator.calculate(
@@ -179,7 +189,7 @@ class GPUxtb(ase.calculators.calculator.Calculator):
         self.results["charges"] = self._res["charges"]
 
 
-def _validate_ase_atoms(atoms) -> None:
+def _validate_ase_atoms(atoms: ase.Atoms) -> None:
     """Reject periodic ASE inputs that the public molecular ABI cannot model."""
     if np.any(atoms.pbc):
         raise ase.calculators.calculator.InputError(
@@ -188,7 +198,9 @@ def _validate_ase_atoms(atoms) -> None:
         )
 
 
-def _create_api_calculator(atoms, parameters) -> Calculator:
+def _create_api_calculator(
+    atoms: ase.Atoms, parameters: ase.calculators.calculator.Parameters
+) -> Calculator:
     """Build the underlying gpuxtb API calculator for an ASE atoms object."""
     try:
         return Calculator(
@@ -209,7 +221,9 @@ def _create_api_calculator(atoms, parameters) -> Calculator:
         raise ase.calculators.calculator.InputError(str(e)) from e
 
 
-def _get_charge(atoms, parameters) -> float:
+def _get_charge(
+    atoms: ase.Atoms, parameters: ase.calculators.calculator.Parameters
+) -> float:
     """Total charge from the explicit parameter or the initial atomic charges."""
     return (
         float(atoms.get_initial_charges().sum())
@@ -218,8 +232,10 @@ def _get_charge(atoms, parameters) -> float:
     )
 
 
-def _get_uhf(atoms, parameters) -> int:
-    """Number of unpaired electrons from the multiplicity or initial magmoms."""
+def _get_uhf(
+    atoms: ase.Atoms, parameters: ase.calculators.calculator.Parameters
+) -> int:
+    """Return unpaired electrons from the multiplicity or initial magmoms."""
     if parameters.multiplicity is None:
         return int(atoms.get_initial_magnetic_moments().sum().round())
     return _resolve_uhf(None, parameters.multiplicity)

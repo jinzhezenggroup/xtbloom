@@ -7,8 +7,6 @@ per-system diagnostics produced by the gpuxtb public C API.
 
 from __future__ import annotations
 
-from typing import Optional
-
 
 class GPUxtbError(RuntimeError):
     """Base class for all gpuxtb Python errors."""
@@ -21,7 +19,7 @@ class GPUxtbRuntimeError(GPUxtbError):
     the library diagnostic from :c:func:`gpuxtb_get_last_error`.
     """
 
-    def __init__(self, message: str, status: Optional[int] = None) -> None:
+    def __init__(self, message: str, status: int | None = None) -> None:
         super().__init__(message)
         self.status = status
         self.message = message

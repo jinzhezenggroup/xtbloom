@@ -16,7 +16,6 @@ def inspect_wheel(
     wheel: Path, *, checker: Path, readelf: str, temporary_root: Path
 ) -> None:
     """Inspect the single ELF libgpuxtb payload retained by one Linux wheel."""
-
     with zipfile.ZipFile(wheel) as archive:
         candidates = [
             info
@@ -49,6 +48,7 @@ def inspect_wheel(
 
 
 def main() -> int:
+    """Inspect each requested wheel with the configured CUDA ABI checker."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checker", required=True, type=Path)
     parser.add_argument("--readelf", required=True)

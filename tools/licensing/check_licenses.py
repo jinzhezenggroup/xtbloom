@@ -167,7 +167,6 @@ def _require_files(root: Path, relative_paths: tuple[str, ...], context: str) ->
 
 def _require_exception_policy(root: Path) -> None:
     """Validate the grant and source notices required by GPLv3 section 7."""
-
     exception = (root / EXCEPTION_FILE).read_text(encoding="utf-8")
     for token in EXCEPTION_TOKENS:
         if token not in exception:
@@ -191,7 +190,6 @@ def _require_exception_policy(root: Path) -> None:
 
 def _requirement_name(requirement: str) -> str:
     """Return a normalized distribution name from a PEP 508 requirement."""
-
     match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", requirement)
     if match is None:
         raise LicenseCheckError(f"invalid dependency requirement: {requirement}")
@@ -200,7 +198,6 @@ def _requirement_name(requirement: str) -> str:
 
 def _require_dependency_policy(project: object) -> None:
     """Keep proprietary providers out of the mandatory Python dependency set."""
-
     if not isinstance(project, dict):
         raise LicenseCheckError("pyproject project metadata must be a table")
     dependencies = project.get("dependencies")
@@ -220,7 +217,8 @@ def _require_dependency_policy(project: object) -> None:
     ):
         if token not in openblas:
             raise LicenseCheckError(
-                "scipy-openblas32 must use the reviewed minimum and cover Linux x86_64 and aarch64"
+                "scipy-openblas32 must use the reviewed minimum and cover Linux "
+                "x86_64 and aarch64"
             )
     if "mkl" in mandatory:
         raise LicenseCheckError("mkl must not be a mandatory Python dependency")
@@ -248,13 +246,11 @@ def _require_dependency_policy(project: object) -> None:
 
 def _find_bundled_vendor_libraries(names: set[str]) -> list[str]:
     """Return separately packaged CUDA/MKL library files in an artifact."""
-
     return sorted(name for name in names if FORBIDDEN_VENDOR_LIBRARY_RE.search(name))
 
 
 def _git_object_id(kind: str, data: bytes) -> str:
     """Return the Git SHA-1 object ID for canonical object bytes."""
-
     header = f"{kind} {len(data)}\0".encode()
     # SHA-1 is part of the pinned Git object format here, not a security check.
     return hashlib.sha1(header + data, usedforsecurity=False).hexdigest()
@@ -262,7 +258,6 @@ def _git_object_id(kind: str, data: bytes) -> str:
 
 def _git_tree_id(entries: dict[str, tuple[str, str]]) -> str:
     """Reconstruct a Git tree ID from relative paths and (mode, blob) pairs."""
-
     root: dict[str, object] = {}
     for path, leaf in entries.items():
         node = root
@@ -299,7 +294,6 @@ def _git_tree_id(entries: dict[str, tuple[str, str]]) -> str:
 
 def _check_implib_manifest(manifest: object) -> dict[str, tuple[str, str, str]]:
     """Validate pinned implib metadata and return its declared file mapping."""
-
     if not isinstance(manifest, dict):
         raise LicenseCheckError("implib manifest root must be an object")
     if (
@@ -352,7 +346,6 @@ def _check_implib_manifest(manifest: object) -> dict[str, tuple[str, str, str]]:
 
 def _check_implib_provenance(root: Path) -> None:
     """Verify the vendored implib tree is exactly the pinned DeepMD copy."""
-
     manifest = json.loads((root / IMPLIB_MANIFEST_PATH).read_text(encoding="utf-8"))
     declared = _check_implib_manifest(manifest)
 
@@ -400,7 +393,6 @@ def _check_implib_provenance(root: Path) -> None:
 
 def check_source(root: Path) -> None:
     """Validate project metadata, provenance, and derived-file SPDX tags."""
-
     _require_files(root, SOURCE_FILES, "source tree")
     license_text = (root / "LICENSE").read_text(encoding="utf-8")
     if (
@@ -509,7 +501,6 @@ def check_source(root: Path) -> None:
 
 def check_install(prefix: Path) -> None:
     """Validate the legal payload installed by CMake."""
-
     _require_files(prefix, INSTALL_FILES, "install tree")
     bundled = _find_bundled_vendor_libraries(
         {
@@ -536,7 +527,6 @@ def _archive_names(path: Path) -> set[str]:
 
 def _read_archive_members(path: Path, names: set[str]) -> dict[str, bytes]:
     """Read only selected legal/provenance payloads, not a wheel's large DSO."""
-
     if path.suffix == ".whl" or zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
             return {name: archive.read(name) for name in names}
@@ -564,7 +554,6 @@ def _find_archive_name(names: set[str], suffix: str) -> str:
 
 def _check_archived_implib(path: Path, names: set[str], wheel: bool) -> None:
     """Validate the installed manifest and the complete sdist vendor payload."""
-
     manifest_suffix = (
         "share/licenses/gpuxtb/provenance/implib_manifest.json"
         if wheel
@@ -608,7 +597,6 @@ def _check_archived_implib(path: Path, names: set[str], wheel: bool) -> None:
 
 def check_archive(path: Path) -> None:
     """Require every distribution archive to retain the common legal set."""
-
     names = _archive_names(path)
     required = COMMON_ARCHIVE_SUFFIXES + (
         WHEEL_ARCHIVE_SUFFIXES if path.suffix == ".whl" else SDIST_ARCHIVE_SUFFIXES
@@ -640,6 +628,7 @@ def check_archive(path: Path) -> None:
 
 
 def main() -> int:
+    """Validate source, install, and archive licensing payloads from the CLI."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", type=Path, default=Path.cwd())
     parser.add_argument("--install-prefix", type=Path)

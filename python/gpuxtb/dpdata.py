@@ -20,13 +20,16 @@ Net charge and spin multiplicity are handled per frame:
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Sequence, Union
+from typing import TYPE_CHECKING
 
 import numpy as np
 from dpdata.driver import Driver
 
 from .exceptions import GPUxtbNotSupportedError, GPUxtbValueError
 from .interface import BatchCalculator, Structure, symbols_to_numbers
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 # dpdata reports energies in eV and forces in eV/Angstrom, while the gpuxtb C
 # API reports Hartree and Hartree/bohr.
@@ -38,8 +41,10 @@ class _SymbolMap:
     """Convert dpdata atom names to atomic numbers."""
 
     def __init__(self, atom_names: Sequence[str]) -> None:
-        self._numbers: Dict[str, int] = {}
-        for symbol, number in zip(atom_names, symbols_to_numbers(atom_names)):
+        self._numbers: dict[str, int] = {}
+        for symbol, number in zip(
+            atom_names, symbols_to_numbers(atom_names), strict=True
+        ):
             if symbol in self._numbers:
                 raise GPUxtbValueError(f"duplicate dpdata atom name {symbol!r}")
             self._numbers[symbol] = number
@@ -79,11 +84,11 @@ class GPUxtbDriver(Driver):
     def __init__(
         self,
         method: str = "GFN2-xTB",
-        charge: Optional[float] = None,
-        uhf: Optional[int] = None,
-        multiplicity: Optional[int] = None,
-        spin_channels: Optional[int] = None,
-        **kwargs,
+        charge: float | None = None,
+        uhf: int | None = None,
+        multiplicity: int | None = None,
+        spin_channels: int | None = None,
+        **kwargs: object,
     ) -> None:
         self.method = method
         self.charge = charge
@@ -177,11 +182,11 @@ class GPUxtbDriver(Driver):
 def _frame_value(
     data: dict,
     key: str,
-    fixed: Optional[Union[int, float]],
+    fixed: float | None,
     frame: int,
     nframes: int,
-    default: Optional[Union[int, float]],
-) -> Optional[Union[int, float]]:
+    default: float | None,
+) -> int | float | None:
     """Return a fixed scalar, a per-frame value, or the default."""
     if fixed is not None:
         return fixed

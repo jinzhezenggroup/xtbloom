@@ -17,7 +17,8 @@ _HARTREE_TO_EV = 27.211386245988
 
 
 @pytest.fixture(scope="module")
-def ketene_atoms():
+def ketene_atoms() -> Atoms:
+    """Build the ketene conformance structure in ASE units."""
     case = _cases.case_by_id("ketene")
     numbers, positions_bohr, _, _, _ = _cases.structure_inputs(case)
     atoms = Atoms(
@@ -26,7 +27,8 @@ def ketene_atoms():
     return atoms
 
 
-def test_ase_energy_matches_golden(ketene_atoms):
+def test_ase_energy_matches_golden(ketene_atoms: Atoms) -> None:
+    """Match the ASE energy and free-energy alias to the golden value."""
     case = _cases.case_by_id("ketene")
     golden = _cases.golden(case)
     tolerance = _cases.tolerances()
@@ -41,7 +43,8 @@ def test_ase_energy_matches_golden(ketene_atoms):
     )
 
 
-def test_ase_forces_and_charges(ketene_atoms):
+def test_ase_forces_and_charges(ketene_atoms: Atoms) -> None:
+    """Match ASE forces and charges to the conformance golden values."""
     case = _cases.case_by_id("ketene")
     golden = _cases.golden(case)
     tolerance = _cases.tolerances()
@@ -60,7 +63,8 @@ def test_ase_forces_and_charges(ketene_atoms):
         )
 
 
-def test_ase_charge_from_atoms(ketene_atoms):
+def test_ase_charge_from_atoms(ketene_atoms: Atoms) -> None:
+    """Read the molecular charge from ASE initial atomic charges."""
     case = _cases.case_by_id("h3_plus")
     numbers, positions_bohr, _, _, _ = _cases.structure_inputs(case)
     atoms = Atoms(numbers=numbers, positions=np.asarray(positions_bohr) * _BOHR)
@@ -74,7 +78,8 @@ def test_ase_charge_from_atoms(ketene_atoms):
     )
 
 
-def test_ase_set_resets_results(ketene_atoms):
+def test_ase_set_resets_results(ketene_atoms: Atoms) -> None:
+    """Invalidate cached ASE results after changing a compute setting."""
     ketene_atoms.calc = GPUxtb(method="GFN2-xTB")
     first = ketene_atoms.get_potential_energy()
     ketene_atoms.calc.set(electronic_temperature=5000.0)
@@ -82,7 +87,10 @@ def test_ase_set_resets_results(ketene_atoms):
     assert second != pytest.approx(first, abs=1e-2)
 
 
-def test_ase_set_rejects_invalid_settings_transactionally(ketene_atoms):
+def test_ase_set_rejects_invalid_settings_transactionally(
+    ketene_atoms: Atoms,
+) -> None:
+    """Keep ASE parameters unchanged when validation rejects an update."""
     calculator = GPUxtb(method="GFN2-xTB")
     ketene_atoms.calc = calculator
     ketene_atoms.get_potential_energy()
@@ -92,12 +100,14 @@ def test_ase_set_rejects_invalid_settings_transactionally(ketene_atoms):
     assert calculator.parameters.max_scc_iterations == 250
 
 
-def test_ase_rejects_fractional_multiplicity():
+def test_ase_rejects_fractional_multiplicity() -> None:
+    """Reject nonintegral spin multiplicities through the ASE interface."""
     with pytest.raises(GPUxtbValueError):
         GPUxtb(method="GFN2-xTB", multiplicity=1.5)
 
 
-def test_ase_rebuilds_when_atomic_numbers_change():
+def test_ase_rebuilds_when_atomic_numbers_change() -> None:
+    """Rebuild fixed-topology native state after ASE changes atom species."""
     atoms = Atoms(numbers=[1, 1], positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.74]])
     atoms.calc = GPUxtb(method="GFN2-xTB", backend="cpu")
     atoms.get_potential_energy()
@@ -109,7 +119,8 @@ def test_ase_rebuilds_when_atomic_numbers_change():
     assert reused == pytest.approx(reference.get_potential_energy(), abs=1e-10)
 
 
-def test_ase_rejects_periodic_systems():
+def test_ase_rejects_periodic_systems() -> None:
+    """Reject periodic ASE structures unsupported by the molecular ABI."""
     atoms = Atoms(
         numbers=[1, 1],
         positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.74]],
@@ -121,7 +132,8 @@ def test_ase_rejects_periodic_systems():
         atoms.get_potential_energy()
 
 
-def test_ase_registered_class():
+def test_ase_registered_class() -> None:
+    """Register the calculator for ASE's name-based construction path."""
     from ase.calculators.calculator import external_calculators
 
     assert "gpuxtb" in external_calculators

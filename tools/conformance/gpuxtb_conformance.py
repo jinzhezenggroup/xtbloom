@@ -18,9 +18,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPOSITORY_ROOT / "data" / "conformance" / "manifest.json"
@@ -137,7 +139,7 @@ def normalize_tblite_output(
 
 
 def _numeric_matrix(
-    value: Any, rows: int, columns: int, property_name: str
+    value: object, rows: int, columns: int, property_name: str
 ) -> list[list[float]]:
     """Validate and normalize one atom-major matrix from reference JSON."""
     if not isinstance(value, list) or len(value) != rows:
@@ -309,7 +311,8 @@ def load_turbomole_coord(path: Path, case: dict[str, Any]) -> dict[str, Any]:
         symbol = fields[3].lower()
         if symbol not in symbol_numbers:
             raise ConformanceError(
-                f"Turbomole input {path}:{line_number} has unsupported element {fields[3]!r}"
+                f"Turbomole input {path}:{line_number} has unsupported "
+                f"element {fields[3]!r}"
             )
         positions.append(position)
         atomic_numbers.append(symbol_numbers[symbol])
@@ -326,7 +329,7 @@ def load_turbomole_coord(path: Path, case: dict[str, Any]) -> dict[str, Any]:
 
 
 def _atomic_numbers(
-    value: Any, count: int, property_name: str, path: Path
+    value: object, count: int, property_name: str, path: Path
 ) -> list[int]:
     """Validate integral atomic numbers supported by the pinned GFN2 model."""
     if not isinstance(value, list) or len(value) != count:
@@ -408,7 +411,8 @@ def load_qmmm_input(
     if gamma_mode == "explicit":
         if source_numbers_value is not None:
             raise ConformanceError(
-                f"QMMM input {path} explicit gamma mode must not provide source atomic numbers"
+                f"QMMM input {path} explicit gamma mode must not provide "
+                "source atomic numbers"
             )
     elif gamma_mode == "element_hardness":
         source_numbers = _atomic_numbers(
@@ -421,13 +425,13 @@ def load_qmmm_input(
         for number in source_numbers:
             try:
                 expected_gammas.append(float(hardness_by_atomic_number[str(number)]))
-            except (KeyError, TypeError, ValueError) as exc:
+            except (KeyError, TypeError, ValueError) as exc:  # noqa: PERF203 - retain Z context
                 raise ConformanceError(
                     f"QMMM input {path} has no pinned GFN2 hardness for Z={number}"
                 ) from exc
         if any(
             not math.isclose(actual, expected, rel_tol=0.0, abs_tol=1.0e-12)
-            for actual, expected in zip(gammas, expected_gammas)
+            for actual, expected in zip(gammas, expected_gammas, strict=True)
         ):
             raise ConformanceError(
                 f"QMMM input {path} element-hardness gammas do not match "
@@ -444,7 +448,7 @@ def materialize_xtb_qmmm(document: dict[str, Any]) -> dict[str, str]:
     """Serialize a validated QMMM document into deterministic xTB CLI files."""
     qm = document["qm"]
     coord_lines = ["$coord"]
-    for position, symbol in zip(qm["positions_bohr"], qm["symbols"]):
+    for position, symbol in zip(qm["positions_bohr"], qm["symbols"], strict=True):
         coord_lines.append(
             " ".join([*(f"{float(value):.17g}" for value in position), symbol.lower()])
         )
@@ -456,6 +460,7 @@ def materialize_xtb_qmmm(document: dict[str, Any]) -> dict[str, str]:
         point_charges["charges_e"],
         point_charges["positions_bohr"],
         point_charges["gammas_hartree"],
+        strict=True,
     ):
         pcharge_lines.append(
             " ".join(
@@ -609,7 +614,7 @@ def normalize_xtb_output(
     return properties
 
 
-def sha256_json(value: Any) -> str:
+def sha256_json(value: object) -> str:
     """Hash canonical JSON independent of temporary paths and whitespace."""
     encoded = json.dumps(
         value, allow_nan=False, separators=(",", ":"), sort_keys=True
@@ -876,7 +881,7 @@ def check_manifest(manifest_path: Path) -> None:
             )
         if any(
             not math.isclose(float(force), -float(grad), abs_tol=0.0)
-            for force, grad in zip(forces, gradient)
+            for force, grad in zip(forces, gradient, strict=True)
         ):
             raise ConformanceError(f"golden {golden_path} violates force = -gradient")
         point_charge_count = int(case.get("point_charge_count", 0))
@@ -901,7 +906,7 @@ def check_manifest(manifest_path: Path) -> None:
                 )
             if any(
                 not math.isclose(float(force), -float(grad), abs_tol=0.0)
-                for force, grad in zip(pc_forces, pc_gradient)
+                for force, grad in zip(pc_forces, pc_gradient, strict=True)
             ):
                 raise ConformanceError(
                     f"golden {golden_path} violates point-charge force = -gradient"
@@ -920,7 +925,8 @@ def check_manifest(manifest_path: Path) -> None:
                 )
         if provenance.get("source_output_sha256") != sha256_json(properties):
             raise ConformanceError(
-                f"golden {golden_path} does not match its normalized reference output hash"
+                f"golden {golden_path} does not match its normalized "
+                "reference output hash"
             )
         if reference_engine == "xtb":
             expected_shapes = {
@@ -932,11 +938,13 @@ def check_manifest(manifest_path: Path) -> None:
                 _validate_nested_shape(
                     properties.get(property_name), shape, property_name, golden_path
                 )
-    print(f"conformance manifest OK: {len(cases)} cases")
+    print(  # noqa: T201 - CLI validation report
+        f"conformance manifest OK: {len(cases)} cases"
+    )
 
 
 def _validate_nested_shape(
-    value: Any, shape: tuple[int, ...], property_name: str, path: Path
+    value: object, shape: tuple[int, ...], property_name: str, path: Path
 ) -> None:
     """Check a numeric nested-list shape and reject non-finite SCC state."""
     if not shape:
@@ -1225,7 +1233,8 @@ def generate_with_tblite(
             )
             if completed.returncode != 0:
                 raise ConformanceError(
-                    f"tblite failed for {case['id']} with status {completed.returncode}:\n"
+                    f"tblite failed for {case['id']} with status "
+                    f"{completed.returncode}:\n"
                     f"{completed.stdout}"
                 )
             raw = load_json(raw_output)
@@ -1248,7 +1257,7 @@ def generate_with_tblite(
             }
             destination = output_dir / f"{case['id']}.json"
             dump_json(destination, canonical_golden(manifest, case, raw, provenance))
-            print(f"generated {destination}")
+            print(f"generated {destination}")  # noqa: T201 - CLI progress output
 
 
 def xtb_command(executable: Path, case: dict[str, Any]) -> list[str]:
@@ -1398,7 +1407,7 @@ def generate_with_xtb(
                     manifest, case, properties, provenance, qmmm_input
                 ),
             )
-            print(f"generated {destination}")
+            print(f"generated {destination}")  # noqa: T201 - CLI progress output
 
 
 def git_revision(source_root: Path) -> str:
@@ -1426,7 +1435,8 @@ def import_tblite_snapshot(
     expected_revision = source["revision"]
     if actual_revision != expected_revision and not allow_revision_mismatch:
         raise ConformanceError(
-            f"tblite revision mismatch: expected {expected_revision}, got {actual_revision}; "
+            f"tblite revision mismatch: expected {expected_revision}, "
+            f"got {actual_revision}; "
             "use --allow-revision-mismatch only for an intentional corpus update"
         )
 
@@ -1463,8 +1473,10 @@ def import_tblite_snapshot(
             "source_revision": actual_revision,
         }
         dump_json(golden_path, canonical_golden(manifest, case, raw, provenance))
-        print(f"imported {case['id']}")
-    print("snapshot imported; update manifest hashes before running 'check'")
+        print(f"imported {case['id']}")  # noqa: T201 - CLI progress output
+    print(  # noqa: T201 - CLI completion output
+        "snapshot imported; update manifest hashes before running 'check'"
+    )
 
 
 def actual_properties(raw: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
@@ -1498,8 +1510,8 @@ def actual_properties(raw: dict[str, Any], case: dict[str, Any]) -> dict[str, An
 def compare_values(
     case_id: str,
     property_name: str,
-    expected: Any,
-    actual: Any,
+    expected: object,
+    actual: object,
     atol: float,
     rtol: float,
 ) -> tuple[bool, str]:
@@ -1509,14 +1521,15 @@ def compare_values(
     if len(expected_values) != len(actual_values):
         return (
             False,
-            f"{case_id} {property_name}: shape {len(actual_values)} != {len(expected_values)}",
+            f"{case_id} {property_name}: shape {len(actual_values)} != "
+            f"{len(expected_values)}",
         )
     worst_index = 0
     worst_error = -1.0
     worst_limit = 0.0
     passed = True
     for index, (expected_value, actual_value) in enumerate(
-        zip(expected_values, actual_values)
+        zip(expected_values, actual_values, strict=True)
     ):
         expected_float = float(expected_value)
         actual_float = float(actual_value)
@@ -1535,7 +1548,7 @@ def compare_values(
     )
 
 
-def _flatten_numeric(value: Any, property_name: str) -> list[float]:
+def _flatten_numeric(value: object, property_name: str) -> list[float]:
     """Flatten a scalar or nested list while preserving deterministic order."""
     if isinstance(value, list):
         flattened: list[float] = []
@@ -1591,7 +1604,9 @@ def compare_directory(
         for property_name, tolerance_name in compared_properties:
             if property_name not in actual:
                 failures.append(f"{case['id']} is missing {property_name}")
-                print(f"FAIL {failures[-1]}")
+                print(  # noqa: T201 - CLI validation report
+                    f"FAIL {failures[-1]}"
+                )
                 continue
             tolerance = tolerances[tolerance_name]
             passed, message = compare_values(
@@ -1602,7 +1617,9 @@ def compare_directory(
                 float(tolerance["atol"]),
                 float(tolerance["rtol"]),
             )
-            print(("PASS " if passed else "FAIL ") + message)
+            print(  # noqa: T201 - CLI validation report
+                ("PASS " if passed else "FAIL ") + message
+            )
             if not passed:
                 failures.append(message)
     if failures:
@@ -1672,7 +1689,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         else:  # pragma: no cover - argparse guarantees the command choices.
             raise AssertionError(args.command)
     except (ConformanceError, KeyError, OSError) as exc:
-        print(f"conformance error: {exc}", file=sys.stderr)
+        print(  # noqa: T201 - CLI diagnostics
+            f"conformance error: {exc}", file=sys.stderr
+        )
         return 1
     return 0
 

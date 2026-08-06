@@ -6,8 +6,30 @@ import ctypes
 import ctypes.util
 import os
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from pathlib import Path
+
+
+class _StorageSlice(Protocol):
+    """Atom range required from a public benchmark batch slice."""
+
+    atom_begin: int
+    atom_end: int
+
+
+class _BatchStorage(Protocol):
+    """Structural storage contract consumed by the tblite adapter."""
+
+    atomic_numbers: Sequence[int]
+    positions: Sequence[float]
+    molecular_charges: Sequence[float]
+    unpaired_electrons: Sequence[int]
+    point_charge_values: Sequence[float]
+    slices: Sequence[_StorageSlice]
+
 
 _THREAD_RUNTIME_KEEPALIVE: list[ctypes.CDLL] = []
 
@@ -237,7 +259,7 @@ class TbliteAdapter:
     def __init__(
         self,
         library_path: Path,
-        storage: Any,
+        storage: _BatchStorage,
         property_name: str,
         accuracy: float = 1.0e-4,
         max_iterations: int = 500,

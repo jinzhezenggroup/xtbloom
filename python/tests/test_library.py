@@ -4,18 +4,26 @@ from __future__ import annotations
 
 import ctypes
 import site
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
 from gpuxtb import library
 from gpuxtb.exceptions import GPUxtbValueError
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def test_version_string():
+
+def test_version_string() -> None:
+    """Expose the native library version through the ctypes wrapper."""
     assert library.get_version() == "0.1.0"
 
 
-def test_runtime_search_includes_user_site_packages(monkeypatch, tmp_path):
+def test_runtime_search_includes_user_site_packages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Search CUDA runtime libraries beneath the user site-packages path."""
     user_site = tmp_path / "site-packages"
     runtime_dir = user_site / "nvidia" / "cublas" / "lib"
     runtime_dir.mkdir(parents=True)
@@ -26,7 +34,9 @@ def test_runtime_search_includes_user_site_packages(monkeypatch, tmp_path):
     assert runtime_dir in library._runtime_search_dirs()
 
 
-def test_runtime_search_and_preload_match_scipy_openblas32(monkeypatch, tmp_path):
+def test_runtime_search_and_preload_match_scipy_openblas32(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Keep runtime discovery aligned with scipy-openblas32's wheel layout."""
     user_site = tmp_path / "site-packages"
     runtime_dir = user_site / "scipy_openblas32" / "lib"
@@ -42,7 +52,8 @@ def test_runtime_search_and_preload_match_scipy_openblas32(monkeypatch, tmp_path
     )
 
 
-def test_status_strings():
+def test_status_strings() -> None:
+    """Map public status values to stable diagnostic strings."""
     assert library.status_string(library.STATUS_SUCCESS) == "success"
     assert (
         library.status_string(library.STATUS_SCC_NOT_CONVERGED) == "SCC not converged"
@@ -52,7 +63,8 @@ def test_status_strings():
     )
 
 
-def test_abi_struct_sizes():
+def test_abi_struct_sizes() -> None:
+    """Keep ctypes structure sizes and suffix offsets aligned with the C ABI."""
     # The ctypes mirrors must match the C ABI field layout used by validation.
     assert ctypes.sizeof(ctypes.c_void_p) == 8  # supported wheel platforms are 64-bit
     assert ctypes.sizeof(library.ContextOptions) == 32
@@ -76,7 +88,8 @@ def test_abi_struct_sizes():
     assert library.SCC_START_WARM == 2
 
 
-def test_unknown_method_rejected():
+def test_unknown_method_rejected() -> None:
+    """Distinguish unknown methods from reserved unsupported GFN1-xTB."""
     from gpuxtb.exceptions import GPUxtbNotSupportedError
     from gpuxtb.interface import Calculator
 
@@ -86,7 +99,8 @@ def test_unknown_method_rejected():
         Calculator("GFN1-xTB", np.array([1]), np.zeros((1, 3)))
 
 
-def test_host_const_returns_consistent_buffer_and_owner():
+def test_host_const_returns_consistent_buffer_and_owner() -> None:
+    """Keep host descriptor pointers and owning arrays consistent."""
     buf, owner = library.host_const([1.0, 2.0, 3.0], ctypes.c_double, np.float64)
     assert isinstance(buf, library.ConstBuffer)
     assert buf.data is not None

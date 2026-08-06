@@ -55,6 +55,7 @@ class CompareProfile:
     per_field: Mapping[str, tuple[float, float]] | None = None
 
     def __post_init__(self) -> None:
+        """Validate profile identity and all configured tolerances."""
         if (
             not isinstance(self.name, str)
             or not self.name
@@ -91,13 +92,13 @@ class CompareProfile:
                 )
             ):
                 raise TraceCompareError(
-                    f"comparison profile {self.identifier} has invalid {label} tolerance"
+                    f"comparison profile {self.identifier} has invalid "
+                    f"{label} tolerance"
                 )
 
     @property
     def identifier(self) -> str:
         """Stable CLI/diagnostic identifier for this profile version."""
-
         return f"{self.name}_v{self.version}"
 
     def tolerance_for(self, path: str) -> tuple[float, float]:
@@ -108,7 +109,6 @@ class CompareProfile:
         sequence indices (for example ``iterations[0].residual[3]``), so the
         trailing indices must not hide the owning ``residual`` field.
         """
-
         overrides = sorted(
             (self.per_field or {}).items(), key=lambda item: len(item[0]), reverse=True
         )
@@ -194,12 +194,12 @@ class Mismatch:
 
     def render(self) -> str:
         """Render an actionable scalar diagnostic for CTest output."""
-
         atol, rtol = self.tolerance
         return (
             f"  {self.path}\n"
             f"      actual={self.actual!r} expected={self.expected!r}\n"
-            f"      abs_err={self.absolute_error:.6e} rel_err={self.relative_error:.6e} "
+            f"      abs_err={self.absolute_error:.6e} "
+            f"rel_err={self.relative_error:.6e} "
             f"(tol atol={atol:.1e} rtol={rtol:.1e})"
         )
 
@@ -213,16 +213,17 @@ class TraceCompareResult:
 
     @property
     def matches(self) -> bool:
+        """Return whether the comparison found no mismatches."""
         return not self.mismatches
 
     def render(self, max_reported: int = 5) -> str:
         """Render a deterministic summary and the first ``max_reported`` paths."""
-
         if max_reported <= 0:
             raise TraceCompareError("max_reported must be positive")
         header = (
             f"{FORMAT} comparison ({self.profile}): {len(self.mismatches)} "
-            f"mismatch(es){', all reported' if len(self.mismatches) <= max_reported else ''}"
+            "mismatch(es)"
+            f"{', all reported' if len(self.mismatches) <= max_reported else ''}"
         )
         if not self.mismatches:
             return header
@@ -233,7 +234,7 @@ class TraceCompareResult:
         return "\n".join(lines)
 
 
-def _scalar_path(parent: str, key: Any) -> str:
+def _scalar_path(parent: str, key: object) -> str:
     return f"{parent}.{key}" if parent else str(key)
 
 
@@ -249,7 +250,7 @@ def _under_exact_path(path: str) -> bool:
     )
 
 
-def _is_exact(path: str, actual: Any, expected: Any) -> bool:
+def _is_exact(path: str, actual: object, expected: object) -> bool:
     if _under_exact_path(path):
         return True
     if isinstance(actual, (bool, str)) or isinstance(expected, (bool, str)):
@@ -257,9 +258,8 @@ def _is_exact(path: str, actual: Any, expected: Any) -> bool:
     return isinstance(actual, int) and isinstance(expected, int)
 
 
-def _metadata_array_length(value: Any) -> int | str:
+def _metadata_array_length(value: object) -> int | str:
     """Return a deterministic descriptor even before #157's strict validation."""
-
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return len(value)
     return f"invalid-{type(value).__name__}"
@@ -269,7 +269,9 @@ class _Comparator:
     def __init__(self, profile: CompareProfile) -> None:
         self._profile = profile
 
-    def _compare_scalar(self, path: str, actual: Any, expected: Any) -> Mismatch | None:
+    def _compare_scalar(
+        self, path: str, actual: object, expected: object
+    ) -> Mismatch | None:
         if _is_exact(path, actual, expected):
             if type(actual) is type(expected) and actual == expected:
                 return None
@@ -301,7 +303,11 @@ class _Comparator:
         )
 
     def compare(
-        self, parent: str, actual: Any, expected: Any, mismatches: list[Mismatch]
+        self,
+        parent: str,
+        actual: object,
+        expected: object,
+        mismatches: list[Mismatch],
     ) -> None:
         if isinstance(actual, Mapping) and isinstance(expected, Mapping):
             for key in sorted(set(actual) | set(expected)):
@@ -351,7 +357,9 @@ class _Comparator:
                     )
                 )
                 return
-            for index, (actual_item, expected_item) in enumerate(zip(actual, expected)):
+            for index, (actual_item, expected_item) in enumerate(
+                zip(actual, expected, strict=True)
+            ):
                 self.compare(
                     f"{parent}[{index}]", actual_item, expected_item, mismatches
                 )
@@ -393,7 +401,6 @@ def _point_charge_metadata(molecule: Mapping[str, Any]) -> Mapping[str, Any]:
 
 def _metadata_projection(trace: Mapping[str, Any]) -> Mapping[str, Any]:
     """Extract only exact descriptors used to gate a numerical comparison."""
-
     molecule = trace["input"]
     iterations = trace["iterations"]
     return {
@@ -432,8 +439,8 @@ def _metadata_projection(trace: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def compare_trace(
-    actual: Any,
-    expected: Any,
+    actual: object,
+    expected: object,
     profile: CompareProfile | str = CPU_CLOSED_LOOP_V1.identifier,
     *,
     identical_metadata_only: bool = False,
@@ -444,7 +451,6 @@ def compare_trace(
     including every iteration index/convergence flag, failed-attempt presence,
     and terminal status/count before a caller performs a numerical comparison.
     """
-
     resolved = _resolve_profile(profile)
     TRACE.validate(actual)
     TRACE.validate(expected)
@@ -470,7 +476,6 @@ def compare_iteration(
     equally malformed standalone dictionaries.  The function does not inject
     state or execute gpuxtb; a backend replay harness must do that work.
     """
-
     resolved = _resolve_profile(profile)
     position, expected = _validated_iteration_context(
         actual, expected_trace, logical_index
@@ -513,7 +518,8 @@ def _load_golden(path: Path, expected_sha256: str | None) -> Mapping[str, Any]:
         pinned_sha256 = _validate_expected_sha256(expected_sha256)
         if actual_sha256 != pinned_sha256:
             raise TraceCompareError(
-                f"golden {path} SHA-256 mismatch: got {actual_sha256}, expected {pinned_sha256}"
+                f"golden {path} SHA-256 mismatch: got {actual_sha256}, "
+                f"expected {pinned_sha256}"
             )
     TRACE.validate(golden)
     canonical = TRACE.dumps(golden).encode("utf-8")
@@ -550,7 +556,6 @@ def _validated_iteration_context(
     still supplies all dimensions and the logical index needed by strict trace
     validation.
     """
-
     TRACE.validate(expected_trace)
     position, expected = _select_iteration(expected_trace, logical_index)
     candidate = dict(deepcopy(expected_trace))
@@ -578,7 +583,6 @@ def validate_iteration(
     iteration: Mapping[str, Any], expected_trace: Mapping[str, Any], logical_index: int
 ) -> None:
     """Validate one standalone snapshot in its complete golden trace context."""
-
     _validated_iteration_context(iteration, expected_trace, logical_index)
 
 
@@ -591,7 +595,6 @@ def _positive_integer(value: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the read-only trace-comparison CLI."""
-
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -644,7 +647,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI and return 0 match, 1 mismatch, or 2 input/tool error."""
-
     arguments = build_parser().parse_args(argv)
     try:
         golden = _load_golden(arguments.golden, arguments.golden_sha256)
@@ -669,10 +671,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         # JSON integers outside the platform float range raise OverflowError;
         # classify those documents as input errors instead of leaking a
         # traceback and accidentally using the scientific-mismatch exit code.
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         return EXIT_INPUT_ERROR
 
-    print(result.render(arguments.max_reported))
+    print(  # noqa: T201 - CLI comparison report
+        result.render(arguments.max_reported)
+    )
     return EXIT_MATCH if result.matches else EXIT_MISMATCH
 
 

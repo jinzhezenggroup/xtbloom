@@ -23,6 +23,7 @@ class TbliteObserverPatchTest(unittest.TestCase):
     """Keep the patch, metadata, documentation, and probe synchronized."""
 
     def setUp(self) -> None:
+        """Load the pinned observer bundle inspected by each test."""
         self.metadata = VALIDATOR.load_metadata()
         patch = self.metadata["patch"]
         assert isinstance(patch, dict)

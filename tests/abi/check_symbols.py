@@ -23,6 +23,7 @@ EXPECTED_SYMBOLS = {
 
 
 def main() -> int:
+    """Verify one shared library against the public symbol allowlist."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--nm", required=True, help="nm-compatible executable")
     parser.add_argument(
@@ -53,11 +54,17 @@ def main() -> int:
     extra = exported - EXPECTED_SYMBOLS
     if missing or extra or unexpected:
         if missing:
-            print("missing C ABI symbols:", ", ".join(sorted(missing)))
+            print(  # noqa: T201 - CLI validation report
+                "missing C ABI symbols:", ", ".join(sorted(missing))
+            )
         if extra:
-            print("unlisted gpuxtb symbols:", ", ".join(sorted(extra)))
+            print(  # noqa: T201 - CLI validation report
+                "unlisted gpuxtb symbols:", ", ".join(sorted(extra))
+            )
         if unexpected:
-            print("unexpected non-C ABI exports:", ", ".join(sorted(unexpected)))
+            print(  # noqa: T201 - CLI validation report
+                "unexpected non-C ABI exports:", ", ".join(sorted(unexpected))
+            )
         return 1
     return 0
 

@@ -41,13 +41,16 @@ class FakeRunner:
         self.closed = False
 
     def set_start_mode(self, mode: str) -> None:
+        """Record the requested benchmark start mode."""
         self.mode = mode
         self.events.append(("mode", mode))
 
     def invoke(self) -> None:
+        """Record one deterministic invocation in the active mode."""
         self.events.append(("invoke", self.mode))
 
     def snapshot(self) -> dict[str, Any]:
+        """Return deterministic observables for the active mode."""
         self.events.append(("snapshot", self.mode))
         return {
             "energies_hartree": [-10.0],
@@ -58,6 +61,7 @@ class FakeRunner:
         }
 
     def close(self) -> None:
+        """Record that the fake runner released its resources."""
         self.closed = True
 
 
@@ -168,7 +172,7 @@ def set_measured_observables(
             "forces_hartree_per_bohr": forces,
         }
         for sample_index, (energies, forces) in enumerate(
-            zip(energy_samples, force_samples)
+            zip(energy_samples, force_samples, strict=True)
         )
     ]
 
@@ -177,6 +181,7 @@ class NatomsScalingTest(unittest.TestCase):
     """Exercise parser, protocol ordering, provenance, and serialization."""
 
     def test_parser_requires_explicit_mode_and_output_paths(self) -> None:
+        """Require explicit mode and artifact paths for reproducible runs."""
         parser = natoms_scaling.build_parser()
         arguments = parser.parse_args(
             [
@@ -204,6 +209,7 @@ class NatomsScalingTest(unittest.TestCase):
             parser.parse_args(["--library", "libgpuxtb.so"])
 
     def test_gpuxtb_benchmark_pins_conformance_scc_and_retains_300k(self) -> None:
+        """Pin SCC tolerances while retaining the initialized temperature."""
         options = SimpleNamespace(
             max_scc_iterations=250,
             charge_tolerance=1.0e-6,
@@ -229,6 +235,7 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertEqual(options.electronic_temperature, original_temperature)
 
     def test_nonfresh_runs_require_reference_and_gates_cannot_be_widened(self) -> None:
+        """Require FRESH evidence and reject relaxed correctness gates."""
         parser = natoms_scaling.build_parser()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -269,7 +276,8 @@ class NatomsScalingTest(unittest.TestCase):
                         parser.parse_args(arguments(engine, mode))
                     )
 
-            strict = arguments("gpuxtb", "warm") + [
+            strict = [
+                *arguments("gpuxtb", "warm"),
                 "--energy-reference-json",
                 str(reference),
             ]
@@ -288,6 +296,7 @@ class NatomsScalingTest(unittest.TestCase):
                     )
 
     def test_default_alkanes_have_physical_bonds_and_no_nonbonded_overlap(self) -> None:
+        """Keep generated alkane geometries physically separated and bonded."""
         for natoms in natoms_scaling.DEFAULT_NATOMS:
             with self.subTest(natoms=natoms):
                 molecule = natoms_scaling.make_alkane(natoms)
@@ -327,6 +336,7 @@ class NatomsScalingTest(unittest.TestCase):
                 self.assertGreater(min(nonbonded_distances), 1.75)
 
     def test_dirty_current_run_is_rejected_or_marked_development_only(self) -> None:
+        """Reject dirty evidence unless explicitly labeled development-only."""
         identity = {
             "repository": {"revision": "a" * 40, "dirty": True},
             "library": {
@@ -341,6 +351,7 @@ class NatomsScalingTest(unittest.TestCase):
         )
 
     def test_warm_protocol_seeds_once_then_measures_only_warm(self) -> None:
+        """Seed WARM state once and exclude that FRESH call from samples."""
         runner = FakeRunner()
         clock_values = iter((0, 1_000_000, 2_000_000, 4_000_000))
         result = natoms_scaling.measure_runner(
@@ -376,6 +387,7 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertEqual(result["correctness"]["status"], "pass")
 
     def test_warm_force_vector_mismatch_fails_correctness(self) -> None:
+        """Fail WARM correctness when any published force exceeds tolerance."""
         runner = FakeRunner(
             forces={
                 "fresh": [0.1, -0.2, 0.3],
@@ -398,6 +410,7 @@ class NatomsScalingTest(unittest.TestCase):
         )
 
     def test_document_repeats_mode_and_run_identity_per_row(self) -> None:
+        """Repeat self-contained mode and provenance identity in each row."""
         identity = {
             "argv": ["python", "natoms_scaling.py", "--start-mode", "fresh"],
             "repository": {"revision": "abc", "dirty": False},
@@ -419,6 +432,7 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertEqual(document["rows"][0]["raw_samples"][0]["latency_ms"], 1.0)
 
     def test_cmake_metadata_records_flags_compiler_source_and_provider(self) -> None:
+        """Capture CMake flags, compiler, source, and numerical provider."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "source"
@@ -467,6 +481,7 @@ class NatomsScalingTest(unittest.TestCase):
     def test_meson_metadata_records_build_options_compilers_and_dependencies(
         self,
     ) -> None:
+        """Capture hashed Meson introspection and dependency provenance."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "source"
@@ -538,6 +553,7 @@ class NatomsScalingTest(unittest.TestCase):
     def test_meson_compiler_provenance_does_not_rebind_bare_path_entry(
         self,
     ) -> None:
+        """Do not resolve a configure-time compiler name through a later PATH."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             configured_compiler = root / "configured" / "cc"
@@ -571,6 +587,7 @@ class NatomsScalingTest(unittest.TestCase):
         )
 
     def test_reference_protocol_records_cold_and_persistent_samples(self) -> None:
+        """Separate the first reference invocation from persistent samples."""
         runner = FakeRunner({"fresh": 13, "warm": 2, "persistent": 0})
         clock_values = iter((0, 5_000_000, 10_000_000, 12_000_000))
         result = natoms_scaling.measure_reference_runner(
@@ -593,6 +610,7 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertEqual(result["timing"]["samples_ms"], [2.0])
 
     def test_artifacts_retain_raw_samples_and_refuse_overwrite(self) -> None:
+        """Retain raw JSON samples and reject accidental artifact overwrite."""
         document = {
             "schema_version": 1,
             "rows": [
@@ -627,6 +645,7 @@ class NatomsScalingTest(unittest.TestCase):
                 )
 
     def test_csv_serialization_uses_lf_and_remains_parseable(self) -> None:
+        """Serialize portable LF-only CSV that the standard reader parses."""
         document = {
             "schema_version": 1,
             "rows": [{"label": "sample", "values": [1, 2]}],
@@ -654,6 +673,7 @@ class NatomsScalingTest(unittest.TestCase):
                 )
 
     def test_csv_omits_realistic_raw_vectors_for_default_reader(self) -> None:
+        """Keep large raw vectors in JSON and compact CSV to summary fields."""
         force_vector = [index / 123456789.0 for index in range(3 * 122)]
         raw_samples = [
             {
@@ -705,6 +725,7 @@ class NatomsScalingTest(unittest.TestCase):
         )
 
     def test_artifact_pair_rolls_back_when_second_publish_fails(self) -> None:
+        """Remove the first new artifact when publishing its peer fails."""
         document = {"schema_version": 1, "rows": [{"value": 1}]}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -720,19 +741,22 @@ class NatomsScalingTest(unittest.TestCase):
                     raise OSError("synthetic CSV publication failure")
                 real_link(source, destination)
 
-            with mock.patch.object(
-                natoms_scaling.os, "link", side_effect=fail_second_link
+            with (
+                mock.patch.object(
+                    natoms_scaling.os, "link", side_effect=fail_second_link
+                ),
+                self.assertRaisesRegex(OSError, "synthetic CSV"),
             ):
-                with self.assertRaisesRegex(OSError, "synthetic CSV"):
-                    natoms_scaling.write_artifacts(
-                        json_path, csv_path, document, allow_overwrite=False
-                    )
+                natoms_scaling.write_artifacts(
+                    json_path, csv_path, document, allow_overwrite=False
+                )
             self.assertFalse(json_path.exists())
             self.assertFalse(csv_path.exists())
             self.assertEqual(list(root.glob("*.tmp")), [])
             self.assertEqual(list(root.glob("*.lock")), [])
 
     def test_artifact_pair_restores_both_originals_after_replace_failure(self) -> None:
+        """Restore both original artifacts after partial replacement failure."""
         document = {"schema_version": 1, "rows": [{"value": "new"}]}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -750,19 +774,22 @@ class NatomsScalingTest(unittest.TestCase):
                     raise OSError("synthetic replacement failure")
                 real_replace(source, destination)
 
-            with mock.patch.object(
-                natoms_scaling.os, "replace", side_effect=fail_second_publication
+            with (
+                mock.patch.object(
+                    natoms_scaling.os, "replace", side_effect=fail_second_publication
+                ),
+                self.assertRaisesRegex(OSError, "synthetic replacement"),
             ):
-                with self.assertRaisesRegex(OSError, "synthetic replacement"):
-                    natoms_scaling.write_artifacts(
-                        json_path, csv_path, document, allow_overwrite=True
-                    )
+                natoms_scaling.write_artifacts(
+                    json_path, csv_path, document, allow_overwrite=True
+                )
             self.assertEqual(json_path.read_text(encoding="utf-8"), "old-json")
             self.assertEqual(csv_path.read_text(encoding="utf-8"), "old-csv")
             self.assertEqual(list(root.glob("*.backup")), [])
             self.assertEqual(list(root.glob("*.tmp")), [])
 
     def test_artifact_pair_rejects_stale_partial_and_concurrent_lock(self) -> None:
+        """Reject incomplete old pairs and active pair reservations."""
         document = {"schema_version": 1, "rows": [{"value": 1}]}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -784,6 +811,7 @@ class NatomsScalingTest(unittest.TestCase):
             self.assertFalse(csv_path.exists())
 
     def test_collect_rows_records_independent_cell_errors(self) -> None:
+        """Preserve successful peers when one benchmark cell setup fails."""
         molecule_a = natoms_scaling.make_alkane(32)
         molecule_b = natoms_scaling.make_alkane(62)
         created: list[FakeRunner] = []
@@ -826,6 +854,7 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertTrue(created[0].closed)
 
     def test_reference_artifact_hashes_the_exact_bytes_that_are_parsed(self) -> None:
+        """Hash the same in-memory bytes used to parse reference evidence."""
         document = make_reference_document()
         original = json.dumps(document, sort_keys=True).encode("utf-8")
         with tempfile.TemporaryDirectory() as directory:
@@ -839,6 +868,7 @@ class NatomsScalingTest(unittest.TestCase):
     def test_reference_artifact_rejects_schema_identity_and_duplicate_rows(
         self,
     ) -> None:
+        """Reject malformed, inconsistent, or duplicate reference rows."""
         mutations = {
             "schema": lambda document: document.update(schema_version=999),
             "engine": lambda document: document.update(engine="tblite"),
@@ -921,6 +951,7 @@ class NatomsScalingTest(unittest.TestCase):
                         natoms_scaling.load_reference_artifact(path)
 
     def test_cross_engine_force_and_energy_use_validated_reference(self) -> None:
+        """Compare measured energy and force samples with validated FRESH data."""
         document = make_reference_document()
         reference_row = document["rows"][0]
         with tempfile.TemporaryDirectory() as directory:
@@ -974,6 +1005,7 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertEqual(comparison["measured_samples"]["count"], 2)
 
     def test_cross_engine_checks_later_samples_not_only_cold_summary(self) -> None:
+        """Gate every measured sample rather than only a cold summary vector."""
         document = make_reference_document()
         reference_row = document["rows"][0]
         with tempfile.TemporaryDirectory() as directory:
@@ -1005,6 +1037,7 @@ class NatomsScalingTest(unittest.TestCase):
         )
 
     def test_cross_engine_malformed_measured_vectors_fail_cleanly(self) -> None:
+        """Report malformed measured vectors as clean correctness failures."""
         document = make_reference_document()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "fresh.json"
@@ -1033,6 +1066,7 @@ class NatomsScalingTest(unittest.TestCase):
                     self.assertEqual(comparison["measured_samples"]["status"], "fail")
 
     def test_gpuxtb_reference_requires_exact_compute_option_identity(self) -> None:
+        """Require exact gpuxtb compute options for same-engine comparison."""
         document = make_reference_document()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "fresh.json"
@@ -1054,6 +1088,7 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertEqual(comparison["gpuxtb_option_identity"], "fail")
 
     def test_gpuxtb_warm_reference_requires_same_binary_and_revision(self) -> None:
+        """Require WARM rows to match the FRESH binary and source revision."""
         document = make_reference_document()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "fresh.json"
@@ -1080,6 +1115,7 @@ class NatomsScalingTest(unittest.TestCase):
     def test_cross_engine_force_above_manifest_gate_is_not_performance_evidence(
         self,
     ) -> None:
+        """Reject performance evidence whose forces exceed the manifest gate."""
         document = make_reference_document()
         reference_row = document["rows"][0]
         with tempfile.TemporaryDirectory() as directory:
@@ -1125,6 +1161,7 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertEqual(comparison["force"]["status"], "fail")
 
     def test_tblite_charge_getter_can_be_excluded_from_timed_protocol(self) -> None:
+        """Allow tblite atomic-charge publication outside the timed protocol."""
         adapter = object.__new__(TbliteAdapter)
         adapter.property_name = "force"
         adapter.collect_atomic_charges = False

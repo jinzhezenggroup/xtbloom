@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import _cases
 import numpy as np
 import pytest
 from gpuxtb import BatchCalculator, Calculator, PointCharge, Structure
 from gpuxtb.exceptions import GPUxtbRuntimeError
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 MOLECULAR_CASES = [
     "ketene",
@@ -17,8 +22,9 @@ MOLECULAR_CASES = [
 ]
 
 
-def _make_structures(case_ids, **kwargs):
-    structures = []
+def _make_structures(case_ids: Sequence[str], **kwargs: object) -> list[Structure]:
+    """Build structures from named molecular conformance cases."""
+    structures: list[Structure] = []
     for case_id in case_ids:
         case = _cases.case_by_id(case_id)
         numbers, positions, charge, uhf, spin = _cases.structure_inputs(case)
@@ -36,7 +42,8 @@ def _make_structures(case_ids, **kwargs):
 
 
 @pytest.mark.parametrize("case_id", MOLECULAR_CASES)
-def test_batch_single_matches_serial(case_id):
+def test_batch_single_matches_serial(case_id: str) -> None:
+    """Match a one-system batch to serial calculation output."""
     case = _cases.case_by_id(case_id)
     numbers, positions, charge, uhf, spin = _cases.structure_inputs(case)
 
@@ -52,7 +59,8 @@ def test_batch_single_matches_serial(case_id):
     assert result[0].energy == pytest.approx(serial.energy, abs=1e-12)
 
 
-def test_batch_matches_goldens_all_molecular_cases():
+def test_batch_matches_goldens_all_molecular_cases() -> None:
+    """Match every molecular batch slice to its conformance golden."""
     structures = _make_structures(MOLECULAR_CASES)
     batch = BatchCalculator(structures)
     result = batch.compute()
@@ -71,7 +79,8 @@ def test_batch_matches_goldens_all_molecular_cases():
     assert result[-1].forces == pytest.approx(result[len(result) - 1].forces, abs=0.0)
 
 
-def test_batch_preserves_healthy_peer_when_another_fails():
+def test_batch_preserves_healthy_peer_when_another_fails() -> None:
+    """Preserve a successful peer when another system does not converge."""
     # h3+ converges in four iterations while NeNaCl does not.  The high-level
     # batch API must retain the healthy result and expose peer-local status.
     calculator = BatchCalculator(
@@ -90,7 +99,8 @@ def test_batch_preserves_healthy_peer_when_another_fails():
         calculator.compute(raise_on_failure=True)
 
 
-def test_batch_mixed_charge_and_spin_diagnostics():
+def test_batch_mixed_charge_and_spin_diagnostics() -> None:
+    """Publish diagnostics for a batch with mixed charges and spin states."""
     charges = {
         "ketene": (0, 0),
         "h3_plus": (1, 0),
@@ -113,7 +123,8 @@ def test_batch_mixed_charge_and_spin_diagnostics():
     assert (result.scc_iterations > 0).all()
 
 
-def test_batch_point_charges():
+def test_batch_point_charges() -> None:
+    """Match point-charge batch results to QM/MM conformance goldens."""
     case_ids = [
         "water_one_pc_gamma999",
         "water_dimer_6pc_hardness",
@@ -150,7 +161,8 @@ def test_batch_point_charges():
         ), case_id
 
 
-def test_batch_empty_rejected():
+def test_batch_empty_rejected() -> None:
+    """Reject a batch that contains no structures."""
     from gpuxtb.exceptions import GPUxtbValueError
 
     with pytest.raises(GPUxtbValueError):

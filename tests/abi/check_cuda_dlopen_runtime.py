@@ -14,6 +14,8 @@ GPUXTB_BACKEND_CUDA = 2
 
 
 class ContextOptions(ctypes.Structure):
+    """Mirror the public context-options C structure for loader checks."""
+
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
@@ -26,6 +28,7 @@ class ContextOptions(ctypes.Structure):
 
 
 def configure_api(library: ctypes.CDLL) -> None:
+    """Declare the C signatures used by the loader runtime check."""
     library.gpuxtb_context_options_init.argtypes = [
         ctypes.POINTER(ContextOptions),
         ctypes.c_size_t,
@@ -44,7 +47,6 @@ def exercise_unavailable_contexts(
     library: ctypes.CDLL, thread_count: int, calls_per_thread: int
 ) -> None:
     """Start CUDA API calls together after the DSO fallback cohort is ready."""
-
     configure_api(library)
     barrier = Barrier(thread_count)
 
@@ -77,6 +79,7 @@ def exercise_unavailable_contexts(
 
 
 def main() -> int:
+    """Load the library and exercise the selected no-runtime behavior."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--library", required=True, type=Path)
     parser.add_argument(

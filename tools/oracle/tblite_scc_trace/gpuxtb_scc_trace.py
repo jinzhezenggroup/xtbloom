@@ -63,7 +63,7 @@ def _iter_items(value: Mapping[str, Any]) -> Iterator[tuple[str, Any]]:
         yield key, item
 
 
-def _emit(value: Any, out: list[str], level: int, indent: str) -> None:
+def _emit(value: object, out: list[str], level: int, indent: str) -> None:
     """Append the canonical JSON representation of ``value`` to ``out``."""
     if isinstance(value, Mapping):
         items = sorted(_iter_items(value), key=lambda item: item[0])
@@ -118,17 +118,17 @@ def _require(condition: bool, message: str) -> None:
         raise TraceError(message)
 
 
-def _as_dict(value: Any, path: str) -> dict[str, Any]:
+def _as_dict(value: object, path: str) -> dict[str, Any]:
     _require(isinstance(value, Mapping), f"{path} must be an object")
     return dict(value)
 
 
-def _as_list(value: Any, path: str) -> list[Any]:
+def _as_list(value: object, path: str) -> list[Any]:
     _require(isinstance(value, (list, tuple)), f"{path} must be an array")
     return list(value)
 
 
-def _as_float(value: Any, path: str) -> float:
+def _as_float(value: object, path: str) -> float:
     _require(
         isinstance(value, (int, float)) and not isinstance(value, bool),
         f"{path} must be a number",
@@ -138,7 +138,7 @@ def _as_float(value: Any, path: str) -> float:
     return number
 
 
-def _as_int(value: Any, path: str) -> int:
+def _as_int(value: object, path: str) -> int:
     _require(
         isinstance(value, int) and not isinstance(value, bool),
         f"{path} must be an integer",
@@ -146,13 +146,13 @@ def _as_int(value: Any, path: str) -> int:
     return int(value)
 
 
-def _as_bool(value: Any, path: str) -> bool:
+def _as_bool(value: object, path: str) -> bool:
     _require(isinstance(value, bool), f"{path} must be a boolean")
     return bool(value)
 
 
 def _object_fields(
-    value: Any,
+    value: object,
     path: str,
     *,
     required: set[str],
@@ -175,7 +175,7 @@ def _object_fields(
     return result
 
 
-def _json_value(value: Any, path: str) -> None:
+def _json_value(value: object, path: str) -> None:
     """Validate extensible provenance values as finite JSON data."""
     if isinstance(value, Mapping):
         for key, item in _iter_items(value):
@@ -194,7 +194,7 @@ def _json_value(value: Any, path: str) -> None:
     )
 
 
-def _matrix(path: str, value: Any, channels: int, rows: int, columns: int) -> None:
+def _matrix(path: str, value: object, channels: int, rows: int, columns: int) -> None:
     spin_values = _as_list(value, path)
     _require(
         len(spin_values) == channels,
@@ -218,7 +218,7 @@ def _matrix(path: str, value: Any, channels: int, rows: int, columns: int) -> No
                 _as_float(element, f"{row_path}[{column_index}]")
 
 
-def _spectrum(path: str, value: Any, channels: int, length: int) -> None:
+def _spectrum(path: str, value: object, channels: int, length: int) -> None:
     channel_values = _as_list(value, path)
     _require(
         len(channel_values) == channels,
@@ -235,7 +235,7 @@ def _spectrum(path: str, value: Any, channels: int, length: int) -> None:
             _as_float(element, f"{channel_path}[{element_index}]")
 
 
-def _multipoles(path: str, value: Any, atoms: int, components: int) -> None:
+def _multipoles(path: str, value: object, atoms: int, components: int) -> None:
     """Validate restricted ``[spin=1][atom][component]`` multipoles."""
     spin_values = _as_list(value, path)
     _require(
@@ -309,7 +309,7 @@ def _validate_atomic_charges(
         shell_offset += shell_count
 
 
-def validate(trace: Any) -> None:
+def validate(trace: object) -> None:
     """Validate a candidate restricted ``gpuxtb-scc-trace-v1`` document.
 
     The JSON Schema carries the machine-readable static contract; this runtime
@@ -486,7 +486,8 @@ def validate(trace: Any) -> None:
             offset = _as_int(value, f"basis.shell_offsets[{atom_index}]")
             _require(
                 offset == expected_offset,
-                f"basis.shell_offsets[{atom_index}] must be {expected_offset}, got {offset}",
+                f"basis.shell_offsets[{atom_index}] must be {expected_offset}, "
+                f"got {offset}",
             )
             expected_offset += validated_shell_counts[atom_index]
 
@@ -570,14 +571,16 @@ def validate(trace: Any) -> None:
         mixed = _flatten_population(entry, "mixed")
         raw = _flatten_population(entry, "raw")
         reconstructed = [
-            raw_value - mixed_value for raw_value, mixed_value in zip(raw, mixed)
+            raw_value - mixed_value
+            for raw_value, mixed_value in zip(raw, mixed, strict=True)
         ]
         for residual_index, (actual, expected) in enumerate(
-            zip(validated_residual, reconstructed)
+            zip(validated_residual, reconstructed, strict=True)
         ):
             _require(
                 actual == expected,
-                f"{path}.residual[{residual_index}] must equal raw q/d/Q minus mixed q/d/Q "
+                f"{path}.residual[{residual_index}] must equal raw q/d/Q "
+                "minus mixed q/d/Q "
                 f"(expected {expected!r}, got {actual!r})",
             )
         residual_rms = _as_float(entry["residual_rms"], path + ".residual_rms")
@@ -613,11 +616,13 @@ def validate(trace: Any) -> None:
         _require(
             overall_converged
             == (energy_converged and population_converged and temperature_converged),
-            f"{path}.convergence.overall must be the conjunction of energy, population, and temperature",
+            f"{path}.convergence.overall must be the conjunction of energy, "
+            "population, and temperature",
         )
         _require(
             not overall_converged or iteration_offset + 1 == len(iterations),
-            f"{path}.convergence.overall cannot be true before the final completed iteration",
+            f"{path}.convergence.overall cannot be true before the final "
+            "completed iteration",
         )
 
     failed_attempt: dict[str, Any] | None = None
@@ -680,11 +685,12 @@ def validate(trace: Any) -> None:
     elif iterations:
         _require(
             not bool(iterations[-1]["convergence"]["overall"]),
-            "the last completed iteration cannot be converged unless terminal.status is 1",
+            "the last completed iteration cannot be converged unless "
+            "terminal.status is 1",
         )
 
 
-def dumps(trace: Any) -> str:
+def dumps(trace: object) -> str:
     """Serialize a validated trace to canonical JSON with a trailing newline."""
     validate(trace)
     out: list[str] = []

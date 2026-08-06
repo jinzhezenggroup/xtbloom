@@ -5,7 +5,7 @@
   },
   "generator": {
     "path": "tools/parameters/generate_gfn2.py",
-    "sha256": "ed31736ca1940d0ae711fa1532db17d0a5210bae0e81dafd841c8f5cb0cfc80e"
+    "sha256": "218dca6add7a30f94b1d05603efc080d8e16de858cf1b5fa68ea4e6338583fe9"
   },
   "method": "gfn2-xtb",
   "outputs": {

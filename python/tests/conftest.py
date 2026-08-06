@@ -9,13 +9,14 @@ import pytest
 from gpuxtb import library
 
 
-def pytest_configure(config) -> None:
+def pytest_configure(config: pytest.Config) -> None:
+    """Register the CUDA availability marker."""
     marker = "cuda: requires a gpuxtb library built with CUDA and a device"
     config.addinivalue_line("markers", marker)
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _ensure_library():
+def _ensure_library() -> str | Path:
     """Resolve the gpuxtb shared library once for the whole session.
 
     Missing or unloadable native code is a packaging/test failure.  In

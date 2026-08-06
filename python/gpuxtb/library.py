@@ -13,16 +13,20 @@ units. Electronic temperatures in the ``gpuxtb_compute_options_t`` are
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import ctypes.util
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Sequence, Union
+from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 
 from .exceptions import GPUxtbRuntimeError
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 # --- ABI constants (kept in sync with include/gpuxtb/gpuxtb.h) ----------------
 
@@ -67,7 +71,7 @@ DEFAULT_ELECTRONIC_TEMPERATURE = 300.0 * KELVIN_TO_HARTREE
 class ContextOptions(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_context_options_t`` ABI version 1."""
 
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("backend", ctypes.c_int32),
@@ -81,7 +85,7 @@ class ContextOptions(ctypes.Structure):
 class ConstBuffer(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_const_buffer_t`` (caller-owned input view)."""
 
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, object]]] = [
         ("data", ctypes.c_void_p),
         ("size_bytes", ctypes.c_size_t),
         ("memory_space", ctypes.c_int32),
@@ -92,7 +96,7 @@ class ConstBuffer(ctypes.Structure):
 class Buffer(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_buffer_t`` (caller-owned output view)."""
 
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, object]]] = [
         ("data", ctypes.c_void_p),
         ("size_bytes", ctypes.c_size_t),
         ("memory_space", ctypes.c_int32),
@@ -103,7 +107,7 @@ class Buffer(ctypes.Structure):
 class Batch(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_batch_t`` including the ABI-v2 spin suffix."""
 
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("batch_size", ctypes.c_int64),
@@ -129,7 +133,7 @@ class Batch(ctypes.Structure):
 class ComputeOptions(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_compute_options_t`` through ABI version 2."""
 
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("model", ctypes.c_int32),
@@ -147,7 +151,7 @@ class ComputeOptions(ctypes.Structure):
 class BatchResult(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_batch_result_t`` ABI version 1."""
 
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("flags", ctypes.c_uint32),
@@ -165,7 +169,7 @@ class BatchResult(ctypes.Structure):
 # --- Shared-library discovery -------------------------------------------------
 
 
-def _installed_package_library() -> Optional[Path]:
+def _installed_package_library() -> Path | None:
     """Locate ``libgpuxtb`` installed next to the Python package inside a wheel.
 
     With ``wheel.install-dir = "gpuxtb"`` the CMake install step drops the
@@ -190,7 +194,7 @@ def _installed_package_library() -> Optional[Path]:
     return candidates[0] if candidates else None
 
 
-def library_path() -> Union[str, Path]:
+def library_path() -> str | Path:
     """Return the path to the gpuxtb shared library.
 
     Resolution order:
@@ -205,7 +209,7 @@ def library_path() -> Union[str, Path]:
         when no shared library can be found.
     """
     explicit = os.environ.get("GPUXTB_LIBRARY")
-    candidates: list[Union[str, Path]] = []
+    candidates: list[str | Path] = []
     if explicit:
         candidates.append(explicit)
     bundled = _installed_package_library()
@@ -274,7 +278,7 @@ def _configure_library(library: ctypes.CDLL) -> None:
     library.gpuxtb_compute.restype = ctypes.c_int32
 
 
-_lib: Optional[ctypes.CDLL] = None
+_lib: ctypes.CDLL | None = None
 _dll_directory_handles: list = []
 
 
@@ -292,8 +296,9 @@ def _runtime_search_dirs() -> list[Path]:
 
     try:
         import site
-    except Exception:  # pragma: no cover - defensive
-        site = None
+    except Exception:  # noqa: BLE001 - defensive: probe environments where
+        # `site` is unavailable without aborting library discovery
+        site = None  # pragma: no cover - defensive
     site_packages = (
         getattr(site, "getsitepackages", lambda: [])() if site is not None else []
     )
@@ -315,9 +320,11 @@ def _runtime_search_dirs() -> list[Path]:
         # The PyPI `mkl` package installs its libraries into the interpreter
         # prefix root's lib/ (site-packages/../../libmkl_rt.so.3 in a venv or
         # conda env), so add that location as well.
-        for prefix_lib in (base.parent.parent, base.parent.parent.parent):
-            if prefix_lib.name == "lib" and prefix_lib.is_dir():
-                dirs.append(prefix_lib)
+        dirs.extend(
+            prefix_lib
+            for prefix_lib in (base.parent.parent, base.parent.parent.parent)
+            if prefix_lib.name == "lib" and prefix_lib.is_dir()
+        )
         # scipy-openblas32 (LP64) / scipy-openblas64 (ILP64) install their
         # prefixed runtime under <site-packages>/scipy_openblas{32,64}/lib.
         for openblas_style in ("scipy_openblas32", "scipy_openblas64"):
@@ -383,12 +390,10 @@ def _preload_runtime_libraries() -> list[str]:
     search_dirs = _runtime_search_dirs()
     if os.name == "nt":
         for directory in search_dirs:
-            try:
-                # The returned object removes the directory when it is closed;
-                # keep it alive for as long as the native library may be used.
+            # The returned object removes the directory when it is closed;
+            # keep it alive for as long as the native library may be used.
+            with contextlib.suppress(OSError):
                 _dll_directory_handles.append(os.add_dll_directory(str(directory)))
-            except OSError:
-                pass
         return []
 
     loaded: list[str] = []
@@ -437,7 +442,7 @@ def get_library() -> ctypes.CDLL:
 # --- Thin checked wrappers ------------------------------------------------------
 
 
-def _decode(value: Optional[Union[bytes, str]]) -> str:
+def _decode(value: bytes | str | None) -> str:
     if value is None:
         return "<null>"
     return (
@@ -470,7 +475,7 @@ def _check_init(operation: str, status: int) -> None:
         )
 
 
-def device_memory_info(device_id: int = 0) -> Optional[tuple[int, int]]:
+def device_memory_info(device_id: int = 0) -> tuple[int, int] | None:
     """Return ``(free_bytes, total_bytes)`` for one CUDA device, or ``None``.
 
     Used by the auto-batch-size controller to budget a batch slice from actual
@@ -574,8 +579,10 @@ def compute_checked(
 
 
 def host_const(
-    values: Optional[Sequence[Union[int, float, bool]]], ctype, dtype
-) -> "tuple[ConstBuffer, np.ndarray]":
+    values: Sequence[int | float | bool] | None,
+    ctype: type[ctypes._SimpleCData],
+    dtype: object,
+) -> tuple[ConstBuffer, np.ndarray]:
     """Build a host ``gpuxtb_const_buffer_t`` from a numpy-compatible sequence.
 
     The returned buffer aliases the contiguous numpy array, so the caller must
@@ -600,7 +607,11 @@ def host_const(
     )
 
 
-def empty_result_shape(shape, ctype, dtype) -> "tuple[Buffer, np.ndarray]":
+def empty_result_shape(
+    shape: int | tuple[int, ...],
+    ctype: type[ctypes._SimpleCData],
+    dtype: object,
+) -> tuple[Buffer, np.ndarray]:
     """Allocate a host output buffer and return its descriptor plus owner."""
     owner = np.empty(shape, dtype=dtype)
     return (
@@ -616,46 +627,46 @@ def empty_result_shape(shape, ctype, dtype) -> "tuple[Buffer, np.ndarray]":
 
 __all__ = [
     "API_VERSION",
-    "STATUS_SUCCESS",
-    "STATUS_INVALID_ARGUMENT",
-    "STATUS_BACKEND_UNAVAILABLE",
-    "STATUS_NOT_SUPPORTED",
-    "STATUS_ALLOCATION_FAILED",
-    "STATUS_NOT_IMPLEMENTED",
-    "STATUS_INTERNAL_ERROR",
-    "STATUS_SCC_NOT_CONVERGED",
-    "STATUS_EIGENSOLVER_FAILED",
     "BACKEND_AUTO",
     "BACKEND_CPU",
     "BACKEND_CUDA",
     "BACKEND_ROCM",
-    "MEMORY_HOST",
+    "COMPUTE_ATOMIC_CHARGES",
+    "COMPUTE_ENERGY",
+    "COMPUTE_FORCES",
+    "COMPUTE_POINT_CHARGE_FORCES",
+    "DEFAULT_ELECTRONIC_TEMPERATURE",
+    "KELVIN_TO_HARTREE",
     "MEMORY_CUDA_DEVICE",
+    "MEMORY_HOST",
     "MEMORY_ROCM_DEVICE",
     "MODEL_GFN1_XTB",
     "MODEL_GFN2_XTB",
     "SCC_START_FRESH",
     "SCC_START_WARM",
-    "COMPUTE_ENERGY",
-    "COMPUTE_FORCES",
-    "COMPUTE_ATOMIC_CHARGES",
-    "COMPUTE_POINT_CHARGE_FORCES",
-    "KELVIN_TO_HARTREE",
-    "DEFAULT_ELECTRONIC_TEMPERATURE",
-    "ContextOptions",
-    "ConstBuffer",
-    "Buffer",
+    "STATUS_ALLOCATION_FAILED",
+    "STATUS_BACKEND_UNAVAILABLE",
+    "STATUS_EIGENSOLVER_FAILED",
+    "STATUS_INTERNAL_ERROR",
+    "STATUS_INVALID_ARGUMENT",
+    "STATUS_NOT_IMPLEMENTED",
+    "STATUS_NOT_SUPPORTED",
+    "STATUS_SCC_NOT_CONVERGED",
+    "STATUS_SUCCESS",
     "Batch",
-    "ComputeOptions",
     "BatchResult",
-    "library_path",
-    "load_library",
+    "Buffer",
+    "ComputeOptions",
+    "ConstBuffer",
+    "ContextOptions",
+    "compute_checked",
+    "device_memory_info",
+    "empty_result_shape",
+    "get_last_error",
     "get_library",
     "get_version",
-    "status_string",
-    "get_last_error",
-    "device_memory_info",
-    "compute_checked",
     "host_const",
-    "empty_result_shape",
+    "library_path",
+    "load_library",
+    "status_string",
 ]

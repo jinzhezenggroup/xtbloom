@@ -9,7 +9,8 @@ from gpuxtb import Calculator, Context, Structure, library, numbers_to_symbols
 from gpuxtb.exceptions import GPUxtbRuntimeError, GPUxtbValueError
 
 
-def test_multiplicity_maps_to_unpaired_electrons():
+def test_multiplicity_maps_to_unpaired_electrons() -> None:
+    """Map multiplicity to its number of unpaired electrons."""
     calc = Calculator(
         "GFN2-xTB",
         np.array([1]),
@@ -22,14 +23,16 @@ def test_multiplicity_maps_to_unpaired_electrons():
     assert calc2.uhf == 2
 
 
-def test_default_spin_channels_follow_open_shell():
+def test_default_spin_channels_follow_open_shell() -> None:
+    """Choose unrestricted channels by default only for open shells."""
     closed = Calculator("GFN2-xTB", np.array([1, 1]), np.zeros((2, 3)))
     assert closed.spin_channels == 1
     open_shell = Calculator("GFN2-xTB", np.array([1, 1]), np.zeros((2, 3)), uhf=1)
     assert open_shell.spin_channels == 2
 
 
-def test_structure_rejects_invalid_inputs():
+def test_structure_rejects_invalid_inputs() -> None:
+    """Reject invalid spin state and nonintegral atomic numbers."""
     with pytest.raises(GPUxtbValueError):
         Structure(np.array([1]), np.zeros((1, 3)), spin_channels=3)
     with pytest.raises(GPUxtbValueError):
@@ -45,7 +48,10 @@ def test_structure_rejects_invalid_inputs():
 
 
 @pytest.mark.parametrize("numbers", [[6.9], [0], [-1], [119], [True]])
-def test_numbers_to_symbols_rejects_invalid_atomic_numbers(numbers):
+def test_numbers_to_symbols_rejects_invalid_atomic_numbers(
+    numbers: list[int | float | bool],
+) -> None:
+    """Reject atomic numbers outside the exact supported integer range."""
     with pytest.raises(GPUxtbValueError):
         numbers_to_symbols(numbers)
 
@@ -61,7 +67,7 @@ def _library_has_cuda() -> bool:
 
 
 @pytest.mark.cuda
-def test_cuda_unrestricted_open_shell_is_supported():
+def test_cuda_unrestricted_open_shell_is_supported() -> None:
     """The public Python CUDA path accepts ABI-v2 unrestricted radicals."""
     if not _library_has_cuda():
         pytest.skip("CUDA backend is not available on this host")
@@ -96,7 +102,8 @@ def test_cuda_unrestricted_open_shell_is_supported():
 
 
 @pytest.mark.cuda
-def test_auto_keeps_cuda_for_spin_updates_on_gpu_hosts():
+def test_auto_keeps_cuda_for_spin_updates_on_gpu_hosts() -> None:
+    """Keep auto-selected CUDA state across orbital-channel updates."""
     if not _library_has_cuda():
         pytest.skip("CUDA backend is not available on this host")
 
@@ -129,7 +136,7 @@ def test_auto_keeps_cuda_for_spin_updates_on_gpu_hosts():
 
 
 @pytest.mark.cuda
-def test_cuda_closed_shell_matches_golden():
+def test_cuda_closed_shell_matches_golden() -> None:
     """A restricted closed-shell CUDA run must reproduce the golden numbers."""
     if not _library_has_cuda():
         pytest.skip("CUDA backend is not available on this host")
