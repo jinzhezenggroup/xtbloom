@@ -1278,24 +1278,34 @@ int test_ragged_mixer_failure_isolated_from_peer_commit() {
 int test_inactive_peer_history_untouched_by_active_only_commit() {
   Fixture fixture;
   std::string error;
-  CHECK(make_fixture(3, fixture, error, 2u));
-  for (int iteration = 0; iteration < 2; ++iteration) {
-    CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
-                                       fixture.overlap_cache, fixture.wavefunction,
-                                       fixture.mixer_state, fixture.driver_state,
-                                       fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
-  }
+  CHECK(make_fixture(3, fixture, error, 5u));
+  /* Run to full convergence so systems 0 and 1 are inactive peers. */
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.converged[0] == 1u);
+  CHECK(fixture.driver_state.converged[1] == 1u);
+  CHECK(fixture.driver_state.converged[2] == 1u);
+
+  /* System 2 becomes the only active member while systems 0 and 1 stay
+   * converged. Its commit must copy only its own history: the inactive peers'
+   * mixer histories (including their statuses) must remain byte-identical. */
+  CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 2, fixture.wavefunction,
+                                      fixture.mixer_state, fixture.driver_state,
+                                      error) == GPUXTB_STATUS_SUCCESS);
   const MixerSystemSnapshot first = snapshot_mixer_system(fixture, 0u);
   const MixerSystemSnapshot second = snapshot_mixer_system(fixture, 1u);
-  /* At most one more driver iteration can run before every member converges;
-   * after the first pass most systems are already converged, so repeated
-   * calls must leave their published history completely untouched. */
+  const double active_qsh_before = fixture.wavefunction.qsh[0];
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
                                      fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
   CHECK(mixer_snapshots_equal(first, snapshot_mixer_system(fixture, 0u)));
   CHECK(mixer_snapshots_equal(second, snapshot_mixer_system(fixture, 1u)));
+  CHECK(fixture.driver_state.converged[2] == 1u);
+  CHECK(fixture.mixer_state.iterations[2] == 1u);
+  CHECK(fixture.wavefunction.qsh[0] == active_qsh_before);
   return 0;
 }
 

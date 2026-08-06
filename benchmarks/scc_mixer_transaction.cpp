@@ -98,7 +98,8 @@ std::vector<double> median_samples(std::vector<double> samples) {
 
 int main(int argc, char** argv) {
   const std::size_t batch = argc > 1 ? static_cast<std::size_t>(std::atoll(argv[1])) : 64u;
-  const std::size_t atoms_per_system = argc > 2 ? static_cast<std::size_t>(std::atoll(argv[2])) : 6u;
+  const std::size_t atoms_per_system =
+      argc > 2 ? static_cast<std::size_t>(std::atoll(argv[2])) : 6u;
   const std::int64_t history_size = argc > 3 ? std::atoll(argv[3]) : 64;
   const std::size_t repetitions = argc > 4 ? static_cast<std::size_t>(std::atoll(argv[4])) : 200u;
   const char* json_path = argc > 5 ? argv[5] : nullptr;
@@ -116,16 +117,16 @@ int main(int argc, char** argv) {
   std::vector<std::int32_t> spin_channels(batch, 1);
 
   BasisPlan basis;
-  if (gpuxtb::detail::gfn2::make_basis_plan(
-          static_cast<std::int64_t>(batch), total_atoms, atom_offsets.data(),
-          atomic_numbers.data(), basis, error) != GPUXTB_STATUS_SUCCESS) {
+  if (gpuxtb::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(batch), total_atoms,
+                                            atom_offsets.data(), atomic_numbers.data(), basis,
+                                            error) != GPUXTB_STATUS_SUCCESS) {
     std::fprintf(stderr, "make_basis_plan: %s\n", error.c_str());
     return 1;
   }
   WavefunctionLayout layout;
-  if (gpuxtb::detail::gfn2::make_wavefunction_layout(
-          basis, atomic_numbers.data(), charges.data(), unpaired.data(), spin_channels.data(),
-          layout, error) != GPUXTB_STATUS_SUCCESS) {
+  if (gpuxtb::detail::gfn2::make_wavefunction_layout(basis, atomic_numbers.data(), charges.data(),
+                                                     unpaired.data(), spin_channels.data(), layout,
+                                                     error) != GPUXTB_STATUS_SUCCESS) {
     std::fprintf(stderr, "make_wavefunction_layout: %s\n", error.c_str());
     return 1;
   }
@@ -151,9 +152,9 @@ int main(int argc, char** argv) {
   SccMixerState state;
   SccMixerState staged;
   SccMixerWorkspace scratch;
-  if (gpuxtb::detail::gfn2::bind_wavefunction_view(
-          layout, wavefunction_storage.data, wavefunction_storage.size, wavefunction,
-          error) != GPUXTB_STATUS_SUCCESS ||
+  if (gpuxtb::detail::gfn2::bind_wavefunction_view(layout, wavefunction_storage.data,
+                                                   wavefunction_storage.size, wavefunction,
+                                                   error) != GPUXTB_STATUS_SUCCESS ||
       gpuxtb::detail::gfn2::initialize_sad_multipole_state(layout, wavefunction, error) !=
           GPUXTB_STATUS_SUCCESS ||
       gpuxtb::detail::gfn2::bind_scc_mixer_state(plan, state_storage.data, state_storage.size,
@@ -175,8 +176,7 @@ int main(int argc, char** argv) {
   std::vector<std::size_t> history_offsets(batch);
   std::size_t history_cursor = 0u;
   for (std::size_t system = 0u; system < batch; ++system) {
-    const std::size_t dimension =
-        static_cast<std::size_t>(offsets[system + 1u] - offsets[system]);
+    const std::size_t dimension = static_cast<std::size_t>(offsets[system + 1u] - offsets[system]);
     dimensions[system] = dimension;
     vector_offsets[system] = static_cast<std::size_t>(offsets[system]);
     history_offsets[system] = history_cursor;
@@ -197,9 +197,9 @@ int main(int argc, char** argv) {
                          0.0002 * static_cast<double>(system + 1u) * static_cast<double>(iteration);
       }
       set_system_vector(layout, wavefunction, system, raw.data());
-      if (gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(
-              plan, static_cast<std::int64_t>(system), wavefunction, state, scratch,
-              error) != GPUXTB_STATUS_SUCCESS) {
+      if (gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(plan, static_cast<std::int64_t>(system),
+                                                           wavefunction, state, scratch,
+                                                           error) != GPUXTB_STATUS_SUCCESS) {
         std::fprintf(stderr, "warmup mix: %s\n", error.c_str());
         return 1;
       }
@@ -216,6 +216,34 @@ int main(int argc, char** argv) {
   };
 
   const auto active_counts = [&]() {
+    /* Optional argv[6]: ","-separated explicit active-system counts. Without
+     * it, use fractions of the fixed batch so every row keeps the same total
+     * batch history and only the active count changes. */
+    if (argc > 6) {
+      std::vector<std::size_t> counts;
+      for (const char* cursor = argv[6]; *cursor != '\0';) {
+        char* end = nullptr;
+        const long long value = std::strtoll(cursor, &end, 10);
+        if (end == cursor || value <= 0 || static_cast<std::uint64_t>(value) > batch) {
+          std::fprintf(stderr, "invalid active-count list near \"%s\"\n", cursor);
+          std::exit(1);
+        }
+        counts.push_back(static_cast<std::size_t>(value));
+        if (*end == '\0') {
+          break;
+        }
+        if (*end != ',') {
+          std::fprintf(stderr, "invalid active-count list near \"%s\"\n", end);
+          std::exit(1);
+        }
+        cursor = end + 1;
+      }
+      if (counts.empty()) {
+        std::fprintf(stderr, "active-count list must be nonempty\n");
+        std::exit(1);
+      }
+      return counts;
+    }
     std::vector<std::size_t> counts{batch / 8u, batch / 4u, batch / 2u, batch};
     if (counts.front() == 0u) {
       counts[0u] = 1u;
@@ -230,12 +258,18 @@ int main(int argc, char** argv) {
            1.0e3;
   };
 
-  const std::size_t scalar_bytes =
-      2u * sizeof(double) + 2u * sizeof(std::uint64_t) + sizeof(gpuxtb_status_t) +
-      2u * sizeof(std::uint8_t);
+  const std::size_t scalar_bytes = 2u * sizeof(double) + 2u * sizeof(std::uint64_t) +
+                                   sizeof(gpuxtb_status_t) + 2u * sizeof(std::uint8_t);
   const std::size_t per_system_bytes =
       (3u * dimensions.front() + 2u * dimensions.front() * memory + memory) * sizeof(double) +
       scalar_bytes;
+
+  /* Steady-state scratch, allocated once before timing so the measured loops
+   * perform no per-call allocation. */
+  std::vector<std::vector<double>> raw_scratch(batch);
+  for (std::size_t system = 0u; system < batch; ++system) {
+    raw_scratch[system].resize(dimensions[system]);
+  }
 
   struct Row {
     std::size_t active = 0u;
@@ -249,14 +283,16 @@ int main(int argc, char** argv) {
   rows.reserve(active_counts.size());
 
   std::printf("mixer_transaction_benchmark\n");
-  std::printf("batch=%zu atoms_per_system=%zu history=%lld state_size_bytes=%zu "
-              "vector_bytes=%zu history_bytes=%zu per_system_bytes=%zu\n",
-              batch, atoms_per_system, static_cast<long long>(history_size),
-              static_cast<size_t>(plan.state_size_bytes()),
-              static_cast<size_t>(plan.total_vector_elements()) * sizeof(double),
-              history_cursor * sizeof(double), per_system_bytes);
-  std::printf("row,active_systems,old_copy_us,copy_transaction_us,mix_transaction_us,"
-              "old_copy_bytes,new_transaction_bytes\n");
+  std::printf(
+      "batch=%zu atoms_per_system=%zu history=%lld state_size_bytes=%zu "
+      "vector_bytes=%zu history_bytes=%zu per_system_bytes=%zu\n",
+      batch, atoms_per_system, static_cast<long long>(history_size),
+      static_cast<size_t>(plan.state_size_bytes()),
+      static_cast<size_t>(plan.total_vector_elements()) * sizeof(double),
+      history_cursor * sizeof(double), per_system_bytes);
+  std::printf(
+      "row,active_systems,old_copy_us,copy_transaction_us,mix_transaction_us,"
+      "old_copy_bytes,new_transaction_bytes\n");
 
   for (const std::size_t active : active_counts) {
     Row row;
@@ -281,36 +317,55 @@ int main(int argc, char** argv) {
     for (std::size_t round = 0u; round < repetitions; ++round) {
       scrub();
       auto start = timestamp();
+      bool copy_ok = true;
       for (std::size_t system = 0u; system < active; ++system) {
-        (void)gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
-            plan, static_cast<std::int64_t>(system), state, staged, error);
-        (void)gpuxtb::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
-            plan, static_cast<std::int64_t>(system), staged, state, error);
+        copy_ok = copy_ok &&
+                  gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+                      plan, static_cast<std::int64_t>(system), state, staged, error) ==
+                      GPUXTB_STATUS_SUCCESS &&
+                  gpuxtb::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
+                      plan, static_cast<std::int64_t>(system), staged, state, error) ==
+                      GPUXTB_STATUS_SUCCESS;
       }
       row.copy_samples.push_back(elapsed_us(start));
+      if (!copy_ok) {
+        std::fprintf(stderr, "transaction copy failed: %s\n", error.c_str());
+        return 1;
+      }
 
       /* A realistic mix transaction additionally runs one Broyden transition
-       * against a freshly prepared raw output and commits it. */
+       * against a freshly prepared raw output and commits it. Rounds advance
+       * the per-system iteration counter; history saturates at history_size
+       * transitions, and every row here starts far beyond saturation. */
       scrub();
       start = timestamp();
+      bool mix_ok = true;
       for (std::size_t system = 0u; system < active; ++system) {
-        (void)gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
-            plan, static_cast<std::int64_t>(system), state, staged, error);
+        mix_ok = mix_ok && gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+                               plan, static_cast<std::int64_t>(system), state, staged, error) ==
+                               GPUXTB_STATUS_SUCCESS;
         const std::size_t dimension = dimensions[system];
         const std::size_t vector_offset = vector_offsets[system];
-        std::vector<double> raw(dimension);
+        std::vector<double>& raw = raw_scratch[system];
         for (std::size_t component = 0u; component < dimension; ++component) {
           raw[component] =
               state.current_inputs[vector_offset + component] +
               0.0005 * static_cast<double>(component + 1u) * static_cast<double>(round + 1u);
         }
         set_system_vector(layout, wavefunction, system, raw.data());
-        (void)gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(
-            plan, static_cast<std::int64_t>(system), wavefunction, staged, scratch, error);
-        (void)gpuxtb::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
-            plan, static_cast<std::int64_t>(system), staged, state, error);
+        mix_ok = mix_ok &&
+                 gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(
+                     plan, static_cast<std::int64_t>(system), wavefunction, staged, scratch,
+                     error) == GPUXTB_STATUS_SUCCESS &&
+                 gpuxtb::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
+                     plan, static_cast<std::int64_t>(system), staged, state, error) ==
+                     GPUXTB_STATUS_SUCCESS;
       }
       row.mix_samples.push_back(elapsed_us(start));
+      if (!mix_ok) {
+        std::fprintf(stderr, "transaction mix failed: %s\n", error.c_str());
+        return 1;
+      }
     }
 
     const std::vector<double> old_stats = median_samples(row.old_samples);
