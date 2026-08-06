@@ -243,6 +243,12 @@ class Gfn2CudaExecutionCache {
   [[nodiscard]] Gfn2CudaExecutionIdentity identity() const noexcept;
 
  private:
+  friend gpuxtb_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache,
+                                                           const gpuxtb_batch_t& batch,
+                                                           const gpuxtb_compute_options_t& options,
+                                                           gpuxtb_batch_result_t& result,
+                                                           bool require_prepared_topology,
+                                                           std::string& error);
   friend gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
                                                       const gpuxtb_batch_t& batch,
                                                       const gpuxtb_compute_options_t& options,
@@ -268,6 +274,14 @@ class Gfn2CudaExecutionCache {
                                                            const gpuxtb_compute_options_t& options,
                                                            gpuxtb_batch_result_t& result,
                                                            std::string& error);
+
+/* Plan-owned variant of the public transaction. It uses the same pointer and
+ * canonical topology staging as gpuxtb_compute, but rejects a topology
+ * candidate before numerical refresh instead of rebuilding the prepared
+ * runtime. This is the fixed-topology corruption gate for device descriptors. */
+[[nodiscard]] gpuxtb_status_t execute_restricted_gfn2_cuda_plan(
+    Gfn2CudaExecutionCache& cache, const gpuxtb_batch_t& batch,
+    const gpuxtb_compute_options_t& options, gpuxtb_batch_result_t& result, std::string& error);
 
 }  // namespace gpuxtb::detail
 

@@ -101,8 +101,13 @@ static int run_installed_inference(gpuxtb_context_t* context, const char* mode_n
     gpuxtb_plan_destroy(plan);
     return 14;
   }
+  const gpuxtb_backend_t backend = gpuxtb_context_get_backend(context);
+  const int device_workspace_invalid =
+      backend == GPUXTB_BACKEND_CUDA
+          ? workspace.device_required_bytes == 0u || workspace.device_required_alignment == 0u
+          : workspace.device_required_bytes != 0u || workspace.device_required_alignment != 1u;
   if (workspace.host_required_bytes == 0u || workspace.host_required_alignment == 0u ||
-      workspace.device_required_bytes != 0u) {
+      device_workspace_invalid) {
     fprintf(stderr, "installed %s workspace query returned inconsistent sizes\n", mode_name);
     gpuxtb_plan_destroy(plan);
     return 15;

@@ -169,6 +169,10 @@ class CpuWorkerPool final {
     task_count_ = 0u;
   }
 
+  [[nodiscard]] std::size_t resident_bytes() const noexcept {
+    return workers_.capacity() * sizeof(std::thread);
+  }
+
  private:
   void drain_tasks(Task task, void* context, std::size_t task_count) noexcept {
     for (;;) {
@@ -888,8 +892,8 @@ std::size_t sum_double_vectors(std::initializer_list<const std::vector<double>*>
 }  // namespace
 
 std::size_t SystemExecution::resident_bytes() const noexcept {
-  const std::size_t small_vectors = vector_bytes(atom_offsets) + vector_bytes(point_offsets) +
-                                    vector_bytes(molecular_charges) +
+  const std::size_t small_vectors = vector_bytes(key.atomic_numbers) + vector_bytes(atom_offsets) +
+                                    vector_bytes(point_offsets) + vector_bytes(molecular_charges) +
                                     vector_bytes(unpaired_electrons) + vector_bytes(spin_channels) +
                                     vector_bytes(periodic_status);
   const std::size_t planar_vectors = sum_double_vectors({
@@ -1609,12 +1613,47 @@ gpuxtb_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
 std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache) noexcept {
   std::lock_guard<std::mutex> lock(cache.impl_->mutex);
   const Gfn2CpuExecutionCache::Impl& implementation = *cache.impl_;
-  std::size_t total = 0u;
+  /* Count every retained allocation owned by the plan cache. The object sizes
+   * cover inline metadata; vector capacities cover their heap reservations. */
+  std::size_t total = sizeof(Gfn2CpuExecutionCache::Impl) +
+                      implementation.workers.resident_bytes() +
+                      vector_bytes(implementation.systems);
   for (const std::unique_ptr<SystemExecution>& system : implementation.systems) {
-    total += system->resident_bytes();
+    total += sizeof(SystemExecution) + system->resident_bytes();
   }
-  /* Batch-level staging retained across steady-state calls: the copied input
-   * request is topology-sized and independent of the requested properties. */
+
+  const auto key_vector_bytes = [](const std::vector<SystemKey>& keys) noexcept {
+    std::size_t bytes = vector_bytes(keys);
+    for (const SystemKey& key : keys) bytes += vector_bytes(key.atomic_numbers);
+    return bytes;
+  };
+  const auto output_vector_bytes = [](const std::vector<SystemOutput>& outputs) noexcept {
+    std::size_t bytes = vector_bytes(outputs);
+    for (const SystemOutput& output : outputs) {
+      bytes += vector_bytes(output.forces) + vector_bytes(output.atomic_charges) +
+               vector_bytes(output.point_forces);
+    }
+    return bytes;
+  };
+  const auto string_vector_bytes = [](const std::vector<std::string>& strings) noexcept {
+    std::size_t bytes = vector_bytes(strings);
+    /* capacity()+1 is a conservative reservation for implementations whose
+     * empty diagnostic uses small-string storage inside the vector element. */
+    for (const std::string& value : strings) bytes += value.capacity() + 1u;
+    return bytes;
+  };
+
+  /* Batch-level topology/policy keys and transaction staging all survive
+   * steady-state calls and must be represented by the workspace query. */
+  total += key_vector_bytes(implementation.keys) + key_vector_bytes(implementation.requested_keys) +
+           output_vector_bytes(implementation.outputs) +
+           string_vector_bytes(implementation.system_errors) +
+           vector_bytes(implementation.inference_statuses) +
+           vector_bytes(implementation.task_failures) + vector_bytes(implementation.energies) +
+           vector_bytes(implementation.forces) + vector_bytes(implementation.atomic_charges) +
+           vector_bytes(implementation.point_forces) + vector_bytes(implementation.iterations) +
+           vector_bytes(implementation.converged) + vector_bytes(implementation.system_statuses);
+
   const HostRequest& request = implementation.request;
   total += vector_bytes(request.atom_offsets) + vector_bytes(request.atomic_numbers) +
            vector_bytes(request.positions) + vector_bytes(request.molecular_charges) +

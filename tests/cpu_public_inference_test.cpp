@@ -1205,6 +1205,39 @@ struct PlanDeleter {
 
 using PlanHandle = std::unique_ptr<gpuxtb_plan_t, PlanDeleter>;
 
+int test_plan_creation_model_and_abi_prefix_contracts() {
+  const std::uint32_t flags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES;
+  ContextHandle context = make_cpu_context(1);
+  CHECK(context != nullptr);
+
+  PublicBatch request = make_repeated_h2_he_batch(2u);
+  request.bind(flags);
+
+  /* This allocation contains only the ABI-v1 prefix. Plan normalization must
+   * not copy/read the ABI-v2 suffix that an older caller does not own. */
+  void* short_storage = ::operator new(GPUXTB_COMPUTE_OPTIONS_V1_SIZE);
+  auto* short_options = static_cast<gpuxtb_compute_options_t*>(short_storage);
+  CHECK(gpuxtb_compute_options_init(short_options, GPUXTB_COMPUTE_OPTIONS_V1_SIZE) ==
+        GPUXTB_STATUS_SUCCESS);
+  short_options->flags = flags;
+  gpuxtb_plan_t* raw_short_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &request.batch, short_options, &raw_short_plan) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(raw_short_plan != nullptr);
+  gpuxtb_plan_destroy(raw_short_plan);
+  ::operator delete(short_storage);
+
+  /* GFN1 is a reserved ABI value. Plan setup rejects it consistently on CPU
+   * before it creates a GFN2 cache that would fail only at execution time. */
+  gpuxtb_compute_options_t gfn1 = request.options;
+  gfn1.model = GPUXTB_MODEL_GFN1_XTB;
+  gpuxtb_plan_t* raw_gfn1_plan = reinterpret_cast<gpuxtb_plan_t*>(UINTPTR_MAX);
+  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &gfn1, &raw_gfn1_plan) ==
+        GPUXTB_STATUS_NOT_SUPPORTED);
+  CHECK(raw_gfn1_plan == nullptr);
+  return 0;
+}
+
 int test_plan_create_query_workspace_and_reuse() {
   const std::uint32_t flags =
       GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
@@ -1497,6 +1530,9 @@ int main() {
   }
   if (const int line = test_degenerate_occupation_representability_is_publicly_successful();
       line != 0) {
+    return line;
+  }
+  if (const int line = test_plan_creation_model_and_abi_prefix_contracts(); line != 0) {
     return line;
   }
   if (const int line = test_plan_create_query_workspace_and_reuse(); line != 0) {

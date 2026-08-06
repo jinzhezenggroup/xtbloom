@@ -126,9 +126,18 @@ struct FixedTopology {
 };
 
 gpuxtb_compute_options_t normalize_plan_policy(const gpuxtb_compute_options_t& options) noexcept {
-  gpuxtb_compute_options_t policy = options;
+  /* ABI-v1 callers own only the first 48 bytes. Copy the validated prefix
+   * field-by-field so plan creation never reads the optional v2 suffix. */
+  gpuxtb_compute_options_t policy{};
   policy.struct_size = GPUXTB_COMPUTE_OPTIONS_V2_SIZE;
   policy.api_version = GPUXTB_API_VERSION;
+  policy.model = options.model;
+  policy.flags = options.flags;
+  policy.max_scc_iterations = options.max_scc_iterations;
+  policy.reserved = 0u;
+  policy.charge_tolerance = options.charge_tolerance;
+  policy.energy_tolerance = options.energy_tolerance;
+  policy.electronic_temperature = options.electronic_temperature;
   policy.scc_start_mode = GPUXTB_SCC_START_FRESH;
   policy.reserved_v2 = 0u;
   return policy;
@@ -143,10 +152,9 @@ bool plan_policy_matches(const gpuxtb_compute_options_t& policy,
          options.electronic_temperature == policy.electronic_temperature;
 }
 
-/* Plan identity compares host-readable topology bytes on every plan compute.
- * CUDA callers may keep the immutable topology host-resident while numerical
- * geometry stays device-resident, which matches the public mixed-mode
- * convention; a device-resident topology is rejected for a plan. */
+/* CPU plan identity compares host-readable topology bytes on every compute.
+ * CUDA plans use the backend's canonical mixed-memory topology staging, which
+ * validates pointer ownership before it snapshots or compares caller bytes. */
 bool host_resident(gpuxtb_memory_space_t memory_space) noexcept {
   return memory_space == GPUXTB_MEMORY_HOST;
 }
@@ -259,20 +267,29 @@ gpuxtb_status_t Gfn2Plan::create(Context& context, const gpuxtb_batch_t& batch,
     error = std::move(validation.error);
     return validation.status;
   }
-  if (!topology_host_resident(batch)) {
-    error =
-        "plan identity requires host-resident topology buffers (offsets, element numbers, "
-        "charges, spin channels)";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  if (options.model == GPUXTB_MODEL_GFN1_XTB) {
+    error = "GFN1-xTB is reserved by the ABI but is not implemented yet";
+    return GPUXTB_STATUS_NOT_SUPPORTED;
   }
 
   impl_->backend = context.backend;
   impl_->context = &context;
   impl_->policy = normalize_plan_policy(options);
-  impl_->topology.capture(batch);
+  impl_->topology.batch_size = batch.batch_size;
+  impl_->topology.total_atoms = batch.total_atoms;
+  impl_->topology.total_point_charges = batch.total_point_charges;
+  impl_->topology.total_charge_response_elements = batch.total_charge_response_elements;
   impl_->cuda_prepared = false;
 
   if (context.backend == GPUXTB_BACKEND_CPU) {
+    if (!topology_host_resident(batch)) {
+      error =
+          "CPU plan identity requires host-resident topology buffers (offsets, element numbers, "
+          "charges, spin channels)";
+      impl_->context = nullptr;
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    impl_->topology.capture(batch);
     impl_->cpu_cache = std::make_shared<Gfn2CpuExecutionCache>(context.cpu_threads);
     bool reused = false;
     gpuxtb_status_t status =
@@ -332,26 +349,9 @@ gpuxtb_status_t Gfn2Plan::query_workspace(std::uint32_t compute_flags,
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
   if (impl_->backend == GPUXTB_BACKEND_CPU) {
-    /* Persistent bytes are captured at plan creation. Add only the
-     * flag-dependent publication staging on top. */
-    std::size_t host_bytes = impl_->cpu_persistent_bytes;
-    const std::size_t batch = static_cast<std::size_t>(impl_->topology.batch_size);
-    const std::size_t atoms = static_cast<std::size_t>(impl_->topology.total_atoms);
-    const std::size_t points = static_cast<std::size_t>(impl_->topology.total_point_charges);
-    if ((compute_flags & GPUXTB_COMPUTE_ENERGY) != 0u) {
-      host_bytes += batch * sizeof(double);
-    }
-    if ((compute_flags & GPUXTB_COMPUTE_FORCES) != 0u) {
-      host_bytes += 3u * atoms * sizeof(double);
-    }
-    if ((compute_flags & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0u) {
-      host_bytes += atoms * sizeof(double);
-    }
-    if ((compute_flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0u) {
-      host_bytes += 3u * points * sizeof(double);
-    }
-    host_bytes += batch * (sizeof(std::int32_t) + sizeof(std::uint8_t) + sizeof(std::int32_t));
-    query.host_required_bytes = static_cast<std::uint64_t>(host_bytes);
+    /* The captured value includes per-system state, copied inputs, policy
+     * keys, worker/publication metadata, and all flag-dependent output staging. */
+    query.host_required_bytes = static_cast<std::uint64_t>(impl_->cpu_persistent_bytes);
     query.host_required_alignment = static_cast<std::uint32_t>(kHostWorkspaceAlignment);
     query.device_required_bytes = 0u;
     query.device_required_alignment = 1u;
@@ -426,27 +426,22 @@ gpuxtb_status_t Gfn2Plan::compute(const gpuxtb_batch_t& batch,
     return GPUXTB_STATUS_INTERNAL_ERROR;
   }
 
-  if (!topology_host_resident(batch)) {
-    error =
-        "plan compute requires host-resident topology buffers (offsets, element numbers, "
-        "charges, spin channels)";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
-  }
-  if (!impl_->topology.matches(batch)) {
-    error = "the batch topology does not match the fixed plan topology";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
-  }
-
   if (!plan_policy_matches(impl_->policy, options)) {
     error = "the compute options do not match the fixed plan policy";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
 
-  if (options.model == GPUXTB_MODEL_GFN1_XTB) {
-    return GPUXTB_STATUS_NOT_SUPPORTED;
-  }
-
   if (impl_->backend == GPUXTB_BACKEND_CPU) {
+    if (!topology_host_resident(batch)) {
+      error =
+          "CPU plan compute requires host-resident topology buffers (offsets, element numbers, "
+          "charges, spin channels)";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    if (!impl_->topology.matches(batch)) {
+      error = "the batch topology does not match the fixed plan topology";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
     if (impl_->cpu_cache == nullptr) {
       error = "plan does not own a CPU GFN2 execution cache";
       return GPUXTB_STATUS_INTERNAL_ERROR;
@@ -458,7 +453,7 @@ gpuxtb_status_t Gfn2Plan::compute(const gpuxtb_batch_t& batch,
     error = "plan does not own a CUDA GFN2 execution cache";
     return GPUXTB_STATUS_INTERNAL_ERROR;
   }
-  return execute_restricted_gfn2_cuda(*impl_->cuda_cache, batch, options, result, error);
+  return execute_restricted_gfn2_cuda_plan(*impl_->cuda_cache, batch, options, result, error);
 #else
   error = "the gpuxtb library was built without CUDA support";
   return GPUXTB_STATUS_BACKEND_UNAVAILABLE;

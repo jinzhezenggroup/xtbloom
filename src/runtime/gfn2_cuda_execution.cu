@@ -4670,7 +4670,7 @@ struct Gfn2CudaExecutionCache::Impl {
 
   gpuxtb_status_t validate_public_request_pointers(const gpuxtb_batch_t& batch,
                                                    const gpuxtb_compute_options_t& options,
-                                                   const gpuxtb_batch_result_t& result,
+                                                   const gpuxtb_batch_result_t* result,
                                                    std::string& error) {
     std::int64_t coordinates = 0;
     std::int64_t point_coordinates = 0;
@@ -4754,6 +4754,7 @@ struct Gfn2CudaExecutionCache::Impl {
                             response_active ? batch.total_charge_response_elements : 0,
                             sizeof(double), alignof(double));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (result == nullptr) return GPUXTB_STATUS_SUCCESS;
 
     const bool energy_requested =
         (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_ENERGY)) != 0u;
@@ -4763,27 +4764,27 @@ struct Gfn2CudaExecutionCache::Impl {
         (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_ATOMIC_CHARGES)) != 0u;
     const bool point_forces_requested =
         (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_POINT_CHARGE_FORCES)) != 0u;
-    status = validate_output("energies", result.energies, energy_requested ? batch.batch_size : 0,
+    status = validate_output("energies", result->energies, energy_requested ? batch.batch_size : 0,
                              sizeof(double), alignof(double));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
-    status = validate_output("forces", result.forces, force_requested ? coordinates : 0,
+    status = validate_output("forces", result->forces, force_requested ? coordinates : 0,
                              sizeof(double), alignof(double));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status =
-        validate_output("atomic_charges", result.atomic_charges,
+        validate_output("atomic_charges", result->atomic_charges,
                         charges_requested ? batch.total_atoms : 0, sizeof(double), alignof(double));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
-    status = validate_output("point_charge_forces", result.point_charge_forces,
+    status = validate_output("point_charge_forces", result->point_charge_forces,
                              point_forces_requested ? point_coordinates : 0, sizeof(double),
                              alignof(double));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
-    status = validate_output("scc_iterations", result.scc_iterations, batch.batch_size,
+    status = validate_output("scc_iterations", result->scc_iterations, batch.batch_size,
                              sizeof(std::int32_t), alignof(std::int32_t));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
-    status = validate_output("scc_converged", result.scc_converged, batch.batch_size,
+    status = validate_output("scc_converged", result->scc_converged, batch.batch_size,
                              sizeof(std::uint8_t), alignof(std::uint8_t));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
-    return validate_output("per_system_status", result.per_system_status, batch.batch_size,
+    return validate_output("per_system_status", result->per_system_status, batch.batch_size,
                            sizeof(gpuxtb_status_t), alignof(gpuxtb_status_t));
   }
 
@@ -5811,10 +5812,12 @@ Gfn2CudaExecutionCache::Gfn2CudaExecutionCache(std::int32_t device_id, void* str
 
 Gfn2CudaExecutionCache::~Gfn2CudaExecutionCache() = default;
 
-gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
-                                             const gpuxtb_batch_t& batch,
-                                             const gpuxtb_compute_options_t& options,
-                                             gpuxtb_batch_result_t& result, std::string& error) {
+gpuxtb_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache,
+                                                  const gpuxtb_batch_t& batch,
+                                                  const gpuxtb_compute_options_t& options,
+                                                  gpuxtb_batch_result_t& result,
+                                                  bool require_prepared_topology,
+                                                  std::string& error) {
   if (cache.impl_ == nullptr) {
     error = "CUDA GFN2 execution cache has no implementation";
     return GPUXTB_STATUS_INTERNAL_ERROR;
@@ -5842,7 +5845,7 @@ gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
     gpuxtb_status_t status =
         validate_cuda_stream_owner(implementation.device_id, implementation.stream, true, error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
-    status = implementation.validate_public_request_pointers(batch, options, result, error);
+    status = implementation.validate_public_request_pointers(batch, options, &result, error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = implementation.ensure_handles(error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
@@ -5858,6 +5861,11 @@ gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
         topology_candidate_pending = false;
       }
     };
+    if (require_prepared_topology && topology_candidate_pending) {
+      abort_topology_candidate();
+      error = "the batch topology does not match the fixed CUDA plan topology";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
     const Gfn2CudaTopologyHostSnapshot* topology =
         topology_candidate_pending ? implementation.topology_staging.candidate_snapshot()
                                    : implementation.topology_staging.committed_snapshot();
@@ -5986,6 +5994,21 @@ gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
   return finish(transaction_status);
 }
 
+gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
+                                             const gpuxtb_batch_t& batch,
+                                             const gpuxtb_compute_options_t& options,
+                                             gpuxtb_batch_result_t& result, std::string& error) {
+  return execute_restricted_gfn2_cuda_impl(cache, batch, options, result, false, error);
+}
+
+gpuxtb_status_t execute_restricted_gfn2_cuda_plan(Gfn2CudaExecutionCache& cache,
+                                                  const gpuxtb_batch_t& batch,
+                                                  const gpuxtb_compute_options_t& options,
+                                                  gpuxtb_batch_result_t& result,
+                                                  std::string& error) {
+  return execute_restricted_gfn2_cuda_impl(cache, batch, options, result, true, error);
+}
+
 gpuxtb_status_t Gfn2CudaExecutionCache::prepare_host(const gpuxtb_batch_t& batch,
                                                      const gpuxtb_compute_options_t& options,
                                                      bool& reused, std::string& error) {
@@ -6076,7 +6099,12 @@ gpuxtb_status_t Gfn2CudaExecutionCache::prepare_topology_only(
   };
 
   const gpuxtb_status_t setup_status = [&]() -> gpuxtb_status_t {
-    gpuxtb_status_t status = impl_->ensure_handles(error);
+    gpuxtb_status_t status =
+        validate_cuda_stream_owner(impl_->device_id, impl_->stream, true, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = impl_->validate_public_request_pointers(batch, options, nullptr, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = impl_->ensure_handles(error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
 
     const Gfn2CudaTopologyStagingDiagnostic staged =

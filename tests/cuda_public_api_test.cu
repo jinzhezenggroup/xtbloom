@@ -1087,12 +1087,21 @@ int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
   MaterializedResult reference;
   CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
 
-  /* Keep topology host-readable for exact plan identity, but place geometry on
-   * the CUDA device. Plan creation must support this mixed public descriptor
-   * rather than requiring an initial host geometry copy. */
+  /* Plan identity is canonicalized by the CUDA owner, so a plan accepts the
+   * same all-device topology descriptors as gpuxtb_compute. */
   DeviceBatchInputs device_inputs;
-  CUDA_CHECK(device_inputs.upload_numerical(batch));
-  batch.descriptor.positions = device_inputs.positions_.descriptor();
+  CUDA_CHECK(device_inputs.upload_all(batch));
+  bind_inputs(batch, &device_inputs, InputLayout::kDevice);
+  CHECK(verify_input_layout(batch, InputLayout::kDevice, false) == 0);
+
+  /* CUDA pointer ownership is checked before topology staging reads a buffer.
+   * A device pointer tagged as HOST must fail plan creation transactionally. */
+  gpuxtb_batch_t mislabeled = batch.descriptor;
+  mislabeled.atom_offsets.memory_space = GPUXTB_MEMORY_HOST;
+  gpuxtb_plan_t* raw_mislabeled_plan = reinterpret_cast<gpuxtb_plan_t*>(UINTPTR_MAX);
+  CHECK(gpuxtb_plan_create(context.get(), &mislabeled, &options, &raw_mislabeled_plan) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(raw_mislabeled_plan == nullptr);
 
   gpuxtb_plan_t* raw_plan = nullptr;
   CHECK(gpuxtb_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
@@ -1142,7 +1151,7 @@ int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
   MaterializedResult changed_reference;
   CHECK(run_cpu_reference(cpu_context, batch, options, changed_reference) == 0);
   CUDA_CHECK(device_inputs.upload_numerical(batch));
-  batch.descriptor.positions = device_inputs.positions_.descriptor();
+  bind_inputs(batch, &device_inputs, InputLayout::kDevice);
   {
     ResultOwner owner;
     CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
@@ -1153,15 +1162,34 @@ int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
     CHECK(compare_result(owner, actual, changed_reference, options) == 0);
   }
 
-  /* A mismatched topology fails before output mutation (corrupted plan). */
+  /* A mislabeled device topology on compute is rejected before output
+   * mutation, before host-side identity code could dereference it. */
+  {
+    ResultOwner owner;
+    CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
+    gpuxtb_batch_t mislabeled_compute = batch.descriptor;
+    mislabeled_compute.atomic_numbers.memory_space = GPUXTB_MEMORY_HOST;
+    CHECK(gpuxtb_plan_compute(plan.get(), &mislabeled_compute, &options, &owner.descriptor) ==
+          GPUXTB_STATUS_INVALID_ARGUMENT);
+    bool unchanged = false;
+    CUDA_CHECK(owner.unchanged(unchanged));
+    CHECK(unchanged);
+  }
+
+  /* A mismatched all-device topology fails before output mutation (corrupted
+   * plan) rather than rebuilding the plan-owned prepared runtime. */
   PublicBatch other;
   CHECK(make_fixture_batch(2u, false, other) == 0);
-  gpuxtb_batch_result_t result{};
-  CHECK(gpuxtb_batch_result_init(&result, sizeof(result)) == GPUXTB_STATUS_SUCCESS);
-  result.flags = kResultFlagsCanary;
-  CHECK(gpuxtb_plan_compute(plan.get(), &other.descriptor, &options, &result) ==
+  DeviceBatchInputs other_inputs;
+  CUDA_CHECK(other_inputs.upload_all(other));
+  bind_inputs(other, &other_inputs, InputLayout::kDevice);
+  ResultOwner other_result;
+  CUDA_CHECK(other_result.bind(other, ResultLayout::kDevice, options.flags));
+  CHECK(gpuxtb_plan_compute(plan.get(), &other.descriptor, &options, &other_result.descriptor) ==
         GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(result.flags == kResultFlagsCanary);
+  bool unchanged = false;
+  CUDA_CHECK(other_result.unchanged(unchanged));
+  CHECK(unchanged);
 
   g_scenario = "plan-api";
   return 0;

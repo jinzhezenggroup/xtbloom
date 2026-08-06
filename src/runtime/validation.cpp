@@ -673,9 +673,12 @@ DescriptorValidationResult validate_plan_descriptor_structure(
   if (!prefix.ok()) {
     return prefix;
   }
-  DescriptorValidationResult semantics = validate_host_topology_semantics(*batch);
-  if (!semantics.ok()) {
-    return semantics;
+  DescriptorValidationResult semantics;
+  if (backend == GPUXTB_BACKEND_CPU) {
+    semantics = validate_host_topology_semantics(*batch);
+    if (!semantics.ok()) {
+      return semantics;
+    }
   }
   DescriptorValidationResult aliases =
       validate_compute_descriptor_aliases(*batch, *options, nullptr, extents);
