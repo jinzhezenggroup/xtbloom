@@ -374,8 +374,9 @@ gpuxtb_status_t Gfn2Plan::query_workspace(std::uint32_t compute_flags,
       impl_->cuda_prepared
           ? impl_->cuda_force_device_bytes
           : identity.force_immutable_arena_bytes + identity.force_execution_arena_bytes;
-  const std::uint64_t device_bytes =
-      base_device + ((compute_flags & GPUXTB_COMPUTE_FORCES) != 0u ? force_device : 0u);
+  const bool force_mode =
+      (compute_flags & (GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_POINT_CHARGE_FORCES)) != 0u;
+  const std::uint64_t device_bytes = base_device + (force_mode ? force_device : 0u);
   const std::uint64_t host_bytes =
       (impl_->cuda_prepared ? impl_->cuda_host_workspace_bytes
                             : static_cast<std::uint64_t>(identity.provider_host_workspace_bytes)) +

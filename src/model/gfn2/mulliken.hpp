@@ -49,6 +49,7 @@ class MullikenPlan {
   [[nodiscard]] std::int64_t quadrupole_population_elements() const noexcept;
   [[nodiscard]] std::int64_t population_scratch_elements() const noexcept;
   [[nodiscard]] std::int64_t hamiltonian_scratch_elements() const noexcept;
+  [[nodiscard]] std::size_t resident_bytes() const noexcept;
 
   [[nodiscard]] const std::vector<std::int64_t>& atom_offsets() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& batch_shell_offsets() const noexcept;

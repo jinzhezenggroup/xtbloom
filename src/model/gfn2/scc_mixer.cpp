@@ -714,6 +714,17 @@ std::size_t SccMixerPlan::workspace_size_bytes() const noexcept {
   return data_ == nullptr ? 0u : data_->workspace_size_bytes;
 }
 
+std::size_t SccMixerPlan::resident_bytes() const noexcept {
+  if (data_ == nullptr) {
+    return 0u;
+  }
+  return sizeof(*data_) + data_->vector_offsets.capacity() * sizeof(std::int64_t) +
+         data_->history_offsets.capacity() * sizeof(std::int64_t) +
+         data_->qsh_system_offsets.capacity() * sizeof(std::int64_t) +
+         data_->dipole_system_offsets.capacity() * sizeof(std::int64_t) +
+         data_->quadrupole_system_offsets.capacity() * sizeof(std::int64_t);
+}
+
 const std::vector<std::int64_t>& SccMixerPlan::vector_offsets() const noexcept {
   static const std::vector<std::int64_t> empty;
   return data_ == nullptr ? empty : data_->vector_offsets;

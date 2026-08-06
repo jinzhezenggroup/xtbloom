@@ -296,6 +296,18 @@ std::int64_t ES2Plan::total_matrix_elements() const noexcept {
   return data_ == nullptr ? 0 : data_->total_matrix_elements;
 }
 
+std::size_t ES2Plan::resident_bytes() const noexcept {
+  if (data_ == nullptr) {
+    return 0u;
+  }
+  return sizeof(*data_) + data_->atom_offsets.capacity() * sizeof(std::int64_t) +
+         data_->batch_shell_offsets.capacity() * sizeof(std::int64_t) +
+         data_->atom_shell_offsets.capacity() * sizeof(std::int64_t) +
+         data_->matrix_offsets.capacity() * sizeof(std::int64_t) +
+         data_->shell_to_atom.capacity() * sizeof(std::int64_t) +
+         data_->shell_hardness.capacity() * sizeof(double);
+}
+
 const std::vector<std::int64_t>& ES2Plan::atom_offsets() const noexcept {
   return data_ == nullptr ? kEmptyInt64Vector : data_->atom_offsets;
 }

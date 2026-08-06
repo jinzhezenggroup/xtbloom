@@ -48,6 +48,7 @@ class SccMixerPlan {
   [[nodiscard]] double maximum_tolerance() const noexcept;
   [[nodiscard]] std::size_t state_size_bytes() const noexcept;
   [[nodiscard]] std::size_t workspace_size_bytes() const noexcept;
+  [[nodiscard]] std::size_t resident_bytes() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& vector_offsets() const noexcept;
   /* Exact field binding check used by higher-level SCC composers. */
   [[nodiscard]] bool matches_wavefunction_layout(const WavefunctionLayout& layout) const noexcept;

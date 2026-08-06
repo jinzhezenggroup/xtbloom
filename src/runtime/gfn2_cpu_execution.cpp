@@ -896,6 +896,62 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
                                     vector_bytes(point_offsets) + vector_bytes(molecular_charges) +
                                     vector_bytes(unpaired_electrons) + vector_bytes(spin_channels) +
                                     vector_bytes(periodic_status);
+  const std::size_t basis_plan_vectors =
+      vector_bytes(basis.atom_offsets) + vector_bytes(basis.batch_shell_offsets) +
+      vector_bytes(basis.batch_orbital_offsets) +
+      vector_bytes(basis.batch_cartesian_orbital_offsets) +
+      vector_bytes(basis.batch_primitive_offsets) + vector_bytes(basis.atom_shell_offsets) +
+      vector_bytes(basis.atom_orbital_offsets) +
+      vector_bytes(basis.atom_cartesian_orbital_offsets) +
+      vector_bytes(basis.atom_primitive_offsets) + vector_bytes(basis.shell_orbital_offsets) +
+      vector_bytes(basis.shell_cartesian_orbital_offsets) +
+      vector_bytes(basis.shell_primitive_offsets) + vector_bytes(basis.shell_to_atom) +
+      vector_bytes(basis.principal_quantum_numbers) + vector_bytes(basis.angular_momenta) +
+      vector_bytes(basis.slater_exponents) + vector_bytes(basis.primitive_exponents) +
+      vector_bytes(basis.primitive_coefficients);
+  const std::size_t direct_plan_vectors =
+      basis_plan_vectors + vector_bytes(integrals.matrix_offsets) +
+      vector_bytes(coordination.atom_offsets) + vector_bytes(coordination.covalent_radius) +
+      vector_bytes(repulsion.atom_offsets) + vector_bytes(repulsion.sqrt_alpha) +
+      vector_bytes(repulsion.effective_charge) + vector_bytes(repulsion.light_element) +
+      vector_bytes(h0.atom_offsets) + vector_bytes(h0.batch_shell_offsets) +
+      vector_bytes(h0.batch_orbital_offsets) + vector_bytes(h0.matrix_offsets) +
+      vector_bytes(h0.shell_pair_offsets) + vector_bytes(h0.atomic_radii) +
+      vector_bytes(h0.shell_levels) + vector_bytes(h0.shell_coordination_scale) +
+      vector_bytes(h0.shell_polynomial) + vector_bytes(h0.shell_pair_scale) +
+      vector_bytes(es3.batch_shell_offsets) + vector_bytes(es3.shell_gamma3) +
+      vector_bytes(spin.atom_offsets) + vector_bytes(spin.batch_shell_offsets) +
+      vector_bytes(spin.atom_shell_offsets) + vector_bytes(spin.shell_population_offsets) +
+      vector_bytes(spin.spin_channels) + vector_bytes(spin.coupling_offsets) +
+      vector_bytes(spin.coupling_matrices) + vector_bytes(external.atom_offsets) +
+      vector_bytes(external.batch_shell_offsets) + vector_bytes(external.point_charge_offsets) +
+      vector_bytes(external.shell_to_atom) + vector_bytes(external.shell_hardness);
+  const std::size_t wavefunction_plan_vectors =
+      vector_bytes(wavefunction_layout.atom_offsets) +
+      vector_bytes(wavefunction_layout.batch_shell_offsets) +
+      vector_bytes(wavefunction_layout.batch_orbital_offsets) +
+      vector_bytes(wavefunction_layout.atomic_numbers) +
+      vector_bytes(wavefunction_layout.molecular_charges) +
+      vector_bytes(wavefunction_layout.unpaired_electrons) +
+      vector_bytes(wavefunction_layout.spin_channels) +
+      vector_bytes(wavefunction_layout.reference_atom_occupations) +
+      vector_bytes(wavefunction_layout.reference_shell_occupations) +
+      vector_bytes(wavefunction_layout.electron_counts) +
+      vector_bytes(wavefunction_layout.alpha_electron_counts) +
+      vector_bytes(wavefunction_layout.beta_electron_counts) +
+      vector_bytes(wavefunction_layout.coefficients.system_offsets) +
+      vector_bytes(wavefunction_layout.eigenvalues.system_offsets) +
+      vector_bytes(wavefunction_layout.occupations.system_offsets) +
+      vector_bytes(wavefunction_layout.density.system_offsets) +
+      vector_bytes(wavefunction_layout.qsh.system_offsets) +
+      vector_bytes(wavefunction_layout.qat.system_offsets) +
+      vector_bytes(wavefunction_layout.dipole.system_offsets) +
+      vector_bytes(wavefunction_layout.quadrupole.system_offsets) +
+      vector_bytes(wavefunction_layout.energy_weighted_density.system_offsets);
+  const std::size_t opaque_plan_storage = es2.resident_bytes() + aes2.resident_bytes() +
+                                          mulliken.resident_bytes() + eigensolver.resident_bytes() +
+                                          mixer.resident_bytes() + d4.resident_bytes() +
+                                          periodic.resident_bytes() + driver.resident_bytes();
   const std::size_t planar_vectors = sum_double_vectors({
       &positions,
       &point_positions,
@@ -952,7 +1008,8 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
       warm_checkpoint_wavefunction_storage.size() + overlap_cache_storage.size() +
       eigensolver_workspace_storage.size() + mixer_state_storage.size() +
       driver_state_storage.size() + driver_workspace_storage.size();
-  return small_vectors + planar_vectors + aligned_buffers;
+  return small_vectors + direct_plan_vectors + wavefunction_plan_vectors + opaque_plan_storage +
+         planar_vectors + aligned_buffers;
 }
 
 gpuxtb_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend& backend,

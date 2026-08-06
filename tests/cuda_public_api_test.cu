@@ -1135,6 +1135,42 @@ int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
   CHECK(energy_query.host_required_bytes > 0u);
   CHECK(query.device_required_bytes >= energy_query.device_required_bytes);
 
+  /* Point-charge forces need the CUDA force arenas even when QM forces are
+   * not requested. Compare two plans over the exact same embedded topology so
+   * the property flag is the only source of the workspace-size difference. */
+  PublicBatch qmmm_batch;
+  CHECK(make_fixture_batch(4u, true, qmmm_batch) == 0);
+  gpuxtb_compute_options_t qmmm_energy_options = options;
+  qmmm_energy_options.flags = GPUXTB_COMPUTE_ENERGY;
+  gpuxtb_plan_t* raw_qmmm_energy_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &qmmm_batch.descriptor, &qmmm_energy_options,
+                           &raw_qmmm_energy_plan) == GPUXTB_STATUS_SUCCESS);
+  CHECK(raw_qmmm_energy_plan != nullptr);
+  PlanHandle qmmm_energy_plan(raw_qmmm_energy_plan);
+
+  gpuxtb_workspace_query_t qmmm_energy_query{};
+  CHECK(gpuxtb_workspace_query_init(&qmmm_energy_query, sizeof(qmmm_energy_query)) ==
+        GPUXTB_STATUS_SUCCESS);
+  qmmm_energy_query.compute_flags = qmmm_energy_options.flags;
+  CHECK(gpuxtb_plan_query_workspace(qmmm_energy_plan.get(), &qmmm_energy_query) ==
+        GPUXTB_STATUS_SUCCESS);
+
+  gpuxtb_compute_options_t qmmm_point_force_options = options;
+  qmmm_point_force_options.flags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_POINT_CHARGE_FORCES;
+  gpuxtb_plan_t* raw_qmmm_point_force_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &qmmm_batch.descriptor, &qmmm_point_force_options,
+                           &raw_qmmm_point_force_plan) == GPUXTB_STATUS_SUCCESS);
+  CHECK(raw_qmmm_point_force_plan != nullptr);
+  PlanHandle qmmm_point_force_plan(raw_qmmm_point_force_plan);
+
+  gpuxtb_workspace_query_t qmmm_point_force_query{};
+  CHECK(gpuxtb_workspace_query_init(&qmmm_point_force_query, sizeof(qmmm_point_force_query)) ==
+        GPUXTB_STATUS_SUCCESS);
+  qmmm_point_force_query.compute_flags = qmmm_point_force_options.flags;
+  CHECK(gpuxtb_plan_query_workspace(qmmm_point_force_plan.get(), &qmmm_point_force_query) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(qmmm_point_force_query.device_required_bytes > qmmm_energy_query.device_required_bytes);
+
   /* Plan compute equals the CPU reference on the original and a changed
    * geometry, proving fixed-topology reuse. */
   {

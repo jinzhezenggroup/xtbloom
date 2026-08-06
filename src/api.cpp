@@ -5,6 +5,7 @@
 #include <cstring>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <new>
 #include <string>
 #include <utility>
@@ -313,7 +314,8 @@ gpuxtb_status_t gpuxtb_plan_create(gpuxtb_context_t* context, const gpuxtb_batch
     return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "batch or compute options is NULL");
   }
   try {
-    gpuxtb::detail::Gfn2Plan* implementation = new (std::nothrow) gpuxtb::detail::Gfn2Plan{};
+    std::unique_ptr<gpuxtb::detail::Gfn2Plan> implementation(new (std::nothrow)
+                                                                 gpuxtb::detail::Gfn2Plan{});
     if (implementation == nullptr) {
       return fail(GPUXTB_STATUS_ALLOCATION_FAILED, "failed to allocate a plan implementation");
     }
@@ -322,16 +324,15 @@ gpuxtb_status_t gpuxtb_plan_create(gpuxtb_context_t* context, const gpuxtb_batch
         implementation->create(*context->implementation, *batch, *options, error);
     if (status != GPUXTB_STATUS_SUCCESS) {
       implementation->destroy();
-      delete implementation;
       return fail(status, std::move(error));
     }
 
-    gpuxtb_plan_t* wrapper = new (std::nothrow) gpuxtb_plan_t{implementation};
+    gpuxtb_plan_t* wrapper = new (std::nothrow) gpuxtb_plan_t{implementation.get()};
     if (wrapper == nullptr) {
       implementation->destroy();
-      delete implementation;
       return fail(GPUXTB_STATUS_ALLOCATION_FAILED, "failed to allocate a plan handle");
     }
+    implementation.release();
     *plan = wrapper;
     last_error.clear();
     return GPUXTB_STATUS_SUCCESS;
