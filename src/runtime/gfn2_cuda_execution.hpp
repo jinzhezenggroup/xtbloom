@@ -152,10 +152,14 @@ struct Gfn2CudaExecutionIdentity {
   std::size_t candidate_validation_arena_bytes = 0u;
   std::size_t topology_staging_host_bytes = 0u;
   std::size_t topology_staging_device_bytes = 0u;
+  /* Heap bodies for the prepared cache and its retained topology candidate. */
+  std::size_t runtime_owner_host_bytes = 0u;
   std::size_t host_plans_bytes = 0u;
   std::size_t topology_setup_host_bytes = 0u;
   std::size_t inputs_setup_host_bytes = 0u;
   std::size_t eigensolver_setup_host_bytes = 0u;
+  /* Host implementation record retained beside the device checkpoint. */
+  std::size_t initializer_host_bytes = 0u;
   std::size_t initializer_device_checkpoint_bytes = 0u;
   std::size_t scc_loop_device_control_bytes = 0u;
   /* Complete plan-owned reusable workspace totals. These include every arena

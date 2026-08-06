@@ -5877,18 +5877,23 @@ struct Gfn2CudaExecutionCache::Impl {
         topology_staging.workspace_bytes();
     identity.topology_staging_host_bytes = topology_workspace.host_bytes;
     identity.topology_staging_device_bytes = topology_workspace.device_bytes;
+    /* Cache/prepared records contain the inline host plans, arena owners, and
+     * descriptor metadata. Their nested heap payloads are counted below. */
+    identity.runtime_owner_host_bytes = sizeof(Impl) + sizeof(current);
     identity.host_plans_bytes = current.host.retained_host_bytes();
     identity.topology_setup_host_bytes = current.topology_owner.retained_host_bytes();
     identity.inputs_setup_host_bytes = current.inputs_owner.retained_host_bytes();
     identity.eigensolver_setup_host_bytes = current.eigensolver_owner.retained_host_bytes();
+    identity.initializer_host_bytes = current.initializer.retained_host_bytes();
     identity.initializer_device_checkpoint_bytes = current.initializer.image_bytes();
     identity.scc_loop_device_control_bytes = current.scc_loop.retained_device_bytes();
     identity.retained_host_workspace_bytes =
         identity.provider_host_workspace_bytes + identity.numerical_host_staging_arena_bytes +
         identity.public_result_host_arena_bytes + identity.candidate_validation_arena_bytes +
-        identity.topology_staging_host_bytes + identity.host_plans_bytes +
-        identity.topology_setup_host_bytes + identity.inputs_setup_host_bytes +
-        identity.eigensolver_setup_host_bytes;
+        identity.topology_staging_host_bytes + identity.runtime_owner_host_bytes +
+        identity.host_plans_bytes + identity.topology_setup_host_bytes +
+        identity.inputs_setup_host_bytes + identity.eigensolver_setup_host_bytes +
+        identity.initializer_host_bytes;
     identity.retained_device_workspace_bytes =
         identity.topology_arena_bytes + identity.input_arena_bytes +
         identity.iteration_arena_bytes + identity.eigensolver_setup_arena_bytes +

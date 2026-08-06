@@ -1222,6 +1222,10 @@ std::size_t Gfn2SccIterationInitializer::image_bytes() const noexcept {
   return impl_ == nullptr ? 0u : impl_->image_bytes;
 }
 
+std::size_t Gfn2SccIterationInitializer::retained_host_bytes() const noexcept {
+  return impl_ == nullptr ? 0u : sizeof(*impl_);
+}
+
 std::uint64_t Gfn2SccIterationInitializer::plan_token() const noexcept {
   return impl_ == nullptr ? 0u : impl_->plan_token;
 }

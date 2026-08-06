@@ -755,15 +755,18 @@ std::size_t Gfn2SccSetupTopology::retained_host_bytes() const noexcept {
   const auto bytes = [](const auto& values) noexcept {
     return values.capacity() * sizeof(typename std::decay_t<decltype(values)>::value_type);
   };
-  return impl_->arena.total_bytes + bytes(impl_->atom_offsets) + bytes(impl_->batch_shell_offsets) +
-         bytes(impl_->batch_orbital_offsets) + bytes(impl_->matrix_offsets) +
-         bytes(impl_->atom_shell_offsets) + bytes(impl_->shell_orbital_offsets) +
-         bytes(impl_->shell_to_atom) + bytes(impl_->orbital_to_shell) +
-         bytes(impl_->orbital_to_atom) + bytes(impl_->bucket_offsets) +
-         bytes(impl_->bucket_systems) + bytes(impl_->bucket_orbital_counts) +
-         bytes(impl_->spin_channels) + bytes(impl_->spin_channel_offsets) +
-         bytes(impl_->spin_orbital_offsets) + bytes(impl_->spin_matrix_offsets) +
-         bytes(impl_->spin_shell_offsets) + bytes(impl_->spin_atom_offsets) + bytes(impl_->buckets);
+  /* The owner retains both the implementation record and its pinned upload
+   * image; vector capacities account for the independent host copies. */
+  return sizeof(*impl_) + impl_->arena.total_bytes + bytes(impl_->atom_offsets) +
+         bytes(impl_->batch_shell_offsets) + bytes(impl_->batch_orbital_offsets) +
+         bytes(impl_->matrix_offsets) + bytes(impl_->atom_shell_offsets) +
+         bytes(impl_->shell_orbital_offsets) + bytes(impl_->shell_to_atom) +
+         bytes(impl_->orbital_to_shell) + bytes(impl_->orbital_to_atom) +
+         bytes(impl_->bucket_offsets) + bytes(impl_->bucket_systems) +
+         bytes(impl_->bucket_orbital_counts) + bytes(impl_->spin_channels) +
+         bytes(impl_->spin_channel_offsets) + bytes(impl_->spin_orbital_offsets) +
+         bytes(impl_->spin_matrix_offsets) + bytes(impl_->spin_shell_offsets) +
+         bytes(impl_->spin_atom_offsets) + bytes(impl_->buckets);
 }
 
 Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::bind_device_arena_and_upload_async(
