@@ -66,8 +66,8 @@ A Python package wrapping the public C ABI is provided under `python/` and is
 packaged with scikit-build-core:
 
 ```console
-pip install .             # CPU runtime
-pip install ".[cuda12]"  # CUDA 12 host runtimes
+uv sync --no-editable                # CPU runtime
+uv sync --no-editable --extra cuda12 # CUDA 12 host runtimes
 ```
 
 It offers a tblite-like single-molecule interface (`gpuxtb.Calculator`,

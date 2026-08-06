@@ -90,7 +90,8 @@ wheel.py-api = "py3"
 # GPUXTB_ENABLE_CUDA: AUTO enables the CUDA backend whenever a CUDA toolkit with
 # nvcc is available at build time and produces a CPU-only wheel otherwise. It
 # can be forced with, e.g.,
-# ``GPUXTB_ENABLE_CUDA=ON pip install .`` (see python/README.md).
+# ``GPUXTB_ENABLE_CUDA=ON uv sync --no-editable --extra cuda12``
+# (see python/README.md).
 [tool.scikit-build.cmake.define]
 GPUXTB_ENABLE_CUDA = { env = "GPUXTB_ENABLE_CUDA", default = "AUTO" }
 # Ship optimized SASS for the main data-center/consumer generations plus
