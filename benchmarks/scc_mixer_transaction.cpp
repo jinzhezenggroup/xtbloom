@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -184,9 +185,10 @@ int main(int argc, char** argv) {
   }
   const std::size_t memory = static_cast<std::size_t>(history_size);
 
-  /* Warm the Broyden path for every system so the measured $mix$ rows exercise
-   * history reads and writes instead of only the damped first step. */
-  for (int iteration = 0; iteration < 3; ++iteration) {
+  /* Warm the Broyden path through a full history depth for every system so all
+   * measured rows exercise the same saturated history regime instead of mixing
+   * startup iterations with steady-state samples. */
+  for (std::int64_t iteration = 0; iteration < history_size; ++iteration) {
     for (std::size_t system = 0u; system < batch; ++system) {
       const std::size_t dimension = dimensions[system];
       const std::size_t vector_offset = vector_offsets[system];
@@ -260,9 +262,13 @@ int main(int argc, char** argv) {
 
   const std::size_t scalar_bytes = 2u * sizeof(double) + 2u * sizeof(std::uint64_t) +
                                    sizeof(gpuxtb_status_t) + 2u * sizeof(std::uint8_t);
-  const std::size_t per_system_bytes =
+  const std::size_t per_system_copy_bytes =
       (3u * dimensions.front() + 2u * dimensions.front() * memory + memory) * sizeof(double) +
       scalar_bytes;
+  /* A successful transaction copies this payload once during prepare and once
+   * during commit. Count both directions so the byte metric matches the timed
+   * prepare+commit path and the two-memcpy old baseline. */
+  const std::size_t per_system_transaction_bytes = 2u * per_system_copy_bytes;
 
   /* Steady-state scratch, allocated once before timing so the measured loops
    * perform no per-call allocation. */
@@ -285,11 +291,12 @@ int main(int argc, char** argv) {
   std::printf("mixer_transaction_benchmark\n");
   std::printf(
       "batch=%zu atoms_per_system=%zu history=%lld state_size_bytes=%zu "
-      "vector_bytes=%zu history_bytes=%zu per_system_bytes=%zu\n",
+      "vector_bytes=%zu history_bytes=%zu per_system_copy_bytes=%zu "
+      "per_system_transaction_bytes=%zu\n",
       batch, atoms_per_system, static_cast<long long>(history_size),
       static_cast<size_t>(plan.state_size_bytes()),
       static_cast<size_t>(plan.total_vector_elements()) * sizeof(double),
-      history_cursor * sizeof(double), per_system_bytes);
+      history_cursor * sizeof(double), per_system_copy_bytes, per_system_transaction_bytes);
   std::printf(
       "row,active_systems,old_copy_us,copy_transaction_us,mix_transaction_us,"
       "old_copy_bytes,new_transaction_bytes\n");
@@ -298,7 +305,7 @@ int main(int argc, char** argv) {
     Row row;
     row.active = active;
     row.old_bytes = 2u * static_cast<size_t>(plan.state_size_bytes());
-    row.new_bytes = active * per_system_bytes;
+    row.new_bytes = active * per_system_transaction_bytes;
     row.old_samples.reserve(repetitions);
     row.copy_samples.reserve(repetitions);
     row.mix_samples.reserve(repetitions);
@@ -384,7 +391,8 @@ int main(int argc, char** argv) {
          << "  \"atoms_per_system\": " << atoms_per_system << ",\n"
          << "  \"history_size\": " << history_size << ",\n"
          << "  \"state_size_bytes\": " << plan.state_size_bytes() << ",\n"
-         << "  \"per_system_bytes\": " << per_system_bytes << ",\n"
+         << "  \"per_system_copy_bytes\": " << per_system_copy_bytes << ",\n"
+         << "  \"per_system_transaction_bytes\": " << per_system_transaction_bytes << ",\n"
          << "  \"repetitions\": " << repetitions << ",\n"
          << "  \"rows\": [\n";
     for (std::size_t index = 0u; index < rows.size(); ++index) {
