@@ -17,7 +17,7 @@ repos:
         args: ["--maxkb=1024", "--enforce-all"]
         # Canonical generated or raw evidence artifacts; each exact file is
         # tracked with a committed SHA-256 manifest.
-        exclude: ^(?:data/parameters/d4\.hpp|benchmarks/evidence/issue-168/2026-08-06-epyc7k62/(?:gpuxtb-fresh|gpuxtb-warm|tblite-persistent)\.json)$
+        exclude: ^(?:data/parameters/d4\.hpp|benchmarks/evidence/issue-168/2026-08-06-epyc7k62/(?:gpuxtb-fresh|gpuxtb-warm|tblite-persistent)\.json|benchmarks/evidence/issue-138/2026-08-06-node3/nsys-(?:baseline|repaired)-b(?:1|128)\.nsys-rep)$
       - id: check-merge-conflict
       - id: check-symlinks
       - id: check-toml
