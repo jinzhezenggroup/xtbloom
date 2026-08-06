@@ -70,6 +70,11 @@ enum class Gfn2GeometryDeviceError : std::uint32_t {
   kNonfiniteAdjoint = 10u,
   kNonfiniteGradientSeed = 11u,
   kNonfiniteVjpArithmetic = 12u,
+  /* Recorded by the sparse/dense CN consistency gate in the preprocessing
+   * composer when the bucketed pair-list coordination numbers disagree with
+   * the dense geometry cache.  The peer fails closed so a sparse/dense
+   * regression cannot silently publish different physics. */
+  kSparseCoordinationMismatch = 13u,
 };
 
 /*

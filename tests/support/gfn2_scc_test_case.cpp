@@ -332,6 +332,35 @@ bool HostSccCase::Impl::append_system(SmallSystemKind kind, std::int64_t system)
       atom(1, -4.0, 0.0, 0.0);
       atom(1, 4.0, 0.0, 0.0);
       break;
+    case SmallSystemKind::kCarbonSlab: {
+      /* A 20-carbon n-alkane C20H42 (62 atoms) in bohr.  Carbons form a
+       * straight chain along z at 1.54 bohr spacing; each interior carbon
+       * carries two hydrogens in y, and each terminal carbon carries three
+       * hydrogens, so every carbon has four neighbors.  The molecule is
+       * neutral, closed-shell, and wide-gap, so restricted 0 K SCC converges
+       * reliably, and 62 atoms crosses the 40-atom sparse pair-list crossover
+       * used by the production bucketed CN consistency gate. */
+      constexpr double bond = 1.54;
+      constexpr double h_bond = 1.09;
+      constexpr double h_y = h_bond * std::sin(109.5 * 3.14159265358979323846 / 180.0 / 2.0);
+      constexpr double h_z = h_bond * std::cos(109.5 * 3.14159265358979323846 / 180.0 / 2.0);
+      atom(6, 0.0, 0.0, 0.0);
+      for (std::int32_t carbon = 0; carbon < 20; ++carbon) {
+        const double z = static_cast<double>(carbon) * bond;
+        if (carbon > 0) {
+          atom(6, 0.0, 0.0, z);
+        }
+        if (carbon == 0 || carbon == 19) {
+          atom(1, h_y * 0.0, h_y, z + (carbon == 0 ? -h_z : h_z));
+          atom(1, h_y, 0.0, z);
+          atom(1, -h_y, 0.0, z);
+        } else {
+          atom(1, 0.0, h_y, z);
+          atom(1, 0.0, -h_y, z);
+        }
+      }
+      break;
+    }
     default:
       return false;
   }

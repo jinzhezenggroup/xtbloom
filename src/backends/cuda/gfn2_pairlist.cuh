@@ -14,6 +14,9 @@ namespace gpuxtb::detail::cuda {
 
 inline constexpr std::uint32_t kGfn2PairListAbiVersion = 1u;
 
+/* Default sparse cutoff matching the GFN2 coordination/reference cutoffs. */
+inline constexpr double kDefaultPairlistCutoffBohr = 25.0;
+
 /*
  * Pair-list strategy for one fixed-topology batch.
  *

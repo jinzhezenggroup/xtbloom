@@ -12,6 +12,7 @@
 #include "backends/cuda/gfn2_es2.cuh"
 #include "backends/cuda/gfn2_geometry.cuh"
 #include "backends/cuda/gfn2_integrals.cuh"
+#include "backends/cuda/gfn2_pairlist.cuh"
 
 namespace gpuxtb::detail::cuda {
 
@@ -52,6 +53,7 @@ enum class Gfn2PreprocessingBindingField : std::uint32_t {
   kSeal = 13u,
   kGeneration = 14u,
   kEpoch = 15u,
+  kPairlist = 16u,
 };
 
 struct Gfn2PreprocessingBindingDiagnostic {
@@ -74,6 +76,12 @@ enum class Gfn2PreprocessingDeviceError : std::uint32_t {
   kEs2PlanFailure = 5u,
   kAes2PlanFailure = 6u,
   kGeometryEpochOverflow = 7u,
+  /* The sparse pair-list builder failed or its coordination numbers disagreed
+   * bitwise with the dense geometry cache for a healthy peer.  Either event
+   * fails that peer closed so a sparse/dense regression can never silently
+   * publish different physics. */
+  kSparsePairlistFailure = 8u,
+  kSparseCoordinationMismatch = 9u,
 };
 
 /* Per-system summary; primitive-domain codes remain available in diagnostics. */
@@ -97,6 +105,13 @@ struct Gfn2PreprocessingDevicePlan {
   Gfn2H0DevicePlan h0{};
   Gfn2ES2DeviceBatch es2{};
   Gfn2AES2DeviceBatch aes2{};
+  /* Optional sparse pair-list view selected by the host dispatch policy.  When
+   * batch_size is zero the sparse CN consistency check is disabled and all
+   * pairlist pointers must be null.  When enabled it shares the canonical
+   * atom_offsets/covalent_radii pointers with geometry and the sparse bucketed
+   * builder produces a coordination_numbers check that must match the dense
+   * geometry cache bitwise for every healthy peer. */
+  Gfn2PairListDeviceBatch pairlist{};
   std::uint64_t plan_token = 0u;
 };
 
@@ -138,6 +153,8 @@ struct Gfn2PreprocessingDeviceOutput {
    * path must use operator_generations and published_mask as the commit record. */
   Gfn2ES2DeviceCache es2{};
   Gfn2AES2DeviceCache aes2{};
+  /* Published sparse pair-list state when the pairlist plan leaf is enabled. */
+  Gfn2PairListDeviceCache pairlist{};
   /* Per-system generation for the complete S/D/Q/H0/ES2/AES2 transaction. */
   std::uint64_t* operator_generations = nullptr;
   std::int64_t generation_elements = 0;
@@ -163,6 +180,13 @@ struct Gfn2PreprocessingDeviceDiagnostics {
   std::uint32_t* system_stages = nullptr;
   std::int64_t system_stage_elements = 0;
   std::uint32_t* plan_error = nullptr;
+  /* Sparse pair-list domain.  The bucketed builder and coordination evaluator
+   * report here, then the consistency gate folds any mismatch into the
+   * geometry system errors so the existing publication gate rejects the peer.
+   * Both buffers must be present when plan.pairlist is enabled. */
+  std::uint32_t* sparse_system_errors = nullptr;
+  std::int64_t sparse_system_elements = 0;
+  std::uint32_t* sparse_device_error = nullptr;
   std::uint64_t plan_token = 0u;
 };
 
@@ -194,6 +218,13 @@ struct Gfn2PreprocessingDeviceWorkspace {
   Gfn2ES2DeviceWorkspace es2{};
   Gfn2AES2DeviceCache aes2_candidate{};
   Gfn2AES2DeviceWorkspace aes2{};
+  /* Sparse pair-list candidate state; only valid when the plan leaf is enabled
+   * and its host scheduler has provisioned these buffers.  The sparse
+   * coordination check writes here before the dense/parity gate publishes. */
+  Gfn2PairListDeviceCache pairlist_candidate{};
+  Gfn2PairListDeviceWorkspace pairlist{};
+  double* sparse_coordination = nullptr;
+  std::int64_t sparse_coordination_elements = 0;
   std::uint64_t plan_token = 0u;
 };
 
@@ -272,6 +303,18 @@ static_assert(std::is_standard_layout_v<Gfn2PreprocessingLaunchDiagnostic>);
  * prior cache generations. Epoch overflow fails the complete plan closed.
  */
 [[nodiscard]] Gfn2PreprocessingLaunchDiagnostic compose_gfn2_preprocessing_epoch_cuda(
+    Gfn2PreprocessingDeviceBinding& binding, cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Run only the sparse/dense CN consistency gate over an already-composed
+ * binding.  Compares the dense geometry-candidate coordination numbers with
+ * the caller-populated workspace.sparse_coordination and, on any bitwise
+ * disagreement, records kSparseCoordinationMismatch in the peer's geometry
+ * error slot so the existing publication gate rejects it.  This entry lets a
+ * host test corrupt the sparse output after evaluate but before the gate, to
+ * prove the fail-closed path deterministically.
+ */
+[[nodiscard]] Gfn2PreprocessingLaunchDiagnostic gate_gfn2_sparse_coordination_cuda(
     Gfn2PreprocessingDeviceBinding& binding, cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace gpuxtb::detail::cuda
