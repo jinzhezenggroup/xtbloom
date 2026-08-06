@@ -13,9 +13,9 @@
 //   old:    the pre-change full mixer-state copy used when the whole batch
 //           history was duplicated every iteration (two state_size memcpys).
 //
-// A large ("cold") read/write scrubber is touched between measured rounds so
-// both the active-system transactions and the whole-state baseline are timed in
-// the same cache regime rather than as a tiny hot loop.
+// A large read scrubber is touched between measured rounds so both the
+// active-system transactions and the whole-state baseline are timed after the
+// same cache perturbation rather than as a tiny hot loop.
 
 #include <algorithm>
 #include <array>
@@ -23,8 +23,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <memory>
