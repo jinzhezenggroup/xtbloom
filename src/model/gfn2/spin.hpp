@@ -99,6 +99,27 @@ gpuxtb_status_t evaluate_spin_polarization_cpu(SpinPolarizationView view,
                                                std::string& error);
 
 /*
+ *  Compute the spin energy and magnetization shell potential of exactly one
+ *  ragged batch member. shell_populations and shell_potentials retain the
+ *  full packed layout, but only the selected system's population and shell
+ *  potential slices are inspected or modified. Restricted systems produce a
+ *  zero energy and write nothing (their potential slice must already be
+ *  zeroed by the caller). This lets an SCC worker prepare the Hamiltonian for
+ *  a successful member while peers may fail independently.
+ *
+ *  Structural and aliasing failures return INVALID_ARGUMENT. Invalid target
+ *  numerical data or target arithmetic failure return INTERNAL_ERROR; the
+ *  target potential slice may then be partially modified and the accumulated
+ *  energy is unchanged, so callers must treat the whole target system as
+ *  failed. The routine allocates no memory and needs no scratch.
+ */
+gpuxtb_status_t evaluate_spin_polarization_system_cpu(SpinPolarizationView view,
+                                                      std::int64_t system,
+                                                      const double* shell_populations,
+                                                      double& spin_energy, double* shell_potentials,
+                                                      std::string& error);
+
+/*
  * Accumulate the spin energy of one packed system. Only the target population
  * slice is inspected, allowing SCC workers to evaluate newly solved raw
  * multipoles while failed or inactive peers remain untouched. The accumulator

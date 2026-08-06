@@ -1038,6 +1038,159 @@ int test_mixed_spin_heterogeneous_ragged_batch() {
   return 0;
 }
 
+int test_one_system_population_and_hamiltonian() {
+  Fixture batch;
+  std::string error;
+  CHECK(make_fixture({0, 2, 3}, {1, 1, 8}, {0.0, 0.0}, {0, 2}, {1, 2}, batch, error));
+  for (std::size_t index = 0; index < batch.overlap.size(); ++index) {
+    batch.overlap[index] = 0.015 * static_cast<double>(index + 1u) - 0.12;
+  }
+  for (std::size_t index = 0; index < batch.dipole_integrals.size(); ++index) {
+    batch.dipole_integrals[index] = -0.006 * static_cast<double>(index + 2u) + 0.21;
+  }
+  for (std::size_t index = 0; index < batch.quadrupole_integrals.size(); ++index) {
+    batch.quadrupole_integrals[index] = 0.0025 * static_cast<double>(index + 3u) - 0.14;
+  }
+  for (std::size_t index = 0; index < batch.density.size(); ++index) {
+    batch.density[index] = -0.009 * static_cast<double>(index + 1u) + 0.37;
+  }
+  for (std::size_t index = 0; index < batch.vat.size(); ++index) {
+    batch.vat[index] = 0.031 * static_cast<double>(index + 1u) - 0.18;
+  }
+  for (std::size_t index = 0; index < batch.vsh.size(); ++index) {
+    batch.vsh[index] = -0.027 * static_cast<double>(index + 2u) + 0.16;
+  }
+  for (std::size_t index = 0; index < batch.dipole_potential.size(); ++index) {
+    batch.dipole_potential[index] = 0.004 * static_cast<double>(index + 1u) - 0.07;
+  }
+  for (std::size_t index = 0; index < batch.quadrupole_potential.size(); ++index) {
+    batch.quadrupole_potential[index] = -0.003 * static_cast<double>(index + 1u) + 0.11;
+  }
+  for (std::size_t index = 0; index < batch.hamiltonian.size(); ++index) {
+    batch.hamiltonian[index] = 0.001 * static_cast<double>(index + 1u);
+  }
+
+  std::vector<double> batch_qsh(batch.qsh);
+  std::vector<double> batch_qat(batch.qat);
+  std::vector<double> batch_dipole(batch.dipole);
+  std::vector<double> batch_quadrupole(batch.quadrupole);
+  CHECK(evaluate_population(batch, error));
+  const std::vector<double> reference_qsh(batch.qsh);
+  const std::vector<double> reference_qat(batch.qat);
+  const std::vector<double> reference_dipole(batch.dipole);
+  const std::vector<double> reference_quadrupole(batch.quadrupole);
+  const std::vector<double> initial_hamiltonian(batch.hamiltonian);
+  CHECK(assemble_hamiltonian(batch, error));
+  const std::vector<double> reference_hamiltonian(batch.hamiltonian);
+
+  /* One-system population reproduces the batch target slice. */
+  std::fill(batch.qsh.begin(), batch.qsh.end(), 0.0);
+  std::fill(batch.qat.begin(), batch.qat.end(), 0.0);
+  std::fill(batch.dipole.begin(), batch.dipole.end(), 0.0);
+  std::fill(batch.quadrupole.begin(), batch.quadrupole.end(), 0.0);
+  for (std::int64_t system = 0; system < batch.plan.batch_size(); ++system) {
+    CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
+              batch.plan, integral_view(batch), density_view(batch), population_view(batch), system,
+              workspace_view(batch), error) == GPUXTB_STATUS_SUCCESS);
+    const auto matches_batch_field =
+        [system](const std::vector<double>& expected, const std::vector<double>& actual,
+                 const gpuxtb::detail::gfn2::WavefunctionFieldLayout& layout) {
+          const std::int64_t begin = layout.system_offsets[system];
+          const std::int64_t end = layout.system_offsets[system + 1u];
+          return std::equal(expected.begin() + begin, expected.begin() + end,
+                            actual.begin() + begin, actual.begin() + end);
+        };
+    CHECK(matches_batch_field(reference_qsh, batch.qsh, batch.wavefunction.qsh));
+    CHECK(matches_batch_field(reference_qat, batch.qat, batch.wavefunction.qat));
+    CHECK(matches_batch_field(reference_dipole, batch.dipole, batch.wavefunction.dipole));
+    CHECK(
+        matches_batch_field(reference_quadrupole, batch.quadrupole, batch.wavefunction.quadrupole));
+  }
+
+  /* One-system Hamiltonian reproduces the batch target slice. */
+  std::fill(batch.hamiltonian.begin(), batch.hamiltonian.end(), 0.0);
+  for (std::int64_t system = 0; system < batch.plan.batch_size(); ++system) {
+    const std::int64_t begin =
+        static_cast<std::int64_t>(batch.wavefunction.density.system_offsets[system]);
+    std::copy_n(initial_hamiltonian.begin() + begin,
+                batch.wavefunction.density.system_offsets[system + 1u] - begin,
+                batch.hamiltonian.begin() + begin);
+    CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+              batch.plan, integral_view(batch), potential_view(batch), hamiltonian_view(batch),
+              system, workspace_view(batch), error) == GPUXTB_STATUS_SUCCESS);
+  }
+  CHECK(batch.hamiltonian == reference_hamiltonian);
+
+  /* A poisoned peer density must not affect a healthy member. */
+  Fixture poisoned;
+  CHECK(make_fixture({0, 2, 3}, {1, 1, 8}, {0.0, 0.0}, {0, 2}, {1, 2}, poisoned, error));
+  std::copy(batch.density.begin(), batch.density.end(), poisoned.density.begin());
+  std::copy(batch.overlap.begin(), batch.overlap.end(), poisoned.overlap.begin());
+  std::copy(batch.dipole_integrals.begin(), batch.dipole_integrals.end(),
+            poisoned.dipole_integrals.begin());
+  std::copy(batch.quadrupole_integrals.begin(), batch.quadrupole_integrals.end(),
+            poisoned.quadrupole_integrals.begin());
+  std::fill(poisoned.density.begin() + batch.wavefunction.density.system_offsets[1],
+            poisoned.density.end(), std::numeric_limits<double>::quiet_NaN());
+  std::fill(poisoned.qsh.begin(), poisoned.qsh.end(), 0.0);
+  std::fill(poisoned.qat.begin(), poisoned.qat.end(), 0.0);
+  std::fill(poisoned.dipole.begin(), poisoned.dipole.end(), 0.0);
+  std::fill(poisoned.quadrupole.begin(), poisoned.quadrupole.end(), 0.0);
+  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
+            poisoned.plan, integral_view(poisoned), density_view(poisoned),
+            population_view(poisoned), 0, workspace_view(poisoned),
+            error) == GPUXTB_STATUS_SUCCESS);
+  for (std::size_t index = 0; index < static_cast<std::size_t>(2u * 1u * 1u); ++index) {
+    CHECK(poisoned.qsh[index] == reference_qsh[index]);
+  }
+  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
+            poisoned.plan, integral_view(poisoned), density_view(poisoned),
+            population_view(poisoned), 1, workspace_view(poisoned),
+            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+
+  /* A poisoned Hamiltonian slice fails target-only and isolates peers. */
+  Fixture hamiltonian_poison;
+  CHECK(make_fixture({0, 2, 3}, {1, 1, 8}, {0.0, 0.0}, {0, 2}, {1, 2}, hamiltonian_poison, error));
+  std::copy(batch.overlap.begin(), batch.overlap.end(), hamiltonian_poison.overlap.begin());
+  std::copy(batch.dipole_integrals.begin(), batch.dipole_integrals.end(),
+            hamiltonian_poison.dipole_integrals.begin());
+  std::copy(batch.quadrupole_integrals.begin(), batch.quadrupole_integrals.end(),
+            hamiltonian_poison.quadrupole_integrals.begin());
+  std::copy(initial_hamiltonian.begin(), initial_hamiltonian.end(),
+            hamiltonian_poison.hamiltonian.begin());
+  const auto copy_potential_slice =
+      [&batch](const std::vector<double>& source, std::vector<double>& destination,
+               const gpuxtb::detail::gfn2::WavefunctionFieldLayout& layout) {
+        const std::int64_t begin = layout.system_offsets[0];
+        const std::int64_t end = layout.system_offsets[1];
+        std::copy(source.begin() + begin, source.begin() + end, destination.begin() + begin);
+      };
+  copy_potential_slice(batch.vat, hamiltonian_poison.vat, batch.wavefunction.qat);
+  copy_potential_slice(batch.vsh, hamiltonian_poison.vsh, batch.wavefunction.qsh);
+  copy_potential_slice(batch.dipole_potential, hamiltonian_poison.dipole_potential,
+                       batch.wavefunction.dipole);
+  copy_potential_slice(batch.quadrupole_potential, hamiltonian_poison.quadrupole_potential,
+                       batch.wavefunction.quadrupole);
+  /* A NaN in the second member's Hamiltonian is invisible to member 0. */
+  hamiltonian_poison.hamiltonian[batch.wavefunction.density.system_offsets[1]] =
+      std::numeric_limits<double>::quiet_NaN();
+  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+            hamiltonian_poison.plan, integral_view(hamiltonian_poison),
+            potential_view(hamiltonian_poison), hamiltonian_view(hamiltonian_poison), 0,
+            workspace_view(hamiltonian_poison), error) == GPUXTB_STATUS_SUCCESS);
+  const std::int64_t h0 = batch.wavefunction.density.system_offsets[0];
+  const std::int64_t h1 = batch.wavefunction.density.system_offsets[1];
+  for (std::int64_t matrix = h0; matrix < h1; ++matrix) {
+    CHECK(hamiltonian_poison.hamiltonian[static_cast<std::size_t>(matrix)] ==
+          reference_hamiltonian[static_cast<std::size_t>(matrix)]);
+  }
+  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+            hamiltonian_poison.plan, integral_view(hamiltonian_poison),
+            potential_view(hamiltonian_poison), hamiltonian_view(hamiltonian_poison), 1,
+            workspace_view(hamiltonian_poison), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  return 0;
+}
+
 int test_translation_invariance_with_integral_evaluator() {
   Fixture fixture;
   std::string error;
@@ -1523,6 +1676,9 @@ int main() {
     return line;
   }
   if (const int line = test_mixed_spin_heterogeneous_ragged_batch(); line != 0) {
+    return line;
+  }
+  if (const int line = test_one_system_population_and_hamiltonian(); line != 0) {
     return line;
   }
   if (const int line = test_translation_invariance_with_integral_evaluator(); line != 0) {

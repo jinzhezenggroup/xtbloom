@@ -85,6 +85,21 @@ gpuxtb_status_t add_es3_energy_cpu(ES3View view, const double* shell_charges, do
                                    std::string& error);
 
 /*
+ * Overwrite the ES3 shell potential of exactly one ragged batch member.
+ * shell_charges and shell_potentials address the complete packed arrays, while
+ * numerical validation and arithmetic touch only system's shell slice. This
+ * allows an SCC worker to prepare the Hamiltonian for a successful member
+ * while peers may fail independently. Structural/binding errors return
+ * INVALID_ARGUMENT; invalid target numerical data and range failures return
+ * INTERNAL_ERROR and the target slice may be partially modified, so callers
+ * must treat the whole target system as failed. The routine allocates no
+ * memory and needs no scratch.
+ */
+gpuxtb_status_t evaluate_es3_potential_system_cpu(ES3View view, std::int64_t system,
+                                                  const double* shell_charges,
+                                                  double* shell_potentials, std::string& error);
+
+/*
  * Accumulate E3 for exactly one ragged batch member. shell_charges addresses
  * the complete packed array, while numerical validation and arithmetic touch
  * only system's shell slice. Structural/binding errors return

@@ -31,16 +31,16 @@ struct SccDriverPlanData;
  * Immutable orchestration metadata for a restricted, electrostatic-only GFN2
  * SCC scaffold with optional self-consistent D4 and periodic charge embedding.
  *
- * The current CPU implementation deliberately prepares the classical
- * potentials and Mulliken populations as full-batch operations because those
- * component primitives publish atomically only at batch granularity. The
- * generalized eigensolve and mixer are still invoked only for active systems.
- * This preserves skip-converged behavior without duplicating the physical
- * kernels. A future per-system Mulliken primitive can reuse this plan and
- * split the prepare/finalize barriers without changing the state model.
- * D4 contributes its charge-dependent two-body atom potential on every active
- * iteration. The charge-independent ATM contribution remains outside SCC and
- * is evaluated as part of the eventual total-energy/gradient path.
+ * The CPU driver prepares the classical potentials and Mulliken
+ * Hamiltonian/population per active system only: converged, terminal, and
+ * failed peers perform no classical or Mulliken arithmetic. A per-system
+ * numerical failure during potential, Hamiltonian, or population assembly is
+ * data-level and leaves successful peers commit-ready, matching the semantics
+ * of eigensolver, mixer, and periodic failures. The generalized eigensolve
+ * and mixer are invoked only for active systems. D4 contributes its
+ * charge-dependent two-body atom potential on every active iteration. The
+ * charge-independent ATM contribution remains outside SCC and is evaluated as
+ * part of the eventual total-energy/gradient path.
  */
 class SccDriverPlan {
  public:

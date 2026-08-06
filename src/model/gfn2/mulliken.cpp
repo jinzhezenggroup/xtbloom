@@ -635,6 +635,312 @@ gpuxtb_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& i
   }
 }
 
+gpuxtb_status_t evaluate_mulliken_population_system_cpu(
+    const MullikenPlan& plan, const MullikenIntegralView& integrals,
+    const MullikenDensityView& density, const MullikenPopulationView& population,
+    std::int64_t system, const MullikenWorkspace& workspace, std::string& error) {
+  gpuxtb_status_t status = validate_plan(plan, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_integral_view(plan, integrals, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_view_identity(plan, density.plan_identity,
+                                  "Mulliken density view belongs to a different plan", error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_view_identity(plan, population.plan_identity,
+                                  "Mulliken population view belongs to a different plan", error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  if (validate_pointer_count(density.density, density.elements, plan.density_elements(),
+                             "Mulliken density view is NULL, misaligned, or has wrong extent",
+                             error) != GPUXTB_STATUS_SUCCESS ||
+      validate_pointer_count(population.qsh, population.qsh_elements,
+                             plan.shell_population_elements(),
+                             "Mulliken qsh output is NULL, misaligned, or has wrong extent",
+                             error) != GPUXTB_STATUS_SUCCESS ||
+      validate_pointer_count(population.qat, population.qat_elements,
+                             plan.atom_population_elements(),
+                             "Mulliken qat output is NULL, misaligned, or has wrong extent",
+                             error) != GPUXTB_STATUS_SUCCESS ||
+      validate_pointer_count(population.dipole, population.dipole_elements,
+                             plan.dipole_population_elements(),
+                             "Mulliken dipole output is NULL, misaligned, or has wrong extent",
+                             error) != GPUXTB_STATUS_SUCCESS ||
+      validate_pointer_count(population.quadrupole, population.quadrupole_elements,
+                             plan.quadrupole_population_elements(),
+                             "Mulliken quadrupole output is NULL, misaligned, or has wrong extent",
+                             error) != GPUXTB_STATUS_SUCCESS) {
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  if (system < 0 || system >= plan.batch_size()) {
+    error = "Mulliken population system index is out of range";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  status = validate_workspace(workspace, plan.population_scratch_elements(), error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+
+  std::size_t matrix_bytes = 0;
+  std::size_t dipole_integral_bytes = 0;
+  std::size_t quadrupole_integral_bytes = 0;
+  std::size_t density_bytes = 0;
+  std::size_t qsh_bytes = 0;
+  std::size_t qat_bytes = 0;
+  std::size_t dipole_population_bytes = 0;
+  std::size_t quadrupole_population_bytes = 0;
+  std::size_t scratch_bytes = 0;
+  if (!byte_count(plan.matrix_elements(), matrix_bytes) ||
+      !byte_count(3 * plan.matrix_elements(), dipole_integral_bytes) ||
+      !byte_count(6 * plan.matrix_elements(), quadrupole_integral_bytes) ||
+      !byte_count(plan.density_elements(), density_bytes) ||
+      !byte_count(plan.shell_population_elements(), qsh_bytes) ||
+      !byte_count(plan.atom_population_elements(), qat_bytes) ||
+      !byte_count(plan.dipole_population_elements(), dipole_population_bytes) ||
+      !byte_count(plan.quadrupole_population_elements(), quadrupole_population_bytes) ||
+      !byte_count(plan.population_scratch_elements(), scratch_bytes)) {
+    error = "Mulliken population byte extents are not representable";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const std::array<MemoryRange, 8> active_ranges{
+      {{integrals.overlap, matrix_bytes},
+       {integrals.dipole, dipole_integral_bytes},
+       {integrals.quadrupole, quadrupole_integral_bytes},
+       {density.density, density_bytes},
+       {population.qsh, qsh_bytes},
+       {population.qat, qat_bytes},
+       {population.dipole, dipole_population_bytes},
+       {population.quadrupole, quadrupole_population_bytes}}};
+  if (!pairwise_disjoint(active_ranges)) {
+    error = "Mulliken population inputs and outputs must not overlap";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const MemoryRange scratch_range{workspace.scratch, scratch_bytes};
+  const std::array<MemoryRange, 4> descriptor_ranges{{{&integrals, sizeof(integrals)},
+                                                      {&density, sizeof(density)},
+                                                      {&population, sizeof(population)},
+                                                      {&workspace, sizeof(workspace)}}};
+  for (const MemoryRange& range : active_ranges) {
+    if (ranges_overlap(scratch_range.data, scratch_range.size_bytes, range.data,
+                       range.size_bytes)) {
+      error = "Mulliken population workspace must not overlap inputs or outputs";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    if (overlaps_control_storage(plan, range, descriptor_ranges)) {
+      error = "Mulliken population buffers must not overlap plan or descriptor storage";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+  }
+  if (overlaps_control_storage(plan, scratch_range, descriptor_ranges)) {
+    error = "Mulliken population workspace must not overlap plan or descriptor storage";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  const MullikenPlanData& data = *plan.identity();
+  const std::int64_t atom_begin = data.atom_offsets[system];
+  const std::int64_t atom_end = data.atom_offsets[system + 1u];
+  const std::int64_t shell_begin = data.batch_shell_offsets[system];
+  const std::int64_t shell_end = data.batch_shell_offsets[system + 1u];
+  const std::int64_t orbital_begin = data.batch_orbital_offsets[system];
+  const std::int64_t orbital_end = data.batch_orbital_offsets[system + 1u];
+  const std::int64_t atoms = atom_end - atom_begin;
+  const std::int64_t shells = shell_end - shell_begin;
+  const std::int64_t orbitals = orbital_end - orbital_begin;
+  const std::int32_t nspin = data.spin_channels[system];
+  const std::int64_t matrix_base = data.matrix_offsets[system];
+  const std::int64_t density_base = data.density_offsets[system];
+  const std::int64_t qsh_base = data.shell_population_offsets[system];
+  const std::int64_t qat_base = data.atom_population_offsets[system];
+  const std::int64_t dipole_base = data.dipole_population_offsets[system];
+  const std::int64_t quadrupole_base = data.quadrupole_population_offsets[system];
+  if (atom_begin < 0 || atom_begin > atom_end || atom_end > data.total_atoms || shell_begin < 0 ||
+      shell_begin > shell_end || shell_end > data.total_shells || orbital_begin < 0 ||
+      orbital_begin > orbital_end || orbital_end > data.total_orbitals || qsh_base < 0 ||
+      dipole_base < 0 || quadrupole_base < 0) {
+    error = "Mulliken target system partition is structurally invalid";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  double* qsh_scratch = workspace.scratch;
+  double* qat_scratch = qsh_scratch + data.shell_population_elements;
+  double* dipole_scratch = qat_scratch + data.atom_population_elements;
+  double* quadrupole_scratch = dipole_scratch + data.dipole_population_elements;
+  const std::size_t target_shells =
+      static_cast<std::size_t>(nspin) * static_cast<std::size_t>(shells);
+  const std::size_t target_atoms =
+      static_cast<std::size_t>(nspin) * static_cast<std::size_t>(atoms);
+  std::fill_n(qsh_scratch + qsh_base, target_shells, 0.0);
+  std::fill_n(qat_scratch + qat_base, target_atoms, 0.0);
+  std::fill_n(dipole_scratch + dipole_base, target_atoms * 3u, 0.0);
+  std::fill_n(quadrupole_scratch + quadrupole_base, target_atoms * 6u, 0.0);
+
+  for (std::int32_t spin = 0; spin < nspin; ++spin) {
+    const std::int64_t spin_matrix_base = density_base + spin * orbitals * orbitals;
+    for (std::int64_t local_ket = 0; local_ket < orbitals; ++local_ket) {
+      const std::int64_t ket = orbital_begin + local_ket;
+      const std::int64_t local_shell =
+          data.orbital_to_shell[static_cast<std::size_t>(ket)] - shell_begin;
+      const std::int64_t local_atom =
+          data.orbital_to_atom[static_cast<std::size_t>(ket)] - atom_begin;
+      double& shell_charge =
+          qsh_scratch[static_cast<std::size_t>(qsh_base + spin * shells + local_shell)];
+      for (std::int64_t local_bra = 0; local_bra < orbitals; ++local_bra) {
+        const std::int64_t matrix_index = matrix_base + local_bra * orbitals + local_ket;
+        const std::int64_t density_index = spin_matrix_base + local_bra * orbitals + local_ket;
+        const double density_value = density.density[static_cast<std::size_t>(density_index)];
+        const double overlap_value = integrals.overlap[static_cast<std::size_t>(matrix_index)];
+        if (!std::isfinite(density_value) || !std::isfinite(overlap_value)) {
+          error = "Mulliken target density or overlap contains NaN or infinity";
+          return GPUXTB_STATUS_INTERNAL_ERROR;
+        }
+        if (!add_product(-density_value, overlap_value, shell_charge)) {
+          error = "Mulliken target qsh contraction exceeded floating-point range";
+          return GPUXTB_STATUS_INTERNAL_ERROR;
+        }
+        for (std::int64_t component = 0; component < 3; ++component) {
+          double& value = dipole_scratch[static_cast<std::size_t>(
+              dipole_base + (spin * atoms + local_atom) * 3 + component)];
+          const double integral = integrals.dipole[static_cast<std::size_t>(
+              component * data.matrix_elements + matrix_index)];
+          if (!std::isfinite(integral)) {
+            error = "Mulliken target dipole integral contains NaN or infinity";
+            return GPUXTB_STATUS_INTERNAL_ERROR;
+          }
+          if (!add_product(-density_value, integral, value)) {
+            error = "Mulliken target dipole contraction exceeded floating-point range";
+            return GPUXTB_STATUS_INTERNAL_ERROR;
+          }
+        }
+        for (std::int64_t component = 0; component < 6; ++component) {
+          double& value = quadrupole_scratch[static_cast<std::size_t>(
+              quadrupole_base + (spin * atoms + local_atom) * 6 + component)];
+          const double integral = integrals.quadrupole[static_cast<std::size_t>(
+              component * data.matrix_elements + matrix_index)];
+          if (!std::isfinite(integral)) {
+            error = "Mulliken target quadrupole integral contains NaN or infinity";
+            return GPUXTB_STATUS_INTERNAL_ERROR;
+          }
+          if (!add_product(-density_value, integral, value)) {
+            error = "Mulliken target quadrupole contraction exceeded floating-point range";
+            return GPUXTB_STATUS_INTERNAL_ERROR;
+          }
+        }
+      }
+    }
+  }
+
+  if (nspin == 2) {
+    for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
+      const std::size_t charge_index = static_cast<std::size_t>(qsh_base + local_shell);
+      const std::size_t magnetization_index =
+          static_cast<std::size_t>(qsh_base + shells + local_shell);
+      const double alpha = qsh_scratch[charge_index];
+      const double beta = qsh_scratch[magnetization_index];
+      const double charge = alpha + beta;
+      const double magnetization = alpha - beta;
+      if (!std::isfinite(charge) || !std::isfinite(magnetization)) {
+        error = "Mulliken target spin conversion exceeded floating-point range";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      qsh_scratch[charge_index] = charge;
+      qsh_scratch[magnetization_index] = magnetization;
+    }
+  }
+
+  for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
+    const std::size_t charge_index = static_cast<std::size_t>(qsh_base + local_shell);
+    const double reference =
+        data.reference_shell_occupations[static_cast<std::size_t>(shell_begin + local_shell)];
+    if (nspin == 1) {
+      const double charge = qsh_scratch[charge_index] + reference;
+      if (!std::isfinite(charge)) {
+        error = "Mulliken target reference-charge addition exceeded floating-point range";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      qsh_scratch[charge_index] = charge;
+    } else {
+      const double charge = qsh_scratch[charge_index] + reference;
+      if (!std::isfinite(charge)) {
+        error = "Mulliken target reference-charge addition exceeded floating-point range";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      qsh_scratch[charge_index] = charge;
+    }
+  }
+
+  if (nspin == 2) {
+    for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
+      for (std::int64_t component = 0; component < 3; ++component) {
+        const std::size_t charge_index =
+            static_cast<std::size_t>(dipole_base + local_atom * 3 + component);
+        const std::size_t magnetization_index =
+            static_cast<std::size_t>(dipole_base + (atoms + local_atom) * 3 + component);
+        const double alpha = dipole_scratch[charge_index];
+        const double beta = dipole_scratch[magnetization_index];
+        const double charge = alpha + beta;
+        const double magnetization = alpha - beta;
+        if (!std::isfinite(charge) || !std::isfinite(magnetization)) {
+          error = "Mulliken target dipole spin conversion exceeded floating-point range";
+          return GPUXTB_STATUS_INTERNAL_ERROR;
+        }
+        dipole_scratch[charge_index] = charge;
+        dipole_scratch[magnetization_index] = magnetization;
+      }
+      for (std::int64_t component = 0; component < 6; ++component) {
+        const std::size_t charge_index =
+            static_cast<std::size_t>(quadrupole_base + local_atom * 6 + component);
+        const std::size_t magnetization_index =
+            static_cast<std::size_t>(quadrupole_base + (atoms + local_atom) * 6 + component);
+        const double alpha = quadrupole_scratch[charge_index];
+        const double beta = quadrupole_scratch[magnetization_index];
+        const double charge = alpha + beta;
+        const double magnetization = alpha - beta;
+        if (!std::isfinite(charge) || !std::isfinite(magnetization)) {
+          error = "Mulliken target quadrupole spin conversion exceeded floating-point range";
+          return GPUXTB_STATUS_INTERNAL_ERROR;
+        }
+        quadrupole_scratch[charge_index] = charge;
+        quadrupole_scratch[magnetization_index] = magnetization;
+      }
+    }
+  }
+
+  for (std::int32_t channel = 0; channel < nspin; ++channel) {
+    for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
+      const std::int64_t shell = shell_begin + local_shell;
+      const std::int64_t local_atom =
+          data.shell_to_atom[static_cast<std::size_t>(shell)] - atom_begin;
+      const std::size_t atom_index =
+          static_cast<std::size_t>(qat_base + channel * atoms + local_atom);
+      const double updated =
+          qat_scratch[atom_index] +
+          qsh_scratch[static_cast<std::size_t>(qsh_base + channel * shells + local_shell)];
+      if (!std::isfinite(updated)) {
+        error = "Mulliken target shell-to-atom charge reduction exceeded floating-point range";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      qat_scratch[atom_index] = updated;
+    }
+  }
+
+  std::copy_n(qsh_scratch + qsh_base, static_cast<std::size_t>(nspin) * shells,
+              population.qsh + qsh_base);
+  std::copy_n(qat_scratch + qat_base, static_cast<std::size_t>(nspin) * atoms,
+              population.qat + qat_base);
+  std::copy_n(dipole_scratch + dipole_base, static_cast<std::size_t>(nspin) * atoms * 3,
+              population.dipole + dipole_base);
+  std::copy_n(quadrupole_scratch + quadrupole_base, static_cast<std::size_t>(nspin) * atoms * 6,
+              population.quadrupole + quadrupole_base);
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
 gpuxtb_status_t evaluate_mulliken_population_cpu(const MullikenPlan& plan,
                                                  const MullikenIntegralView& integrals,
                                                  const MullikenDensityView& density,
@@ -1230,6 +1536,324 @@ gpuxtb_status_t add_mulliken_hamiltonian_cpu(const MullikenPlan& plan,
 
   std::copy_n(hamiltonian_scratch, static_cast<std::size_t>(data.density_elements),
               hamiltonian.matrix);
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t add_mulliken_hamiltonian_system_cpu(
+    const MullikenPlan& plan, const MullikenIntegralView& integrals,
+    const MullikenPotentialView& potential, const MullikenHamiltonianView& hamiltonian,
+    std::int64_t system, const MullikenWorkspace& workspace, std::string& error) {
+  gpuxtb_status_t status = validate_plan(plan, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_integral_view(plan, integrals, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_view_identity(plan, potential.plan_identity,
+                                  "Mulliken potential view belongs to a different plan", error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_view_identity(plan, hamiltonian.plan_identity,
+                                  "Mulliken Hamiltonian view belongs to a different plan", error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  if (validate_pointer_count(potential.vat, potential.vat_elements, plan.atom_population_elements(),
+                             "Mulliken vat view is NULL, misaligned, or has wrong extent",
+                             error) != GPUXTB_STATUS_SUCCESS ||
+      validate_pointer_count(potential.vsh, potential.vsh_elements,
+                             plan.shell_population_elements(),
+                             "Mulliken vsh view is NULL, misaligned, or has wrong extent",
+                             error) != GPUXTB_STATUS_SUCCESS ||
+      validate_pointer_count(potential.dipole, potential.dipole_elements,
+                             plan.dipole_population_elements(),
+                             "Mulliken dipole potential is NULL, misaligned, or has wrong extent",
+                             error) != GPUXTB_STATUS_SUCCESS ||
+      validate_pointer_count(
+          potential.quadrupole, potential.quadrupole_elements,
+          plan.quadrupole_population_elements(),
+          "Mulliken quadrupole potential is NULL, misaligned, or has wrong extent",
+          error) != GPUXTB_STATUS_SUCCESS ||
+      validate_pointer_count(hamiltonian.matrix, hamiltonian.elements, plan.density_elements(),
+                             "Mulliken Hamiltonian is NULL, misaligned, or has wrong extent",
+                             error) != GPUXTB_STATUS_SUCCESS) {
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  if (system < 0 || system >= plan.batch_size()) {
+    error = "Mulliken Hamiltonian system index is out of range";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  status = validate_workspace(workspace, plan.hamiltonian_scratch_elements(), error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+
+  std::size_t matrix_bytes = 0;
+  std::size_t dipole_integral_bytes = 0;
+  std::size_t quadrupole_integral_bytes = 0;
+  std::size_t atom_bytes = 0;
+  std::size_t shell_bytes = 0;
+  std::size_t dipole_bytes = 0;
+  std::size_t quadrupole_bytes = 0;
+  std::size_t hamiltonian_bytes = 0;
+  std::size_t scratch_bytes = 0;
+  if (!byte_count(plan.matrix_elements(), matrix_bytes) ||
+      !byte_count(3 * plan.matrix_elements(), dipole_integral_bytes) ||
+      !byte_count(6 * plan.matrix_elements(), quadrupole_integral_bytes) ||
+      !byte_count(plan.atom_population_elements(), atom_bytes) ||
+      !byte_count(plan.shell_population_elements(), shell_bytes) ||
+      !byte_count(plan.dipole_population_elements(), dipole_bytes) ||
+      !byte_count(plan.quadrupole_population_elements(), quadrupole_bytes) ||
+      !byte_count(plan.density_elements(), hamiltonian_bytes) ||
+      !byte_count(plan.hamiltonian_scratch_elements(), scratch_bytes)) {
+    error = "Mulliken Hamiltonian byte extents are not representable";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const std::array<MemoryRange, 8> active_ranges{{{integrals.overlap, matrix_bytes},
+                                                  {integrals.dipole, dipole_integral_bytes},
+                                                  {integrals.quadrupole, quadrupole_integral_bytes},
+                                                  {potential.vat, atom_bytes},
+                                                  {potential.vsh, shell_bytes},
+                                                  {potential.dipole, dipole_bytes},
+                                                  {potential.quadrupole, quadrupole_bytes},
+                                                  {hamiltonian.matrix, hamiltonian_bytes}}};
+  if (!pairwise_disjoint(active_ranges)) {
+    error = "Mulliken Hamiltonian inputs and output must not overlap";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const MemoryRange scratch_range{workspace.scratch, scratch_bytes};
+  const std::array<MemoryRange, 4> descriptor_ranges{{{&integrals, sizeof(integrals)},
+                                                      {&potential, sizeof(potential)},
+                                                      {&hamiltonian, sizeof(hamiltonian)},
+                                                      {&workspace, sizeof(workspace)}}};
+  for (const MemoryRange& range : active_ranges) {
+    if (ranges_overlap(scratch_range.data, scratch_range.size_bytes, range.data,
+                       range.size_bytes)) {
+      error = "Mulliken Hamiltonian workspace must not overlap inputs or output";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    if (overlaps_control_storage(plan, range, descriptor_ranges)) {
+      error = "Mulliken Hamiltonian buffers must not overlap plan or descriptor storage";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+  }
+  if (overlaps_control_storage(plan, scratch_range, descriptor_ranges)) {
+    error = "Mulliken Hamiltonian workspace must not overlap plan or descriptor storage";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  const MullikenPlanData& data = *plan.identity();
+  const std::int64_t atom_begin = data.atom_offsets[system];
+  const std::int64_t atom_end = data.atom_offsets[system + 1u];
+  const std::int64_t shell_begin = data.batch_shell_offsets[system];
+  const std::int64_t shell_end = data.batch_shell_offsets[system + 1u];
+  const std::int64_t orbital_begin = data.batch_orbital_offsets[system];
+  const std::int64_t orbital_end = data.batch_orbital_offsets[system + 1u];
+  const std::int64_t atoms = atom_end - atom_begin;
+  const std::int64_t shells = shell_end - shell_begin;
+  const std::int64_t orbitals = orbital_end - orbital_begin;
+  const std::int32_t nspin = data.spin_channels[system];
+  const std::int64_t matrix_base = data.matrix_offsets[system];
+  const std::int64_t hamiltonian_base = data.density_offsets[system];
+  const std::int64_t vsh_base = data.shell_population_offsets[system];
+  const std::int64_t vat_base = data.atom_population_offsets[system];
+  const std::int64_t dipole_base = data.dipole_population_offsets[system];
+  const std::int64_t quadrupole_base = data.quadrupole_population_offsets[system];
+  if (atom_begin < 0 || atom_begin > atom_end || atom_end > data.total_atoms || shell_begin < 0 ||
+      shell_begin > shell_end || shell_end > data.total_shells || orbital_begin < 0 ||
+      orbital_begin > orbital_end || orbital_end > data.total_orbitals || vat_base < 0 ||
+      vsh_base < 0 || dipole_base < 0 || quadrupole_base < 0) {
+    error = "Mulliken target system partition is structurally invalid";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  double* hamiltonian_scratch = workspace.scratch;
+  double* vat_scratch = hamiltonian_scratch + data.density_elements;
+  double* vsh_scratch = vat_scratch + data.atom_population_elements;
+  double* dipole_scratch = vsh_scratch + data.shell_population_elements;
+  double* quadrupole_scratch = dipole_scratch + data.dipole_population_elements;
+  const std::size_t target_hamiltonian_elements = static_cast<std::size_t>(nspin) *
+                                                  static_cast<std::size_t>(orbitals) *
+                                                  static_cast<std::size_t>(orbitals);
+  for (std::size_t element = 0; element < target_hamiltonian_elements; ++element) {
+    const double value = hamiltonian.matrix[static_cast<std::size_t>(hamiltonian_base) + element];
+    if (!std::isfinite(value)) {
+      error = "Mulliken target Hamiltonian input contains NaN or infinity";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    hamiltonian_scratch[static_cast<std::size_t>(hamiltonian_base) + element] = value;
+  }
+
+  const auto convert_potential = [&](const double* source, double* destination, std::int64_t base,
+                                     std::int64_t channel_elements) {
+    if (nspin == 1) {
+      for (std::int64_t element = 0; element < channel_elements; ++element) {
+        const std::size_t index = static_cast<std::size_t>(base + element);
+        const double value = source[index];
+        if (!std::isfinite(value)) {
+          return GPUXTB_STATUS_INVALID_ARGUMENT;
+        }
+        destination[index] = value;
+      }
+      return GPUXTB_STATUS_SUCCESS;
+    }
+    for (std::int64_t element = 0; element < channel_elements; ++element) {
+      const std::size_t charge_index = static_cast<std::size_t>(base + element);
+      const std::size_t magnetization_index =
+          static_cast<std::size_t>(base + channel_elements + element);
+      const double charge = source[charge_index];
+      const double magnetization = source[magnetization_index];
+      if (!std::isfinite(charge) || !std::isfinite(magnetization)) {
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
+      /* Half-before-add matches tblite's magnet_to_updown conversion. */
+      const double alpha = 0.5 * charge + 0.5 * magnetization;
+      const double beta = 0.5 * charge - 0.5 * magnetization;
+      if (!std::isfinite(alpha) || !std::isfinite(beta)) {
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      destination[charge_index] = alpha;
+      destination[magnetization_index] = beta;
+    }
+    return GPUXTB_STATUS_SUCCESS;
+  };
+  const gpuxtb_status_t vat_status = convert_potential(potential.vat, vat_scratch, vat_base, atoms);
+  const gpuxtb_status_t vsh_status =
+      convert_potential(potential.vsh, vsh_scratch, vsh_base, shells);
+  const gpuxtb_status_t dipole_status =
+      convert_potential(potential.dipole, dipole_scratch, dipole_base, atoms * 3);
+  const gpuxtb_status_t quadrupole_status =
+      convert_potential(potential.quadrupole, quadrupole_scratch, quadrupole_base, atoms * 6);
+  if (vat_status != GPUXTB_STATUS_SUCCESS || vsh_status != GPUXTB_STATUS_SUCCESS ||
+      dipole_status != GPUXTB_STATUS_SUCCESS || quadrupole_status != GPUXTB_STATUS_SUCCESS) {
+    if (vat_status == GPUXTB_STATUS_INVALID_ARGUMENT ||
+        vsh_status == GPUXTB_STATUS_INVALID_ARGUMENT ||
+        dipole_status == GPUXTB_STATUS_INVALID_ARGUMENT ||
+        quadrupole_status == GPUXTB_STATUS_INVALID_ARGUMENT) {
+      error = "Mulliken target potentials contain NaN or infinity";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    error = "Mulliken target potential spin conversion exceeded floating-point range";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+
+  for (std::int32_t spin = 0; spin < nspin; ++spin) {
+    const std::int64_t spin_matrix_base = hamiltonian_base + spin * orbitals * orbitals;
+    for (std::int64_t local_row = 0; local_row < orbitals; ++local_row) {
+      const std::int64_t row = orbital_begin + local_row;
+      const std::int64_t row_shell = data.orbital_to_shell[static_cast<std::size_t>(row)];
+      const std::int64_t row_atom = data.orbital_to_atom[static_cast<std::size_t>(row)];
+      const std::int64_t local_row_shell = row_shell - shell_begin;
+      const std::int64_t local_row_atom = row_atom - atom_begin;
+      const double row_vat =
+          vat_scratch[static_cast<std::size_t>(vat_base + spin * atoms + local_row_atom)];
+      const double row_vsh =
+          vsh_scratch[static_cast<std::size_t>(vsh_base + spin * shells + local_row_shell)];
+
+      for (std::int64_t local_column = local_row; local_column < orbitals; ++local_column) {
+        const std::int64_t column = orbital_begin + local_column;
+        const std::int64_t column_shell = data.orbital_to_shell[static_cast<std::size_t>(column)];
+        const std::int64_t column_atom = data.orbital_to_atom[static_cast<std::size_t>(column)];
+        const std::int64_t local_column_shell = column_shell - shell_begin;
+        const std::int64_t local_column_atom = column_atom - atom_begin;
+        const double column_vat =
+            vat_scratch[static_cast<std::size_t>(vat_base + spin * atoms + local_column_atom)];
+        const double column_vsh =
+            vsh_scratch[static_cast<std::size_t>(vsh_base + spin * shells + local_column_shell)];
+
+        const std::int64_t forward_matrix = matrix_base + local_row * orbitals + local_column;
+        const std::int64_t reverse_matrix = matrix_base + local_column * orbitals + local_row;
+        const std::int64_t forward_hamiltonian =
+            spin_matrix_base + local_row * orbitals + local_column;
+        const std::int64_t reverse_hamiltonian =
+            spin_matrix_base + local_column * orbitals + local_row;
+        double shift = 0.0;
+        const double overlap = integrals.overlap[static_cast<std::size_t>(forward_matrix)];
+        const double reverse_overlap = integrals.overlap[static_cast<std::size_t>(reverse_matrix)];
+        const double half_overlap = -0.5 * overlap;
+        if (!std::isfinite(overlap) || !std::isfinite(reverse_overlap)) {
+          error = "Mulliken target overlap input contains NaN or infinity";
+          return GPUXTB_STATUS_INVALID_ARGUMENT;
+        }
+        if (!std::isfinite(half_overlap) || !add_product(half_overlap, row_vat, shift) ||
+            !add_product(half_overlap, row_vsh, shift) ||
+            !add_product(half_overlap, column_vat, shift) ||
+            !add_product(half_overlap, column_vsh, shift)) {
+          error = "Mulliken target scalar Hamiltonian assembly exceeded floating-point range";
+          return GPUXTB_STATUS_INTERNAL_ERROR;
+        }
+
+        for (std::int64_t component = 0; component < 3; ++component) {
+          const double row_potential = dipole_scratch[static_cast<std::size_t>(
+              dipole_base + (spin * atoms + local_row_atom) * 3 + component)];
+          const double column_potential = dipole_scratch[static_cast<std::size_t>(
+              dipole_base + (spin * atoms + local_column_atom) * 3 + component)];
+          const double forward_integral =
+              -0.5 * integrals.dipole[static_cast<std::size_t>(component * data.matrix_elements +
+                                                               forward_matrix)];
+          const double reverse_integral =
+              -0.5 * integrals.dipole[static_cast<std::size_t>(component * data.matrix_elements +
+                                                               reverse_matrix)];
+          if (!std::isfinite(forward_integral) || !std::isfinite(reverse_integral)) {
+            error = "Mulliken target dipole integral input contains NaN or infinity";
+            return GPUXTB_STATUS_INVALID_ARGUMENT;
+          }
+          if (!std::isfinite(row_potential) || !std::isfinite(column_potential) ||
+              !add_product(forward_integral, column_potential, shift) ||
+              !add_product(reverse_integral, row_potential, shift)) {
+            error = "Mulliken target dipole Hamiltonian assembly exceeded floating-point range";
+            return GPUXTB_STATUS_INTERNAL_ERROR;
+          }
+        }
+
+        for (std::int64_t component = 0; component < 6; ++component) {
+          const double row_potential = quadrupole_scratch[static_cast<std::size_t>(
+              quadrupole_base + (spin * atoms + local_row_atom) * 6 + component)];
+          const double column_potential = quadrupole_scratch[static_cast<std::size_t>(
+              quadrupole_base + (spin * atoms + local_column_atom) * 6 + component)];
+          const double forward_integral =
+              -0.5 * integrals.quadrupole[static_cast<std::size_t>(
+                         component * data.matrix_elements + forward_matrix)];
+          const double reverse_integral =
+              -0.5 * integrals.quadrupole[static_cast<std::size_t>(
+                         component * data.matrix_elements + reverse_matrix)];
+          if (!std::isfinite(forward_integral) || !std::isfinite(reverse_integral)) {
+            error = "Mulliken target quadrupole integral input contains NaN or infinity";
+            return GPUXTB_STATUS_INVALID_ARGUMENT;
+          }
+          if (!std::isfinite(row_potential) || !std::isfinite(column_potential) ||
+              !add_product(forward_integral, column_potential, shift) ||
+              !add_product(reverse_integral, row_potential, shift)) {
+            error = "Mulliken target quadrupole Hamiltonian assembly exceeded floating-point range";
+            return GPUXTB_STATUS_INTERNAL_ERROR;
+          }
+        }
+        const double forward_value =
+            hamiltonian_scratch[static_cast<std::size_t>(forward_hamiltonian)] + shift;
+        if (!std::isfinite(forward_value)) {
+          error = "Mulliken target Hamiltonian accumulation exceeded floating-point range";
+          return GPUXTB_STATUS_INTERNAL_ERROR;
+        }
+        hamiltonian_scratch[static_cast<std::size_t>(forward_hamiltonian)] = forward_value;
+        if (forward_hamiltonian != reverse_hamiltonian) {
+          const double reverse_value =
+              hamiltonian_scratch[static_cast<std::size_t>(reverse_hamiltonian)] + shift;
+          if (!std::isfinite(reverse_value)) {
+            error = "Mulliken target Hamiltonian accumulation exceeded floating-point range";
+            return GPUXTB_STATUS_INTERNAL_ERROR;
+          }
+          hamiltonian_scratch[static_cast<std::size_t>(reverse_hamiltonian)] = reverse_value;
+        }
+      }
+    }
+  }
+
+  std::copy_n(hamiltonian_scratch + hamiltonian_base, target_hamiltonian_elements,
+              hamiltonian.matrix + hamiltonian_base);
   error.clear();
   return GPUXTB_STATUS_SUCCESS;
 }

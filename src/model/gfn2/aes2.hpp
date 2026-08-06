@@ -157,6 +157,24 @@ gpuxtb_status_t evaluate_aes2_potential_cpu(const AES2Plan& plan, const AES2Geom
                                             const AES2Workspace& workspace, std::string& error);
 
 /*
+ * Overwrite the AES2 atom q/d/Q potentials of exactly one ragged batch member.
+ * The multipole and potential pointers retain the full atom-major layout, but
+ * only the selected system's atom and pair slices are inspected or written.
+ * This lets an SCC worker prepare the Hamiltonian for a successful member
+ * while peers may fail independently.
+ *
+ * Structural and aliasing failures return INVALID_ARGUMENT. Nonfinite target
+ * data or target arithmetic failure return INTERNAL_ERROR and the target
+ * potential slices remain unchanged. The canonical caller-owned scratch is
+ * used for staging, and successful calls allocate nothing.
+ */
+gpuxtb_status_t evaluate_aes2_potential_system_cpu(
+    const AES2Plan& plan, const AES2GeometryCache& cache, std::int64_t system,
+    const double* atomic_charges, const double* atomic_dipoles, const double* atomic_quadrupoles,
+    double* charge_potentials, double* dipole_potentials, double* quadrupole_potentials,
+    const AES2Workspace& workspace, std::string& error);
+
+/*
  * Accumulate one AES2 energy per ragged batch member. Existing energies must
  * be finite. workspace.batch_scratch stages every contribution before any
  * caller output is updated, preserving call-level failure atomicity.

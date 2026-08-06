@@ -169,6 +169,23 @@ gpuxtb_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& i
                                    std::string& error);
 
 /*
+ * Compute q = n0 - P:S and atomic d/Q = -P:D/Q for exactly one ragged batch
+ * member. The density and population pointers retain the full batch layout,
+ * but only the selected system's density slice is read and only its
+ * population slices are written. This lets an SCC worker publish a successful
+ * member while peers may fail independently.
+ *
+ * Structural and aliasing failures return INVALID_ARGUMENT. Invalid target
+ * numerical data or target arithmetic failure return INTERNAL_ERROR and the
+ * target population slices remain unchanged. The canonical caller-owned
+ * workspace is used for staging, and successful calls allocate nothing.
+ */
+gpuxtb_status_t evaluate_mulliken_population_system_cpu(
+    const MullikenPlan& plan, const MullikenIntegralView& integrals,
+    const MullikenDensityView& density, const MullikenPopulationView& population,
+    std::int64_t system, const MullikenWorkspace& workspace, std::string& error);
+
+/*
  * Compute q = n0 - P:S and atomic d/Q = -P:D/Q. The ket AO determines the
  * owning shell and atom. For two spin channels, alpha/beta contractions are
  * converted to charge and magnetization, with magnetization N_beta-N_alpha.
@@ -180,6 +197,31 @@ gpuxtb_status_t evaluate_mulliken_population_cpu(const MullikenPlan& plan,
                                                  const MullikenPopulationView& population,
                                                  const MullikenWorkspace& workspace,
                                                  std::string& error);
+
+/*
+ * Accumulate the scalar, dipole, and quadrupole SCC potential shifts of
+ * exactly one ragged batch member into its Hamiltonian slice:
+ *
+ *   dH_mn = -S_mn (u_m + u_n)/2
+ *            -D_mn(A_n):v_D(A_n)/2 - D_nm(A_m):v_D(A_m)/2
+ *            -Q_mn(A_n):v_Q(A_n)/2 - Q_nm(A_m):v_Q(A_m)/2.
+ *
+ * Q uses the packed dual contraction with no extra factor for off-diagonal
+ * components. Charge/magnetization potentials are converted to alpha/beta
+ * before assembly. The potential and Hamiltonian pointers retain the full
+ * batch layout, but only the target system's slices are read or modified.
+ * This lets an SCC worker prepare the Hamiltonian for a successful member
+ * while peers may fail independently.
+ *
+ * Structural and aliasing failures return INVALID_ARGUMENT. Invalid target
+ * numerical data or target arithmetic failure return INTERNAL_ERROR and the
+ * target Hamiltonian slice remains unchanged. The canonical caller-owned
+ * workspace is used for staging, and successful calls allocate nothing.
+ */
+gpuxtb_status_t add_mulliken_hamiltonian_system_cpu(
+    const MullikenPlan& plan, const MullikenIntegralView& integrals,
+    const MullikenPotentialView& potential, const MullikenHamiltonianView& hamiltonian,
+    std::int64_t system, const MullikenWorkspace& workspace, std::string& error);
 
 /*
  * Accumulate scalar, dipole, and quadrupole SCC potential shifts into H:

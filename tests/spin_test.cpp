@@ -231,6 +231,87 @@ int test_failure_atomicity_and_descriptor_validation() {
   return 0;
 }
 
+int test_one_system_energy_potential_and_failure_isolation() {
+  const std::vector<std::int64_t> atom_offsets{0, 1, 2};
+  const std::vector<std::int32_t> atomic_numbers{1, 1};
+  const std::vector<double> charges{0.0, 0.0};
+  const std::vector<std::int32_t> unpaired{1, 1};
+  const std::vector<std::int32_t> channels{2, 2};
+  BasisPlan basis;
+  WavefunctionLayout wavefunction;
+  SpinPolarizationPlan plan;
+  std::string error;
+  CHECK(make_plan(atom_offsets, atomic_numbers, charges, unpaired, channels, basis, wavefunction,
+                  plan, error));
+  const SpinPolarizationView view = gpuxtb::detail::gfn2::make_spin_polarization_view(plan);
+  std::vector<double> populations(static_cast<std::size_t>(view.shell_population_elements), 0.0);
+  populations[1] = -1.0; /* first member: alpha doublet */
+  populations[3] = 0.25; /* second member: arbitrary magnetization */
+  std::vector<double> batch_potentials(populations.size(), 91.0);
+  std::array<double, 2> batch_energies{{91.0, 91.0}};
+  CHECK(gpuxtb::detail::gfn2::evaluate_spin_polarization_cpu(
+            view, populations.data(), batch_energies.data(), batch_potentials.data(), error) ==
+        GPUXTB_STATUS_SUCCESS);
+
+  /* One-system potentials reproduce the batch potential slice. */
+  std::vector<double> system_potentials(populations.size(), 0.0);
+  for (std::int64_t system = 0; system < view.batch_size; ++system) {
+    double energy = 0.0;
+    CHECK(gpuxtb::detail::gfn2::evaluate_spin_polarization_system_cpu(
+              view, system, populations.data(), energy, system_potentials.data(), error) ==
+          GPUXTB_STATUS_SUCCESS);
+    CHECK(energy == batch_energies[static_cast<std::size_t>(system)]);
+    const std::int64_t begin = view.shell_population_offsets[system];
+    const std::int64_t end = view.shell_population_offsets[system + 1];
+    for (std::int64_t element = begin; element < end; ++element) {
+      CHECK(system_potentials[static_cast<std::size_t>(element)] ==
+            batch_potentials[static_cast<std::size_t>(element)]);
+    }
+  }
+
+  /* A poisoned peer population must not affect the target member. */
+  const double saved_peer = populations[3];
+  populations[3] = std::numeric_limits<double>::quiet_NaN();
+  double isolated_energy = -3.25;
+  std::fill(system_potentials.begin(), system_potentials.end(), 0.0);
+  CHECK(gpuxtb::detail::gfn2::evaluate_spin_polarization_system_cpu(
+            view, 0, populations.data(), isolated_energy, system_potentials.data(), error) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(isolated_energy == batch_energies[0]);
+  CHECK(system_potentials[0] == batch_potentials[0]);
+  CHECK(system_potentials[1] == batch_potentials[1]);
+  populations[3] = saved_peer;
+
+  /* Target numerical poison is a target-only failure. */
+  populations[1] = std::numeric_limits<double>::quiet_NaN();
+  double unchanged_energy = 1.75;
+  std::fill(system_potentials.begin(), system_potentials.end(), 11.0);
+  const std::vector<double> untouched(system_potentials);
+  CHECK(gpuxtb::detail::gfn2::evaluate_spin_polarization_system_cpu(
+            view, 0, populations.data(), unchanged_energy, system_potentials.data(), error) ==
+        GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(unchanged_energy == 1.75);
+  CHECK(system_potentials == untouched);
+  populations[1] = -1.0;
+
+  CHECK(gpuxtb::detail::gfn2::evaluate_spin_polarization_system_cpu(
+            view, -1, populations.data(), unchanged_energy, system_potentials.data(), error) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gpuxtb::detail::gfn2::evaluate_spin_polarization_system_cpu(
+            view, view.batch_size, populations.data(), unchanged_energy, system_potentials.data(),
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+
+  /* No per-call allocation. */
+  const std::size_t before = allocation_test::count.load(std::memory_order_relaxed);
+  allocation_test::enabled.store(true, std::memory_order_relaxed);
+  const gpuxtb_status_t status = gpuxtb::detail::gfn2::evaluate_spin_polarization_system_cpu(
+      view, 0, populations.data(), unchanged_energy, system_potentials.data(), error);
+  allocation_test::enabled.store(false, std::memory_order_relaxed);
+  CHECK(status == GPUXTB_STATUS_SUCCESS);
+  CHECK(allocation_test::count.load(std::memory_order_relaxed) == before);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -241,6 +322,9 @@ int main() {
     return line;
   }
   if (const int line = test_failure_atomicity_and_descriptor_validation(); line != 0) {
+    return line;
+  }
+  if (const int line = test_one_system_energy_potential_and_failure_isolation(); line != 0) {
     return line;
   }
   return 0;

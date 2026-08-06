@@ -686,6 +686,11 @@ gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data
                                                    const SccDriverGeometryView& geometry,
                                                    const SccDriverWorkspace& workspace,
                                                    std::string& error);
+gpuxtb_status_t prepare_system_potentials_and_hamiltonian(const SccDriverPlanData& data,
+                                                          const SccDriverGeometryView& geometry,
+                                                          std::size_t system,
+                                                          const SccDriverWorkspace& workspace,
+                                                          std::string& error);
 void copy_raw_population_system(const WavefunctionLayout& layout, std::size_t system,
                                 const SccDriverWorkspace& workspace);
 gpuxtb_status_t rebuild_mixed_atomic_charges(const SccDriverPlanData& data, std::size_t system,
@@ -766,11 +771,14 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
     }
   }
 
-  bool any_solved = false;
+  /* Compute the raw Mulliken population per solved system only. Systems that
+   * failed eigensolve (active=2) stay out of the population and energy stages,
+   * so a peer's failure cannot trigger classical or Mulliken arithmetic for
+   * the rest of the batch. */
   for (std::size_t system = 0u; system < batch; ++system) {
-    any_solved = any_solved || workspace.active_systems[system] == 1u;
-  }
-  if (any_solved) {
+    if (workspace.active_systems[system] != 1u) {
+      continue;
+    }
     const MullikenDensityView density{workspace.staged_wavefunction.density,
                                       data.wavefunction.density.element_count,
                                       data.mulliken.identity()};
@@ -780,10 +788,14 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
         workspace.raw_dipoles,     data.wavefunction.dipole.element_count,
         workspace.raw_quadrupoles, data.wavefunction.quadrupole.element_count,
         data.mulliken.identity()};
-    status = evaluate_mulliken_population_cpu(data.mulliken, geometry.integrals, density,
-                                              population, workspace.mulliken_workspace, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    status = evaluate_mulliken_population_system_cpu(data.mulliken, geometry.integrals, density,
+                                                     population, static_cast<std::int64_t>(system),
+                                                     workspace.mulliken_workspace, error);
+    if (status == GPUXTB_STATUS_INVALID_ARGUMENT || status == GPUXTB_STATUS_NOT_SUPPORTED) {
       return status;
+    }
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      workspace.active_systems[system] = 6u;
     }
   }
 
@@ -865,13 +877,15 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
 
   gpuxtb_status_t first_failure = GPUXTB_STATUS_SUCCESS;
   bool first_failure_was_periodic = false;
+  bool first_failure_was_preparation = false;
   for (std::size_t system = 0u; system < batch; ++system) {
     if (workspace.active_systems[system] == 2u || workspace.active_systems[system] == 3u ||
-        workspace.active_systems[system] == 5u || workspace.active_systems[system] == 6u) {
+        workspace.active_systems[system] == 5u || workspace.active_systems[system] == 6u ||
+        workspace.active_systems[system] == 7u) {
       const gpuxtb_status_t failure =
           workspace.active_systems[system] == 2u
               ? GPUXTB_STATUS_EIGENSOLVER_FAILED
-              : (workspace.active_systems[system] == 5u
+              : (workspace.active_systems[system] == 5u || workspace.active_systems[system] == 7u
                      ? GPUXTB_STATUS_INTERNAL_ERROR
                      : (workspace.active_systems[system] == 6u
                             ? GPUXTB_STATUS_INTERNAL_ERROR
@@ -895,12 +909,13 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
         state.periodic_embedding_energies[system] = nan;
       }
       state.internal_energies[system] = nan;
-      if (workspace.active_systems[system] != 5u) {
+      if (workspace.active_systems[system] != 5u && workspace.active_systems[system] != 7u) {
         ++state.iterations[system];
       }
       if (first_failure == GPUXTB_STATUS_SUCCESS) {
         first_failure = failure;
         first_failure_was_periodic = workspace.active_systems[system] == 5u;
+        first_failure_was_preparation = workspace.active_systems[system] == 7u;
       }
       continue;
     }
@@ -954,6 +969,8 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
       error = "one or more SCC systems reached the maximum iteration count";
     } else if (first_failure_was_periodic) {
       error = "one or more SCC systems failed during periodic charge embedding";
+    } else if (first_failure_was_preparation) {
+      error = "one or more SCC systems failed during potential or Mulliken preparation";
     } else if (first_failure == GPUXTB_STATUS_INTERNAL_ERROR) {
       error = "one or more SCC systems failed during energy assembly or mixing";
     } else {
@@ -2136,182 +2153,191 @@ gpuxtb_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
   return GPUXTB_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t gather_mixed_multipoles(const SccDriverPlanData& data,
-                                        const SccDriverWorkspace& workspace, std::string& error) {
+gpuxtb_status_t gather_mixed_multipoles_system(const SccDriverPlanData& data, std::size_t system,
+                                               const SccDriverWorkspace& workspace,
+                                               std::string& error) {
   const WavefunctionLayout& layout = data.wavefunction;
-  const std::size_t batch = static_cast<std::size_t>(layout.batch_size);
-  std::fill_n(workspace.staged_wavefunction.qat, static_cast<std::size_t>(layout.qat.element_count),
-              0.0);
-  for (std::size_t system = 0u; system < batch; ++system) {
-    const std::int64_t atom_begin = layout.atom_offsets[system];
-    const std::int64_t atom_end = layout.atom_offsets[system + 1u];
-    const std::int64_t shell_begin = layout.batch_shell_offsets[system];
-    const std::int64_t shell_end = layout.batch_shell_offsets[system + 1u];
-    const std::int64_t atoms = atom_end - atom_begin;
-    const std::int64_t shells = shell_end - shell_begin;
-    const std::int32_t channels = layout.spin_channels[system];
-    const std::int64_t qsh_base = layout.qsh.system_offsets[system];
-    const std::int64_t qat_base = layout.qat.system_offsets[system];
-    const std::int64_t dipole_base = layout.dipole.system_offsets[system];
-    const std::int64_t quadrupole_base = layout.quadrupole.system_offsets[system];
+  const std::int64_t atom_begin = layout.atom_offsets[system];
+  const std::int64_t atom_end = layout.atom_offsets[system + 1u];
+  const std::int64_t shell_begin = layout.batch_shell_offsets[system];
+  const std::int64_t shell_end = layout.batch_shell_offsets[system + 1u];
+  const std::int64_t atoms = atom_end - atom_begin;
+  const std::int64_t shells = shell_end - shell_begin;
+  const std::int32_t channels = layout.spin_channels[system];
+  const std::int64_t qsh_base = layout.qsh.system_offsets[system];
+  const std::int64_t qat_base = layout.qat.system_offsets[system];
+  const std::int64_t dipole_base = layout.dipole.system_offsets[system];
+  const std::int64_t quadrupole_base = layout.quadrupole.system_offsets[system];
 
-    for (std::int32_t channel = 0; channel < channels; ++channel) {
-      for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
-        const std::int64_t shell = shell_begin + local_shell;
-        const std::int64_t local_atom =
-            data.mulliken.shell_to_atom()[static_cast<std::size_t>(shell)] - atom_begin;
-        const double charge = workspace.staged_wavefunction.qsh[static_cast<std::size_t>(
-            qsh_base + static_cast<std::int64_t>(channel) * shells + local_shell)];
-        double& atomic_charge = workspace.staged_wavefunction.qat[static_cast<std::size_t>(
-            qat_base + static_cast<std::int64_t>(channel) * atoms + local_atom)];
-        if (!add_finite(charge, atomic_charge)) {
-          error = "SCC driver mixed shell-to-atom reduction is not finite";
-          return GPUXTB_STATUS_INTERNAL_ERROR;
-        }
-      }
-    }
-
+  std::fill_n(workspace.staged_wavefunction.qat + qat_base,
+              static_cast<std::size_t>(channels) * static_cast<std::size_t>(atoms), 0.0);
+  for (std::int32_t channel = 0; channel < channels; ++channel) {
     for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
-      const double value =
-          workspace.staged_wavefunction.qsh[static_cast<std::size_t>(qsh_base + local_shell)];
-      if (!std::isfinite(value)) {
-        error = "SCC driver mixed shell charges contain NaN or infinity";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
-      }
-      workspace.shell_charges[static_cast<std::size_t>(shell_begin + local_shell)] = value;
-    }
-    for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
-      const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
-      const double charge =
-          workspace.staged_wavefunction.qat[static_cast<std::size_t>(qat_base + local_atom)];
-      if (!std::isfinite(charge)) {
-        error = "SCC driver mixed atomic charges contain NaN or infinity";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
-      }
-      workspace.atomic_charges[atom] = charge;
-      for (std::size_t component = 0u; component < 3u; ++component) {
-        const double value = workspace.staged_wavefunction.dipole[static_cast<std::size_t>(
-            dipole_base + local_atom * 3 + static_cast<std::int64_t>(component))];
-        if (!std::isfinite(value)) {
-          error = "SCC driver mixed atomic dipoles contain NaN or infinity";
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
-        }
-        workspace.atomic_dipoles[atom * 3u + component] = value;
-      }
-      for (std::size_t component = 0u; component < 6u; ++component) {
-        const double value = workspace.staged_wavefunction.quadrupole[static_cast<std::size_t>(
-            quadrupole_base + local_atom * 6 + static_cast<std::int64_t>(component))];
-        if (!std::isfinite(value)) {
-          error = "SCC driver mixed atomic quadrupoles contain NaN or infinity";
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
-        }
-        workspace.atomic_quadrupoles[atom * 6u + component] = value;
+      const std::int64_t shell = shell_begin + local_shell;
+      const std::int64_t local_atom =
+          data.mulliken.shell_to_atom()[static_cast<std::size_t>(shell)] - atom_begin;
+      const double charge = workspace.staged_wavefunction.qsh[static_cast<std::size_t>(
+          qsh_base + static_cast<std::int64_t>(channel) * shells + local_shell)];
+      double& atomic_charge = workspace.staged_wavefunction.qat[static_cast<std::size_t>(
+          qat_base + static_cast<std::int64_t>(channel) * atoms + local_atom)];
+      if (!add_finite(charge, atomic_charge)) {
+        error = "SCC driver mixed shell-to-atom reduction is not finite";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
       }
     }
   }
+
+  for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
+    const double value =
+        workspace.staged_wavefunction.qsh[static_cast<std::size_t>(qsh_base + local_shell)];
+    if (!std::isfinite(value)) {
+      error = "SCC driver mixed shell charges contain NaN or infinity";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    workspace.shell_charges[static_cast<std::size_t>(shell_begin + local_shell)] = value;
+  }
+  for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
+    const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
+    const double charge =
+        workspace.staged_wavefunction.qat[static_cast<std::size_t>(qat_base + local_atom)];
+    if (!std::isfinite(charge)) {
+      error = "SCC driver mixed atomic charges contain NaN or infinity";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    workspace.atomic_charges[atom] = charge;
+    for (std::size_t component = 0u; component < 3u; ++component) {
+      const double value = workspace.staged_wavefunction.dipole[static_cast<std::size_t>(
+          dipole_base + local_atom * 3 + static_cast<std::int64_t>(component))];
+      if (!std::isfinite(value)) {
+        error = "SCC driver mixed atomic dipoles contain NaN or infinity";
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
+      workspace.atomic_dipoles[atom * 3u + component] = value;
+    }
+    for (std::size_t component = 0u; component < 6u; ++component) {
+      const double value = workspace.staged_wavefunction.quadrupole[static_cast<std::size_t>(
+          quadrupole_base + local_atom * 6 + static_cast<std::int64_t>(component))];
+      if (!std::isfinite(value)) {
+        error = "SCC driver mixed atomic quadrupoles contain NaN or infinity";
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
+      workspace.atomic_quadrupoles[atom * 6u + component] = value;
+    }
+  }
+  error.clear();
   return GPUXTB_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data,
-                                                   const SccDriverGeometryView& geometry,
-                                                   const SccDriverWorkspace& workspace,
-                                                   std::string& error) {
+gpuxtb_status_t prepare_system_potentials_and_hamiltonian(const SccDriverPlanData& data,
+                                                          const SccDriverGeometryView& geometry,
+                                                          std::size_t system,
+                                                          const SccDriverWorkspace& workspace,
+                                                          std::string& error) {
   const WavefunctionLayout& layout = data.wavefunction;
-  gpuxtb_status_t status = gather_mixed_multipoles(data, workspace, error);
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+
+  gpuxtb_status_t status = gather_mixed_multipoles_system(data, system, workspace, error);
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
   }
 
-  std::fill_n(workspace.atomic_potentials, static_cast<std::size_t>(layout.qat.element_count), 0.0);
-  std::fill_n(workspace.shell_potentials, static_cast<std::size_t>(layout.qsh.element_count), 0.0);
-  std::fill_n(workspace.dipole_potentials, static_cast<std::size_t>(layout.dipole.element_count),
-              0.0);
-  std::fill_n(workspace.quadrupole_potentials,
-              static_cast<std::size_t>(layout.quadrupole.element_count), 0.0);
-  const std::size_t batch = static_cast<std::size_t>(layout.batch_size);
-  const double nan = std::numeric_limits<double>::quiet_NaN();
-  if (data.periodic_embedding.sealed()) {
-    std::fill_n(workspace.periodic_atomic_potentials, static_cast<std::size_t>(layout.total_atoms),
-                0.0);
-    std::fill_n(workspace.periodic_embedding_energies, batch, nan);
-    std::fill_n(workspace.periodic_system_statuses, batch, GPUXTB_STATUS_INVALID_ARGUMENT);
-  }
-  status = evaluate_spin_polarization_cpu(
-      make_spin_polarization_view(data.spin), workspace.staged_wavefunction.qsh,
-      workspace.spin_energies, workspace.spin_shell_potentials, error);
+  const std::int64_t atom_begin = layout.atom_offsets[system];
+  const std::int64_t atom_end = layout.atom_offsets[system + 1u];
+  const std::int64_t shell_begin = layout.batch_shell_offsets[system];
+  const std::int64_t shell_end = layout.batch_shell_offsets[system + 1u];
+  const std::int64_t atoms = atom_end - atom_begin;
+  const std::int64_t shells = shell_end - shell_begin;
+  const std::int32_t channels = layout.spin_channels[system];
+  const std::int64_t qsh_base = layout.qsh.system_offsets[system];
+  const std::int64_t qat_base = layout.qat.system_offsets[system];
+  const std::int64_t dipole_base = layout.dipole.system_offsets[system];
+  const std::int64_t quadrupole_base = layout.quadrupole.system_offsets[system];
+  const std::size_t qsh_slice =
+      static_cast<std::size_t>(channels) * static_cast<std::size_t>(shells);
+  const std::size_t qat_slice =
+      static_cast<std::size_t>(channels) * static_cast<std::size_t>(atoms);
+
+  /* Only this system's wavefunction-major potential slices are produced. The
+   * component scratch buffers are reused across the two-per-system pass. */
+  std::fill_n(workspace.atomic_potentials + qat_base, qat_slice, 0.0);
+  std::fill_n(workspace.shell_potentials + qsh_base, qsh_slice, 0.0);
+  std::fill_n(workspace.dipole_potentials + dipole_base, qat_slice * 3u, 0.0);
+  std::fill_n(workspace.quadrupole_potentials + quadrupole_base, qat_slice * 6u, 0.0);
+  std::fill_n(workspace.spin_shell_potentials + qsh_base, qsh_slice, 0.0);
+
+  double spin_energy = 0.0;
+  status = evaluate_spin_polarization_system_cpu(
+      make_spin_polarization_view(data.spin), static_cast<std::int64_t>(system),
+      workspace.staged_wavefunction.qsh, spin_energy, workspace.spin_shell_potentials, error);
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
   }
-  status = evaluate_es2_potential_cpu(data.es2, geometry.es2_cache, workspace.shell_charges,
-                                      workspace.component_shell_potential, workspace.es2_workspace,
-                                      error);
+  workspace.spin_energies[system] = spin_energy;
+
+  status = evaluate_es2_potential_system_cpu(
+      data.es2, geometry.es2_cache, static_cast<std::int64_t>(system), workspace.shell_charges,
+      workspace.component_shell_potential, error);
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
   }
+  for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
+    workspace.shell_potentials[static_cast<std::size_t>(qsh_base + local_shell)] =
+        workspace.component_shell_potential[static_cast<std::size_t>(shell_begin + local_shell)];
+  }
+
   const ES3View es3_view = make_es3_view(data.es3);
-  for (std::size_t system = 0u; system < batch; ++system) {
-    const std::int64_t shell_begin = layout.batch_shell_offsets[system];
-    const std::int64_t shell_end = layout.batch_shell_offsets[system + 1u];
-    const std::int64_t shells = shell_end - shell_begin;
-    const std::int64_t destination_base = layout.qsh.system_offsets[system];
-    for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
-      workspace.shell_potentials[static_cast<std::size_t>(destination_base + local_shell)] =
-          workspace.component_shell_potential[static_cast<std::size_t>(shell_begin + local_shell)];
-    }
-  }
-  status = evaluate_es3_potential_cpu(es3_view, workspace.shell_charges,
-                                      workspace.component_shell_potential, error);
+  status = evaluate_es3_potential_system_cpu(es3_view, static_cast<std::int64_t>(system),
+                                             workspace.shell_charges,
+                                             workspace.component_shell_potential, error);
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
   }
-  for (std::size_t system = 0u; system < batch; ++system) {
-    const std::int64_t shell_begin = layout.batch_shell_offsets[system];
-    const std::int64_t shell_end = layout.batch_shell_offsets[system + 1u];
-    const std::int64_t shells = shell_end - shell_begin;
-    const std::int64_t destination_base = layout.qsh.system_offsets[system];
-    for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
-      double& target =
-          workspace.shell_potentials[static_cast<std::size_t>(destination_base + local_shell)];
-      if (!add_finite(
-              workspace
-                  .component_shell_potential[static_cast<std::size_t>(shell_begin + local_shell)],
-              target)) {
-        error = "SCC driver ES2+ES3 shell potential exceeded floating-point range";
-        return GPUXTB_STATUS_INTERNAL_ERROR;
-      }
-      if (geometry.explicit_point_charge_shell_elements != 0 &&
-          !add_finite(geometry.explicit_point_charge_shell_potential[static_cast<std::size_t>(
-                          shell_begin + local_shell)],
-                      target)) {
-        error = "SCC driver explicit point-charge potential is not finite";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
-      }
+  for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
+    double& target = workspace.shell_potentials[static_cast<std::size_t>(qsh_base + local_shell)];
+    if (!add_finite(
+            workspace
+                .component_shell_potential[static_cast<std::size_t>(shell_begin + local_shell)],
+            target)) {
+      error = "SCC driver ES2+ES3 shell potential exceeded floating-point range";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    if (geometry.explicit_point_charge_shell_elements != 0 &&
+        !add_finite(geometry.explicit_point_charge_shell_potential[static_cast<std::size_t>(
+                        shell_begin + local_shell)],
+                    target)) {
+      error = "SCC driver explicit point-charge potential is not finite";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
     }
   }
-  for (std::int64_t element = 0; element < layout.qsh.element_count; ++element) {
-    if (!add_finite(workspace.spin_shell_potentials[static_cast<std::size_t>(element)],
-                    workspace.shell_potentials[static_cast<std::size_t>(element)])) {
+  for (std::size_t element = 0u; element < qsh_slice; ++element) {
+    double& target = workspace.shell_potentials[static_cast<std::size_t>(qsh_base) + element];
+    if (!add_finite(workspace.spin_shell_potentials[static_cast<std::size_t>(qsh_base) + element],
+                    target)) {
       error = "SCC driver electrostatic+spin shell potential exceeded floating-point range";
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
   }
 
-  status = evaluate_aes2_potential_cpu(
-      data.aes2, geometry.aes2_cache, workspace.atomic_charges, workspace.atomic_dipoles,
-      workspace.atomic_quadrupoles, workspace.component_atomic_potential,
+  status = evaluate_aes2_potential_system_cpu(
+      data.aes2, geometry.aes2_cache, static_cast<std::int64_t>(system), workspace.atomic_charges,
+      workspace.atomic_dipoles, workspace.atomic_quadrupoles, workspace.component_atomic_potential,
       workspace.component_dipole_potential, workspace.component_quadrupole_potential,
       workspace.aes2_workspace, error);
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
   }
   if (data.d4.sealed()) {
-    status = evaluate_d4_two_body_cpu(
-        data.d4, geometry.d4_cache, workspace.atomic_charges, workspace.d4_two_body_energies,
-        workspace.d4_atomic_potentials, workspace.d4_workspace, error);
+    status = evaluate_d4_two_body_system_cpu(
+        data.d4, geometry.d4_cache, static_cast<std::int64_t>(system), workspace.atomic_charges,
+        workspace.d4_two_body_energies[system], workspace.d4_atomic_potentials + atom_begin,
+        workspace.d4_workspace, error);
     if (status != GPUXTB_STATUS_SUCCESS) {
       return status;
     }
   }
+
+  /* The periodic response potential has no cross-system coupling: the target
+   * system's atom slice is fully determined by its own mixed charges. */
   if (data.periodic_embedding.sealed()) {
     const PeriodicEmbeddingView periodic_view{geometry.periodic_shifts,
                                               geometry.periodic_shift_elements,
@@ -2326,106 +2352,93 @@ gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data
                                               workspace.periodic_system_statuses,
                                               layout.batch_size,
                                               data.periodic_embedding.identity()};
-    for (std::size_t system = 0u; system < batch; ++system) {
-      if (workspace.active_systems[system] != 1u) {
-        continue;
-      }
-      status = evaluate_periodic_embedding_system_cpu(
-          data.periodic_embedding, static_cast<std::int64_t>(system), periodic_view,
-          workspace.periodic_embedding_workspace, error);
-      if (status == GPUXTB_STATUS_INVALID_ARGUMENT) {
-        return status;
-      }
-      if (status != GPUXTB_STATUS_SUCCESS) {
-        /* The component guarantees unchanged numerical outputs on failure.
-         * Keep an explicit zero potential so the later whole-batch Mulliken
-         * assembly remains safe while successful peers continue. */
-        const std::int64_t atom_begin = layout.atom_offsets[system];
-        const std::int64_t atom_end = layout.atom_offsets[system + 1u];
-        std::fill_n(workspace.periodic_atomic_potentials + atom_begin,
-                    static_cast<std::size_t>(atom_end - atom_begin), 0.0);
-        workspace.periodic_embedding_energies[system] = nan;
-        workspace.active_systems[system] = 5u;
-      }
+    status = evaluate_periodic_embedding_system_cpu(
+        data.periodic_embedding, static_cast<std::int64_t>(system), periodic_view,
+        workspace.periodic_embedding_workspace, error);
+    if (status == GPUXTB_STATUS_INVALID_ARGUMENT) {
+      return status;
+    }
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      /* The component guarantees unchanged numerical outputs on failure. Keep
+       * an explicit zero potential so the later per-system Mulliken assembly
+       * stays finite while successful peers continue. */
+      std::fill_n(workspace.periodic_atomic_potentials + atom_begin,
+                  static_cast<std::size_t>(atoms), 0.0);
+      workspace.periodic_embedding_energies[system] = nan;
+      workspace.active_systems[system] = 5u;
     }
   }
-  for (std::size_t system = 0u; system < batch; ++system) {
-    const std::int64_t atom_begin = layout.atom_offsets[system];
-    const std::int64_t atom_end = layout.atom_offsets[system + 1u];
-    const std::int64_t atoms = atom_end - atom_begin;
-    const std::int64_t qat_base = layout.qat.system_offsets[system];
-    const std::int64_t dipole_base = layout.dipole.system_offsets[system];
-    const std::int64_t quadrupole_base = layout.quadrupole.system_offsets[system];
+
+  /* Repack AES2 into wavefunction-major atom potentials and add the periodic
+   * and D4 response slices when the system is still active. */
+  for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
+    const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
+    workspace.atomic_potentials[static_cast<std::size_t>(qat_base + local_atom)] =
+        workspace.component_atomic_potential[atom];
+    for (std::size_t component = 0u; component < 3u; ++component) {
+      workspace.dipole_potentials[static_cast<std::size_t>(dipole_base + local_atom * 3 +
+                                                           static_cast<std::int64_t>(component))] =
+          workspace.component_dipole_potential[atom * 3u + component];
+    }
+    for (std::size_t component = 0u; component < 6u; ++component) {
+      workspace.quadrupole_potentials[static_cast<std::size_t>(
+          quadrupole_base + local_atom * 6 + static_cast<std::int64_t>(component))] =
+          workspace.component_quadrupole_potential[atom * 6u + component];
+    }
+  }
+  if (workspace.active_systems[system] == 1u && data.periodic_embedding.sealed()) {
+    bool finite = true;
     for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
       const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
-      workspace.atomic_potentials[static_cast<std::size_t>(qat_base + local_atom)] =
-          workspace.component_atomic_potential[atom];
-      for (std::size_t component = 0u; component < 3u; ++component) {
-        workspace.dipole_potentials[static_cast<std::size_t>(
-            dipole_base + local_atom * 3 + static_cast<std::int64_t>(component))] =
-            workspace.component_dipole_potential[atom * 3u + component];
-      }
-      for (std::size_t component = 0u; component < 6u; ++component) {
-        workspace.quadrupole_potentials[static_cast<std::size_t>(
-            quadrupole_base + local_atom * 6 + static_cast<std::int64_t>(component))] =
-            workspace.component_quadrupole_potential[atom * 6u + component];
+      double& target = workspace.atomic_potentials[static_cast<std::size_t>(qat_base + local_atom)];
+      if (!add_finite(workspace.periodic_atomic_potentials[atom], target)) {
+        finite = false;
+        break;
       }
     }
-    if (data.periodic_embedding.sealed() && workspace.active_systems[system] == 1u) {
-      bool finite = true;
+    if (!finite) {
+      /* Restore the complete AES2 atomic potential for this failed system. */
       for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
         const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
-        double& target =
-            workspace.atomic_potentials[static_cast<std::size_t>(qat_base + local_atom)];
-        if (!add_finite(workspace.periodic_atomic_potentials[atom], target)) {
-          finite = false;
-          break;
-        }
+        workspace.atomic_potentials[static_cast<std::size_t>(qat_base + local_atom)] =
+            workspace.component_atomic_potential[atom];
       }
-      if (!finite) {
-        /* Restore the complete AES2 atomic potential for this failed system;
-         * Mulliken Hamiltonian construction is still a whole-batch primitive. */
-        for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
-          const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
-          workspace.atomic_potentials[static_cast<std::size_t>(qat_base + local_atom)] =
-              workspace.component_atomic_potential[atom];
-        }
-        std::fill_n(workspace.periodic_atomic_potentials + atom_begin,
-                    static_cast<std::size_t>(atoms), 0.0);
-        workspace.periodic_embedding_energies[system] = nan;
-        workspace.periodic_system_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
-        workspace.active_systems[system] = 5u;
-      }
+      std::fill_n(workspace.periodic_atomic_potentials + atom_begin,
+                  static_cast<std::size_t>(atoms), 0.0);
+      workspace.periodic_embedding_energies[system] = nan;
+      workspace.periodic_system_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
+      workspace.active_systems[system] = 5u;
     }
-    if (data.d4.sealed() && workspace.active_systems[system] == 1u) {
-      for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
-        const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
-        double& target =
-            workspace.atomic_potentials[static_cast<std::size_t>(qat_base + local_atom)];
-        if (!add_finite(workspace.d4_atomic_potentials[atom], target)) {
-          error = "SCC driver AES2+embedding+D4 atom potential exceeded floating-point range";
-          return GPUXTB_STATUS_INTERNAL_ERROR;
-        }
+  }
+  if (workspace.active_systems[system] == 1u && data.d4.sealed()) {
+    for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
+      const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
+      double& target = workspace.atomic_potentials[static_cast<std::size_t>(qat_base + local_atom)];
+      if (!add_finite(workspace.d4_atomic_potentials[atom], target)) {
+        error = "SCC driver AES2+embedding+D4 atom potential exceeded floating-point range";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
       }
     }
   }
 
-  for (std::int64_t element = 0; element < geometry.h0_elements; ++element) {
+  const std::int64_t matrix_begin = data.mulliken.matrix_offsets()[system];
+  const std::int64_t matrix_end = data.mulliken.matrix_offsets()[system + 1u];
+  const std::int64_t matrix_elements = matrix_end - matrix_begin;
+  const std::int64_t hamiltonian_base = layout.density.system_offsets[system];
+  for (std::int64_t element = matrix_begin; element < matrix_end; ++element) {
     if (!std::isfinite(geometry.h0[static_cast<std::size_t>(element)])) {
       error = "SCC driver H0 contains NaN or infinity";
       return GPUXTB_STATUS_INVALID_ARGUMENT;
     }
   }
-  for (std::size_t system = 0u; system < batch; ++system) {
-    const std::int64_t matrix_begin = data.mulliken.matrix_offsets()[system];
-    const std::int64_t matrix_end = data.mulliken.matrix_offsets()[system + 1u];
-    const std::int64_t matrix_elements = matrix_end - matrix_begin;
-    const std::int64_t hamiltonian_base = layout.density.system_offsets[system];
-    for (std::int32_t spin = 0; spin < layout.spin_channels[system]; ++spin) {
-      std::copy_n(geometry.h0 + matrix_begin, static_cast<std::size_t>(matrix_elements),
-                  workspace.hamiltonian + hamiltonian_base +
-                      static_cast<std::int64_t>(spin) * matrix_elements);
-    }
+  for (std::int32_t spin = 0; spin < layout.spin_channels[system]; ++spin) {
+    std::copy_n(geometry.h0 + matrix_begin, static_cast<std::size_t>(matrix_elements),
+                workspace.hamiltonian + hamiltonian_base +
+                    static_cast<std::int64_t>(spin) * matrix_elements);
+  }
+  if (workspace.active_systems[system] != 1u) {
+    error.clear();
+    return GPUXTB_STATUS_SUCCESS;
   }
 
   const MullikenPotentialView potential{
@@ -2434,8 +2447,9 @@ gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data
       workspace.quadrupole_potentials, layout.quadrupole.element_count, data.mulliken.identity()};
   const MullikenHamiltonianView hamiltonian{workspace.hamiltonian, layout.density.element_count,
                                             data.mulliken.identity()};
-  status = add_mulliken_hamiltonian_cpu(data.mulliken, geometry.integrals, potential, hamiltonian,
-                                        workspace.mulliken_workspace, error);
+  status = add_mulliken_hamiltonian_system_cpu(data.mulliken, geometry.integrals, potential,
+                                               hamiltonian, static_cast<std::int64_t>(system),
+                                               workspace.mulliken_workspace, error);
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
   }
@@ -2447,14 +2461,7 @@ gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data
    * from H0, so reproduce the same physical operator as H0 + 2*(Htmp-H0);
    * doubling Htmp directly would incorrectly double the core Hamiltonian.
    */
-  for (std::size_t system = 0u; system < batch; ++system) {
-    if (layout.spin_channels[system] != 2) {
-      continue;
-    }
-    const std::int64_t matrix_begin = data.mulliken.matrix_offsets()[system];
-    const std::int64_t matrix_end = data.mulliken.matrix_offsets()[system + 1u];
-    const std::int64_t matrix_elements = matrix_end - matrix_begin;
-    const std::int64_t hamiltonian_base = layout.density.system_offsets[system];
+  if (layout.spin_channels[system] == 2) {
     for (std::int32_t spin = 0; spin < 2; ++spin) {
       for (std::int64_t matrix = 0; matrix < matrix_elements; ++matrix) {
         const double h0 = geometry.h0[static_cast<std::size_t>(matrix_begin + matrix)];
@@ -2467,6 +2474,38 @@ gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data
         }
         target = physical;
       }
+    }
+  }
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data,
+                                                   const SccDriverGeometryView& geometry,
+                                                   const SccDriverWorkspace& workspace,
+                                                   std::string& error) {
+  const WavefunctionLayout& layout = data.wavefunction;
+  const std::size_t batch = static_cast<std::size_t>(layout.batch_size);
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  if (data.periodic_embedding.sealed()) {
+    std::fill_n(workspace.periodic_embedding_energies, batch, nan);
+    std::fill_n(workspace.periodic_system_statuses, batch, GPUXTB_STATUS_INVALID_ARGUMENT);
+  }
+  for (std::size_t system = 0u; system < batch; ++system) {
+    if (workspace.active_systems[system] != 1u) {
+      continue;
+    }
+    gpuxtb_status_t status =
+        prepare_system_potentials_and_hamiltonian(data, geometry, system, workspace, error);
+    if (status == GPUXTB_STATUS_INTERNAL_ERROR) {
+      /* A target-system numerical failure during classical or Mulliken
+       * preparation is data-level: keep every peer running and record the
+       * failure so the publication loop reports it without NaN-ing peers. */
+      workspace.active_systems[system] = 7u;
+      continue;
+    }
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      return status;
     }
   }
   error.clear();

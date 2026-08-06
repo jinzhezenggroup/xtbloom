@@ -923,6 +923,49 @@ int test_ragged_failure_isolation_restart_and_skip() {
   return 0;
 }
 
+int test_converged_system_skips_classical_and_mulliken_arithmetic() {
+  Fixture fixture;
+  std::string error;
+  CHECK(make_fixture(2, fixture, error));
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.converged[0] == 1u);
+  CHECK(fixture.driver_state.converged[1] == 1u);
+
+  /* Restart system 1 so it becomes active again while system 0 remains
+   * converged, then poison the converged system's public multipoles. The
+   * active-only driver must never read the converged peer's data: a classic
+   * whole-batch gather would reject the NaN before any system ran. */
+  CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 1, fixture.wavefunction,
+                                      fixture.mixer_state, fixture.driver_state,
+                                      error) == GPUXTB_STATUS_SUCCESS);
+  const std::int64_t qsh_begin = fixture.wavefunction_layout.qsh.system_offsets[0];
+  const std::int64_t qsh_end = fixture.wavefunction_layout.qsh.system_offsets[1];
+  const std::int64_t qat_begin = fixture.wavefunction_layout.qat.system_offsets[0];
+  const std::int64_t qat_end = fixture.wavefunction_layout.qat.system_offsets[1];
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  for (std::int64_t element = qsh_begin; element < qsh_end; ++element) {
+    fixture.wavefunction.qsh[static_cast<std::size_t>(element)] = nan;
+  }
+  for (std::int64_t element = qat_begin; element < qat_end; ++element) {
+    fixture.wavefunction.qat[static_cast<std::size_t>(element)] = nan;
+  }
+
+  const int diagonalizations_before = diagonalizations.load(std::memory_order_relaxed);
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(diagonalizations.load(std::memory_order_relaxed) == diagonalizations_before + 1);
+  CHECK(fixture.driver_state.converged[0] == 1u);
+  CHECK(fixture.driver_state.converged[1] == 1u);
+  CHECK(std::isnan(fixture.wavefunction.qsh[static_cast<std::size_t>(qsh_begin)]));
+  CHECK(std::isnan(fixture.wavefunction.qat[static_cast<std::size_t>(qat_begin)]));
+  return 0;
+}
+
 int test_structural_failure_atomicity_and_zero_allocation() {
   Fixture fixture;
   std::string error;
@@ -1796,6 +1839,10 @@ int main() {
     return status;
   }
   if (const int status = test_ragged_failure_isolation_restart_and_skip(); status != 0) {
+    return status;
+  }
+  if (const int status = test_converged_system_skips_classical_and_mulliken_arithmetic();
+      status != 0) {
     return status;
   }
   return test_structural_failure_atomicity_and_zero_allocation();
