@@ -28,7 +28,7 @@ Do not infer a release-wide claim from one homogeneous molecule, one batch size,
 5. Preserve failed or unavailable coordinates instead of silently dropping them.
 6. Never widen a conformance tolerance to make a timing row eligible.
 
-Invoke `$gpuxtb-prove-scientific-change` when numerical output changed and `$gpuxtb-validate-cuda-change` for CUDA claims.
+When numerical output changed, require the independent scientific-evidence workflow before timing. For CUDA claims, require the complete real-GPU runtime and sanitizer matrix as applicable.
 
 ## Control the Measurement
 

@@ -55,7 +55,7 @@ Use structured tools from `tools/licensing/`, `tests/licensing/`, `tests/abi/`, 
 
 ## Run the Required Gates
 
-At minimum, run the relevant subset and then `$gpuxtb-select-validation`:
+At minimum, run the relevant subset and return the results to the caller's validation ledger:
 
 ```bash
 python3 tools/licensing/check_licenses.py --source-root .
