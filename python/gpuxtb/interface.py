@@ -534,6 +534,17 @@ class Context:
             self._backend = None
             self._finalizer = None
 
+    def create_plan(self, batch: library.Batch) -> library.Plan:
+        """Create a fixed-topology plan bound to this context.
+
+        The low-level ``batch`` descriptor fixes the immutable topology; the
+        returned plan reuses topology and workspace across repeated
+        ``plan.compute`` calls (geometry may change). The plan must be
+        destroyed before the context.
+        """
+        self._create()
+        return library.Plan(self._handle, batch)
+
     def __enter__(self) -> Context:  # noqa: PYI034 - Python 3.10 lacks typing.Self
         """Create the native context and return this owner."""
         self._create()

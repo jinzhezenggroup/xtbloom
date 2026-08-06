@@ -87,6 +87,15 @@ struct DescriptorValidationResult {
     gpuxtb_backend_t backend, const gpuxtb_batch_t* batch, const gpuxtb_compute_options_t* options,
     const gpuxtb_batch_result_t* result);
 
+/*
+ * Validate batch and compute-options descriptors for fixed-topology plan
+ * creation, which has no caller-owned result descriptor yet. The batch plus
+ * the compute policy are checked with the same prefix, host-topology, and
+ * alias rules as gpuxtb_compute; result buffers are simply not required.
+ */
+[[nodiscard]] DescriptorValidationResult validate_plan_descriptor_structure(
+    gpuxtb_backend_t backend, const gpuxtb_batch_t* batch, const gpuxtb_compute_options_t* options);
+
 }  // namespace gpuxtb::detail
 
 #endif  // GPUXTB_RUNTIME_VALIDATION_HPP

@@ -12,6 +12,7 @@
 #include "gpuxtb/gpuxtb.h"
 #include "runtime/backend.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
+#include "runtime/gfn2_plan.hpp"
 #if defined(GPUXTB_HAS_CUDA)
 #include "runtime/gfn2_cuda_execution.hpp"
 #endif
@@ -19,6 +20,10 @@
 
 struct gpuxtb_context {
   gpuxtb::detail::Context* implementation;
+};
+
+struct gpuxtb_plan {
+  gpuxtb::detail::Gfn2Plan* implementation;
 };
 
 namespace {
@@ -130,6 +135,11 @@ gpuxtb_status_t gpuxtb_compute_options_init(gpuxtb_compute_options_t* options, s
 
 gpuxtb_status_t gpuxtb_batch_result_init(gpuxtb_batch_result_t* result, size_t struct_size) {
   return initialize_structure(result, struct_size, GPUXTB_BATCH_RESULT_V1_SIZE, "batch result");
+}
+
+gpuxtb_status_t gpuxtb_workspace_query_init(gpuxtb_workspace_query_t* query, size_t struct_size) {
+  return initialize_structure(query, struct_size, GPUXTB_WORKSPACE_QUERY_V1_SIZE,
+                              "workspace query");
 }
 
 gpuxtb_status_t gpuxtb_context_create(const gpuxtb_context_options_t* options,
@@ -288,6 +298,107 @@ gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* 
   return fail(GPUXTB_STATUS_BACKEND_UNAVAILABLE,
               "the gpuxtb library was built without CUDA support");
 #endif
+}
+
+gpuxtb_status_t gpuxtb_plan_create(gpuxtb_context_t* context, const gpuxtb_batch_t* batch,
+                                   gpuxtb_plan_t** plan) {
+  if (plan == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "plan output pointer is NULL");
+  }
+  *plan = nullptr;
+  if (context == nullptr || context->implementation == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "context is NULL");
+  }
+  try {
+    gpuxtb::detail::Gfn2Plan* implementation = new (std::nothrow) gpuxtb::detail::Gfn2Plan{};
+    if (implementation == nullptr) {
+      return fail(GPUXTB_STATUS_ALLOCATION_FAILED, "failed to allocate a plan implementation");
+    }
+    std::string error;
+    const gpuxtb_status_t status = implementation->create(*context->implementation, *batch, error);
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      implementation->destroy();
+      delete implementation;
+      return fail(status, std::move(error));
+    }
+
+    gpuxtb_plan_t* wrapper = new (std::nothrow) gpuxtb_plan_t{implementation};
+    if (wrapper == nullptr) {
+      implementation->destroy();
+      delete implementation;
+      return fail(GPUXTB_STATUS_ALLOCATION_FAILED, "failed to allocate a plan handle");
+    }
+    *plan = wrapper;
+    last_error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    return fail(GPUXTB_STATUS_ALLOCATION_FAILED, "failed to allocate a plan");
+  } catch (const std::exception& exception) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR, "unknown exception while creating a plan");
+  }
+}
+
+void gpuxtb_plan_destroy(gpuxtb_plan_t* plan) {
+  if (plan == nullptr) {
+    return;
+  }
+  if (plan->implementation != nullptr) {
+    plan->implementation->destroy();
+    delete plan->implementation;
+  }
+  delete plan;
+}
+
+gpuxtb_status_t gpuxtb_plan_query_workspace(const gpuxtb_plan_t* plan,
+                                            gpuxtb_workspace_query_t* query) {
+  if (plan == nullptr || plan->implementation == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "plan is NULL");
+  }
+  if (!valid_header(query, GPUXTB_WORKSPACE_QUERY_V1_SIZE)) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
+                "workspace query is NULL, too small, or uses an unsupported API version");
+  }
+  try {
+    std::string error;
+    const gpuxtb_status_t status = plan->implementation->query_workspace(
+        static_cast<std::uint32_t>(query->compute_flags), *query, error);
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      return fail(status, std::move(error));
+    }
+    last_error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  } catch (const std::exception& exception) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR, "unknown exception while querying plan workspace");
+  }
+}
+
+gpuxtb_status_t gpuxtb_plan_compute(gpuxtb_plan_t* plan, const gpuxtb_batch_t* batch,
+                                    const gpuxtb_compute_options_t* options,
+                                    gpuxtb_batch_result_t* result) {
+  if (plan == nullptr || plan->implementation == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "plan is NULL");
+  }
+  try {
+    std::string error;
+    const gpuxtb_status_t status = plan->implementation->compute(*batch, *options, *result, error);
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      return fail(status, std::move(error));
+    }
+    last_error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    return fail(GPUXTB_STATUS_ALLOCATION_FAILED,
+                "failed to allocate temporary storage while executing a plan compute request");
+  } catch (const std::exception& exception) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR,
+                "unknown exception while executing a plan compute request");
+  }
 }
 
 }  // extern "C"

@@ -1199,6 +1199,200 @@ int test_degenerate_occupation_representability_is_publicly_successful() {
   return 0;
 }
 
+struct PlanDeleter {
+  void operator()(gpuxtb_plan_t* plan) const noexcept { gpuxtb_plan_destroy(plan); }
+};
+
+using PlanHandle = std::unique_ptr<gpuxtb_plan_t, PlanDeleter>;
+
+int test_plan_create_query_workspace_and_reuse() {
+  const std::uint32_t flags =
+      GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
+  ContextHandle context = make_cpu_context(4);
+  CHECK(context != nullptr);
+
+  PublicBatch request = make_repeated_h2_he_batch(8u);
+  request.bind(flags);
+  gpuxtb_plan_t* raw_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &raw_plan) == GPUXTB_STATUS_SUCCESS);
+  CHECK(raw_plan != nullptr);
+  CHECK(gpuxtb_context_get_backend(context.get()) == GPUXTB_BACKEND_CPU);
+  PlanHandle plan(raw_plan);
+
+  /* Workspace query: CPU host workspace with the requested properties must be
+   * nonzero and well-aligned; a CPU plan has no device workspace. */
+  gpuxtb_workspace_query_t query{};
+  CHECK(gpuxtb_workspace_query_init(&query, sizeof(query)) == GPUXTB_STATUS_SUCCESS);
+  query.compute_flags = flags;
+  CHECK(gpuxtb_plan_query_workspace(plan.get(), &query) == GPUXTB_STATUS_SUCCESS);
+  CHECK(query.host_required_bytes > 0u);
+  CHECK(query.host_required_alignment >= 8u);
+  CHECK(query.device_required_bytes == 0u);
+  CHECK(query.device_required_alignment == 1u);
+
+  /* Requested properties change the reported host workspace: forces and
+   * charges keep additional output staging alive. */
+  gpuxtb_workspace_query_t energy_query{};
+  CHECK(gpuxtb_workspace_query_init(&energy_query, sizeof(energy_query)) == GPUXTB_STATUS_SUCCESS);
+  energy_query.compute_flags = GPUXTB_COMPUTE_ENERGY;
+  CHECK(gpuxtb_plan_query_workspace(plan.get(), &energy_query) == GPUXTB_STATUS_SUCCESS);
+  CHECK(energy_query.host_required_bytes > 0u);
+  CHECK(query.host_required_bytes > energy_query.host_required_bytes);
+
+  /* Creating a second plan on the same context is independent. */
+  gpuxtb_plan_t* second_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &second_plan) == GPUXTB_STATUS_SUCCESS);
+  CHECK(second_plan != nullptr);
+  gpuxtb_plan_destroy(second_plan);
+
+  /* Plan compute reproduces the exact convenience-path results. */
+  PublicBatch via_compute = request;
+  via_compute.bind(flags);
+  CHECK(gpuxtb_compute(context.get(), &via_compute.batch, &via_compute.options,
+                       &via_compute.result) == GPUXTB_STATUS_SUCCESS);
+
+  request.bind(flags);
+  CHECK(gpuxtb_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(request.statuses == via_compute.statuses);
+  CHECK(request.converged == via_compute.converged);
+  CHECK(request.iterations == via_compute.iterations);
+  CHECK(request.energies == via_compute.energies);
+  CHECK(request.forces == via_compute.forces);
+  CHECK(request.atomic_charges == via_compute.atomic_charges);
+  CHECK(request.result.flags == via_compute.result.flags);
+  return 0;
+}
+
+int test_plan_fixed_topology_zero_steady_state_allocations() {
+  const std::uint32_t flags =
+      GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
+  ContextHandle context = make_cpu_context(1);
+  CHECK(context != nullptr);
+
+  PublicBatch request = make_repeated_h2_he_batch(4u);
+  request.bind(flags);
+  gpuxtb_plan_t* raw_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &raw_plan) == GPUXTB_STATUS_SUCCESS);
+  PlanHandle plan(raw_plan);
+
+  /* Plan creation pre-warms the topology; two plan calls with changed geometry
+   * warm every plan-owned vector so the third must not allocate. */
+  CHECK(gpuxtb_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+        GPUXTB_STATUS_SUCCESS);
+  request.positions[0] -= 0.011;
+  request.positions[3] += 0.011;
+  request.bind(flags);
+  CHECK(gpuxtb_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(request.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(std::isfinite(request.energies[0]));
+
+  allocation_test::count.store(0u, std::memory_order_relaxed);
+  allocation_test::enabled.store(true, std::memory_order_release);
+  const gpuxtb_status_t status =
+      gpuxtb_plan_compute(plan.get(), &request.batch, &request.options, &request.result);
+  allocation_test::enabled.store(false, std::memory_order_release);
+  CHECK(status == GPUXTB_STATUS_SUCCESS);
+  CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
+  return 0;
+}
+
+int test_plan_topology_mismatch_fails_before_output_mutation() {
+  const std::uint32_t flags =
+      GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
+  ContextHandle context = make_cpu_context(1);
+  CHECK(context != nullptr);
+
+  PublicBatch request = make_repeated_h2_he_batch(2u);
+  request.bind(flags);
+  gpuxtb_plan_t* raw_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &raw_plan) == GPUXTB_STATUS_SUCCESS);
+  PlanHandle plan(raw_plan);
+
+  /* A different topology (methane) against the H2/He plan is a corrupted
+   * request: it must fail before any caller output is modified. */
+  PublicBatch other;
+  other.atom_offsets = {0, 5};
+  other.atomic_numbers = {6, 1, 1, 1, 1};
+  other.positions = {0.0,   0.0,   0.0,  1.09,  1.09,  1.09,  1.09, -1.09,
+                     -1.09, -1.09, 1.09, -1.09, -1.09, -1.09, 1.09};
+  other.molecular_charges = {0.0};
+  other.unpaired_electrons = {0};
+  other.bind(flags);
+  const std::vector<double> energies_before = other.energies;
+  const std::vector<double> forces_before = other.forces;
+  const std::vector<double> charges_before = other.atomic_charges;
+  const std::vector<std::int32_t> iterations_before = other.iterations;
+  const std::vector<std::uint8_t> converged_before = other.converged;
+  const std::vector<std::int32_t> statuses_before = other.statuses;
+  const std::uint32_t flags_before = other.result.flags;
+  CHECK(gpuxtb_plan_compute(plan.get(), &other.batch, &other.options, &other.result) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(std::strstr(gpuxtb_get_last_error(), "topology") != nullptr);
+  CHECK(other.energies == energies_before);
+  CHECK(other.forces == forces_before);
+  CHECK(other.atomic_charges == charges_before);
+  CHECK(other.iterations == iterations_before);
+  CHECK(other.converged == converged_before);
+  CHECK(other.statuses == statuses_before);
+  CHECK(other.result.flags == flags_before);
+
+  /* The correct topology still computes after the failed attempt. */
+  request.bind(flags);
+  CHECK(gpuxtb_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(request.statuses[0] == GPUXTB_STATUS_SUCCESS);
+
+  /* A null plan handle is rejected without touching outputs. */
+  request.result.flags = UINT32_C(0x12345678);
+  CHECK(gpuxtb_plan_compute(nullptr, &request.batch, &request.options, &request.result) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(request.result.flags == UINT32_C(0x12345678));
+  return 0;
+}
+
+int test_plan_multi_threaded_reuse() {
+  const std::uint32_t flags =
+      GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
+  ContextHandle context = make_cpu_context(4);
+  CHECK(context != nullptr);
+
+  PublicBatch request = make_repeated_h2_he_batch(4u);
+  request.bind(flags);
+  gpuxtb_plan_t* raw_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &request.batch, &raw_plan) == GPUXTB_STATUS_SUCCESS);
+  PlanHandle plan(raw_plan);
+
+  const std::size_t workers = 4u;
+  std::vector<gpuxtb_status_t> statuses(workers, GPUXTB_STATUS_INTERNAL_ERROR);
+  std::vector<std::thread> threads;
+  threads.reserve(workers);
+  for (std::size_t worker = 0u; worker < workers; ++worker) {
+    threads.emplace_back([&, worker] {
+      PublicBatch batch(request);
+      batch.positions[1] += 0.0001 * static_cast<double>(worker);
+      batch.bind(flags);
+      statuses[worker] =
+          gpuxtb_plan_compute(plan.get(), &batch.batch, &batch.options, &batch.result);
+      if (statuses[worker] != GPUXTB_STATUS_SUCCESS) {
+        std::cerr << "worker " << worker << " failed: " << gpuxtb_get_last_error() << '\n';
+      }
+    });
+  }
+  for (std::thread& thread : threads) {
+    thread.join();
+  }
+  for (gpuxtb_status_t status : statuses) {
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      std::cerr << "plan multi-threaded worker failed with " << status << ": "
+                << gpuxtb_get_last_error() << '\n';
+    }
+    CHECK(status == GPUXTB_STATUS_SUCCESS);
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -1248,6 +1442,18 @@ int main() {
   }
   if (const int line = test_degenerate_occupation_representability_is_publicly_successful();
       line != 0) {
+    return line;
+  }
+  if (const int line = test_plan_create_query_workspace_and_reuse(); line != 0) {
+    return line;
+  }
+  if (const int line = test_plan_fixed_topology_zero_steady_state_allocations(); line != 0) {
+    return line;
+  }
+  if (const int line = test_plan_topology_mismatch_fails_before_output_mutation(); line != 0) {
+    return line;
+  }
+  if (const int line = test_plan_multi_threaded_reuse(); line != 0) {
     return line;
   }
   return 0;

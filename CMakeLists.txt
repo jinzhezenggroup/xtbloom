@@ -287,6 +287,7 @@ add_library(gpuxtb
   src/api.cpp
   src/runtime/backend.cpp
   src/runtime/gfn2_cpu_execution.cpp
+  src/runtime/gfn2_plan.cpp
   src/runtime/validation.cpp
   $<TARGET_OBJECTS:gpuxtb_gfn2_cpu>
 )

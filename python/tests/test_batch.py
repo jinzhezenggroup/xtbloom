@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import ctypes
 from typing import TYPE_CHECKING
 
 import _cases
 import numpy as np
 import pytest
-from gpuxtb import BatchCalculator, Calculator, PointCharge, Structure
+from gpuxtb import BatchCalculator, Calculator, Context, PointCharge, Structure, library
 from gpuxtb.exceptions import GPUxtbRuntimeError
 
 if TYPE_CHECKING:
@@ -167,3 +168,130 @@ def test_batch_empty_rejected() -> None:
 
     with pytest.raises(GPUxtbValueError):
         BatchCalculator([])
+
+
+def test_fixed_topology_plan_matches_compute_and_exposes_workspace() -> None:
+    """A fixed-topology plan mirrors compute and exposes reusable workspace."""
+    case = _cases.case_by_id("ketene")
+    numbers, positions, charge, uhf, spin = _cases.structure_inputs(case)
+
+    serial = Calculator(
+        "GFN2-xTB", numbers, positions, charge=charge, uhf=uhf, spin_channels=spin
+    )
+    serial_result = serial.singlepoint()
+
+    context = Context(backend="cpu")
+    owners: list = []
+
+    def host(
+        values: Sequence[object],
+        ctype: type[ctypes._SimpleCData],
+        dtype: np.dtype,
+    ) -> library.ConstBuffer:
+        buf, owner = library.host_const(values, ctype, dtype)
+        owners.append(owner)
+        return buf
+
+    atom_offsets = host([0, len(numbers)], ctypes.c_int64, np.int64)
+    atomic_numbers = host(numbers, ctypes.c_int32, np.int32)
+    positions_flat = host(np.asarray(positions).ravel(), ctypes.c_double, np.float64)
+    molecular_charges = host([float(charge)], ctypes.c_double, np.float64)
+    unpaired_electrons = host([int(uhf)], ctypes.c_int32, np.int32)
+    spin_channels = host([int(spin)], ctypes.c_int32, np.int32)
+
+    batch = library.Batch()
+    context._create()
+    library._check_init(
+        "gpuxtb_batch_init",
+        library.load_library().gpuxtb_batch_init(
+            ctypes.byref(batch), ctypes.sizeof(batch)
+        ),
+    )
+    batch.batch_size = 1
+    batch.total_atoms = len(numbers)
+    batch.atom_offsets = atom_offsets
+    batch.atomic_numbers = atomic_numbers
+    batch.positions = positions_flat
+    batch.molecular_charges = molecular_charges
+    batch.unpaired_electrons = unpaired_electrons
+    batch.spin_channels = spin_channels
+
+    plan = context.create_plan(batch)
+    assert plan.handle
+
+    full_flags = (
+        library.COMPUTE_ENERGY | library.COMPUTE_FORCES | library.COMPUTE_ATOMIC_CHARGES
+    )
+    workspace = plan.query_workspace(full_flags)
+    assert workspace.host_required_bytes > 0
+    assert workspace.host_required_alignment >= 8
+    assert workspace.device_required_bytes == 0  # CPU backend has no device memory
+
+    energy_only = plan.query_workspace(library.COMPUTE_ENERGY)
+    assert workspace.host_required_bytes >= energy_only.host_required_bytes
+
+    options = library.ComputeOptions()
+    library._check_init(
+        "gpuxtb_compute_options_init",
+        library.load_library().gpuxtb_compute_options_init(
+            ctypes.byref(options), ctypes.sizeof(options)
+        ),
+    )
+    options.flags = full_flags
+    result = library.BatchResult()
+    library._check_init(
+        "gpuxtb_batch_result_init",
+        library.load_library().gpuxtb_batch_result_init(
+            ctypes.byref(result), ctypes.sizeof(result)
+        ),
+    )
+    energies, energy_owner = library.empty_result_shape(1, ctypes.c_double, np.float64)
+    forces, forces_owner = library.empty_result_shape(
+        3 * len(numbers), ctypes.c_double, np.float64
+    )
+    charges, charges_owner = library.empty_result_shape(
+        len(numbers), ctypes.c_double, np.float64
+    )
+    iterations, iterations_owner = library.empty_result_shape(
+        1, ctypes.c_int32, np.int32
+    )
+    converged, converged_owner = library.empty_result_shape(1, ctypes.c_uint8, np.uint8)
+    statuses, statuses_owner = library.empty_result_shape(1, ctypes.c_int32, np.int32)
+    owners.extend(
+        [
+            energy_owner,
+            forces_owner,
+            charges_owner,
+            iterations_owner,
+            converged_owner,
+            statuses_owner,
+        ]
+    )
+    result.energies = energies
+    result.forces = forces
+    result.atomic_charges = charges
+    result.scc_iterations = iterations
+    result.scc_converged = converged
+    result.per_system_status = statuses
+
+    plan.compute(batch, options, result)
+    assert statuses_owner[0] == library.STATUS_SUCCESS
+    assert converged_owner[0] == 1
+    assert iterations_owner[0] > 0
+    assert energy_owner[0] == pytest.approx(serial_result.energy, abs=1e-12)
+    assert np.allclose(forces_owner.reshape(-1, 3), serial_result.forces, atol=1e-12)
+
+    # Reuse the same fixed topology with a changed geometry.
+    shifted = np.asarray(positions, dtype=np.float64).copy()
+    shifted[0, 0] += 0.01
+    positions_flat2 = host(shifted.ravel(), ctypes.c_double, np.float64)
+    batch.positions = positions_flat2
+    energy2, energy2_owner = library.empty_result_shape(1, ctypes.c_double, np.float64)
+    owners.append(energy2_owner)
+    result.energies = energy2
+    plan.compute(batch, options, result)
+    assert statuses_owner[0] == library.STATUS_SUCCESS
+    assert np.isfinite(energy2_owner[0])
+
+    plan.destroy()
+    context.close()

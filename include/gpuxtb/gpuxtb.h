@@ -38,6 +38,9 @@ extern "C" {
 
 typedef struct gpuxtb_context gpuxtb_context_t;
 
+/* Opaque fixed-topology plan handle. See gpuxtb_plan_create. */
+typedef struct gpuxtb_plan gpuxtb_plan_t;
+
 /*
  * ABI tags are explicitly int32_t rather than enum-typed fields. This keeps
  * their object representation and function calling convention identical in C
@@ -323,6 +326,38 @@ typedef struct gpuxtb_batch_result {
 #define GPUXTB_BATCH_RESULT_V1_SIZE \
   (offsetof(gpuxtb_batch_result_t, per_system_status) + sizeof(gpuxtb_buffer_t))
 
+/*
+ * Caller-friendly workspace sizing for one fixed-topology plan.
+ *
+ * compute_flags is an input carrying the properties the caller plans to
+ * request on the fixed topology. host_required_bytes / host_required_alignment
+ * and device_required_bytes / device_required_alignment are outputs describing
+ * the reusable, caller-owned workspace gpuxtb_plan_compute needs in host and
+ * device memory. A backend that uses no device workspace reports zero device
+ * bytes with alignment one. Sizes can differ between backends and between
+ * property sets; the returned values cover one steady-state plan compute.
+ *
+ * This is an estimation/sizing contract for reusable caller-owned scratch. It
+ * is not a promise that every backend derives the bytes from a live prepared
+ * runtime: CPU values are derived from the immutable topology and the requested
+ * properties, while CUDA values are measured from the prepared runtime when one
+ * is available.
+ */
+typedef struct gpuxtb_workspace_query {
+  uint32_t struct_size;
+  uint32_t api_version;
+  uint32_t compute_flags;
+  uint32_t reserved;
+  uint64_t host_required_bytes;
+  uint32_t host_required_alignment;
+  uint64_t device_required_bytes;
+  uint32_t device_required_alignment;
+  uint32_t reserved_v2;
+} gpuxtb_workspace_query_t;
+
+#define GPUXTB_WORKSPACE_QUERY_V1_SIZE \
+  (offsetof(gpuxtb_workspace_query_t, reserved_v2) + sizeof(uint32_t))
+
 GPUXTB_API const char* gpuxtb_version_string(void);
 GPUXTB_API const char* gpuxtb_status_string(gpuxtb_status_t status);
 
@@ -336,6 +371,8 @@ GPUXTB_API gpuxtb_status_t gpuxtb_compute_options_init(gpuxtb_compute_options_t*
                                                        size_t struct_size);
 GPUXTB_API gpuxtb_status_t gpuxtb_batch_result_init(gpuxtb_batch_result_t* result,
                                                     size_t struct_size);
+GPUXTB_API gpuxtb_status_t gpuxtb_workspace_query_init(gpuxtb_workspace_query_t* query,
+                                                       size_t struct_size);
 
 GPUXTB_API gpuxtb_status_t gpuxtb_context_create(const gpuxtb_context_options_t* options,
                                                  gpuxtb_context_t** context);
@@ -362,6 +399,53 @@ GPUXTB_API int32_t gpuxtb_context_get_device_id(const gpuxtb_context_t* context)
 GPUXTB_API gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* batch,
                                           const gpuxtb_compute_options_t* options,
                                           gpuxtb_batch_result_t* result);
+
+/*
+ * Create a fixed-topology plan from one already-validated-shaped batch
+ * descriptor. The plan binds the immutable topology (atom offsets, element
+ * numbers, spin channels, point-charge and response structure) to the context
+ * backend and reserves its reusable host/device workspace. Geometry (positions
+ * and point-charge positions/values) is intentionally not part of the plan and
+ * may change per gpuxtb_plan_compute call.
+ *
+ * The plan is a setup-with-allocation-permitted path: creating it performs
+ * validation and workspace reservation that gpuxtb_compute would otherwise
+ * repeat on every call. Calling gpuxtb_plan_compute repeatedly for the same
+ * fixed topology must not allocate steady-state workspace on either backend.
+ *
+ * A plan is bound to the creating context; it must be destroyed with
+ * gpuxtb_plan_destroy before the context. Passing a plan whose topology does
+ * not match the batch on gpuxtb_plan_compute, or a plan created for a
+ * different context, fails before any caller output is modified.
+ */
+GPUXTB_API gpuxtb_status_t gpuxtb_plan_create(gpuxtb_context_t* context,
+                                              const gpuxtb_batch_t* batch, gpuxtb_plan_t** plan);
+GPUXTB_API void gpuxtb_plan_destroy(gpuxtb_plan_t* plan);
+
+/*
+ * Query the reusable caller-owned workspace gpuxtb_plan_compute needs on the
+ * plan's backend for the requested properties. On return query.compute_flags
+ * is preserved and the four sizing fields are populated as documented on
+ * gpuxtb_workspace_query_t. Callers that want device sizing must use a CUDA
+ * plan; CPU plans always report zero device bytes.
+ */
+GPUXTB_API gpuxtb_status_t gpuxtb_plan_query_workspace(const gpuxtb_plan_t* plan,
+                                                       gpuxtb_workspace_query_t* query);
+
+/*
+ * Execute one synchronous batched inference on a fixed-topology plan.
+ *
+ * geometry-only descriptors: positions and point-charge positions/values may
+ * change between calls, but the immutable topology must match the plan exactly
+ * or the call fails with GPUXTB_STATUS_INVALID_ARGUMENT before any caller
+ * output is modified. Otherwise semantics match gpuxtb_compute: complete
+ * validation before execution, per-system SCC/eigensolver failures recorded in
+ * per_system_status, and failed systems' floating-point slices filled with
+ * quiet NaNs.
+ */
+GPUXTB_API gpuxtb_status_t gpuxtb_plan_compute(gpuxtb_plan_t* plan, const gpuxtb_batch_t* batch,
+                                               const gpuxtb_compute_options_t* options,
+                                               gpuxtb_batch_result_t* result);
 
 #ifdef __cplusplus
 } /* extern "C" */
