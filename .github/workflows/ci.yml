@@ -124,7 +124,9 @@ jobs:
 
   upload-coverage:
     needs: [cpu, python]
-    if: ${{ !cancelled() && needs.cpu.result == 'success' && needs.python.result == 'success' }}
+    # if: ${{ !cancelled() && needs.cpu.result == 'success' && needs.python.result == 'success' }}
+    # disable due to no license
+    if: false
     strategy:
       fail-fast: false
       matrix:
@@ -235,7 +237,7 @@ jobs:
 
   pass:
     name: Pass CI checks
-    needs: [cpu, python, upload-coverage, licensing-source-distribution, static-cpu-package, public-cpu-release]
+    needs: [cpu, python, licensing-source-distribution, static-cpu-package, public-cpu-release]
     runs-on: ubuntu-24.04
     if: always()
     steps:
