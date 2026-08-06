@@ -3,25 +3,62 @@
 #include <cusolverDn.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <iostream>
+#include <cstdio>
+#include <cstring>
 #include <limits>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "backends/cuda/gfn2_scc_iteration.cuh"
+#include "backends/cuda/gfn2_scc_iteration_arena.cuh"
+#include "backends/cuda/gfn2_scc_iteration_initialize.cuh"
+#include "backends/cuda/gfn2_scc_iteration_reports.cuh"
+#include "backends/cuda/gfn2_scc_loop.cuh"
+#include "backends/cuda/gfn2_scc_setup_eigensolver.cuh"
+#include "backends/cuda/gfn2_scc_setup_inputs.cuh"
+#include "backends/cuda/gfn2_scc_setup_topology.hpp"
+#include "data/parameters/d4.hpp"
+#include "model/gfn2/coordination.hpp"
 #include "tests/support/gfn2_scc_test_case.hpp"
 
 /*
- * The #89 launch entry is intentionally not named here until its signature is
- * sealed. Defining this macro later enables launcher-specific assertions
- * without making the setup fixture depend on an unstable declaration today.
+ * #95: CUDA SCC composer Graph replay and failure-DAG tests.
+ *
+ * This translation unit owns the reusable composer fixture for the restricted
+ * GFN2 SCC iteration: immutable topology/input/eigensolver setup owners, the
+ * single caller-owned iteration arena, the fresh initializer,
+ * and the complete binding produced by the sealed setup path. Unlike the
+ * historical partial fixture, the binding here is the real production binding
+ * (eigensolver provider sealed as kGraphSupported), so it exercises
+ * bind_gfn2_scc_iteration_arena_cuda + launch_gfn2_restricted_scc_iteration_cuda
+ * directly.
+ *
+ * Coverage maps to the issue acceptance:
+ *  - one-step CPU parity including raw-on-terminal versus next_mixed-on-nonterminal
+ *    publication for batch 1/8/32/128 on custom and default streams;
+ *  - repeated launches with a reused binding (no descriptor rebuild);
+ *  - changed-input CUDA Graph replay with unchanged descriptors and arenas;
+ *  - peer-local numerical failure with healthy-peer full-DAG continuation;
+ *  - plan/provenance failure suppressing downstream stages with public buffers
+ *    left byte-stable;
+ *  - inactive-peer poisoning of geometry, multipoles, mixer histories, energies,
+ *    and publication buffers proving the composer neither reads nor writes them.
  */
-#ifndef GPUXTB_TEST_HAS_GFN2_SCC_ITERATION_COMPOSER_LAUNCHER
-#define GPUXTB_TEST_HAS_GFN2_SCC_ITERATION_COMPOSER_LAUNCHER 0
-#endif
+
+#define CHECK(condition)                                                                    \
+  do {                                                                                      \
+    if (!(condition)) {                                                                     \
+      std::fprintf(stderr, "composer check failed at line %d: %s\n", __LINE__, #condition); \
+      return __LINE__;                                                                      \
+    }                                                                                       \
+  } while (false)
+
+#define CUDA_CHECK(expression) CHECK((expression) == cudaSuccess)
 
 namespace {
 
@@ -33,634 +70,1406 @@ using gpuxtb::test::gfn2::HostSccCheckpoint;
 using gpuxtb::test::gfn2::SmallSystemKind;
 
 constexpr std::uint64_t kPlanToken = 0x9500c0deULL;
-constexpr bool kComposerLauncherAvailable =
-    GPUXTB_TEST_HAS_GFN2_SCC_ITERATION_COMPOSER_LAUNCHER != 0;
+constexpr std::uint64_t kGeometryGeneration = 105u;
+constexpr std::uint64_t kInitializationGeneration = 1u;
 
-bool cuda_ok(cudaError_t status, const char* operation) {
-  if (status == cudaSuccess) {
-    return true;
-  }
-  std::cerr << operation << ": " << cudaGetErrorString(status) << '\n';
-  return false;
-}
-
-bool solver_ok(cusolverStatus_t status, const char* operation) {
-  if (status == CUSOLVER_STATUS_SUCCESS) {
-    return true;
-  }
-  std::cerr << operation << ": cuSOLVER status " << static_cast<int>(status) << '\n';
-  return false;
-}
-
-bool blas_ok(cublasStatus_t status, const char* operation) {
-  if (status == CUBLAS_STATUS_SUCCESS) {
-    return true;
-  }
-  std::cerr << operation << ": cuBLAS status " << static_cast<int>(status) << '\n';
-  return false;
-}
-
-template <typename T>
-class DeviceBuffer {
- public:
-  DeviceBuffer() noexcept = default;
-  ~DeviceBuffer() { release(); }
-  DeviceBuffer(const DeviceBuffer&) = delete;
-  DeviceBuffer& operator=(const DeviceBuffer&) = delete;
-
-  [[nodiscard]] bool allocate(std::size_t count) {
-    release();
-    if (count == 0u) {
-      return true;
-    }
-    if (count > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
-      return false;
-    }
-    const cudaError_t status = cudaMalloc(reinterpret_cast<void**>(&pointer_), count * sizeof(T));
-    if (status != cudaSuccess) {
-      std::cerr << "cudaMalloc: " << cudaGetErrorString(status) << '\n';
-      pointer_ = nullptr;
-      return false;
-    }
-    count_ = count;
-    return true;
-  }
-
-  [[nodiscard]] bool allocate_and_upload(const T* source, std::size_t count, cudaStream_t stream) {
-    return allocate(count) && upload(source, count, stream);
-  }
-
-  [[nodiscard]] bool allocate_and_upload(const std::vector<T>& source, cudaStream_t stream) {
-    return allocate_and_upload(source.data(), source.size(), stream);
-  }
-
-  [[nodiscard]] bool upload(const T* source, std::size_t count, cudaStream_t stream) {
-    if (count == 0u) {
-      return true;
-    }
-    return source != nullptr && count <= count_ &&
-           cuda_ok(
-               cudaMemcpyAsync(pointer_, source, count * sizeof(T), cudaMemcpyHostToDevice, stream),
-               "cudaMemcpyAsync host to device");
-  }
-
-  [[nodiscard]] bool download(std::vector<T>& destination, cudaStream_t stream) const {
-    destination.resize(count_);
-    return count_ == 0u || cuda_ok(cudaMemcpyAsync(destination.data(), pointer_, count_ * sizeof(T),
-                                                   cudaMemcpyDeviceToHost, stream),
-                                   "cudaMemcpyAsync device to host");
-  }
-
-  [[nodiscard]] T* get() const noexcept { return pointer_; }
-  [[nodiscard]] std::size_t size() const noexcept { return count_; }
-
- private:
-  void release() noexcept {
-    if (pointer_ != nullptr) {
-      (void)cudaFree(pointer_);
-      pointer_ = nullptr;
-    }
-    count_ = 0u;
-  }
-
-  T* pointer_ = nullptr;
-  std::size_t count_ = 0u;
+struct CouplingSelection {
+  bool d4 = false;
+  bool point_charges = false;
+  bool periodic = false;
 };
 
-class PinnedBuffer {
+class DeviceAllocation {
  public:
-  PinnedBuffer() noexcept = default;
-  ~PinnedBuffer() {
+  DeviceAllocation() = default;
+  DeviceAllocation(const DeviceAllocation&) = delete;
+  DeviceAllocation& operator=(const DeviceAllocation&) = delete;
+
+  ~DeviceAllocation() {
     if (pointer_ != nullptr) {
-      (void)cudaFreeHost(pointer_);
+      (void)cudaFree(pointer_);
     }
   }
-  PinnedBuffer(const PinnedBuffer&) = delete;
-  PinnedBuffer& operator=(const PinnedBuffer&) = delete;
 
-  [[nodiscard]] bool allocate(std::size_t bytes) {
-    if (pointer_ != nullptr || bytes_ != 0u) {
-      return false;
-    }
+  bool allocate(std::size_t bytes) noexcept {
     bytes_ = bytes;
-    return bytes == 0u || cuda_ok(cudaMallocHost(&pointer_, bytes), "cudaMallocHost");
+    return bytes != 0u && cudaMalloc(&pointer_, bytes) == cudaSuccess;
   }
 
-  [[nodiscard]] void* get() const noexcept { return pointer_; }
-  [[nodiscard]] std::size_t size() const noexcept { return bytes_; }
+  void* get() const noexcept { return pointer_; }
+  std::size_t bytes() const noexcept { return bytes_; }
 
  private:
   void* pointer_ = nullptr;
   std::size_t bytes_ = 0u;
 };
 
-struct ProviderHandles {
-  cudaStream_t stream = nullptr;
-  cusolverDnHandle_t solver = nullptr;
-  cusolverDnParams_t parameters = nullptr;
-  cublasHandle_t blas = nullptr;
+class PinnedAllocation {
+ public:
+  PinnedAllocation() = default;
+  PinnedAllocation(const PinnedAllocation&) = delete;
+  PinnedAllocation& operator=(const PinnedAllocation&) = delete;
 
-  ProviderHandles() noexcept = default;
+  ~PinnedAllocation() {
+    if (pointer_ != nullptr) {
+      (void)cudaFreeHost(pointer_);
+    }
+  }
+
+  bool allocate(std::size_t bytes) noexcept {
+    bytes_ = bytes;
+    return bytes == 0u || cudaMallocHost(&pointer_, bytes) == cudaSuccess;
+  }
+
+  void* get() const noexcept { return pointer_; }
+  std::size_t bytes() const noexcept { return bytes_; }
+
+ private:
+  void* pointer_ = nullptr;
+  std::size_t bytes_ = 0u;
+};
+
+class GraphResources {
+ public:
+  GraphResources() = default;
+  GraphResources(const GraphResources&) = delete;
+  GraphResources& operator=(const GraphResources&) = delete;
+
+  ~GraphResources() {
+    if (graph_ != nullptr) {
+      (void)cudaGraphDestroy(graph_);
+    }
+    if (executable_ != nullptr) {
+      (void)cudaGraphExecDestroy(executable_);
+    }
+  }
+
+  cudaGraph_t* graph_address() noexcept { return &graph_; }
+  cudaGraphExec_t* executable_address() noexcept { return &executable_; }
+  cudaGraph_t graph() const noexcept { return graph_; }
+  cudaGraphExec_t executable() const noexcept { return executable_; }
+
+ private:
+  cudaGraph_t graph_ = nullptr;
+  cudaGraphExec_t executable_ = nullptr;
+};
+
+class ProviderHandles {
+ public:
+  ProviderHandles() = default;
   ProviderHandles(const ProviderHandles&) = delete;
   ProviderHandles& operator=(const ProviderHandles&) = delete;
+
   ~ProviderHandles() {
-    if (blas != nullptr) {
-      (void)cublasDestroy(blas);
+    if (blas_ != nullptr) {
+      (void)cublasDestroy(blas_);
     }
-    if (parameters != nullptr) {
-      (void)cusolverDnDestroyParams(parameters);
+    if (parameters_ != nullptr) {
+      (void)cusolverDnDestroyParams(parameters_);
     }
-    if (solver != nullptr) {
-      (void)cusolverDnDestroy(solver);
+    if (solver_ != nullptr) {
+      (void)cusolverDnDestroy(solver_);
     }
-    if (stream != nullptr) {
-      (void)cudaStreamDestroy(stream);
+    if (stream_ != nullptr) {
+      (void)cudaStreamSynchronize(stream_);
+      (void)cudaStreamDestroy(stream_);
     }
   }
 
-  [[nodiscard]] bool create() {
-    return cuda_ok(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
-                   "cudaStreamCreateWithFlags") &&
-           solver_ok(cusolverDnCreate(&solver), "cusolverDnCreate") &&
-           solver_ok(cusolverDnCreateParams(&parameters), "cusolverDnCreateParams") &&
-           blas_ok(cublasCreate(&blas), "cublasCreate") &&
-           solver_ok(cusolverDnSetStream(solver, stream), "cusolverDnSetStream") &&
-           blas_ok(cublasSetStream(blas, stream), "cublasSetStream");
+  bool create() noexcept {
+    return cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking) == cudaSuccess &&
+           cusolverDnCreate(&solver_) == CUSOLVER_STATUS_SUCCESS &&
+           cusolverDnCreateParams(&parameters_) == CUSOLVER_STATUS_SUCCESS &&
+           cublasCreate(&blas_) == CUBLAS_STATUS_SUCCESS;
   }
+
+  cudaStream_t stream() const noexcept { return stream_; }
+  cusolverDnHandle_t solver() const noexcept { return solver_; }
+  cusolverDnParams_t parameters() const noexcept { return parameters_; }
+  cublasHandle_t blas() const noexcept { return blas_; }
+
+ private:
+  cudaStream_t stream_ = nullptr;
+  cusolverDnHandle_t solver_ = nullptr;
+  cusolverDnParams_t parameters_ = nullptr;
+  cublasHandle_t blas_ = nullptr;
 };
 
-bool checkpoints_equal(const HostSccCheckpoint& first, const HostSccCheckpoint& second) {
-  return first.wavefunction == second.wavefunction && first.mixer_state == second.mixer_state &&
-         first.driver_state == second.driver_state &&
-         first.driver_workspace == second.driver_workspace;
+/* HostSccCase exposes the production component caches but not the common
+ * geometry-pair cache. The SCC iteration only validates that common cache as
+ * an energy-only input; a deterministic finite image supplies the production
+ * owner until the host fixture grows a common geometry-cache accessor. */
+template <typename T>
+Gfn2SccSetupHostArray<T> setup_view(const std::vector<T>& values) noexcept {
+  return {values.empty() ? nullptr : values.data(), static_cast<std::int64_t>(values.size())};
 }
 
-/* Host metadata used both for full host validation and immutable CUDA upload. */
-struct HostTopology {
-  std::vector<std::int64_t> atom_offsets;
-  std::vector<std::int64_t> batch_shell_offsets;
-  std::vector<std::int64_t> batch_orbital_offsets;
-  std::vector<std::int64_t> matrix_offsets;
-  std::vector<std::int64_t> atom_shell_offsets;
-  std::vector<std::int64_t> shell_orbital_offsets;
-  std::vector<std::int64_t> shell_to_atom;
-  std::vector<std::int64_t> orbital_to_shell;
-  std::vector<std::int64_t> orbital_to_atom;
-  std::vector<std::int64_t> bucket_offsets;
-  std::vector<std::int32_t> bucket_systems;
-  std::vector<std::int32_t> bucket_orbital_counts;
-  std::vector<Gfn2EigensolverBucket> buckets;
+template <typename T>
+Gfn2SccIterationHostArrayView<T> initialization_view(const T* values,
+                                                     std::int64_t elements) noexcept {
+  return {elements == 0 ? nullptr : values, elements};
+}
 
-  [[nodiscard]] bool make(const HostSccCase& fixture) {
-    const auto& basis = fixture.basis_plan();
-    const auto& integrals = fixture.integral_plan();
-    atom_offsets = basis.atom_offsets;
-    batch_shell_offsets = basis.batch_shell_offsets;
-    batch_orbital_offsets = basis.batch_orbital_offsets;
-    matrix_offsets = integrals.matrix_offsets;
-    atom_shell_offsets = basis.atom_shell_offsets;
-    shell_orbital_offsets = basis.shell_orbital_offsets;
-    shell_to_atom = basis.shell_to_atom;
-    orbital_to_shell.assign(static_cast<std::size_t>(basis.total_orbitals), -1);
-    orbital_to_atom.assign(static_cast<std::size_t>(basis.total_orbitals), -1);
-    for (std::int64_t shell = 0; shell < basis.total_shells; ++shell) {
-      const std::int64_t atom = shell_to_atom[static_cast<std::size_t>(shell)];
-      for (std::int64_t orbital = shell_orbital_offsets[static_cast<std::size_t>(shell)];
-           orbital < shell_orbital_offsets[static_cast<std::size_t>(shell + 1)]; ++orbital) {
-        orbital_to_shell[static_cast<std::size_t>(orbital)] = shell;
-        orbital_to_atom[static_cast<std::size_t>(orbital)] = atom;
-      }
-    }
+struct InputBacking {
+  gpuxtb::detail::gfn2::CoordinationPlan coordination_plan;
+  std::vector<double> geometry_pair_data;
+  std::vector<std::uint64_t> geometry_generations;
+  std::vector<Gfn2D4DeviceElementData> d4_elements;
+  std::vector<Gfn2D4DeviceReferenceData> d4_references;
 
-    std::vector<std::int32_t> dimensions;
-    dimensions.reserve(static_cast<std::size_t>(basis.batch_size));
-    for (std::int64_t system = 0; system < basis.batch_size; ++system) {
-      const std::int64_t orbitals = batch_orbital_offsets[static_cast<std::size_t>(system + 1)] -
-                                    batch_orbital_offsets[static_cast<std::size_t>(system)];
-      if (orbitals <= 0 || orbitals > std::numeric_limits<std::int32_t>::max()) {
-        return false;
-      }
-      dimensions.push_back(static_cast<std::int32_t>(orbitals));
+  bool prepare(const HostSccCase& host, std::string& error) {
+    if (gpuxtb::detail::gfn2::make_coordination_plan(
+            host.batch_size(), host.total_atoms(), host.atom_offsets().data(),
+            host.atomic_numbers().data(), coordination_plan, error) != GPUXTB_STATUS_SUCCESS) {
+      return false;
     }
-    std::vector<std::int32_t> unique_dimensions = dimensions;
-    std::sort(unique_dimensions.begin(), unique_dimensions.end());
-    unique_dimensions.erase(std::unique(unique_dimensions.begin(), unique_dimensions.end()),
-                            unique_dimensions.end());
+    geometry_pair_data.resize(static_cast<std::size_t>(host.aes2_plan().total_pairs()) *
+                              kGfn2GeometryPairDataElements);
+    for (std::size_t index = 0; index < geometry_pair_data.size(); ++index) {
+      geometry_pair_data[index] = 0.001 * static_cast<double>(index + 1u);
+    }
+    geometry_generations.assign(static_cast<std::size_t>(host.batch_size()),
+                                host.options().geometry_generation);
 
-    bucket_offsets.push_back(0);
-    std::int64_t packed_matrix_offset = 0;
-    std::int64_t packed_orbital_offset = 0;
-    for (const std::int32_t dimension : unique_dimensions) {
-      const std::int64_t system_index_offset = static_cast<std::int64_t>(bucket_systems.size());
-      for (std::int64_t system = 0; system < basis.batch_size; ++system) {
-        if (dimensions[static_cast<std::size_t>(system)] == dimension) {
-          bucket_systems.push_back(static_cast<std::int32_t>(system));
-        }
-      }
-      const std::int64_t system_count =
-          static_cast<std::int64_t>(bucket_systems.size()) - system_index_offset;
-      if (system_count <= 0 || system_count > std::numeric_limits<std::int32_t>::max()) {
-        return false;
-      }
-      buckets.push_back({dimension, static_cast<std::int32_t>(system_count), system_index_offset,
-                         packed_matrix_offset, packed_orbital_offset});
-      bucket_orbital_counts.push_back(dimension);
-      bucket_offsets.push_back(static_cast<std::int64_t>(bucket_systems.size()));
-      packed_matrix_offset += static_cast<std::int64_t>(dimension) * dimension * system_count;
-      packed_orbital_offset += static_cast<std::int64_t>(dimension) * system_count;
+    d4_elements.reserve(gpuxtb::parameters::d4::kElements.size());
+    for (const auto& element : gpuxtb::parameters::d4::kElements) {
+      d4_elements.push_back({element.reference_offset, element.reference_count,
+                             element.covalent_radius, element.electronegativity,
+                             element.effective_charge, element.hardness, element.r4r2});
     }
-    return packed_matrix_offset == integrals.total_matrix_elements &&
-           packed_orbital_offset == basis.total_orbitals;
+    d4_references.reserve(gpuxtb::parameters::d4::kReferences.size());
+    for (const auto& reference : gpuxtb::parameters::d4::kReferences) {
+      d4_references.push_back(
+          {reference.coordination_number, reference.charge, reference.gaussian_count});
+    }
+    return true;
   }
 
-  [[nodiscard]] Gfn2RaggedTopologyView view(const HostSccCase& fixture,
-                                            Gfn2PlanMemorySpace memory_space) const noexcept {
-    const auto& basis = fixture.basis_plan();
-    const auto& integrals = fixture.integral_plan();
-    Gfn2RaggedTopologyView result{};
-    result.memory_space = memory_space;
-    result.pair_map_kind = Gfn2PairMapKind::kNone;
-    result.plan_token = kPlanToken;
-    result.batch_size = basis.batch_size;
-    result.total_atoms = basis.total_atoms;
-    result.total_shells = basis.total_shells;
-    result.total_orbitals = basis.total_orbitals;
-    result.total_matrix_elements = integrals.total_matrix_elements;
-    result.bucket_count = static_cast<std::int64_t>(buckets.size());
-    result.atom_offset_count = static_cast<std::int64_t>(atom_offsets.size());
-    result.batch_shell_offset_count = static_cast<std::int64_t>(batch_shell_offsets.size());
-    result.batch_orbital_offset_count = static_cast<std::int64_t>(batch_orbital_offsets.size());
-    result.matrix_offset_count = static_cast<std::int64_t>(matrix_offsets.size());
-    result.atom_shell_offset_count = static_cast<std::int64_t>(atom_shell_offsets.size());
-    result.shell_orbital_offset_count = static_cast<std::int64_t>(shell_orbital_offsets.size());
-    result.shell_to_atom_count = static_cast<std::int64_t>(shell_to_atom.size());
-    result.orbital_to_shell_count = static_cast<std::int64_t>(orbital_to_shell.size());
-    result.orbital_to_atom_count = static_cast<std::int64_t>(orbital_to_atom.size());
-    result.bucket_offset_count = static_cast<std::int64_t>(bucket_offsets.size());
-    result.bucket_system_count = static_cast<std::int64_t>(bucket_systems.size());
-    result.bucket_orbital_count = static_cast<std::int64_t>(bucket_orbital_counts.size());
-    result.atom_offsets = atom_offsets.data();
-    result.batch_shell_offsets = batch_shell_offsets.data();
-    result.batch_orbital_offsets = batch_orbital_offsets.data();
-    result.matrix_offsets = matrix_offsets.data();
-    result.atom_shell_offsets = atom_shell_offsets.data();
-    result.shell_orbital_offsets = shell_orbital_offsets.data();
-    result.shell_to_atom = shell_to_atom.data();
-    result.orbital_to_shell = orbital_to_shell.data();
-    result.orbital_to_atom = orbital_to_atom.data();
-    result.bucket_offsets = bucket_offsets.data();
-    result.bucket_systems = bucket_systems.data();
-    result.bucket_orbital_counts = bucket_orbital_counts.data();
+  Gfn2SccSetupInputSources sources(const HostSccCase& host) const noexcept {
+    Gfn2SccSetupInputSources result{};
+    result.basis = &host.basis_plan();
+    result.integrals = &host.integral_plan();
+    result.h0_plan = &host.h0_plan();
+    result.wavefunction = &host.wavefunction_layout();
+    result.es2 = &host.es2_plan();
+    result.es3 = &host.es3_plan();
+    result.aes2 = &host.aes2_plan();
+    result.mulliken = &host.mulliken_plan();
+    result.mixer = &host.mixer_plan();
+    result.driver = &host.driver_plan();
+    result.geometry_generation = host.options().geometry_generation;
+    result.atomic_numbers = setup_view(host.atomic_numbers());
+    result.positions = setup_view(host.positions());
+    result.covalent_radii = setup_view(coordination_plan.covalent_radius);
+    result.h0 = setup_view(host.h0());
+    result.overlap = setup_view(host.overlap());
+    result.dipole_integrals = setup_view(host.dipole_integrals());
+    result.quadrupole_integrals = setup_view(host.quadrupole_integrals());
+    result.geometry_cache.pair_data = setup_view(geometry_pair_data);
+    result.geometry_cache.coordination_numbers = setup_view(host.coordination_numbers());
+    result.geometry_cache.system_generations = setup_view(geometry_generations);
+    result.es2_cache.coulomb_matrix = {host.es2_cache().coulomb_matrix,
+                                       host.es2_cache().matrix_elements};
+    result.aes2_cache.pair_data = {host.aes2_cache().pair_data,
+                                   host.aes2_cache().pair_data_elements};
+
+    if (host.d4_plan() != nullptr) {
+      result.d4.plan = host.d4_plan();
+      result.d4.elements = setup_view(d4_elements);
+      result.d4.references = setup_view(d4_references);
+      result.d4.reference_c6 = {
+          gpuxtb::parameters::d4::kReferenceC6.data(),
+          static_cast<std::int64_t>(gpuxtb::parameters::d4::kReferenceC6.size())};
+      result.d4.pair_data = {host.d4_cache()->pair_data, host.d4_cache()->pair_data_elements};
+      result.d4.coordination_numbers = {host.d4_cache()->coordination_numbers,
+                                        host.d4_cache()->coordination_elements};
+    }
+    if (host.point_charge_plan() != nullptr) {
+      result.point_charges.plan = host.point_charge_plan();
+      result.point_charges.positions = setup_view(host.point_charge_positions());
+      result.point_charges.charges = setup_view(host.point_charge_charges());
+      result.point_charges.hardnesses = setup_view(host.point_charge_hardnesses());
+      result.point_charges.shell_potential_cache =
+          setup_view(host.explicit_point_charge_shell_potential());
+    }
+    if (host.periodic_plan() != nullptr) {
+      result.periodic.plan = host.periodic_plan();
+      result.periodic.shifts = setup_view(host.periodic_shifts());
+      result.periodic.response_matrices = setup_view(host.periodic_response_matrices());
+    }
     return result;
   }
 };
 
-struct DeviceTopology {
-  DeviceBuffer<std::int64_t> atom_offsets;
-  DeviceBuffer<std::int64_t> batch_shell_offsets;
-  DeviceBuffer<std::int64_t> batch_orbital_offsets;
-  DeviceBuffer<std::int64_t> matrix_offsets;
-  DeviceBuffer<std::int64_t> atom_shell_offsets;
-  DeviceBuffer<std::int64_t> shell_orbital_offsets;
-  DeviceBuffer<std::int64_t> shell_to_atom;
-  DeviceBuffer<std::int64_t> orbital_to_shell;
-  DeviceBuffer<std::int64_t> orbital_to_atom;
-  DeviceBuffer<std::int64_t> bucket_offsets;
-  DeviceBuffer<std::int32_t> bucket_systems;
-  DeviceBuffer<std::int32_t> bucket_orbital_counts;
-  Gfn2RaggedTopologyView descriptor{};
+Gfn2SccIterationHostInitialization fresh_initialization(const HostSccCase& host) noexcept {
+  const auto& layout = host.wavefunction_layout();
+  const auto& wavefunction = host.wavefunction();
+  Gfn2SccIterationHostInitialization result{};
+  result.mode = Gfn2SccIterationInitializationMode::kFresh;
+  result.plan_token = kPlanToken;
+  result.initialization_generation = kInitializationGeneration;
+  result.topology = {
+      initialization_view(host.atom_offsets().data(),
+                          static_cast<std::int64_t>(host.atom_offsets().size())),
+      initialization_view(layout.batch_shell_offsets.data(),
+                          static_cast<std::int64_t>(layout.batch_shell_offsets.size())),
+      kPlanToken};
+  result.wavefunction.plan_token = kPlanToken;
+  result.wavefunction.population = {
+      initialization_view(wavefunction.qsh, layout.qsh.element_count),
+      initialization_view(wavefunction.qat, layout.qat.element_count),
+      initialization_view(wavefunction.dipole, layout.dipole.element_count),
+      initialization_view(wavefunction.quadrupole, layout.quadrupole.element_count), kPlanToken};
+  return result;
+}
 
-  [[nodiscard]] bool upload(const HostSccCase& fixture, const HostTopology& host,
-                            cudaStream_t stream) {
-    if (!atom_offsets.allocate_and_upload(host.atom_offsets, stream) ||
-        !batch_shell_offsets.allocate_and_upload(host.batch_shell_offsets, stream) ||
-        !batch_orbital_offsets.allocate_and_upload(host.batch_orbital_offsets, stream) ||
-        !matrix_offsets.allocate_and_upload(host.matrix_offsets, stream) ||
-        !atom_shell_offsets.allocate_and_upload(host.atom_shell_offsets, stream) ||
-        !shell_orbital_offsets.allocate_and_upload(host.shell_orbital_offsets, stream) ||
-        !shell_to_atom.allocate_and_upload(host.shell_to_atom, stream) ||
-        !orbital_to_shell.allocate_and_upload(host.orbital_to_shell, stream) ||
-        !orbital_to_atom.allocate_and_upload(host.orbital_to_atom, stream) ||
-        !bucket_offsets.allocate_and_upload(host.bucket_offsets, stream) ||
-        !bucket_systems.allocate_and_upload(host.bucket_systems, stream) ||
-        !bucket_orbital_counts.allocate_and_upload(host.bucket_orbital_counts, stream)) {
-      return false;
-    }
-    descriptor = host.view(fixture, Gfn2PlanMemorySpace::kCudaDevice);
-    descriptor.atom_offsets = atom_offsets.get();
-    descriptor.batch_shell_offsets = batch_shell_offsets.get();
-    descriptor.batch_orbital_offsets = batch_orbital_offsets.get();
-    descriptor.matrix_offsets = matrix_offsets.get();
-    descriptor.atom_shell_offsets = atom_shell_offsets.get();
-    descriptor.shell_orbital_offsets = shell_orbital_offsets.get();
-    descriptor.shell_to_atom = shell_to_atom.get();
-    descriptor.orbital_to_shell = orbital_to_shell.get();
-    descriptor.orbital_to_atom = orbital_to_atom.get();
-    descriptor.bucket_offsets = bucket_offsets.get();
-    descriptor.bucket_systems = bucket_systems.get();
-    descriptor.bucket_orbital_counts = bucket_orbital_counts.get();
-    return true;
-  }
-};
-
-struct DeviceCheckpointMirror {
-  DeviceBuffer<std::byte> wavefunction;
-  DeviceBuffer<std::byte> mixer_state;
-  DeviceBuffer<std::byte> driver_state;
-  DeviceBuffer<std::byte> driver_workspace;
-
-  [[nodiscard]] bool upload(const HostSccCheckpoint& checkpoint, cudaStream_t stream) {
-    return wavefunction.allocate_and_upload(checkpoint.wavefunction, stream) &&
-           mixer_state.allocate_and_upload(checkpoint.mixer_state, stream) &&
-           driver_state.allocate_and_upload(checkpoint.driver_state, stream) &&
-           driver_workspace.allocate_and_upload(checkpoint.driver_workspace, stream);
-  }
-
-  [[nodiscard]] bool download(HostSccCheckpoint& checkpoint, cudaStream_t stream) const {
-    return wavefunction.download(checkpoint.wavefunction, stream) &&
-           mixer_state.download(checkpoint.mixer_state, stream) &&
-           driver_state.download(checkpoint.driver_state, stream) &&
-           driver_workspace.download(checkpoint.driver_workspace, stream);
-  }
-};
-
-/* Numerical inputs already available from the production host fixture. */
-struct DeviceInputs {
-  DeviceTopology topology;
-  DeviceBuffer<std::int32_t> atomic_numbers;
-  DeviceBuffer<double> positions;
-  DeviceBuffer<double> h0;
-  DeviceBuffer<double> overlap;
-  DeviceBuffer<double> dipole_integrals;
-  DeviceBuffer<double> quadrupole_integrals;
-  DeviceBuffer<double> es2_cache;
-  DeviceBuffer<double> aes2_cache;
-  DeviceBuffer<double> d4_pair_data;
-  DeviceBuffer<double> d4_coordination;
-  DeviceBuffer<std::int64_t> point_charge_offsets;
-  DeviceBuffer<double> point_charge_positions;
-  DeviceBuffer<double> point_charge_charges;
-  DeviceBuffer<double> point_charge_hardnesses;
-  DeviceBuffer<double> explicit_point_charge_shell_potential;
-  DeviceBuffer<double> periodic_shifts;
-  DeviceBuffer<double> periodic_response;
-  DeviceBuffer<double> electron_counts;
-  DeviceBuffer<double> temperatures;
-  DeviceBuffer<std::uint8_t> active;
-
-  [[nodiscard]] bool upload(const HostSccCase& fixture, const HostTopology& host_topology,
-                            cudaStream_t stream) {
-    const auto& wavefunction = fixture.wavefunction_layout();
-    const auto& es2 = fixture.es2_cache();
-    const auto& aes2 = fixture.aes2_cache();
-    std::vector<double> electrons(2u * static_cast<std::size_t>(fixture.batch_size()));
-    std::vector<double> temperature(static_cast<std::size_t>(fixture.batch_size()),
-                                    fixture.options().electronic_temperature);
-    std::vector<std::uint8_t> active_host(static_cast<std::size_t>(fixture.batch_size()), 1u);
-    for (std::int64_t system = 0; system < fixture.batch_size(); ++system) {
-      electrons[2u * static_cast<std::size_t>(system)] =
-          wavefunction.alpha_electron_counts[static_cast<std::size_t>(system)];
-      electrons[2u * static_cast<std::size_t>(system) + 1u] =
-          wavefunction.beta_electron_counts[static_cast<std::size_t>(system)];
-    }
-
-    if (!topology.upload(fixture, host_topology, stream) ||
-        !atomic_numbers.allocate_and_upload(fixture.atomic_numbers(), stream) ||
-        !positions.allocate_and_upload(fixture.positions(), stream) ||
-        !h0.allocate_and_upload(fixture.h0(), stream) ||
-        !overlap.allocate_and_upload(fixture.overlap(), stream) ||
-        !dipole_integrals.allocate_and_upload(fixture.dipole_integrals(), stream) ||
-        !quadrupole_integrals.allocate_and_upload(fixture.quadrupole_integrals(), stream) ||
-        !es2_cache.allocate_and_upload(es2.coulomb_matrix,
-                                       static_cast<std::size_t>(es2.matrix_elements), stream) ||
-        !aes2_cache.allocate_and_upload(
-            aes2.pair_data, static_cast<std::size_t>(aes2.pair_data_elements), stream) ||
-        !point_charge_offsets.allocate_and_upload(fixture.point_charge_offsets(), stream) ||
-        !point_charge_positions.allocate_and_upload(fixture.point_charge_positions(), stream) ||
-        !point_charge_charges.allocate_and_upload(fixture.point_charge_charges(), stream) ||
-        !point_charge_hardnesses.allocate_and_upload(fixture.point_charge_hardnesses(), stream) ||
-        !explicit_point_charge_shell_potential.allocate_and_upload(
-            fixture.explicit_point_charge_shell_potential(), stream) ||
-        !periodic_shifts.allocate_and_upload(fixture.periodic_shifts(), stream) ||
-        !periodic_response.allocate_and_upload(fixture.periodic_response_matrices(), stream) ||
-        !electron_counts.allocate_and_upload(electrons, stream) ||
-        !temperatures.allocate_and_upload(temperature, stream) ||
-        !active.allocate_and_upload(active_host, stream)) {
-      return false;
-    }
-
-    const auto* d4 = fixture.d4_cache();
-    return d4 != nullptr &&
-           d4_pair_data.allocate_and_upload(
-               d4->pair_data, static_cast<std::size_t>(d4->pair_data_elements), stream) &&
-           d4_coordination.allocate_and_upload(d4->coordination_numbers,
-                                               static_cast<std::size_t>(d4->coordination_elements),
-                                               stream);
-  }
-};
-
-struct ProviderWorkspace {
-  DeviceBuffer<double> matrix_a;
-  DeviceBuffer<double> matrix_b;
-  DeviceBuffer<double> eigenvalues;
-  DeviceBuffer<double*> factor_pointers;
-  DeviceBuffer<double*> matrix_pointers;
-  DeviceBuffer<int> info_a;
-  DeviceBuffer<int> info_b;
-  DeviceBuffer<std::uint8_t> eligible;
-  DeviceBuffer<std::uint32_t> sequence_active;
-  DeviceBuffer<std::byte> solver_device_workspace;
-  PinnedBuffer solver_host_workspace;
-  Gfn2EigensolverWorkspaceRequirements requirements{};
-  Gfn2EigensolverDeviceWorkspace descriptor{};
-
-  [[nodiscard]] bool create(const HostSccCase& fixture, const HostTopology& topology,
-                            const ProviderHandles& handles) {
-    const std::size_t matrices =
-        static_cast<std::size_t>(fixture.integral_plan().total_matrix_elements);
-    const std::size_t orbitals =
-        static_cast<std::size_t>(fixture.wavefunction_layout().total_orbitals);
-    const std::size_t batch = static_cast<std::size_t>(fixture.batch_size());
-    if (!matrix_a.allocate(matrices) || !matrix_b.allocate(matrices) ||
-        !eigenvalues.allocate(orbitals) || !factor_pointers.allocate(batch) ||
-        !matrix_pointers.allocate(batch) || !info_a.allocate(batch) || !info_b.allocate(batch) ||
-        !eligible.allocate(batch) || !sequence_active.allocate(1u)) {
-      return false;
-    }
-    for (const Gfn2EigensolverBucket& bucket : topology.buckets) {
-      const Gfn2EigensolverLaunchResult query = query_gfn2_eigensolver_bucket_workspace_cuda(
-          handles.solver, handles.parameters, bucket, matrix_b.get(), eigenvalues.get(),
-          requirements);
-      if (!query.success()) {
-        std::cerr << "cuSOLVER workspace query failed: " << static_cast<unsigned int>(query.status)
-                  << '\n';
-        return false;
-      }
-    }
-    if (!solver_device_workspace.allocate(requirements.solver_device_workspace_bytes) ||
-        !solver_host_workspace.allocate(requirements.solver_host_workspace_bytes)) {
-      return false;
-    }
-    descriptor.matrix_scratch_a = matrix_a.get();
-    descriptor.matrix_a_elements = static_cast<std::int64_t>(matrix_a.size());
-    descriptor.matrix_scratch_b = matrix_b.get();
-    descriptor.matrix_b_elements = static_cast<std::int64_t>(matrix_b.size());
-    descriptor.eigenvalue_scratch = eigenvalues.get();
-    descriptor.eigenvalue_elements = static_cast<std::int64_t>(eigenvalues.size());
-    descriptor.factor_pointers = factor_pointers.get();
-    descriptor.factor_pointer_elements = static_cast<std::int64_t>(factor_pointers.size());
-    descriptor.matrix_pointers = matrix_pointers.get();
-    descriptor.matrix_pointer_elements = static_cast<std::int64_t>(matrix_pointers.size());
-    descriptor.info_a = info_a.get();
-    descriptor.info_a_elements = static_cast<std::int64_t>(info_a.size());
-    descriptor.info_b = info_b.get();
-    descriptor.info_b_elements = static_cast<std::int64_t>(info_b.size());
-    descriptor.eligible = eligible.get();
-    descriptor.eligible_elements = static_cast<std::int64_t>(eligible.size());
-    descriptor.sequence_active = sequence_active.get();
-    descriptor.sequence_active_elements = static_cast<std::int64_t>(sequence_active.size());
-    descriptor.solver_device_workspace = solver_device_workspace.get();
-    descriptor.solver_device_workspace_bytes = requirements.solver_device_workspace_bytes;
-    descriptor.solver_host_workspace = solver_host_workspace.get();
-    descriptor.solver_host_workspace_bytes = solver_host_workspace.size();
-    descriptor.plan_token = kPlanToken;
-    return true;
-  }
-
-  [[nodiscard]] Gfn2SccIterationCudaEigensolverProvider provider(
-      const HostTopology& topology, const ProviderHandles& handles) const noexcept {
-    Gfn2SccIterationCudaEigensolverProvider result{};
-    result.buckets = topology.buckets.data();
-    result.bucket_count = static_cast<std::int64_t>(topology.buckets.size());
-    result.solver = handles.solver;
-    result.parameters = handles.parameters;
-    result.blas = handles.blas;
-    result.device_workspace = solver_device_workspace.get();
-    result.device_workspace_bytes = requirements.solver_device_workspace_bytes;
-    result.host_workspace = solver_host_workspace.get();
-    result.host_workspace_bytes = solver_host_workspace.size();
-    result.requirements = requirements;
-    result.capture_mode = Gfn2SccIterationProviderCaptureMode::kUncapturedSegmentRequired;
-    result.plan_token = kPlanToken;
-    return result;
-  }
-};
-
+/*
+ * Reusable #95 composer fixture. All immutable setup owners, the single
+ * iteration arena, caller-owned provider host workspace, and initialized
+ * binding are built with the sealed production path; the eigensolver provider
+ * is captured only when the linked provider supports it (kGraphSupported).
+ */
 struct ComposerFixture {
   HostSccCase host;
-  HostSccCheckpoint cpu_before;
-  HostSccCheckpoint cpu_after_one_iteration;
-  HostTopology host_topology;
+  InputBacking backing;
   ProviderHandles handles;
-  DeviceInputs device_inputs;
-  DeviceCheckpointMirror initial_checkpoint;
-  ProviderWorkspace provider_workspace;
-  Gfn2SccIterationBinding partial_binding{};
+  Gfn2SccSetupTopology topology_owner;
+  Gfn2SccSetupInputs inputs_owner;
+  Gfn2SccSetupEigensolver eigensolver_owner;
+  Gfn2SccIterationInitializer initializer;
+  DeviceAllocation topology_arena;
+  DeviceAllocation input_arena;
+  DeviceAllocation iteration_arena;
+  DeviceAllocation eigensolver_setup_arena;
+  PinnedAllocation provider_host_workspace;
+  Gfn2RaggedTopologyView device_topology{};
+  Gfn2WavefunctionLayoutView device_wavefunction{};
+  Gfn2SccIterationDevicePlan plan_seed{};
+  Gfn2SccIterationDeviceInput input_seed{};
+  Gfn2SccIterationArenaRequirements arena_requirements{};
+  Gfn2SccIterationDeviceState state_seed{};
+  Gfn2SccIterationDeviceWorkspace workspace_seed{};
+  Gfn2SccIterationReportStorage report_storage{};
+  Gfn2SccSetupEigensolverBinding eigensolver_binding{};
+  Gfn2SccIterationInitializationReady ready{};
+  Gfn2SccIterationBinding binding{};
 
-  [[nodiscard]] bool create(std::string& error) {
-    HostSccCaseOptions options;
-    options.systems = {SmallSystemKind::kH2, SmallSystemKind::kHe, SmallSystemKind::kLiH,
-                       SmallSystemKind::kCH2};
-    options.enable_d4 = true;
-    options.enable_periodic_embedding = true;
-    options.enable_explicit_point_charges = true;
+  bool create(std::int64_t batch_size = 4, bool optional_components = false,
+              const std::vector<SmallSystemKind>& systems = {}, double electronic_temperature = 0.0,
+              std::uint64_t maximum_iterations = 8u, CouplingSelection coupling = {}) {
+    if (batch_size <= 0) {
+      return false;
+    }
+    constexpr std::array<SmallSystemKind, 4> kSystems{SmallSystemKind::kH2, SmallSystemKind::kHe,
+                                                      SmallSystemKind::kLiH, SmallSystemKind::kCH2};
+    HostSccCaseOptions options{};
+    options.systems.clear();
+    options.systems.reserve(static_cast<std::size_t>(batch_size));
+    for (std::int64_t system = 0; system < batch_size; ++system) {
+      if (!systems.empty()) {
+        options.systems.push_back(systems[static_cast<std::size_t>(system) % systems.size()]);
+      } else {
+        options.systems.push_back(kSystems[static_cast<std::size_t>(system) % kSystems.size()]);
+      }
+    }
+    options.geometry_generation = kGeometryGeneration;
+    options.maximum_iterations = maximum_iterations;
+    options.mixer_history = 3;
+    options.electronic_temperature = electronic_temperature;
+    options.enable_d4 = optional_components || coupling.d4;
+    options.enable_explicit_point_charges = optional_components || coupling.point_charges;
+    options.enable_periodic_embedding = optional_components || coupling.periodic;
+
+    std::string error;
     if (HostSccCase::create(options, host, error) != GPUXTB_STATUS_SUCCESS) {
+      std::fprintf(stderr, "HostSccCase::create failed: %s\n", error.c_str());
+      return false;
+    }
+    if (!backing.prepare(host, error) || !handles.create()) {
+      std::fprintf(stderr, "composer host/provider setup failed: %s\n", error.c_str());
       return false;
     }
 
-    cpu_before = host.checkpoint();
-    if (host.run_one_iteration(error) != GPUXTB_STATUS_SUCCESS) {
+    auto topology_diagnostic =
+        Gfn2SccSetupTopology::create(host.basis_plan(), host.integral_plan(),
+                                     host.wavefunction_layout(), kPlanToken, topology_owner);
+    if (!topology_diagnostic.success() ||
+        !topology_arena.allocate(topology_owner.requirements().immutable_device_bytes)) {
+      std::fprintf(stderr, "composer topology create/allocation failed\n");
       return false;
     }
-    cpu_after_one_iteration = host.checkpoint();
-    if (checkpoints_equal(cpu_before, cpu_after_one_iteration)) {
-      error = "CPU SCC oracle did not advance any checkpoint bytes";
-      return false;
-    }
-    if (host.restore(cpu_before, error) != GPUXTB_STATUS_SUCCESS ||
-        !checkpoints_equal(host.checkpoint(), cpu_before)) {
-      return false;
-    }
-
-    if (!host_topology.make(host)) {
-      error = "failed to construct SCC composer topology and buckets";
-      return false;
-    }
-    const Gfn2PlanSchemaDiagnostic topology_diagnostic =
-        validate_gfn2_topology_host(host_topology.view(host, Gfn2PlanMemorySpace::kHost));
-    if (topology_diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
-      error = "host SCC composer topology validation failed";
-      return false;
-    }
-    if (!handles.create() || !device_inputs.upload(host, host_topology, handles.stream) ||
-        !initial_checkpoint.upload(cpu_before, handles.stream) ||
-        !provider_workspace.create(host, host_topology, handles)) {
-      error = "failed to construct CUDA SCC composer setup fixture";
+    topology_diagnostic = topology_owner.bind_device_arena_and_upload_async(
+        topology_arena.get(), topology_arena.bytes(), device_topology, device_wavefunction,
+        handles.stream());
+    if (!topology_diagnostic.success()) {
+      std::fprintf(stderr, "composer topology upload failed: error=%u field=%u\n",
+                   static_cast<unsigned>(topology_diagnostic.error),
+                   static_cast<unsigned>(topology_diagnostic.field));
       return false;
     }
 
-    /*
-     * This is deliberately partial until the launch ABI is sealed. It records
-     * the stable topology/provider/workspace leaves without pretending that
-     * an incomplete graph is safe to pass to the binding validator.
-     */
-    partial_binding.plan.abi_version = kGfn2SccIterationAbiVersion;
-    partial_binding.plan.plan_token = kPlanToken;
-    partial_binding.plan.geometry_generation = host.options().geometry_generation;
-    partial_binding.plan.topology = device_inputs.topology.descriptor;
-    partial_binding.plan.eigensolver_provider = provider_workspace.provider(host_topology, handles);
-    partial_binding.plan.eigensolver_batch.batch_size = host.batch_size();
-    partial_binding.plan.eigensolver_batch.total_orbitals =
-        host.wavefunction_layout().total_orbitals;
-    partial_binding.plan.eigensolver_batch.total_matrix_elements =
-        host.integral_plan().total_matrix_elements;
-    partial_binding.plan.eigensolver_batch.orbital_offset_count =
-        static_cast<std::int64_t>(host_topology.batch_orbital_offsets.size());
-    partial_binding.plan.eigensolver_batch.matrix_offset_count =
-        static_cast<std::int64_t>(host_topology.matrix_offsets.size());
-    partial_binding.plan.eigensolver_batch.bucket_system_count = host.batch_size();
-    partial_binding.plan.eigensolver_batch.active_elements = host.batch_size();
-    partial_binding.plan.eigensolver_batch.plan_token = kPlanToken;
-    partial_binding.plan.eigensolver_batch.orbital_offsets =
-        device_inputs.topology.batch_orbital_offsets.get();
-    partial_binding.plan.eigensolver_batch.matrix_offsets =
-        device_inputs.topology.matrix_offsets.get();
-    partial_binding.plan.eigensolver_batch.bucket_systems =
-        device_inputs.topology.bucket_systems.get();
-    partial_binding.plan.eigensolver_batch.active = device_inputs.active.get();
-    partial_binding.workspace.eigensolver_workspace = provider_workspace.descriptor;
-    partial_binding.workspace.plan_token = kPlanToken;
+    const Gfn2SccSetupInputSources sources = backing.sources(host);
+    auto input_diagnostic = Gfn2SccSetupInputs::create(sources, topology_owner.host_topology(),
+                                                       kPlanToken, inputs_owner);
+    if (!input_diagnostic.success() ||
+        !input_arena.allocate(inputs_owner.requirements().device_bytes)) {
+      std::fprintf(stderr,
+                   "composer immutable-input create/allocation failed: error=%u "
+                   "field=%u index=%lld\n",
+                   static_cast<unsigned>(input_diagnostic.error),
+                   static_cast<unsigned>(input_diagnostic.field),
+                   static_cast<long long>(input_diagnostic.index));
+      return false;
+    }
+    input_diagnostic = inputs_owner.bind_device_arena_and_upload_async(
+        device_topology, device_wavefunction, input_arena.get(), input_arena.bytes(), plan_seed,
+        input_seed, handles.stream());
+    if (!input_diagnostic.success()) {
+      std::fprintf(stderr, "composer immutable-input upload failed: error=%u field=%u\n",
+                   static_cast<unsigned>(input_diagnostic.error),
+                   static_cast<unsigned>(input_diagnostic.field));
+      return false;
+    }
 
-    HostSccCheckpoint roundtrip;
-    if (!initial_checkpoint.download(roundtrip, handles.stream) ||
-        !cuda_ok(cudaStreamSynchronize(handles.stream), "cudaStreamSynchronize") ||
-        !checkpoints_equal(roundtrip, cpu_before)) {
-      error = "initial CPU checkpoint did not survive the CUDA upload roundtrip";
+    auto eigensolver_diagnostic = Gfn2SccSetupEigensolver::create(
+        topology_owner, host.overlap().data(), static_cast<std::int64_t>(host.overlap().size()),
+        kGeometryGeneration, kPlanToken, handles.solver(), handles.parameters(), handles.blas(),
+        plan_seed.eigensolver_options, eigensolver_owner);
+    if (!eigensolver_diagnostic.success()) {
+      std::fprintf(stderr, "composer eigensolver owner create failed: error=%u field=%u\n",
+                   static_cast<unsigned>(eigensolver_diagnostic.error),
+                   static_cast<unsigned>(eigensolver_diagnostic.field));
+      return false;
+    }
+
+    const auto& eigensolver_requirements = eigensolver_owner.requirements();
+    const auto arena_diagnostic = query_gfn2_scc_iteration_arena_requirements_cuda(
+        plan_seed, eigensolver_requirements.provider, arena_requirements);
+    if (!arena_diagnostic.success() || !iteration_arena.allocate(arena_requirements.total_bytes) ||
+        !provider_host_workspace.allocate(
+            eigensolver_requirements.provider.solver_host_workspace_bytes)) {
+      std::fprintf(stderr, "composer iteration-arena query/allocation failed: error=%u\n",
+                   static_cast<unsigned>(arena_diagnostic.error));
+      return false;
+    }
+
+    auto bind_arena_diagnostic = bind_gfn2_scc_iteration_arena_cuda(
+        plan_seed, eigensolver_requirements.provider, arena_requirements, iteration_arena.get(),
+        iteration_arena.bytes(), provider_host_workspace.get(), provider_host_workspace.bytes(),
+        state_seed, workspace_seed, report_storage);
+    if (!bind_arena_diagnostic.success() ||
+        !eigensolver_setup_arena.allocate(eigensolver_requirements.setup_device_bytes)) {
+      std::fprintf(stderr, "composer iteration-arena bind failed: error=%u\n",
+                   static_cast<unsigned>(bind_arena_diagnostic.error));
+      return false;
+    }
+
+    eigensolver_diagnostic = eigensolver_owner.bind_and_factor_overlap_async(
+        device_topology, plan_seed, arena_requirements, iteration_arena.get(),
+        iteration_arena.bytes(), workspace_seed, provider_host_workspace.get(),
+        provider_host_workspace.bytes(), eigensolver_setup_arena.get(),
+        eigensolver_setup_arena.bytes(), eigensolver_binding, handles.stream());
+    if (!eigensolver_diagnostic.success()) {
+      std::fprintf(stderr,
+                   "composer overlap factorization submission failed: error=%u field=%u "
+                   "index=%lld\n",
+                   static_cast<unsigned>(eigensolver_diagnostic.error),
+                   static_cast<unsigned>(eigensolver_diagnostic.field),
+                   static_cast<long long>(eigensolver_diagnostic.index));
+      return false;
+    }
+    plan_seed.eigensolver_batch = eigensolver_binding.batch;
+    plan_seed.eigensolver_provider = eigensolver_binding.provider;
+    plan_seed.overlap_cache = eigensolver_binding.cache;
+    plan_seed.eigensolver_options = eigensolver_binding.options;
+
+    auto initialization_diagnostic = Gfn2SccIterationInitializer::create(
+        plan_seed, arena_requirements, iteration_arena.get(), iteration_arena.bytes(), state_seed,
+        workspace_seed, report_storage, fresh_initialization(host), initializer);
+    if (!initialization_diagnostic.success()) {
+      std::fprintf(stderr,
+                   "composer initializer create failed: error=%u field=%u "
+                   "index=%lld\n",
+                   static_cast<unsigned>(initialization_diagnostic.error),
+                   static_cast<unsigned>(initialization_diagnostic.field),
+                   static_cast<long long>(initialization_diagnostic.index));
+      return false;
+    }
+    initialization_diagnostic = initializer.upload_async(
+        iteration_arena.get(), iteration_arena.bytes(), ready, handles.stream());
+    if (!initialization_diagnostic.success()) {
+      std::fprintf(stderr, "composer initializer upload failed: error=%u field=%u\n",
+                   static_cast<unsigned>(initialization_diagnostic.error),
+                   static_cast<unsigned>(initialization_diagnostic.field));
+      return false;
+    }
+
+    const auto report_diagnostic = build_gfn2_scc_iteration_report_binding_cuda(
+        report_storage, plan_seed, input_seed, state_seed, workspace_seed, binding);
+    if (report_diagnostic.error != Gfn2SccIterationBindingError::kSuccess) {
+      std::fprintf(stderr,
+                   "composer report/binding build failed: error=%u field=%u "
+                   "index=%lld\n",
+                   static_cast<unsigned>(report_diagnostic.error),
+                   static_cast<unsigned>(report_diagnostic.field),
+                   static_cast<long long>(report_diagnostic.index));
+      return false;
+    }
+
+    const auto validator_diagnostic = validate_gfn2_scc_iteration_binding_cuda(
+        binding.plan, binding.input, state_seed, workspace_seed);
+    if (validator_diagnostic.error != Gfn2SccIterationBindingError::kSuccess) {
+      std::fprintf(stderr,
+                   "composer binding validation failed: error=%u field=%u "
+                   "index=%lld\n",
+                   static_cast<unsigned>(validator_diagnostic.error),
+                   static_cast<unsigned>(validator_diagnostic.field),
+                   static_cast<long long>(validator_diagnostic.index));
       return false;
     }
     return true;
   }
 };
 
-int test_composer_fixture_setup() {
-  ComposerFixture fixture;
-  std::string error;
-  error.reserve(256u);
-  if (!fixture.create(error)) {
-    std::cerr << error << '\n';
-    return __LINE__;
+template <typename T>
+bool upload(const T* host, T* device, std::int64_t elements, cudaStream_t stream) {
+  return elements >= 0 &&
+         (elements == 0 ||
+          cudaMemcpyAsync(device, host, static_cast<std::size_t>(elements) * sizeof(T),
+                          cudaMemcpyHostToDevice, stream) == cudaSuccess);
+}
+
+template <typename T>
+bool upload_value(const T& host, T* device, cudaStream_t stream) {
+  return device != nullptr &&
+         cudaMemcpyAsync(device, &host, sizeof(T), cudaMemcpyHostToDevice, stream) == cudaSuccess;
+}
+
+template <typename T>
+bool download(const T* device, std::int64_t elements, std::vector<T>& host, cudaStream_t stream) {
+  if (elements < 0) {
+    return false;
   }
-  if (fixture.host_topology.buckets.empty() ||
-      fixture.partial_binding.plan.eigensolver_provider.bucket_count !=
-          static_cast<std::int64_t>(fixture.host_topology.buckets.size()) ||
-      fixture.partial_binding.workspace.eigensolver_workspace.plan_token != kPlanToken ||
-      fixture.partial_binding.plan.topology.memory_space != Gfn2PlanMemorySpace::kCudaDevice) {
-    return __LINE__;
+  host.resize(static_cast<std::size_t>(elements));
+  return elements == 0 || cudaMemcpyAsync(host.data(), device, host.size() * sizeof(T),
+                                          cudaMemcpyDeviceToHost, stream) == cudaSuccess;
+}
+
+template <typename T>
+bool download_value(const T* device, T& host, cudaStream_t stream) {
+  return device != nullptr &&
+         cudaMemcpyAsync(&host, device, sizeof(T), cudaMemcpyDeviceToHost, stream) == cudaSuccess;
+}
+
+template <typename T>
+bool upload_fill(T* device, std::int64_t elements, T value) {
+  if (device == nullptr || elements < 0) {
+    return false;
+  }
+  std::vector<T> host(static_cast<std::size_t>(elements), value);
+  return elements == 0 || cudaMemcpy(device, host.data(), host.size() * sizeof(T),
+                                     cudaMemcpyHostToDevice) == cudaSuccess;
+}
+
+bool near(double first, double second, double tolerance) noexcept {
+  const double scale = std::max({1.0, std::abs(first), std::abs(second)});
+  return std::abs(first - second) <= tolerance * scale;
+}
+
+bool compare_doubles(const char* field, const std::vector<double>& actual, const double* expected,
+                     std::int64_t elements, double tolerance) {
+  if (expected == nullptr || elements < 0 || actual.size() != static_cast<std::size_t>(elements)) {
+    std::fprintf(stderr, "%s has an invalid parity extent\n", field);
+    return false;
+  }
+  for (std::int64_t index = 0; index < elements; ++index) {
+    if (!near(actual[static_cast<std::size_t>(index)], expected[index], tolerance)) {
+      std::fprintf(stderr, "%s mismatch at %lld: CUDA=%.17g CPU=%.17g delta=%.3e tolerance=%.3e\n",
+                   field, static_cast<long long>(index), actual[static_cast<std::size_t>(index)],
+                   expected[index], actual[static_cast<std::size_t>(index)] - expected[index],
+                   tolerance);
+      return false;
+    }
+  }
+  return true;
+}
+
+bool compare_exact_values(const char* field, const std::vector<std::uint64_t>& actual,
+                          const std::uint64_t* expected, std::int64_t elements) {
+  if (expected == nullptr || elements < 0 || actual.size() != static_cast<std::size_t>(elements)) {
+    std::fprintf(stderr, "%s has an invalid parity extent\n", field);
+    return false;
+  }
+  for (std::int64_t index = 0; index < elements; ++index) {
+    if (actual[static_cast<std::size_t>(index)] != expected[index]) {
+      std::fprintf(stderr, "%s mismatch at %lld: CUDA=%llu CPU=%llu\n", field,
+                   static_cast<long long>(index),
+                   static_cast<unsigned long long>(actual[static_cast<std::size_t>(index)]),
+                   static_cast<unsigned long long>(expected[index]));
+      return false;
+    }
+  }
+  return true;
+}
+
+bool system_slice_is_byte_stable(const std::vector<double>& before,
+                                 const std::vector<double>& after,
+                                 const std::vector<std::int64_t>& offsets, std::int64_t system) {
+  if (system < 0 || system + 1 >= static_cast<std::int64_t>(offsets.size()) ||
+      before.size() != after.size()) {
+    return false;
+  }
+  const std::int64_t begin = offsets[static_cast<std::size_t>(system)];
+  const std::int64_t end = offsets[static_cast<std::size_t>(system + 1)];
+  if (begin < 0 || begin > end || end > static_cast<std::int64_t>(before.size())) {
+    return false;
+  }
+  return std::memcmp(before.data() + begin, after.data() + begin,
+                     static_cast<std::size_t>(end - begin) * sizeof(double)) == 0;
+}
+
+bool system_slice_is_finite(const std::vector<double>& values,
+                            const std::vector<std::int64_t>& offsets, std::int64_t system) {
+  if (system < 0 || system + 1 >= static_cast<std::int64_t>(offsets.size())) {
+    return false;
+  }
+  const std::int64_t begin = offsets[static_cast<std::size_t>(system)];
+  const std::int64_t end = offsets[static_cast<std::size_t>(system + 1)];
+  if (begin < 0 || begin >= end || end > static_cast<std::int64_t>(values.size())) {
+    return false;
+  }
+  return std::all_of(values.begin() + begin, values.begin() + end,
+                     [](double value) { return std::isfinite(value); });
+}
+
+std::uint64_t failure_record(Gfn2SccStageId stage, std::uint32_t code) {
+  return gfn2_scc_stage_failure_record(stage, code);
+}
+
+/* One CPU driver call per binding launch, mirroring the CUDA loop bound. */
+int run_host_fixed_scc_loop(HostSccCase& host) {
+  std::string error;
+  for (std::uint64_t iteration = 0u; iteration < host.options().maximum_iterations; ++iteration) {
+    const gpuxtb_status_t status = host.run_one_iteration(error);
+    if (status != GPUXTB_STATUS_SUCCESS && status != GPUXTB_STATUS_SCC_NOT_CONVERGED &&
+        status != GPUXTB_STATUS_EIGENSOLVER_FAILED) {
+      std::fprintf(stderr, "CPU composer reference failed at %llu: status=%d error=%s\n",
+                   static_cast<unsigned long long>(iteration), status, error.c_str());
+      return __LINE__;
+    }
+  }
+  return 0;
+}
+
+/* Advance the CPU oracle until every peer is terminal (converged, failed, or
+ * at the iteration bound), mirroring the device-tail graph termination the
+ * terminal branch of the raw-publication policy test relies on. */
+int run_host_until_globally_terminal(HostSccCase& host) {
+  std::string error;
+  for (;;) {
+    bool any_active = false;
+    const auto& state = host.driver_state();
+    for (std::int64_t system = 0; system < host.batch_size(); ++system) {
+      any_active = any_active || (state.system_statuses[system] == GPUXTB_STATUS_SUCCESS &&
+                                  state.converged[system] == 0u &&
+                                  state.iterations[system] < host.options().maximum_iterations);
+    }
+    if (!any_active) {
+      return 0;
+    }
+    const gpuxtb_status_t status = host.run_one_iteration(error);
+    if (status != GPUXTB_STATUS_SUCCESS && status != GPUXTB_STATUS_SCC_NOT_CONVERGED &&
+        status != GPUXTB_STATUS_EIGENSOLVER_FAILED) {
+      std::fprintf(stderr, "CPU composer terminal reference failed: status=%d error=%s\n", status,
+                   error.c_str());
+      return __LINE__;
+    }
+  }
+}
+
+std::vector<double> changed_core_hamiltonian(const HostSccCase& host) {
+  std::vector<double> changed = host.h0();
+  const auto& layout = host.wavefunction_layout();
+  const auto& matrix_offsets = host.h0_plan().matrix_offsets;
+  for (std::int64_t system = 0; system < layout.batch_size; ++system) {
+    const std::int64_t n =
+        layout.batch_orbital_offsets[system + 1] - layout.batch_orbital_offsets[system];
+    /* H0 has one physical matrix per system. Keep every perturbation
+     * symmetric so the changed input stays a valid one-electron Hamiltonian. */
+    const std::int64_t matrix_begin = matrix_offsets[static_cast<std::size_t>(system)];
+    for (std::int64_t row = 0; row < n; ++row) {
+      for (std::int64_t column = row; column < n; ++column) {
+        const double shift = 2.5e-3 * static_cast<double>(system + 1) +
+                             5.0e-4 * static_cast<double>(row + column + 1);
+        changed[static_cast<std::size_t>(matrix_begin + row * n + column)] += shift;
+        if (row != column) {
+          changed[static_cast<std::size_t>(matrix_begin + column * n + row)] += shift;
+        }
+      }
+    }
+  }
+  return changed;
+}
+
+/* Snapshot every public numerical buffer the test isolates during poisoning. */
+struct PublicSnapshot {
+  std::vector<double> qsh;
+  std::vector<double> qat;
+  std::vector<double> published_shell_charges;
+  std::vector<double> free_energies;
+  std::vector<std::uint64_t> iterations;
+  std::vector<gpuxtb_status_t> statuses;
+  std::vector<std::uint8_t> converged;
+};
+
+int snapshot_public(const ComposerFixture& fixture, PublicSnapshot& snapshot) {
+  const auto& layout = fixture.host.wavefunction_layout();
+  const auto& state = fixture.binding.state;
+  CHECK(download(state.raw_population.qsh, state.raw_population.qsh_elements, snapshot.qsh,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.qat, state.raw_population.qat_elements, snapshot.qat,
+                 fixture.handles.stream()));
+  CHECK(download(state.published.shell_charges, state.published.shell_elements,
+                 snapshot.published_shell_charges, fixture.handles.stream()));
+  CHECK(download(state.scc.free_energies, state.scc.batch_elements, snapshot.free_energies,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.iterations, state.scc.batch_elements, snapshot.iterations,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.system_statuses, state.scc.batch_elements, snapshot.statuses,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.converged, state.scc.batch_elements, snapshot.converged,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  (void)layout;
+  return 0;
+}
+
+int test_composer_binding_and_repeat_launch() {
+  ComposerFixture fixture;
+  CHECK(fixture.create(4, true));
+  const Gfn2SccIterationBindingDiagnostic validator =
+      validate_gfn2_scc_iteration_binding_cuda(fixture.binding.plan, fixture.binding.input,
+                                               fixture.binding.state, fixture.binding.workspace);
+  CHECK(validator.error == Gfn2SccIterationBindingError::kSuccess);
+  CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
+        Gfn2SccIterationProviderCaptureMode::kGraphSupported);
+  CHECK(fixture.binding.plan.plan_token == kPlanToken);
+  CHECK(fixture.binding.workspace.eigensolver_workspace.plan_token == kPlanToken);
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  const Gfn2SccIterationLaunchResult first =
+      launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
+  if (!first.success()) {
+    std::fprintf(stderr, "composer launch 1 failed: status=%u stage=%u binding_error=%u cuda=%d\n",
+                 static_cast<unsigned>(first.status), static_cast<unsigned>(first.stage),
+                 static_cast<unsigned>(first.binding.error), static_cast<int>(first.cuda_status));
+  }
+  CHECK(first.success());
+  std::vector<double> first_free_energies;
+  CHECK(download(fixture.binding.state.scc.free_energies, fixture.host.batch_size(),
+                 first_free_energies, fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  /* Repeated launch reuses the exact same binding and arenas: steady-state
+   * contract consumed by Graph replay, no descriptor rebuild in the hot path. */
+  const Gfn2SccIterationLaunchResult second =
+      launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
+  CHECK(second.success());
+  std::vector<double> second_free_energies;
+  CHECK(download(fixture.binding.state.scc.free_energies, fixture.host.batch_size(),
+                 second_free_energies, fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
+    CHECK(std::isfinite(first_free_energies[static_cast<std::size_t>(system)]));
+    CHECK(std::isfinite(second_free_energies[static_cast<std::size_t>(system)]));
+  }
+  return 0;
+}
+
+int test_composer_one_step_cpu_parity(std::int64_t batch_size, bool optional_components) {
+  ComposerFixture fixture;
+  CHECK(fixture.create(batch_size, optional_components));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  const Gfn2SccIterationLaunchResult launch =
+      launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
+  if (!launch.success()) {
+    std::fprintf(stderr,
+                 "composer parity launch failed: status=%u stage=%u binding_error=%u cuda=%d\n",
+                 static_cast<unsigned>(launch.status), static_cast<unsigned>(launch.stage),
+                 static_cast<unsigned>(launch.binding.error), static_cast<int>(launch.cuda_status));
+  }
+  CHECK(launch.success());
+  std::string error;
+  const gpuxtb_status_t cpu_status = fixture.host.run_one_iteration(error);
+  if (cpu_status != GPUXTB_STATUS_SUCCESS) {
+    std::fprintf(stderr, "CPU composer iteration failed: status=%d error=%s\n", cpu_status,
+                 error.c_str());
+  }
+  CHECK(cpu_status == GPUXTB_STATUS_SUCCESS);
+
+  const auto& layout = fixture.host.wavefunction_layout();
+  const auto& state = fixture.binding.state;
+  const auto& workspace = fixture.binding.workspace;
+  std::vector<double> public_qsh;
+  std::vector<double> public_qat;
+  std::vector<double> public_dipoles;
+  std::vector<double> public_quadrupoles;
+  std::vector<double> raw_qsh;
+  std::vector<double> raw_qat;
+  std::vector<double> raw_dipoles;
+  std::vector<double> raw_quadrupoles;
+  std::vector<double> free_energy;
+  std::vector<double> current_inputs;
+  std::vector<std::uint64_t> iterations;
+  std::vector<gpuxtb_status_t> statuses;
+  std::vector<std::uint8_t> converged;
+  CHECK(download(state.raw_population.qsh, state.raw_population.qsh_elements, public_qsh,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.qat, state.raw_population.qat_elements, public_qat,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.dipole, state.raw_population.dipole_elements, public_dipoles,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.quadrupole, state.raw_population.quadrupole_elements,
+                 public_quadrupoles, fixture.handles.stream()));
+  CHECK(download(workspace.staged_raw_population.qsh, workspace.staged_raw_population.qsh_elements,
+                 raw_qsh, fixture.handles.stream()));
+  CHECK(download(workspace.staged_raw_population.qat, workspace.staged_raw_population.qat_elements,
+                 raw_qat, fixture.handles.stream()));
+  CHECK(download(workspace.staged_raw_population.dipole,
+                 workspace.staged_raw_population.dipole_elements, raw_dipoles,
+                 fixture.handles.stream()));
+  CHECK(download(workspace.staged_raw_population.quadrupole,
+                 workspace.staged_raw_population.quadrupole_elements, raw_quadrupoles,
+                 fixture.handles.stream()));
+  CHECK(download(state.free_energy.free_energy, state.free_energy.free_energy_elements, free_energy,
+                 fixture.handles.stream()));
+  CHECK(download(state.mixer.current_inputs, state.mixer.total_vector_elements, current_inputs,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.iterations, state.scc.batch_elements, iterations,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.system_statuses, state.scc.batch_elements, statuses,
+                 fixture.handles.stream()));
+  CHECK(
+      download(state.scc.converged, state.scc.batch_elements, converged, fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
+    CHECK(iterations[static_cast<std::size_t>(system)] ==
+          fixture.host.driver_state().iterations[system]);
+    CHECK(statuses[static_cast<std::size_t>(system)] ==
+          fixture.host.driver_state().system_statuses[system]);
+    CHECK(converged[static_cast<std::size_t>(system)] ==
+          fixture.host.driver_state().converged[system]);
+    CHECK(std::isfinite(free_energy[static_cast<std::size_t>(system)]));
+  }
+  CHECK(compare_doubles("public qsh", public_qsh, fixture.host.wavefunction().qsh,
+                        layout.qsh.element_count, 3.0e-9));
+  CHECK(compare_doubles("public qat", public_qat, fixture.host.wavefunction().qat,
+                        layout.qat.element_count, 3.0e-9));
+  CHECK(compare_doubles("public dipoles", public_dipoles, fixture.host.wavefunction().dipole,
+                        layout.dipole.element_count, 3.0e-9));
+  CHECK(compare_doubles("public quadrupoles", public_quadrupoles,
+                        fixture.host.wavefunction().quadrupole, layout.quadrupole.element_count,
+                        3.0e-9));
+  CHECK(compare_doubles("raw qsh", raw_qsh, fixture.host.driver_workspace().raw_qsh,
+                        layout.qsh.element_count, 3.0e-9));
+  CHECK(compare_doubles("raw qat", raw_qat, fixture.host.driver_workspace().raw_qat,
+                        layout.qat.element_count, 3.0e-9));
+  CHECK(compare_doubles("raw dipoles", raw_dipoles, fixture.host.driver_workspace().raw_dipoles,
+                        layout.dipole.element_count, 3.0e-9));
+  CHECK(compare_doubles("raw quadrupoles", raw_quadrupoles,
+                        fixture.host.driver_workspace().raw_quadrupoles,
+                        layout.quadrupole.element_count, 3.0e-9));
+  CHECK(compare_doubles("free energy", free_energy, fixture.host.driver_state().free_energies,
+                        fixture.host.batch_size(), 3.0e-9));
+  CHECK(compare_doubles("mixer current inputs", current_inputs,
+                        fixture.host.mixer_state().current_inputs,
+                        fixture.host.mixer_plan().total_vector_elements(), 3.0e-9));
+  return 0;
+}
+
+/*
+ * raw-on-terminal versus next_mixed-on-nonterminal publication policy.
+ *
+ * After a single damping step no peer has converged, so the published
+ * population must be the damped next-mixed state while the staged Mulliken
+ * population holds the raw one-iteration multipoles. After a full loop every
+ * peer either converged (terminal) or hit the bound; for converged peers the
+ * published population must be exactly the final raw Mulliken population and
+ * must agree with the CPU oracle's published raw slice.
+ */
+int test_composer_raw_publication_policy(bool terminal) {
+  ComposerFixture fixture;
+  CHECK(fixture.create(4, false));
+  CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
+        Gfn2SccIterationProviderCaptureMode::kGraphSupported);
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  if (terminal) {
+    /* Terminal: run the device-tail graph owner until no peer is active, so
+     * converged peers' raw Mulliken population is committed to the public
+     * raw buffers by the state composer. */
+    Gfn2SccLoopCudaGraphOwner graph;
+    const Gfn2SccLoopGraphBuildResult build = graph.build(fixture.binding);
+    if (!build.success() || !build.device_tail_graph_ready() || !graph.ready()) {
+      std::fprintf(stderr, "terminal composer graph build failed: status=%u fallback=%u\n",
+                   static_cast<unsigned>(build.status),
+                   static_cast<unsigned>(build.fallback_reason));
+    }
+    CHECK(build.success());
+    CHECK(build.device_tail_graph_ready());
+    CHECK(graph.ready());
+    const Gfn2SccLoopLaunchResult launch = graph.launch(fixture.handles.stream());
+    CHECK(launch.success());
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    CHECK(run_host_until_globally_terminal(fixture.host) == 0);
+
+    const auto& layout = fixture.host.wavefunction_layout();
+    std::vector<double> public_qsh;
+    std::vector<double> raw_qsh;
+    std::vector<std::uint8_t> converged;
+    std::vector<std::uint64_t> iterations;
+    std::vector<gpuxtb_status_t> statuses;
+    CHECK(download(fixture.binding.state.raw_population.qsh,
+                   fixture.binding.state.raw_population.qsh_elements, public_qsh,
+                   fixture.handles.stream()));
+    CHECK(download(fixture.binding.workspace.staged_raw_population.qsh,
+                   fixture.binding.workspace.staged_raw_population.qsh_elements, raw_qsh,
+                   fixture.handles.stream()));
+    CHECK(download(fixture.binding.state.scc.converged, fixture.host.batch_size(), converged,
+                   fixture.handles.stream()));
+    CHECK(download(fixture.binding.state.scc.iterations, fixture.host.batch_size(), iterations,
+                   fixture.handles.stream()));
+    CHECK(download(fixture.binding.state.scc.system_statuses, fixture.host.batch_size(), statuses,
+                   fixture.handles.stream()));
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+    /* Every peer that reached terminal convergence must have published its raw
+     * Mulliken population; the device-tail owner guarantees at least one such
+     * peer here. Public == staged raw is the raw-on-terminal atom of the
+     * #89/#95 publication contract and must match the CPU oracle exactly. */
+    std::size_t terminal_count = 0u;
+    for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
+      CHECK(iterations[static_cast<std::size_t>(system)] ==
+            fixture.host.driver_state().iterations[system]);
+      CHECK(statuses[static_cast<std::size_t>(system)] ==
+            fixture.host.driver_state().system_statuses[system]);
+      CHECK(converged[static_cast<std::size_t>(system)] ==
+            fixture.host.driver_state().converged[system]);
+      if (converged[static_cast<std::size_t>(system)] != 0u) {
+        ++terminal_count;
+        const std::int64_t begin = layout.qsh.system_offsets[system];
+        const std::int64_t end = layout.qsh.system_offsets[system + 1];
+        for (std::int64_t index = begin; index < end; ++index) {
+          CHECK(public_qsh[static_cast<std::size_t>(index)] ==
+                raw_qsh[static_cast<std::size_t>(index)]);
+        }
+      }
+    }
+    CHECK(terminal_count > 0u);
+    CHECK(compare_doubles("terminal public qsh", public_qsh, fixture.host.wavefunction().qsh,
+                          layout.qsh.element_count, 3.0e-9));
+    return 0;
   }
 
-  /* The launcher-specific parity call is added behind this setup-time gate. */
-  if constexpr (kComposerLauncherAvailable) {
-    return 0;
+  const Gfn2SccIterationLaunchResult launch =
+      launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
+  CHECK(launch.success());
+  std::string error;
+  CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+
+  const auto& layout = fixture.host.wavefunction_layout();
+  std::vector<double> public_qsh;
+  std::vector<double> raw_qsh;
+  std::vector<std::uint8_t> converged;
+  CHECK(download(fixture.binding.state.raw_population.qsh,
+                 fixture.binding.state.raw_population.qsh_elements, public_qsh,
+                 fixture.handles.stream()));
+  CHECK(download(fixture.binding.workspace.staged_raw_population.qsh,
+                 fixture.binding.workspace.staged_raw_population.qsh_elements, raw_qsh,
+                 fixture.handles.stream()));
+  CHECK(download(fixture.binding.state.scc.converged, fixture.host.batch_size(), converged,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  /* No peer converges on the first damped step. */
+  for (const std::uint8_t value : converged) {
+    CHECK(value == 0u);
+  }
+  /* Public == damped next-mixed (CPU wavefunction), staged raw is the raw
+   * Mulliken population, and the two genuinely differ somewhere after one
+   * damped mixing step (the trivial H2 shell is zero and may coincide). */
+  CHECK(compare_doubles("nonterminal public qsh", public_qsh, fixture.host.wavefunction().qsh,
+                        layout.qsh.element_count, 3.0e-9));
+  CHECK(compare_doubles("nonterminal raw qsh", raw_qsh, fixture.host.driver_workspace().raw_qsh,
+                        layout.qsh.element_count, 3.0e-9));
+  double max_public_raw_delta = 0.0;
+  for (std::int64_t index = 0; index < layout.qsh.element_count; ++index) {
+    max_public_raw_delta =
+        std::max(max_public_raw_delta, std::abs(public_qsh[static_cast<std::size_t>(index)] -
+                                                raw_qsh[static_cast<std::size_t>(index)]));
+  }
+  CHECK(max_public_raw_delta > 1.0e-9);
+  return 0;
+}
+
+int test_composer_changed_input_graph_replay(std::int64_t batch_size, bool optional_components) {
+  ComposerFixture fixture;
+  CHECK(fixture.create(batch_size, optional_components));
+  CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
+        Gfn2SccIterationProviderCaptureMode::kGraphSupported);
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  const HostSccCheckpoint initial = fixture.host.checkpoint();
+  const void* const stable_iteration_arena = fixture.iteration_arena.get();
+  const void* const stable_input_arena = fixture.input_arena.get();
+  const void* const stable_setup_arena = fixture.eigensolver_setup_arena.get();
+  const void* const stable_topology_arena = fixture.topology_arena.get();
+
+  GraphResources graph;
+  CUDA_CHECK(cudaStreamBeginCapture(fixture.handles.stream(), cudaStreamCaptureModeThreadLocal));
+  const Gfn2SccLoopLaunchResult captured =
+      launch_gfn2_restricted_scc_loop_cuda(fixture.binding, fixture.handles.stream());
+  CHECK(captured.success());
+  CHECK(captured.submitted_iterations == fixture.host.options().maximum_iterations);
+  CUDA_CHECK(cudaStreamEndCapture(fixture.handles.stream(), graph.graph_address()));
+  CHECK(graph.graph() != nullptr);
+  CUDA_CHECK(cudaGraphInstantiate(graph.executable_address(), graph.graph(), nullptr, nullptr, 0u));
+
+  CUDA_CHECK(cudaGraphLaunch(graph.executable(), fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(run_host_fixed_scc_loop(fixture.host) == 0);
+
+  std::vector<double> first_free_energies;
+  std::vector<std::uint64_t> first_iterations;
+  CHECK(download(fixture.binding.state.scc.free_energies, fixture.host.batch_size(),
+                 first_free_energies, fixture.handles.stream()));
+  CHECK(download(fixture.binding.state.scc.iterations, fixture.host.batch_size(), first_iterations,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  /* Replay the identical graph with changed numerical H0 inputs: restore the
+   * CPU oracle and the device initialization checkpoint, then rewrite the
+   * immutable H0 buffer in place. No descriptor, arena, or provider is
+   * rebuilt between the two executions. */
+  std::string error;
+  CHECK(fixture.host.restore(initial, error) == GPUXTB_STATUS_SUCCESS);
+  const std::vector<double> changed_h0 = changed_core_hamiltonian(fixture.host);
+  fixture.host.h0() = changed_h0;
+  CHECK(fixture.initializer
+            .upload_async(fixture.iteration_arena.get(), fixture.iteration_arena.bytes(),
+                          fixture.ready, fixture.handles.stream())
+            .success());
+  CUDA_CHECK(cudaMemcpyAsync(const_cast<double*>(fixture.binding.input.hamiltonian.h0),
+                             changed_h0.data(), changed_h0.size() * sizeof(double),
+                             cudaMemcpyHostToDevice, fixture.handles.stream()));
+  CUDA_CHECK(cudaGraphLaunch(graph.executable(), fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(run_host_fixed_scc_loop(fixture.host) == 0);
+
+  std::vector<double> changed_free_energies;
+  std::vector<std::uint64_t> changed_iterations;
+  CHECK(download(fixture.binding.state.scc.free_energies, fixture.host.batch_size(),
+                 changed_free_energies, fixture.handles.stream()));
+  CHECK(download(fixture.binding.state.scc.iterations, fixture.host.batch_size(),
+                 changed_iterations, fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  CHECK(first_free_energies.size() == changed_free_energies.size());
+  bool numerical_input_was_consumed = false;
+  for (std::size_t index = 0; index < first_free_energies.size(); ++index) {
+    numerical_input_was_consumed =
+        numerical_input_was_consumed ||
+        !near(first_free_energies[index], changed_free_energies[index], 1.0e-10);
+  }
+  CHECK(numerical_input_was_consumed);
+  CHECK(fixture.iteration_arena.get() == stable_iteration_arena);
+  CHECK(fixture.input_arena.get() == stable_input_arena);
+  CHECK(fixture.eigensolver_setup_arena.get() == stable_setup_arena);
+  CHECK(fixture.topology_arena.get() == stable_topology_arena);
+  CHECK(fixture.binding.plan.eigensolver_provider.plan_token == kPlanToken);
+  return 0;
+}
+
+/* Healthy peers advance through the full DAG when one peer fails numerically
+ * inside the mixed-gather stage (first consumer of the mixed shell charges). */
+int test_composer_peer_numerical_failure_dag() {
+  constexpr std::int64_t kTarget = 1;
+  ComposerFixture fixture;
+  CHECK(fixture.create(4, true));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  const auto& layout = fixture.host.wavefunction_layout();
+  const std::int64_t target_shell_begin = layout.qsh.system_offsets[kTarget];
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  CHECK(upload_value(nan,
+                     const_cast<double*>(fixture.binding.state.scc.current_inputs.shell_charges) +
+                         target_shell_begin,
+                     fixture.handles.stream()));
+
+  const Gfn2SccIterationLaunchResult launch =
+      launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
+  CHECK(launch.success());
+
+  std::vector<std::uint64_t> iterations;
+  std::vector<gpuxtb_status_t> statuses;
+  std::vector<std::uint64_t> failures;
+  std::vector<double> public_qsh;
+  std::vector<double> public_qat;
+  std::uint64_t plan_failure = 1u;
+  CHECK(download(fixture.binding.state.scc.iterations, fixture.host.batch_size(), iterations,
+                 fixture.handles.stream()));
+  CHECK(download(fixture.binding.state.scc.system_statuses, fixture.host.batch_size(), statuses,
+                 fixture.handles.stream()));
+  CHECK(download(fixture.binding.workspace.ledger.system_failure_records, fixture.host.batch_size(),
+                 failures, fixture.handles.stream()));
+  CHECK(download(fixture.binding.state.raw_population.qsh,
+                 fixture.binding.state.raw_population.qsh_elements, public_qsh,
+                 fixture.handles.stream()));
+  CHECK(download(fixture.binding.state.raw_population.qat,
+                 fixture.binding.state.raw_population.qat_elements, public_qat,
+                 fixture.handles.stream()));
+  CHECK(download_value(fixture.binding.workspace.ledger.plan_failure_record, plan_failure,
+                       fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  CHECK(plan_failure == 0u);
+  CHECK(iterations[static_cast<std::size_t>(kTarget)] == 0u);
+  CHECK(statuses[static_cast<std::size_t>(kTarget)] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(failures[static_cast<std::size_t>(kTarget)] ==
+        failure_record(
+            Gfn2SccStageId::kMixedGather,
+            static_cast<std::uint32_t>(Gfn2SccPotentialDeviceError::kNonfiniteMixedShellCharge)));
+  /* Peers 0/2/3 continue through the complete DAG and publish new finite
+   * population, matching the CPU oracle for the same healthy subset. */
+  for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
+    if (system == kTarget) {
+      continue;
+    }
+    CHECK(iterations[static_cast<std::size_t>(system)] == 1u);
+    CHECK(statuses[static_cast<std::size_t>(system)] == GPUXTB_STATUS_SUCCESS);
+    CHECK(failures[static_cast<std::size_t>(system)] == 0u);
+    CHECK(system_slice_is_finite(public_qsh, layout.qsh.system_offsets, system));
+    CHECK(system_slice_is_finite(public_qat, layout.qat.system_offsets, system));
+  }
+  return 0;
+}
+
+/* A plan/provenance failure (stale geometry generation) suppresses every
+ * downstream stage of the owning peer's DAG: no energy or population stage
+ * runs, the failure publishes a quiet NaN energy plus the canonical stage
+ * record, and the population/publication buffers stay byte-stable. Healthy
+ * peers keep advancing through their complete DAG. */
+int test_composer_plan_provenance_failure_dag() {
+  constexpr std::int64_t kTarget = 0;
+  ComposerFixture fixture;
+  CHECK(fixture.create(4, true));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  PublicSnapshot before;
+  CHECK(snapshot_public(fixture, before) == 0);
+
+  const std::uint64_t stale_generation = kGeometryGeneration - 1u;
+  CHECK(upload(&stale_generation, fixture.binding.plan.geometry_cache.geometry_generations, 1,
+               fixture.handles.stream()));
+
+  const Gfn2SccIterationLaunchResult launch =
+      launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
+  CHECK(launch.success());
+
+  PublicSnapshot after;
+  CHECK(snapshot_public(fixture, after) == 0);
+  const auto& layout = fixture.host.wavefunction_layout();
+
+  std::vector<std::uint64_t> failures;
+  std::uint64_t plan_failure = 1u;
+  CHECK(download(fixture.binding.workspace.ledger.system_failure_records, fixture.host.batch_size(),
+                 failures, fixture.handles.stream()));
+  CHECK(download_value(fixture.binding.workspace.ledger.plan_failure_record, plan_failure,
+                       fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  CHECK(plan_failure == 0u);
+  CHECK(after.iterations[static_cast<std::size_t>(kTarget)] == 0u);
+  CHECK(after.statuses[static_cast<std::size_t>(kTarget)] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(failures[static_cast<std::size_t>(kTarget)] ==
+        failure_record(Gfn2SccStageId::kGeometry,
+                       static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kStaleGeneration)));
+  /* Plan-level failure publishes no partial numerical data: population and
+   * published multipole slices are byte-stable, while the failed peer's
+   * per-system energy slice is filled with a quiet NaN by the failure
+   * publication policy (never a partial or stale finite value). */
+  CHECK(system_slice_is_byte_stable(before.qsh, after.qsh, layout.qsh.system_offsets, kTarget));
+  CHECK(system_slice_is_byte_stable(before.qat, after.qat, layout.qat.system_offsets, kTarget));
+  CHECK(system_slice_is_byte_stable(before.published_shell_charges, after.published_shell_charges,
+                                    layout.qsh.system_offsets, kTarget));
+  CHECK(std::isnan(after.free_energies[static_cast<std::size_t>(kTarget)]));
+  /* Healthy peers advance exactly one iteration. */
+  for (std::int64_t system = 1; system < fixture.host.batch_size(); ++system) {
+    CHECK(after.iterations[static_cast<std::size_t>(system)] ==
+          before.iterations[static_cast<std::size_t>(system)] + 1u);
+    CHECK(after.statuses[static_cast<std::size_t>(system)] == GPUXTB_STATUS_SUCCESS);
+    CHECK(failures[static_cast<std::size_t>(system)] == 0u);
+  }
+  return 0;
+}
+
+/*
+ * Poison every requested inactive/dormant slice of one inactive peer —
+ * geometry offsets/coordination, multipoles, mixer histories, energies, and
+ * publication buffers — and prove the composer neither reads nor writes them
+ * while healthy peers complete the DAG. The inactive peer is selected by
+ * publishing a terminal state (converged/iteration count) exactly as a failed
+ * or converged predecessor would.
+ */
+int test_composer_inactive_dormant_poisoning() {
+  constexpr std::int64_t kInactive = 1;
+  constexpr double kSentinel = -777.125;
+  ComposerFixture fixture;
+  CHECK(fixture.create(4, true));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  const auto& layout = fixture.host.wavefunction_layout();
+  const auto& state = fixture.binding.state;
+
+  std::vector<std::uint64_t> iterations(static_cast<std::size_t>(fixture.host.batch_size()), 0u);
+  std::vector<gpuxtb_status_t> statuses(static_cast<std::size_t>(fixture.host.batch_size()),
+                                        GPUXTB_STATUS_SUCCESS);
+  std::vector<std::uint8_t> converged(static_cast<std::size_t>(fixture.host.batch_size()), 0u);
+  converged[static_cast<std::size_t>(kInactive)] = 1u;
+  iterations[static_cast<std::size_t>(kInactive)] = fixture.host.options().maximum_iterations;
+  CHECK(upload(iterations.data(), state.scc.iterations, fixture.host.batch_size(),
+               fixture.handles.stream()));
+  CHECK(upload(statuses.data(), state.scc.system_statuses, fixture.host.batch_size(),
+               fixture.handles.stream()));
+  CHECK(upload(converged.data(), state.scc.converged, fixture.host.batch_size(),
+               fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  /* Poison the inactive peer's per-system slices. The inactive peer owns
+   * shells [shell_begin, shell_end), atoms [atom_begin, atom_end), and mixer
+   * vector [vector_begin, vector_end) in each history column. */
+  const std::int64_t shell_begin = layout.qsh.system_offsets[kInactive];
+  const std::int64_t shell_end = layout.qsh.system_offsets[kInactive + 1];
+  const std::int64_t atom_begin = fixture.host.atom_offsets()[static_cast<std::size_t>(kInactive)];
+  const std::int64_t atom_end =
+      fixture.host.atom_offsets()[static_cast<std::size_t>(kInactive + 1)];
+  const auto& vector_offsets = fixture.host.mixer_plan().vector_offsets();
+  const std::int64_t vector_begin = vector_offsets[static_cast<std::size_t>(kInactive)];
+  const std::int64_t vector_end = vector_offsets[static_cast<std::size_t>(kInactive + 1)];
+  const std::int64_t mixer_vector = vector_end - vector_begin;
+  const std::int64_t history_size = fixture.host.mixer_plan().history_size();
+
+  /* Geometry: coordination numbers and per-system generations. */
+  CHECK(upload_fill(
+      const_cast<double*>(fixture.binding.plan.geometry_cache.coordination_numbers) + atom_begin,
+      atom_end - atom_begin, kSentinel));
+  std::vector<std::uint64_t> sentinel_generation{std::numeric_limits<std::uint64_t>::max()};
+  CHECK(upload(&sentinel_generation[0],
+               fixture.binding.plan.geometry_cache.geometry_generations + kInactive, 1,
+               fixture.handles.stream()));
+  /* Multipoles: mixed shell charges. */
+  CHECK(upload_fill(const_cast<double*>(state.scc.current_inputs.shell_charges) + shell_begin,
+                    shell_end - shell_begin, kSentinel));
+  /* Mixer histories: df, u, and omega slices. */
+  CHECK(upload_fill(state.mixer.df_history + vector_begin * history_size,
+                    mixer_vector * history_size, kSentinel));
+  CHECK(upload_fill(state.mixer.u_history + vector_begin * history_size,
+                    mixer_vector * history_size, kSentinel));
+  CHECK(upload_fill(state.mixer.omega + kInactive * history_size, history_size, kSentinel));
+  /* Energies. */
+  CHECK(upload_fill(state.free_energy.internal_energy + kInactive, 1, kSentinel));
+  CHECK(upload_fill(state.free_energy.free_energy + kInactive, 1, kSentinel));
+  CHECK(upload_fill(state.free_energy.entropy + kInactive, 1, kSentinel));
+  CHECK(upload_fill(state.scc.free_energies + kInactive, 1, kSentinel));
+  /* Publication buffers. */
+  CHECK(upload_fill(state.raw_population.qsh + shell_begin, shell_end - shell_begin, kSentinel));
+  CHECK(upload_fill(state.raw_population.qat + atom_begin, atom_end - atom_begin, kSentinel));
+  CHECK(
+      upload_fill(state.published.shell_charges + shell_begin, shell_end - shell_begin, kSentinel));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  const Gfn2SccIterationLaunchResult launch =
+      launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
+  CHECK(launch.success());
+
+  std::vector<double> coordination_numbers;
+  std::vector<double> shell_charges;
+  std::vector<double> df_history;
+  std::vector<double> u_history;
+  std::vector<double> omega;
+  std::vector<double> internal_energy;
+  std::vector<double> free_energy;
+  std::vector<double> entropy;
+  std::vector<double> scc_free_energies;
+  std::vector<double> raw_qsh;
+  std::vector<double> raw_qat;
+  std::vector<double> published_shell_charges;
+  std::vector<std::uint64_t> geometry_generations;
+  std::vector<std::uint64_t> after_iterations;
+  std::vector<gpuxtb_status_t> after_statuses;
+  CHECK(download(fixture.binding.plan.geometry_cache.coordination_numbers,
+                 fixture.host.total_atoms(), coordination_numbers, fixture.handles.stream()));
+  CHECK(download(fixture.binding.plan.geometry_cache.geometry_generations,
+                 fixture.host.batch_size(), geometry_generations, fixture.handles.stream()));
+  CHECK(download(state.scc.current_inputs.shell_charges, layout.qsh.element_count, shell_charges,
+                 fixture.handles.stream()));
+  CHECK(download(state.mixer.df_history, state.mixer.history_elements, df_history,
+                 fixture.handles.stream()));
+  CHECK(download(state.mixer.u_history, state.mixer.history_elements, u_history,
+                 fixture.handles.stream()));
+  CHECK(download(state.mixer.omega, state.mixer.omega_elements, omega, fixture.handles.stream()));
+  CHECK(download(state.free_energy.internal_energy, fixture.host.batch_size(), internal_energy,
+                 fixture.handles.stream()));
+  CHECK(download(state.free_energy.free_energy, fixture.host.batch_size(), free_energy,
+                 fixture.handles.stream()));
+  CHECK(download(state.free_energy.entropy, fixture.host.batch_size(), entropy,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.free_energies, fixture.host.batch_size(), scc_free_energies,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.qsh, layout.qsh.element_count, raw_qsh,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.qat, layout.qat.element_count, raw_qat,
+                 fixture.handles.stream()));
+  CHECK(download(state.published.shell_charges, layout.qsh.element_count, published_shell_charges,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.iterations, fixture.host.batch_size(), after_iterations,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.system_statuses, fixture.host.batch_size(), after_statuses,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  /* The whole inactive peer remains byte-stable: nothing read or wrote it. */
+  for (std::int64_t index = atom_begin; index < atom_end; ++index) {
+    CHECK(coordination_numbers[static_cast<std::size_t>(index)] == kSentinel);
+  }
+  CHECK(geometry_generations[static_cast<std::size_t>(kInactive)] ==
+        std::numeric_limits<std::uint64_t>::max());
+  for (std::int64_t index = shell_begin; index < shell_end; ++index) {
+    CHECK(shell_charges[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(raw_qsh[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(published_shell_charges[static_cast<std::size_t>(index)] == kSentinel);
+  }
+  for (std::int64_t index = vector_begin * history_size; index < vector_end * history_size;
+       ++index) {
+    CHECK(df_history[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(u_history[static_cast<std::size_t>(index)] == kSentinel);
+  }
+  for (std::int64_t index = kInactive * history_size; index < (kInactive + 1) * history_size;
+       ++index) {
+    CHECK(omega[static_cast<std::size_t>(index)] == kSentinel);
+  }
+  CHECK(internal_energy[static_cast<std::size_t>(kInactive)] == kSentinel);
+  CHECK(free_energy[static_cast<std::size_t>(kInactive)] == kSentinel);
+  CHECK(entropy[static_cast<std::size_t>(kInactive)] == kSentinel);
+  CHECK(scc_free_energies[static_cast<std::size_t>(kInactive)] == kSentinel);
+  CHECK(after_iterations[static_cast<std::size_t>(kInactive)] ==
+        fixture.host.options().maximum_iterations);
+  CHECK(after_statuses[static_cast<std::size_t>(kInactive)] == GPUXTB_STATUS_SUCCESS);
+
+  /* Active peers advanced exactly one iteration and published fresh finite
+   * population from the poisoned free state. */
+  for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
+    if (system == kInactive) {
+      continue;
+    }
+    CHECK(after_iterations[static_cast<std::size_t>(system)] == 1u);
+    CHECK(after_statuses[static_cast<std::size_t>(system)] == GPUXTB_STATUS_SUCCESS);
+    CHECK(system_slice_is_finite(raw_qsh, layout.qsh.system_offsets, system));
+    CHECK(system_slice_is_finite(raw_qat, layout.qat.system_offsets, system));
+  }
+  return 0;
+}
+
+/* The same binding executes on the default stream and stays CPU-parity exact,
+ * proving stream-identity independence for the composer. */
+int test_composer_default_stream_parity() {
+  ComposerFixture fixture;
+  CHECK(fixture.create(8, false));
+  /* All setup uploads ran on the custom nonblocking stream; establish stream
+   * ordering before reusing the binding on the default stream. */
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  const Gfn2SccIterationLaunchResult launch =
+      launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, nullptr);
+  CHECK(launch.success());
+  CUDA_CHECK(cudaStreamSynchronize(nullptr));
+  std::string error;
+  CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+
+  const auto& layout = fixture.host.wavefunction_layout();
+  std::vector<double> public_qsh;
+  std::vector<double> raw_qsh;
+  std::vector<double> free_energy;
+  std::vector<std::uint64_t> iterations;
+  CHECK(download(fixture.binding.state.raw_population.qsh,
+                 fixture.binding.state.raw_population.qsh_elements, public_qsh, nullptr));
+  CHECK(download(fixture.binding.workspace.staged_raw_population.qsh,
+                 fixture.binding.workspace.staged_raw_population.qsh_elements, raw_qsh, nullptr));
+  CHECK(download(fixture.binding.state.free_energy.free_energy,
+                 fixture.binding.state.free_energy.free_energy_elements, free_energy, nullptr));
+  CHECK(download(fixture.binding.state.scc.iterations, fixture.host.batch_size(), iterations,
+                 nullptr));
+  CUDA_CHECK(cudaStreamSynchronize(nullptr));
+  CHECK(compare_doubles("default-stream public qsh", public_qsh, fixture.host.wavefunction().qsh,
+                        layout.qsh.element_count, 3.0e-9));
+  CHECK(compare_doubles("default-stream raw qsh", raw_qsh, fixture.host.driver_workspace().raw_qsh,
+                        layout.qsh.element_count, 3.0e-9));
+  CHECK(compare_doubles("default-stream free energy", free_energy,
+                        fixture.host.driver_state().free_energies, fixture.host.batch_size(),
+                        3.0e-9));
+  CHECK(compare_exact_values("default-stream iterations", iterations,
+                             fixture.host.driver_state().iterations, fixture.host.batch_size()));
+  return 0;
+}
+
+int run_all() {
+  int status = test_composer_binding_and_repeat_launch();
+  if (status != 0) {
+    return status;
+  }
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    status = test_composer_one_step_cpu_parity(batch_size, false);
+    if (status != 0) {
+      return status;
+    }
+    status = test_composer_one_step_cpu_parity(batch_size, true);
+    if (status != 0) {
+      return status;
+    }
+    status = test_composer_changed_input_graph_replay(batch_size, false);
+    if (status != 0) {
+      return status;
+    }
+  }
+  status = test_composer_changed_input_graph_replay(8, true);
+  if (status != 0) {
+    return status;
+  }
+  status = test_composer_raw_publication_policy(false);
+  if (status != 0) {
+    return status;
+  }
+  status = test_composer_raw_publication_policy(true);
+  if (status != 0) {
+    return status;
+  }
+  status = test_composer_peer_numerical_failure_dag();
+  if (status != 0) {
+    return status;
+  }
+  status = test_composer_plan_provenance_failure_dag();
+  if (status != 0) {
+    return status;
+  }
+  status = test_composer_inactive_dormant_poisoning();
+  if (status != 0) {
+    return status;
+  }
+  status = test_composer_default_stream_parity();
+  if (status != 0) {
+    return status;
   }
   return 0;
 }
@@ -675,8 +1484,10 @@ int main() {
     (void)cudaGetLastError();
     return 0;
   }
-  if (!cuda_ok(count_status, "cudaGetDeviceCount")) {
+  if (count_status != cudaSuccess) {
+    std::fprintf(stderr, "cudaGetDeviceCount: %s\n", cudaGetErrorString(count_status));
     return 1;
   }
-  return test_composer_fixture_setup();
+  CUDA_CHECK(cudaSetDevice(0));
+  return run_all();
 }
