@@ -412,6 +412,69 @@ std::size_t expected_disabled_workspace_size(const Fixture& fixture) {
   return append_test_segment(cursor, 0u, kSccDriverWorkspaceAlignment);
 }
 
+/* One system's complete mixer history snapshot for byte-equality checks. */
+struct MixerSystemSnapshot {
+  std::vector<double> current_inputs;
+  std::vector<double> previous_inputs;
+  std::vector<double> previous_residuals;
+  std::vector<double> df_history;
+  std::vector<double> u_history;
+  std::vector<double> omega;
+  double residual_rms = 0.0;
+  double residual_maximum = 0.0;
+  std::uint64_t iterations = 0u;
+  std::uint64_t restart_counts = 0u;
+  gpuxtb_status_t system_status = GPUXTB_STATUS_SUCCESS;
+  std::uint8_t initialized = 0u;
+  std::uint8_t converged = 0u;
+};
+
+MixerSystemSnapshot snapshot_mixer_system(const Fixture& fixture, std::size_t system) {
+  const std::vector<std::int64_t>& offsets = fixture.mixer_plan.vector_offsets();
+  const std::size_t memory = static_cast<std::size_t>(fixture.mixer_plan.history_size());
+  const std::size_t dimension = static_cast<std::size_t>(offsets[system + 1u] - offsets[system]);
+  const std::size_t vector_offset = static_cast<std::size_t>(offsets[system]);
+  std::size_t history_offset = 0u;
+  for (std::size_t previous = 0u; previous < system; ++previous) {
+    history_offset += static_cast<std::size_t>(offsets[previous + 1u] - offsets[previous]);
+  }
+  history_offset *= memory;
+  MixerSystemSnapshot snapshot;
+  snapshot.current_inputs.assign(fixture.mixer_state.current_inputs + vector_offset,
+                                 fixture.mixer_state.current_inputs + vector_offset + dimension);
+  snapshot.previous_inputs.assign(fixture.mixer_state.previous_inputs + vector_offset,
+                                  fixture.mixer_state.previous_inputs + vector_offset + dimension);
+  snapshot.previous_residuals.assign(
+      fixture.mixer_state.previous_residuals + vector_offset,
+      fixture.mixer_state.previous_residuals + vector_offset + dimension);
+  snapshot.df_history.assign(fixture.mixer_state.df_history + history_offset,
+                             fixture.mixer_state.df_history + history_offset + dimension * memory);
+  snapshot.u_history.assign(fixture.mixer_state.u_history + history_offset,
+                            fixture.mixer_state.u_history + history_offset + dimension * memory);
+  snapshot.omega.assign(fixture.mixer_state.omega + system * memory,
+                        fixture.mixer_state.omega + (system + 1u) * memory);
+  snapshot.residual_rms = fixture.mixer_state.residual_rms[system];
+  snapshot.residual_maximum = fixture.mixer_state.residual_maximum[system];
+  snapshot.iterations = fixture.mixer_state.iterations[system];
+  snapshot.restart_counts = fixture.mixer_state.restart_counts[system];
+  snapshot.system_status = fixture.mixer_state.system_statuses[system];
+  snapshot.initialized = fixture.mixer_state.initialized[system];
+  snapshot.converged = fixture.mixer_state.converged[system];
+  return snapshot;
+}
+
+bool mixer_snapshots_equal(const MixerSystemSnapshot& first, const MixerSystemSnapshot& second) {
+  return first.current_inputs == second.current_inputs &&
+         first.previous_inputs == second.previous_inputs &&
+         first.previous_residuals == second.previous_residuals &&
+         first.df_history == second.df_history && first.u_history == second.u_history &&
+         first.omega == second.omega && first.residual_rms == second.residual_rms &&
+         first.residual_maximum == second.residual_maximum &&
+         first.iterations == second.iterations && first.restart_counts == second.restart_counts &&
+         first.system_status == second.system_status && first.initialized == second.initialized &&
+         first.converged == second.converged;
+}
+
 bool make_component_plans(std::vector<std::int32_t> atomic_numbers, double molecular_charge,
                           std::int32_t unpaired_electrons, ComponentPlans& plans,
                           std::string& error) {
@@ -1139,6 +1202,100 @@ int test_mixer_failure_preserves_public_history_and_counts_attempt() {
   CHECK(fixture.mixer_state.previous_inputs[0] == previous_input_before);
   CHECK(fixture.wavefunction.qsh[0] == qsh_before);
   CHECK(std::isnan(fixture.driver_state.free_energies[0]));
+  return 0;
+}
+
+int test_ragged_mixer_failure_isolated_from_peer_commit() {
+  Fixture fixture;
+  std::string error;
+  CHECK(make_fixture(2, fixture, error));
+  /* A converged-peer reference: system 0 converges on the first attempt and
+   * then stays inactive, so it must never be copied by a later transaction
+   * that only touches the restarted system 1. */
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.converged[0] == 1u);
+  CHECK(fixture.driver_state.converged[1] == 1u);
+
+  CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 1, fixture.wavefunction,
+                                      fixture.mixer_state, fixture.driver_state,
+                                      error) == GPUXTB_STATUS_SUCCESS);
+  const MixerSystemSnapshot peer_before = snapshot_mixer_system(fixture, 0u);
+  const double peer_qsh_before = fixture.wavefunction.qsh[0];
+  CHECK(fixture.driver_state.iterations[0] == 1u);
+  const std::uint64_t peer_driver_iterations_before = fixture.driver_state.iterations[0];
+
+  /* Force system 1's mixer transition to fail while system 0 remains a
+   * converged, inactive peer. */
+  fixture.mixer_state.iterations[1] = std::numeric_limits<std::uint64_t>::max();
+  const MixerSystemSnapshot failed_before = snapshot_mixer_system(fixture, 1u);
+  CHECK(iterate_scc_driver_batch_cpu(
+            fixture.driver_plan, fixture.geometry, backend(), fixture.overlap_cache,
+            fixture.wavefunction, fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
+            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.converged[0] == 1u);
+  CHECK(fixture.driver_state.system_statuses[1] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.driver_state.iterations[1] == 1u);
+  CHECK(fixture.driver_state.iterations[0] == peer_driver_iterations_before);
+  /* The failed system's own public history is byte-identical except for its
+   * published status, and the inactive peer's history is byte-identical
+   * including its status. */
+  const MixerSystemSnapshot failed_after = snapshot_mixer_system(fixture, 1u);
+  CHECK(failed_after.iterations == failed_before.iterations);
+  CHECK(failed_after.restart_counts == failed_before.restart_counts);
+  CHECK(failed_after.current_inputs == failed_before.current_inputs);
+  CHECK(failed_after.previous_inputs == failed_before.previous_inputs);
+  CHECK(failed_after.previous_residuals == failed_before.previous_residuals);
+  CHECK(failed_after.df_history == failed_before.df_history);
+  CHECK(failed_after.u_history == failed_before.u_history);
+  CHECK(failed_after.omega == failed_before.omega);
+  CHECK(failed_after.residual_rms == failed_before.residual_rms);
+  CHECK(failed_after.residual_maximum == failed_before.residual_maximum);
+  CHECK(failed_after.initialized == failed_before.initialized);
+  CHECK(failed_after.converged == failed_before.converged);
+  CHECK(failed_after.system_status == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(mixer_snapshots_equal(peer_before, snapshot_mixer_system(fixture, 0u)));
+  CHECK(fixture.wavefunction.qsh[0] == peer_qsh_before);
+
+  /* Restart the failed system from its unchanged public state and let the
+   * active-only path advance it while the converged peer is skipped. */
+  CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 1, fixture.wavefunction,
+                                      fixture.mixer_state, fixture.driver_state,
+                                      error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.iterations[1] == 1u);
+  CHECK(fixture.driver_state.converged[1] == 1u);
+  CHECK(mixer_snapshots_equal(peer_before, snapshot_mixer_system(fixture, 0u)));
+  return 0;
+}
+
+int test_inactive_peer_history_untouched_by_active_only_commit() {
+  Fixture fixture;
+  std::string error;
+  CHECK(make_fixture(3, fixture, error, 2u));
+  for (int iteration = 0; iteration < 2; ++iteration) {
+    CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                       fixture.overlap_cache, fixture.wavefunction,
+                                       fixture.mixer_state, fixture.driver_state,
+                                       fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+  }
+  const MixerSystemSnapshot first = snapshot_mixer_system(fixture, 0u);
+  const MixerSystemSnapshot second = snapshot_mixer_system(fixture, 1u);
+  /* At most one more driver iteration can run before every member converges;
+   * after the first pass most systems are already converged, so repeated
+   * calls must leave their published history completely untouched. */
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(mixer_snapshots_equal(first, snapshot_mixer_system(fixture, 0u)));
+  CHECK(mixer_snapshots_equal(second, snapshot_mixer_system(fixture, 1u)));
   return 0;
 }
 
@@ -1901,6 +2058,13 @@ int main() {
     return status;
   }
   if (const int status = test_mixer_failure_preserves_public_history_and_counts_attempt();
+      status != 0) {
+    return status;
+  }
+  if (const int status = test_ragged_mixer_failure_isolated_from_peer_commit(); status != 0) {
+    return status;
+  }
+  if (const int status = test_inactive_peer_history_untouched_by_active_only_commit();
       status != 0) {
     return status;
   }

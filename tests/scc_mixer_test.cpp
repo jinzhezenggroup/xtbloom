@@ -646,6 +646,172 @@ int test_initialization_atomicity_validation_and_zero_allocation() {
   return 0;
 }
 
+int test_system_transaction_prepare_commit_and_peer_isolation() {
+  Fixture fixture;
+  std::string error;
+  CHECK(make_fixture({0, 1, 3}, {1, 8, 1}, {1.0, 0.0}, {0, 1}, {1, 2}, 4, fixture, error));
+  set_initial_vectors(fixture);
+  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(
+            fixture.plan, fixture.wavefunction, fixture.state, error) == GPUXTB_STATUS_SUCCESS);
+  const std::size_t systems = static_cast<std::size_t>(fixture.plan.batch_size());
+  const std::size_t memory = static_cast<std::size_t>(fixture.plan.history_size());
+  for (std::size_t iteration = 0u; iteration < 6u; ++iteration) {
+    for (std::size_t system = 0u; system < systems; ++system) {
+      const std::size_t dimension = static_cast<std::size_t>(
+          fixture.plan.vector_offsets()[system + 1u] - fixture.plan.vector_offsets()[system]);
+      install_raw_output(fixture, system, residual_for(system, iteration, dimension));
+    }
+    CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, fixture.wavefunction,
+                                                          fixture.state, fixture.scratch,
+                                                          error) == GPUXTB_STATUS_SUCCESS);
+  }
+  const std::vector<std::byte> public_before(
+      static_cast<const std::byte*>(fixture.state_storage->data()),
+      static_cast<const std::byte*>(fixture.state_storage->data()) +
+          fixture.plan.state_size_bytes());
+
+  AlignedBuffer staged_storage(fixture.plan.state_size_bytes());
+  SccMixerState staged;
+  CHECK(gpuxtb::detail::gfn2::bind_scc_mixer_state(fixture.plan, staged_storage.data(),
+                                                   staged_storage.size(), staged,
+                                                   error) == GPUXTB_STATUS_SUCCESS);
+  std::memset(staged_storage.data(), 0x5a, staged_storage.size());
+
+  /* Prepare only system 0: its records must appear in the staged binding
+   * while every other system's history remains the untouched sentinel. */
+  const std::size_t zero_dimension =
+      static_cast<std::size_t>(fixture.plan.vector_offsets()[1] - fixture.plan.vector_offsets()[0]);
+  const std::size_t one_dimension =
+      static_cast<std::size_t>(fixture.plan.vector_offsets()[2] - fixture.plan.vector_offsets()[1]);
+  const std::size_t one_vector_offset = static_cast<std::size_t>(fixture.plan.vector_offsets()[1]);
+  const std::size_t zero_history = zero_dimension * memory;
+  const std::size_t one_history = one_dimension * memory;
+  const std::uint64_t sentinel_u64 = 0x5a5a5a5a5a5a5a5aULL;
+  double sentinel_double = 0.0;
+  std::memcpy(&sentinel_double, &sentinel_u64, sizeof(sentinel_double));
+
+  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, 0, fixture.state, staged, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(equal_double_arrays(staged.current_inputs, fixture.state.current_inputs, zero_dimension));
+  CHECK(equal_double_arrays(staged.previous_inputs, fixture.state.previous_inputs, zero_dimension));
+  CHECK(equal_double_arrays(staged.previous_residuals, fixture.state.previous_residuals,
+                            zero_dimension));
+  CHECK(equal_double_arrays(staged.df_history, fixture.state.df_history, zero_history));
+  CHECK(equal_double_arrays(staged.u_history, fixture.state.u_history, zero_history));
+  CHECK(equal_double_arrays(staged.omega, fixture.state.omega, memory));
+  CHECK(staged.residual_rms[0] == fixture.state.residual_rms[0]);
+  CHECK(staged.residual_maximum[0] == fixture.state.residual_maximum[0]);
+  CHECK(staged.iterations[0] == fixture.state.iterations[0]);
+  CHECK(staged.restart_counts[0] == fixture.state.restart_counts[0]);
+  CHECK(staged.system_statuses[0] == fixture.state.system_statuses[0]);
+  CHECK(staged.initialized[0] == fixture.state.initialized[0]);
+  CHECK(staged.converged[0] == fixture.state.converged[0]);
+  CHECK(std::all_of(staged.current_inputs + one_vector_offset,
+                    staged.current_inputs + one_vector_offset + one_dimension,
+                    [&](double value) { return value == sentinel_double; }));
+  CHECK(std::all_of(staged.df_history + zero_history,
+                    staged.df_history + zero_history + one_history,
+                    [&](double value) { return value == sentinel_double; }));
+  CHECK(std::all_of(staged.omega + memory, staged.omega + 2u * memory,
+                    [&](double value) { return value == sentinel_double; }));
+  CHECK(staged.residual_rms[1] == sentinel_double);
+  CHECK(staged.iterations[1] == sentinel_u64);
+  CHECK(staged.converged[1] == 0x5au);
+
+  /* Commit must be the exact inverse for the prepared system and a no-op for
+   * every peer, so a prepare/commit round trip is byte-identical. */
+  CHECK(gpuxtb::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
+            fixture.plan, 0, staged, fixture.state, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(std::memcmp(public_before.data(), fixture.state_storage->data(),
+                    fixture.plan.state_size_bytes()) == 0);
+
+  /* A failed mix inside a transaction leaves the public binding untouched:
+   * the caller discards the staged copy instead of committing it. */
+  std::vector<double> bad_raw(one_dimension);
+  for (std::size_t component = 0u; component < one_dimension; ++component) {
+    bad_raw[component] = component == 0u ? std::numeric_limits<double>::quiet_NaN()
+                                         : 0.05 * static_cast<double>(component + 1u);
+  }
+  set_system_vector(fixture, 1u, bad_raw);
+  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, 1, fixture.state, staged, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(fixture.plan, 1, fixture.wavefunction,
+                                                         staged, fixture.scratch,
+                                                         error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(staged.system_statuses[1] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.state.system_statuses[1] == GPUXTB_STATUS_SUCCESS);
+  CHECK(std::memcmp(public_before.data(), fixture.state_storage->data(),
+                    fixture.plan.state_size_bytes()) == 0);
+
+  /* The same staged transaction succeeds once the raw output is finite, and
+   * committing it advances only system 1. */
+  install_raw_output(fixture, 1u, residual_for(1u, 6u, one_dimension));
+  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, 1, fixture.state, staged, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(fixture.plan, 1, fixture.wavefunction,
+                                                         staged, fixture.scratch,
+                                                         error) == GPUXTB_STATUS_SUCCESS);
+  const std::uint64_t one_iteration_before = fixture.state.iterations[1];
+  CHECK(gpuxtb::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
+            fixture.plan, 1, staged, fixture.state, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.state.iterations[1] == one_iteration_before + 1u);
+  CHECK(equal_double_arrays(fixture.state.current_inputs + one_vector_offset,
+                            staged.current_inputs + one_vector_offset, one_dimension));
+  CHECK(std::memcmp(public_before.data(), fixture.state_storage->data(),
+                    zero_dimension * sizeof(double)) == 0);
+
+  return 0;
+}
+
+int test_system_transaction_validation() {
+  Fixture fixture;
+  std::string error;
+  CHECK(make_fixture({0, 1, 3}, {1, 8, 1}, {1.0, 0.0}, {0, 1}, {1, 2}, 3, fixture, error));
+  set_initial_vectors(fixture);
+  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(
+            fixture.plan, fixture.wavefunction, fixture.state, error) == GPUXTB_STATUS_SUCCESS);
+  AlignedBuffer staged_storage(fixture.plan.state_size_bytes());
+  SccMixerState staged;
+  CHECK(gpuxtb::detail::gfn2::bind_scc_mixer_state(fixture.plan, staged_storage.data(),
+                                                   staged_storage.size(), staged,
+                                                   error) == GPUXTB_STATUS_SUCCESS);
+
+  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, 2, fixture.state, staged, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, -1, fixture.state, staged, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gpuxtb::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
+            fixture.plan, 2, staged, fixture.state, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  /* Source and staged must be disjoint bindings. */
+  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, 0, fixture.state, fixture.state, error) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gpuxtb::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
+            fixture.plan, 0, fixture.state, fixture.state, error) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+
+  /* A freshly bound state is uninitialized, so no transaction may stage it. */
+  AlignedBuffer fresh_storage(fixture.plan.state_size_bytes());
+  SccMixerState fresh;
+  CHECK(gpuxtb::detail::gfn2::bind_scc_mixer_state(fixture.plan, fresh_storage.data(),
+                                                   fresh_storage.size(), fresh,
+                                                   error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, 0, fresh, staged, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+
+  /* Validation failure must publish nothing: a failed prepare leaves the
+   * staged buffer exactly as the caller left it. */
+  std::memset(staged_storage.data(), 0x3c, staged_storage.size());
+  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, 0, fresh, staged, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  const std::vector<std::byte> staged_after(
+      static_cast<const std::byte*>(staged_storage.data()),
+      static_cast<const std::byte*>(staged_storage.data()) + staged_storage.size());
+  CHECK(std::all_of(staged_after.begin(), staged_after.end(),
+                    [](std::byte value) { return value == std::byte{0x3c}; }));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -660,6 +826,12 @@ int main() {
   }
   if (const int status = test_initialization_atomicity_validation_and_zero_allocation();
       status != 0) {
+    return status;
+  }
+  if (const int status = test_system_transaction_prepare_commit_and_peer_isolation(); status != 0) {
+    return status;
+  }
+  if (const int status = test_system_transaction_validation(); status != 0) {
     return status;
   }
   return 0;

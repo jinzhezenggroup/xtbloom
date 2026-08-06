@@ -181,6 +181,38 @@ gpuxtb_status_t mix_scc_broyden_batch_cpu(const SccMixerPlan& plan,
                                           const SccMixerState& state,
                                           const SccMixerWorkspace& workspace, std::string& error);
 
+/*
+ * Stage exactly one system's mixer history and records into a separate
+ * full-layout binding, leaving every other system untouched. Both states must
+ * be exact bindings of the same plan and their storages must not overlap.
+ *
+ * The caller owns the transaction: it may run mix_scc_broyden_system_cpu (or
+ * restart-style edits) against the staged binding and then either publish it
+ * with commit_scc_mixer_system_transaction_cpu or discard it. Discarding a
+ * staged system makes the public history byte-identical to before the prepare,
+ * so higher-level drivers can isolate one failing system without copying the
+ * full batch history. Concurrent workers must never prepare the same system
+ * into the same staged binding.
+ */
+gpuxtb_status_t prepare_scc_mixer_system_transaction_cpu(const SccMixerPlan& plan,
+                                                         std::int64_t system,
+                                                         const SccMixerState& source,
+                                                         const SccMixerState& staged,
+                                                         std::string& error);
+
+/*
+ * Publish one system's staged mixer history and records back to its public
+ * binding, leaving every other system untouched. This is the mirror of
+ * prepare_scc_mixer_system_transaction_cpu; committing a system that was never
+ * prepared is allowed and copies whatever the staged binding currently holds.
+ * Neither function allocates on its successful path.
+ */
+gpuxtb_status_t commit_scc_mixer_system_transaction_cpu(const SccMixerPlan& plan,
+                                                        std::int64_t system,
+                                                        const SccMixerState& staged,
+                                                        const SccMixerState& destination,
+                                                        std::string& error);
+
 }  // namespace gpuxtb::detail::gfn2
 
 #endif  // GPUXTB_MODEL_GFN2_SCC_MIXER_HPP

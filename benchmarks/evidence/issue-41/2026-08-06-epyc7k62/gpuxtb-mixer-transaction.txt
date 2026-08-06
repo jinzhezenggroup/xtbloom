@@ -1,0 +1,7 @@
+mixer_transaction_benchmark
+batch=64 atoms_per_system=6 history=64 state_size_bytes=4461952 vector_bytes=33792 history_bytes=2162688 per_system_bytes=69718
+row,active_systems,old_copy_us,copy_transaction_us,mix_transaction_us,old_copy_bytes,new_transaction_bytes
+8,8,242.870,32.912,2436.134,8923904,557744
+16,16,240.766,65.454,4878.600,8923904,1115488
+32,32,240.255,130.387,9759.674,8923904,2230976
+64,64,245.956,282.956,19552.653,8923904,4461952

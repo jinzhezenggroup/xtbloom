@@ -2196,6 +2196,13 @@ if(GPUXTB_BUILD_TESTS)
   target_compile_features(gpuxtb_scc_driver_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.scc_driver COMMAND gpuxtb_scc_driver_test)
 
+  # Focused #41 benchmark: per-iteration mixer history transactions must scale
+  # with active-system history rather than the total batch history. Not a CTest
+  # gate; run standalone to produce issue-scoped evidence.
+  add_executable(gpuxtb_scc_mixer_transaction_benchmark benchmarks/scc_mixer_transaction.cpp)
+  target_link_libraries(gpuxtb_scc_mixer_transaction_benchmark PRIVATE gpuxtb_gfn2_cpu)
+  target_compile_features(gpuxtb_scc_mixer_transaction_benchmark PRIVATE cxx_std_17)
+
   if(GPUXTB_CPU_LINALG_RUNTIME)
     add_executable(gpuxtb_eigensolver_test tests/eigensolver_test.cpp)
     target_link_libraries(gpuxtb_eigensolver_test PRIVATE
