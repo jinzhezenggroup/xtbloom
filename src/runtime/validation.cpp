@@ -355,9 +355,6 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
     if (options->reserved_v2 != 0u) {
       return invalid("compute options reserved_v2 field must be zero");
     }
-    if (backend_value == GPUXTB_BACKEND_CPU && start_mode == GPUXTB_SCC_START_WARM) {
-      return unsupported("the CPU backend does not support strict WARM SCC starts");
-    }
   }
   if (result->reserved != 0) {
     return invalid("batch result reserved field must be zero");

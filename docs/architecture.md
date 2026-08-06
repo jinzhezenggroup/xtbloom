@@ -89,13 +89,19 @@ not per-system SCC failures.
 
 The ABI-v2 `scc_start_mode` suffix controls the electronic initial state for one call. `FRESH`
 restores the immutable setup state and is also the meaning of every ABI-v1 or short options
-prefix. CUDA `WARM` strictly consumes the checkpoint from the latest fully converged compatible
-batch call, including across one successful changed-coordinate refresh. It never falls back to a
-fresh solve: a missing checkpoint or any topology, charge, spin, temperature, tolerance,
-iteration-limit, or requested-property change is a call-level invalid argument and leaves caller
-outputs unchanged. CPU contexts report `NOT_SUPPORTED` for `WARM`. High-level Python calculators
-intentionally select `FRESH`; persistent warm policy is exposed only by the low-level C/ctypes
-descriptor for now.
+prefix. CPU and CUDA both support strict `WARM`: it consumes the checkpoint from the latest fully
+converged compatible batch call on the same context and never falls back to a fresh solve. A
+compatible identity covers the complete topology and compute policy (requested-property flags;
+molecular charge, spin, and unpaired electrons; point-charge and periodic structure; SCC tolerances;
+iteration limit; and electronic temperature). Geometry is not part of the identity, so a WARM call
+reuses the previous converged electronic state as the initial SCC guess for the new coordinates and
+reconverges;
+CUDA additionally keys its checkpoint to a geometry epoch and keeps modifying-Broyden history only
+for a same-epoch reuse, while the CPU always restarts a fresh mixing window from the converged
+state. A missing checkpoint or any identity change is a call-level invalid argument and leaves
+caller outputs unchanged. CPU and CUDA use the same compute-options identity, including
+requested-property/output flags. High-level Python calculators intentionally select `FRESH`;
+persistent warm policy is exposed only by the low-level C/ctypes descriptor for now.
 
 ## Layering
 
