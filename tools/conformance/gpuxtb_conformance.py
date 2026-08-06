@@ -421,7 +421,7 @@ def load_qmmm_input(
         for number in source_numbers:
             try:
                 expected_gammas.append(float(hardness_by_atomic_number[str(number)]))
-            except (KeyError, TypeError, ValueError) as exc:
+            except (KeyError, TypeError, ValueError) as exc:  # noqa: PERF203 - retain Z context
                 raise ConformanceError(
                     f"QMMM input {path} has no pinned GFN2 hardness for Z={number}"
                 ) from exc
