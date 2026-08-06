@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <utility>
@@ -1602,9 +1604,462 @@ bool test_graph_capture() {
   return true;
 }
 
+/* Benchmark-facing variant of make_batch() with caller-selected AO
+ * dimensions. Homogeneous benchmarks use one n=32 bucket; heterogeneous
+ * benchmarks interleave n=16 and n=40 so the two buckets are separable in
+ * the compaction telemetry while remaining well conditioned for batched
+ * symmetric eigensolves. Everything else (offsets, values, bucket order)
+ * follows the validated make_batch() fabrication exactly. */
+TestBatch make_benchmark_batch(std::int64_t batch_size, bool heterogeneous) {
+  TestBatch data;
+  data.batch_size = batch_size;
+  data.orbital_offsets.assign(static_cast<std::size_t>(batch_size + 1), 0);
+  data.matrix_offsets.assign(static_cast<std::size_t>(batch_size + 1), 0);
+  data.active.assign(static_cast<std::size_t>(batch_size), 1u);
+  std::vector<std::int32_t> dimensions(static_cast<std::size_t>(batch_size), 32);
+  if (heterogeneous) {
+    for (std::int64_t system = 0; system < batch_size; ++system) {
+      dimensions[static_cast<std::size_t>(system)] = system % 2 == 0 ? 16 : 40;
+    }
+  }
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    const std::int64_t n = dimensions[static_cast<std::size_t>(system)];
+    data.total_orbitals += n;
+    data.total_matrices += n * n;
+    data.orbital_offsets[static_cast<std::size_t>(system + 1)] = data.total_orbitals;
+    data.matrix_offsets[static_cast<std::size_t>(system + 1)] = data.total_matrices;
+  }
+  data.overlap.resize(static_cast<std::size_t>(data.total_matrices), 0.0);
+  data.hamiltonian.resize(static_cast<std::size_t>(data.total_matrices), 0.0);
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    const std::int64_t n = dimensions[static_cast<std::size_t>(system)];
+    const std::int64_t begin = data.matrix_offsets[static_cast<std::size_t>(system)];
+    for (std::int64_t row = 0; row < n; ++row) {
+      for (std::int64_t column = 0; column < n; ++column) {
+        const double distance = static_cast<double>(std::abs(row - column) + 1);
+        const double s = row == column
+                             ? 1.05 + 0.05 * static_cast<double>(row + 1) / static_cast<double>(n)
+                             : 0.01 / distance;
+        const double h = row == column ? -0.8 + 0.035 * static_cast<double>(row) +
+                                             0.001 * static_cast<double>(system)
+                                       : 0.02 / distance;
+        data.overlap[static_cast<std::size_t>(begin + row * n + column)] = s;
+        data.hamiltonian[static_cast<std::size_t>(begin + row * n + column)] = h;
+      }
+    }
+  }
+  std::int64_t system_offset = 0;
+  std::int64_t matrix_offset = 0;
+  std::int64_t orbital_offset = 0;
+  std::vector<std::int32_t> bucket_dimensions = dimensions;
+  std::sort(bucket_dimensions.begin(), bucket_dimensions.end());
+  bucket_dimensions.erase(std::unique(bucket_dimensions.begin(), bucket_dimensions.end()),
+                          bucket_dimensions.end());
+  for (const std::int32_t n : bucket_dimensions) {
+    std::vector<std::int32_t> systems;
+    for (std::int64_t system = 0; system < batch_size; ++system) {
+      if (dimensions[static_cast<std::size_t>(system)] == n) {
+        systems.push_back(static_cast<std::int32_t>(system));
+      }
+    }
+    if (systems.empty()) {
+      continue;
+    }
+    data.buckets.push_back({n, static_cast<std::int32_t>(systems.size()), system_offset,
+                            matrix_offset, orbital_offset});
+    data.bucket_systems.insert(data.bucket_systems.end(), systems.begin(), systems.end());
+    system_offset += static_cast<std::int64_t>(systems.size());
+    matrix_offset += static_cast<std::int64_t>(n) * n * static_cast<std::int64_t>(systems.size());
+    orbital_offset += static_cast<std::int64_t>(n) * static_cast<std::int64_t>(systems.size());
+  }
+  return data;
+}
+
+struct LatencyStats {
+  double mean_us = 0.0;
+  double min_us = 0.0;
+  double p50_us = 0.0;
+};
+
+/* Repeated enqueue/record/synchronize timing for one launch path. `prepare`
+ * is enqueued on the stream before the timed interval so error resets and
+ * other setup never count toward the measured latency. */
+template <typename Prepare, typename Enqueue>
+LatencyStats measure_launch_latency(DeviceFixture& fixture, int warmup, int samples,
+                                    Prepare&& prepare, Enqueue&& enqueue) {
+  std::vector<float> samples_us;
+  cudaEvent_t start = nullptr;
+  cudaEvent_t stop = nullptr;
+  (void)cudaEventCreate(&start);
+  (void)cudaEventCreate(&stop);
+  for (int sample = -warmup; sample < samples; ++sample) {
+    prepare();
+    (void)cudaEventRecord(start, fixture.providers.stream);
+    enqueue();
+    (void)cudaEventRecord(stop, fixture.providers.stream);
+    (void)cudaEventSynchronize(stop);
+    float elapsed_ms = 0.0F;
+    (void)cudaEventElapsedTime(&elapsed_ms, start, stop);
+    if (sample >= 0) {
+      samples_us.push_back(elapsed_ms * 1000.0F);
+    }
+  }
+  (void)cudaEventDestroy(stop);
+  (void)cudaEventDestroy(start);
+  LatencyStats stats;
+  if (samples_us.empty()) {
+    return stats;
+  }
+  std::sort(samples_us.begin(), samples_us.end());
+  double total = 0.0;
+  for (const float value : samples_us) {
+    total += value;
+    stats.min_us = stats.min_us == 0.0 ? value : std::min(stats.min_us, static_cast<double>(value));
+  }
+  stats.mean_us = total / static_cast<double>(samples_us.size());
+  stats.p50_us = samples_us[samples_us.size() / 2u];
+  return stats;
+}
+
+int run_compaction_benchmark() {
+  constexpr int kWarmup = 5;
+  constexpr int kSamples = 50;
+  std::puts("# gpuxtb CUDA SCC active-set eigensolver compaction benchmark");
+  std::puts("# workload = homogeneous (all n=32) or heterogeneous (n=16/n=40)");
+  std::puts("# one JSON row per (batch, workload, canonical active count) tier");
+  std::puts("# tier_fraction = active_total / batch_size; bucket activity reports");
+  std::puts("# active = submitted_eigensolver = submitted_backtransform = completed");
+  std::puts("# whenever every selected peer succeeds (exact-capacity submission).");
+  std::puts("{\"benchmark\":\"compaction\",\"rows\":[");
+  bool first_row = true;
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    for (const bool heterogeneous : {false, true}) {
+      DeviceFixture fixture;
+      if (!fixture.create(make_benchmark_batch(batch_size, heterogeneous)) ||
+          !factor(fixture, 31u)) {
+        return 1;
+      }
+      Gfn2EigensolverCompactedSolveGraph graph;
+      const auto build = build_gfn2_compacted_eigensolver_graph_cuda(
+          fixture.batch, fixture.host.buckets.data(),
+          static_cast<std::int64_t>(fixture.host.buckets.size()), fixture.cache, 31u,
+          fixture.hamiltonian.get(), Gfn2EigensolverOptions{}, fixture.providers.solver,
+          fixture.providers.parameters, fixture.providers.blas, fixture.workspace, fixture.results,
+          fixture.system_errors.get(), fixture.device_error.get(), graph);
+      if (!build.success() || !graph.valid()) {
+        std::cerr << "compacted graph build failed: status="
+                  << static_cast<unsigned int>(build.status)
+                  << " cuda=" << cudaGetErrorString(build.cuda_status) << '\n';
+        return 1;
+      }
+      const std::vector<double> clean_hamiltonian = fixture.host.hamiltonian;
+      const std::int64_t bucket_count = static_cast<std::int64_t>(fixture.host.buckets.size());
+
+      /* Canonical deterministic active-count tier sweep. Sign extended so the
+       * largest tier is always the full batch and the final tier is empty. */
+      std::vector<std::int64_t> tiers;
+      for (const std::int64_t fraction : {64, 48, 32, 24, 16, 8, 4, 1}) {
+        const std::int64_t active =
+            std::min<std::int64_t>(batch_size, (batch_size * fraction + 31) / 32);
+        if (tiers.empty() || tiers.back() != active) {
+          tiers.push_back(active);
+        }
+        if (active == 0) {
+          break;
+        }
+      }
+      tiers.push_back(0);
+      for (const std::int64_t active_total : tiers) {
+        for (std::int64_t system = 0; system < batch_size; ++system) {
+          fixture.host.active[static_cast<std::size_t>(system)] = system < active_total ? 1u : 0u;
+        }
+        fixture.host.hamiltonian = clean_hamiltonian;
+        for (std::int64_t system = 0; system < batch_size; ++system) {
+          if (fixture.host.active[static_cast<std::size_t>(system)] == 0u) {
+            const std::int64_t begin =
+                fixture.host.matrix_offsets[static_cast<std::size_t>(system)];
+            const std::int64_t end =
+                fixture.host.matrix_offsets[static_cast<std::size_t>(system + 1)];
+            std::fill(fixture.host.hamiltonian.begin() + begin,
+                      fixture.host.hamiltonian.begin() + end,
+                      std::numeric_limits<double>::quiet_NaN());
+          }
+        }
+        if (!fixture.active.upload(fixture.host.active) ||
+            !fixture.hamiltonian.upload(fixture.host.hamiltonian)) {
+          return 1;
+        }
+
+        /* One correctness pass for each path, then repeated timed launches.
+         * The first pass proves the compacted result equals the uncompacted
+         * result for every active peer in this exact tier. */
+        const auto prepare_errors = [&]() {
+          (void)reset_gfn2_eigensolver_device_errors_cuda(
+              fixture.host.batch_size, fixture.system_errors.get(), fixture.device_error.get(),
+              fixture.providers.stream);
+        };
+        if (!fixture.fill_outputs(kSentinel)) {
+          return 1;
+        }
+        prepare_errors();
+        if (!launch_compacted(fixture, graph) || !validate_compacted_launch(fixture)) {
+          std::cerr << "compacted correctness failed at active=" << active_total << '\n';
+          return 1;
+        }
+        std::vector<double> compacted_eigenvalues;
+        std::vector<double> compacted_coefficients;
+        if (!fixture.eigenvalues.download(compacted_eigenvalues) ||
+            !fixture.coefficients.download(compacted_coefficients) ||
+            !fixture.fill_outputs(kSentinel)) {
+          return 1;
+        }
+        prepare_errors();
+        if (!solve(fixture, 31u, false)) {
+          std::cerr << "uncompacted solve failed at active=" << active_total << '\n';
+          return 1;
+        }
+        std::vector<double> uncompacted_eigenvalues;
+        std::vector<double> uncompacted_coefficients;
+        if (!fixture.eigenvalues.download(uncompacted_eigenvalues) ||
+            !fixture.coefficients.download(uncompacted_coefficients)) {
+          return 1;
+        }
+        for (std::int64_t system = 0; system < batch_size; ++system) {
+          if (fixture.host.active[static_cast<std::size_t>(system)] == 0u) {
+            continue;
+          }
+          const std::int64_t orbital_begin =
+              fixture.host.orbital_offsets[static_cast<std::size_t>(system)];
+          const std::int64_t orbital_end =
+              fixture.host.orbital_offsets[static_cast<std::size_t>(system + 1)];
+          const std::int64_t matrix_begin =
+              fixture.host.matrix_offsets[static_cast<std::size_t>(system)];
+          const std::int64_t matrix_end =
+              fixture.host.matrix_offsets[static_cast<std::size_t>(system + 1)];
+          for (std::int64_t index = orbital_begin; index < orbital_end; ++index) {
+            if (!near(compacted_eigenvalues[static_cast<std::size_t>(index)],
+                      uncompacted_eigenvalues[static_cast<std::size_t>(index)], 1.0e-12)) {
+              std::cerr << "tier active=" << active_total << " system=" << system
+                        << " eigen mismatch\n";
+              return 1;
+            }
+          }
+          for (std::int64_t index = matrix_begin; index < matrix_end; ++index) {
+            if (!near(compacted_coefficients[static_cast<std::size_t>(index)],
+                      uncompacted_coefficients[static_cast<std::size_t>(index)], 1.0e-10)) {
+              std::cerr << "tier active=" << active_total << " system=" << system
+                        << " coefficient mismatch\n";
+              return 1;
+            }
+          }
+          if (!validate_system(fixture.host, system, compacted_eigenvalues,
+                               compacted_coefficients)) {
+            return 1;
+          }
+        }
+
+        /* Timed steady-state launches for this tier. */
+        const LatencyStats compacted =
+            measure_launch_latency(fixture, kWarmup, kSamples, prepare_errors,
+                                   [&]() { (void)graph.launch(fixture.providers.stream); });
+        const LatencyStats uncompacted =
+            measure_launch_latency(fixture, kWarmup, kSamples, prepare_errors, [&]() {
+              (void)solve_gfn2_eigensystems_cuda(
+                  fixture.batch, fixture.host.buckets.data(), bucket_count, fixture.cache, 31u,
+                  fixture.hamiltonian.get(), Gfn2EigensolverOptions{}, fixture.providers.solver,
+                  fixture.providers.parameters, fixture.providers.blas, fixture.workspace,
+                  fixture.results, fixture.system_errors.get(), fixture.device_error.get(),
+                  fixture.providers.stream);
+            });
+
+        std::vector<Gfn2EigensolverBucketActivity> activity;
+        if (!fixture.bucket_activity.download(activity)) {
+          return 1;
+        }
+        if (!first_row) {
+          std::puts(",");
+        }
+        first_row = false;
+        std::printf(
+            "{\"batch\":%lld,\"workload\":\"%s\",\"active_total\":%lld,"
+            "\"tier_fraction\":%.6f,\"bucket_count\":%lld",
+            static_cast<long long>(batch_size), heterogeneous ? "heterogeneous" : "homogeneous",
+            static_cast<long long>(active_total),
+            static_cast<double>(active_total) / static_cast<double>(batch_size),
+            static_cast<long long>(bucket_count));
+        for (std::size_t bucket_index = 0; bucket_index < activity.size(); ++bucket_index) {
+          const auto& observed = activity[bucket_index];
+          std::printf(
+              ",\"b%zu\":{\"n\":%d,\"capacity\":%d,\"active\":%u,\"submitted_eig\":%u,"
+              "\"submitted_back\":%u,\"completed\":%u}",
+              bucket_index, fixture.host.buckets[bucket_index].orbital_count,
+              fixture.host.buckets[bucket_index].system_count, observed.active_count,
+              observed.submitted_eigensolver_count, observed.submitted_backtransform_count,
+              observed.completed_count);
+        }
+        std::printf(
+            ",\"compacted_us\":{\"mean\":%.3f,\"min\":%.3f,\"p50\":%.3f},"
+            "\"uncompacted_us\":{\"mean\":%.3f,\"min\":%.3f,\"p50\":%.3f},"
+            "\"match\":true}",
+            compacted.mean_us, compacted.min_us, compacted.p50_us, uncompacted.mean_us,
+            uncompacted.min_us, uncompacted.p50_us);
+        std::fflush(stdout);
+      }
+    }
+  }
+  std::puts("\n]}");
+  return 0;
+}
+
+/* Long steady-state loop at one fixed active pattern for Nsight Compute
+ * profiling. The profile keeps a fixed mid-convergence canonical tier and
+ * replays the compacted graph kLoops times so a profiler can attribute
+ * eigensolver work to the compacted submission counts. */
+int run_compaction_profile(std::int64_t batch_size, bool heterogeneous, std::int64_t active_total,
+                           int loops) {
+  DeviceFixture fixture;
+  if (!fixture.create(make_benchmark_batch(batch_size, heterogeneous)) || !factor(fixture, 31u)) {
+    return 1;
+  }
+  Gfn2EigensolverCompactedSolveGraph graph;
+  const auto build = build_gfn2_compacted_eigensolver_graph_cuda(
+      fixture.batch, fixture.host.buckets.data(),
+      static_cast<std::int64_t>(fixture.host.buckets.size()), fixture.cache, 31u,
+      fixture.hamiltonian.get(), Gfn2EigensolverOptions{}, fixture.providers.solver,
+      fixture.providers.parameters, fixture.providers.blas, fixture.workspace, fixture.results,
+      fixture.system_errors.get(), fixture.device_error.get(), graph);
+  if (!build.success() || !graph.valid()) {
+    return 1;
+  }
+  const std::vector<double> clean_hamiltonian = fixture.host.hamiltonian;
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    fixture.host.active[static_cast<std::size_t>(system)] = system < active_total ? 1u : 0u;
+  }
+  fixture.host.hamiltonian = clean_hamiltonian;
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    if (fixture.host.active[static_cast<std::size_t>(system)] == 0u) {
+      const std::int64_t begin = fixture.host.matrix_offsets[static_cast<std::size_t>(system)];
+      const std::int64_t end = fixture.host.matrix_offsets[static_cast<std::size_t>(system + 1)];
+      std::fill(fixture.host.hamiltonian.begin() + begin, fixture.host.hamiltonian.begin() + end,
+                std::numeric_limits<double>::quiet_NaN());
+    }
+  }
+  if (!fixture.active.upload(fixture.host.active) ||
+      !fixture.hamiltonian.upload(fixture.host.hamiltonian) || !fixture.fill_outputs(kSentinel)) {
+    return 1;
+  }
+  (void)reset_gfn2_eigensolver_device_errors_cuda(
+      fixture.host.batch_size, fixture.system_errors.get(), fixture.device_error.get(),
+      fixture.providers.stream);
+  for (int loop = 0; loop < loops; ++loop) {
+    (void)graph.launch(fixture.providers.stream);
+  }
+  if (!cuda_ok(cudaStreamSynchronize(fixture.providers.stream), "profile synchronize")) {
+    return 1;
+  }
+  if (!validate_compacted_launch(fixture)) {
+    std::cerr << "compaction profile correctness failed\n";
+    return 1;
+  }
+  std::cout << "compaction profile passed: batch=" << batch_size
+            << " heterogeneous=" << heterogeneous << " active=" << active_total
+            << " loops=" << loops << '\n';
+  return 0;
+}
+
+/* Sanitizer control: the uncompacted batched solve launched directly on the
+ * stream with no CUDA Graph. Used to attribute racecheck/synccheck findings
+ * to graph replay of cuBLAS/cuSOLVER batches rather than to the compaction
+ * logic itself. */
+int run_direct_solve_control(std::int64_t batch_size, bool heterogeneous, std::int64_t active_total,
+                             int loops) {
+  DeviceFixture fixture;
+  if (!fixture.create(make_benchmark_batch(batch_size, heterogeneous)) || !factor(fixture, 31u)) {
+    return 1;
+  }
+  const std::vector<double> clean_hamiltonian = fixture.host.hamiltonian;
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    fixture.host.active[static_cast<std::size_t>(system)] = system < active_total ? 1u : 0u;
+  }
+  fixture.host.hamiltonian = clean_hamiltonian;
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    if (fixture.host.active[static_cast<std::size_t>(system)] == 0u) {
+      const std::int64_t begin = fixture.host.matrix_offsets[static_cast<std::size_t>(system)];
+      const std::int64_t end = fixture.host.matrix_offsets[static_cast<std::size_t>(system + 1)];
+      std::fill(fixture.host.hamiltonian.begin() + begin, fixture.host.hamiltonian.begin() + end,
+                std::numeric_limits<double>::quiet_NaN());
+    }
+  }
+  if (!fixture.active.upload(fixture.host.active) ||
+      !fixture.hamiltonian.upload(fixture.host.hamiltonian) || !fixture.fill_outputs(kSentinel)) {
+    return 1;
+  }
+  (void)reset_gfn2_eigensolver_device_errors_cuda(
+      fixture.host.batch_size, fixture.system_errors.get(), fixture.device_error.get(),
+      fixture.providers.stream);
+  for (int loop = 0; loop < loops; ++loop) {
+    const auto solve = solve_gfn2_eigensystems_cuda(
+        fixture.batch, fixture.host.buckets.data(),
+        static_cast<std::int64_t>(fixture.host.buckets.size()), fixture.cache, 31u,
+        fixture.hamiltonian.get(), Gfn2EigensolverOptions{}, fixture.providers.solver,
+        fixture.providers.parameters, fixture.providers.blas, fixture.workspace, fixture.results,
+        fixture.system_errors.get(), fixture.device_error.get(), fixture.providers.stream);
+    if (!solve.success()) {
+      return 1;
+    }
+  }
+  if (!cuda_ok(cudaStreamSynchronize(fixture.providers.stream), "direct solve synchronize")) {
+    return 1;
+  }
+  std::cout << "direct solve control passed: batch=" << batch_size
+            << " heterogeneous=" << heterogeneous << " active=" << active_total
+            << " loops=" << loops << '\n';
+  return 0;
+}
+
 }  // namespace
 
+#ifdef GPUXTB_COMPACTION_BENCHMARK_ONLY
 int main() {
+  int device_count = 0;
+  if (!cuda_ok(cudaGetDeviceCount(&device_count), "cudaGetDeviceCount") || device_count == 0) {
+    return 1;
+  }
+  return run_compaction_benchmark();
+}
+#else
+int main(int argc, char** argv) {
+  if (argc >= 2 && std::strcmp(argv[1], "--compaction-benchmark") == 0) {
+    return run_compaction_benchmark();
+  }
+  if (argc >= 2 && std::strcmp(argv[1], "--compaction-profile") == 0) {
+    if (argc != 6) {
+      std::cerr << "usage: --compaction-profile <batch> <heterogeneous 0/1> <active> <loops>\n";
+      return 1;
+    }
+    const std::int64_t batch = std::atoll(argv[2]);
+    const bool heterogeneous = std::atoi(argv[3]) != 0;
+    const std::int64_t active = std::atoll(argv[4]);
+    const int loops = std::atoi(argv[5]);
+    if (batch < 1 || active < 0 || active > batch || loops < 1) {
+      return 1;
+    }
+    return run_compaction_profile(batch, heterogeneous, active, loops);
+  }
+  if (argc >= 2 && std::strcmp(argv[1], "--direct-solve") == 0) {
+    if (argc != 6) {
+      std::cerr << "usage: --direct-solve <batch> <heterogeneous 0/1> <active> <loops>\n";
+      return 1;
+    }
+    const std::int64_t batch = std::atoll(argv[2]);
+    const bool heterogeneous = std::atoi(argv[3]) != 0;
+    const std::int64_t active = std::atoll(argv[4]);
+    const int loops = std::atoi(argv[5]);
+    if (batch < 1 || active < 0 || active > batch || loops < 1) {
+      return 1;
+    }
+    return run_direct_solve_control(batch, heterogeneous, active, loops);
+  }
   int device_count = 0;
   if (!cuda_ok(cudaGetDeviceCount(&device_count), "cudaGetDeviceCount") || device_count == 0) {
     return 1;
@@ -1640,3 +2095,4 @@ int main() {
   std::cout << "CUDA eigensolver tests passed\n";
   return 0;
 }
+#endif
