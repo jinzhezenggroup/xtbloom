@@ -1,0 +1,3 @@
+========= COMPUTE-SANITIZER
+compaction profile passed: batch=128 heterogeneous=1 active=64 loops=20
+========= ERROR SUMMARY: 0 errors

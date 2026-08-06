@@ -1,0 +1,16 @@
+WARNING: Device-side CUDA Event completion trace is currently enabled.
+         This may increase runtime overhead and the likelihood of false
+         dependencies across CUDA Streams. If you wish to avoid this, please
+         disable the feature with --cuda-event-trace=false.
+WARNING: CPU IP/backtrace sampling not supported, disabling.
+Try the 'nsys status --environment' command to learn more.
+
+WARNING: CPU context switch tracing not supported, disabling.
+Try the 'nsys status --environment' command to learn more.
+
+compaction profile passed: batch=32 heterogeneous=1 active=16 loops=5
+Collecting data...
+Generating '/tmp/nsys-report-3429.qdstrm'
+[1/1] [0%                          ] nsys-active16.nsys-rep[1/1] [0%                          ] nsys-active16.nsys-rep[1/1] [12%                         ] nsys-active16.nsys-rep[1/1] [====25%                     ] nsys-active16.nsys-rep[1/1] [=======================96%  ] nsys-active16.nsys-rep[1/1] [========================100%] nsys-active16.nsys-rep[1/1] [========================100%] nsys-active16.nsys-rep
+Generated:
+	/home/jzzeng/codes/gpuxtb4/build/pr201-evidence-clean/nsys-active16.nsys-rep

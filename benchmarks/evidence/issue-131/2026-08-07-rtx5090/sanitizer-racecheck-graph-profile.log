@@ -2,3 +2,4 @@
 ========= Error: process didn't terminate successfully
 ========= Target application returned an error
 ========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)
+srun: error: node3: task 0: Exited with exit code 11
