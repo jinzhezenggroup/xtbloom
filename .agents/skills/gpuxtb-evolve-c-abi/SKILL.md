@@ -54,7 +54,7 @@ Add focused tests for all applicable cases:
 8. Python low-level layout and high-level behavior from a non-editable installed wheel.
 9. Shared symbol allowlist, static and shared installs, and the external install consumer.
 
-Invoke `$gpuxtb-select-validation` and require a shared public CPU build with a verified LP64 runtime. For CUDA-visible changes, also invoke `$gpuxtb-validate-cuda-change`; compile-only coverage is incomplete.
+Return these gates to the caller's validation ledger and require a shared public CPU build with a verified LP64 runtime. For CUDA-visible changes, add the complete real-GPU runtime, memory-mode, and sanitizer matrix; compile-only coverage is incomplete.
 
 ## Review the Final Diff
 

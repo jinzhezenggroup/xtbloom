@@ -41,7 +41,7 @@ Require every applicable level:
 4. **Public level:** run the exported C ABI on sequential one-system calls and true homogeneous and heterogeneous ragged batches. Do not compare a ragged batch to another view of the same ragged result.
 5. **Failure level:** cover non-finite inputs, difficult/nonconvergent SCC, eigensolver failure when injectable, successful peers beside failed systems, complete NaN publication, and unchanged outputs on call-level failure.
 
-For CUDA-visible changes, cover host, device, and mixed descriptors through `$gpuxtb-validate-cuda-change`. Self-consistency or CPU/CUDA agreement never replaces the independent golden.
+For CUDA-visible changes, cover host, device, and mixed descriptors plus the complete real-GPU runtime and sanitizer matrix. Self-consistency or CPU/CUDA agreement never replaces the independent golden.
 
 ## Preserve Oracle Independence
 
@@ -73,4 +73,4 @@ Do not call comparator-only work a backend replay. Preserve callback lifecycle a
 
 ## Report the Evidence
 
-Invoke `$gpuxtb-select-validation`. Report exact commands and counts, oracle versions and hashes, maximum errors with units, tolerances and their source, tested memory modes, and unavailable evidence. Leave the issue open when finite differences, real-GPU parity, independent oracle generation, or pinned replay remains outstanding.
+Return these gates to the caller's validation ledger. Report exact commands and counts, oracle versions and hashes, maximum errors with units, tolerances and their source, tested memory modes, and unavailable evidence. Leave the issue open when finite differences, real-GPU parity, independent oracle generation, or pinned replay remains outstanding.

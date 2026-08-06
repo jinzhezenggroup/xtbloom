@@ -77,8 +77,8 @@ For ABI, packaging, host-runtime, or publication changes, also:
 
 ## Prove Steady-State Constraints
 
-When execution, cache, Graph, or performance code changes, instrument repeated public calls after warmup. Prove the issue's requirements for allocation count, address stability, Graph reuse, transfers, host polling, synchronization, active-set behavior, and topology/geometry epoch transitions. Use `$gpuxtb-record-performance` for timing or profiler claims.
+When execution, cache, Graph, or performance code changes, instrument repeated public calls after warmup. Prove the issue's requirements for allocation count, address stability, Graph reuse, transfers, host polling, synchronization, active-set behavior, and topology/geometry epoch transitions. Use the dedicated performance-evidence workflow for timing or profiler claims.
 
 ## Report Missing Evidence Honestly
 
-Invoke `$gpuxtb-select-validation`. Report exact pass/fail/skip counts and each tested matrix coordinate. Mark real-GPU, sanitizer, installed-consumer, profile, or memory-mode gaps as unavailable or not run; do not let green hosted CI close a runtime acceptance criterion.
+Return these gates to the caller's validation ledger. Report exact pass/fail/skip counts and each tested matrix coordinate. Mark real-GPU, sanitizer, installed-consumer, profile, or memory-mode gaps as unavailable or not run; do not let green hosted CI close a runtime acceptance criterion.

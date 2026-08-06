@@ -20,6 +20,7 @@ Build a validation ledger that distinguishes a real pass from an absent, skipped
 | C/C++ core, CMake, native tests | Fresh CPU Release configure, build, and full registered CTest |
 | Eigensolver or public CPU inference | Shared CPU build with an absolute verified LP64 LAPACKE+CBLAS runtime; public inference and conformance tests must be registered |
 | Public header, validation, symbols, install API | Invoke `$gpuxtb-evolve-c-abi`; add shared/static installs and external consumers |
+| GFN2 physics, SCC, energy, force, charge, QM/MM, parameters, or oracle behavior | Invoke `$gpuxtb-prove-scientific-change`; require independent evidence in addition to self-consistency |
 | CUDA source or CUDA runtime behavior | Invoke `$gpuxtb-validate-cuda-change`; use explicit CUDA `ON` and a real NVIDIA GPU |
 | Python package or bindings | Non-editable `uv` install of the native wheel plus the focused and full Python suites |
 | `pyproject.toml` or dependency resolution | Regenerate `uv.lock` only against PyPI, then require `uv lock --check` |
