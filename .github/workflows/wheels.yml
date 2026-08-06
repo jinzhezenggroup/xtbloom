@@ -99,13 +99,6 @@ jobs:
           # cibuildwheel[uv]: install uv so `build-frontend = "build[uv]"`
           # (pyproject.toml) can use it for builds and test environments.
           extras: "uv"
-      - name: Show ccache statistics
-        env:
-          CCACHE_DIR: ${{ runner.temp }}/ccache
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes ccache
-          ccache -s
       - name: Enforce PyPI wheel size limit
         run: python python/ci/check-wheel-size.py wheelhouse
       - name: Verify wheel licenses
