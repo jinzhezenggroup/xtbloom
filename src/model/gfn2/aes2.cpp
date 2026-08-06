@@ -1109,6 +1109,165 @@ gpuxtb_status_t evaluate_aes2_potential_cpu(const AES2Plan& plan, const AES2Geom
   return GPUXTB_STATUS_SUCCESS;
 }
 
+gpuxtb_status_t evaluate_aes2_potential_system_cpu(
+    const AES2Plan& plan, const AES2GeometryCache& cache, std::int64_t system,
+    const double* atomic_charges, const double* atomic_dipoles, const double* atomic_quadrupoles,
+    double* charge_potentials, double* dipole_potentials, double* quadrupole_potentials,
+    const AES2Workspace& workspace, std::string& error) {
+  gpuxtb_status_t status = validate_plan(plan, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_cache_shape(plan, cache, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  if (system < 0 || system >= plan.batch_size()) {
+    error = "AES2 potential system index is out of range";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  if (atomic_charges == nullptr || atomic_dipoles == nullptr || atomic_quadrupoles == nullptr ||
+      charge_potentials == nullptr || dipole_potentials == nullptr ||
+      quadrupole_potentials == nullptr || !is_aligned(atomic_charges, alignof(double)) ||
+      !is_aligned(atomic_dipoles, alignof(double)) ||
+      !is_aligned(atomic_quadrupoles, alignof(double)) ||
+      !is_aligned(charge_potentials, alignof(double)) ||
+      !is_aligned(dipole_potentials, alignof(double)) ||
+      !is_aligned(quadrupole_potentials, alignof(double))) {
+    error = "AES2 system potential inputs and outputs must not be NULL or misaligned";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  status = validate_workspace_pointer(
+      workspace.potential_scratch, workspace.potential_elements, plan.potential_scratch_elements(),
+      "AES2 potential scratch is NULL, misaligned, or too small", error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+
+  const std::int64_t pairs = plan.total_pairs();
+  const std::int64_t atoms = plan.total_atoms();
+  std::size_t atom_bytes = 0u;
+  std::size_t dipole_bytes = 0u;
+  std::size_t quadrupole_bytes = 0u;
+  std::size_t pair_bytes = 0u;
+  std::size_t scratch_bytes = 0u;
+  if (!count_bytes(atoms, sizeof(double), atom_bytes) ||
+      !count_bytes(atoms * 3, sizeof(double), dipole_bytes) ||
+      !count_bytes(atoms * 6, sizeof(double), quadrupole_bytes) ||
+      !count_bytes(pairs * kPairStride, sizeof(double), pair_bytes) ||
+      !count_bytes(plan.potential_scratch_elements(), sizeof(double), scratch_bytes)) {
+    error = "AES2 system potential dimensions exceed addressable host storage";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  /* Only the target system's atom, pair, and output slices are touched, but
+   * overlapping full-batch ranges still guarantee the caller's descriptors
+   * cannot wrap the subset the operation will dereference. */
+  const std::array<MemoryRange, 8> active{{{atomic_charges, atom_bytes},
+                                           {atomic_dipoles, dipole_bytes},
+                                           {atomic_quadrupoles, quadrupole_bytes},
+                                           {cache.pair_data, pair_bytes},
+                                           {charge_potentials, atom_bytes},
+                                           {dipole_potentials, dipole_bytes},
+                                           {quadrupole_potentials, quadrupole_bytes},
+                                           {workspace.potential_scratch, scratch_bytes}}};
+  if (!ranges_are_disjoint(active.data(), active.size())) {
+    error = "AES2 system potential inputs, outputs, cache, and scratch must not overlap";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  for (const MemoryRange& range : active) {
+    if (overlaps_control_storage(plan, cache, workspace, range.data, range.size_bytes)) {
+      error = "AES2 system potential buffers must not overlap plan or descriptor storage";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+  }
+
+  const std::size_t system_index = static_cast<std::size_t>(system);
+  const std::int64_t atom_begin = plan.atom_offsets()[system_index];
+  const std::int64_t atom_end = plan.atom_offsets()[system_index + 1u];
+  const std::int64_t pair_begin = plan.pair_offsets()[system_index];
+  const std::int64_t pair_end = plan.pair_offsets()[system_index + 1u];
+  if (!finite_cache_pair_slice(cache, pair_begin, pair_end)) {
+    error = "AES2 target geometry cache contains invalid numerical data";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+  for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+    const std::size_t atom_index = static_cast<std::size_t>(atom);
+    if (!std::isfinite(atomic_charges[atom_index])) {
+      error = "AES2 target atomic charges contain NaN or infinity";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    for (std::size_t component = 0u; component < 3u; ++component) {
+      if (!std::isfinite(atomic_dipoles[atom_index * 3u + component])) {
+        error = "AES2 target atomic dipoles contain NaN or infinity";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+    }
+    for (std::size_t component = 0u; component < 6u; ++component) {
+      if (!std::isfinite(atomic_quadrupoles[atom_index * 6u + component])) {
+        error = "AES2 target atomic quadrupoles contain NaN or infinity";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+    }
+  }
+
+  /* Stage only the target system's atom potentials in the canonical scratch,
+   * then publish the target slice as one atomic update. */
+  double* const scratch_charge = workspace.potential_scratch;
+  double* const scratch_dipole = workspace.potential_scratch + static_cast<std::size_t>(atoms);
+  double* const scratch_quadrupole =
+      workspace.potential_scratch + static_cast<std::size_t>(atoms) * 4u;
+  constexpr std::array<double, 6> scale{{1.0, 2.0, 1.0, 2.0, 2.0, 1.0}};
+  for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+    const std::size_t atom_index = static_cast<std::size_t>(atom);
+    scratch_charge[atom_index] = 0.0;
+    for (std::size_t component = 0u; component < 3u; ++component) {
+      const std::size_t index = atom_index * 3u + component;
+      scratch_dipole[index] =
+          2.0 * plan.dipole_kernel()[atom_index] * atomic_dipoles[atom_index * 3u + component];
+      if (!std::isfinite(scratch_dipole[index])) {
+        error = "AES2 target onsite potential arithmetic exceeded floating-point range";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+    }
+    for (std::size_t component = 0u; component < 6u; ++component) {
+      const std::size_t index = atom_index * 6u + component;
+      scratch_quadrupole[index] = 2.0 * plan.quadrupole_kernel()[atom_index] * scale[component] *
+                                  atomic_quadrupoles[atom_index * 6u + component];
+      if (!std::isfinite(scratch_quadrupole[index])) {
+        error = "AES2 target onsite potential arithmetic exceeded floating-point range";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+    }
+  }
+
+  std::int64_t pair = pair_begin;
+  for (std::int64_t second = atom_begin; second < atom_end; ++second) {
+    for (std::int64_t first = atom_begin; first < second; ++first, ++pair) {
+      const std::size_t pair_base = static_cast<std::size_t>(pair * kPairStride);
+      if (!add_pair_potential(cache.pair_data + pair_base, static_cast<std::size_t>(first),
+                              static_cast<std::size_t>(second), atomic_charges, atomic_dipoles,
+                              atomic_quadrupoles, scratch_charge, scratch_dipole,
+                              scratch_quadrupole)) {
+        error = "AES2 target pair potential arithmetic exceeded floating-point range";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+    }
+  }
+  if (pair != pair_end) {
+    error = "AES2 target pair enumeration disagrees with the plan";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  const std::size_t target_atoms = static_cast<std::size_t>(atom_end - atom_begin);
+  std::copy_n(scratch_charge + atom_begin, target_atoms, charge_potentials + atom_begin);
+  std::copy_n(scratch_dipole + static_cast<std::size_t>(atom_begin) * 3u, target_atoms * 3u,
+              dipole_potentials + static_cast<std::size_t>(atom_begin) * 3u);
+  std::copy_n(scratch_quadrupole + static_cast<std::size_t>(atom_begin) * 6u, target_atoms * 6u,
+              quadrupole_potentials + static_cast<std::size_t>(atom_begin) * 6u);
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
 gpuxtb_status_t add_aes2_energy_cpu(const AES2Plan& plan, const AES2GeometryCache& cache,
                                     const double* atomic_charges, const double* atomic_dipoles,
                                     const double* atomic_quadrupoles, double* energies,

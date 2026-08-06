@@ -136,6 +136,24 @@ gpuxtb_status_t evaluate_es2_potential_cpu(const ES2Plan& plan, const ES2Geometr
                                            const ES2Workspace& workspace, std::string& error);
 
 /*
+ * Overwrite the ES2 shell potential of exactly one ragged batch member. The
+ * charge and potential pointers retain the full packed shell layout, but only
+ * the selected system's shell slice is read or modified. This lets an SCC
+ * worker prepare the Hamiltonian of a successful member while peers may
+ * contain NaN or fail independently.
+ *
+ * Structural and aliasing failures return INVALID_ARGUMENT. Nonfinite
+ * target-system data or target arithmetic failure return INTERNAL_ERROR;
+ * in that case the target slice of shell_potentials may be partially
+ * modified, so callers must treat the whole target system as failed and must
+ * not consume its slice. No per-call allocation is performed.
+ */
+gpuxtb_status_t evaluate_es2_potential_system_cpu(const ES2Plan& plan,
+                                                  const ES2GeometryCache& cache,
+                                                  std::int64_t system, const double* shell_charges,
+                                                  double* shell_potentials, std::string& error);
+
+/*
  * Accumulate one Hartree energy per batch member,
  *
  *   E2 = 1/2 q^T Gamma q.

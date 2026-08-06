@@ -1,0 +1,4 @@
+interface:
+  display_name: "Validate CUDA Change"
+  short_description: "Verify real CUDA behavior, parity, and safety"
+  default_prompt: "Use $gpuxtb-validate-cuda-change to verify this CUDA implementation on every affected memory and failure path."

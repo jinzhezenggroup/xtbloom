@@ -356,6 +356,55 @@ gpuxtb_status_t evaluate_spin_polarization_cpu(SpinPolarizationView view,
   return GPUXTB_STATUS_SUCCESS;
 }
 
+gpuxtb_status_t evaluate_spin_polarization_system_cpu(SpinPolarizationView view,
+                                                      std::int64_t system,
+                                                      const double* shell_populations,
+                                                      double& spin_energy, double* shell_potentials,
+                                                      std::string& error) {
+  gpuxtb_status_t status = validate_view(view, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  if (system < 0 || system >= view.batch_size || shell_populations == nullptr ||
+      shell_potentials == nullptr ||
+      reinterpret_cast<std::uintptr_t>(shell_populations) % alignof(double) != 0u ||
+      reinterpret_cast<std::uintptr_t>(shell_potentials) % alignof(double) != 0u ||
+      reinterpret_cast<std::uintptr_t>(&spin_energy) % alignof(double) != 0u) {
+    error = "spin-polarization one-system inputs and outputs must not be NULL or misaligned";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t population_bytes =
+      static_cast<std::size_t>(view.shell_population_elements) * sizeof(double);
+  if (ranges_overlap(shell_populations, population_bytes, shell_potentials, population_bytes) ||
+      ranges_overlap(shell_populations, population_bytes, &spin_energy, sizeof(spin_energy)) ||
+      ranges_overlap(shell_potentials, population_bytes, &spin_energy, sizeof(spin_energy))) {
+    error = "spin-polarization one-system outputs must be disjoint from their inputs";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const std::int64_t population_begin = view.shell_population_offsets[system];
+  const std::int64_t population_end = view.shell_population_offsets[system + 1];
+  for (std::int64_t element = population_begin; element < population_end; ++element) {
+    if (!std::isfinite(shell_populations[element])) {
+      error = "spin-polarization target populations contain NaN or infinity";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+  }
+  double energy = 0.0;
+  if (view.spin_channels[system] == 2) {
+    if (!evaluate_unrestricted_system(view, system, shell_populations, shell_potentials, energy)) {
+      error = "spin-polarization target potential exceeded floating-point range";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+  }
+  if (!std::isfinite(energy)) {
+    error = "spin-polarization target energy is not finite";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+  spin_energy = energy;
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
 gpuxtb_status_t add_spin_polarization_energy_system_cpu(SpinPolarizationView view,
                                                         std::int64_t system,
                                                         const double* shell_populations,
