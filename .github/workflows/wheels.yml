@@ -48,12 +48,45 @@ jobs:
             tests: cpu
     steps:
       - uses: actions/checkout@v5
+      - name: Restore ccache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          # ${{ runner.temp }} is not available in job-level env, so each step
+          # references the same host paths directly. Inside the manylinux
+          # container the host root is mounted at /host, and CIBW_ENVIRONMENT
+          # below points CCACHE_DIR at /host${{ runner.temp }}/ccache, so this
+          # host directory is where the container's ccache actually persists.
+          # Cache writes happen only for pushes to main and same-repository
+          # PRs (fork PRs have read-only cache access, so untrusted code cannot
+          # plant entries; this workflow has no pull_request_target trigger).
+          path: ${{ runner.temp }}/ccache
+          # ccache hashes compiler identity and flags itself, so a toolkit or
+          # compiler change only costs cache hits, never stale objects.
+          key: ccache-wheel-${{ matrix.platform_id }}-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'include/**', 'src/**', 'tests/**', 'pyproject.toml') }}
+          restore-keys: |
+            ccache-wheel-${{ matrix.platform_id }}-
+      - name: Restore cibuildwheel tool cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          # CIBW_CACHE_PATH is cibuildwheel's own tool-download cache (see the
+          # cibuildwheel docs, "Caching cibuildwheel's downloaded tools"); it is
+          # always a host-directory path, unlike the ccache directory.
+          path: ${{ runner.temp }}/cibw-cache
+          key: cibw-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            cibw-${{ runner.os }}-
       - name: Build wheels
         uses: pypa/cibuildwheel@v4.1
         env:
           CIBW_ARCHS: all
           CIBW_BUILD: ${{ matrix.build }}
-          CIBW_ENVIRONMENT: "GPUXTB_ENABLE_CUDA=${{ matrix.variant == 'cuda' && 'ON' || 'OFF' }}"
+          CIBW_CACHE_PATH: ${{ runner.temp }}/cibw-cache
+          # Inside the manylinux container the host filesystem is mounted at
+          # /host, so CCACHE_DIR=/host/... persists the ccache on the host
+          # where actions/cache can save it after the job. The GPUXTB_*_LAUNCHER
+          # variables map to CMAKE_*_COMPILER_LAUNCHER defines in pyproject.toml
+          # and enable caching for the C, C++, and nvcc compilations.
+          CIBW_ENVIRONMENT: "GPUXTB_ENABLE_CUDA=${{ matrix.variant == 'cuda' && 'ON' || 'OFF' }} GPUXTB_C_COMPILER_LAUNCHER=ccache GPUXTB_CXX_COMPILER_LAUNCHER=ccache GPUXTB_CUDA_COMPILER_LAUNCHER=ccache CCACHE_DIR=/host${{ runner.temp }}/ccache CCACHE_MAXSIZE=1G"
           # Hosted wheel builders have no NVIDIA kernel driver.  Expose the
           # toolkit stub only inside the isolated wheel test so the dynamic
           # driver resolver can exercise its no-device fallback; production
@@ -66,6 +99,13 @@ jobs:
           # cibuildwheel[uv]: install uv so `build-frontend = "build[uv]"`
           # (pyproject.toml) can use it for builds and test environments.
           extras: "uv"
+      - name: Show ccache statistics
+        env:
+          CCACHE_DIR: ${{ runner.temp }}/ccache
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ccache
+          ccache -s
       - name: Enforce PyPI wheel size limit
         run: python python/ci/check-wheel-size.py wheelhouse
       - name: Verify wheel licenses

@@ -17,6 +17,12 @@ jobs:
       matrix:
         compiler: [gcc, clang]
     runs-on: ubuntu-24.04
+    env:
+      # Bound the per-job cache so the repository's 10 GiB actions/cache quota
+      # is shared across the jobs instead of being consumed by the 5 GiB
+      # ccache default. ccache always hashes the exact compiler and flags, so a
+      # too-small cache only means fewer hits, never stale objects.
+      CCACHE_MAXSIZE: 1G
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -26,6 +32,20 @@ jobs:
         with:
           version: "0.10.7"
           enable-cache: true
+      - name: Install ccache
+        run: sudo apt-get update && sudo apt-get install --yes ccache
+      - name: Restore ccache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          # ccache 4 stores its cache under XDG_CACHE_HOME/ccache, which on the
+          # runner is ~/.cache/ccache. CCACHE_BASEDIR is left unset because the
+          # checkout path is stable across hosted-runner runs. A compiler or
+          # toolkit change only costs cache hits, never correctness: ccache
+          # hashes the compiler identity and flags itself.
+          path: ~/.cache/ccache
+          key: ccache-cpu-${{ matrix.compiler }}-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'include/**', 'src/**', 'tests/**') }}
+          restore-keys: |
+            ccache-cpu-${{ matrix.compiler }}-
       - name: Configure
         env:
           CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
@@ -37,11 +57,15 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DGPUXTB_ENABLE_CUDA=OFF \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_C_FLAGS="${COVERAGE_FLAGS}" \
             -DCMAKE_CXX_FLAGS="${COVERAGE_FLAGS}" \
             -DCMAKE_EXE_LINKER_FLAGS="${COVERAGE_FLAGS}"
       - name: Build
         run: cmake --build build --parallel
+      - name: Show ccache statistics
+        run: ccache -s
       - name: Test
         run: ctest --test-dir build --output-on-failure
       - name: Collect C++ coverage
@@ -67,6 +91,8 @@ jobs:
 
   python:
     runs-on: ubuntu-24.04
+    env:
+      CCACHE_MAXSIZE: 1G
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -83,10 +109,23 @@ jobs:
       # a CI failure instead of drifting silently. --no-editable installs the
       # real wheel (not an editable hook), so gpuxtb.library can discover the
       # bundled libgpuxtb exactly as an installed package does.
+      - name: Install ccache
+        run: sudo apt-get update && sudo apt-get install --yes ccache
+      - name: Restore ccache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/ccache
+          key: ccache-python-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'include/**', 'src/**', 'tests/**', 'pyproject.toml') }}
+          restore-keys: |
+            ccache-python-
       - name: Install package with test extras
         env:
           GPUXTB_ENABLE_CUDA: "OFF"
+          GPUXTB_C_COMPILER_LAUNCHER: ccache
+          GPUXTB_CXX_COMPILER_LAUNCHER: ccache
         run: uv sync --locked --no-editable --extra test
+      - name: Show ccache statistics
+        run: ccache -s
       - name: Run Python tests with coverage
         run: |
           installed_library="$(uv run --no-sync python -c 'from gpuxtb.library import library_path; print(library_path())')"
@@ -174,14 +213,27 @@ jobs:
 
   static-cpu-package:
     runs-on: ubuntu-24.04
+    env:
+      CCACHE_MAXSIZE: 1G
     steps:
       - uses: actions/checkout@v5
+      - name: Install ccache
+        run: sudo apt-get update && sudo apt-get install --yes ccache
+      - name: Restore ccache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/ccache
+          key: ccache-static-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'include/**', 'src/**', 'tests/**') }}
+          restore-keys: |
+            ccache-static-
       - name: Configure static package
         run: |
           cmake -S . -B build-static -G Ninja \
             -DGPUXTB_ENABLE_CUDA=OFF \
             -DGPUXTB_BUILD_TESTS=OFF \
             -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE=Release
       - name: Build and install
         run: |
@@ -189,6 +241,8 @@ jobs:
           cmake --install build-static --prefix "${RUNNER_TEMP}/gpuxtb-static-install"
           python3 tools/licensing/check_licenses.py --source-root . \
             --install-prefix "${RUNNER_TEMP}/gpuxtb-static-install"
+      - name: Show ccache statistics
+        run: ccache -s
       - name: Consume static exported CMake package
         run: |
           cmake -S tests/install_consumer -B build-static-consumer -G Ninja \
@@ -198,6 +252,8 @@ jobs:
 
   public-cpu-release:
     runs-on: ubuntu-24.04
+    env:
+      CCACHE_MAXSIZE: 1G
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -208,6 +264,15 @@ jobs:
         with:
           version: "0.10.7"
           enable-cache: true
+      - name: Install ccache
+        run: sudo apt-get update && sudo apt-get install --yes ccache
+      - name: Restore ccache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/ccache
+          key: ccache-public-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'include/**', 'src/**', 'tests/**') }}
+          restore-keys: |
+            ccache-public-
       - name: Install LP64 eigensolver runtime
         run: uv pip install --system 'scipy-openblas32>=0.3.34.0.0'
       - name: Configure shared public inference build
@@ -218,9 +283,13 @@ jobs:
             -DGPUXTB_ENABLE_CUDA=OFF \
             -DGPUXTB_CPU_LINALG_LIBRARY="${openblas}" \
             -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build-public --parallel
+      - name: Show ccache statistics
+        run: ccache -s
       - name: Test public inference and conformance
         run: ctest --test-dir build-public --output-on-failure
       - name: Install and consume exported CMake package

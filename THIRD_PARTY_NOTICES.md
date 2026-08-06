@@ -93,6 +93,25 @@ cuBLAS, cuSOLVER, and libcuda) rather than retaining ordinary shared-library
 `DT_NEEDED` entries for those host libraries. This mechanism is an engineering
 boundary, not the legal basis for combining with CUDA.
 
+## ccache (CI build-time tool)
+
+Repository: <https://github.com/ccache/ccache>
+
+License: `GPL-3.0-or-later`.
+
+The CI workflows use ccache as a compiler launcher (via
+`CMAKE_*_COMPILER_LAUNCHER`) to reuse compiled C, C++, and CUDA objects across
+runs. CI downloads the pinned static release binary
+`ccache-4.13.6-linux-<arch>-musl-static` (SHA-256 verified in
+`python/ci/install-ccache.sh`; x86_64
+`156ec57c5198cc849d92834023d09910b83dc5504c6cf405d09e6ae7b208a3e5`, aarch64
+`2098d561e4a8e36bd06a29aedce53ea90c7e365f9573a93d91c230efbf96a958`) and
+installs it only inside the disposable build container. ccache is a build-time
+tool: it is not vendored into the repository, not redistributed in source
+archives, installs, or wheels, and does not alter the licensing of build
+outputs (the project is itself `GPL-3.0-or-later`, so building with ccache
+introduces no incompatibility).
+
 ## OpenBLAS runtime dependency
 
 Repository: <https://github.com/MacPython/openblas-libs>
