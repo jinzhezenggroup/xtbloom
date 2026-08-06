@@ -20,9 +20,11 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping, Sequence
 
 import tomllib
 
@@ -167,13 +169,11 @@ class ParameterError(ValueError):
 
 def sha256_bytes(content: bytes) -> str:
     """Return a lowercase SHA-256 digest for *content*."""
-
     return hashlib.sha256(content).hexdigest()
 
 
-def canonical_json_bytes(value: Any) -> bytes:
+def canonical_json_bytes(value: object) -> bytes:
     """Serialize JSON with stable UTF-8, key ordering, and line endings."""
-
     return (
         json.dumps(
             value,
@@ -187,7 +187,7 @@ def canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _mapping(value: Any, location: str) -> Mapping[str, Any]:
+def _mapping(value: object, location: str) -> Mapping[str, Any]:
     if not isinstance(value, dict):
         raise ParameterError(f"{location} must be a TOML table")
     return value
@@ -212,7 +212,7 @@ def _expect_keys(
         )
 
 
-def _number(value: Any, location: str) -> float:
+def _number(value: object, location: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ParameterError(f"{location} must be numeric")
     result = float(value)
@@ -221,19 +221,19 @@ def _number(value: Any, location: str) -> float:
     return result
 
 
-def _integer(value: Any, location: str) -> int:
+def _integer(value: object, location: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ParameterError(f"{location} must be an integer")
     return value
 
 
-def _boolean(value: Any, location: str) -> bool:
+def _boolean(value: object, location: str) -> bool:
     if not isinstance(value, bool):
         raise ParameterError(f"{location} must be a boolean")
     return value
 
 
-def _string(value: Any, location: str) -> str:
+def _string(value: object, location: str) -> str:
     if not isinstance(value, str):
         raise ParameterError(f"{location} must be a string")
     return value
@@ -410,7 +410,6 @@ def _normalize_elements(source: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 def normalize_export(document: Mapping[str, Any]) -> dict[str, Any]:
     """Validate and normalize a parsed tblite GFN2 TOML export."""
-
     source = _mapping(document, "root")
     _expect_keys(
         source,
@@ -505,7 +504,6 @@ def normalize_export(document: Mapping[str, Any]) -> dict[str, Any]:
 
 def parse_and_normalize(raw_toml: bytes) -> dict[str, Any]:
     """Parse UTF-8 TOML and return the validated canonical representation."""
-
     try:
         text = raw_toml.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -532,7 +530,6 @@ def _cpp_string(value: str) -> str:
 
 def render_header(parameters: Mapping[str, Any], source_revision: str) -> bytes:
     """Render the canonical parameters as trivially copyable C++ tables."""
-
     elements = parameters["elements"]
     shells = [shell for element in elements for shell in element["shells"]]
     hamiltonian = parameters["hamiltonian"]
@@ -739,7 +736,10 @@ def render_header(parameters: Mapping[str, Any], source_revision: str) -> bytes:
             "}",
             "",
             "[[nodiscard]] constexpr double pair_scale(std::uint32_t first,",
-            "                                          std::uint32_t second) noexcept {",
+            (
+                "                                          std::uint32_t second) "
+                "noexcept {"
+            ),
             "  for (const auto& override_value : kPairScaleOverrides) {",
             "    if ((override_value.first_atomic_number == first &&",
             "         override_value.second_atomic_number == second) ||",
@@ -893,7 +893,6 @@ def _manifest(
 
 def build_artifacts(raw_toml: bytes, provenance: Mapping[str, Any]) -> dict[str, bytes]:
     """Build every committed artifact from raw TOML and provenance metadata."""
-
     parameters = parse_and_normalize(raw_toml)
     source = _mapping(provenance.get("source"), "manifest.source")
     source_revision = _string(source.get("revision"), "manifest.source.revision")
@@ -927,6 +926,7 @@ def _existing_provenance(output_dir: Path) -> dict[str, Any]:
 def write_or_check(
     output_dir: Path, artifacts: Mapping[str, bytes], *, check: bool
 ) -> None:
+    """Write generated artifacts or verify their checked-in bytes."""
     output_dir.mkdir(parents=True, exist_ok=True)
     stale = []
     for filename, content in artifacts.items():
@@ -985,6 +985,7 @@ def _arguments(argv: Sequence[str] | None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Generate or verify the canonical GFN2 parameter artifacts."""
     arguments = _arguments(argv)
     try:
         # Force a stable process locale even when this module is called directly.
@@ -1008,7 +1009,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         artifacts = build_artifacts(raw_toml, provenance)
         write_or_check(arguments.output_dir, artifacts, check=arguments.check)
     except (OSError, ParameterError, subprocess.CalledProcessError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         return 1
     return 0
 

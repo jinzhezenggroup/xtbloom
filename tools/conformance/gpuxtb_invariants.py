@@ -30,13 +30,15 @@ from __future__ import annotations
 
 import argparse
 import copy
-import ctypes
 import math
 import sys
-from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import ctypes
+    from collections.abc import Callable, Iterable, Sequence
 
 import gpuxtb_conformance as conformance
 import gpuxtb_public_api as public_api
@@ -356,7 +358,7 @@ def gpuxtb_solver(
 
 
 def _compare(
-    case_id: str, label: str, expected: Any, actual: Any, atol: float
+    case_id: str, label: str, expected: object, actual: object, atol: float
 ) -> tuple[bool, str]:
     """Compare a scalar or equal-length numeric arrays and report the worst error."""
     if isinstance(expected, list):
@@ -403,7 +405,9 @@ def _compare(
 
 def _report(failures: list[str], passed: bool, message: str) -> None:
     """Emit one reproducible PASS/FAIL line and accumulate any failure."""
-    print(("PASS " if passed else "FAIL ") + message)
+    print(  # noqa: T201 - CLI validation report
+        ("PASS " if passed else "FAIL ") + message
+    )
     if not passed:
         failures.append(message)
 
@@ -414,7 +418,7 @@ def gate_batch_versus_sequential(
     atol: float,
     failures: list[str],
 ) -> None:
-    """A ragged batch must not change any per-system property of its members."""
+    """Require a ragged batch to preserve every per-system property."""
     for expected, actual in zip(sequential, batched, strict=True):
         for label, expected_value, actual_value in (
             ("energy_hartree", expected.energy, actual.energy),
@@ -548,7 +552,8 @@ def gate_rotation_covariance(
                 )
             passed, message = _compare(
                 actual.case_id,
-                f"point_charge_forces_hartree_per_bohr rotation_covariant_{label_suffix}",
+                "point_charge_forces_hartree_per_bohr "
+                f"rotation_covariant_{label_suffix}",
                 rotated_point_forces,
                 actual.point_forces,
                 atol_force,
@@ -559,7 +564,7 @@ def gate_rotation_covariance(
 def gate_force_conservation(
     results: Sequence[InvariantResult], atol: float, failures: list[str]
 ) -> None:
-    """The total force on an isolated system must vanish componentwise."""
+    """Require total isolated-system force to vanish componentwise."""
     for result in results:
         axis_net: list[float] = [0.0, 0.0, 0.0]
         for atom in range(len(result.charges)):
@@ -573,14 +578,15 @@ def gate_force_conservation(
             _report(
                 failures,
                 passed,
-                f"{result.case_id} total_force_axis_{axis}: net={net:.6e} limit={atol:.6e}",
+                f"{result.case_id} total_force_axis_{axis}: "
+                f"net={net:.6e} limit={atol:.6e}",
             )
 
 
 def gate_charge_conservation(
     results: Sequence[InvariantResult], atol: float, failures: list[str]
 ) -> None:
-    """The summed atomic charges must reproduce the declared molecular charge."""
+    """Require summed atomic charges to reproduce the molecular charge."""
     for result in results:
         net = sum(result.charges)
         passed = abs(net - result.molecular_charge) <= atol
@@ -601,7 +607,9 @@ def run_invariant_checks(
     failures: list[str] = []
     by_id: dict[str, Geometry] = {geometry.case_id: geometry for geometry in geometries}
 
-    print(f"sequential baseline: {len(geometries)} case(s)")
+    print(  # noqa: T201 - CLI validation report
+        f"sequential baseline: {len(geometries)} case(s)"
+    )
     sequential: list[InvariantResult] = []
     for geometry in geometries:
         # A true one-system-at-a-time baseline is essential here. Repeating the
@@ -616,21 +624,25 @@ def run_invariant_checks(
         sequential.append(single_result[0])
     baseline_by_id = {result.case_id: result for result in sequential}
 
-    print(f"heterogeneous ragged batch: {len(geometries)} case(s)")
+    print(  # noqa: T201 - CLI validation report
+        f"heterogeneous ragged batch: {len(geometries)} case(s)"
+    )
     batched = solver([by_id[result.case_id] for result in sequential])
     gate_batch_versus_sequential(sequential, batched, INVARIANT_EXACT_ATOL, failures)
 
     for case_id in homogeneous_case_ids:
         if case_id not in by_id:
             continue
-        print(f"homogeneous ragged batch: {case_id} x{HOMOGENEOUS_REPLICAS}")
+        print(  # noqa: T201 - CLI validation report
+            f"homogeneous ragged batch: {case_id} x{HOMOGENEOUS_REPLICAS}"
+        )
         replicas = solver([by_id[case_id]] * HOMOGENEOUS_REPLICAS)
         gate_homogeneous_replicates(
             baseline_by_id[case_id], replicas, INVARIANT_EXACT_ATOL, failures
         )
 
     for delta in TRANSLATION_DELTAS:
-        print(f"translation: delta={delta}")
+        print(f"translation: delta={delta}")  # noqa: T201 - CLI validation report
         translated_results = solver(
             [translated(by_id[r.case_id], delta) for r in sequential]
         )
@@ -648,7 +660,7 @@ def run_invariant_checks(
         ("r90_z", [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
     ]
     for label, matrix in rotations:
-        print(f"rotation: {label}")
+        print(f"rotation: {label}")  # noqa: T201 - CLI validation report
         rotated_results = solver(
             [rotated(by_id[r.case_id], matrix) for r in sequential]
         )
@@ -663,9 +675,9 @@ def run_invariant_checks(
             failures,
         )
 
-    print("force conservation")
+    print("force conservation")  # noqa: T201 - CLI validation report
     gate_force_conservation(sequential, INVARIANT_NET_FORCE_ATOL, failures)
-    print("charge conservation")
+    print("charge conservation")  # noqa: T201 - CLI validation report
     gate_charge_conservation(sequential, INVARIANT_NET_CHARGE_ATOL, failures)
     return failures
 
@@ -708,7 +720,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         manifest = conformance.load_json(args.manifest)
         cases = conformance.selected_cases(manifest, args.cases)
         if not cases:
-            print("no GFN2 conformance cases selected")
+            print(  # noqa: T201 - CLI validation report
+                "no GFN2 conformance cases selected"
+            )
             return 0
         geometries = load_geometries(args.manifest, manifest, cases)
         homogeneous_case_ids = select_homogeneous_case_ids(geometries)
@@ -723,11 +737,11 @@ def main(argv: Iterable[str] | None = None) -> int:
                 args.cpu_threads,
                 args.memory_mode,
             )
-            print(
+            print(  # noqa: T201 - CLI validation report
                 f"invariance checks: backend={backend}, memory_mode={args.memory_mode}"
             )
             failures = run_invariant_checks(solver, geometries, homogeneous_case_ids)
-            print(
+            print(  # noqa: T201 - CLI validation report
                 f"invariance {'OK' if not failures else 'FAILED'}: "
                 f"backend={backend}, memory_mode={args.memory_mode}, "
                 f"cases={len(cases)}, failures={len(failures)}"
@@ -740,10 +754,10 @@ def main(argv: Iterable[str] | None = None) -> int:
                 f"{len(overall_failures)} invariance check(s) failed"
             )
     except public_api.BackendUnavailable as exc:
-        print(f"SKIP {exc}", file=sys.stderr)
+        print(f"SKIP {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         return 77 if args.skip_backend_unavailable else 1
     except conformance.ConformanceError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         return 1
     return 0
 

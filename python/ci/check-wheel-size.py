@@ -9,6 +9,7 @@ PYPI_FILE_LIMIT_BYTES = 100_000_000
 
 
 def main() -> int:
+    """Report wheel sizes and fail when any exceeds PyPI's file limit."""
     wheel_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("wheelhouse")
     wheels = sorted(wheel_dir.glob("*.whl"))
     if not wheels:
@@ -16,7 +17,9 @@ def main() -> int:
     oversized = []
     for wheel in wheels:
         size = wheel.stat().st_size
-        print(f"{wheel.name}: {size / 1_000_000:.1f} MB")
+        print(  # noqa: T201 - CLI validation report
+            f"{wheel.name}: {size / 1_000_000:.1f} MB"
+        )
         if size > PYPI_FILE_LIMIT_BYTES:
             oversized.append((wheel, size))
     if oversized:

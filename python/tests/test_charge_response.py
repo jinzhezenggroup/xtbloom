@@ -16,7 +16,8 @@ H2_POSITIONS = np.array(
 )
 
 
-def _h2(charge_response=None):
+def _h2(charge_response: ChargeResponse | None = None) -> Calculator:
+    """Build the shared hydrogen calculator with an optional response."""
     return Calculator(
         "GFN2-xTB",
         numbers=[1, 1],
@@ -25,7 +26,8 @@ def _h2(charge_response=None):
     )
 
 
-def test_zero_charge_response_matches_baseline():
+def test_zero_charge_response_matches_baseline() -> None:
+    """Make an explicit zero response identical to the ordinary model."""
     baseline = _h2().singlepoint()
     zero = _h2(
         ChargeResponse(shifts=[0.0, 0.0], matrix=[[0.0, 0.0], [0.0, 0.0]])
@@ -35,7 +37,8 @@ def test_zero_charge_response_matches_baseline():
     assert zero.charges == pytest.approx(baseline.charges, abs=1.0e-9)
 
 
-def test_charge_response_changes_energy():
+def test_charge_response_changes_energy() -> None:
+    """Apply a nonzero response to the SCC energy and charges."""
     baseline = _h2().singlepoint()
     response = ChargeResponse(
         shifts=[0.003, -0.002], matrix=[[0.02, 0.001], [0.001, 0.018]]
@@ -48,7 +51,8 @@ def test_charge_response_changes_energy():
     assert not np.allclose(result.charges, baseline.charges, rtol=0.0, atol=1.0e-10)
 
 
-def test_single_matches_batch_and_sequential():
+def test_single_matches_batch_and_sequential() -> None:
+    """Keep response results consistent across single and batch execution."""
     response = ChargeResponse(
         shifts=[0.003, -0.002], matrix=[[0.02, 0.001], [0.001, 0.018]]
     )
@@ -72,7 +76,8 @@ def test_single_matches_batch_and_sequential():
     )
 
 
-def test_response_packing_skips_dense_zeros_for_ordinary_batches():
+def test_response_packing_skips_dense_zeros_for_ordinary_batches() -> None:
+    """Avoid allocating dense response operators for ordinary batches."""
     structures = [
         Structure([2], [[0.0, 0.0, 0.0]]),
         Structure([1, 1], H2_POSITIONS),
@@ -85,7 +90,10 @@ def test_response_packing_skips_dense_zeros_for_ordinary_batches():
 
 
 @pytest.mark.parametrize("response_index", [1, 2])
-def test_ragged_response_packing_zero_fills_only_mixed_batches(response_index):
+def test_ragged_response_packing_zero_fills_only_mixed_batches(
+    response_index: int,
+) -> None:
+    """Zero-fill missing operators only when a ragged batch has a response."""
     response = ChargeResponse(
         shifts=[0.003, -0.002], matrix=[[0.02, 0.001], [0.001, 0.018]]
     )
@@ -117,7 +125,8 @@ def test_ragged_response_packing_zero_fills_only_mixed_batches(response_index):
     assert matrix == pytest.approx(expected_matrix)
 
 
-def test_charge_response_shape_validation():
+def test_charge_response_shape_validation() -> None:
+    """Reject malformed response arrays and atom-count mismatches."""
     with pytest.raises(GPUxtbValueError):
         ChargeResponse(shifts=[0.0, 0.0], matrix=[0.0, 0.0, 0.0, 0.0])
     with pytest.raises(GPUxtbValueError):
@@ -131,7 +140,8 @@ def test_charge_response_shape_validation():
         calc.singlepoint()
 
 
-def test_nonsymmetric_matrix_rejected_by_native():
+def test_nonsymmetric_matrix_rejected_by_native() -> None:
+    """Reject a nonsymmetric response matrix at the native API boundary."""
     calc = _h2(ChargeResponse(shifts=[0.0, 0.0], matrix=[[0.0, 0.001], [0.0, 0.0]]))
     with pytest.raises(GPUxtbRuntimeError):
         calc.singlepoint()

@@ -22,11 +22,13 @@ import statistics
 import subprocess
 import sys
 import time
-from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CONFORMANCE_TOOLS = REPOSITORY_ROOT / "tools" / "conformance"
@@ -382,7 +384,10 @@ class GpuxtbAdapter:
         self.synchronize()
         self.memory.download_outputs()
         failures = [
-            f"system {index}: status={self.statuses[index]}, converged={self.converged[index]}, iterations={self.iterations[index]}"
+            "system "
+            f"{index}: status={self.statuses[index]}, "
+            f"converged={self.converged[index]}, "
+            f"iterations={self.iterations[index]}"
             for index in range(self.systems)
             if self.statuses[index] != public_api.GPUXTB_STATUS_SUCCESS
             or self.converged[index] != 1
@@ -534,10 +539,15 @@ def benchmark_gpuxtb_cell(
                     "after_measurement": memory_after_measurement,
                 },
                 "timing_scope": {
-                    "setup": "shared-library load, context create, descriptor allocation/upload",
+                    "setup": (
+                        "shared-library load, context create, descriptor "
+                        "allocation/upload"
+                    ),
                     "cold": "first gpuxtb_compute plus explicit CUDA synchronize",
                     "warm": "gpuxtb_compute plus explicit CUDA synchronize",
-                    "excluded": "post-timing device-to-host download and correctness comparison",
+                    "excluded": (
+                        "post-timing device-to-host download and correctness comparison"
+                    ),
                 },
                 "engine_options": {
                     "model": "GFN2-xTB",
@@ -979,7 +989,7 @@ def discover_reference(engine: str, explicit: Path | None) -> dict[str, Any]:
 def reference_rows(
     engine: str, args: argparse.Namespace, metadata: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    """Emit explicit provisional rows until persistent baseline adapters are available."""
+    """Emit provisional rows until persistent baseline adapters are available."""
     reason = (
         f"provisional {engine} CLI adapter is not timed yet; command template and "
         "executable/version discovery are recorded in metadata.references"
@@ -1352,7 +1362,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         rows: list[dict[str, Any]] = []
         if "gpuxtb" in args.engines:
             for cell in gpuxtb_cells(args):
-                print(
+                print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"RUN {cell.engine} {cell.backend}/{cell.memory_mode} "
                     f"{cell.workload} {cell.property} batch={cell.batch_size}",
                     flush=True,
@@ -1361,10 +1371,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     cell, args, manifest, cases[WORKLOAD_CASES[cell.workload]]
                 )
                 rows.append(row)
-                print(f"  {row['availability']}", flush=True)
+                print(  # noqa: T201 - preserve benchmark CLI progress output
+                    f"  {row['availability']}", flush=True
+                )
         if "xtb" in args.engines:
             for cell in xtb_cells(args):
-                print(
+                print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"RUN {cell.engine} {cell.backend}/{cell.memory_mode} "
                     f"{cell.workload} {cell.property} batch={cell.batch_size}",
                     flush=True,
@@ -1373,10 +1385,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     cell, args, manifest, cases[WORKLOAD_CASES[cell.workload]]
                 )
                 rows.append(row)
-                print(f"  {row['availability']}", flush=True)
+                print(  # noqa: T201 - preserve benchmark CLI progress output
+                    f"  {row['availability']}", flush=True
+                )
         if "tblite" in args.engines:
             for cell in tblite_cells(args):
-                print(
+                print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"RUN {cell.engine} {cell.backend}/{cell.memory_mode} "
                     f"{cell.workload} {cell.property} batch={cell.batch_size}",
                     flush=True,
@@ -1385,10 +1399,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     cell, args, manifest, cases[WORKLOAD_CASES[cell.workload]]
                 )
                 rows.append(row)
-                print(f"  {row['availability']}", flush=True)
+                print(  # noqa: T201 - preserve benchmark CLI progress output
+                    f"  {row['availability']}", flush=True
+                )
         if "dxtb" in args.engines:
             for cell in dxtb_cells(args):
-                print(
+                print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"RUN {cell.engine} {cell.backend}/{cell.memory_mode} "
                     f"{cell.workload} {cell.property} batch={cell.batch_size}",
                     flush=True,
@@ -1397,7 +1413,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     cell, args, manifest, cases[WORKLOAD_CASES[cell.workload]]
                 )
                 rows.append(row)
-                print(f"  {row['availability']}", flush=True)
+                print(  # noqa: T201 - preserve benchmark CLI progress output
+                    f"  {row['availability']}", flush=True
+                )
         document = {
             "schema_version": SCHEMA_VERSION,
             "metadata": metadata,
@@ -1413,7 +1431,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         write_json(args.output_json, document)
         write_csv(args.output_csv, rows)
-        print(f"wrote {args.output_json} and {args.output_csv}")
+        print(  # noqa: T201 - preserve benchmark CLI completion output
+            f"wrote {args.output_json} and {args.output_csv}"
+        )
         errors = [row for row in rows if row["availability"] == "error"]
         failed = [
             row for row in rows if row.get("correctness", {}).get("status") == "fail"
@@ -1424,7 +1444,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         return 0
     except (BenchmarkError, conformance.ConformanceError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         return 1
 
 

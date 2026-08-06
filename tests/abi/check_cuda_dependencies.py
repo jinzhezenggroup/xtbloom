@@ -38,7 +38,6 @@ LOADER_SYMBOL_RE = re.compile(
 
 def find_forbidden_needed(dynamic_output: str) -> list[str]:
     """Return NVIDIA shared objects present in the ELF dependency list."""
-
     forbidden: set[str] = set()
     for line in dynamic_output.splitlines():
         if "(NEEDED)" not in line or "[" not in line:
@@ -51,7 +50,6 @@ def find_forbidden_needed(dynamic_output: str) -> list[str]:
 
 def find_cuda_symbol_leaks(dynamic_symbols_output: str) -> tuple[list[str], list[str]]:
     """Return unresolved CUDA names and defined loader/CUDA exports."""
-
     unresolved: set[str] = set()
     exported: set[str] = set()
     for line in dynamic_symbols_output.splitlines():
@@ -79,6 +77,7 @@ def find_cuda_symbol_leaks(dynamic_symbols_output: str) -> tuple[list[str], list
 
 
 def main() -> int:
+    """Inspect one shared library for forbidden CUDA loader dependencies."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--readelf", required=True, help="readelf-compatible executable"
@@ -105,16 +104,20 @@ def main() -> int:
 
     failed = False
     if forbidden:
-        print(
+        print(  # noqa: T201 - CLI validation report
             "CUDA-enabled libgpuxtb must not carry a DT_NEEDED entry on an NVIDIA "
             "library; found: " + ", ".join(forbidden)
         )
         failed = True
     if unresolved:
-        print("unresolved CUDA-facing symbols: " + ", ".join(unresolved))
+        print(  # noqa: T201 - CLI validation report
+            "unresolved CUDA-facing symbols: " + ", ".join(unresolved)
+        )
         failed = True
     if exported:
-        print("exported CUDA loader/shim symbols: " + ", ".join(exported))
+        print(  # noqa: T201 - CLI validation report
+            "exported CUDA loader/shim symbols: " + ", ".join(exported)
+        )
         failed = True
     return int(failed)
 

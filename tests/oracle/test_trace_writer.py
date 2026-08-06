@@ -180,6 +180,7 @@ class TraceWriterTest(unittest.TestCase):
     """Exercise canonical emission, schema alignment, and observer semantics."""
 
     def test_fixture_records_restricted_channels_and_nested_multipoles(self) -> None:
+        """Retain restricted channels and nested multipoles in the fixture."""
         loaded = json.loads(TRACE.dumps(_fixture()))
         iteration = loaded["iterations"][0]
         self.assertEqual(len(iteration["occupations"]), 2)
@@ -189,6 +190,7 @@ class TraceWriterTest(unittest.TestCase):
 
     @unittest.skipIf(jsonschema is None, "jsonschema is not installed")
     def test_all_writer_lifecycle_outputs_validate_against_schema(self) -> None:
+        """Validate every writer lifecycle fixture against the schema."""
         schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
         jsonschema.Draft7Validator.check_schema(schema)
         validator = jsonschema.Draft7Validator(schema)
@@ -209,10 +211,12 @@ class TraceWriterTest(unittest.TestCase):
                 validator.validate(json.loads(TRACE.dumps(fixture)))
 
     def test_roundtrip_is_byte_identical(self) -> None:
+        """Round-trip canonical trace bytes without changes."""
         text = TRACE.dumps(_fixture())
         self.assertEqual(TRACE.dumps(json.loads(text)), text)
 
     def test_unicode_and_extensible_provenance_roundtrip(self) -> None:
+        """Preserve Unicode and extensible provenance through serialization."""
         fixture = _fixture()
         fixture["provenance"]["oracle_command"] = "trace --molecule H₃⁺"
         fixture["provenance"]["toolchain"] = {"compiler": "gfortran", "flags": []}
@@ -221,6 +225,7 @@ class TraceWriterTest(unittest.TestCase):
         self.assertEqual(TRACE.dumps(json.loads(text)), text)
 
     def test_floats_keep_17_significant_digits(self) -> None:
+        """Serialize binary64 values with 17 significant digits."""
         text = TRACE.dumps(_fixture())
         self.assertIn("0.10000000000000001", text)
         fixture = _fixture()
@@ -230,6 +235,7 @@ class TraceWriterTest(unittest.TestCase):
         self.assertIsInstance(json.loads(text)["input"]["molecular_charge"], float)
 
     def test_quadrupole_and_residual_layout_is_independent_of_fortran(self) -> None:
+        """Validate quadrupole and residual layouts independently of Fortran."""
         fixture = _fixture()
         iteration = fixture["iterations"][0]
         mixed = (
@@ -256,21 +262,25 @@ class TraceWriterTest(unittest.TestCase):
         TRACE.validate(fixture)
 
     def test_multiple_completed_iterations(self) -> None:
+        """Accept a lifecycle with multiple completed iterations."""
         fixture = _fixture()
         fixture["iterations"] = [_iteration(converged=False), _iteration(index=2)]
         fixture["terminal"]["iterations"] = 2
         TRACE.validate(fixture)
 
     def test_setup_failure_has_zero_iterations(self) -> None:
+        """Require setup failures to contain zero completed iterations."""
         TRACE.validate(_setup_failure())
 
     def test_eigensolver_failure_preserves_only_pre_solve_state(self) -> None:
+        """Retain only pre-solve state after an eigensolver failure."""
         fixture = _eigensolver_failure()
         self.assertNotIn("density", fixture["failed_attempt"])
         self.assertNotIn("raw_qsh", fixture["failed_attempt"])
         TRACE.validate(fixture)
 
     def test_later_mixer_failure_has_no_failed_attempt(self) -> None:
+        """Omit failed-attempt payloads for later mixer failures."""
         fixture = _fixture()
         fixture["iterations"] = [_iteration(converged=False)]
         fixture["terminal"] = {
@@ -281,6 +291,7 @@ class TraceWriterTest(unittest.TestCase):
         TRACE.validate(fixture)
 
     def test_max_iterations_uses_terminal_status_only(self) -> None:
+        """Represent an iteration limit through terminal status only."""
         fixture = _fixture()
         fixture["iterations"] = [_iteration(converged=False)]
         fixture["terminal"] = {
@@ -292,6 +303,7 @@ class TraceWriterTest(unittest.TestCase):
         TRACE.validate(fixture)
 
     def test_rejects_unsupported_format_version(self) -> None:
+        """Reject unsupported trace format versions."""
         fixture = _fixture()
         fixture["format"] = "gpuxtb-scc-trace-v0"
         with self.assertRaisesRegex(TRACE.TraceError, "unsupported trace format"):
@@ -305,22 +317,26 @@ class TraceWriterTest(unittest.TestCase):
         return fixture
 
     def test_accepts_restricted_open_shell_inputs(self) -> None:
+        """Accept restricted open-shell inputs represented by the v1 schema."""
         fixture = self._restricted_open_shell_fixture()
         TRACE.validate(fixture)
 
     def test_rejects_unrestricted_v1_inputs(self) -> None:
+        """Reject unrestricted inputs unsupported by the v1 schema."""
         fixture = _fixture()
         fixture["input"]["spin_channels"] = 2
         with self.assertRaisesRegex(TRACE.TraceError, "restricted-only"):
             TRACE.validate(fixture)
 
     def test_rejects_negative_unpaired_electron_count(self) -> None:
+        """Reject negative unpaired-electron counts."""
         fixture = _fixture()
         fixture["input"]["unpaired_electrons"] = -1
         with self.assertRaisesRegex(TRACE.TraceError, "must be nonnegative"):
             TRACE.validate(fixture)
 
     def test_rejects_malformed_molecular_input(self) -> None:
+        """Reject malformed molecular descriptors."""
         fixture = _fixture()
         fixture["input"]["positions"] = [0.0, 0.0]
         with self.assertRaisesRegex(TRACE.TraceError, "positions must hold"):
@@ -335,6 +351,7 @@ class TraceWriterTest(unittest.TestCase):
             TRACE.validate(fixture)
 
     def test_point_charge_dimensions_values_and_hardness(self) -> None:
+        """Validate point-charge dimensions, values, and hardness data."""
         fixture = _fixture()
         fixture["input"]["point_charges"] = {
             "positions": [0.0, 0.0, 4.0],
@@ -355,6 +372,7 @@ class TraceWriterTest(unittest.TestCase):
             TRACE.validate(fixture)
 
     def test_rejects_missing_or_inconsistent_basis_mapping(self) -> None:
+        """Reject missing or inconsistent atom-to-basis mappings."""
         fixture = _fixture()
         del fixture["basis"]["atom_to_shell_count"]
         with self.assertRaisesRegex(TRACE.TraceError, "atom_to_shell_count"):
@@ -369,6 +387,7 @@ class TraceWriterTest(unittest.TestCase):
             TRACE.validate(fixture)
 
     def test_rejects_wrong_matrix_multipole_and_occupation_shapes(self) -> None:
+        """Reject invalid matrix, multipole, and occupation shapes."""
         fixture = _fixture()
         fixture["statics"]["overlap"][0][0].append(0.0)
         with self.assertRaisesRegex(TRACE.TraceError, "columns"):
@@ -383,6 +402,7 @@ class TraceWriterTest(unittest.TestCase):
             TRACE.validate(fixture)
 
     def test_rejects_wrong_residual_layout_value_and_rms(self) -> None:
+        """Reject invalid residual layouts, values, and RMS summaries."""
         fixture = _fixture()
         fixture["residual_layout"]["atomic_dipoles"] = 5
         with self.assertRaisesRegex(TRACE.TraceError, "must be 6"):
@@ -397,12 +417,14 @@ class TraceWriterTest(unittest.TestCase):
             TRACE.validate(fixture)
 
     def test_rejects_qat_inconsistent_with_qsh_reduction(self) -> None:
+        """Reject atomic charges inconsistent with shell-charge reduction."""
         fixture = _fixture()
         fixture["iterations"][0]["raw_qat"][0][1] = 7.0
         with self.assertRaisesRegex(TRACE.TraceError, "reduced raw_qsh"):
             TRACE.validate(fixture)
 
     def test_rejects_inconsistent_convergence_flags(self) -> None:
+        """Reject mutually inconsistent convergence flags."""
         fixture = _fixture()
         fixture["iterations"][0]["convergence"]["energy"] = False
         with self.assertRaisesRegex(TRACE.TraceError, "must be the conjunction"):
@@ -414,6 +436,7 @@ class TraceWriterTest(unittest.TestCase):
             TRACE.validate(fixture)
 
     def test_rejects_out_of_order_iteration_or_failed_attempt_index(self) -> None:
+        """Reject out-of-order iteration and failed-attempt indices."""
         fixture = _fixture()
         fixture["iterations"] = [_iteration(index=2)]
         with self.assertRaisesRegex(TRACE.TraceError, "out-of-order index"):
@@ -424,6 +447,7 @@ class TraceWriterTest(unittest.TestCase):
             TRACE.validate(fixture)
 
     def test_terminal_count_status_and_convergence_are_consistent(self) -> None:
+        """Keep terminal count, status, and convergence mutually consistent."""
         fixture = _fixture()
         fixture["terminal"]["iterations"] = 999
         with self.assertRaisesRegex(TRACE.TraceError, "must be 1"):
@@ -442,6 +466,7 @@ class TraceWriterTest(unittest.TestCase):
             TRACE.validate(fixture)
 
     def test_rejects_nonfinite_values_in_core_or_extensible_provenance(self) -> None:
+        """Reject nonfinite values in core data and extensible provenance."""
         fixture = _fixture()
         fixture["iterations"][0]["energy"] = float("nan")
         with self.assertRaisesRegex(TRACE.TraceError, "finite"):
@@ -452,6 +477,7 @@ class TraceWriterTest(unittest.TestCase):
             TRACE.validate(fixture)
 
     def test_provenance_is_lowercase_hex(self) -> None:
+        """Require provenance digests and revisions to use lowercase hex."""
         fixture = _fixture()
         fixture["provenance"]["tblite_revision"] = "z" * 40
         with self.assertRaisesRegex(TRACE.TraceError, "40-hex"):
@@ -462,6 +488,7 @@ class TraceWriterTest(unittest.TestCase):
             TRACE.validate(fixture)
 
     def test_rejects_schema_forbidden_extra_fields(self) -> None:
+        """Reject extra fields outside explicitly extensible objects."""
         fixture = _fixture()
         fixture["unexpected"] = True
         with self.assertRaisesRegex(TRACE.TraceError, "unsupported field"):
@@ -476,6 +503,7 @@ class TraceWriterTest(unittest.TestCase):
             TRACE.validate(fixture)
 
     def test_schema_document_is_valid_and_versioned(self) -> None:
+        """Keep the checked-in JSON schema valid and explicitly versioned."""
         schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
         self.assertEqual(schema["properties"]["format"]["const"], TRACE.FORMAT)
         self.assertEqual(

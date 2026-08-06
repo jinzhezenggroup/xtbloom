@@ -15,6 +15,10 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "gpuxtb_conformance.py"
@@ -348,7 +352,7 @@ class ConformanceToolTest(unittest.TestCase):
         self.run_tool("compare", "--actual-dir", str(golden))
 
     def test_compare_accepts_raw_tblite_energy_and_gradient(self) -> None:
-        """tblite gradients are negated exactly once before force comparison."""
+        """Tblite gradients are negated exactly once before force comparison."""
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as temporary:
             actual_dir = Path(temporary)
@@ -394,7 +398,7 @@ class ConformanceToolTest(unittest.TestCase):
             self.assertIn("FAIL", completed.stdout)
 
     def test_generate_runs_tblite_command_and_normalizes_gradient(self) -> None:
-        """A tiny fake executable verifies argv construction without a Fortran toolchain."""
+        """Verify command construction and normalization with a fake executable."""
         expected = json.loads(
             (
                 REPOSITORY_ROOT / "data" / "conformance" / "golden" / "h3_plus.json"
@@ -473,14 +477,16 @@ class ConformanceToolTest(unittest.TestCase):
                 "raw = {\n"
                 "  'partial charges': properties['partial_charges_e'],\n"
                 "  'atomic dipole moments': properties['atomic_dipoles_e_bohr'],\n"
-                "  'atomic quadrupole moments': properties['atomic_quadrupoles_e_bohr2'],\n"
+                "  'atomic quadrupole moments': "
+                "properties['atomic_quadrupoles_e_bohr2'],\n"
                 "  'number of unpaired electrons': 1,\n"
                 "}\n"
                 "pathlib.Path('xtbout.json').write_text(json.dumps(raw))\n"
                 "gradient = properties['gradient_hartree_per_bohr']\n"
                 "rows = [' '.join(map(str, gradient[i:i+3])) for i in range(0, 6, 3)]\n"
                 "pathlib.Path('gradient').write_text(\n"
-                "  '$grad\\n  cycle = 1 SCF energy = -4.42833345932 |dE/dxyz| = 0.0\\n'\n"
+                "  '$grad\\n  cycle = 1 SCF energy = -4.42833345932 "
+                "|dE/dxyz| = 0.0\\n'\n"
                 "  ' 0 0 0 o\\n 0 0 1.834 h\\n' + '\\n'.join(rows) + '\\n$end\\n'\n"
                 ")\n",
                 encoding="utf-8",
@@ -542,7 +548,8 @@ class ConformanceToolTest(unittest.TestCase):
                 "raw = {\n"
                 "  'partial charges': properties['partial_charges_e'],\n"
                 "  'atomic dipole moments': properties['atomic_dipoles_e_bohr'],\n"
-                "  'atomic quadrupole moments': properties['atomic_quadrupoles_e_bohr2'],\n"
+                "  'atomic quadrupole moments': "
+                "properties['atomic_quadrupoles_e_bohr2'],\n"
                 "  'number of unpaired electrons': 0,\n"
                 "}\n"
                 "pathlib.Path('xtbout.json').write_text(json.dumps(raw))\n"
@@ -551,11 +558,13 @@ class ConformanceToolTest(unittest.TestCase):
                 "coords = pathlib.Path('coord').read_text().splitlines()[1:-1]\n"
                 f"energy = {expected['properties']['energy_hartree']!r}\n"
                 "pathlib.Path('gradient').write_text(\n"
-                "  '$grad\\n  cycle = 1 SCF energy = ' + str(energy) + ' |dE/dxyz| = 0.0\\n'\n"
+                "  '$grad\\n  cycle = 1 SCF energy = ' + str(energy) +"
+                " ' |dE/dxyz| = 0.0\\n'\n"
                 "  + '\\n'.join(coords) + '\\n' + '\\n'.join(rows) + '\\n$end\\n'\n"
                 ")\n"
                 "pcgradient = properties['point_charge_gradient_hartree_per_bohr']\n"
-                "pathlib.Path('pcgrad').write_text(' '.join(map(str, pcgradient)) + '\\n')\n",
+                "pathlib.Path('pcgrad').write_text("
+                "' '.join(map(str, pcgradient)) + '\\n')\n",
                 encoding="utf-8",
             )
             executable.chmod(0o755)
@@ -694,7 +703,12 @@ def _invariant_geometries() -> list[INVARIANTS.Geometry]:
 class InvarianceToolTest(unittest.TestCase):
     """Exercise the automated symmetry, conservation, and batch gates."""
 
-    def run_invariant_checks(self, solver, geometries) -> list[str]:
+    def run_invariant_checks(
+        self,
+        solver: Callable[[list[INVARIANTS.Geometry]], list[INVARIANTS.InvariantResult]],
+        geometries: list[INVARIANTS.Geometry],
+    ) -> list[str]:
+        """Run every invariant while suppressing expected progress output."""
         with redirect_stdout(io.StringIO()):
             return INVARIANTS.run_invariant_checks(solver, geometries, ())
 
@@ -745,7 +759,9 @@ class InvarianceToolTest(unittest.TestCase):
         """A trivially symmetric solver satisfies all self-consistency gates."""
         geometries = _invariant_geometries()
 
-        def solver(items):
+        def solver(
+            items: list[INVARIANTS.Geometry],
+        ) -> list[INVARIANTS.InvariantResult]:
             return [_zero_invariant_result(item) for item in items]
 
         failures = self.run_invariant_checks(solver, geometries)
@@ -755,7 +771,9 @@ class InvarianceToolTest(unittest.TestCase):
         """A position-dependent energy cannot pass the translation gate."""
         geometries = _invariant_geometries()
 
-        def solver(items):
+        def solver(
+            items: list[INVARIANTS.Geometry],
+        ) -> list[INVARIANTS.InvariantResult]:
             results = []
             for item in items:
                 result = _zero_invariant_result(item)
@@ -774,7 +792,9 @@ class InvarianceToolTest(unittest.TestCase):
         """A lab-frame force cannot pass the rotation-covariance gate."""
         geometries = _invariant_geometries()
 
-        def solver(items):
+        def solver(
+            items: list[INVARIANTS.Geometry],
+        ) -> list[INVARIANTS.InvariantResult]:
             results = []
             for item in items:
                 result = _zero_invariant_result(item)
@@ -798,7 +818,9 @@ class InvarianceToolTest(unittest.TestCase):
         """A nonzero net force cannot pass the conservation gate."""
         geometries = _invariant_geometries()
 
-        def solver(items):
+        def solver(
+            items: list[INVARIANTS.Geometry],
+        ) -> list[INVARIANTS.InvariantResult]:
             results = []
             for item in items:
                 result = _zero_invariant_result(item)
@@ -826,7 +848,9 @@ class InvarianceToolTest(unittest.TestCase):
         """Batch-size-dependent results must differ from one-system solves."""
         geometries = _invariant_geometries()
 
-        def solver(items):
+        def solver(
+            items: list[INVARIANTS.Geometry],
+        ) -> list[INVARIANTS.InvariantResult]:
             return [
                 INVARIANTS.InvariantResult(
                     case_id=item.case_id,
@@ -847,7 +871,9 @@ class InvarianceToolTest(unittest.TestCase):
         geometries = _invariant_geometries()
         invocation_sizes: list[int] = []
 
-        def solver(items):
+        def solver(
+            items: list[INVARIANTS.Geometry],
+        ) -> list[INVARIANTS.InvariantResult]:
             invocation_sizes.append(len(items))
             return [_zero_invariant_result(item) for item in items]
 

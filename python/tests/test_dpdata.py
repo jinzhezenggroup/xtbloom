@@ -13,7 +13,9 @@ _BOHR = 0.529177210903
 _HARTREE_TO_EV = 27.211386245988
 
 
-def _case_data_dict(case_id, nframes=1, distort=False):
+def _case_data_dict(
+    case_id: str, nframes: int = 1, distort: bool = False
+) -> dict[str, object]:
     """Build a dpdata System data dict (coords in Angstrom) from a conformance case."""
     case = _cases.case_by_id(case_id)
     numbers, positions, _, _, _ = _cases.structure_inputs(case)
@@ -39,7 +41,8 @@ def _case_data_dict(case_id, nframes=1, distort=False):
     }
 
 
-def _ensure_driver_registered():
+def _ensure_driver_registered() -> type:
+    """Load and return the registered gpuxtb dpdata driver class."""
     # The entry point is registered after a normal wheel install; for a source
     # checkout we register the module explicitly, mirroring dpdata's loader.
     import gpuxtb.dpdata as _  # noqa: F401
@@ -49,12 +52,14 @@ def _ensure_driver_registered():
     return Driver.get_driver("gpuxtb")
 
 
-def test_driver_registered():
+def test_driver_registered() -> None:
+    """Expose the plugin through dpdata's driver registry."""
     driver_class = _ensure_driver_registered()
     assert driver_class.__module__ == "gpuxtb.dpdata"
 
 
-def test_label_energies_match_golden():
+def test_label_energies_match_golden() -> None:
+    """Match dpdata labels to golden energies and forces in dpdata units."""
     _ensure_driver_registered()
     system = dpdata.System(data=_case_data_dict("ketene"))
     labeled = system.predict(driver="gpuxtb")
@@ -72,7 +77,8 @@ def test_label_energies_match_golden():
     )
 
 
-def test_label_distinct_frames():
+def test_label_distinct_frames() -> None:
+    """Label every distinct frame in one dpdata system."""
     _ensure_driver_registered()
     system = dpdata.System(data=_case_data_dict("ketene", nframes=2, distort=True))
     labeled = system.predict(driver="gpuxtb")
@@ -82,7 +88,8 @@ def test_label_distinct_frames():
     assert labeled.data["energies"][0] != pytest.approx(labeled.data["energies"][1])
 
 
-def test_driver_charge():
+def test_driver_charge() -> None:
+    """Forward a fixed charged-system state through the dpdata driver."""
     _ensure_driver_registered()
     system = dpdata.System(data=_case_data_dict("h3_plus"))
     labeled = system.predict(driver="gpuxtb", charge=1)
@@ -94,7 +101,8 @@ def test_driver_charge():
     )
 
 
-def test_driver_multiplicity():
+def test_driver_multiplicity() -> None:
+    """Forward spin multiplicity through the dpdata driver."""
     _ensure_driver_registered()
     system = dpdata.System(data=_case_data_dict("oh_radical"))
     labeled = system.predict(driver="gpuxtb", multiplicity=2, spin_channels=1)
@@ -106,7 +114,8 @@ def test_driver_multiplicity():
     )
 
 
-def test_driver_reads_per_frame_multiplicity_without_forcing_uhf_zero():
+def test_driver_reads_per_frame_multiplicity_without_forcing_uhf_zero() -> None:
+    """Honor per-frame multiplicity when no fixed UHF value is supplied."""
     _ensure_driver_registered()
     data = _case_data_dict("oh_radical")
     data["multiplicity"] = np.array([2], dtype=np.int32)
@@ -120,7 +129,8 @@ def test_driver_reads_per_frame_multiplicity_without_forcing_uhf_zero():
     )
 
 
-def test_driver_raises_instead_of_publishing_failed_frame_nans():
+def test_driver_raises_instead_of_publishing_failed_frame_nans() -> None:
+    """Raise instead of publishing NaNs for a failed dpdata frame."""
     _ensure_driver_registered()
     from gpuxtb.exceptions import GPUxtbRuntimeError
 
@@ -129,7 +139,8 @@ def test_driver_raises_instead_of_publishing_failed_frame_nans():
         system.predict(driver="gpuxtb", charge=-1, backend="cpu", max_scc_iterations=1)
 
 
-def test_driver_rejects_periodic():
+def test_driver_rejects_periodic() -> None:
+    """Reject periodic dpdata systems unsupported by the molecular ABI."""
     _ensure_driver_registered()
     from gpuxtb.exceptions import GPUxtbNotSupportedError
 

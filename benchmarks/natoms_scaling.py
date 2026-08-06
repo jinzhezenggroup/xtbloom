@@ -31,11 +31,13 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CONFORMANCE_TOOLS = REPOSITORY_ROOT / "tools" / "conformance"
@@ -110,13 +112,21 @@ class Runner(Protocol):
 
     compute_options: dict[str, Any]
 
-    def set_start_mode(self, mode: str) -> None: ...
+    def set_start_mode(self, mode: str) -> None:
+        """Select the state semantics for subsequent invocations."""
+        ...
 
-    def invoke(self) -> None: ...
+    def invoke(self) -> None:
+        """Execute one inference without publishing caller outputs."""
+        ...
 
-    def snapshot(self) -> dict[str, Any]: ...
+    def snapshot(self) -> dict[str, Any]:
+        """Return a synchronized copy of the latest public outputs."""
+        ...
 
-    def close(self) -> None: ...
+    def close(self) -> None:
+        """Release persistent resources owned by the runner."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -129,6 +139,7 @@ class Molecule:
 
     @property
     def natoms(self) -> int:
+        """Return the number of atoms represented by this molecule."""
         return len(self.atomic_numbers)
 
 
@@ -191,7 +202,15 @@ class BatchStorage:
     keepalive: list[Any]
 
 
-def configure_gpuxtb_conformance_scc(options: Any) -> None:
+class _ConformanceOptions(Protocol):
+    """Mutable option fields pinned by the conformance benchmark."""
+
+    max_scc_iterations: int
+    charge_tolerance: float
+    energy_tolerance: float
+
+
+def configure_gpuxtb_conformance_scc(options: _ConformanceOptions) -> None:
     """Pin the SCC convergence controls used by the conformance oracle.
 
     ``gpuxtb_compute_options_init`` already supplies the public 300 K default,
@@ -380,7 +399,7 @@ def _read_json_metadata(path: Path) -> tuple[Any, dict[str, Any]]:
 
 
 def _meson_compiler_executable_provenance(
-    exelist: Any,
+    exelist: object,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Separate verifiable compiler files from unresolved Meson entries.
 
@@ -603,7 +622,7 @@ def collect_run_identity(
     }
 
 
-def _is_sha256(value: Any) -> bool:
+def _is_sha256(value: object) -> bool:
     """Return whether ``value`` is one lowercase or uppercase SHA-256 digest."""
     return (
         isinstance(value, str)
@@ -612,7 +631,7 @@ def _is_sha256(value: Any) -> bool:
     )
 
 
-def _is_git_revision(value: Any) -> bool:
+def _is_git_revision(value: object) -> bool:
     """Accept complete SHA-1 or SHA-256 Git object identifiers."""
     return (
         isinstance(value, str)
@@ -643,7 +662,8 @@ def _gpuxtb_binary_source_identity(
         or source_git.get("revision") != revision
     ):
         raise BenchmarkError(
-            f"{context} gpuxtb binary source must be clean and match repository revision"
+            f"{context} gpuxtb binary source must be clean and match repository "
+            "revision"
         )
     return library_sha, revision
 
@@ -1044,7 +1064,7 @@ class ReferenceRunner:
         self.closed = False
 
     def set_start_mode(self, mode: str) -> None:
-        """References expose persistent state rather than gpuxtb start tags."""
+        """Expose persistent state rather than gpuxtb start tags."""
         if mode != "persistent":
             raise BenchmarkError(
                 f"reference engine cannot select gpuxtb SCC start mode {mode}"
@@ -1108,15 +1128,18 @@ def validate_snapshot(
         for status in snapshot["per_system_status"]
     ):
         raise BenchmarkError(
-            f"public inference produced per-system failures: {snapshot['per_system_status']}"
+            "public inference produced per-system failures: "
+            f"{snapshot['per_system_status']}"
         )
     if any(value != 1 for value in snapshot["scc_converged"]):
         raise BenchmarkError(
-            f"public inference did not converge every system: {snapshot['scc_converged']}"
+            "public inference did not converge every system: "
+            f"{snapshot['scc_converged']}"
         )
     if any(value <= 0 for value in snapshot["scc_iterations"]):
         raise BenchmarkError(
-            f"public inference reported invalid SCC iterations: {snapshot['scc_iterations']}"
+            "public inference reported invalid SCC iterations: "
+            f"{snapshot['scc_iterations']}"
         )
     _validate_forces(snapshot, expected_force_count, "public inference")
 
@@ -1441,7 +1464,7 @@ def collect_rows(
 
 
 def _validated_reference_options(
-    options: Any, property_name: str, natoms: int, batch_size: int
+    options: object, property_name: str, natoms: int, batch_size: int
 ) -> dict[str, Any]:
     """Validate and retain the complete gpuxtb option identity from one row."""
     required = {
@@ -1458,7 +1481,8 @@ def _validated_reference_options(
     }
     if not isinstance(options, dict) or set(options) != required:
         raise BenchmarkError(
-            "reference row compute_options must contain the complete gpuxtb option image"
+            "reference row compute_options must contain the complete gpuxtb "
+            "option image"
         )
     expected_flags = public_api.GPUXTB_COMPUTE_ENERGY
     if property_name == "force":
@@ -1500,7 +1524,7 @@ def _validated_reference_options(
 
 
 def _validated_finite_vector(
-    value: Any,
+    value: object,
     expected_count: int,
     field_name: str,
     source: str = "reference row",
@@ -1518,7 +1542,7 @@ def _validated_finite_vector(
 
 
 def _validated_raw_sample_vectors(
-    value: Any,
+    value: object,
     expected_repetitions: int,
     expected_energy_count: int,
     expected_force_count: int | None,
@@ -1931,14 +1955,16 @@ def build_document(
             ),
             "timing_scope": (
                 "one synchronous gpuxtb_compute public-C-ABI call; persistent context, "
-                "descriptors, options, and caller-owned result buffers; result inspection "
+                "descriptors, options, and caller-owned result buffers; result "
+                "inspection "
                 "is outside the measured interval"
                 if engine == "gpuxtb"
                 else "one persistent reference public-C-API logical batch; setup and "
                 "result inspection are outside the measured interval"
             ),
             "warm_seed": (
-                "exactly one untimed FRESH call on the same identity before WARM warmups"
+                "exactly one untimed FRESH call on the same identity before WARM "
+                "warmups"
                 if protocol.start_mode == "warm"
                 else None
             ),
@@ -2143,7 +2169,8 @@ def write_artifacts(
         )
     except FileExistsError as exc:
         raise FileExistsError(
-            f"benchmark artifact pair is reserved by a concurrent or stale writer: {lock_path}"
+            "benchmark artifact pair is reserved by a concurrent or stale writer: "
+            f"{lock_path}"
         ) from exc
     try:
         lock_stat = os.fstat(lock_descriptor)
@@ -2346,21 +2373,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.allow_overwrite,
         )
     except (BenchmarkError, FileExistsError, OSError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        print(f"ERROR: {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         return 2
     for row in rows:
         if row["availability"] == "available":
-            print(
+            print(  # noqa: T201 - preserve benchmark CLI progress output
                 f"{row['molecule']} natoms={row['natoms']} batch={row['batch_size']} "
                 f"{row['start_mode']} median={row['timing']['median_ms']:.6f} ms "
                 f"iterations={row['raw_samples'][-1]['scc_iterations']}"
             )
         else:
-            print(
+            print(  # noqa: T201 - preserve benchmark CLI diagnostics
                 f"ERROR {row['molecule']} batch={row['batch_size']}: {row['error']}",
                 file=sys.stderr,
             )
-    print(f"wrote {args.output_json} and {args.output_csv}")
+    print(  # noqa: T201 - preserve benchmark CLI completion output
+        f"wrote {args.output_json} and {args.output_csv}"
+    )
     return 2 if failed else 0
 
 

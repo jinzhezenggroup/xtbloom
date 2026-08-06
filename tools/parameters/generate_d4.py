@@ -70,7 +70,6 @@ class D4DataError(ValueError):
 
 def git_show(git_dir: Path, revision: str, path: str) -> str:
     """Read one committed UTF-8 blob without consulting a working tree."""
-
     return subprocess.check_output(
         ["git", f"--git-dir={git_dir}", "show", f"{revision}:{path}"],
         text=True,
@@ -80,7 +79,6 @@ def git_show(git_dir: Path, revision: str, path: str) -> str:
 
 def git_value(git_dir: Path, *arguments: str) -> str:
     """Run a read-only Git query and return its stripped scalar output."""
-
     return subprocess.check_output(
         ["git", f"--git-dir={git_dir}", *arguments], text=True, encoding="utf-8"
     ).strip()
@@ -88,7 +86,6 @@ def git_value(git_dir: Path, *arguments: str) -> str:
 
 def source_digest(sources: dict[str, str]) -> str:
     """Hash path/blob pairs so the manifest identifies every parsed input."""
-
     digest = hashlib.sha256()
     for path in sorted(sources):
         encoded_path = path.encode("utf-8")
@@ -102,7 +99,6 @@ def source_digest(sources: dict[str, str]) -> str:
 
 def numeric_tokens(text: str) -> list[float]:
     """Parse decimal Fortran literals after comments and kind tags are removed."""
-
     uncommented = "\n".join(line.split("!", 1)[0] for line in text.splitlines())
     uncommented = uncommented.replace("_wp", "").replace("D", "E").replace("d", "e")
     return [
@@ -115,7 +111,6 @@ def numeric_tokens(text: str) -> list[float]:
 
 def parameter_array(source: str, name: str, expected: int = 118) -> list[float]:
     """Extract one ``name(max_elem) = [...]`` parameter array."""
-
     match = re.search(
         rf"\b{name}\s*\(\s*max_elem\s*\)\s*=\s*(?:aatoau\s*\*)?\s*\[(.*?)\]",
         source,
@@ -133,7 +128,6 @@ def parse_reference_data(
     source: str,
 ) -> tuple[dict[tuple[str, int, int], float], dict[tuple[str, int, int], list[float]]]:
     """Parse scalar and rank-one ``data`` initializers from reference.inc."""
-
     scalars: dict[tuple[str, int, int], float] = {}
     scalar_pattern = re.compile(
         r"data\s+(\w+)\s*\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)\s*/\s*"
@@ -157,7 +151,6 @@ def parse_reference_data(
 
 def zeta(a: float, c: float, qref: float, qmod: float) -> float:
     """DFT-D4 charge scaling function used for GFN2 reference data."""
-
     if qmod < 0.0:
         return math.exp(a)
     return math.exp(a * (1.0 - math.exp(c * (1.0 - qref / qmod))))
@@ -165,7 +158,6 @@ def zeta(a: float, c: float, qref: float, qmod: float) -> float:
 
 def trapzd(values: list[float]) -> float:
     """Apply dftd4's fixed 23-point trapezoidal Casimir--Polder quadrature."""
-
     if len(values) != len(FREQUENCIES):
         raise D4DataError("dynamic-polarizability vector does not have 23 entries")
     total = 0.0
@@ -182,7 +174,6 @@ def trapzd(values: list[float]) -> float:
 
 def format_double(value: float) -> str:
     """Emit a locale-independent round-trippable C++ binary64 literal."""
-
     if not math.isfinite(value):
         raise D4DataError("generated D4 data contains NaN or infinity")
     text = format(value, ".17g")
@@ -195,7 +186,6 @@ def format_array(
     values: list[float] | list[int], indent: str = "    ", columns: int = 4
 ) -> str:
     """Format a constexpr initializer with bounded line length."""
-
     rendered = [
         format_double(value) if isinstance(value, float) else str(value)
         for value in values
@@ -211,7 +201,6 @@ def build_tables(
     sources: dict[str, str],
 ) -> tuple[list[dict[str, float | int]], list[dict[str, float | int]], list[float]]:
     """Construct packed element/reference records and their dense C6 matrix."""
-
     scalars, arrays = parse_reference_data(sources["src/dftd4/reference.inc"])
     covalent = parameter_array(
         sources["src/dftd4/data/covrad.f90"], "covalent_rad_2009"
@@ -243,7 +232,8 @@ def build_tables(
             raw_alpha = arrays[("alphaiw", reference_index, atomic_number)]
             if len(raw_alpha) != len(FREQUENCIES):
                 raise D4DataError(
-                    f"element {atomic_number} reference {reference_index} has invalid alpha data"
+                    f"element {atomic_number} reference {reference_index} "
+                    "has invalid alpha data"
                 )
             secondary = int(required_scalars["refsys"])
             if secondary <= 0:
@@ -320,7 +310,6 @@ def render_header(
     c6: list[float],
 ) -> str:
     """Render the packed data as one header shared by host and device code."""
-
     element_rows = [
         "    D4ElementData{"
         + ", ".join(
@@ -400,6 +389,7 @@ inline constexpr std::array<double, kReferenceCount * kReferenceCount> kReferenc
 
 
 def main() -> int:
+    """Generate pinned D4 tables and their provenance manifest."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-git-dir", type=Path, required=True)
     parser.add_argument("--revision", required=True)

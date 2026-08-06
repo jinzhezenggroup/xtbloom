@@ -19,8 +19,30 @@ import os
 import sys
 import time
 from pathlib import Path
-from types import ModuleType, TracebackType
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from types import ModuleType, TracebackType
+
+
+class _StorageSlice(Protocol):
+    """Atom range required from a public benchmark batch slice."""
+
+    atom_begin: int
+    atom_end: int
+
+
+class _BatchStorage(Protocol):
+    """Structural storage contract shared by public benchmark adapters."""
+
+    atomic_numbers: Sequence[int]
+    positions: Sequence[float]
+    molecular_charges: Sequence[float]
+    unpaired_electrons: Sequence[int]
+    point_charge_values: Sequence[float]
+    slices: Sequence[_StorageSlice]
+
 
 _LOCAL_DXTB_SOURCE_ROOT = Path.home() / "codes" / "dxtb"
 DEFAULT_DXTB_SOURCE_ROOT: Path | None = (
@@ -45,7 +67,6 @@ def _import_runtime(
     itself.  dxtb's normal Python dependencies, including ``tad-libcint`` for
     GFN2, must still be installed in the active environment.
     """
-
     try:
         torch = importlib.import_module("torch")
     except ImportError as exc:  # pragma: no cover - environment dependent
@@ -116,7 +137,7 @@ class DxtbAdapter:
 
     def __init__(
         self,
-        storage: Any,
+        storage: _BatchStorage,
         property_name: str,
         backend: str,
         device_id: int = 0,
@@ -155,6 +176,8 @@ class DxtbAdapter:
         self._closed = False
         self._energies: Any | None = None
         self._forces: Any | None = None
+        # dxtb's calculator is a third-party dynamic object with no stable
+        # protocol across releases; retain it as ``Any`` at this boundary.
         self._calculator: Any | None = None
         self._previous_threads: int | None = None
         self._timer: Any | None = getattr(self.dxtb, "timer", None)
@@ -297,7 +320,7 @@ class DxtbAdapter:
         }
 
     @property
-    def calculator(self) -> Any:
+    def calculator(self) -> Any:  # noqa: ANN401 - dynamic dxtb calculator API
         """Return the live calculator while rejecting use after cleanup."""
         if self._closed or self._calculator is None:
             raise DxtbError("dxtb adapter is closed")
@@ -311,7 +334,6 @@ class DxtbAdapter:
         until :meth:`synchronize`, allowing the harness to place a precise
         completion boundary around the measured operation.
         """
-
         calculator = self.calculator
         self._energies = None
         self._forces = None
@@ -346,7 +368,6 @@ class DxtbAdapter:
 
     def synchronize(self) -> None:
         """Complete all CUDA work submitted by :meth:`invoke`; CPU is synchronous."""
-
         if self._closed:
             raise DxtbError("dxtb adapter is closed")
         if self.backend == "cuda":
@@ -354,7 +375,6 @@ class DxtbAdapter:
 
     def results(self) -> dict[str, Any]:
         """Copy synchronized outputs to Python lists in public gpuxtb units."""
-
         if self._energies is None:
             raise DxtbError("dxtb results requested before a successful invoke")
         self.synchronize()
@@ -373,7 +393,6 @@ class DxtbAdapter:
 
     def close(self) -> None:
         """Release tensors/calculator and restore process-global torch controls."""
-
         if self._closed:
             return
         self._closed = True
@@ -392,7 +411,8 @@ class DxtbAdapter:
         if self._previous_threads is not None:
             self.torch.set_num_threads(self._previous_threads)
 
-    def __enter__(self) -> Self:
+    def __enter__(self) -> DxtbAdapter:  # noqa: PYI034 - Python 3.10 lacks typing.Self
+        """Return this adapter for use as a context manager."""
         return self
 
     def __exit__(
@@ -401,13 +421,13 @@ class DxtbAdapter:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> bool:
+        """Close the adapter and propagate any exception from the context."""
         self.close()
         return False
 
 
 def timed_invoke(adapter: DxtbAdapter) -> float:
     """Measure one inference through an explicit CPU/CUDA completion boundary."""
-
     start = time.perf_counter_ns()
     adapter.invoke()
     adapter.synchronize()

@@ -25,6 +25,8 @@ WHEEL_SPEC.loader.exec_module(WHEEL_INSPECTOR)
 
 
 class LicenseArchiveTests(unittest.TestCase):
+    """Verify legal payload requirements for built distribution archives."""
+
     def _write_wheel(self, path: Path, names: set[str]) -> None:
         with zipfile.ZipFile(path, "w") as archive:
             for name in sorted(names):
@@ -41,6 +43,7 @@ class LicenseArchiveTests(unittest.TestCase):
         } | {f"gpuxtb/{suffix}" for suffix in CHECKER.WHEEL_ARCHIVE_SUFFIXES}
 
     def test_project_license_cannot_be_satisfied_by_third_party_filename(self) -> None:
+        """Require the project license at its exact archive location."""
         names = self._valid_wheel_names()
         names.remove("gpuxtb-0.1.0.dist-info/licenses/LICENSE")
         names.add("gpuxtb/share/licenses/gpuxtb/third-party/d4/mctc-lib-LICENSE")
@@ -51,6 +54,7 @@ class LicenseArchiveTests(unittest.TestCase):
                 CHECKER.check_archive(wheel)
 
     def test_wheel_must_retain_every_provenance_manifest(self) -> None:
+        """Require all provenance manifests in wheel payloads."""
         names = self._valid_wheel_names()
         missing = "gpuxtb/share/licenses/gpuxtb/provenance/mctc_manifest.json"
         names.remove(missing)
@@ -61,6 +65,7 @@ class LicenseArchiveTests(unittest.TestCase):
                 CHECKER.check_archive(wheel)
 
     def test_wheel_must_retain_implib_provenance_manifest(self) -> None:
+        """Require the vendored implib provenance manifest in wheels."""
         names = self._valid_wheel_names()
         missing = "gpuxtb/share/licenses/gpuxtb/provenance/implib_manifest.json"
         names.remove(missing)
@@ -72,6 +77,8 @@ class LicenseArchiveTests(unittest.TestCase):
 
 
 class ImplibProvenanceTests(unittest.TestCase):
+    """Verify vendored implib content against its pinned provenance."""
+
     def _copy_payload(self, root: Path) -> None:
         source = REPOSITORY / CHECKER.IMPLIB_VENDOR_PATH
         destination = root / CHECKER.IMPLIB_VENDOR_PATH
@@ -82,9 +89,11 @@ class ImplibProvenanceTests(unittest.TestCase):
         shutil.copy2(REPOSITORY / CHECKER.IMPLIB_MANIFEST_PATH, manifest)
 
     def test_vendored_tree_matches_pinned_deepmd_revision(self) -> None:
+        """Accept the checked-in implib tree at its pinned revision."""
         CHECKER._check_implib_provenance(REPOSITORY)
 
     def test_unexpected_vendored_file_is_rejected(self) -> None:
+        """Reject undeclared files in the vendored implib tree."""
         with tempfile.TemporaryDirectory(prefix="gpuxtb-implib-test-") as directory:
             root = Path(directory)
             self._copy_payload(root)
@@ -97,6 +106,7 @@ class ImplibProvenanceTests(unittest.TestCase):
                 CHECKER._check_implib_provenance(root)
 
     def test_modified_vendored_bytes_are_rejected(self) -> None:
+        """Reject modified bytes in a declared vendored implib file."""
         with tempfile.TemporaryDirectory(prefix="gpuxtb-implib-test-") as directory:
             root = Path(directory)
             self._copy_payload(root)
@@ -112,7 +122,10 @@ class ImplibProvenanceTests(unittest.TestCase):
 
 
 class CudaWheelInspectionTests(unittest.TestCase):
+    """Verify extraction and dispatch of CUDA wheel ABI inspection."""
+
     def test_wheel_payload_is_forwarded_to_cuda_abi_checker(self) -> None:
+        """Forward the extracted ELF payload and selected readelf command."""
         with tempfile.TemporaryDirectory(prefix="gpuxtb-wheel-test-") as directory:
             root = Path(directory)
             wheel = root / "gpuxtb-test.whl"
@@ -140,6 +153,7 @@ class CudaWheelInspectionTests(unittest.TestCase):
             self.assertEqual(marker.read_text(encoding="utf-8"), "test-readelf")
 
     def test_wheel_with_multiple_elf_payloads_is_rejected(self) -> None:
+        """Reject wheels containing ambiguous gpuxtb ELF payloads."""
         with tempfile.TemporaryDirectory(prefix="gpuxtb-wheel-test-") as directory:
             root = Path(directory)
             wheel = root / "gpuxtb-test.whl"

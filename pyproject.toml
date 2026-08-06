@@ -134,23 +134,45 @@ before-build = "bash {package}/python/ci/install-cuda-wheel-deps.sh"
 repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel} --exclude libcublas.so.12 --exclude libcublasLt.so.12 --exclude libcusolver.so.11 --exclude libcusparse.so.12 --exclude libcudart.so.12 --exclude libnvJitLink.so.12 --exclude libcufft.so.11 --exclude libcurand.so.10 --exclude libcuda.so.1"
 
 [tool.ruff]
-# ruff-format owns formatting and ruff's I rule owns import ordering (kept in
-# the same tool as the formatter so they can never disagree), so linting catches
-# real defects and modernization without fighting the formatter:
-#   E4/E7/E9  - meaningful pycodestyle classes (imports, statement, runtime)
-#   F         - pyflakes (undefined names, unused imports/variables, ...)
-#   I         - unsorted imports
-#   B         - flake8-bugbear (likely bugs and design gotchas, e.g. zip
-#               without explicit strict=)
-#   BLE001    - no blind `except Exception` (deliberate broad catches carry a
-#               documented noqa)
-#   C4        - flake8-comprehensions (cleaner dict/set/list constructions)
-#   RUF       - ruff-specific rules (mutable defaults, sorted dunders, ...)
-#   SIM       - flake8-simplify (readable simplifications)
-#   UP        - pyupgrade (modern idiomatic Python for the >=3.10 baseline)
-#   PERF      - perflint (small, uncontroversial performance patterns)
+# Ruff owns both formatting and import ordering so those policies cannot drift.
+# The remaining families enforce docstrings, typing, NumPy compatibility, safe
+# exceptions, explicit iteration semantics, and focused simplification checks.
 extend-exclude = ["cmake/3rdparty/implib/implib-gen.py"]
-lint.select = ["E4", "E7", "E9", "F", "I", "B", "BLE001", "C4", "RUF", "SIM", "UP", "PERF"]
+lint.select = [
+  "E",
+  "W",
+  "F",
+  "I",
+  "D",
+  "UP",
+  "C4",
+  "RUF",
+  "NPY",
+  "TID251",
+  "TID253",
+  "T20",
+  "B",
+  "BLE001",
+  "N804",
+  "N805",
+  "DTZ",
+  "TCH",
+  "PYI",
+  "ANN",
+  "PIE808",
+  "PT022",
+  "RET502",
+  "SIM",
+  "TD006",
+  "PLR1711",
+  "PLR1733",
+  "PLR2044",
+  "PERF",
+]
+
+[tool.ruff.lint.pydocstyle]
+# The Python API and scientific tooling already use NumPy-style sections.
+convention = "numpy"
 
 [tool.ruff.lint.per-file-ignores]
 # benchmarks/run.py appends a tools path to sys.path before importing

@@ -10,7 +10,7 @@ from __future__ import annotations
 import _cases
 import numpy as np
 import pytest
-from gpuxtb import Calculator, PointCharge, Structure
+from gpuxtb import Calculator, PointCharge, Result, Structure
 from gpuxtb.exceptions import GPUxtbRuntimeError, GPUxtbValueError
 
 # Cases whose goldens are pure molecular (no external point charges).
@@ -23,7 +23,10 @@ MOLECULAR_CASES = [
 ]
 
 
-def _assert_matches_golden(result, golden_values, tolerances):
+def _assert_matches_golden(
+    result: Result, golden_values: dict, tolerances: dict
+) -> None:
+    """Compare one result with the declared conformance tolerances."""
     assert result.energy == pytest.approx(
         golden_values["energy_hartree"], abs=tolerances["energy"]["atol"]
     )
@@ -38,7 +41,8 @@ def _assert_matches_golden(result, golden_values, tolerances):
 
 
 @pytest.mark.parametrize("case_id", MOLECULAR_CASES)
-def test_singlepoint_matches_golden(case_id):
+def test_singlepoint_matches_golden(case_id: str) -> None:
+    """Match each molecular single-point result to its golden data."""
     case = _cases.case_by_id(case_id)
     numbers, positions, charge, uhf, spin = _cases.structure_inputs(case)
     calc = Calculator(
@@ -56,7 +60,8 @@ def test_singlepoint_matches_golden(case_id):
     _assert_matches_golden(result, _cases.golden(case), _cases.tolerances())
 
 
-def test_h2o_singlepoint_smoke():
+def test_h2o_singlepoint_smoke() -> None:
+    """Produce finite nontrivial water outputs through the high-level API."""
     calc = Calculator(
         "GFN2-xTB",
         np.array([8, 1, 1]),
@@ -78,7 +83,8 @@ def test_h2o_singlepoint_smoke():
     assert result["gradient"] == pytest.approx(-result.forces, abs=0.0)
 
 
-def test_update_positions_reuses_calculator():
+def test_update_positions_reuses_calculator() -> None:
+    """Reuse a calculator after replacing its positions."""
     case = _cases.case_by_id("ketene")
     numbers, positions, charge, uhf, spin = _cases.structure_inputs(case)
     calc = Calculator(
@@ -92,7 +98,8 @@ def test_update_positions_reuses_calculator():
     assert second != pytest.approx(first, abs=1e-6)
 
 
-def test_charge_and_multiplicity_are_consistent():
+def test_charge_and_multiplicity_are_consistent() -> None:
+    """Resolve consistent multiplicity and reject conflicting UHF input."""
     case = _cases.case_by_id("h3_plus")
     numbers, positions, charge, _, _ = _cases.structure_inputs(case)
     calc = Calculator("GFN2-xTB", numbers, positions, charge=charge, multiplicity=1)
@@ -101,7 +108,8 @@ def test_charge_and_multiplicity_are_consistent():
         Calculator("GFN2-xTB", numbers, positions, charge=charge, uhf=1, multiplicity=1)
 
 
-def test_structure_update_is_transactional():
+def test_structure_update_is_transactional() -> None:
+    """Leave a structure unchanged when a multi-field update is invalid."""
     structure = Structure(np.array([1, 1]), np.zeros((2, 3)))
     original = structure.positions.copy()
     with pytest.raises(GPUxtbValueError):
@@ -120,13 +128,15 @@ def test_structure_update_is_transactional():
         ("electronic_temperature", float("inf")),
     ],
 )
-def test_invalid_compute_settings_are_rejected(setting, value):
+def test_invalid_compute_settings_are_rejected(setting: str, value: object) -> None:
+    """Reject nonfinite, nonpositive, or nonintegral compute settings."""
     calc = Calculator("GFN2-xTB", np.array([1, 1]), np.zeros((2, 3)))
     with pytest.raises(GPUxtbValueError):
         calc.set(setting, value)
 
 
-def test_open_shell_spin_polarized_differs_from_restricted():
+def test_open_shell_spin_polarized_differs_from_restricted() -> None:
+    """Distinguish unrestricted open-shell energy from restricted energy."""
     case = _cases.case_by_id("oh_radical")
     numbers, positions, charge, uhf, _ = _cases.structure_inputs(case)
     restricted = Calculator(
@@ -142,7 +152,8 @@ def test_open_shell_spin_polarized_differs_from_restricted():
     assert e_unrestricted < e_restricted
 
 
-def test_point_charge_singlepoint():
+def test_point_charge_singlepoint() -> None:
+    """Match single-point QM/MM energy and forces to golden values."""
     case = _cases.case_by_id("water_one_pc_gamma999")
     numbers, positions, charge, uhf, spin = _cases.structure_inputs(case)
     point_positions, point_values, point_gammas = _cases.qmmm_points(case)
@@ -167,7 +178,8 @@ def test_point_charge_singlepoint():
     )
 
 
-def test_scc_failure_raises():
+def test_scc_failure_raises() -> None:
+    """Raise a runtime error when SCC exhausts its iteration budget."""
     # A loose convergence ceiling on a charged system should fail cleanly.
     case = _cases.case_by_id("sif5_minus")
     numbers, positions, charge, uhf, spin = _cases.structure_inputs(case)

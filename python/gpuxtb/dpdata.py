@@ -20,13 +20,16 @@ Net charge and spin multiplicity are handled per frame:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 from dpdata.driver import Driver
 
 from .exceptions import GPUxtbNotSupportedError, GPUxtbValueError
 from .interface import BatchCalculator, Structure, symbols_to_numbers
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 # dpdata reports energies in eV and forces in eV/Angstrom, while the gpuxtb C
 # API reports Hartree and Hartree/bohr.
@@ -85,7 +88,7 @@ class GPUxtbDriver(Driver):
         uhf: int | None = None,
         multiplicity: int | None = None,
         spin_channels: int | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         self.method = method
         self.charge = charge
@@ -179,10 +182,10 @@ class GPUxtbDriver(Driver):
 def _frame_value(
     data: dict,
     key: str,
-    fixed: int | float | None,
+    fixed: float | None,
     frame: int,
     nframes: int,
-    default: int | float | None,
+    default: float | None,
 ) -> int | float | None:
     """Return a fixed scalar, a per-frame value, or the default."""
     if fixed is not None:

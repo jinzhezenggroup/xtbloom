@@ -18,12 +18,15 @@ import ctypes
 import ctypes.util
 import os
 import sys
-from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 
 from .exceptions import GPUxtbRuntimeError
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 # --- ABI constants (kept in sync with include/gpuxtb/gpuxtb.h) ----------------
 
@@ -68,7 +71,7 @@ DEFAULT_ELECTRONIC_TEMPERATURE = 300.0 * KELVIN_TO_HARTREE
 class ContextOptions(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_context_options_t`` ABI version 1."""
 
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("backend", ctypes.c_int32),
@@ -82,7 +85,7 @@ class ContextOptions(ctypes.Structure):
 class ConstBuffer(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_const_buffer_t`` (caller-owned input view)."""
 
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, object]]] = [
         ("data", ctypes.c_void_p),
         ("size_bytes", ctypes.c_size_t),
         ("memory_space", ctypes.c_int32),
@@ -93,7 +96,7 @@ class ConstBuffer(ctypes.Structure):
 class Buffer(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_buffer_t`` (caller-owned output view)."""
 
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, object]]] = [
         ("data", ctypes.c_void_p),
         ("size_bytes", ctypes.c_size_t),
         ("memory_space", ctypes.c_int32),
@@ -104,7 +107,7 @@ class Buffer(ctypes.Structure):
 class Batch(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_batch_t`` including the ABI-v2 spin suffix."""
 
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("batch_size", ctypes.c_int64),
@@ -130,7 +133,7 @@ class Batch(ctypes.Structure):
 class ComputeOptions(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_compute_options_t`` through ABI version 2."""
 
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("model", ctypes.c_int32),
@@ -148,7 +151,7 @@ class ComputeOptions(ctypes.Structure):
 class BatchResult(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_batch_result_t`` ABI version 1."""
 
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("flags", ctypes.c_uint32),
@@ -576,7 +579,9 @@ def compute_checked(
 
 
 def host_const(
-    values: Sequence[int | float | bool] | None, ctype, dtype
+    values: Sequence[int | float | bool] | None,
+    ctype: type[ctypes._SimpleCData],
+    dtype: object,
 ) -> tuple[ConstBuffer, np.ndarray]:
     """Build a host ``gpuxtb_const_buffer_t`` from a numpy-compatible sequence.
 
@@ -602,7 +607,11 @@ def host_const(
     )
 
 
-def empty_result_shape(shape, ctype, dtype) -> tuple[Buffer, np.ndarray]:
+def empty_result_shape(
+    shape: int | tuple[int, ...],
+    ctype: type[ctypes._SimpleCData],
+    dtype: object,
+) -> tuple[Buffer, np.ndarray]:
     """Allocate a host output buffer and return its descriptor plus owner."""
     owner = np.empty(shape, dtype=dtype)
     return (

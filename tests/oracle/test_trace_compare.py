@@ -78,7 +78,6 @@ def _iteration(index: int, converged: bool) -> dict:
 
 def _trace(iterations: int = 1) -> dict:
     """Build a valid multi-iteration trace (only the last iteration converges)."""
-
     all_iterations = [
         _iteration(index + 1, index + 1 == iterations) for index in range(iterations)
     ]
@@ -119,7 +118,6 @@ def _trace(iterations: int = 1) -> dict:
 
 def _nonconverged_trace(status: int) -> dict:
     """Build one valid completed-but-nonconverged lifecycle."""
-
     trace = _trace(1)
     trace["iterations"][0]["convergence"] = {
         "energy": False,
@@ -133,7 +131,6 @@ def _nonconverged_trace(status: int) -> dict:
 
 def _setup_failure() -> dict:
     """Build a valid failure before any SCC iteration completes."""
-
     trace = _trace(1)
     trace["iterations"] = []
     trace["terminal"] = {
@@ -158,12 +155,14 @@ class TraceCompareTest(unittest.TestCase):
     """Exercise numeric, exact, metadata, and iteration comparison behavior."""
 
     def test_identical_trace_matches(self) -> None:
+        """Accept identical validated traces."""
         result = COMPARE.compare_trace(_trace(2), _trace(2))
         self.assertTrue(result.matches, msg=result.render())
         self.assertEqual(result.mismatches, ())
         self.assertEqual(result.profile, "cpu_closed_loop_v1")
 
     def test_one_value_perturbation_fails_at_expected_path(self) -> None:
+        """Report the exact scalar path changed by a perturbation."""
         golden = _trace(1)
         actual = deepcopy(golden)
         actual["iterations"][0]["density"][0][0][0] = 0.5 + 1.0e-5
@@ -176,6 +175,7 @@ class TraceCompareTest(unittest.TestCase):
         self.assertIn("iterations[0].density[0][0][0]", result.render())
 
     def test_later_iteration_error_is_isolated(self) -> None:
+        """Isolate a mismatch to its later iteration."""
         golden = _trace(2)
         actual = deepcopy(golden)
         actual["iterations"][1]["energy"] = golden["iterations"][1]["energy"] + 1.0e-4
@@ -185,6 +185,7 @@ class TraceCompareTest(unittest.TestCase):
         self.assertEqual(result.mismatches[0].path, "iterations[1].energy")
 
     def test_exact_fields_are_compared_exactly(self) -> None:
+        """Compare schema identity and state fields without tolerance."""
         golden = _trace(1)
         actual = deepcopy(golden)
         actual["provenance"]["oracle_patch_sha256"] = "a" * 64
@@ -193,6 +194,7 @@ class TraceCompareTest(unittest.TestCase):
         self.assertEqual(result.mismatches[0].path, "provenance.oracle_patch_sha256")
 
     def test_numeric_integer_and_float_compare_numerically(self) -> None:
+        """Treat numeric integer and float leaves as numerical values."""
         golden = _trace(1)
         actual = deepcopy(golden)
         golden["iterations"][0]["energy"] = 0.0
@@ -200,6 +202,7 @@ class TraceCompareTest(unittest.TestCase):
         self.assertTrue(COMPARE.compare_trace(actual, golden).matches)
 
     def test_metadata_only_ignores_numerics(self) -> None:
+        """Ignore scientific values during metadata-only comparison."""
         golden = _trace(1)
         actual = deepcopy(golden)
         actual["iterations"][0]["energy"] += 1.0e-3
@@ -208,6 +211,7 @@ class TraceCompareTest(unittest.TestCase):
         self.assertTrue(result.matches, msg=result.render())
 
     def test_metadata_only_catches_iteration_convergence_flag(self) -> None:
+        """Detect convergence-state differences in metadata-only mode."""
         golden = _trace(2)
         actual = deepcopy(golden)
         actual["iterations"][0]["convergence"]["temperature"] = False
@@ -218,6 +222,7 @@ class TraceCompareTest(unittest.TestCase):
         )
 
     def test_metadata_only_catches_iteration_count(self) -> None:
+        """Detect iteration-count differences in metadata-only mode."""
         result = COMPARE.compare_trace(
             _trace(1), _trace(2), identical_metadata_only=True
         )
@@ -230,6 +235,7 @@ class TraceCompareTest(unittest.TestCase):
         )
 
     def test_metadata_only_catches_terminal_status(self) -> None:
+        """Detect terminal-status differences in metadata-only mode."""
         actual = _nonconverged_trace(COMPARE.TRACE.STATUS_FAILED)
         golden = _nonconverged_trace(COMPARE.TRACE.STATUS_MAX_ITERATIONS)
         result = COMPARE.compare_trace(actual, golden, identical_metadata_only=True)
@@ -237,10 +243,12 @@ class TraceCompareTest(unittest.TestCase):
         self.assertEqual(result.mismatches[0].path, "terminal.status")
 
     def test_empty_setup_failure_trace_compares(self) -> None:
+        """Compare setup failures that contain no completed iterations."""
         result = COMPARE.compare_trace(_setup_failure(), _setup_failure())
         self.assertTrue(result.matches, msg=result.render())
 
     def test_metadata_only_catches_point_charge_layout(self) -> None:
+        """Detect point-charge layout differences in metadata-only mode."""
         golden = _trace(1)
         actual = deepcopy(golden)
         actual["input"]["point_charges"] = {
@@ -258,6 +266,7 @@ class TraceCompareTest(unittest.TestCase):
         )
 
     def test_cuda_replay_profile_is_versioned(self) -> None:
+        """Expose a stable versioned identifier for the CUDA replay profile."""
         golden = _trace(1)
         actual = deepcopy(golden)
         actual["iterations"][0]["eigenvalues"] = [[-1.0 + 1.0e-10]]
@@ -266,10 +275,12 @@ class TraceCompareTest(unittest.TestCase):
         self.assertEqual(result.profile, "cuda_replay_v1")
 
     def test_unknown_profile_is_actionable(self) -> None:
+        """Report unknown comparison profiles with actionable context."""
         with self.assertRaisesRegex(COMPARE.TraceCompareError, "choose one of"):
             COMPARE.compare_trace(_trace(1), _trace(1), profile="cuda_replay")
 
     def test_malformed_profile_configuration_is_actionable(self) -> None:
+        """Reject malformed profile tolerances with a clear error."""
         malformed = (
             {"version": True},
             {"atol": "small"},
@@ -285,6 +296,7 @@ class TraceCompareTest(unittest.TestCase):
                     COMPARE.CompareProfile(**arguments)
 
     def test_tolerance_boundary_is_inclusive(self) -> None:
+        """Accept values exactly on the configured tolerance boundary."""
         profile = COMPARE.CompareProfile("boundary", 1, atol=1.0e-3)
         golden = _trace(1)
         golden["iterations"][0]["energy"] = 0.0
@@ -296,6 +308,7 @@ class TraceCompareTest(unittest.TestCase):
         self.assertFalse(COMPARE.compare_trace(actual, golden, profile=profile).matches)
 
     def test_relative_tolerance_uses_symmetric_max_scale(self) -> None:
+        """Scale relative tolerance symmetrically by both operands."""
         profile = COMPARE.CompareProfile("relative", 1, rtol=0.1)
         first = _trace(1)
         second = deepcopy(first)
@@ -305,6 +318,7 @@ class TraceCompareTest(unittest.TestCase):
         self.assertTrue(COMPARE.compare_trace(second, first, profile=profile).matches)
 
     def test_per_field_override_wins(self) -> None:
+        """Prefer a matching field override over default tolerances."""
         profile = COMPARE.CompareProfile(
             "override", 1, per_field={"energy": (1.0e-3, 0.0)}
         )
@@ -318,6 +332,7 @@ class TraceCompareTest(unittest.TestCase):
         self.assertEqual(result.mismatches[0].path, "iterations[0].density[0][0][0]")
 
     def test_array_field_override_reaches_scalar_leaves(self) -> None:
+        """Apply array-field overrides to indexed scalar leaves."""
         profile = COMPARE.CompareProfile(
             "array_override", 1, per_field={"density": (1.0e-3, 0.0)}
         )
@@ -334,6 +349,7 @@ class TraceCompareTest(unittest.TestCase):
         )
 
     def test_iteration_comparison_reports_logical_array_position(self) -> None:
+        """Report a selected iteration at its logical array position."""
         golden = _trace(2)
         actual_iteration = deepcopy(golden["iterations"][1])
         actual_iteration["density"] = [[[0.5 + 1.0e-7]]]
@@ -342,6 +358,7 @@ class TraceCompareTest(unittest.TestCase):
         self.assertEqual(result.mismatches[0].path, "iterations[1].density[0][0][0]")
 
     def test_iteration_index_is_schema_validated_exactly(self) -> None:
+        """Validate the selected iteration's logical index exactly."""
         golden = _trace(2)
         actual_iteration = deepcopy(golden["iterations"][1])
         actual_iteration["index"] = 3
@@ -349,6 +366,7 @@ class TraceCompareTest(unittest.TestCase):
             COMPARE.compare_iteration(actual_iteration, golden, 2)
 
     def test_iteration_validation_rejects_numeric_string(self) -> None:
+        """Reject numeric strings where the trace schema requires numbers."""
         golden = _trace(1)
         actual_iteration = deepcopy(golden["iterations"][0])
         actual_iteration["density"][0][0][0] = "0.5"
@@ -356,6 +374,7 @@ class TraceCompareTest(unittest.TestCase):
             COMPARE.compare_iteration(actual_iteration, golden, 1)
 
     def test_iteration_validation_rejects_missing_field(self) -> None:
+        """Reject standalone iterations missing required fields."""
         golden = _trace(1)
         actual_iteration = deepcopy(golden["iterations"][0])
         del actual_iteration["density"]
@@ -363,6 +382,7 @@ class TraceCompareTest(unittest.TestCase):
             COMPARE.compare_iteration(actual_iteration, golden, 1)
 
     def test_iteration_validation_rejects_nonfinite_value(self) -> None:
+        """Reject nonfinite values in standalone iterations."""
         golden = _trace(1)
         actual_iteration = deepcopy(golden["iterations"][0])
         actual_iteration["energy"] = float("nan")
@@ -370,6 +390,7 @@ class TraceCompareTest(unittest.TestCase):
             COMPARE.compare_iteration(actual_iteration, golden, 1)
 
     def test_iteration_validation_uses_full_trace_shape(self) -> None:
+        """Use full-trace dimensions to validate a standalone iteration."""
         golden = _trace(1)
         actual_iteration = deepcopy(golden["iterations"][0])
         actual_iteration["residual"] = actual_iteration["residual"][:-1]
@@ -377,6 +398,7 @@ class TraceCompareTest(unittest.TestCase):
             COMPARE.compare_iteration(actual_iteration, golden, 1)
 
     def test_iteration_comparison_accepts_valid_tuple_sequence(self) -> None:
+        """Accept tuples wherever the validated trace permits sequences."""
         golden = _trace(1)
         golden["iterations"] = tuple(golden["iterations"])
         actual_iteration = deepcopy(golden["iterations"][0])
@@ -386,6 +408,7 @@ class TraceCompareTest(unittest.TestCase):
         self.assertTrue(result.matches)
 
     def test_iteration_convergence_difference_is_scientific_mismatch(self) -> None:
+        """Classify convergence-state changes as scientific mismatches."""
         golden = _trace(1)
         actual_iteration = deepcopy(golden["iterations"][0])
         actual_iteration["convergence"] = {
@@ -408,10 +431,12 @@ class TraceCompareTest(unittest.TestCase):
         )
 
     def test_rejects_malformed_actual_trace(self) -> None:
+        """Reject malformed actual traces before numerical comparison."""
         with self.assertRaises(COMPARE.TRACE.TraceError):
             COMPARE.compare_trace({"format": "gpuxtb-scc-trace-v1"}, _trace(1))
 
     def test_json_roundtrip_then_compare_identical(self) -> None:
+        """Preserve equality across canonical JSON serialization."""
         text = COMPARE.TRACE.dumps(_trace(2))
         actual = json.loads(text)
         result = COMPARE.compare_trace(actual, _trace(2))
@@ -422,6 +447,7 @@ class TraceCompareCliTest(unittest.TestCase):
     """Exercise exit codes and the canonical golden read-only boundary."""
 
     def test_trace_match_is_zero_and_golden_is_unchanged(self) -> None:
+        """Return success for a match without modifying the golden file."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             golden_path = root / "golden.json"
@@ -447,6 +473,7 @@ class TraceCompareCliTest(unittest.TestCase):
             self.assertEqual(golden_path.stat().st_mtime_ns, before_stat.st_mtime_ns)
 
     def test_trace_mismatch_is_one_and_reports_path(self) -> None:
+        """Return mismatch status and print the differing scalar path."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             golden_path = root / "golden.json"
@@ -463,6 +490,7 @@ class TraceCompareCliTest(unittest.TestCase):
             self.assertEqual(completed.stderr, "")
 
     def test_iteration_cli_selects_and_validates_golden_context(self) -> None:
+        """Select an iteration while retaining its golden trace context."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             golden_path = root / "golden.json"
@@ -481,6 +509,7 @@ class TraceCompareCliTest(unittest.TestCase):
             self.assertIn("cuda_replay_v1", completed.stdout)
 
     def test_malformed_json_is_input_error_without_traceback(self) -> None:
+        """Classify malformed JSON as a concise CLI input error."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             golden_path = root / "golden.json"
@@ -495,6 +524,7 @@ class TraceCompareCliTest(unittest.TestCase):
             self.assertNotIn("Traceback", completed.stderr)
 
     def test_out_of_range_json_integer_is_input_error_without_traceback(self) -> None:
+        """Classify out-of-range JSON integers as CLI input errors."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             golden_path = root / "golden.json"
@@ -512,6 +542,7 @@ class TraceCompareCliTest(unittest.TestCase):
             self.assertNotIn("Traceback", completed.stderr)
 
     def test_wrong_golden_hash_is_input_error(self) -> None:
+        """Reject a golden whose bytes do not match the pinned hash."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             golden_path = root / "golden.json"
@@ -528,6 +559,7 @@ class TraceCompareCliTest(unittest.TestCase):
             self.assertIn("SHA-256 mismatch", completed.stderr)
 
     def test_noncanonical_golden_is_input_error(self) -> None:
+        """Reject noncanonical golden serialization as an input error."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             golden_path = root / "golden.json"
@@ -541,6 +573,7 @@ class TraceCompareCliTest(unittest.TestCase):
             self.assertIn("not canonical", completed.stderr)
 
     def test_unknown_cli_profile_is_argparse_error(self) -> None:
+        """Reject unknown CLI profiles through argparse validation."""
         completed = _run_cli(
             "trace", "actual.json", "golden.json", "--profile", "cuda_replay"
         )

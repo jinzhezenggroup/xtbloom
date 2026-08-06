@@ -18,12 +18,14 @@ class HarnessTest(unittest.TestCase):
     """Exercise non-hardware protocol logic without loading gpuxtb or CUDA."""
 
     def test_timing_summary_retains_samples_and_batch_throughput(self) -> None:
+        """Retain raw samples and derive batch throughput from their median."""
         summary = run.timing_summary([3.0, 1.0, 2.0], batch_size=8)
         self.assertEqual(summary["samples_ms"], [3.0, 1.0, 2.0])
         self.assertEqual(summary["median_ms"], 2.0)
         self.assertEqual(summary["systems_per_second_at_median"], 4000.0)
 
     def test_gpuxtb_cell_matrix_contains_cpu_and_three_cuda_placements(self) -> None:
+        """Cover CPU host and all supported CUDA descriptor placements."""
         args = SimpleNamespace(
             backends=("cpu", "cuda"),
             cuda_memory_modes=("host", "device", "mixed"),
@@ -40,6 +42,7 @@ class HarnessTest(unittest.TestCase):
         )
 
     def test_xtb_matrix_is_serial_cpu_host_and_templates_are_strict(self) -> None:
+        """Keep reference matrices serial and command templates reproducible."""
         args = SimpleNamespace(
             workloads=("gas", "qmmm"),
             properties=("energy", "force"),
@@ -66,6 +69,7 @@ class HarnessTest(unittest.TestCase):
         )
 
     def test_dxtb_matrix_contains_persistent_cpu_and_cuda_rows(self) -> None:
+        """Emit persistent dxtb rows for both supported compute devices."""
         args = SimpleNamespace(
             workloads=("gas", "qmmm"),
             properties=("energy", "force"),
@@ -82,6 +86,7 @@ class HarnessTest(unittest.TestCase):
     def test_xtb_result_normalization_uses_force_sign_and_optional_pc_output(
         self,
     ) -> None:
+        """Convert xTB gradients to QM and point-charge force conventions."""
         adapter = object.__new__(XtbAdapter)
         adapter.property_name = "force"
         adapter.states = [
@@ -110,6 +115,7 @@ class HarnessTest(unittest.TestCase):
         )
 
     def test_tblite_result_normalization_uses_force_sign_and_charges(self) -> None:
+        """Convert tblite gradients while preserving requested atomic charges."""
         adapter = object.__new__(TbliteAdapter)
         adapter.property_name = "force"
         adapter.states = [
@@ -132,6 +138,7 @@ class HarnessTest(unittest.TestCase):
         self.assertEqual(output["atomic_charges_e"], [0.25, -0.25])
 
     def test_correctness_includes_qm_and_point_charge_forces(self) -> None:
+        """Gate both QM and point-charge force vectors for QMMM workloads."""
         expected = {
             "energy_hartree": -1.0,
             "forces_hartree_per_bohr": [0.1, 0.2, 0.3],
@@ -168,6 +175,7 @@ class HarnessTest(unittest.TestCase):
         )
 
     def test_json_and_csv_preserve_unavailable_rows(self) -> None:
+        """Preserve unavailable benchmark cells in both artifact formats."""
         cell = run.Cell("tblite", "cpu", "host", "gas", "force", 8)
         row = run.unavailable_row(cell, "missing library")
         with tempfile.TemporaryDirectory() as directory:

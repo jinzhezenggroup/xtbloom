@@ -18,8 +18,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 TOOL_DIR = Path(__file__).resolve().parent
 REPOSITORY_ROOT = TOOL_DIR.parents[2]
@@ -148,7 +151,8 @@ def validate_bundle(metadata: dict[str, object]) -> str:
     expected_paths = patch.get("modified_paths")
     if patched_paths != expected_paths:
         raise ObserverPatchError(
-            f"patch path list differs from metadata: {patched_paths!r} != {expected_paths!r}"
+            f"patch path list differs from metadata: {patched_paths!r} != "
+            f"{expected_paths!r}"
         )
 
     required_tokens = (
@@ -251,7 +255,8 @@ def clone_and_apply(
     ).stdout.splitlines()
     if actual_paths != expected_paths:
         raise ObserverPatchError(
-            f"applied path list differs from metadata: {actual_paths!r} != {expected_paths!r}"
+            f"applied path list differs from metadata: {actual_paths!r} != "
+            f"{expected_paths!r}"
         )
     validate_applied_hooks(checkout)
 
@@ -474,7 +479,9 @@ def main() -> int:
     if source_state(source_root) != initial_source_state:
         raise ObserverPatchError("the source tblite checkout changed during validation")
     probe = "; numerical probe passed" if arguments.probe else ""
-    print(f"observer patch OK: revision={revision} sha256={digest}{probe}{retained}")
+    print(  # noqa: T201 - CLI validation report
+        f"observer patch OK: revision={revision} sha256={digest}{probe}{retained}"
+    )
     return 0
 
 
@@ -482,5 +489,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except ObserverPatchError as error:
-        print(f"error: {error}", file=sys.stderr)
+        print(f"error: {error}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         raise SystemExit(1) from error

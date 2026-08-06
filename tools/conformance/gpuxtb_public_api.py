@@ -16,11 +16,13 @@ import argparse
 import ctypes
 import ctypes.util
 import sys
-from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from types import TracebackType
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
+    from types import TracebackType
 
 import gpuxtb_conformance as conformance
 
@@ -230,7 +232,7 @@ class CudaRuntime:
         self.allocations.append(pointer)
         return pointer
 
-    def upload(self, owner: Any) -> ctypes.c_void_p:
+    def upload(self, owner: object) -> ctypes.c_void_p:
         """Allocate a device buffer and synchronously copy one ctypes owner."""
         size_bytes = ctypes.sizeof(owner)
         pointer = self.allocate(size_bytes)
@@ -245,8 +247,8 @@ class CudaRuntime:
         )
         return pointer
 
-    def download(self, pointer: ctypes.c_void_p, owner: Any) -> None:
-        """Synchronously copy one device output into its ctypes host mirror."""
+    def download(self, pointer: ctypes.c_void_p, owner: object) -> None:
+        """Copy one device output synchronously into its ctypes host mirror."""
         size_bytes = ctypes.sizeof(owner)
         self._check(
             self.runtime.cudaMemcpy(
@@ -284,7 +286,8 @@ class CudaRuntime:
         if failures:
             raise conformance.ConformanceError("; ".join(failures))
 
-    def __enter__(self) -> Self:
+    def __enter__(self) -> CudaRuntime:  # noqa: PYI034 - Python 3.10 lacks typing.Self
+        """Return this allocation owner for a managed CUDA operation."""
         return self
 
     def __exit__(
@@ -293,12 +296,15 @@ class CudaRuntime:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> bool:
+        """Release CUDA resources while preserving an active exception."""
         try:
             self.close()
         except conformance.ConformanceError as cleanup_error:
             if exc_type is None:
                 raise
-            print(f"warning: CUDA cleanup failed: {cleanup_error}", file=sys.stderr)
+            print(  # noqa: T201 - CLI validation report
+                f"warning: CUDA cleanup failed: {cleanup_error}", file=sys.stderr
+            )
         return False
 
 
@@ -390,7 +396,7 @@ class DescriptorMemory:
             0,
         )
 
-    def output(self, owner: Any, role: str) -> Buffer:
+    def output(self, owner: object, role: str) -> Buffer:
         """Create one output descriptor and retain device-to-host download state."""
         if self._is_device(role):
             assert self.cuda is not None
@@ -417,10 +423,12 @@ class DescriptorMemory:
             self.cuda.download(pointer, owner)
 
     def close(self) -> None:
+        """Release device storage when this descriptor set owns any."""
         if self.cuda is not None:
             self.cuda.close()
 
-    def __enter__(self) -> Self:
+    def __enter__(self) -> DescriptorMemory:  # noqa: PYI034 - Python 3.10 lacks typing.Self
+        """Return this descriptor owner for a managed compute operation."""
         return self
 
     def __exit__(
@@ -429,6 +437,7 @@ class DescriptorMemory:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> bool:
+        """Release any device storage while propagating active exceptions."""
         if self.cuda is None:
             return False
         return self.cuda.__exit__(exc_type, exc, traceback)
@@ -710,14 +719,14 @@ def _compare_case(
         if property_name not in case_slice.expected:
             continue
         if property_name in unsupported_properties:
-            print(
+            print(  # noqa: T201 - CLI validation report
                 f"SKIP {case_slice.case['id']} {property_name}: "
                 f"{unsupported_properties[property_name]}"
             )
             continue
         if property_name not in actual:
             message = f"{case_slice.case['id']} is missing {property_name}"
-            print(f"FAIL {message}")
+            print(f"FAIL {message}")  # noqa: T201 - CLI validation report
             failures.append(message)
             continue
         tolerance = manifest["tolerances"][tolerance_name]
@@ -729,7 +738,9 @@ def _compare_case(
             float(tolerance["atol"]),
             float(tolerance["rtol"]),
         )
-        print(("PASS " if passed else "FAIL ") + message)
+        print(  # noqa: T201 - CLI validation report
+            ("PASS " if passed else "FAIL ") + message
+        )
         if not passed:
             failures.append(message)
     return failures
@@ -971,7 +982,7 @@ def run_backend(
             f"{backend}/{memory_mode}: {len(failures)} public C API conformance "
             f"comparison(s) failed; actual JSON retained in {backend_dir}"
         )
-    print(
+    print(  # noqa: T201 - CLI validation report
         f"public C API conformance OK: backend={backend}, "
         f"memory_mode={memory_mode}, cases={len(storage.slices)}, "
         f"forces={request_forces}, actual_dir={backend_dir}"
@@ -1021,7 +1032,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         manifest = conformance.load_json(args.manifest)
         cases = supported_cases(manifest, args.cases)
         if not cases:
-            print("no GFN2 conformance cases selected")
+            print(  # noqa: T201 - CLI validation report
+                "no GFN2 conformance cases selected"
+            )
             return 0
         library = _configure_library(args.library)
         backends = ("cpu", "cuda") if args.backend == "all" else (args.backend,)
@@ -1059,10 +1072,10 @@ def main(argv: Iterable[str] | None = None) -> int:
                     request_forces=True,
                 )
     except BackendUnavailable as exc:
-        print(f"SKIP {exc}", file=sys.stderr)
+        print(f"SKIP {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         return 77 if args.skip_backend_unavailable else 1
     except conformance.ConformanceError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         return 1
     return 0
 
