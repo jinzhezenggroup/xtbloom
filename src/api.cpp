@@ -1,4 +1,6 @@
 #include <algorithm>
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+
 #include <cstdint>
 #include <cstring>
 #include <exception>

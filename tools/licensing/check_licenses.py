@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import stat
 import tarfile
 import zipfile
@@ -20,21 +21,26 @@ from pathlib import Path
 import tomllib
 
 PROJECT_LICENSE = "GPL-3.0-or-later"
+EXCEPTION_FILE = "CUDA_MKL_LINKING_EXCEPTION"
 IMPLIB_MANIFEST_PATH = "cmake/3rdparty/implib_manifest.json"
 IMPLIB_VENDOR_PATH = "cmake/3rdparty/implib"
 IMPLIB_REVISION = "6f4fc02ae058ef11848046af01a1a756f3229c29"
 IMPLIB_TREE = "5fbe7e9f2c4efe0c2be4d2eed409e81f35458ba4"
 SOURCE_FILES = (
     "LICENSE",
+    EXCEPTION_FILE,
     "THIRD_PARTY_NOTICES.md",
     "LICENSES/LGPL-3.0-or-later.txt",
     "LICENSES/Apache-2.0.txt",
     "LICENSES/MIT.txt",
     "data/parameters/d4.NOTICE",
+    "data/parameters/tblite_sto.hpp",
+    "data/parameters/tblite_spin.hpp",
     "data/parameters/licenses/dftd4-COPYING",
     "data/parameters/licenses/dftd4-COPYING.LESSER",
     "data/parameters/licenses/mctc-lib-LICENSE",
     "data/parameters/manifest.json",
+    "data/parameters/sto_manifest.json",
     "data/parameters/spin_manifest.json",
     "data/parameters/d4_manifest.json",
     "data/parameters/mctc_manifest.json",
@@ -42,6 +48,7 @@ SOURCE_FILES = (
 )
 COMMON_ARCHIVE_SUFFIXES = (
     "LICENSE",
+    EXCEPTION_FILE,
     "THIRD_PARTY_NOTICES.md",
     "LICENSES/LGPL-3.0-or-later.txt",
     "LICENSES/Apache-2.0.txt",
@@ -49,10 +56,13 @@ COMMON_ARCHIVE_SUFFIXES = (
 )
 SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/d4.NOTICE",
+    "data/parameters/tblite_sto.hpp",
+    "data/parameters/tblite_spin.hpp",
     "data/parameters/licenses/dftd4-COPYING",
     "data/parameters/licenses/dftd4-COPYING.LESSER",
     "data/parameters/licenses/mctc-lib-LICENSE",
     "data/parameters/manifest.json",
+    "data/parameters/sto_manifest.json",
     "data/parameters/spin_manifest.json",
     "data/parameters/d4_manifest.json",
     "data/parameters/mctc_manifest.json",
@@ -60,7 +70,9 @@ SDIST_ARCHIVE_SUFFIXES = (
 )
 WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/gpuxtb/THIRD_PARTY_NOTICES.md",
+    f"share/licenses/gpuxtb/{EXCEPTION_FILE}",
     "share/licenses/gpuxtb/provenance/manifest.json",
+    "share/licenses/gpuxtb/provenance/sto_manifest.json",
     "share/licenses/gpuxtb/provenance/spin_manifest.json",
     "share/licenses/gpuxtb/provenance/d4_manifest.json",
     "share/licenses/gpuxtb/provenance/mctc_manifest.json",
@@ -74,11 +86,13 @@ WHEEL_ARCHIVE_SUFFIXES = (
 FORBIDDEN_ARCHIVE_PARTS = ("/build/", "/.cache/", "/.claude/", "/.ruff_cache/")
 INSTALL_FILES = (
     "share/licenses/gpuxtb/LICENSE",
+    f"share/licenses/gpuxtb/{EXCEPTION_FILE}",
     "share/licenses/gpuxtb/THIRD_PARTY_NOTICES.md",
     "share/licenses/gpuxtb/third-party/LGPL-3.0-or-later.txt",
     "share/licenses/gpuxtb/third-party/Apache-2.0.txt",
     "share/licenses/gpuxtb/third-party/MIT.txt",
     "share/licenses/gpuxtb/provenance/manifest.json",
+    "share/licenses/gpuxtb/provenance/sto_manifest.json",
     "share/licenses/gpuxtb/provenance/spin_manifest.json",
     "share/licenses/gpuxtb/provenance/d4_manifest.json",
     "share/licenses/gpuxtb/provenance/mctc_manifest.json",
@@ -91,6 +105,8 @@ INSTALL_FILES = (
 SPDX_FILES = {
     "data/parameters/gfn2.hpp": "LGPL-3.0-or-later",
     "data/parameters/d4.hpp": "LGPL-3.0-or-later",
+    "data/parameters/tblite_sto.hpp": "LGPL-3.0-or-later",
+    "data/parameters/tblite_spin.hpp": "LGPL-3.0-or-later",
     "src/model/gfn2/basis.cpp": "GPL-3.0-or-later",
     "src/model/gfn2/spin.cpp": "GPL-3.0-or-later",
     "src/model/gfn2/coordination.cpp": "GPL-3.0-or-later",
@@ -104,6 +120,38 @@ NOTICE_TOKENS = (
     "9ab8ca565e0f71d967587e0bca2015f7d689f19f",
     "6f4fc02ae058ef11848046af01a1a756f3229c29",
     "No LAMMPS source code",
+    "scipy-openblas32",
+    EXCEPTION_FILE,
+)
+EXCEPTION_TOKENS = (
+    "Copyright (C) 2026 Jinzhe Zeng",
+    "section 7",
+    "libcuda",
+    "libcudart",
+    "cuBLAS",
+    "cuSOLVER",
+    "cuSPARSE",
+    "nvJitLink",
+    "libdevice",
+    "libmkl_rt",
+    "LP64 CBLAS and LAPACKE",
+    "does not apply to third-party material",
+)
+EXCEPTION_NOTICE = (
+    "gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION."
+)
+NVIDIA_DEPENDENCIES = {
+    "nvidia-cublas-cu12",
+    "nvidia-cusolver-cu12",
+    "nvidia-cusparse-cu12",
+    "nvidia-cuda-runtime-cu12",
+    "nvidia-nvjitlink-cu12",
+}
+SOURCE_NOTICE_SUFFIXES = {".c", ".cpp", ".cu", ".cuh", ".h", ".hpp"}
+FORBIDDEN_VENDOR_LIBRARY_RE = re.compile(
+    r"(?:^|/)(?:lib(?:cuda|cudart|cublas|cusolver|cusparse|nvjitlink|mkl)[^/]*)"
+    r"(?:\.a|\.so(?:\.[0-9]+)*)$",
+    re.IGNORECASE,
 )
 
 
@@ -115,6 +163,90 @@ def _require_files(root: Path, relative_paths: tuple[str, ...], context: str) ->
     missing = [path for path in relative_paths if not (root / path).is_file()]
     if missing:
         raise LicenseCheckError(f"{context} is missing: {', '.join(missing)}")
+
+
+def _require_exception_policy(root: Path) -> None:
+    """Validate the grant and source notices required by GPLv3 section 7."""
+    exception = (root / EXCEPTION_FILE).read_text(encoding="utf-8")
+    for token in EXCEPTION_TOKENS:
+        if token not in exception:
+            raise LicenseCheckError(f"{EXCEPTION_FILE} omits {token}")
+    if "cudadevrt" in exception:
+        raise LicenseCheckError(
+            f"{EXCEPTION_FILE} must not cover cudadevrt without renewed review"
+        )
+
+    for directory in (root / "src", root / "include"):
+        for path in directory.rglob("*"):
+            if not path.is_file() or path.suffix not in SOURCE_NOTICE_SUFFIXES:
+                continue
+            prefix = path.read_text(encoding="utf-8")[:4096]
+            if EXCEPTION_NOTICE not in prefix:
+                relative = path.relative_to(root).as_posix()
+                raise LicenseCheckError(
+                    f"{relative} omits the additional-permission notice"
+                )
+
+
+def _requirement_name(requirement: str) -> str:
+    """Return a normalized distribution name from a PEP 508 requirement."""
+    match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", requirement)
+    if match is None:
+        raise LicenseCheckError(f"invalid dependency requirement: {requirement}")
+    return re.sub(r"[-_.]+", "-", match.group(0)).lower()
+
+
+def _require_dependency_policy(project: object) -> None:
+    """Keep proprietary providers out of the mandatory Python dependency set."""
+    if not isinstance(project, dict):
+        raise LicenseCheckError("pyproject project metadata must be a table")
+    dependencies = project.get("dependencies")
+    extras = project.get("optional-dependencies")
+    if not isinstance(dependencies, list) or not isinstance(extras, dict):
+        raise LicenseCheckError("pyproject dependency metadata is incomplete")
+
+    mandatory = {_requirement_name(item): item for item in dependencies}
+    if "scipy-openblas32" not in mandatory:
+        raise LicenseCheckError("Linux CPU installs must require scipy-openblas32")
+    openblas = mandatory["scipy-openblas32"]
+    for token in (
+        "scipy-openblas32>=0.3.34.0.0",
+        "sys_platform == 'linux'",
+        "x86_64",
+        "aarch64",
+    ):
+        if token not in openblas:
+            raise LicenseCheckError(
+                "scipy-openblas32 must use the reviewed minimum and cover Linux "
+                "x86_64 and aarch64"
+            )
+    if "mkl" in mandatory:
+        raise LicenseCheckError("mkl must not be a mandatory Python dependency")
+    unexpected_nvidia = NVIDIA_DEPENDENCIES.intersection(mandatory)
+    if unexpected_nvidia:
+        raise LicenseCheckError("NVIDIA packages must be confined to the cuda12 extra")
+
+    cuda_requirements = extras.get("cuda12")
+    if not isinstance(cuda_requirements, list):
+        raise LicenseCheckError("pyproject must define the cuda12 optional dependency")
+    cuda_names = {_requirement_name(item) for item in cuda_requirements}
+    if cuda_names != NVIDIA_DEPENDENCIES:
+        raise LicenseCheckError(
+            "cuda12 must contain the reviewed NVIDIA dependency set"
+        )
+    for extra, requirements in extras.items():
+        if extra == "cuda12" or not isinstance(requirements, list):
+            continue
+        names = {_requirement_name(item) for item in requirements}
+        if names.intersection(NVIDIA_DEPENDENCIES) or "mkl" in names:
+            raise LicenseCheckError(
+                f"proprietary providers must not be included in the {extra} extra"
+            )
+
+
+def _find_bundled_vendor_libraries(names: set[str]) -> list[str]:
+    """Return separately packaged CUDA/MKL library files in an artifact."""
+    return sorted(name for name in names if FORBIDDEN_VENDOR_LIBRARY_RE.search(name))
 
 
 def _git_object_id(kind: str, data: bytes) -> str:
@@ -274,9 +406,20 @@ def check_source(root: Path) -> None:
     if project.get("license") != PROJECT_LICENSE:
         raise LicenseCheckError("pyproject project.license must be GPL-3.0-or-later")
     declared = set(project.get("license-files", ()))
-    for required in ("LICENSE", "THIRD_PARTY_NOTICES.md", "LICENSES/*.txt"):
+    for required in (
+        "LICENSE",
+        EXCEPTION_FILE,
+        "THIRD_PARTY_NOTICES.md",
+        "LICENSES/*.txt",
+    ):
         if required not in declared:
             raise LicenseCheckError(f"pyproject license-files omits {required}")
+    _require_dependency_policy(project)
+    _require_exception_policy(root)
+
+    cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
+    if '"$<DEVICE_LINK:--cudadevrt=none>"' not in cmake:
+        raise LicenseCheckError("CUDA device link must pass --cudadevrt=none")
 
     notice = (root / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
     for token in NOTICE_TOKENS:
@@ -291,6 +434,9 @@ def check_source(root: Path) -> None:
     spin = json.loads(
         (root / "data/parameters/spin_manifest.json").read_text(encoding="utf-8")
     )
+    sto = json.loads(
+        (root / "data/parameters/sto_manifest.json").read_text(encoding="utf-8")
+    )
     d4 = json.loads(
         (root / "data/parameters/d4_manifest.json").read_text(encoding="utf-8")
     )
@@ -301,6 +447,16 @@ def check_source(root: Path) -> None:
         raise LicenseCheckError("GFN2 parameter manifest has the wrong SPDX license")
     if spin["source"]["license"] != "LGPL-3.0-or-later":
         raise LicenseCheckError("spin manifest has the wrong SPDX license")
+    if (
+        sto["source"]["license"] != "LGPL-3.0-or-later"
+        or sto["source"]["revision"] != "fa8a4416e8fe093d0075bc10ac875494c2a449a9"
+        or sto["source"]["sha256"]
+        != "8a3df2db076469b0e22c02af9dfadf9880932fc241b82d5802ebb268d002773c"
+        or sto["consumer"] != "data/parameters/tblite_sto.hpp"
+    ):
+        raise LicenseCheckError("STO manifest has incorrect LGPL provenance")
+    if spin["consumer"] != "data/parameters/tblite_spin.hpp":
+        raise LicenseCheckError("spin manifest must identify the LGPL data header")
     if d4["license"] != "LGPL-3.0-or-later":
         raise LicenseCheckError("D4 manifest has the wrong SPDX license")
     if (
@@ -346,6 +502,17 @@ def check_source(root: Path) -> None:
 def check_install(prefix: Path) -> None:
     """Validate the legal payload installed by CMake."""
     _require_files(prefix, INSTALL_FILES, "install tree")
+    bundled = _find_bundled_vendor_libraries(
+        {
+            path.relative_to(prefix).as_posix()
+            for path in prefix.rglob("*")
+            if path.is_file()
+        }
+    )
+    if bundled:
+        raise LicenseCheckError(
+            "install tree bundles a CUDA/MKL provider library: " + bundled[0]
+        )
 
 
 def _archive_names(path: Path) -> set[str]:
@@ -442,6 +609,11 @@ def check_archive(path: Path) -> None:
     if missing:
         raise LicenseCheckError(
             f"{path} is missing archived legal files: {', '.join(missing)}"
+        )
+    bundled = _find_bundled_vendor_libraries(names)
+    if bundled:
+        raise LicenseCheckError(
+            f"{path} bundles a CUDA/MKL provider library: {bundled[0]}"
         )
     _check_archived_implib(path, names, wheel=path.suffix == ".whl")
     leaked = sorted(

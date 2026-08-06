@@ -1,4 +1,5 @@
 #include "runtime/gfn2_cpu_execution.hpp"
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <algorithm>
 #include <atomic>

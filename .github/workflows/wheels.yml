@@ -8,7 +8,8 @@ name: Python wheels
 #
 # - Linux x86_64 builds a CUDA-enabled wheel in the PyPA CUDA manylinux image
 #   ([tool.cibuildwheel] in pyproject.toml) and runs the full conformance suite
-#   via `test-extras` (deps from the package's `[test]` optional dependency).
+#   via `test-extras` (deps from the package's `[test,cuda12]` optional
+#   dependencies).
 # - Linux aarch64 builds CUDA-enabled on the native ARM runner (no QEMU) and
 #   runs a real CPU inference through the installed wheel and scipy-openblas32.
 # macOS/Windows artifacts are intentionally not published until their CPU
@@ -59,7 +60,7 @@ jobs:
           # code never searches or preloads stubs. A real-GPU forced-CUDA test
           # is run separately on the project GPU before merge/release.
           CIBW_TEST_COMMAND: bash {project}/python/ci/run-wheel-test.sh ${{ matrix.tests }} {project}
-          CIBW_TEST_EXTRAS: ${{ matrix.tests == 'full' && 'test' || '' }}
+          CIBW_TEST_EXTRAS: ${{ matrix.tests == 'full' && 'test,cuda12' || '' }}
         with:
           output-dir: wheelhouse
           # cibuildwheel[uv]: install uv so `build-frontend = "build[uv]"`

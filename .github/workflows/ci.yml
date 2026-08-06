@@ -71,17 +71,18 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
       - name: Install LP64 eigensolver runtime
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes libmkl-rt
+        run: python -m pip install 'scipy-openblas32>=0.3.34.0.0'
       - name: Configure shared public inference build
         run: |
-          mkl_rt="$(dpkg -L libmkl-rt | awk '/\/libmkl_rt\.so$/ { print; exit }')"
-          test -n "${mkl_rt}"
+          openblas="$(python -c 'from pathlib import Path; import scipy_openblas32; print(Path(scipy_openblas32.get_lib_dir()) / scipy_openblas32.get_library(fullname=True))')"
+          test -f "${openblas}"
           cmake -S . -B build-public -G Ninja \
             -DGPUXTB_ENABLE_CUDA=OFF \
-            -DGPUXTB_MKL_RT_LIBRARY="${mkl_rt}" \
+            -DGPUXTB_CPU_LINALG_LIBRARY="${openblas}" \
             -DBUILD_SHARED_LIBS=ON \
             -DCMAKE_BUILD_TYPE=Release
       - name: Build

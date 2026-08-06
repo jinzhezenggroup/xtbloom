@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import shutil
 import tempfile
@@ -74,6 +75,111 @@ class LicenseArchiveTests(unittest.TestCase):
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "implib_manifest"):
                 CHECKER.check_archive(wheel)
+
+    def test_wheel_must_retain_linking_exception(self) -> None:
+        """Require the GPLv3 Section 7 exception in wheel archives."""
+        names = self._valid_wheel_names()
+        missing = "gpuxtb-0.1.0.dist-info/licenses/CUDA_MKL_LINKING_EXCEPTION"
+        names.remove(missing)
+        names.remove("gpuxtb/share/licenses/gpuxtb/CUDA_MKL_LINKING_EXCEPTION")
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-license-test-") as directory:
+            wheel = Path(directory) / "gpuxtb-test.whl"
+            self._write_wheel(wheel, names)
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "CUDA_MKL_LINKING_EXCEPTION"
+            ):
+                CHECKER.check_archive(wheel)
+
+    def test_wheel_must_not_bundle_vendor_library(self) -> None:
+        """Reject wheels that bundle separately licensed vendor libraries."""
+        names = self._valid_wheel_names()
+        names.add("gpuxtb/lib/libcudart.so.12")
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-license-test-") as directory:
+            wheel = Path(directory) / "gpuxtb-test.whl"
+            self._write_wheel(wheel, names)
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "libcudart"):
+                CHECKER.check_archive(wheel)
+
+
+class DependencyPolicyTests(unittest.TestCase):
+    """Verify mandatory and optional dependency licensing boundaries."""
+
+    def setUp(self) -> None:
+        """Load the project metadata used by each dependency-policy test."""
+        metadata = CHECKER.tomllib.loads(
+            (REPOSITORY / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        self.project = metadata["project"]
+
+    def test_current_dependency_policy_is_accepted(self) -> None:
+        """Accept the repository's reviewed dependency policy."""
+        CHECKER._require_dependency_policy(self.project)
+
+    def test_mkl_cannot_be_mandatory(self) -> None:
+        """Reject MKL when added to mandatory dependencies."""
+        project = copy.deepcopy(self.project)
+        project["dependencies"].append("mkl; sys_platform == 'linux'")
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "mkl must not"):
+            CHECKER._require_dependency_policy(project)
+
+    def test_nvidia_provider_cannot_be_mandatory(self) -> None:
+        """Reject NVIDIA providers outside the CUDA optional extra."""
+        project = copy.deepcopy(self.project)
+        project["dependencies"].append(project["optional-dependencies"]["cuda12"][0])
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "confined to"):
+            CHECKER._require_dependency_policy(project)
+
+    def test_openblas_must_cover_both_linux_architectures(self) -> None:
+        """Require the reviewed OpenBLAS wheel architecture selectors."""
+        project = copy.deepcopy(self.project)
+        project["dependencies"] = [
+            requirement.replace(" or platform_machine == 'aarch64'", "")
+            if requirement.startswith("scipy-openblas32")
+            else requirement
+            for requirement in project["dependencies"]
+        ]
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "x86_64 and aarch64"):
+            CHECKER._require_dependency_policy(project)
+
+    def test_openblas_must_use_reviewed_minimum(self) -> None:
+        """Require the minimum reviewed scipy-openblas32 version."""
+        project = copy.deepcopy(self.project)
+        project["dependencies"] = [
+            requirement.replace(">=0.3.34.0.0", "")
+            if requirement.startswith("scipy-openblas32")
+            else requirement
+            for requirement in project["dependencies"]
+        ]
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "reviewed minimum"):
+            CHECKER._require_dependency_policy(project)
+
+    def test_cuda_extra_must_be_complete(self) -> None:
+        """Require the complete reviewed CUDA provider set."""
+        project = copy.deepcopy(self.project)
+        project["optional-dependencies"]["cuda12"].pop()
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "reviewed NVIDIA"):
+            CHECKER._require_dependency_policy(project)
+
+
+class LinkingExceptionTests(unittest.TestCase):
+    """Verify the additional-permission source and exception policy."""
+
+    def test_current_exception_policy_is_accepted(self) -> None:
+        """Accept the current source notices and linking exception."""
+        CHECKER._require_exception_policy(REPOSITORY)
+
+    def test_cudadevrt_cannot_be_added_without_review(self) -> None:
+        """Reject an exception document that newly covers cudadevrt."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-license-test-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "src", root / "src")
+            shutil.copytree(REPOSITORY / "include", root / "include")
+            text = (REPOSITORY / CHECKER.EXCEPTION_FILE).read_text(encoding="utf-8")
+            (root / CHECKER.EXCEPTION_FILE).write_text(
+                text + "\ncudadevrt\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "renewed review"):
+                CHECKER._require_exception_policy(root)
 
 
 class ImplibProvenanceTests(unittest.TestCase):

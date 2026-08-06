@@ -1,4 +1,6 @@
 #ifndef GPUXTB_RUNTIME_GFN2_CUDA_TOPOLOGY_STAGING_HPP
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+
 #define GPUXTB_RUNTIME_GFN2_CUDA_TOPOLOGY_STAGING_HPP
 
 #include <cstddef>

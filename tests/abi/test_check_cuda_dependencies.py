@@ -73,6 +73,19 @@ class CudaDependencyCheckerTests(unittest.TestCase):
         self.assertEqual(unresolved, [])
         self.assertEqual(exported, ["cudaMalloc", "gpu_xtb_cuda_dlsym"])
 
+    def test_rejects_embedded_cudadevrt_link_input(self) -> None:
+        """Reject an ELF payload that records a cudadevrt link input."""
+        self.assertEqual(
+            CHECKER.find_forbidden_binary_tokens(b"elf metadata -l dl,cudadevrt"),
+            ["cudadevrt"],
+        )
+
+    def test_accepts_binary_without_cudadevrt_token(self) -> None:
+        """Accept an ELF payload without the forbidden device runtime token."""
+        self.assertEqual(
+            CHECKER.find_forbidden_binary_tokens(b"elf metadata -l dl"), []
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

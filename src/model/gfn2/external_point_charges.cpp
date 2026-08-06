@@ -1,4 +1,5 @@
 #include "model/gfn2/external_point_charges.hpp"
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstddef>

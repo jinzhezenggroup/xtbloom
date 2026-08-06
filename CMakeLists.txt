@@ -18,8 +18,11 @@ set_property(CACHE GPUXTB_ENABLE_CUDA PROPERTY STRINGS AUTO ON OFF)
 option(GPUXTB_BUILD_TESTS "Build gpuxtb tests" ${PROJECT_IS_TOP_LEVEL})
 option(GPUXTB_PYTHON_WHEEL
   "Install an unversioned single-copy shared library for a Python wheel" OFF)
+set(GPUXTB_CPU_LINALG_LIBRARY "" CACHE FILEPATH
+  "Optional monolithic shared LP64 LAPACKE+CBLAS runtime with local thread control for the CPU eigensolver (e.g. libscipy_openblas.so or libmkl_rt.so). When unset, compatible runtimes are auto-discovered with find_package(BLAS/LAPACK)."
+)
 set(GPUXTB_MKL_RT_LIBRARY "" CACHE FILEPATH
-  "Optional shared LP64 BLAS/LAPACK runtime for the CPU eigensolver (e.g. libmkl_rt.so or libopenblas.so). When unset, compatible runtimes are auto-discovered with find_package(BLAS/LAPACK)."
+  "Deprecated alias for GPUXTB_CPU_LINALG_LIBRARY."
 )
 
 string(TOUPPER "${GPUXTB_ENABLE_CUDA}" GPUXTB_ENABLE_CUDA_NORMALIZED)
@@ -68,6 +71,30 @@ function(gpuxtb_cpu_linalg_has_symbol_set candidate symbol_prefix result)
   set(${result} ${symbol_set_complete} PARENT_SCOPE)
 endfunction()
 
+function(gpuxtb_cpu_linalg_has_local_thread_control candidate result)
+  # gpuxtb parallelizes over systems. Accept a provider only when each worker
+  # can suppress nested BLAS threads without mutating another worker's state.
+  set(has_local_thread_control OFF)
+  foreach(symbol IN ITEMS
+      MKL_Set_Num_Threads_Local
+      openblas_set_num_threads_local
+      scipy_openblas_set_num_threads_local
+  )
+    unset(GPUXTB_CPU_LINALG_THREAD_CONTROL_FOUND CACHE)
+    check_library_exists(
+      "${candidate}" "${symbol}" ""
+      GPUXTB_CPU_LINALG_THREAD_CONTROL_FOUND
+    )
+    if(GPUXTB_CPU_LINALG_THREAD_CONTROL_FOUND)
+      set(has_local_thread_control ON)
+      unset(GPUXTB_CPU_LINALG_THREAD_CONTROL_FOUND CACHE)
+      break()
+    endif()
+    unset(GPUXTB_CPU_LINALG_THREAD_CONTROL_FOUND CACHE)
+  endforeach()
+  set(${result} ${has_local_thread_control} PARENT_SCOPE)
+endfunction()
+
 function(gpuxtb_validate_cpu_linalg_runtime candidate result symbol_prefix_result)
   if(NOT EXISTS "${candidate}" OR IS_DIRECTORY "${candidate}")
     set(${result} OFF PARENT_SCOPE)
@@ -95,6 +122,15 @@ function(gpuxtb_validate_cpu_linalg_runtime candidate result symbol_prefix_resul
     return()
   endif()
 
+  gpuxtb_cpu_linalg_has_local_thread_control(
+    "${candidate}" has_local_thread_control
+  )
+  if(NOT has_local_thread_control)
+    set(${result} OFF PARENT_SCOPE)
+    set(${symbol_prefix_result} "" PARENT_SCOPE)
+    return()
+  endif()
+
   gpuxtb_cpu_linalg_has_symbol_set("${candidate}" "" has_standard_symbols)
   if(has_standard_symbols)
     set(${result} ON PARENT_SCOPE)
@@ -113,27 +149,50 @@ function(gpuxtb_validate_cpu_linalg_runtime candidate result symbol_prefix_resul
   endif()
 endfunction()
 
-# The CPU eigensolver dlopens an LP64 BLAS/LAPACK runtime (MKL on x86_64,
-# OpenBLAS where Intel MKL does not exist, e.g. linux/aarch64). Bake a verified
-# absolute path into the library so a non-system runtime can be found without
-# LD_LIBRARY_PATH. This remains a lazy dlopen: libgpuxtb never gains a hard
-# DT_NEEDED dependency that would make the CUDA backend unloadable when no BLAS
-# is installed.
+# Bake a verified absolute path into the library so a non-system LP64 runtime
+# can be found without LD_LIBRARY_PATH. This remains a lazy dlopen: libgpuxtb
+# never gains a hard DT_NEEDED dependency that would make the CUDA backend
+# unloadable when no BLAS is installed.
 set(GPUXTB_CPU_LINALG_RUNTIME "")
 set(GPUXTB_CPU_LINALG_SYMBOL_PREFIX "")
-if(GPUXTB_MKL_RT_LIBRARY)
+if(GPUXTB_CPU_LINALG_LIBRARY AND GPUXTB_MKL_RT_LIBRARY)
+  get_filename_component(gpuxtb_linalg_path
+    "${GPUXTB_CPU_LINALG_LIBRARY}" REALPATH
+  )
+  get_filename_component(gpuxtb_legacy_linalg_path
+    "${GPUXTB_MKL_RT_LIBRARY}" REALPATH
+  )
+  if(NOT gpuxtb_linalg_path STREQUAL gpuxtb_legacy_linalg_path)
+    message(FATAL_ERROR
+      "GPUXTB_CPU_LINALG_LIBRARY and deprecated GPUXTB_MKL_RT_LIBRARY "
+      "select different files"
+    )
+  endif()
+endif()
+if(GPUXTB_CPU_LINALG_LIBRARY)
+  set(GPUXTB_CONFIGURED_CPU_LINALG_LIBRARY "${GPUXTB_CPU_LINALG_LIBRARY}")
+elseif(GPUXTB_MKL_RT_LIBRARY)
+  message(DEPRECATION
+    "GPUXTB_MKL_RT_LIBRARY is deprecated; use GPUXTB_CPU_LINALG_LIBRARY"
+  )
+  set(GPUXTB_CONFIGURED_CPU_LINALG_LIBRARY "${GPUXTB_MKL_RT_LIBRARY}")
+else()
+  set(GPUXTB_CONFIGURED_CPU_LINALG_LIBRARY "")
+endif()
+
+if(GPUXTB_CONFIGURED_CPU_LINALG_LIBRARY)
   gpuxtb_validate_cpu_linalg_runtime(
-    "${GPUXTB_MKL_RT_LIBRARY}"
+    "${GPUXTB_CONFIGURED_CPU_LINALG_LIBRARY}"
     configured_runtime_is_compatible
     configured_runtime_symbol_prefix
   )
   if(NOT configured_runtime_is_compatible)
     message(FATAL_ERROR
-      "GPUXTB_MKL_RT_LIBRARY=${GPUXTB_MKL_RT_LIBRARY} does not provide a "
-      "complete LP64 LAPACKE+CBLAS runtime"
+      "GPUXTB_CPU_LINALG_LIBRARY=${GPUXTB_CONFIGURED_CPU_LINALG_LIBRARY} does not provide a "
+      "complete LP64 LAPACKE+CBLAS runtime with local thread control"
     )
   endif()
-  set(GPUXTB_CPU_LINALG_RUNTIME "${GPUXTB_MKL_RT_LIBRARY}")
+  set(GPUXTB_CPU_LINALG_RUNTIME "${GPUXTB_CONFIGURED_CPU_LINALG_LIBRARY}")
   set(GPUXTB_CPU_LINALG_SYMBOL_PREFIX "${configured_runtime_symbol_prefix}")
 else()
   if(DEFINED BLA_SIZEOF_INTEGER)
@@ -289,9 +348,9 @@ if(GPUXTB_HAS_CUDA)
       "'${CMAKE_SYSTEM_PROCESSOR}'")
   endif()
 
-  # The generated shims contain all CUDA-facing definitions needed by the
-  # backend.  CUDA device linking still contributes cudadevrt for RDC, but the
-  # host link must not silently reintroduce cudart_static.
+  # The generated shims contain all CUDA-facing host definitions needed by the
+  # backend. Neither the host nor device link may silently reintroduce a static
+  # CUDA runtime.
   set(CMAKE_CUDA_RUNTIME_LIBRARY None)
   enable_language(C ASM)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
@@ -620,7 +679,13 @@ if(GPUXTB_HAS_CUDA)
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
     CUDA_RUNTIME_LIBRARY None
   )
-  target_link_options(gpuxtb PRIVATE "LINKER:-z,defs")
+  # gpuxtb uses relocatable device code for cross-translation-unit constants,
+  # but it does not launch child kernels through CUDA Dynamic Parallelism.
+  # Exclude nvcc's otherwise-default static device-runtime input explicitly.
+  target_link_options(gpuxtb PRIVATE
+    "$<DEVICE_LINK:--cudadevrt=none>"
+    "LINKER:-z,defs"
+  )
 endif()
 
 if(GPUXTB_BUILD_TESTS)
@@ -2151,7 +2216,7 @@ if(GPUXTB_BUILD_TESTS)
     )
   else()
     message(STATUS
-      "gpuxtb eigensolver test: disabled (set GPUXTB_MKL_RT_LIBRARY or provide a system BLAS to enable)"
+      "gpuxtb eigensolver test: disabled (set GPUXTB_CPU_LINALG_LIBRARY or provide a system BLAS to enable)"
     )
   endif()
 
@@ -2301,7 +2366,7 @@ install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 # Legal material is part of the installed SDK contract. Keep project terms,
 # third-party notices, and machine-readable provenance together so native
 # consumers receive the same audit trail as source and Python distributions.
-install(FILES LICENSE THIRD_PARTY_NOTICES.md
+install(FILES LICENSE CUDA_MKL_LINKING_EXCEPTION THIRD_PARTY_NOTICES.md
   DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/gpuxtb
 )
 install(DIRECTORY LICENSES/
@@ -2309,6 +2374,7 @@ install(DIRECTORY LICENSES/
 )
 install(FILES
   data/parameters/manifest.json
+  data/parameters/sto_manifest.json
   data/parameters/spin_manifest.json
   data/parameters/d4_manifest.json
   data/parameters/mctc_manifest.json
