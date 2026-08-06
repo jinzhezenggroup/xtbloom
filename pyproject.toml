@@ -144,3 +144,16 @@ lint.select = ["E4", "E7", "E9", "F", "I"]
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
 addopts = "-ra"
+
+[tool.coverage.run]
+# The CI suite imports the source tree while loading the native library from
+# the installed wheel. Relative paths let GitHub map every measured line back
+# to the corresponding repository file.
+include = ["python/gpuxtb/*"]
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.coverage.xml]
+output = "coverage.xml"
