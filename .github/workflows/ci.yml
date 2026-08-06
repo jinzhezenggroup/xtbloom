@@ -35,7 +35,7 @@ jobs:
       - name: Install ccache
         run: sudo apt-get update && sudo apt-get install --yes ccache
       - name: Restore ccache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # ccache 4 stores its cache under XDG_CACHE_HOME/ccache, which on the
           # runner is ~/.cache/ccache. CCACHE_BASEDIR is left unset because the
@@ -112,7 +112,7 @@ jobs:
       - name: Install ccache
         run: sudo apt-get update && sudo apt-get install --yes ccache
       - name: Restore ccache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ccache
           key: ccache-python-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'include/**', 'src/**', 'tests/**', 'pyproject.toml') }}
@@ -222,7 +222,7 @@ jobs:
       - name: Install ccache
         run: sudo apt-get update && sudo apt-get install --yes ccache
       - name: Restore ccache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ccache
           key: ccache-static-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'include/**', 'src/**', 'tests/**') }}
@@ -269,7 +269,7 @@ jobs:
       - name: Install ccache
         run: sudo apt-get update && sudo apt-get install --yes ccache
       - name: Restore ccache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ccache
           key: ccache-public-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'include/**', 'src/**', 'tests/**') }}
