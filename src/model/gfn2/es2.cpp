@@ -647,6 +647,69 @@ gpuxtb_status_t evaluate_es2_potential_cpu(const ES2Plan& plan, const ES2Geometr
   return GPUXTB_STATUS_SUCCESS;
 }
 
+gpuxtb_status_t evaluate_es2_potential_system_cpu(const ES2Plan& plan,
+                                                  const ES2GeometryCache& cache,
+                                                  std::int64_t system, const double* shell_charges,
+                                                  double* shell_potentials, std::string& error) {
+  gpuxtb_status_t status = validate_plan(plan, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  status = validate_cache(plan, cache, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  if (system < 0 || system >= plan.batch_size()) {
+    error = "ES2 potential system index is out of range";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  if (shell_charges == nullptr || !is_aligned_double(shell_charges) ||
+      shell_potentials == nullptr || !is_aligned_double(shell_potentials)) {
+    error = "ES2 one-system potential inputs and output must not be NULL or misaligned";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  const std::size_t shell_bytes = static_cast<std::size_t>(plan.total_shells()) * sizeof(double);
+  const std::size_t matrix_bytes =
+      static_cast<std::size_t>(plan.total_matrix_elements()) * sizeof(double);
+  if (overlaps_plan_storage(plan, shell_charges, shell_bytes) ||
+      overlaps_plan_storage(plan, cache.coulomb_matrix, matrix_bytes) ||
+      overlaps_plan_storage(plan, shell_potentials, shell_bytes) ||
+      ranges_overlap(shell_charges, shell_bytes, &cache, sizeof(cache)) ||
+      ranges_overlap(cache.coulomb_matrix, matrix_bytes, &cache, sizeof(cache)) ||
+      ranges_overlap(shell_potentials, shell_bytes, &cache, sizeof(cache)) ||
+      ranges_overlap(shell_charges, shell_bytes, cache.coulomb_matrix, matrix_bytes) ||
+      ranges_overlap(shell_charges, shell_bytes, shell_potentials, shell_bytes) ||
+      ranges_overlap(cache.coulomb_matrix, matrix_bytes, shell_potentials, shell_bytes) ||
+      ranges_overlap(shell_potentials, shell_bytes, &error, sizeof(error))) {
+    error =
+        "ES2 one-system potential inputs, output, cache, error, and plan storage must not "
+        "overlap";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  const std::size_t system_index = static_cast<std::size_t>(system);
+  const std::int64_t shell_begin = plan.batch_shell_offsets()[system_index];
+  const std::int64_t shell_end = plan.batch_shell_offsets()[system_index + 1u];
+  for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
+    if (!std::isfinite(shell_charges[static_cast<std::size_t>(shell)])) {
+      error = "ES2 target-system shell charges contain NaN or infinity";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+  }
+
+  for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
+    double potential = 0.0;
+    if (!calculate_potential_row(plan, cache, shell_charges, system_index, shell, potential)) {
+      error = "ES2 target-system potential arithmetic exceeded floating-point range";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    shell_potentials[static_cast<std::size_t>(shell)] = potential;
+  }
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
 gpuxtb_status_t add_es2_energy_cpu(const ES2Plan& plan, const ES2GeometryCache& cache,
                                    const double* shell_charges, double* energies,
                                    const ES2Workspace& workspace, std::string& error) {

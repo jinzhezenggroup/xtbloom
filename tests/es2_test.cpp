@@ -571,6 +571,132 @@ int test_system_energy_failure_isolation_and_binding() {
   return 0;
 }
 
+int test_system_potential_matches_batch_and_failure_isolation() {
+  const std::vector<std::int64_t> offsets{0, 1, 3, 4};
+  const std::vector<std::int32_t> atomic_numbers{1, 8, 1, 6};
+  const std::vector<double> positions{
+      -0.2, 0.1, 0.4, 1.0, -0.7, 0.3, 2.1, 0.2, -0.5, 4.0, 0.6, -0.1,
+  };
+  Evaluation evaluation;
+  std::string error;
+  CHECK(make_evaluation(offsets, atomic_numbers, positions, evaluation, error));
+  std::vector<double> charges(static_cast<std::size_t>(evaluation.plan.total_shells()));
+  for (std::size_t shell = 0; shell < charges.size(); ++shell) {
+    charges[shell] = -0.23 + 0.09 * static_cast<double>(shell);
+  }
+
+  const std::int64_t batch = evaluation.plan.batch_size();
+  std::vector<double> batch_potential(charges.size());
+  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+            evaluation.plan, evaluation.cache, charges.data(), batch_potential.data(),
+            evaluation.workspace, error) == GPUXTB_STATUS_SUCCESS);
+
+  /* Per-system potential reproduces the batch API's target slice. */
+  std::vector<double> system_potential(charges.size(), 0.0);
+  for (std::int64_t system = 0; system < batch; ++system) {
+    const std::int64_t shell_begin = evaluation.plan.batch_shell_offsets()[system];
+    const std::int64_t shell_end = evaluation.plan.batch_shell_offsets()[system + 1u];
+    CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+              evaluation.plan, evaluation.cache, system, charges.data(), system_potential.data(),
+              error) == GPUXTB_STATUS_SUCCESS);
+    for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
+      CHECK(system_potential[static_cast<std::size_t>(shell)] ==
+            batch_potential[static_cast<std::size_t>(shell)]);
+    }
+  }
+
+  /* A poisoned peer charge or matrix must not affect the target system. */
+  constexpr std::int64_t target = 1;
+  const std::size_t target_index = static_cast<std::size_t>(target);
+  const std::int64_t peer_shell = evaluation.plan.batch_shell_offsets()[target_index + 1u];
+  const std::int64_t target_matrix = evaluation.plan.matrix_offsets()[target_index];
+  const std::int64_t peer_matrix = evaluation.plan.matrix_offsets()[target_index + 1u];
+  const std::vector<double> expected(batch_potential);
+
+  const double saved_peer_charge = charges[static_cast<std::size_t>(peer_shell)];
+  charges[static_cast<std::size_t>(peer_shell)] = std::numeric_limits<double>::quiet_NaN();
+  std::fill(system_potential.begin(), system_potential.end(), 0.0);
+  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+            evaluation.plan, evaluation.cache, target, charges.data(), system_potential.data(),
+            error) == GPUXTB_STATUS_SUCCESS);
+  {
+    const std::int64_t shell_begin = evaluation.plan.batch_shell_offsets()[target_index];
+    const std::int64_t shell_end = evaluation.plan.batch_shell_offsets()[target_index + 1u];
+    for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
+      CHECK(system_potential[static_cast<std::size_t>(shell)] ==
+            expected[static_cast<std::size_t>(shell)]);
+    }
+  }
+  charges[static_cast<std::size_t>(peer_shell)] = saved_peer_charge;
+
+  const double saved_peer_matrix = evaluation.matrix[static_cast<std::size_t>(peer_matrix)];
+  evaluation.matrix[static_cast<std::size_t>(peer_matrix)] =
+      std::numeric_limits<double>::quiet_NaN();
+  std::fill(system_potential.begin(), system_potential.end(), 0.0);
+  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+            evaluation.plan, evaluation.cache, target, charges.data(), system_potential.data(),
+            error) == GPUXTB_STATUS_SUCCESS);
+  {
+    const std::int64_t shell_begin = evaluation.plan.batch_shell_offsets()[target_index];
+    const std::int64_t shell_end = evaluation.plan.batch_shell_offsets()[target_index + 1u];
+    for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
+      CHECK(system_potential[static_cast<std::size_t>(shell)] ==
+            expected[static_cast<std::size_t>(shell)]);
+    }
+  }
+  evaluation.matrix[static_cast<std::size_t>(peer_matrix)] = saved_peer_matrix;
+
+  /* Target numerical poison is a target-only failure. */
+  const double saved_target_charge =
+      charges[static_cast<std::size_t>(evaluation.plan.batch_shell_offsets()[target_index])];
+  charges[static_cast<std::size_t>(evaluation.plan.batch_shell_offsets()[target_index])] =
+      std::numeric_limits<double>::quiet_NaN();
+  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+            evaluation.plan, evaluation.cache, target, charges.data(), system_potential.data(),
+            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  charges[static_cast<std::size_t>(evaluation.plan.batch_shell_offsets()[target_index])] =
+      saved_target_charge;
+
+  const double saved_target_matrix = evaluation.matrix[static_cast<std::size_t>(target_matrix)];
+  evaluation.matrix[static_cast<std::size_t>(target_matrix)] =
+      std::numeric_limits<double>::quiet_NaN();
+  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+            evaluation.plan, evaluation.cache, target, charges.data(), system_potential.data(),
+            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  evaluation.matrix[static_cast<std::size_t>(target_matrix)] = saved_target_matrix;
+
+  /* Out-of-range system and foreign cache are structural failures. */
+  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+            evaluation.plan, evaluation.cache, -1, charges.data(), system_potential.data(),
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+            evaluation.plan, evaluation.cache, batch, charges.data(), system_potential.data(),
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  Evaluation foreign;
+  CHECK(make_evaluation(offsets, atomic_numbers, positions, foreign, error));
+  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+            evaluation.plan, foreign.cache, target, charges.data(), system_potential.data(),
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+
+  /* Output aliasing plan storage and a NULL output are rejected. */
+  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+            evaluation.plan, evaluation.cache, target, evaluation.plan.shell_hardness().data(),
+            system_potential.data(), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+            evaluation.plan, evaluation.cache, target, charges.data(), nullptr, error) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+
+  /* The one-system potential allocates nothing and needs no scratch. */
+  const std::size_t before = allocation_test::count.load(std::memory_order_relaxed);
+  allocation_test::enabled.store(true, std::memory_order_relaxed);
+  const gpuxtb_status_t status = gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+      evaluation.plan, evaluation.cache, target, charges.data(), system_potential.data(), error);
+  allocation_test::enabled.store(false, std::memory_order_relaxed);
+  CHECK(status == GPUXTB_STATUS_SUCCESS);
+  CHECK(allocation_test::count.load(std::memory_order_relaxed) == before);
+  return 0;
+}
+
 int test_cache_plan_identity() {
   const std::vector<std::int64_t> pair_offsets{0, 2};
   const std::vector<std::int32_t> pair_numbers{1, 1};
@@ -1660,6 +1786,9 @@ int main() {
     return status;
   }
   if (const int status = test_system_energy_failure_isolation_and_binding(); status != 0) {
+    return status;
+  }
+  if (const int status = test_system_potential_matches_batch_and_failure_isolation(); status != 0) {
     return status;
   }
   if (const int status = test_cache_plan_identity(); status != 0) {

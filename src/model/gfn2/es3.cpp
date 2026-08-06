@@ -377,6 +377,48 @@ gpuxtb_status_t evaluate_es3_potential_cpu(ES3View view, const double* shell_cha
   return GPUXTB_STATUS_SUCCESS;
 }
 
+gpuxtb_status_t evaluate_es3_potential_system_cpu(ES3View view, std::int64_t system,
+                                                  const double* shell_charges,
+                                                  double* shell_potentials, std::string& error) {
+  std::int64_t shell_begin = 0;
+  std::int64_t shell_end = 0;
+  gpuxtb_status_t status = validate_system_view(view, system, shell_begin, shell_end, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  if (!is_aligned(shell_charges, alignof(double)) ||
+      !is_aligned(shell_potentials, alignof(double))) {
+    error = "ES3 shell charges and potentials must not be NULL or misaligned";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  std::size_t shell_bytes = 0;
+  std::size_t offset_bytes = 0;
+  if (!count_bytes(view.total_shells, sizeof(double), shell_bytes) ||
+      !count_bytes(view.batch_shell_offset_count, sizeof(std::int64_t), offset_bytes) ||
+      ranges_overlap(shell_potentials, shell_bytes, shell_charges, shell_bytes) ||
+      ranges_overlap(shell_potentials, shell_bytes, view.shell_gamma3, shell_bytes) ||
+      ranges_overlap(shell_potentials, shell_bytes, view.batch_shell_offsets, offset_bytes) ||
+      ranges_overlap(shell_potentials, shell_bytes, &error, sizeof(error))) {
+    error = "ES3 one-system shell potential output must not overlap inputs or error storage";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
+  for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
+    const double gamma3 = view.shell_gamma3[shell];
+    const double charge = shell_charges[shell];
+    double potential = 0.0;
+    if (!std::isfinite(gamma3) || !std::isfinite(charge) ||
+        !shell_potential(gamma3, charge, potential)) {
+      error = "ES3 target-system shell potential contains invalid data or overflowed";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    shell_potentials[shell] = potential;
+  }
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
 gpuxtb_status_t add_es3_energy_cpu(ES3View view, const double* shell_charges, double* energies,
                                    std::string& error) {
   gpuxtb_status_t status = validate_view(view, error);

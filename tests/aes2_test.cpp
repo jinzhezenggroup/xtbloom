@@ -790,6 +790,137 @@ int test_ragged_matches_sequential() {
   return 0;
 }
 
+int test_system_potential_matches_batch_and_failure_isolation() {
+  const std::vector<std::int64_t> offsets{0, 2, 2, 5, 6};
+  const std::vector<std::int32_t> numbers{3, 1, 8, 6, 1, 79};
+  const std::vector<double> positions{
+      0.0, 0.0, -1.2, 0.1, 0.2, 1.4, -0.7, 0.5, 0.1, 1.2, -0.8, 0.9, 2.1, 0.4, -1.0, 3.3, -0.6, 0.7,
+  };
+  Fixture batch;
+  std::string error;
+  CHECK(make_fixture(offsets, numbers, positions, batch, error));
+  std::vector<double> charges(numbers.size());
+  std::vector<double> dipoles(numbers.size() * 3u);
+  std::vector<double> quadrupoles(numbers.size() * 6u);
+  for (std::size_t atom = 0; atom < numbers.size(); ++atom) {
+    charges[atom] = 0.08 * static_cast<double>(atom + 1u) - 0.27;
+    for (std::size_t component = 0; component < 3u; ++component) {
+      dipoles[atom * 3u + component] =
+          0.03 * static_cast<double>(atom * 3u + component + 1u) - 0.19;
+    }
+    const double xx = 0.02 * static_cast<double>(atom + 1u);
+    const double yy = -0.015 * static_cast<double>(atom + 2u);
+    quadrupoles[atom * 6u] = xx;
+    quadrupoles[atom * 6u + 1u] = -0.01 * static_cast<double>(atom + 1u);
+    quadrupoles[atom * 6u + 2u] = yy;
+    quadrupoles[atom * 6u + 3u] = 0.012 * static_cast<double>(atom + 1u);
+    quadrupoles[atom * 6u + 4u] = -0.008 * static_cast<double>(atom + 2u);
+    quadrupoles[atom * 6u + 5u] = -xx - yy;
+  }
+  std::vector<double> batch_charge(numbers.size());
+  std::vector<double> batch_dipole(dipoles.size());
+  std::vector<double> batch_quadrupole(quadrupoles.size());
+  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+            batch.plan, batch.cache, charges.data(), dipoles.data(), quadrupoles.data(),
+            batch_charge.data(), batch_dipole.data(), batch_quadrupole.data(), batch.workspace,
+            error) == GPUXTB_STATUS_SUCCESS);
+
+  /* The one-system primitive reproduces the batch potential slices, including
+   * an empty ragged member. */
+  std::vector<double> system_charge(charges.size(), -7.0);
+  std::vector<double> system_dipole(dipoles.size(), -7.0);
+  std::vector<double> system_quadrupole(quadrupoles.size(), -7.0);
+  for (std::int64_t system = 0; system < batch.plan.batch_size(); ++system) {
+    CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_system_cpu(
+              batch.plan, batch.cache, system, charges.data(), dipoles.data(), quadrupoles.data(),
+              system_charge.data(), system_dipole.data(), system_quadrupole.data(), batch.workspace,
+              error) == GPUXTB_STATUS_SUCCESS);
+    const std::int64_t atom_begin = offsets[system];
+    const std::int64_t atom_end = offsets[system + 1u];
+    for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+      CHECK(system_charge[static_cast<std::size_t>(atom)] ==
+            batch_charge[static_cast<std::size_t>(atom)]);
+      for (std::size_t component = 0; component < 3u; ++component) {
+        CHECK(system_dipole[static_cast<std::size_t>(atom) * 3u + component] ==
+              batch_dipole[static_cast<std::size_t>(atom) * 3u + component]);
+      }
+      for (std::size_t component = 0; component < 6u; ++component) {
+        CHECK(system_quadrupole[static_cast<std::size_t>(atom) * 6u + component] ==
+              batch_quadrupole[static_cast<std::size_t>(atom) * 6u + component]);
+      }
+    }
+  }
+
+  /* Peer poison must be invisible to the selected system, including a peer
+   * cache slice and peer multipoles. */
+  const std::size_t peer_atom = 2u;
+  const std::size_t peer_pair = static_cast<std::size_t>(batch.plan.pair_offsets()[2]) * 5u;
+  const double saved_charge = charges[peer_atom];
+  const double saved_pair = batch.pair_data[peer_pair];
+  charges[peer_atom] = std::numeric_limits<double>::quiet_NaN();
+  batch.pair_data[peer_pair] = std::numeric_limits<double>::quiet_NaN();
+  const std::vector<double> expected_charge(batch_charge);
+  const std::vector<double> expected_dipole(batch_dipole);
+  const std::vector<double> expected_quadrupole(batch_quadrupole);
+  std::fill(system_charge.begin(), system_charge.end(), 0.0);
+  std::fill(system_dipole.begin(), system_dipole.end(), 0.0);
+  std::fill(system_quadrupole.begin(), system_quadrupole.end(), 0.0);
+  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_system_cpu(
+            batch.plan, batch.cache, 0, charges.data(), dipoles.data(), quadrupoles.data(),
+            system_charge.data(), system_dipole.data(), system_quadrupole.data(), batch.workspace,
+            error) == GPUXTB_STATUS_SUCCESS);
+  for (std::size_t atom = 0; atom < 2u; ++atom) {
+    CHECK(system_charge[atom] == expected_charge[atom]);
+    for (std::size_t component = 0; component < 3u; ++component) {
+      CHECK(system_dipole[atom * 3u + component] == expected_dipole[atom * 3u + component]);
+    }
+    for (std::size_t component = 0; component < 6u; ++component) {
+      CHECK(system_quadrupole[atom * 6u + component] == expected_quadrupole[atom * 6u + component]);
+    }
+  }
+  charges[peer_atom] = saved_charge;
+  batch.pair_data[peer_pair] = saved_pair;
+
+  /* Selecting the poisoned member reports an isolated target failure and
+   * leaves its output slices unchanged. */
+  std::fill(system_charge.begin(), system_charge.end(), 1.5);
+  const std::vector<double> untouched_charge(system_charge);
+  charges[static_cast<std::size_t>(offsets[2])] = std::numeric_limits<double>::infinity();
+  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_system_cpu(
+            batch.plan, batch.cache, 2, charges.data(), dipoles.data(), quadrupoles.data(),
+            system_charge.data(), system_dipole.data(), system_quadrupole.data(), batch.workspace,
+            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(system_charge == untouched_charge);
+  charges[static_cast<std::size_t>(offsets[2])] = 0.08 * 3.0 - 0.27;
+
+  /* Out-of-range system and foreign cache are structural failures. */
+  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_system_cpu(
+            batch.plan, batch.cache, -1, charges.data(), dipoles.data(), quadrupoles.data(),
+            system_charge.data(), system_dipole.data(), system_quadrupole.data(), batch.workspace,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_system_cpu(
+            batch.plan, batch.cache, batch.plan.batch_size(), charges.data(), dipoles.data(),
+            quadrupoles.data(), system_charge.data(), system_dipole.data(),
+            system_quadrupole.data(), batch.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  Fixture foreign;
+  CHECK(make_fixture(offsets, numbers, positions, foreign, error));
+  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_system_cpu(
+            batch.plan, foreign.cache, 0, charges.data(), dipoles.data(), quadrupoles.data(),
+            system_charge.data(), system_dipole.data(), system_quadrupole.data(), batch.workspace,
+            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+
+  /* No per-call allocation in steady state. */
+  const std::size_t before = allocation_test::count.load(std::memory_order_relaxed);
+  allocation_test::enabled.store(true, std::memory_order_relaxed);
+  const gpuxtb_status_t status = gpuxtb::detail::gfn2::evaluate_aes2_potential_system_cpu(
+      batch.plan, batch.cache, 0, charges.data(), dipoles.data(), quadrupoles.data(),
+      system_charge.data(), system_dipole.data(), system_quadrupole.data(), batch.workspace, error);
+  allocation_test::enabled.store(false, std::memory_order_relaxed);
+  CHECK(status == GPUXTB_STATUS_SUCCESS);
+  CHECK(allocation_test::count.load(std::memory_order_relaxed) == before);
+  return 0;
+}
+
 int test_failure_atomicity_and_plan_identity() {
   const std::vector<std::int64_t> offsets{0, 2, 4};
   const std::vector<std::int32_t> numbers{3, 1, 8, 6};
@@ -1053,6 +1184,9 @@ int main() {
     return line;
   }
   if (const int line = test_ragged_matches_sequential(); line != 0) {
+    return line;
+  }
+  if (const int line = test_system_potential_matches_batch_and_failure_isolation(); line != 0) {
     return line;
   }
   if (const int line = test_failure_atomicity_and_plan_identity(); line != 0) {

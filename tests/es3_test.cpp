@@ -347,6 +347,111 @@ int test_system_energy_failure_isolation_and_binding() {
   return 0;
 }
 
+int test_system_potential_matches_batch_and_failure_isolation() {
+  const std::vector<std::int64_t> offsets{0, 1, 1, 3, 4};
+  const std::vector<std::int32_t> atomic_numbers{1, 8, 1, 6};
+  BasisPlan basis;
+  ES3Plan plan;
+  std::string error;
+  CHECK(make_plan(offsets, atomic_numbers, basis, plan, error));
+  const ES3View view = gpuxtb::detail::gfn2::make_es3_view(plan);
+  std::vector<double> charges(static_cast<std::size_t>(plan.total_shells));
+  for (std::size_t shell = 0; shell < charges.size(); ++shell) {
+    charges[shell] = 0.04 * static_cast<double>(shell + 1u) - 0.17;
+  }
+
+  std::vector<double> batch_potentials(charges.size());
+  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_cpu(
+            view, charges.data(), batch_potentials.data(), error) == GPUXTB_STATUS_SUCCESS);
+
+  std::vector<double> system_potentials(charges.size(), 0.0);
+  for (std::int64_t system = 0; system < plan.batch_size; ++system) {
+    const std::int64_t shell_begin = plan.batch_shell_offsets[system];
+    const std::int64_t shell_end = plan.batch_shell_offsets[system + 1];
+    CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_system_cpu(view, system, charges.data(),
+                                                                  system_potentials.data(),
+                                                                  error) == GPUXTB_STATUS_SUCCESS);
+    for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
+      CHECK(system_potentials[static_cast<std::size_t>(shell)] ==
+            batch_potentials[static_cast<std::size_t>(shell)]);
+    }
+  }
+
+  constexpr std::int64_t target = 0;
+  const std::int64_t target_shell = plan.batch_shell_offsets[0];
+  const std::int64_t peer_shell = plan.batch_shell_offsets[2];
+  const std::vector<double> expected(batch_potentials);
+
+  /* A poisoned peer shell or gamma3 must not affect the target system. */
+  const double saved_peer_charge = charges[static_cast<std::size_t>(peer_shell)];
+  charges[static_cast<std::size_t>(peer_shell)] = std::numeric_limits<double>::quiet_NaN();
+  std::fill(system_potentials.begin(), system_potentials.end(), 0.0);
+  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_system_cpu(view, target, charges.data(),
+                                                                system_potentials.data(),
+                                                                error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(system_potentials[static_cast<std::size_t>(target_shell)] ==
+        expected[static_cast<std::size_t>(target_shell)]);
+  charges[static_cast<std::size_t>(peer_shell)] = saved_peer_charge;
+
+  std::vector<double> gamma3 = plan.shell_gamma3;
+  gamma3[static_cast<std::size_t>(peer_shell)] = std::numeric_limits<double>::quiet_NaN();
+  ES3View poisoned_peer_view = view;
+  poisoned_peer_view.shell_gamma3 = gamma3.data();
+  std::fill(system_potentials.begin(), system_potentials.end(), 0.0);
+  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_system_cpu(
+            poisoned_peer_view, target, charges.data(), system_potentials.data(), error) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(system_potentials[static_cast<std::size_t>(target_shell)] ==
+        expected[static_cast<std::size_t>(target_shell)]);
+
+  /* Target poison is a target-only failure. */
+  const double saved_target_charge = charges[static_cast<std::size_t>(target_shell)];
+  charges[static_cast<std::size_t>(target_shell)] = std::numeric_limits<double>::quiet_NaN();
+  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_system_cpu(view, target, charges.data(),
+                                                                system_potentials.data(), error) ==
+        GPUXTB_STATUS_INTERNAL_ERROR);
+  charges[static_cast<std::size_t>(target_shell)] = saved_target_charge;
+
+  gamma3 = plan.shell_gamma3;
+  gamma3[static_cast<std::size_t>(target_shell)] = std::numeric_limits<double>::quiet_NaN();
+  ES3View poisoned_target_view = view;
+  poisoned_target_view.shell_gamma3 = gamma3.data();
+  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_system_cpu(
+            poisoned_target_view, target, charges.data(), system_potentials.data(), error) ==
+        GPUXTB_STATUS_INTERNAL_ERROR);
+
+  /* Out-of-range system and truncated view are structural failures. */
+  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_system_cpu(view, -1, charges.data(),
+                                                                system_potentials.data(), error) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_system_cpu(
+            view, plan.batch_size, charges.data(), system_potentials.data(), error) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  ES3View bad_view = view;
+  --bad_view.shell_gamma3_count;
+  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_system_cpu(bad_view, target, charges.data(),
+                                                                system_potentials.data(), error) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+
+  /* Output aliasing and NULL outputs are rejected without modifying charges. */
+  const std::vector<double> saved_charges = charges;
+  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_system_cpu(
+            view, target, charges.data(), charges.data(), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(charges == saved_charges);
+  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_system_cpu(
+            view, target, charges.data(), nullptr, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+
+  /* The one-system potential allocates nothing. */
+  const std::size_t before = allocation_test::count.load(std::memory_order_relaxed);
+  allocation_test::enabled.store(true, std::memory_order_relaxed);
+  const gpuxtb_status_t status = gpuxtb::detail::gfn2::evaluate_es3_potential_system_cpu(
+      view, target, charges.data(), system_potentials.data(), error);
+  allocation_test::enabled.store(false, std::memory_order_relaxed);
+  CHECK(status == GPUXTB_STATUS_SUCCESS);
+  CHECK(allocation_test::count.load(std::memory_order_relaxed) == before);
+  return 0;
+}
+
 int test_extreme_arithmetic() {
   const std::vector<std::int64_t> offsets{0, 1};
   const std::vector<std::int32_t> atomic_numbers{1};
@@ -612,6 +717,9 @@ int main() {
     return status;
   }
   if (const int status = test_system_energy_failure_isolation_and_binding(); status != 0) {
+    return status;
+  }
+  if (const int status = test_system_potential_matches_batch_and_failure_isolation(); status != 0) {
     return status;
   }
   if (const int status = test_extreme_arithmetic(); status != 0) {
