@@ -1,0 +1,42 @@
+gpuxtb CUDA and Intel MKL Additional Permission
+Version 1.0, 6 August 2026
+
+Copyright (C) 2026 Jinzhe Zeng
+
+This is an additional permission under section 7 of the GNU General Public
+License, version 3 ("GPLv3").
+
+"CUDA Provider Components" means only the NVIDIA CUDA Driver API library
+(libcuda); CUDA Runtime (libcudart); cuBLAS and cuBLASLt; cuSOLVER; cuSPARSE;
+nvJitLink; and NVIDIA libdevice code incorporated by nvcc or nvlink into object
+code generated from gpuxtb.
+
+"MKL Provider Components" means only the Intel oneAPI Math Kernel Library
+single dynamic runtime (libmkl_rt) and Intel MKL component libraries loaded by
+that runtime to implement its documented LP64 CBLAS and LAPACKE interfaces.
+Together, the CUDA Provider Components and MKL Provider Components are the
+"Provider Components".
+
+When you convey gpuxtb, or a covered work based on gpuxtb, linked or combined
+with one or more Provider Components, including through static linking, CUDA
+device linking, dynamic linking, or loading a library by name at run time, the
+copyright holders of the gpuxtb material to which this permission applies grant
+you additional permission to convey the resulting work.
+
+You must obey GPLv3 in all respects for all covered material other than the
+Provider Components and must obey the applicable license terms for each
+Provider Component. Corresponding Source for the resulting work need not
+include source code for a Provider Component.
+
+This permission grants no right to copy, modify, or redistribute any Provider
+Component beyond the rights granted by its copyright holder. It does not make
+a Provider Component subject to GPLv3.
+
+This permission does not apply to third-party material identified in
+THIRD_PARTY_NOTICES.md as retained under a separate license. Such material
+remains governed by its own license and any independent permissions that
+license provides.
+
+Under GPLv3 section 7, a recipient may remove this additional permission from
+a copy. If a modified version is conveyed without this permission, notices
+stating that it applies must also be removed.

@@ -65,6 +65,17 @@ class CudaDependencyCheckerTests(unittest.TestCase):
         self.assertEqual(unresolved, [])
         self.assertEqual(exported, ["cudaMalloc", "gpu_xtb_cuda_dlsym"])
 
+    def test_rejects_embedded_cudadevrt_link_input(self) -> None:
+        self.assertEqual(
+            CHECKER.find_forbidden_binary_tokens(b"elf metadata -l dl,cudadevrt"),
+            ["cudadevrt"],
+        )
+
+    def test_accepts_binary_without_cudadevrt_token(self) -> None:
+        self.assertEqual(
+            CHECKER.find_forbidden_binary_tokens(b"elf metadata -l dl"), []
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

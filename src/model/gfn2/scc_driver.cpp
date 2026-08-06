@@ -1,4 +1,5 @@
 #include "model/gfn2/scc_driver.hpp"
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <algorithm>
 #include <array>

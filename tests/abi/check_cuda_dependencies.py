@@ -1,8 +1,10 @@
 """Verify that a CUDA-enabled shared gpuxtb library is loader-closed.
 
-libgpuxtb.so resolves NVIDIA APIs through hidden, pre-resolved trampolines.  A
+libgpuxtb.so resolves NVIDIA APIs through hidden, pre-resolved trampolines. A
 hard NVIDIA DT_NEEDED, an unresolved CUDA-facing symbol, or an exported loader
 implementation symbol would break the no-runtime load contract and ABI gate.
+The build also disables cudadevrt explicitly; retaining its link-input name in
+the ELF catches accidental reintroduction of nvcc's default device runtime.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ CUDA_SYMBOL_RE = re.compile(r"^(?:__cuda|cuda|cublas|cusolver|cu[A-Z])")
 LOADER_SYMBOL_RE = re.compile(
     r"^(?:gpuxtb_cuda_|gpu_xtb_cuda_|_lib(?:cuda|cudart|cublas|cusolver)_so_tramp_)"
 )
+FORBIDDEN_BINARY_TOKENS = (b"cudadevrt",)
 
 
 def find_forbidden_needed(dynamic_output: str) -> list[str]:
@@ -78,6 +81,14 @@ def find_cuda_symbol_leaks(dynamic_symbols_output: str) -> tuple[list[str], list
     return sorted(unresolved), sorted(exported)
 
 
+def find_forbidden_binary_tokens(payload: bytes) -> list[str]:
+    """Return prohibited CUDA device-link inputs recorded in the ELF bytes."""
+
+    return [
+        token.decode("ascii") for token in FORBIDDEN_BINARY_TOKENS if token in payload
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -102,6 +113,7 @@ def main() -> int:
     )
     forbidden = find_forbidden_needed(dynamic.stdout)
     unresolved, exported = find_cuda_symbol_leaks(dynamic_symbols.stdout)
+    forbidden_tokens = find_forbidden_binary_tokens(args.library.read_bytes())
 
     failed = False
     if forbidden:
@@ -115,6 +127,12 @@ def main() -> int:
         failed = True
     if exported:
         print("exported CUDA loader/shim symbols: " + ", ".join(exported))
+        failed = True
+    if forbidden_tokens:
+        print(
+            "CUDA device-link inputs that must remain disabled: "
+            + ", ".join(forbidden_tokens)
+        )
         failed = True
     return int(failed)
 

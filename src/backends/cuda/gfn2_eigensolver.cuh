@@ -1,4 +1,6 @@
 #ifndef GPUXTB_BACKENDS_CUDA_GFN2_EIGENSOLVER_CUH
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+
 #define GPUXTB_BACKENDS_CUDA_GFN2_EIGENSOLVER_CUH
 
 #include <cublas_v2.h>

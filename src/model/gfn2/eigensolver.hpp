@@ -1,4 +1,6 @@
 #ifndef GPUXTB_MODEL_GFN2_EIGENSOLVER_HPP
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+
 #define GPUXTB_MODEL_GFN2_EIGENSOLVER_HPP
 
 #include <cstddef>
@@ -39,10 +41,11 @@ using BlasSetNumThreadsLocal = int (*)(int threads);
  * Verified LP64 linear-algebra dispatch.
  *
  * Production code obtains this handle from make_mkl_rt_lp64_backend. The
- * factory dlopens and verifies all required symbols from the LP64 runtime the
- * build configured (MKL on x86_64 by default, OpenBLAS where Intel MKL does not
- * exist, e.g. linux/aarch64) or from common SONAMEs, and requests LP64 before
- * use. It rejects an explicit or already-active ILP64 MKL runtime rather than
+ * factory dlopens and verifies all required symbols from the configured LP64
+ * runtime (OpenBLAS is the default Linux package dependency; native users may
+ * select MKL) or from common SONAMEs. A production provider must expose local
+ * thread control so gpuxtb's outer batch workers can keep BLAS sequential. The
+ * factory rejects an explicit or already-active ILP64 MKL runtime rather than
  * switching it. Call it during single-threaded runtime initialization, before
  * concurrent BLAS use or a host's first MKL interface selection. The testing
  * factory is kept in this internal namespace so tests can install spies and
