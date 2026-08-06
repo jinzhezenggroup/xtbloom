@@ -1,7 +1,7 @@
 mixer_transaction_benchmark
-batch=64 atoms_per_system=6 history=64 state_size_bytes=4461952 vector_bytes=33792 history_bytes=2162688 per_system_bytes=69718
+batch=64 atoms_per_system=6 history=64 state_size_bytes=4461952 vector_bytes=33792 history_bytes=2162688 per_system_copy_bytes=69718 per_system_transaction_bytes=139436
 row,active_systems,old_copy_us,copy_transaction_us,mix_transaction_us,old_copy_bytes,new_transaction_bytes
-8,8,309.628,32.954,2438.433,8923904,557744
-16,16,315.560,65.837,4887.605,8923904,1115488
-32,32,341.400,134.229,9775.771,8923904,2230976
-64,64,343.384,330.078,19599.073,8923904,4461952
+8,8,249.537,32.823,2466.948,8923904,1115488
+16,16,249.177,65.626,4944.557,8923904,2230976
+32,32,249.738,131.431,9896.007,8923904,4461952
+64,64,249.086,291.798,19813.144,8923904,8923904
