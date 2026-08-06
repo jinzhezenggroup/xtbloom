@@ -6,8 +6,9 @@ occupations evaluation", squash commit `89a53220655e6fb4037890db487207819b598cc3
 
 The parallel occupations implementation is already on `main`. This directory
 records the durable before/after artifacts that the issue required: the raw
-public-C-API benchmark matrices and the Nsight Systems reports for batch 1 and
-batch 128. "Baseline" is the occupations evaluation before PR #172
+public-C-API benchmark matrices and derived Nsight Systems CUDA kernel
+summaries for batch 1 and batch 128. "Baseline" is the occupations evaluation
+before PR #172
 (`pre-172`, i.e. `main` at `cf0fe8dcf802211892f96436da2f276e49c9199a` plus the
 PR branch without the occupations change). "Repaired" is the parallel
 implementation at PR #172 head `6b71c2a1392497ad8e595b8f88561db300e2b0a6`.
@@ -27,9 +28,12 @@ implementation at PR #172 head `6b71c2a1392497ad8e595b8f88561db300e2b0a6`.
   `CUDA_VISIBLE_DEVICES=0`, `MKL_INTERFACE_LAYER=LP64`,
   `MKL_THREADING_LAYER=SEQUENTIAL`.
 
-The exact argv and environment of every profiled run are embedded in the
-`META_DATA_CAPTURE` table of each `.nsys-rep` report (import with
-`nsys import`).
+The raw Nsight reports were inspected locally and the committed kernel-summary
+CSVs were regenerated from them with Nsight Systems 2025.1.3. Raw
+`.nsys-rep` files are intentionally not committed: Nsight captures the full
+target-process environment, which may contain credentials or other private
+session metadata. The minimally scoped recapture and export commands are
+recorded below.
 
 ## Protocol
 
@@ -44,7 +48,8 @@ interval.
 - Nsight profiles (`benchmarks/natoms_scaling.py`, batch 1 or 128 only): one
   untimed run under `nsys profile` with CUDA tracing only; profiling overhead
   makes these single-sample timings slower than the unprofiled matrix rows and
-  are used only for the kernel-level comparison.
+  they are used only for the kernel-level comparison. The captured B1 run used
+  one warmup and the B128 run used zero warmups before the profiled invocation.
 
 ## Results
 
@@ -71,9 +76,8 @@ for B8/B32 in the JSON artifacts). The maximum force drift measured during PR
 | 128 | 250 | 304.875 | 36.451 | 8.36x | 3.3% | 0.4% |
 
 Kernel instance counts are unchanged, so the speedup is pure per-launch
-latency reduction. The per-report full tables are the
-`nsys-*_cuda_gpu_kern_sum.csv` exports; the raw reports are the `.nsys-rep`
-files.
+latency reduction. The full derived tables are the
+`nsys-*_cuda_gpu_kern_sum.csv` exports.
 
 ## Files
 
@@ -82,24 +86,16 @@ files.
 - `gpuxtb-baseline.csv` / `gpuxtb-repaired.csv`: same data as CSV.
 - `nsys-{baseline,repaired}-b{1,128}.json`: the profiled single-sample
   `natoms_scaling` rows.
-- `nsys-{baseline,repaired}-b{1,128}.nsys-rep`: Nsight Systems 2025.1.3 CUDA
-  reports (open with `nsys-ui` or analyze with `nsys stats`).
 - `nsys-{baseline,repaired}-b{1,128}_cuda_gpu_kern_sum.csv`: canonical kernel
-  summary exports regenerated with `nsys stats --report cuda_gpu_kern_sum`.
+  summary exports regenerated from the local reports with
+  `nsys stats --report cuda_gpu_kern_sum`.
 - `README.md`, `SHA256SUMS`: this document and artifact hashes.
 
-The captured JSON artifacts are archived as captured except for a single
-trailing newline per file, which the repository-wide `end-of-file-fixer` hook
-requires and the current benchmark writers (`write_json`, `natoms_scaling`)
-already emit; the byte difference is an appended `0x0a`, and the committed
-`SHA256SUMS` pins the archived bytes.
-
-The derived `.sqlite` analysis databases are not archived (about 140 MB) but
-can be regenerated from the `.nsys-rep` files:
-
-```bash
-nsys export --type=sqlite -o report.sqlite nsys-baseline-b1.nsys-rep
-```
+The captured JSON artifacts differ from the local output only by an appended
+`0x0a`, which the repository-wide `end-of-file-fixer` requires and the current
+benchmark writers already emit. The two end-to-end CSVs use LF rather than the
+CSV writer's CRLF line terminators so `git diff --check` remains clean; their
+field values are unchanged. The committed `SHA256SUMS` pins the archived bytes.
 
 ## Commands
 
@@ -118,19 +114,24 @@ python3 benchmarks/run.py \
   --output-json <out>.json --output-csv <out>.csv
 ```
 
+The matrix command uses the `benchmarks/run.py` CLI. The profiling command
+below uses the separate `benchmarks/natoms_scaling.py` CLI.
+
 Profiled runs (one per batch, CUDA tracing only):
 
 ```bash
-srun --gres=gpu:1 env \
+srun --gres=gpu:1 env -i \
+  PATH=/home/jzzeng/miniconda3/bin:/usr/bin:/bin \
   LD_LIBRARY_PATH=/group/software/cuda-12.9.1/targets/x86_64-linux/lib:/group/software/deepmd-kit-3.1.1/lib \
+  CUDA_VISIBLE_DEVICES=0 \
   MKL_INTERFACE_LAYER=LP64 MKL_THREADING_LAYER=SEQUENTIAL \
 /group/software/cuda-12.9.1/nsight-systems-2025.1.3/target-linux-x64/nsys profile \
   --force-overwrite true -o <report-prefix> -t cuda \
   python3 benchmarks/natoms_scaling.py \
     --library <build>/libgpuxtb.so.0.1.0 \
-    --molecules 122 --batch-sizes <B> --engines gpuxtb --backends cuda \
-    --properties force --warmups <0 or 1> --repetitions 1 \
-    --cuda-root /group/software/cuda-12.9.1 \
+    --natoms 122 --batch-sizes <B> --engine gpuxtb --start-mode fresh \
+    --backend cuda --property force --warmups <1 for B1, 0 for B128> \
+    --repetitions 1 \
     --output-json <out>.json --output-csv <out>.csv
 ```
 
@@ -140,6 +141,10 @@ Kernel-summary export from a report:
 nsys stats --report cuda_gpu_kern_sum --format csv \
   --output <prefix> <report>.nsys-rep
 ```
+
+Before sharing a raw report, inspect its `META_DATA_CAPTURE` export and verify
+that no credentials or private session metadata are present. This archive
+retains only the derived summaries.
 
 ## Correctness and acceptance evidence from PR #172
 
