@@ -124,7 +124,9 @@ jobs:
 
   upload-coverage:
     needs: [cpu, python]
-    if: ${{ !cancelled() && needs.cpu.result == 'success' && needs.python.result == 'success' }}
+    # if: ${{ !cancelled() && needs.cpu.result == 'success' && needs.python.result == 'success' }}
+    # disable due to no license
+    if: false
     strategy:
       fail-fast: false
       matrix:
