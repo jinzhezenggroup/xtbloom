@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import ClassVar
 from unittest import mock
 
-import torch
+import torch  # noqa: TID253 - this dedicated fake-runtime test needs torch types
 
 from benchmarks.dxtb_adapter import DxtbAdapter, DxtbError, timed_invoke
 
