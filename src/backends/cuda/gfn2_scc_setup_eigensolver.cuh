@@ -165,6 +165,8 @@ class Gfn2SccSetupEigensolver {
 
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] const Gfn2SccSetupEigensolverRequirements& requirements() const noexcept;
+  /* Host bytes retained by copied eigensolver buckets and pinned overlap. */
+  [[nodiscard]] std::size_t retained_host_bytes() const noexcept;
 
   /*
    * Bind this owner's persistent setup arena, validate that iteration_workspace

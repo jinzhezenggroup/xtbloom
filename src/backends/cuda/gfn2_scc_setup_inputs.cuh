@@ -192,6 +192,8 @@ class Gfn2SccSetupInputs {
 
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] Gfn2SccSetupInputsRequirements requirements() const noexcept;
+  /* Pinned upload storage retained by this immutable input owner. */
+  [[nodiscard]] std::size_t retained_host_bytes() const noexcept;
 
   [[nodiscard]] Gfn2SccSetupInputsDiagnostic bind_device_arena_and_upload_async(
       const Gfn2RaggedTopologyView& device_topology,

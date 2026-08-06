@@ -340,8 +340,10 @@ typedef struct gpuxtb_batch_result {
  *
  * This is an accounting query for the plan's retained scratch. CPU values are
  * derived from the immutable topology and policy, while CUDA values are
- * measured from the complete prepared runtime, including numerical, result,
- * validation, and mixed-memory topology staging.
+ * measured from the complete prepared runtime workspace, including numerical,
+ * result, validation, setup-owner, model-plan, and mixed-memory topology
+ * staging storage. Opaque CUDA provider and Graph bookkeeping is not caller
+ * workspace and is intentionally outside these byte counts.
  */
 typedef struct gpuxtb_workspace_query {
   uint32_t struct_size;

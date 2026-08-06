@@ -990,8 +990,22 @@ Gfn2CudaTopologyStagingWorkspaceBytes Gfn2CudaTopologyStaging::workspace_bytes()
     result.device_bytes += 2u * backing->layout.bytes;
     result.host_bytes += backing->layout.bytes;
   };
+  const auto add_snapshot =
+      [&result](const std::unique_ptr<Gfn2CudaTopologyHostSnapshot>& snapshot) noexcept {
+        if (!snapshot) return;
+        const auto bytes = [](const auto& values) noexcept {
+          return values.capacity() * sizeof(typename std::decay_t<decltype(values)>::value_type);
+        };
+        result.host_bytes += bytes(snapshot->atom_offsets) + bytes(snapshot->atomic_numbers) +
+                             bytes(snapshot->molecular_charges) +
+                             bytes(snapshot->unpaired_electrons) + bytes(snapshot->spin_channels) +
+                             bytes(snapshot->point_charge_offsets) +
+                             bytes(snapshot->charge_response_offsets);
+      };
   add_backing(impl_->active);
   add_backing(impl_->pending);
+  add_snapshot(impl_->committed_snapshot);
+  add_snapshot(impl_->pending_snapshot);
   return result;
 }
 

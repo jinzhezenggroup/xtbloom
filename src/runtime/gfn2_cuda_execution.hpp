@@ -152,8 +152,14 @@ struct Gfn2CudaExecutionIdentity {
   std::size_t candidate_validation_arena_bytes = 0u;
   std::size_t topology_staging_host_bytes = 0u;
   std::size_t topology_staging_device_bytes = 0u;
+  std::size_t host_plans_bytes = 0u;
+  std::size_t topology_setup_host_bytes = 0u;
+  std::size_t inputs_setup_host_bytes = 0u;
+  std::size_t eigensolver_setup_host_bytes = 0u;
+  std::size_t initializer_device_checkpoint_bytes = 0u;
+  std::size_t scc_loop_device_control_bytes = 0u;
   /* Complete plan-owned reusable workspace totals. These include every arena
-   * above plus the mixed-memory topology transaction retained by the cache. */
+   * and explicit owner allocation above plus mixed-memory topology staging. */
   std::size_t retained_host_workspace_bytes = 0u;
   std::size_t retained_device_workspace_bytes = 0u;
 };

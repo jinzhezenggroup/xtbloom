@@ -637,4 +637,8 @@ const std::uint32_t* Gfn2SccLoopCudaGraphOwner::device_launch_error_device() con
                                                          : &state_->control->device_launch_error;
 }
 
+std::size_t Gfn2SccLoopCudaGraphOwner::retained_device_bytes() const noexcept {
+  return state_ != nullptr && state_->control != nullptr ? sizeof(Gfn2SccDeviceLoopControl) : 0u;
+}
+
 }  // namespace gpuxtb::detail::cuda
