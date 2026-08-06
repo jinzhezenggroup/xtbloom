@@ -1,4 +1,6 @@
 #ifndef _GNU_SOURCE
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+
 #define _GNU_SOURCE
 #endif
 

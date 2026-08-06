@@ -1,4 +1,6 @@
 #ifndef GPUXTB_BACKENDS_CUDA_GFN2_SCC_SETUP_TOPOLOGY_HPP
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+
 #define GPUXTB_BACKENDS_CUDA_GFN2_SCC_SETUP_TOPOLOGY_HPP
 
 #include <cuda_runtime_api.h>

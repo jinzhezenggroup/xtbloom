@@ -1,4 +1,6 @@
 #ifndef GPUXTB_BACKENDS_CUDA_GFN2_ELECTRONIC_GRADIENT_CUH
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+
 #define GPUXTB_BACKENDS_CUDA_GFN2_ELECTRONIC_GRADIENT_CUH
 
 #include <cuda_runtime_api.h>

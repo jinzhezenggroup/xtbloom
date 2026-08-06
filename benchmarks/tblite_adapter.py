@@ -221,7 +221,7 @@ class TbliteState:
     positions: Any
     energy: ctypes.c_double
     gradient: Any | None
-    charges: Any
+    charges: Any | None
     keepalive: tuple[Any, ...]
 
 
@@ -242,6 +242,7 @@ class TbliteAdapter:
         accuracy: float = 1.0e-4,
         max_iterations: int = 500,
         electronic_temperature_hartree: float = 300.0 * 3.166808578545117e-6,
+        collect_atomic_charges: bool = True,
     ) -> None:
         if storage.point_charge_values:
             raise TbliteError(self.external_point_charge_reason)
@@ -254,6 +255,7 @@ class TbliteAdapter:
         self.accuracy = accuracy
         self.max_iterations = max_iterations
         self.electronic_temperature_hartree = electronic_temperature_hartree
+        self.collect_atomic_charges = collect_atomic_charges
         self.states: list[TbliteState] = []
         try:
             for index in range(len(storage.slices)):
@@ -347,7 +349,11 @@ class TbliteAdapter:
                 if self.property_name == "force"
                 else None
             )
-            charges = (ctypes.c_double * atom_count)()
+            charges = (
+                (ctypes.c_double * atom_count)()
+                if self.collect_atomic_charges
+                else None
+            )
             return TbliteState(
                 error=error,
                 context=context,
@@ -388,19 +394,21 @@ class TbliteAdapter:
                     state.error, state.result, state.gradient
                 )
                 self._check_error(state.error, "tblite_get_result_gradient")
-            self.library.tblite_get_result_charges(
-                state.error, state.result, state.charges
-            )
-            self._check_error(state.error, "tblite_get_result_charges")
+            if state.charges is not None:
+                self.library.tblite_get_result_charges(
+                    state.error, state.result, state.charges
+                )
+                self._check_error(state.error, "tblite_get_result_charges")
 
     def results(self) -> dict[str, Any]:
         """Normalize tblite gradients to forces and retain atomic charges."""
         output: dict[str, Any] = {
-            "energies_hartree": [float(state.energy.value) for state in self.states],
-            "atomic_charges_e": [
-                float(value) for state in self.states for value in state.charges
-            ],
+            "energies_hartree": [float(state.energy.value) for state in self.states]
         }
+        if getattr(self, "collect_atomic_charges", True):
+            output["atomic_charges_e"] = [
+                float(value) for state in self.states for value in (state.charges or ())
+            ]
         if self.property_name == "force":
             output["forces_hartree_per_bohr"] = [
                 -float(value)

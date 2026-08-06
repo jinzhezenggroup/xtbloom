@@ -1,4 +1,6 @@
 #ifndef GPUXTB_MODEL_GFN2_INTEGRALS_HPP
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+
 #define GPUXTB_MODEL_GFN2_INTEGRALS_HPP
 
 #include <cstddef>

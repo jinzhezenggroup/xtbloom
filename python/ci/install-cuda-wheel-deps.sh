@@ -13,8 +13,8 @@
 #
 # The resulting wheels exclude these host shared libraries (see the
 # repair-wheel-command in pyproject.toml); at runtime the trampolines resolve
-# the system driver and the same PyPI nvidia-* packages dynamically. nvcc may
-# still embed device-runtime code such as cudadevrt in libgpuxtb itself.
+# the system driver and the same PyPI nvidia-* packages dynamically. gpuxtb's
+# device link disables cudadevrt; compiler-inserted libdevice code may remain.
 set -euo pipefail
 
 # The container persists across the per-Python-Version before-build calls, so

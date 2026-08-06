@@ -1,4 +1,5 @@
 #include "runtime/gfn2_cpu_execution.hpp"
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <algorithm>
 #include <atomic>
@@ -445,6 +446,7 @@ struct SystemKey {
   std::int32_t spin_channels = 1;
   std::int64_t point_count = 0;
   bool periodic_enabled = false;
+  std::uint32_t compute_flags = 0u;
   std::int32_t maximum_iterations = 0;
   double charge_tolerance = 0.0;
   double energy_tolerance = 0.0;
@@ -455,7 +457,7 @@ struct SystemKey {
            lhs.molecular_charge == rhs.molecular_charge &&
            lhs.unpaired_electrons == rhs.unpaired_electrons &&
            lhs.spin_channels == rhs.spin_channels && lhs.point_count == rhs.point_count &&
-           lhs.periodic_enabled == rhs.periodic_enabled &&
+           lhs.periodic_enabled == rhs.periodic_enabled && lhs.compute_flags == rhs.compute_flags &&
            lhs.maximum_iterations == rhs.maximum_iterations &&
            lhs.charge_tolerance == rhs.charge_tolerance &&
            lhs.energy_tolerance == rhs.energy_tolerance &&
@@ -481,6 +483,7 @@ void make_system_keys(const HostRequest& request, const gpuxtb_compute_options_t
     key.spin_channels = request.spin_channels[index];
     key.point_count = point_end - point_begin;
     key.periodic_enabled = periodic_enabled;
+    key.compute_flags = options.flags;
     key.maximum_iterations = options.max_scc_iterations;
     key.charge_tolerance = options.charge_tolerance;
     key.energy_tolerance = options.energy_tolerance;
@@ -621,16 +624,29 @@ struct SystemExecution {
 
   std::uint64_t geometry_generation = 0u;
 
+  /* Strict warm-start checkpoint. A clone of the fully converged wavefunction
+   * (coefficients, eigenvalues, occupations, densities, and the qsh/qat/dipole/
+   * quadrupole multipoles) taken after a successful inference so the next WARM
+   * call can seed SCC from the converged electronic state instead of the SAD
+   * guess. The clone is independent of the live wavefunction buffer, which the
+   * next FRESH call rewrites with the SAD state. Warm consumption is gated by
+   * the whole-batch identity check in the execution cache, so the flag only
+   * fails closed against a stale or partial state within the same identity. */
+  AlignedBuffer warm_checkpoint_wavefunction_storage;
+  bool warm_checkpoint_valid = false;
+
   gpuxtb_status_t build(std::string& error);
   gpuxtb_status_t infer(const CpuLinearAlgebraBackend& backend, const double* input_positions,
                         const double* input_point_positions, const double* input_point_charges,
                         const double* input_point_hardnesses, const double* input_shifts,
-                        const double* input_response, std::uint32_t compute_flags,
+                        const double* input_response, std::uint32_t compute_flags, bool warm_start,
                         SystemOutput& output, std::string& error);
 
  private:
-  gpuxtb_status_t refresh_geometry(const CpuLinearAlgebraBackend& backend, std::string& error);
+  gpuxtb_status_t refresh_geometry(const CpuLinearAlgebraBackend& backend, bool warm_start,
+                                   std::string& error);
   gpuxtb_status_t run_scc(const CpuLinearAlgebraBackend& backend, std::string& error);
+  gpuxtb_status_t restore_warm_checkpoint(std::string& error);
   gpuxtb_status_t refresh_stationary_potentials(std::string& error);
 };
 
@@ -755,6 +771,9 @@ gpuxtb_status_t SystemExecution::build(std::string& error) {
   status = allocate(wavefunction_storage, wavefunction_layout.workspace_size_bytes,
                     "wavefunction state", error);
   if (status != GPUXTB_STATUS_SUCCESS) return status;
+  status = allocate(warm_checkpoint_wavefunction_storage, wavefunction_layout.workspace_size_bytes,
+                    "warm-start wavefunction checkpoint", error);
+  if (status != GPUXTB_STATUS_SUCCESS) return status;
   status = allocate(overlap_cache_storage, eigensolver.overlap_cache_size_bytes(), "overlap cache",
                     error);
   if (status != GPUXTB_STATUS_SUCCESS) return status;
@@ -846,7 +865,7 @@ gpuxtb_status_t SystemExecution::build(std::string& error) {
 }
 
 gpuxtb_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend& backend,
-                                                  std::string& error) {
+                                                  bool warm_start, std::string& error) {
   ++geometry_generation;
   if (geometry_generation == 0u) {
     geometry_generation = 1u;
@@ -888,8 +907,13 @@ gpuxtb_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend&
                               eigensolver_workspace, overlap_cache, error);
   if (status != GPUXTB_STATUS_SUCCESS) return status;
 
-  status = initialize_sad_multipole_state(wavefunction_layout, wavefunction, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (warm_start) {
+    status = restore_warm_checkpoint(error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+  } else {
+    status = initialize_sad_multipole_state(wavefunction_layout, wavefunction, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+  }
   status = initialize_scc_driver_state_cpu(driver, wavefunction, mixer_state, driver_state, error);
   if (status != GPUXTB_STATUS_SUCCESS) return status;
 
@@ -916,6 +940,20 @@ gpuxtb_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend&
     geometry.periodic_embedding_generation = geometry_generation;
     geometry.periodic_plan_identity = periodic.identity();
   }
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t SystemExecution::restore_warm_checkpoint(std::string& error) {
+  /* The whole-batch identity gate in the execution cache runs before this
+   * system is dispatched, so a missing checkpoint here is an internal
+   * inconsistency rather than a caller policy error. Fail closed. */
+  if (!warm_checkpoint_valid || warm_checkpoint_wavefunction_storage.data() == nullptr) {
+    error = "CPU WARM SCC start found no compatible converged checkpoint in the retained system";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+  std::memcpy(wavefunction_storage.data(), warm_checkpoint_wavefunction_storage.data(),
+              wavefunction_storage.size());
+  error.clear();
   return GPUXTB_STATUS_SUCCESS;
 }
 
@@ -1008,7 +1046,7 @@ gpuxtb_status_t SystemExecution::infer(
     const CpuLinearAlgebraBackend& backend, const double* input_positions,
     const double* input_point_positions, const double* input_point_charges,
     const double* input_point_hardnesses, const double* input_shifts, const double* input_response,
-    std::uint32_t compute_flags, SystemOutput& output, std::string& error) {
+    std::uint32_t compute_flags, bool warm_start, SystemOutput& output, std::string& error) {
   std::copy_n(input_positions, positions.size(), positions.data());
   if (!point_positions.empty()) {
     std::copy_n(input_point_positions, point_positions.size(), point_positions.data());
@@ -1028,16 +1066,27 @@ gpuxtb_status_t SystemExecution::infer(
     }
   }
 
-  gpuxtb_status_t status = refresh_geometry(backend, error);
+  gpuxtb_status_t status = refresh_geometry(backend, warm_start, error);
   if (status != GPUXTB_STATUS_SUCCESS) return status;
   status = run_scc(backend, error);
   output.iterations = static_cast<std::int32_t>(std::min<std::uint64_t>(
       driver_state.iterations[0],
       static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max())));
   if (status != GPUXTB_STATUS_SUCCESS) {
+    /* A failed or non-converged SCC run leaves the live wavefunction in a
+     * partial mixed state; revoke any retained checkpoint so a later strict
+     * WARM request cannot consume it. */
+    warm_checkpoint_valid = false;
     output.status = status;
     return status;
   }
+
+  /* The converged electronic state is the warm checkpoint for the next WARM
+   * call (consumed regardless of the next geometry, but only within the same
+   * topology/options identity enforced by the execution cache). */
+  std::memcpy(warm_checkpoint_wavefunction_storage.data(), wavefunction_storage.data(),
+              wavefunction_storage.size());
+  warm_checkpoint_valid = true;
 
   output.status = GPUXTB_STATUS_SUCCESS;
   output.converged = 1u;
@@ -1136,6 +1185,10 @@ struct Gfn2CpuExecutionCache::Impl {
   bool backend_initialized = false;
   std::vector<SystemKey> keys;
   std::vector<std::unique_ptr<SystemExecution>> systems;
+  /* True only when the most recent executed batch had every member converge.
+   * The strict WARM gate in execute_restricted_gfn2_cpu refuses to start from a
+   * checkpoint unless this identity already produced a fully converged result. */
+  bool systems_ready_for_warm = false;
 
   /* The remaining members are context-owned transaction staging. Their
    * capacities survive repeated calls with the same or smaller topology. */
@@ -1247,12 +1300,14 @@ struct Gfn2CpuExecutionCache::Impl {
                                                       : nullptr;
 
     try {
+      const bool warm_start = job.options.struct_size >= GPUXTB_COMPUTE_OPTIONS_V2_SIZE &&
+                              job.options.scc_start_mode == GPUXTB_SCC_START_WARM;
       owner.inference_statuses[index] = owner.systems[index]->infer(
           owner.backend, request.positions.data() + 3 * atom_begin,
           points == 0 ? nullptr : request.point_positions.data() + 3 * point_begin,
           points == 0 ? nullptr : request.point_charges.data() + point_begin,
           points == 0 ? nullptr : request.point_hardnesses.data() + point_begin, shifts, response,
-          job.options.flags, output, system_error);
+          job.options.flags, warm_start, output, system_error);
     } catch (const std::bad_alloc&) {
       owner.inference_statuses[index] = GPUXTB_STATUS_ALLOCATION_FAILED;
       owner.task_failures[index] = TaskFailure::kAllocation;
@@ -1291,21 +1346,49 @@ gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
     }
     make_system_keys(implementation.request, options, implementation.requested_keys);
 
+    const bool warm_requested = options.struct_size >= GPUXTB_COMPUTE_OPTIONS_V2_SIZE &&
+                                options.scc_start_mode == GPUXTB_SCC_START_WARM;
+    if (warm_requested) {
+      /* Strict WARM: refuse without changing any caller output when this
+       * context has no fully converged compatible identity to consume. The
+       * identity covers the complete SystemKey set (topology plus compute
+       * policy, tolerances, and electronic temperature), exactly matching the
+       * CUDA warm-start contract. */
+      if (implementation.requested_keys != implementation.keys ||
+          !implementation.systems_ready_for_warm) {
+        error =
+            "CPU WARM SCC start requires a previous fully converged call with identical "
+            "topology and compute options";
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
+    }
     status = implementation.ensure_backend(error);
     if (status != GPUXTB_STATUS_SUCCESS) {
       return status;
     }
+
+    /* Keep the currently published checkpoint consumable until every
+     * pre-execution staging/setup step succeeds. prepare_staging only mutates
+     * transaction scratch, while ensure_systems builds a different identity
+     * into a local candidate before replacing the retained systems. A failure
+     * in either step therefore leaves both the old systems and their
+     * whole-batch readiness token intact for a later compatible WARM call. */
+    implementation.prepare_staging(options.flags);
     status = implementation.ensure_systems(implementation.requested_keys, error);
     if (status != GPUXTB_STATUS_SUCCESS) {
       return status;
     }
 
-    implementation.prepare_staging(options.flags);
+    /* Numerical execution is the predecessor attempt for strict WARM
+     * semantics. From this point onward, a failed or non-converged call must
+     * not expose the older checkpoint as though the attempt never occurred. */
+    implementation.systems_ready_for_warm = false;
     Gfn2CpuExecutionCache::Impl::InferenceJob job{implementation, options};
     implementation.workers.parallel_for(static_cast<std::size_t>(implementation.request.batch_size),
                                         &job, &Gfn2CpuExecutionCache::Impl::infer_system);
 
     const HostRequest& request = implementation.request;
+    bool all_converged = true;
     for (std::int64_t system = 0; system < request.batch_size; ++system) {
       const std::size_t index = static_cast<std::size_t>(system);
       const std::int64_t atom_begin = request.atom_offsets[index];
@@ -1319,6 +1402,7 @@ gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
         if (status == GPUXTB_STATUS_SCC_NOT_CONVERGED ||
             status == GPUXTB_STATUS_EIGENSOLVER_FAILED) {
           implementation.system_statuses[index] = status;
+          all_converged = false;
           continue;
         }
         if (!implementation.system_errors[index].empty()) {
@@ -1373,6 +1457,7 @@ gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
         (request.shifts_enabled || request.response_enabled)
             ? static_cast<std::uint32_t>(GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES)
             : 0u;
+    implementation.systems_ready_for_warm = all_converged;
     error.clear();
     return GPUXTB_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {

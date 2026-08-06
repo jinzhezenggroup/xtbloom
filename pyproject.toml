@@ -10,6 +10,7 @@ readme = "README.md"
 license = "GPL-3.0-or-later"
 license-files = [
   "LICENSE",
+  "CUDA_MKL_LINKING_EXCEPTION",
   "THIRD_PARTY_NOTICES.md",
   "LICENSES/*.txt",
   "data/parameters/d4.NOTICE",
@@ -32,34 +33,28 @@ classifiers = [
 ]
 dependencies = [
   "numpy>=1.20",
-  # The CPU eigensolver dlopens an LP64 BLAS runtime: libmkl_rt (PyPI `mkl`,
-  # x86_64 only; Intel MKL has no aarch64 builds) or OpenBLAS. Ship MKL on
-  # x86_64 and the LP64 OpenBLAS wheel (the same one numpy uses on aarch64) on
-  # aarch64 so users never set LD_LIBRARY_PATH. gpuxtb.library() locates and
-  # preloads it on import.
-  "mkl; sys_platform == 'linux' and platform_machine == 'x86_64'",
-  "scipy-openblas32; sys_platform == 'linux' and platform_machine == 'aarch64'",
-  # Published Linux wheels are CUDA-enabled. The CUDA host APIs are resolved
-  # dynamically (see src/runtime/cuda_dlopen.c), but an ordinary
-  # ``pip install gpuxtb`` still installs their providers so the GPU backend
-  # works out of the box rather than being hidden behind an optional extra.
+  # One BSD-licensed LP64 LAPACKE+CBLAS runtime serves both Linux wheel
+  # architectures. Its scipy_-prefixed ABI avoids interposing on NumPy's BLAS.
+  "scipy-openblas32>=0.3.34.0.0; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
+]
+
+[project.optional-dependencies]
+ase = ["ase"]
+dpdata = ["dpdata"]
+# CUDA-enabled wheels load these separately distributed host providers by
+# SONAME. CPU-only installations do not need to install the proprietary stack.
+cuda12 = [
   "nvidia-cublas-cu12>=12.9.1.4; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
   "nvidia-cusolver-cu12>=11.7.5.82; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
   "nvidia-cusparse-cu12>=12.5.10.65; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
   "nvidia-cuda-runtime-cu12>=12.9.79; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
   "nvidia-nvjitlink-cu12>=12.9.86; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
 ]
-
-[project.optional-dependencies]
-ase = ["ase"]
-dpdata = ["dpdata"]
 test = [
   "pytest>=7",
   "pytest-cov",
   "ase",
   "dpdata",
-  "mkl; sys_platform == 'linux' and platform_machine == 'x86_64'",
-  "scipy-openblas32; sys_platform == 'linux' and platform_machine == 'aarch64'",
 ]
 
 [project.entry-points."dpdata.plugins"]
@@ -129,8 +124,8 @@ before-build = "bash {package}/python/ci/install-cuda-wheel-deps.sh"
 # bundled: the trampolines resolve the system CUDA driver plus the
 # PyPI-distributed nvidia-* packages at runtime. libcuda.so.1 is the NVIDIA
 # driver interface and is likewise provided by the system, never bundled.
-# nvcc may still embed CUDA device-runtime code in libgpuxtb itself; Issue #162
-# owns the unresolved legal distribution determination.
+# The device link disables cudadevrt explicitly. NVIDIA libdevice compiler
+# output may still be present and remains covered by the additional permission.
 repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel} --exclude libcublas.so.12 --exclude libcublasLt.so.12 --exclude libcusolver.so.11 --exclude libcusparse.so.12 --exclude libcudart.so.12 --exclude libnvJitLink.so.12 --exclude libcufft.so.11 --exclude libcurand.so.10 --exclude libcuda.so.1"
 
 [tool.ruff]

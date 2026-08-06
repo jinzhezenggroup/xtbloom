@@ -137,18 +137,34 @@ int main() {
   scc_converged[0] = 1u;
   per_system_status[0] = GPUXTB_STATUS_INTERNAL_ERROR;
   result.flags = UINT32_C(0xa5a55a5a);
-  CHECK(gpuxtb_compute(context.get(), &batch, &compute_options, &result) ==
-        GPUXTB_STATUS_NOT_SUPPORTED);
-  CHECK(std::strstr(gpuxtb_get_last_error(), "CPU backend") != nullptr);
-  CHECK(energies[0] == 123.25);
-  CHECK(forces[0] == -4.0 && forces[1] == -5.0 && forces[2] == -6.0);
-  CHECK(atomic_charges[0] == 71.25);
-  CHECK(point_charge_forces[0] == 81.0 && point_charge_forces[1] == 82.0 &&
-        point_charge_forces[2] == 83.0);
-  CHECK(scc_iterations[0] == 91);
-  CHECK(scc_converged[0] == 1u);
-  CHECK(per_system_status[0] == GPUXTB_STATUS_INTERNAL_ERROR);
-  CHECK(result.flags == UINT32_C(0xa5a55a5a));
+  const gpuxtb_status_t warm_compute_status =
+      gpuxtb_compute(context.get(), &batch, &compute_options, &result);
+  if (valid_compute_status == GPUXTB_STATUS_BACKEND_UNAVAILABLE) {
+    /* No LP64 BLAS runtime means the preceding FRESH call never converged, so
+     * the strict WARM identity precondition (a fully converged compatible
+     * predecessor) is not met and the request is rejected before execution. */
+    CHECK(warm_compute_status == GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(std::strstr(gpuxtb_get_last_error(), "WARM") != nullptr);
+    CHECK(energies[0] == 123.25);
+    CHECK(forces[0] == -4.0 && forces[1] == -5.0 && forces[2] == -6.0);
+    CHECK(atomic_charges[0] == 71.25);
+    CHECK(point_charge_forces[0] == 81.0 && point_charge_forces[1] == 82.0 &&
+          point_charge_forces[2] == 83.0);
+    CHECK(scc_iterations[0] == 91);
+    CHECK(scc_converged[0] == 1u);
+    CHECK(per_system_status[0] == GPUXTB_STATUS_INTERNAL_ERROR);
+    CHECK(result.flags == UINT32_C(0xa5a55a5a));
+  } else {
+    /* The FRESH call converged, so WARM consumes that converged electronic
+     * checkpoint and reconverges (fewer iterations) with unchanged physics. */
+    CHECK(warm_compute_status == GPUXTB_STATUS_SUCCESS);
+    CHECK(per_system_status[0] == GPUXTB_STATUS_SUCCESS);
+    CHECK(scc_converged[0] == 1u);
+    CHECK(scc_iterations[0] >= 1);
+    CHECK(std::isfinite(energies[0]));
+    CHECK(std::isfinite(forces[0]) && std::isfinite(forces[1]) && std::isfinite(forces[2]));
+    CHECK(std::isfinite(atomic_charges[0]));
+  }
 
   compute_options.scc_start_mode = GPUXTB_SCC_START_FRESH;
 

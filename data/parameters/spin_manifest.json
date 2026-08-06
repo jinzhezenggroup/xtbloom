@@ -9,6 +9,6 @@
     "sha256": "2833e0636ae0148d6ffde82b39b7bdf83f7f8034ff08b26b6e90ffd27466e34e",
     "license": "LGPL-3.0-or-later"
   },
-  "consumer": "src/model/gfn2/spin.cpp",
+  "consumer": "data/parameters/tblite_spin.hpp",
   "notes": "The same source bytes are present at the local tblite oracle revision e9abc395b122018ed688aecb1c3a65cecaf97beb."
 }

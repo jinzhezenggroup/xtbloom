@@ -1,4 +1,5 @@
 #include "runtime/validation.hpp"
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <array>
 #include <cmath>
@@ -354,9 +355,6 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
     }
     if (options->reserved_v2 != 0u) {
       return invalid("compute options reserved_v2 field must be zero");
-    }
-    if (backend_value == GPUXTB_BACKEND_CPU && start_mode == GPUXTB_SCC_START_WARM) {
-      return unsupported("the CPU backend does not support strict WARM SCC starts");
     }
   }
   if (result->reserved != 0) {

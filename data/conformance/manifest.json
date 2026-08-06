@@ -237,34 +237,46 @@
     "energy": {
       "atol": 5e-07,
       "rtol": 0.0,
-      "unit": "hartree"
+      "unit": "hartree",
+      "justification": "Absolute total electronic Helmholtz free-energy threshold. The pinned live oracles run at --acc 0.0001; observed gpuxtb-to-oracle agreement on the committed corpus is at most about 1e-8 hartree, so 5e-7 leaves roughly two orders of magnitude of headroom for oracle SCC truncation while remaining far above chemical significance."
     },
     "forces": {
       "atol": 5e-07,
       "rtol": 0.0,
-      "unit": "hartree/bohr"
+      "unit": "hartree/bohr",
+      "justification": "Absolute analytic-force threshold. Observed gpuxtb-to-oracle agreement on the committed corpus is at most about 3e-9 hartree/bohr; 5e-7 tolerates the looser --acc 0.0001 oracle gradients without admitting meaningful force error."
     },
     "charges": {
       "atol": 5e-07,
       "rtol": 0.0,
-      "unit": "elementary_charge"
+      "unit": "elementary_charge",
+      "justification": "Absolute SCC atomic-charge (SCC-state) threshold. Observed gpuxtb-to-oracle charge agreement on the committed corpus is at most about 7e-9 elementary charge; 5e-7 keeps the SCC state gate strict while allowing oracle convergence noise."
     },
     "atomic_dipoles": {
       "atol": 5e-07,
       "rtol": 0.0,
-      "unit": "elementary_charge*bohr"
+      "unit": "elementary_charge*bohr",
+      "justification": "Absolute atom-resolved dipole-moment component threshold for the SCC state stored in xtb primary goldens. The public C result ABI exposes no dipole output buffer yet, so this gates reference reproducibility rather than gpuxtb agreement; it is conservatively aligned with the charge threshold."
     },
     "atomic_quadrupoles": {
       "atol": 5e-07,
       "rtol": 0.0,
-      "unit": "elementary_charge*bohr^2"
+      "unit": "elementary_charge*bohr^2",
+      "justification": "Absolute atom-resolved quadrupole-moment component threshold (xx, xy, yy, xz, yz, zz) for goldens that store the SCC state. As with dipoles, the public ABI cannot yet return quadrupoles, so this gate applies to reference-engine reproducibility and is aligned with the charge threshold."
     },
     "point_charge_forces": {
       "atol": 5e-07,
       "rtol": 0.0,
-      "unit": "hartree/bohr"
+      "unit": "hartree/bohr",
+      "justification": "Absolute external point-charge force threshold. Observed gpuxtb-to-oracle agreement on the committed QM/MM corpus is at most about 5e-9 hartree/bohr; 5e-7 additionally absorbs the coarse text precision of xTB's pcgrad artifact while keeping the gate meaningful."
     },
-    "rationale": "The primary gate applies uniformly to gpuxtb versus each case's pinned live tblite or xTB oracle. Tighter term-level and finite-difference gates can be added without weakening this check."
+    "rationale": "The primary gate applies uniformly to gpuxtb versus each case's pinned live tblite or xTB oracle. Tighter term-level and finite-difference gates can be added without weakening this check. Tolerances are absolute because the corpus mixes charged, near-zero, and large energies and gradients where a relative scale would grant unphysical slack; the SCC-state and force tolerances are deliberately identical in atomic units so no single property can pass on a weaker gate."
+  },
+  "cpu_cuda_agreement": {
+    "atol": 1e-06,
+    "rtol": 0.0,
+    "unit": "hartree and hartree/bohr and elementary_charge",
+    "justification": "Both backends must match the same pinned golden within the primary energy, forces, and charges tolerances (5e-7 each in atomic units), so by the triangle inequality CPU-vs-CUDA deviation on identical inputs is bounded by twice the primary tolerance (1e-6). The per-backend invariance and batch-versus-sequential gates in tools/conformance/gpuxtb_invariants.py further require each backend to reproduce its own exact symmetries, making the CPU/CUDA agreement threshold explicit and executable without a dedicated pair comparator."
   },
   "units": {
     "coordinates": "bohr",

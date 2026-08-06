@@ -282,9 +282,9 @@ def _runtime_search_dirs() -> list[Path]:
     """Return directories that may contain gpuxtb's optional host runtimes.
 
     The CUDA host-API shims and CPU eigensolver resolve their providers by
-    SONAME. Those providers live in the ``mkl``/``nvidia-*`` PyPI packages, an
-    installed CUDA toolkit, or the ``scipy-openblas*`` PyPI wheels (the LP64
-    ``scipy-openblas32`` is what numpy uses on aarch64). Collecting them lets
+    SONAME. Those providers live in optional ``mkl``/``nvidia-*`` packages, an
+    installed CUDA toolkit, or the ``scipy-openblas*`` PyPI wheels (gpuxtb's
+    Linux dependency is the LP64 ``scipy-openblas32`` build). Collecting them lets
     the package register those SONAMEs before libgpuxtb is loaded without
     forcing users to set ``LD_LIBRARY_PATH`` (or ``PATH`` on Windows).
     """
@@ -358,7 +358,7 @@ _RUNTIME_LIBRARY_GROUPS = (
     ("libcusolver.so.11",),
     # MKL changes its SONAME between releases; load exactly one runtime.
     ("libmkl_rt.so.4", "libmkl_rt.so.3", "libmkl_rt.so.2", "libmkl_rt.so"),
-    # OpenBLAS is the LP64 BLAS used on platforms without Intel MKL builds
+    # OpenBLAS is gpuxtb's default LP64 BLAS on supported Linux platforms
     # (the scipy-openblas32 wheel ships libscipy_openblas.so with scipy_-prefixed
     # symbols). Preload at most one instance by SONAME so the eigensolver's
     # by-name dlopen reuses it instead of loading a second, conflicting BLAS.
