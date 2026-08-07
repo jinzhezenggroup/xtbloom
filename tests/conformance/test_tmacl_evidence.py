@@ -53,6 +53,32 @@ class TmaclEvidenceTest(unittest.TestCase):
             ):
                 EVIDENCE.check_manifest(path)
 
+    def test_evidence_path_alias_is_rejected(self) -> None:
+        """A digest match cannot redirect one entry away from its canonical file."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        original = manifest["evidence_files"][0]["path"]
+        manifest["evidence_files"][0]["path"] = original.replace(
+            "tmacl-temperature-continuation/",
+            "tmacl-temperature-continuation/../tmacl-temperature-continuation/",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(
+                EVIDENCE.EvidenceError, "canonical evidence path"
+            ):
+                EVIDENCE.check_manifest(path)
+
+    def test_provider_metadata_drift_is_rejected(self) -> None:
+        """Provider identity is part of the provenance contract, not commentary."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        manifest["generator"]["runtime"]["interface"] = "ILP64"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(EVIDENCE.EvidenceError, "runtime.interface"):
+                EVIDENCE.check_manifest(path)
+
     def test_xyz_validation_rejects_nonfinite_and_trailing_rows(self) -> None:
         """Reject a non-finite, truncated, or extended scientific input."""
         fixture = (

@@ -11,14 +11,13 @@ import re
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MANIFEST = (
-    REPOSITORY_ROOT
-    / "data"
-    / "conformance"
-    / "evidence"
-    / "tmacl-temperature-continuation"
-    / "manifest.json"
+EVIDENCE_DIRECTORY_RELATIVE = Path(
+    "data/conformance/evidence/tmacl-temperature-continuation"
 )
+EVIDENCE_DIRECTORY = REPOSITORY_ROOT / EVIDENCE_DIRECTORY_RELATIVE
+FIXTURE_RELATIVE = Path("data/conformance/inputs/tmacl.xyz")
+GENERATOR_RELATIVE = Path("tests/scc_temperature_continuation_test.cpp")
+DEFAULT_MANIFEST = EVIDENCE_DIRECTORY / "manifest.json"
 EXPECTED_EVIDENCE = (
     "tmacl_continuation_funnel.txt",
     "tmacl_mixer_sweep.txt",
@@ -30,6 +29,7 @@ EXPECTED_EVIDENCE = (
     "tmacl_trace_1000K.txt",
 )
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 
 
 class EvidenceError(ValueError):
@@ -52,7 +52,10 @@ def repository_path(value: object, field: str) -> Path:
     """Resolve one manifest path while rejecting traversal outside the repository."""
     if not isinstance(value, str) or not value:
         raise EvidenceError(f"{field} must be a nonempty repository-relative path")
-    candidate = (REPOSITORY_ROOT / value).resolve()
+    relative = Path(value)
+    if relative.is_absolute():
+        raise EvidenceError(f"{field} must be a repository-relative path")
+    candidate = (REPOSITORY_ROOT / relative).resolve()
     try:
         candidate.relative_to(REPOSITORY_ROOT)
     except ValueError as exc:
@@ -65,6 +68,21 @@ def require_sha256(value: object, field: str) -> str:
     if not isinstance(value, str) or SHA256_PATTERN.fullmatch(value) is None:
         raise EvidenceError(f"{field} must be a lowercase SHA-256 digest")
     return value
+
+
+def require_commit(value: object, field: str) -> str:
+    """Validate a full lowercase Git object identifier without requiring .git."""
+    if not isinstance(value, str) or COMMIT_PATTERN.fullmatch(value) is None:
+        raise EvidenceError(f"{field} must be a full lowercase commit identifier")
+    return value
+
+
+def require_exact_path(value: object, expected: Path, field: str) -> Path:
+    """Require the reviewed canonical spelling as well as repository containment."""
+    canonical = expected.as_posix()
+    if value != canonical:
+        raise EvidenceError(f"{field} must be the canonical path {canonical}")
+    return repository_path(value, field)
 
 
 def validate_xyz(path: Path) -> None:
@@ -109,7 +127,9 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
     fixture = manifest.get("fixture")
     if not isinstance(fixture, dict):
         raise EvidenceError("evidence manifest fixture must be an object")
-    fixture_path = repository_path(fixture.get("path"), "fixture.path")
+    fixture_path = require_exact_path(
+        fixture.get("path"), FIXTURE_RELATIVE, "fixture.path"
+    )
     validate_xyz(fixture_path)
     expected_fixture = require_sha256(fixture.get("sha256"), "fixture.sha256")
     if sha256(fixture_path) != expected_fixture:
@@ -123,6 +143,15 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
         raise EvidenceError(
             "fixture.source.issue_node_id is not the pinned upstream issue"
         )
+    expected_source_metadata = {
+        "author": "corinwagen",
+        "created_at": "2022-08-05T14:04:47Z",
+        "retrieved_at": "2026-08-07",
+        "extraction": "Verbatim 18-atom XYZ fenced block from the public issue body.",
+    }
+    for field, expected in expected_source_metadata.items():
+        if source.get(field) != expected:
+            raise EvidenceError(f"fixture.source.{field} is not the reviewed value")
     if source.get("excerpt_sha256") != expected_fixture:
         raise EvidenceError(
             "fixture source excerpt digest must equal the verbatim XYZ digest"
@@ -138,7 +167,9 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
     generator = manifest.get("generator")
     if not isinstance(generator, dict):
         raise EvidenceError("evidence manifest generator must be an object")
-    source_path = repository_path(generator.get("source"), "generator.source")
+    source_path = require_exact_path(
+        generator.get("source"), GENERATOR_RELATIVE, "generator.source"
+    )
     expected_source = require_sha256(
         generator.get("source_sha256"), "generator.source_sha256"
     )
@@ -149,6 +180,57 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
         "data/conformance/evidence/tmacl-temperature-continuation"
     ):
         raise EvidenceError("evidence generator command is not canonical")
+    expected_generator_metadata = {
+        "physics_baseline_commit": "9fd7d4ddce3d5cb576b5bce8005a1f90647d37c0",
+        "refresh_base_commit": "66ae5e7b7fb622d263f2f94974ffbb9f2e3b7d23",
+        "generated_at": "2026-08-07",
+    }
+    for field, expected in expected_generator_metadata.items():
+        if field.endswith("commit"):
+            require_commit(generator.get(field), f"generator.{field}")
+        if generator.get(field) != expected:
+            raise EvidenceError(f"generator.{field} is not the reviewed value")
+    expected_runtime = {
+        "provider": "Intel oneAPI Math Kernel Library",
+        "version": "2026.1.0",
+        "interface": "LP64",
+        "threading": "sequential",
+        "library_sha256": (
+            "b2ff0e31d7cd18c91813d8f6500f37665597d89de22649d90687aa6bf7bd2c0f"
+        ),
+    }
+    runtime = generator.get("runtime")
+    if not isinstance(runtime, dict):
+        raise EvidenceError("generator.runtime must be an object")
+    for field, expected in expected_runtime.items():
+        if runtime.get(field) != expected:
+            raise EvidenceError(f"generator.runtime.{field} is not the reviewed value")
+    require_sha256(runtime.get("library_sha256"), "generator.runtime.library_sha256")
+
+    semantic_cross_check = manifest.get("semantic_cross_check")
+    expected_cross_check = {
+        "provider": "scipy-openblas32",
+        "version": "0.3.34.0.0",
+        "interface": "LP64 with scipy_ symbol prefix",
+        "library_sha256": (
+            "b2dfe24b9aa11cf1d1cec8edbca9423b50cfd186b486d59dd4efe45826261a98"
+        ),
+        "required_result": (
+            "The executable assertion matrix, including exact baseline iteration "
+            "counts and final q/d/Q plus density comparisons, passes unchanged."
+        ),
+    }
+    if not isinstance(semantic_cross_check, dict):
+        raise EvidenceError("semantic_cross_check must be an object")
+    for field, expected in expected_cross_check.items():
+        if semantic_cross_check.get(field) != expected:
+            raise EvidenceError(
+                f"semantic_cross_check.{field} is not the reviewed value"
+            )
+    require_sha256(
+        semantic_cross_check.get("library_sha256"),
+        "semantic_cross_check.library_sha256",
+    )
 
     distribution = manifest.get("distribution")
     expected_distribution = {
@@ -181,13 +263,23 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
     if not isinstance(files, list):
         raise EvidenceError("evidence_files must be an array")
     recorded: dict[str, str] = {}
+    canonical_evidence_paths = {
+        (EVIDENCE_DIRECTORY_RELATIVE / name).as_posix(): name
+        for name in EXPECTED_EVIDENCE
+    }
     for index, entry in enumerate(files):
         if not isinstance(entry, dict):
             raise EvidenceError(f"evidence_files[{index}] must be an object")
-        evidence_path = repository_path(
-            entry.get("path"), f"evidence_files[{index}].path"
-        )
-        name = evidence_path.name
+        path_value = entry.get("path")
+        if (
+            not isinstance(path_value, str)
+            or path_value not in canonical_evidence_paths
+        ):
+            raise EvidenceError(
+                f"evidence_files[{index}].path is not a canonical evidence path"
+            )
+        evidence_path = repository_path(path_value, f"evidence_files[{index}].path")
+        name = canonical_evidence_paths[path_value]
         if name in recorded:
             raise EvidenceError(f"duplicate evidence file {name}")
         recorded[name] = require_sha256(
@@ -200,7 +292,9 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
             "manifest must pin the complete expected tmacl evidence set"
         )
 
-    on_disk = tuple(sorted(item.name for item in path.parent.glob("tmacl_*.txt")))
+    on_disk = tuple(
+        sorted(item.name for item in EVIDENCE_DIRECTORY.glob("tmacl_*.txt"))
+    )
     if on_disk != tuple(sorted(EXPECTED_EVIDENCE)):
         raise EvidenceError(
             "evidence directory contains an unmanifested or missing tmacl file"
@@ -224,8 +318,8 @@ def update_manifest(path: Path = DEFAULT_MANIFEST) -> None:
     generator["source_sha256"] = sha256(generator_path)
     manifest["evidence_files"] = [
         {
-            "path": str((path.parent / name).relative_to(REPOSITORY_ROOT)),
-            "sha256": sha256(path.parent / name),
+            "path": (EVIDENCE_DIRECTORY_RELATIVE / name).as_posix(),
+            "sha256": sha256(EVIDENCE_DIRECTORY / name),
         }
         for name in EXPECTED_EVIDENCE
     ]
