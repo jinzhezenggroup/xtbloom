@@ -1,5 +1,5 @@
 Generating SQLite file arena.sqlite from arena.nsys-rep
-Processing [arena.sqlite] with [/group/software/cuda-12.9.1/nsight-systems-2025.1.3/host-linux-x64/reports/cuda_api_trace.py]... 
+Processing [arena.sqlite] with [/group/software/cuda-12.9.1/nsight-systems-2025.1.3/host-linux-x64/reports/cuda_api_trace.py]...
 Start (ns),Duration (ns),Name,Result,CorrID,Pid,Tid,T-Pri,Thread Name
 1529472309,971,cuModuleGetLoadingMode,0,1,3123189,3123189,20,python
 1529671060,211,cudaGetDeviceProperties_v2_v12000,0,119,3123189,3123189,20,python
@@ -6529,4 +6529,3 @@ Start (ns),Duration (ns),Name,Result,CorrID,Pid,Tid,T-Pri,Thread Name
 2534147909,2024,cudaEventDestroy,0,10854,3123189,3123189,20,python
 2534152147,831,cudaEventDestroy,0,10858,3123189,3123189,20,python
 2534154732,721,cudaEventDestroy,0,10862,3123189,3123189,20,python
-

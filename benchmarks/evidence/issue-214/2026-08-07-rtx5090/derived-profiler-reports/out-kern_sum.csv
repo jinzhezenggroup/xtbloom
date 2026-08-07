@@ -1,5 +1,5 @@
 Generating SQLite file out.sqlite from out.nsys-rep
-Processing [out.sqlite] with [/group/software/cuda-12.9.1/nsight-systems-2025.1.3/host-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+Processing [out.sqlite] with [/group/software/cuda-12.9.1/nsight-systems-2025.1.3/host-linux-x64/reports/cuda_gpu_kern_sum.py]...
 Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
 12.2,1292371,14,92312.2,94593.0,62497,94785,8581.6,"gpuxtb::detail::cuda::<unnamed>::integral_force_shell_pair_kernel(gpuxtb::detail::cuda::Gfn2IntegralDeviceBatch, gpuxtb::detail::cuda::Gfn2ForceDeviceActivity, gpuxtb::detail::cuda::Gfn2IntegralForceDeviceInput, gpuxtb::detail::cuda::Gfn2IntegralForceDeviceWorkspace, unsigned int *, unsigned int *, long)"
 9.9,1054382,41,25716.6,25728.0,25664,25761,35.6,"gpuxtb::detail::cuda::<unnamed>::prepare_weights_kernel(gpuxtb::detail::cuda::Gfn2D4DeviceBatch, gpuxtb::detail::cuda::Gfn2D4DeviceParameters, gpuxtb::detail::cuda::Gfn2D4DeviceCache, const double *, bool, bool, bool, gpuxtb::detail::cuda::Gfn2D4DeviceWorkspace, unsigned int *)"
@@ -142,4 +142,3 @@ Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (n
 0.1,10112,13,777.8,768.0,768,800,15.4,"gpuxtb::detail::cuda::<unnamed>::snapshot_refactor_activity_kernel(long, const unsigned char *, unsigned char *)"
 0.1,9504,14,678.9,672.0,672,704,13.6,"void potrf_set_info<(int)256>(int, int, int *)"
 0.1,9504,14,678.9,672.0,640,704,18.5,"xx_set_info_ker(int, int *, int)"
-

@@ -1,5 +1,5 @@
 Generating SQLite file out.sqlite from out.nsys-rep
-Processing [out.sqlite] with [/group/software/cuda-12.9.1/nsight-systems-2025.1.3/host-linux-x64/reports/cuda_api_trace.py]... 
+Processing [out.sqlite] with [/group/software/cuda-12.9.1/nsight-systems-2025.1.3/host-linux-x64/reports/cuda_api_trace.py]...
 Start (ns),Duration (ns),Name,Result,CorrID,Pid,Tid,T-Pri,Thread Name
 1485013775,1563,cuModuleGetLoadingMode,0,1,3123506,3123506,20,python
 1485333379,361,cudaGetDeviceProperties_v2_v12000,0,119,3123506,3123506,20,python
@@ -6503,4 +6503,3 @@ Start (ns),Duration (ns),Name,Result,CorrID,Pid,Tid,T-Pri,Thread Name
 1896998471,692,cudaEventDestroy,0,11192,3123506,3123506,20,python
 1897001347,731,cudaEventDestroy,0,11196,3123506,3123506,20,python
 1897003792,661,cudaEventDestroy,0,11200,3123506,3123506,20,python
-
