@@ -57,22 +57,22 @@ namespace {
 
 int failures = 0;
 
-#define CHECK(condition)                                                                        \
-  do {                                                                                          \
-    if (!(condition)) {                                                                         \
-      std::fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #condition);      \
-      ++failures;                                                                               \
-    }                                                                                           \
+#define CHECK(condition)                                                                   \
+  do {                                                                                     \
+    if (!(condition)) {                                                                    \
+      std::fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #condition); \
+      ++failures;                                                                          \
+    }                                                                                      \
   } while (0)
 
-#define CUDA_CHECK(condition)                                                                   \
-  do {                                                                                          \
-    cudaError_t check_status = (condition);                                                     \
-    if (check_status != cudaSuccess) {                                                          \
-      std::fprintf(stderr, "CUDA CHECK failed at %s:%d: %s\n", __FILE__, __LINE__,              \
-                   cudaGetErrorString(check_status));                                           \
-      return 1;                                                                                 \
-    }                                                                                           \
+#define CUDA_CHECK(condition)                                                      \
+  do {                                                                             \
+    cudaError_t check_status = (condition);                                        \
+    if (check_status != cudaSuccess) {                                             \
+      std::fprintf(stderr, "CUDA CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, \
+                   cudaGetErrorString(check_status));                              \
+      return 1;                                                                    \
+    }                                                                              \
   } while (0)
 
 const char* cuda_ok(cudaError_t status) {
@@ -199,8 +199,7 @@ int test_device_arena_compute_and_export(int device, cudaStream_t stream) {
   gpuxtb_compute_options_t options{};
   CHECK(gpuxtb_compute_options_init(&options, sizeof(options)) == GPUXTB_STATUS_SUCCESS);
   options.model = GPUXTB_MODEL_GFN2_XTB;
-  options.flags =
-      GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
+  options.flags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
   options.max_scc_iterations = 64;
   options.charge_tolerance = 1.0e-8;
   options.energy_tolerance = 1.0e-8;
@@ -213,8 +212,7 @@ int test_device_arena_compute_and_export(int device, cudaStream_t stream) {
   result.atomic_charges = device_output(arena.charges.pointer, arena.charges.bytes);
   result.scc_iterations = device_output(arena.iterations.pointer, arena.iterations.bytes);
   result.scc_converged = device_output(arena.converged.pointer, arena.converged.bytes);
-  result.per_system_status =
-      device_output(arena.statuses.pointer, arena.statuses.bytes);
+  result.per_system_status = device_output(arena.statuses.pointer, arena.statuses.bytes);
 
   CHECK(gpuxtb_compute(context, &batch, &options, &result) == GPUXTB_STATUS_SUCCESS);
 
@@ -241,8 +239,7 @@ int test_device_arena_compute_and_export(int device, cudaStream_t stream) {
     arena.release();
     return 3;
   }
-  DtManagedTensorVersioned* managed =
-      static_cast<DtManagedTensorVersioned*>(managed_bytes);
+  DtManagedTensorVersioned* managed = static_cast<DtManagedTensorVersioned*>(managed_bytes);
   CHECK((managed->version_major == 1u) && (managed->version_minor == 0u));
   CHECK(managed->dl_tensor.device.device_type == 2);
   CHECK(managed->dl_tensor.device.device_id == device);
@@ -267,8 +264,7 @@ int test_device_arena_compute_and_export(int device, cudaStream_t stream) {
   CHECK((gpuxtb_result_owner_export_dltensor(arena.owner, &view, 1, &managed2_bytes) ==
          GPUXTB_STATUS_SUCCESS) &&
         managed2_bytes != nullptr);
-  DtManagedTensorVersioned* managed2 =
-      static_cast<DtManagedTensorVersioned*>(managed2_bytes);
+  DtManagedTensorVersioned* managed2 = static_cast<DtManagedTensorVersioned*>(managed2_bytes);
   CHECK(managed2->dl_tensor.data == arena.energies.pointer);
   managed2->deleter(managed2);
 

@@ -1,9 +1,9 @@
 // gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
+#include "runtime/result_owner.hpp"
+
 #include <new>
 #include <string>
-
-#include "runtime/result_owner.hpp"
 
 namespace gpuxtb::detail {
 namespace {

@@ -32,8 +32,8 @@ namespace gpuxtb::detail {
  */
 class ResultOwner {
  public:
-  ResultOwner(gpuxtb_memory_space_t memory_space, std::int32_t device_id,
-              std::size_t size_bytes, void* data)
+  ResultOwner(gpuxtb_memory_space_t memory_space, std::int32_t device_id, std::size_t size_bytes,
+              void* data)
       : memory_space_(memory_space),
         device_id_(device_id),
         size_bytes_(size_bytes),

@@ -72,11 +72,10 @@ gpuxtb_status_t allocate_cuda_result_arena(std::int32_t device_id, std::size_t s
   }
 
   cudaError_t status = cudaMalloc(data, size_bytes);
-  const gpuxtb_status_t result =
-      status == cudaSuccess
-          ? GPUXTB_STATUS_SUCCESS
-          : (status == cudaErrorMemoryAllocation ? GPUXTB_STATUS_ALLOCATION_FAILED
-                                                 : GPUXTB_STATUS_BACKEND_UNAVAILABLE);
+  const gpuxtb_status_t result = status == cudaSuccess ? GPUXTB_STATUS_SUCCESS
+                                                       : (status == cudaErrorMemoryAllocation
+                                                              ? GPUXTB_STATUS_ALLOCATION_FAILED
+                                                              : GPUXTB_STATUS_BACKEND_UNAVAILABLE);
   if (status != cudaSuccess) {
     error = std::string("cudaMalloc failed: ") + cuda_error_name(status);
   }

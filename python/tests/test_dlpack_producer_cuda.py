@@ -17,11 +17,9 @@ import importlib
 import gpuxtb._dlpack as dlpack
 import numpy as np
 import pytest
-from gpuxtb import library
+from _cases import case_by_id, structure_inputs
 from gpuxtb.exceptions import GPUxtbNotSupportedError
 from gpuxtb.interface import ArrayBatch
-
-from _cases import case_by_id, structure_inputs
 
 _TORCH = importlib.util.find_spec("torch")
 _CUPY = importlib.util.find_spec("cupy")
@@ -70,7 +68,9 @@ def test_device_producer_imports_with_torch(tmp_path: object) -> None:
         pytest.skip(skip)
     import torch
 
-    packed = {name: np.ascontiguousarray(value) for name, value in _packed("h3_plus").items()}
+    packed = {
+        name: np.ascontiguousarray(value) for name, value in _packed("h3_plus").items()
+    }
     batch = ArrayBatch(**packed, backend="cuda", stream=1)
     result = batch.compute(result_memory="cuda")
 
@@ -88,7 +88,9 @@ def test_device_producer_imports_with_torch(tmp_path: object) -> None:
     # Values must match the host CPU result (parity).
     from gpuxtb.interface import compute_arrays
 
-    host = compute_arrays(**{name: np.ascontiguousarray(value) for name, value in packed.items()})
+    host = compute_arrays(
+        **{name: np.ascontiguousarray(value) for name, value in packed.items()}
+    )
     np.testing.assert_allclose(t_energy.cpu().numpy(), host.energies, rtol=1e-10)
     np.testing.assert_allclose(t_forces.cpu().numpy(), host.forces, atol=1e-9)
     np.testing.assert_allclose(t_charges.cpu().numpy(), host.charges, atol=1e-9)
@@ -108,7 +110,9 @@ def test_device_producer_out_precedence_mixed(tmp_path: object) -> None:
         pytest.skip(skip)
     import torch
 
-    packed = {name: np.ascontiguousarray(value) for name, value in _packed("ketene").items()}
+    packed = {
+        name: np.ascontiguousarray(value) for name, value in _packed("ketene").items()
+    }
     host_out = np.zeros(1, dtype=np.float64)
     batch = ArrayBatch(**packed, backend="cuda", stream=1)
     result = batch.compute(
@@ -130,7 +134,9 @@ def test_device_producer_close_releases_reference(tmp_path: object) -> None:
         pytest.skip(skip)
     import torch
 
-    packed = {name: np.ascontiguousarray(value) for name, value in _packed("h3_plus").items()}
+    packed = {
+        name: np.ascontiguousarray(value) for name, value in _packed("h3_plus").items()
+    }
     batch = ArrayBatch(**packed, backend="cuda", stream=1)
     result = batch.compute(result_memory="cuda")
     t_energy = torch.from_dlpack(result.energies)
@@ -152,7 +158,9 @@ def test_device_producer_failed_indices_mode_is_host_only(tmp_path: object) -> N
     if skip is not None:
         pytest.skip(skip)
 
-    packed = {name: np.ascontiguousarray(value) for name, value in _packed("h3_plus").items()}
+    packed = {
+        name: np.ascontiguousarray(value) for name, value in _packed("h3_plus").items()
+    }
     batch = ArrayBatch(**packed, backend="cuda", stream=1)
     result = batch.compute(result_memory="cuda")
     with pytest.raises(GPUxtbNotSupportedError, match="host numpy status"):

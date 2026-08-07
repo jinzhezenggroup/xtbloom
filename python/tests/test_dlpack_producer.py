@@ -196,9 +196,9 @@ def test_producer_legacy_capsule_negotiation() -> None:
     # native layer; here we only assert our negotiation never crashes and the
     # capsule name is a valid DLPack name.
     capsule = producer.__dlpack__(max_version=(0, 0))
-    assert dlpack._pyapi.PyCapsule_IsValid(capsule, b"dltensor") or dlpack._pyapi.PyCapsule_IsValid(
-        capsule, b"dltensor_versioned"
-    )
+    assert dlpack._pyapi.PyCapsule_IsValid(
+        capsule, b"dltensor"
+    ) or dlpack._pyapi.PyCapsule_IsValid(capsule, b"dltensor_versioned")
     producer.close()
     arena.close()
 
@@ -225,8 +225,11 @@ def test_producer_export_after_close_raises() -> None:
 
 
 def test_producer_unconsumed_capsule_is_collected() -> None:
-    """An unconsumed capsule invokes the native deleter via the capsule
-    destructor without crashing (the deleter is only for the arena release)."""
+    """An unconsumed capsule frees its managed tensor via the capsule destructor.
+
+    The native deleter performs the arena release; the capsule destructor
+    forwards to it without crashing or double-freeing.
+    """
     arena = _host_arena()
     producer = _filled_buffer(arena)
     capsule = producer.__dlpack__(max_version=(1, 0))

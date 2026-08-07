@@ -71,8 +71,7 @@ void expect(bool condition, const std::string& message) {
 // managed tensor fields byte-by-byte without importing through a framework.
 int test_host_arena_and_versioned_export() {
   gpuxtb_result_owner_options_t options;
-  gpuxtb_status_t status =
-      gpuxtb_result_owner_options_init(&options, sizeof(options));
+  gpuxtb_status_t status = gpuxtb_result_owner_options_init(&options, sizeof(options));
   expect(status == GPUXTB_STATUS_SUCCESS, "result owner options init");
   expect(options.memory_space == GPUXTB_MEMORY_HOST, "host default memory space");
   expect(options.device_id == -1, "host default device id");
@@ -115,8 +114,7 @@ int test_host_arena_and_versioned_export() {
     return 1;
   }
 
-  DtManagedTensorVersioned* versioned =
-      static_cast<DtManagedTensorVersioned*>(managed);
+  DtManagedTensorVersioned* versioned = static_cast<DtManagedTensorVersioned*>(managed);
   expect(versioned->version_major == 1u, "DLPack major version is 1");
   expect(versioned->version_minor == 0u, "DLPack minor version is 0");
   expect(versioned->flags == 0u, "no read-only/copied flag set");
@@ -136,8 +134,7 @@ int test_host_arena_and_versioned_export() {
   // A second export must be an independent single-use managed tensor.
   void* managed2 = NULL;
   status = gpuxtb_result_owner_export_dltensor(owner, &view, 1, &managed2);
-  expect(status == GPUXTB_STATUS_SUCCESS && managed2 != NULL &&
-             managed2 != managed,
+  expect(status == GPUXTB_STATUS_SUCCESS && managed2 != NULL && managed2 != managed,
          "repeated export creates a fresh managed tensor");
 
   // Legacy export mirror.
@@ -195,15 +192,13 @@ int test_owner_lifetime_and_failures() {
   // Zero-size arena is rejected.
   options.size_bytes = 0;
   status = gpuxtb_result_owner_create(&options, &owner);
-  expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && owner == NULL,
-         "zero-size arena rejected");
+  expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && owner == NULL, "zero-size arena rejected");
   options.size_bytes = 512;
 
   // Reserved field must be zero.
   options.reserved = 1;
   status = gpuxtb_result_owner_create(&options, &owner);
-  expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && owner == NULL,
-         "nonzero reserved rejected");
+  expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && owner == NULL, "nonzero reserved rejected");
   options.reserved = 0;
 
   owner = NULL;
@@ -282,14 +277,13 @@ int main() {
   // Short-structure init must fail so a future header suffix stays safe.
   {
     gpuxtb_result_owner_options_t options;
-    gpuxtb_status_t status = gpuxtb_result_owner_options_init(
-        &options, GPUXTB_RESULT_OWNER_OPTIONS_V1_SIZE - 1);
+    gpuxtb_status_t status =
+        gpuxtb_result_owner_options_init(&options, GPUXTB_RESULT_OWNER_OPTIONS_V1_SIZE - 1);
     expect(status == GPUXTB_STATUS_INVALID_ARGUMENT, "short result-owner options rejected");
   }
   {
     gpuxtb_dlpack_view_t view;
-    gpuxtb_status_t status =
-        gpuxtb_result_owner_export_dltensor(NULL, &view, 1, NULL);
+    gpuxtb_status_t status = gpuxtb_result_owner_export_dltensor(NULL, &view, 1, NULL);
     expect(status == GPUXTB_STATUS_INVALID_ARGUMENT, "NULL owner export rejected");
   }
 
