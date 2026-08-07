@@ -241,3 +241,18 @@ The invariance gates reuse the golden runner's strict single-shot options
 never diverge in convergence policy. Each gate emits one deterministic
 `PASS`/`FAIL` line with the measured maximum error and the limit; any failure
 makes the tool exit nonzero.
+
+## Difficult-SCC fixture: tmacl ion pair
+
+`data/conformance/inputs/tmacl.xyz` is a reproduced difficult-SCC input for
+the separated `Me4N+ / Cl-` ion pair (18 atoms), copied verbatim from
+grimme-lab/xtb issue #678. It is intentionally **not** a manifest golden: at
+300 K the default Johnson modified-Broyden policy (history 8, damping 0.4)
+does not converge under gpuxtb or upstream xTB within 250 iterations, so there
+is no oracle golden to compare against. The file is instead a machine-readable
+fixture whose provenance, baseline status matrix, per-iteration traces,
+temperature-continuation funnel, and mixer-policy sweep are pinned and
+reproduced by the native CTest gate `gpuxtb.gfn2.scc_temperature_continuation`
+(`tests/scc_temperature_continuation_test.cpp`), which drives the internal CPU
+GFN2 SCC driver on the exact fixture coordinates. See issue #217 for the full
+investigation evidence and decision.

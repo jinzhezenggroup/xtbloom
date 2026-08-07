@@ -2297,6 +2297,29 @@ if(GPUXTB_BUILD_TESTS)
     )
   endif()
 
+  if(GPUXTB_CPU_LINALG_RUNTIME)
+    # Issue #217 investigation gate: pinned temperature-continuation evidence
+    # for the separated Me4N+ / Cl- ion pair on the committed tmacl fixture.
+    # Requires the real LP64 eigensolver because tmacl has 42 orbitals.
+    add_executable(gpuxtb_scc_temperature_continuation_test
+      tests/scc_temperature_continuation_test.cpp
+    )
+    target_compile_definitions(gpuxtb_scc_temperature_continuation_test PRIVATE
+      GPUXTB_TMACL_FIXTURE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/inputs/tmacl.xyz"
+    )
+    target_link_libraries(gpuxtb_scc_temperature_continuation_test PRIVATE
+      gpuxtb_gfn2_cpu
+      Threads::Threads
+    )
+    target_compile_features(gpuxtb_scc_temperature_continuation_test PRIVATE cxx_std_17)
+    add_test(NAME gpuxtb.gfn2.scc_temperature_continuation
+      COMMAND gpuxtb_scc_temperature_continuation_test
+    )
+    gpuxtb_configure_linalg_runtime_test(
+      gpuxtb_scc_temperature_continuation_test gpuxtb.gfn2.scc_temperature_continuation
+    )
+  endif()
+
   add_executable(gpuxtb_parameters_header_test tests/parameters/gfn2_header_test.cpp)
   target_include_directories(gpuxtb_parameters_header_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_compile_features(gpuxtb_parameters_header_test PRIVATE cxx_std_17)
