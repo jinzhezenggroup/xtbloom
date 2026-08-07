@@ -489,7 +489,7 @@ struct Fixture {
                               kToken,
                               plan.topology.batch_orbital_offsets,
                               plan.topology.matrix_offsets,
-                              ptr<std::int32_t>(kBatch),
+                              plan.topology.bucket_systems,
                               nullptr};
     plan.overlap_cache = {ptr<double>(kMatrices),
                           kMatrices,
@@ -1371,10 +1371,27 @@ int test_projection_authority_rejection() {
   CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidTopology);
   fixture.plan.element_identity_projection.element_fingerprint = 0xa1b2c3d4e5f60718ULL;
 
-  /* Presence mismatch: a packed-all-pair projection on a kNone plan. */
+/* Presence mismatch: a packed-all-pair projection on a kNone plan. */
   fixture.plan.packed_all_pair_projection.plan_token = Fixture::kToken;
   CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidTopology);
   fixture.plan.packed_all_pair_projection = {};
+  CHECK(validate().error == Gfn2SccIterationBindingError::kSuccess);
+
+  /* Leaf-vs-projection identity: a topology-only consumer (density reducers)
+   * must name the sealed projection arrays, not a different allocation. */
+  fixture.plan.density_batch.orbital_offsets = fixture.plan.topology.atom_offsets;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.density_batch.orbital_offsets = fixture.plan.topology.batch_orbital_offsets;
+
+  /* Mulliken must borrow shell ownership and AO/matrix projections. */
+  fixture.plan.mulliken_batch.shell_to_atom = fixture.plan.topology.atom_offsets;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.mulliken_batch.shell_to_atom = fixture.plan.topology.shell_to_atom;
+
+  /* Eigensolver must borrow the AO bucket projection. */
+  fixture.plan.eigensolver_batch.bucket_systems = nullptr;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.eigensolver_batch.bucket_systems = fixture.plan.topology.bucket_systems;
   CHECK(validate().error == Gfn2SccIterationBindingError::kSuccess);
   return 0;
 }
