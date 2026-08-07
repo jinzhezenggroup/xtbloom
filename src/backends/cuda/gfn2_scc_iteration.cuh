@@ -38,8 +38,12 @@
 namespace gpuxtb::detail::cuda {
 
 /* ABI v2 seals the complete ordered WavefunctionLayout spin packing in the
- * device plan instead of accepting aggregate extents as layout identity. */
-inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 2u;
+ * device plan instead of accepting aggregate extents as layout identity.  ABI
+ * v3 adds the sealed common topology projections (atom, shell ownership,
+ * AO/matrix, packed all-pair, AO bucket, element identity) as the single
+ * borrowing authority for every plan leaf; leaf identity is proven against
+ * these projections in one place instead of re-deriving the master topology. */
+inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 3u;
 inline constexpr std::int64_t kGfn2SccIterationBaseStageReportCount = 21;
 inline constexpr std::int64_t kGfn2SccIterationMaximumStageReportCount = 26;
 inline constexpr std::int64_t kGfn2SccIterationStageReportCapacity = 40;
@@ -238,6 +242,19 @@ struct Gfn2SccIterationDevicePlan {
   Gfn2RaggedTopologyView topology{};
   /* Canonical mixed one/two-channel packing shared by every spin-aware leaf. */
   Gfn2WavefunctionLayoutView wavefunction_layout{};
+  /*
+   * Sealed common projections of the master topology (ABI v3).  Every leaf
+   * batch below borrows exactly these arrays; the binding validator proves
+   * each leaf's pointer/count identity against them once, instead of each
+   * validator re-proving that equal-sized offset/map fields are the same plan.
+   * The element-identity projection is setup-owned and independently sealed.
+   */
+  Gfn2AtomProjectionView atom_projection{};
+  Gfn2ShellOwnershipProjectionView shell_ownership_projection{};
+  Gfn2AOMatrixProjectionView ao_matrix_projection{};
+  Gfn2PackedAllPairProjectionView packed_all_pair_projection{};
+  Gfn2AOBucketProjectionView ao_bucket_projection{};
+  Gfn2ElementIdentityProjectionView element_identity_projection{};
   Gfn2SccIterationDevicePolicy activity_policy{};
   Gfn2SccDevicePolicy state_policy{};
   Gfn2SccMixerDevicePolicy mixer_policy{};

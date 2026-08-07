@@ -9,6 +9,7 @@
 #include <type_traits>
 
 #include "backends/common/gfn2_plan_schema.hpp"
+#include "backends/cuda/gfn2_geometry.cuh"
 
 namespace gpuxtb::detail::cuda {
 
@@ -101,14 +102,13 @@ struct Gfn2PairListDeviceBatch {
 };
 
 /*
- * Published per-system state.  pair_offsets partition the canonical
- * (first < second) pair list; neighbor_offsets partition the per-atom neighbor
- * ranges (each atom lists its own neighbors in ascending atom order, so a
- * consumer reproduces the dense packed-triangle reduction order for the
- * retained pairs).  pair_generations is per system.  pair_counts and
- * neighbor_counts are the explicit per-system/per-atom committed counts, so a
- * consumer can validate a peer's slice transactionally without assuming offset
- * continuity across a failed peer.
+ * Published per-system state.  pair_offsets and neighbor_offsets name slot
+ * starts; pair_counts and neighbor_counts name the live prefix in each slot.
+ * Candidate builders use compact CSR, while committed consumers may use padded
+ * fixed-capacity slots so a failed peer cannot relocate a healthy peer's data.
+ * Each atom's live neighbors remain ascending, preserving the dense
+ * packed-triangle reduction order for retained pairs.  pair_generations is per
+ * system.
  */
 struct Gfn2PairListDeviceCache {
   Gfn2AtomPair* pairs = nullptr;
@@ -203,9 +203,10 @@ cudaError_t reset_gfn2_pairlist_device_errors_cuda(std::int64_t batch_size,
  * positions in bohr and publish them transactionally.  Invalid device topology,
  * capacities, or a pre-existing device_error make the whole call a no-op;
  * numerical or capacity failure in one system does not prevent healthy peers
- * committing.  Offset arrays are batch-wide CSR metadata and are repacked on
- * every active update; a failed peer contributes an empty range and its
- * generation is reset to zero, so its prior list must not be reused.  In
+ * committing.  Candidate offset arrays are compact CSR metadata and are
+ * repacked on every active update; committed consumers use stable
+ * fixed-capacity slots and preserve a failed peer's last good payload and
+ * generation while clearing current eligibility.  In
  * kSparse mode only pairs with squared distance <= cutoff^2 are retained; kDense retains the
  * complete triangle.  The published pair list is canonically ordered (first ascending, then second)
  * and the per-atom neighbor ranges are ascending, matching the dense packed-triangle reduction
@@ -249,6 +250,64 @@ cudaError_t add_gfn2_pairlist_coordination_vjp_cuda(
     double* gradients, double* gradient_scratch, std::int64_t gradient_elements,
     const Gfn2PairListDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Committed-consumer CN VJP (issue #84 step 5).  Operates on the committed
+ * Gfn2PairListConsumerView published by the preprocessing final gate, so a
+ * force consumer needs only the stable committed view plus positions/radii and
+ * the per-peer dE_dcn.  This entry points a zero-copy Gfn2PairListDeviceCache
+ * projection at the committed arrays (pair_offsets, pairs, pair_counts,
+ * neighbor_offsets, neighbor_counts, neighbors, committed_generations) and
+ * reuses the deterministic ascending-neighbor VJP kernels, so the sparse
+ * result stays bitwise identical to the dense geometry VJP for the retained
+ * pairs.  The committed generation is read per peer from
+ * committed_generations; a peer must be eligible and its generation must
+ * equal expected_generation, else it fails closed (kStaleGeometry).  A
+ * canonical null/zero active projection processes every peer.  A non-null
+ * active_mask must contain exactly batch_size bytes; zero skips the peer
+ * without reading or publishing its numerical slices, one executes it, and
+ * any other value fails that peer closed.
+ *
+ * gradient_scratch is one caller-owned transient buffer shared with the dense
+ * VJP reference so the two paths can coexist without extra steady-state
+ * allocation.
+ */
+cudaError_t add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    const Gfn2PairListDeviceBatch& batch, const Gfn2PairListConsumerView& committed,
+    const double* positions, const double* covalent_radii, std::uint64_t expected_generation,
+    const double* dE_dcn, double* gradients, double* gradient_scratch,
+    std::int64_t gradient_elements, const std::uint32_t* sequence_active,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
+
+/* Validate the complete committed-consumer VJP launch without enqueuing work.
+ * Composed executors use this gate before any earlier stage can modify its
+ * intermediates, preserving complete-request prevalidation for scalar and
+ * replay-safe device-epoch execution. */
+cudaError_t validate_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    const Gfn2PairListDeviceBatch& batch, const Gfn2PairListConsumerView& committed,
+    const double* positions, const double* covalent_radii, std::uint64_t expected_generation,
+    const double* dE_dcn, double* gradients, double* gradient_scratch,
+    std::int64_t gradient_elements, const std::uint32_t* sequence_active,
+    std::uint32_t* system_errors, std::uint32_t* device_error) noexcept;
+
+/* Replay-safe overload.  Kernels read the expected generation from the
+ * device-resident epoch on the caller stream, so Graph replay never captures
+ * a stale host scalar. */
+cudaError_t add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    const Gfn2PairListDeviceBatch& batch, const Gfn2PairListConsumerView& committed,
+    const double* positions, const double* covalent_radii,
+    const Gfn2GeometryEpochDevice& geometry_epoch, const double* dE_dcn, double* gradients,
+    double* gradient_scratch, std::int64_t gradient_elements, const std::uint32_t* sequence_active,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
+
+cudaError_t validate_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    const Gfn2PairListDeviceBatch& batch, const Gfn2PairListConsumerView& committed,
+    const double* positions, const double* covalent_radii,
+    const Gfn2GeometryEpochDevice& geometry_epoch, const double* dE_dcn, double* gradients,
+    double* gradient_scratch, std::int64_t gradient_elements, const std::uint32_t* sequence_active,
+    std::uint32_t* system_errors, std::uint32_t* device_error) noexcept;
 
 /*
  * Deterministic host dispatch policy used to choose between the sparse
