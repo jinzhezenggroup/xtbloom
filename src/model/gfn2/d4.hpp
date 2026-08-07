@@ -47,6 +47,7 @@ class D4Plan {
   /* Reject caller-owned numerical buffers that overlap immutable plan storage. */
   [[nodiscard]] bool overlaps_storage(const void* data, std::size_t size_bytes) const noexcept;
   [[nodiscard]] std::size_t workspace_size_bytes() const noexcept;
+  [[nodiscard]] std::size_t resident_bytes() const noexcept;
   [[nodiscard]] const D4PlanData* identity() const noexcept;
 
  private:

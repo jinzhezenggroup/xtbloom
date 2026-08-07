@@ -416,7 +416,23 @@ bool same_identity(const Gfn2CudaExecutionIdentity& first,
          first.force_immutable_arena_bytes == second.force_immutable_arena_bytes &&
          first.force_execution_arena_bytes == second.force_execution_arena_bytes &&
          first.numerical_refresh_arena_bytes == second.numerical_refresh_arena_bytes &&
-         first.inference_arena_bytes == second.inference_arena_bytes;
+         first.inference_arena_bytes == second.inference_arena_bytes &&
+         first.numerical_host_staging_arena_bytes == second.numerical_host_staging_arena_bytes &&
+         first.public_result_device_arena_bytes == second.public_result_device_arena_bytes &&
+         first.public_result_host_arena_bytes == second.public_result_host_arena_bytes &&
+         first.candidate_validation_arena_bytes == second.candidate_validation_arena_bytes &&
+         first.topology_staging_host_bytes == second.topology_staging_host_bytes &&
+         first.topology_staging_device_bytes == second.topology_staging_device_bytes &&
+         first.runtime_owner_host_bytes == second.runtime_owner_host_bytes &&
+         first.host_plans_bytes == second.host_plans_bytes &&
+         first.topology_setup_host_bytes == second.topology_setup_host_bytes &&
+         first.inputs_setup_host_bytes == second.inputs_setup_host_bytes &&
+         first.eigensolver_setup_host_bytes == second.eigensolver_setup_host_bytes &&
+         first.initializer_host_bytes == second.initializer_host_bytes &&
+         first.initializer_device_checkpoint_bytes == second.initializer_device_checkpoint_bytes &&
+         first.scc_loop_device_control_bytes == second.scc_loop_device_control_bytes &&
+         first.retained_host_workspace_bytes == second.retained_host_workspace_bytes &&
+         first.retained_device_workspace_bytes == second.retained_device_workspace_bytes;
 }
 
 int validate_identity(const Gfn2CudaExecutionIdentity& identity, std::int64_t batch_size,
@@ -462,6 +478,33 @@ int validate_identity(const Gfn2CudaExecutionIdentity& identity, std::int64_t ba
   CHECK(identity.force_execution_arena_bytes > 0u);
   CHECK(identity.numerical_refresh_arena_bytes > 0u);
   CHECK(identity.inference_arena_bytes > 0u);
+  CHECK(identity.numerical_host_staging_arena_bytes > 0u);
+  CHECK(identity.public_result_device_arena_bytes > 0u);
+  CHECK(identity.public_result_host_arena_bytes > 0u);
+  CHECK(identity.candidate_validation_arena_bytes > 0u);
+  CHECK(identity.topology_staging_host_bytes > 0u);
+  CHECK(identity.topology_staging_device_bytes > 0u);
+  CHECK(identity.runtime_owner_host_bytes > 0u);
+  CHECK(identity.host_plans_bytes > 0u);
+  CHECK(identity.topology_setup_host_bytes > 0u);
+  CHECK(identity.inputs_setup_host_bytes > 0u);
+  CHECK(identity.eigensolver_setup_host_bytes > 0u);
+  CHECK(identity.initializer_host_bytes > 0u);
+  CHECK(identity.initializer_device_checkpoint_bytes > 0u);
+  CHECK(identity.retained_host_workspace_bytes ==
+        identity.provider_host_workspace_bytes + identity.numerical_host_staging_arena_bytes +
+            identity.public_result_host_arena_bytes + identity.candidate_validation_arena_bytes +
+            identity.topology_staging_host_bytes + identity.runtime_owner_host_bytes +
+            identity.host_plans_bytes + identity.topology_setup_host_bytes +
+            identity.inputs_setup_host_bytes + identity.eigensolver_setup_host_bytes +
+            identity.initializer_host_bytes);
+  CHECK(identity.retained_device_workspace_bytes ==
+        identity.topology_arena_bytes + identity.input_arena_bytes +
+            identity.iteration_arena_bytes + identity.eigensolver_setup_arena_bytes +
+            identity.force_immutable_arena_bytes + identity.force_execution_arena_bytes +
+            identity.numerical_refresh_arena_bytes + identity.inference_arena_bytes +
+            identity.public_result_device_arena_bytes + identity.topology_staging_device_bytes +
+            identity.initializer_device_checkpoint_bytes + identity.scc_loop_device_control_bytes);
   CHECK(identity.numerical_refresh_binding != 0u);
   CHECK(identity.numerical_epoch != 0u);
   CHECK(identity.committed_generations != 0u);

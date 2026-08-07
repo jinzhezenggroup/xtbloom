@@ -85,6 +85,11 @@ Gfn2SccSetupHostArray<T> setup_array(const std::vector<T>& values) noexcept {
 }
 
 template <typename T>
+std::size_t vector_bytes(const std::vector<T>& values) noexcept {
+  return values.capacity() * sizeof(T);
+}
+
+template <typename T>
 Gfn2SccIterationHostArrayView<T> initialization_array(const T* values,
                                                       std::int64_t elements) noexcept {
   return {elements == 0 ? nullptr : values, elements};
@@ -1460,6 +1465,78 @@ struct HostPlans {
   std::vector<double> explicit_point_shell_potential;
   PinnedArena wavefunction_storage;
   WavefunctionView wavefunction{};
+
+  [[nodiscard]] std::size_t retained_host_bytes() const noexcept {
+    const std::size_t direct_plan_vectors =
+        vector_bytes(key.atom_offsets) + vector_bytes(key.atomic_numbers) +
+        vector_bytes(key.molecular_charges) + vector_bytes(key.unpaired_electrons) +
+        vector_bytes(key.spin_channels) + vector_bytes(key.point_offsets) +
+        vector_bytes(key.response_offsets) + vector_bytes(basis.atom_offsets) +
+        vector_bytes(basis.batch_shell_offsets) + vector_bytes(basis.batch_orbital_offsets) +
+        vector_bytes(basis.batch_cartesian_orbital_offsets) +
+        vector_bytes(basis.batch_primitive_offsets) + vector_bytes(basis.atom_shell_offsets) +
+        vector_bytes(basis.atom_orbital_offsets) +
+        vector_bytes(basis.atom_cartesian_orbital_offsets) +
+        vector_bytes(basis.atom_primitive_offsets) + vector_bytes(basis.shell_orbital_offsets) +
+        vector_bytes(basis.shell_cartesian_orbital_offsets) +
+        vector_bytes(basis.shell_primitive_offsets) + vector_bytes(basis.shell_to_atom) +
+        vector_bytes(basis.principal_quantum_numbers) + vector_bytes(basis.angular_momenta) +
+        vector_bytes(basis.slater_exponents) + vector_bytes(basis.primitive_exponents) +
+        vector_bytes(basis.primitive_coefficients) + vector_bytes(integrals.matrix_offsets) +
+        vector_bytes(coordination.atom_offsets) + vector_bytes(coordination.covalent_radius) +
+        vector_bytes(repulsion.atom_offsets) + vector_bytes(repulsion.sqrt_alpha) +
+        vector_bytes(repulsion.effective_charge) + vector_bytes(repulsion.light_element) +
+        vector_bytes(h0.atom_offsets) + vector_bytes(h0.batch_shell_offsets) +
+        vector_bytes(h0.batch_orbital_offsets) + vector_bytes(h0.matrix_offsets) +
+        vector_bytes(h0.shell_pair_offsets) + vector_bytes(h0.atomic_radii) +
+        vector_bytes(h0.shell_levels) + vector_bytes(h0.shell_coordination_scale) +
+        vector_bytes(h0.shell_polynomial) + vector_bytes(h0.shell_pair_scale) +
+        vector_bytes(es3.batch_shell_offsets) + vector_bytes(es3.shell_gamma3) +
+        vector_bytes(external.atom_offsets) + vector_bytes(external.batch_shell_offsets) +
+        vector_bytes(external.point_charge_offsets) + vector_bytes(external.shell_to_atom) +
+        vector_bytes(external.shell_hardness) + vector_bytes(wavefunction_layout.atom_offsets) +
+        vector_bytes(wavefunction_layout.batch_shell_offsets) +
+        vector_bytes(wavefunction_layout.batch_orbital_offsets) +
+        vector_bytes(wavefunction_layout.atomic_numbers) +
+        vector_bytes(wavefunction_layout.molecular_charges) +
+        vector_bytes(wavefunction_layout.unpaired_electrons) +
+        vector_bytes(wavefunction_layout.spin_channels) +
+        vector_bytes(wavefunction_layout.reference_atom_occupations) +
+        vector_bytes(wavefunction_layout.reference_shell_occupations) +
+        vector_bytes(wavefunction_layout.electron_counts) +
+        vector_bytes(wavefunction_layout.alpha_electron_counts) +
+        vector_bytes(wavefunction_layout.beta_electron_counts) +
+        vector_bytes(wavefunction_layout.coefficients.system_offsets) +
+        vector_bytes(wavefunction_layout.eigenvalues.system_offsets) +
+        vector_bytes(wavefunction_layout.occupations.system_offsets) +
+        vector_bytes(wavefunction_layout.density.system_offsets) +
+        vector_bytes(wavefunction_layout.qsh.system_offsets) +
+        vector_bytes(wavefunction_layout.qat.system_offsets) +
+        vector_bytes(wavefunction_layout.dipole.system_offsets) +
+        vector_bytes(wavefunction_layout.quadrupole.system_offsets) +
+        vector_bytes(wavefunction_layout.energy_weighted_density.system_offsets);
+    const std::size_t model_plan_storage =
+        es2.resident_bytes() + aes2.resident_bytes() + mulliken.resident_bytes() +
+        eigensolver.resident_bytes() + mixer.resident_bytes() + d4.resident_bytes() +
+        periodic.resident_bytes() + driver.resident_bytes();
+    const std::size_t numerical_vectors =
+        vector_bytes(positions) + vector_bytes(point_positions) + vector_bytes(point_values) +
+        vector_bytes(point_gammas) + vector_bytes(periodic_shifts) +
+        vector_bytes(periodic_response) + vector_bytes(coordination_numbers) +
+        vector_bytes(overlap) + vector_bytes(dipole_integrals) +
+        vector_bytes(quadrupole_integrals) + vector_bytes(core_hamiltonian) +
+        vector_bytes(integral_workspace) + vector_bytes(geometry_pair_data) +
+        vector_bytes(geometry_generations) + vector_bytes(es2_matrix) +
+        vector_bytes(es2_matrix_scratch) + vector_bytes(es2_shell_scratch) +
+        vector_bytes(es2_batch_scratch) + vector_bytes(es2_gradient_scratch) +
+        vector_bytes(aes2_pairs) + vector_bytes(aes2_pair_scratch) +
+        vector_bytes(aes2_potential_scratch) + vector_bytes(aes2_batch_scratch) +
+        vector_bytes(aes2_gradient_scratch) + vector_bytes(aes2_coordination_scratch) +
+        vector_bytes(d4_pair_data) + vector_bytes(d4_coordination) + vector_bytes(d4_elements) +
+        vector_bytes(d4_references) + vector_bytes(explicit_point_shell_potential);
+    return direct_plan_vectors + model_plan_storage + numerical_vectors +
+           d4_workspace_storage.bytes() + wavefunction_storage.bytes();
+  }
 
   gpuxtb_status_t build(TopologyKey&& new_key, std::vector<double>&& new_positions,
                         std::vector<double>&& new_point_positions,
@@ -4670,7 +4747,7 @@ struct Gfn2CudaExecutionCache::Impl {
 
   gpuxtb_status_t validate_public_request_pointers(const gpuxtb_batch_t& batch,
                                                    const gpuxtb_compute_options_t& options,
-                                                   const gpuxtb_batch_result_t& result,
+                                                   const gpuxtb_batch_result_t* result,
                                                    std::string& error) {
     std::int64_t coordinates = 0;
     std::int64_t point_coordinates = 0;
@@ -4754,6 +4831,7 @@ struct Gfn2CudaExecutionCache::Impl {
                             response_active ? batch.total_charge_response_elements : 0,
                             sizeof(double), alignof(double));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (result == nullptr) return GPUXTB_STATUS_SUCCESS;
 
     const bool energy_requested =
         (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_ENERGY)) != 0u;
@@ -4763,27 +4841,27 @@ struct Gfn2CudaExecutionCache::Impl {
         (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_ATOMIC_CHARGES)) != 0u;
     const bool point_forces_requested =
         (options.flags & static_cast<std::uint32_t>(GPUXTB_COMPUTE_POINT_CHARGE_FORCES)) != 0u;
-    status = validate_output("energies", result.energies, energy_requested ? batch.batch_size : 0,
+    status = validate_output("energies", result->energies, energy_requested ? batch.batch_size : 0,
                              sizeof(double), alignof(double));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
-    status = validate_output("forces", result.forces, force_requested ? coordinates : 0,
+    status = validate_output("forces", result->forces, force_requested ? coordinates : 0,
                              sizeof(double), alignof(double));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status =
-        validate_output("atomic_charges", result.atomic_charges,
+        validate_output("atomic_charges", result->atomic_charges,
                         charges_requested ? batch.total_atoms : 0, sizeof(double), alignof(double));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
-    status = validate_output("point_charge_forces", result.point_charge_forces,
+    status = validate_output("point_charge_forces", result->point_charge_forces,
                              point_forces_requested ? point_coordinates : 0, sizeof(double),
                              alignof(double));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
-    status = validate_output("scc_iterations", result.scc_iterations, batch.batch_size,
+    status = validate_output("scc_iterations", result->scc_iterations, batch.batch_size,
                              sizeof(std::int32_t), alignof(std::int32_t));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
-    status = validate_output("scc_converged", result.scc_converged, batch.batch_size,
+    status = validate_output("scc_converged", result->scc_converged, batch.batch_size,
                              sizeof(std::uint8_t), alignof(std::uint8_t));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
-    return validate_output("per_system_status", result.per_system_status, batch.batch_size,
+    return validate_output("per_system_status", result->per_system_status, batch.batch_size,
                            sizeof(gpuxtb_status_t), alignof(gpuxtb_status_t));
   }
 
@@ -5791,6 +5869,38 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.force_execution_arena_bytes = current.force_execution_arena.bytes();
     identity.numerical_refresh_arena_bytes = current.numerical_refresh_arena.bytes();
     identity.inference_arena_bytes = current.inference_arena.bytes();
+    identity.numerical_host_staging_arena_bytes = current.numerical_host_staging_arena.bytes();
+    identity.public_result_device_arena_bytes = current.public_result_device_arena.bytes();
+    identity.public_result_host_arena_bytes = current.public_result_host_arena.bytes();
+    identity.candidate_validation_arena_bytes = current.candidate_validation_arena.bytes();
+    const Gfn2CudaTopologyStagingWorkspaceBytes topology_workspace =
+        topology_staging.workspace_bytes();
+    identity.topology_staging_host_bytes = topology_workspace.host_bytes;
+    identity.topology_staging_device_bytes = topology_workspace.device_bytes;
+    /* Cache/prepared records contain the inline host plans, arena owners, and
+     * descriptor metadata. Their nested heap payloads are counted below. */
+    identity.runtime_owner_host_bytes = sizeof(Impl) + sizeof(current);
+    identity.host_plans_bytes = current.host.retained_host_bytes();
+    identity.topology_setup_host_bytes = current.topology_owner.retained_host_bytes();
+    identity.inputs_setup_host_bytes = current.inputs_owner.retained_host_bytes();
+    identity.eigensolver_setup_host_bytes = current.eigensolver_owner.retained_host_bytes();
+    identity.initializer_host_bytes = current.initializer.retained_host_bytes();
+    identity.initializer_device_checkpoint_bytes = current.initializer.image_bytes();
+    identity.scc_loop_device_control_bytes = current.scc_loop.retained_device_bytes();
+    identity.retained_host_workspace_bytes =
+        identity.provider_host_workspace_bytes + identity.numerical_host_staging_arena_bytes +
+        identity.public_result_host_arena_bytes + identity.candidate_validation_arena_bytes +
+        identity.topology_staging_host_bytes + identity.runtime_owner_host_bytes +
+        identity.host_plans_bytes + identity.topology_setup_host_bytes +
+        identity.inputs_setup_host_bytes + identity.eigensolver_setup_host_bytes +
+        identity.initializer_host_bytes;
+    identity.retained_device_workspace_bytes =
+        identity.topology_arena_bytes + identity.input_arena_bytes +
+        identity.iteration_arena_bytes + identity.eigensolver_setup_arena_bytes +
+        identity.force_immutable_arena_bytes + identity.force_execution_arena_bytes +
+        identity.numerical_refresh_arena_bytes + identity.inference_arena_bytes +
+        identity.public_result_device_arena_bytes + identity.topology_staging_device_bytes +
+        identity.initializer_device_checkpoint_bytes + identity.scc_loop_device_control_bytes;
     return identity;
   }
 
@@ -5811,10 +5921,12 @@ Gfn2CudaExecutionCache::Gfn2CudaExecutionCache(std::int32_t device_id, void* str
 
 Gfn2CudaExecutionCache::~Gfn2CudaExecutionCache() = default;
 
-gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
-                                             const gpuxtb_batch_t& batch,
-                                             const gpuxtb_compute_options_t& options,
-                                             gpuxtb_batch_result_t& result, std::string& error) {
+gpuxtb_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache,
+                                                  const gpuxtb_batch_t& batch,
+                                                  const gpuxtb_compute_options_t& options,
+                                                  gpuxtb_batch_result_t& result,
+                                                  bool require_prepared_topology,
+                                                  std::string& error) {
   if (cache.impl_ == nullptr) {
     error = "CUDA GFN2 execution cache has no implementation";
     return GPUXTB_STATUS_INTERNAL_ERROR;
@@ -5842,7 +5954,7 @@ gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
     gpuxtb_status_t status =
         validate_cuda_stream_owner(implementation.device_id, implementation.stream, true, error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
-    status = implementation.validate_public_request_pointers(batch, options, result, error);
+    status = implementation.validate_public_request_pointers(batch, options, &result, error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = implementation.ensure_handles(error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
@@ -5858,6 +5970,11 @@ gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
         topology_candidate_pending = false;
       }
     };
+    if (require_prepared_topology && topology_candidate_pending) {
+      abort_topology_candidate();
+      error = "the batch topology does not match the fixed CUDA plan topology";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
     const Gfn2CudaTopologyHostSnapshot* topology =
         topology_candidate_pending ? implementation.topology_staging.candidate_snapshot()
                                    : implementation.topology_staging.committed_snapshot();
@@ -5986,6 +6103,21 @@ gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
   return finish(transaction_status);
 }
 
+gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
+                                             const gpuxtb_batch_t& batch,
+                                             const gpuxtb_compute_options_t& options,
+                                             gpuxtb_batch_result_t& result, std::string& error) {
+  return execute_restricted_gfn2_cuda_impl(cache, batch, options, result, false, error);
+}
+
+gpuxtb_status_t execute_restricted_gfn2_cuda_plan(Gfn2CudaExecutionCache& cache,
+                                                  const gpuxtb_batch_t& batch,
+                                                  const gpuxtb_compute_options_t& options,
+                                                  gpuxtb_batch_result_t& result,
+                                                  std::string& error) {
+  return execute_restricted_gfn2_cuda_impl(cache, batch, options, result, true, error);
+}
+
 gpuxtb_status_t Gfn2CudaExecutionCache::prepare_host(const gpuxtb_batch_t& batch,
                                                      const gpuxtb_compute_options_t& options,
                                                      bool& reused, std::string& error) {
@@ -6052,6 +6184,112 @@ gpuxtb_status_t Gfn2CudaExecutionCache::prepare_host(const gpuxtb_batch_t& batch
   impl_->prepared = std::move(candidate);
   error.clear();
   return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t Gfn2CudaExecutionCache::prepare_topology_only(
+    const gpuxtb_batch_t& batch, const gpuxtb_compute_options_t& options, std::string& error) {
+  if (impl_ == nullptr) {
+    error = "CUDA GFN2 execution cache has no implementation";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  ScopedCudaDevice device(impl_->device_id, error);
+  if (!device.ok()) return device.status();
+  const auto finish = [&](gpuxtb_status_t status) {
+    std::string restore_error;
+    const gpuxtb_status_t restore_status = device.restore(restore_error);
+    if (restore_status == GPUXTB_STATUS_SUCCESS) return status;
+    if (status != GPUXTB_STATUS_SUCCESS && !error.empty()) {
+      error += "; additionally, " + restore_error;
+    } else {
+      error = std::move(restore_error);
+    }
+    return restore_status;
+  };
+
+  const gpuxtb_status_t setup_status = [&]() -> gpuxtb_status_t {
+    gpuxtb_status_t status =
+        validate_cuda_stream_owner(impl_->device_id, impl_->stream, true, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = impl_->validate_public_request_pointers(batch, options, nullptr, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = impl_->ensure_handles(error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+
+    const Gfn2CudaTopologyStagingDiagnostic staged =
+        impl_->topology_staging.stage_and_validate(batch, error);
+    if (!staged.success()) return staged.status;
+    bool candidate_pending = staged.disposition == Gfn2CudaTopologyStageDisposition::kCandidate;
+    const auto abort_candidate = [&]() noexcept {
+      if (candidate_pending) {
+        impl_->topology_staging.abort_candidate();
+        candidate_pending = false;
+      }
+    };
+    const Gfn2CudaTopologyHostSnapshot* topology =
+        candidate_pending ? impl_->topology_staging.candidate_snapshot()
+                          : impl_->topology_staging.committed_snapshot();
+    if (topology == nullptr) {
+      abort_candidate();
+      error = "CUDA plan setup did not expose a canonical topology snapshot";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
+    if (impl_->prepared != nullptr &&
+        topology_snapshot_matches(*topology, options, impl_->prepared->host.key)) {
+      if (candidate_pending) {
+        const Gfn2CudaTopologyStagingDiagnostic committed =
+            impl_->topology_staging.commit_candidate(error);
+        candidate_pending = false;
+        if (!committed.success()) return committed.status;
+      }
+      error.clear();
+      return GPUXTB_STATUS_SUCCESS;
+    }
+
+    TopologyKey key;
+    std::vector<double> positions;
+    std::vector<double> point_positions;
+    std::vector<double> point_values;
+    std::vector<double> point_gammas;
+    std::vector<double> periodic_shifts;
+    std::vector<double> periodic_response;
+    std::unique_ptr<Impl::Prepared> candidate;
+    try {
+      status =
+          make_topology_only_seed(*topology, options, key, positions, point_positions, point_values,
+                                  point_gammas, periodic_shifts, periodic_response, error);
+      if (status == GPUXTB_STATUS_SUCCESS) {
+        status = impl_->build_candidate(std::move(key), std::move(positions),
+                                        std::move(point_positions), std::move(point_values),
+                                        std::move(point_gammas), std::move(periodic_shifts),
+                                        std::move(periodic_response), candidate, error);
+      }
+    } catch (const std::bad_alloc&) {
+      error = "failed to allocate host metadata for the CUDA GFN2 runtime candidate";
+      status = GPUXTB_STATUS_ALLOCATION_FAILED;
+    } catch (const std::exception& exception) {
+      error = exception.what();
+      status = GPUXTB_STATUS_INTERNAL_ERROR;
+    } catch (...) {
+      error = "unknown exception while constructing CUDA GFN2 runtime candidate";
+      status = GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      abort_candidate();
+      return status;
+    }
+    if (candidate_pending) {
+      const Gfn2CudaTopologyStagingDiagnostic committed =
+          impl_->topology_staging.commit_candidate(error);
+      candidate_pending = false;
+      if (!committed.success()) return committed.status;
+    }
+    impl_->prepared = std::move(candidate);
+    error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  }();
+  return finish(setup_status);
 }
 
 gpuxtb_status_t Gfn2CudaExecutionCache::refresh_numerical_async(

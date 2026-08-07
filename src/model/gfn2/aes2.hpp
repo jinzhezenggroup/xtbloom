@@ -45,6 +45,7 @@ class AES2Plan {
   [[nodiscard]] std::int64_t potential_scratch_elements() const noexcept;
   [[nodiscard]] std::int64_t gradient_scratch_elements() const noexcept;
   [[nodiscard]] std::int64_t coordination_scratch_elements() const noexcept;
+  [[nodiscard]] std::size_t resident_bytes() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& atom_offsets() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& pair_offsets() const noexcept;
   [[nodiscard]] const std::vector<double>& dipole_kernel() const noexcept;

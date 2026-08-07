@@ -1008,6 +1008,48 @@ std::size_t SccDriverPlan::state_size_bytes() const noexcept {
 std::size_t SccDriverPlan::workspace_size_bytes() const noexcept {
   return data_ == nullptr ? 0u : data_->workspace_size_bytes;
 }
+std::size_t SccDriverPlan::resident_bytes() const noexcept {
+  if (data_ == nullptr) {
+    return 0u;
+  }
+
+  const WavefunctionLayout& wavefunction = data_->wavefunction;
+  std::size_t total = sizeof(*data_) + wavefunction.atom_offsets.capacity() * sizeof(std::int64_t) +
+                      wavefunction.batch_shell_offsets.capacity() * sizeof(std::int64_t) +
+                      wavefunction.batch_orbital_offsets.capacity() * sizeof(std::int64_t) +
+                      wavefunction.atomic_numbers.capacity() * sizeof(std::int32_t) +
+                      wavefunction.molecular_charges.capacity() * sizeof(double) +
+                      wavefunction.unpaired_electrons.capacity() * sizeof(std::int32_t) +
+                      wavefunction.spin_channels.capacity() * sizeof(std::int32_t) +
+                      wavefunction.reference_atom_occupations.capacity() * sizeof(double) +
+                      wavefunction.reference_shell_occupations.capacity() * sizeof(double) +
+                      wavefunction.electron_counts.capacity() * sizeof(double) +
+                      wavefunction.alpha_electron_counts.capacity() * sizeof(double) +
+                      wavefunction.beta_electron_counts.capacity() * sizeof(double);
+  total += wavefunction.coefficients.system_offsets.capacity() * sizeof(std::int64_t) +
+           wavefunction.eigenvalues.system_offsets.capacity() * sizeof(std::int64_t) +
+           wavefunction.occupations.system_offsets.capacity() * sizeof(std::int64_t) +
+           wavefunction.density.system_offsets.capacity() * sizeof(std::int64_t) +
+           wavefunction.qsh.system_offsets.capacity() * sizeof(std::int64_t) +
+           wavefunction.qat.system_offsets.capacity() * sizeof(std::int64_t) +
+           wavefunction.dipole.system_offsets.capacity() * sizeof(std::int64_t) +
+           wavefunction.quadrupole.system_offsets.capacity() * sizeof(std::int64_t) +
+           wavefunction.energy_weighted_density.system_offsets.capacity() * sizeof(std::int64_t);
+
+  /* These three plans are copied by value into the driver and therefore own
+   * distinct vector allocations. Opaque subplans share their backing objects
+   * with SystemExecution and are intentionally counted only by that owner. */
+  total += data_->es3.batch_shell_offsets.capacity() * sizeof(std::int64_t) +
+           data_->es3.shell_gamma3.capacity() * sizeof(double) +
+           data_->spin.atom_offsets.capacity() * sizeof(std::int64_t) +
+           data_->spin.batch_shell_offsets.capacity() * sizeof(std::int64_t) +
+           data_->spin.atom_shell_offsets.capacity() * sizeof(std::int64_t) +
+           data_->spin.shell_population_offsets.capacity() * sizeof(std::int64_t) +
+           data_->spin.spin_channels.capacity() * sizeof(std::int32_t) +
+           data_->spin.coupling_offsets.capacity() * sizeof(std::int64_t) +
+           data_->spin.coupling_matrices.capacity() * sizeof(double);
+  return total;
+}
 const SccDriverPlanData* SccDriverPlan::identity() const noexcept { return data_.get(); }
 
 gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,

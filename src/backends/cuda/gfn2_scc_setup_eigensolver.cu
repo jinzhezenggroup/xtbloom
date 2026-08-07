@@ -587,6 +587,14 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::create(
 
 bool Gfn2SccSetupEigensolver::valid() const noexcept { return impl_ != nullptr; }
 
+std::size_t Gfn2SccSetupEigensolver::retained_host_bytes() const noexcept {
+  if (impl_ == nullptr) return 0u;
+  return sizeof(*impl_) + impl_->buckets.capacity() * sizeof(Gfn2EigensolverBucket) +
+         (impl_->pinned_overlap == nullptr
+              ? 0u
+              : static_cast<std::size_t>(impl_->total_matrices) * sizeof(double));
+}
+
 const Gfn2SccSetupEigensolverRequirements& Gfn2SccSetupEigensolver::requirements() const noexcept {
   return impl_ == nullptr ? empty_requirements() : impl_->requirements;
 }

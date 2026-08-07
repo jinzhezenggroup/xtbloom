@@ -119,6 +119,7 @@ class EigensolverPlan {
   [[nodiscard]] std::size_t overlap_cache_size_bytes() const noexcept;
   [[nodiscard]] std::size_t worker_workspace_size_bytes() const noexcept;
   [[nodiscard]] std::size_t workspace_size_bytes() const noexcept;
+  [[nodiscard]] std::size_t resident_bytes() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& matrix_offsets() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& orbital_offsets() const noexcept;
   [[nodiscard]] const std::vector<std::int32_t>& spin_channels() const noexcept;

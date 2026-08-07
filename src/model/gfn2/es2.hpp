@@ -42,6 +42,7 @@ class ES2Plan {
   [[nodiscard]] std::int64_t total_atoms() const noexcept;
   [[nodiscard]] std::int64_t total_shells() const noexcept;
   [[nodiscard]] std::int64_t total_matrix_elements() const noexcept;
+  [[nodiscard]] std::size_t resident_bytes() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& atom_offsets() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& batch_shell_offsets() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& atom_shell_offsets() const noexcept;

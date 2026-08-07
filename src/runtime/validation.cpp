@@ -306,7 +306,7 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
   if (!has_v1_header(options, GPUXTB_COMPUTE_OPTIONS_V1_SIZE)) {
     return invalid("compute options are NULL, too small, or use an unsupported API version");
   }
-  if (!has_v1_header(result, GPUXTB_BATCH_RESULT_V1_SIZE)) {
+  if (result != nullptr && !has_v1_header(result, GPUXTB_BATCH_RESULT_V1_SIZE)) {
     return invalid("batch result is NULL, too small, or uses an unsupported API version");
   }
 
@@ -357,7 +357,7 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
       return invalid("compute options reserved_v2 field must be zero");
     }
   }
-  if (result->reserved != 0) {
+  if (result != nullptr && result->reserved != 0) {
     return invalid("batch result reserved field must be zero");
   }
 
@@ -365,6 +365,7 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
     const char* name;
     BufferView buffer;
   };
+  const gpuxtb_buffer_t empty_buffer{};
   const NamedBuffer all_buffers[] = {
       {"atom_offsets", view(batch->atom_offsets)},
       {"atomic_numbers", view(batch->atomic_numbers)},
@@ -378,13 +379,15 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
       {"atomic_potential_shifts", view(batch->atomic_potential_shifts)},
       {"charge_response_offsets", view(batch->charge_response_offsets)},
       {"charge_response_matrix", view(batch->charge_response_matrix)},
-      {"energies", view(result->energies)},
-      {"forces", view(result->forces)},
-      {"atomic_charges", view(result->atomic_charges)},
-      {"point_charge_forces", view(result->point_charge_forces)},
-      {"scc_iterations", view(result->scc_iterations)},
-      {"scc_converged", view(result->scc_converged)},
-      {"per_system_status", view(result->per_system_status)},
+      {"energies", result == nullptr ? view(empty_buffer) : view(result->energies)},
+      {"forces", result == nullptr ? view(empty_buffer) : view(result->forces)},
+      {"atomic_charges", result == nullptr ? view(empty_buffer) : view(result->atomic_charges)},
+      {"point_charge_forces",
+       result == nullptr ? view(empty_buffer) : view(result->point_charge_forces)},
+      {"scc_iterations", result == nullptr ? view(empty_buffer) : view(result->scc_iterations)},
+      {"scc_converged", result == nullptr ? view(empty_buffer) : view(result->scc_converged)},
+      {"per_system_status",
+       result == nullptr ? view(empty_buffer) : view(result->per_system_status)},
   };
   for (const NamedBuffer& named : all_buffers) {
     DescriptorValidationResult checked =
@@ -501,26 +504,28 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
     }
   }
 
-  const RequiredOutput outputs[] = {
-      {"energies", view(result->energies), batch_f64_bytes,
-       (options->flags & GPUXTB_COMPUTE_ENERGY) != 0},
-      {"forces", view(result->forces), position_bytes,
-       (options->flags & GPUXTB_COMPUTE_FORCES) != 0},
-      {"atomic_charges", view(result->atomic_charges), atom_f64_bytes,
-       (options->flags & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0},
-      {"point_charge_forces", view(result->point_charge_forces), point_position_bytes,
-       (options->flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0},
-      {"scc_iterations", view(result->scc_iterations), batch_i32_bytes, true},
-      {"scc_converged", view(result->scc_converged), batch_u8_bytes, true},
-      {"per_system_status", view(result->per_system_status), batch_i32_bytes, true},
-  };
-  for (const RequiredOutput& output : outputs) {
-    if (!output.requested) {
-      continue;
-    }
-    DescriptorValidationResult checked = require_bytes(output.name, output.buffer, output.bytes);
-    if (!checked.ok()) {
-      return checked;
+  if (result != nullptr) {
+    const RequiredOutput outputs[] = {
+        {"energies", view(result->energies), batch_f64_bytes,
+         (options->flags & GPUXTB_COMPUTE_ENERGY) != 0},
+        {"forces", view(result->forces), position_bytes,
+         (options->flags & GPUXTB_COMPUTE_FORCES) != 0},
+        {"atomic_charges", view(result->atomic_charges), atom_f64_bytes,
+         (options->flags & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0},
+        {"point_charge_forces", view(result->point_charge_forces), point_position_bytes,
+         (options->flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0},
+        {"scc_iterations", view(result->scc_iterations), batch_i32_bytes, true},
+        {"scc_converged", view(result->scc_converged), batch_u8_bytes, true},
+        {"per_system_status", view(result->per_system_status), batch_i32_bytes, true},
+    };
+    for (const RequiredOutput& output : outputs) {
+      if (!output.requested) {
+        continue;
+      }
+      DescriptorValidationResult checked = require_bytes(output.name, output.buffer, output.bytes);
+      if (!checked.ok()) {
+        return checked;
+      }
     }
   }
 
@@ -540,7 +545,7 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
 
 DescriptorValidationResult validate_compute_descriptor_aliases(
     const gpuxtb_batch_t& batch, const gpuxtb_compute_options_t& options,
-    const gpuxtb_batch_result_t& result, const DescriptorExtentState& extents) {
+    const gpuxtb_batch_result_t* result, const DescriptorExtentState& extents) {
   /* One fixed entry per ABI-v1 buffer keeps successful validation allocation-free. */
   std::array<ActiveRange, 20> ranges{};
   std::size_t range_count = 0;
@@ -605,27 +610,29 @@ DescriptorValidationResult validate_compute_descriptor_aliases(
       return checked;
     }
   }
-  const RequiredOutput outputs[] = {
-      {"energies", view(result.energies), extents.batch_f64_bytes,
-       (options.flags & GPUXTB_COMPUTE_ENERGY) != 0},
-      {"forces", view(result.forces), extents.position_bytes,
-       (options.flags & GPUXTB_COMPUTE_FORCES) != 0},
-      {"atomic_charges", view(result.atomic_charges), extents.atom_f64_bytes,
-       (options.flags & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0},
-      {"point_charge_forces", view(result.point_charge_forces), extents.point_position_bytes,
-       (options.flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0},
-      {"scc_iterations", view(result.scc_iterations), extents.batch_i32_bytes, true},
-      {"scc_converged", view(result.scc_converged), extents.batch_u8_bytes, true},
-      {"per_system_status", view(result.per_system_status), extents.batch_i32_bytes, true},
-  };
-  for (const RequiredOutput& output : outputs) {
-    if (!output.requested) {
-      continue;
-    }
-    DescriptorValidationResult checked =
-        add_active_range(ranges, range_count, output.name, output.buffer, output.bytes, true);
-    if (!checked.ok()) {
-      return checked;
+  if (result != nullptr) {
+    const RequiredOutput outputs[] = {
+        {"energies", view(result->energies), extents.batch_f64_bytes,
+         (options.flags & GPUXTB_COMPUTE_ENERGY) != 0},
+        {"forces", view(result->forces), extents.position_bytes,
+         (options.flags & GPUXTB_COMPUTE_FORCES) != 0},
+        {"atomic_charges", view(result->atomic_charges), extents.atom_f64_bytes,
+         (options.flags & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0},
+        {"point_charge_forces", view(result->point_charge_forces), extents.point_position_bytes,
+         (options.flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0},
+        {"scc_iterations", view(result->scc_iterations), extents.batch_i32_bytes, true},
+        {"scc_converged", view(result->scc_converged), extents.batch_u8_bytes, true},
+        {"per_system_status", view(result->per_system_status), extents.batch_i32_bytes, true},
+    };
+    for (const RequiredOutput& output : outputs) {
+      if (!output.requested) {
+        continue;
+      }
+      DescriptorValidationResult checked =
+          add_active_range(ranges, range_count, output.name, output.buffer, output.bytes, true);
+      if (!checked.ok()) {
+        return checked;
+      }
     }
   }
 
@@ -641,13 +648,44 @@ DescriptorValidationResult validate_compute_descriptor_aliases(
 DescriptorValidationResult validate_compute_descriptor_structure(
     gpuxtb_backend_t backend, const gpuxtb_batch_t* batch, const gpuxtb_compute_options_t* options,
     const gpuxtb_batch_result_t* result) {
+  if (result == nullptr) {
+    return invalid("batch result is NULL");
+  }
   DescriptorExtentState extents;
   DescriptorValidationResult prefix =
       validate_compute_descriptor_prefix(backend, batch, options, result, extents);
   if (!prefix.ok()) {
     return prefix;
   }
-  return validate_compute_descriptor_aliases(*batch, *options, *result, extents);
+  return validate_compute_descriptor_aliases(*batch, *options, result, extents);
+}
+
+DescriptorValidationResult validate_plan_descriptor_structure(
+    gpuxtb_backend_t backend, const gpuxtb_batch_t* batch,
+    const gpuxtb_compute_options_t* options) {
+  /* Plan creation has no result descriptor yet; the batch plus the compute
+   * policy that sizes the plan workspace are validated without requiring
+   * caller-owned output buffers. Returned checks that must be deferred to a
+   * later backend staging step are reported through the same pending mask. */
+  DescriptorExtentState extents;
+  DescriptorValidationResult prefix =
+      validate_compute_descriptor_prefix(backend, batch, options, nullptr, extents);
+  if (!prefix.ok()) {
+    return prefix;
+  }
+  DescriptorValidationResult semantics;
+  if (backend == GPUXTB_BACKEND_CPU) {
+    semantics = validate_host_topology_semantics(*batch);
+    if (!semantics.ok()) {
+      return semantics;
+    }
+  }
+  DescriptorValidationResult aliases =
+      validate_compute_descriptor_aliases(*batch, *options, nullptr, extents);
+  if (!aliases.ok()) {
+    return aliases;
+  }
+  return semantics;
 }
 
 DescriptorValidationResult validate_host_topology_semantics(const gpuxtb_batch_t& batch) {
@@ -769,6 +807,9 @@ DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend
                                                         const gpuxtb_batch_t* batch,
                                                         const gpuxtb_compute_options_t* options,
                                                         const gpuxtb_batch_result_t* result) {
+  if (result == nullptr) {
+    return invalid("batch result is NULL");
+  }
   DescriptorExtentState extents;
   DescriptorValidationResult prefix =
       validate_compute_descriptor_prefix(backend, batch, options, result, extents);
@@ -780,7 +821,7 @@ DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend
     return semantics;
   }
   DescriptorValidationResult aliases =
-      validate_compute_descriptor_aliases(*batch, *options, *result, extents);
+      validate_compute_descriptor_aliases(*batch, *options, result, extents);
   if (!aliases.ok()) {
     return aliases;
   }

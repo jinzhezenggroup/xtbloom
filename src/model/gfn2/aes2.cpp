@@ -744,6 +744,18 @@ std::int64_t AES2Plan::coordination_scratch_elements() const noexcept {
   return data_ == nullptr ? 0 : data_->total_atoms;
 }
 
+std::size_t AES2Plan::resident_bytes() const noexcept {
+  if (data_ == nullptr) {
+    return 0u;
+  }
+  return sizeof(*data_) + data_->atom_offsets.capacity() * sizeof(std::int64_t) +
+         data_->pair_offsets.capacity() * sizeof(std::int64_t) +
+         data_->dipole_kernel.capacity() * sizeof(double) +
+         data_->quadrupole_kernel.capacity() * sizeof(double) +
+         data_->multipole_radius.capacity() * sizeof(double) +
+         data_->multipole_valence_cn.capacity() * sizeof(double);
+}
+
 const std::vector<std::int64_t>& AES2Plan::atom_offsets() const noexcept {
   return data_ == nullptr ? kEmptyInt64Vector : data_->atom_offsets;
 }

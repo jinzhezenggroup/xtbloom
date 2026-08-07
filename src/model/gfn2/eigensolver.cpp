@@ -1335,6 +1335,20 @@ std::size_t EigensolverPlan::worker_workspace_size_bytes() const noexcept {
 std::size_t EigensolverPlan::workspace_size_bytes() const noexcept {
   return data_ == nullptr ? 0u : data_->workspace_size_bytes;
 }
+std::size_t EigensolverPlan::resident_bytes() const noexcept {
+  if (data_ == nullptr) {
+    return 0u;
+  }
+  std::size_t total = sizeof(*data_) + data_->matrix_offsets.capacity() * sizeof(std::int64_t) +
+                      data_->orbital_offsets.capacity() * sizeof(std::int64_t) +
+                      data_->spin_channels.capacity() * sizeof(std::int32_t) +
+                      data_->alpha_electron_counts.capacity() * sizeof(double) +
+                      data_->beta_electron_counts.capacity() * sizeof(double);
+  for (const EigensolverFieldData& field : data_->wavefunction_fields) {
+    total += field.system_offsets.capacity() * sizeof(std::int64_t);
+  }
+  return total;
+}
 const std::vector<std::int64_t>& EigensolverPlan::matrix_offsets() const noexcept {
   return data_ == nullptr ? kEmptyInt64Vector : data_->matrix_offsets;
 }

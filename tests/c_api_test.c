@@ -49,6 +49,29 @@ static int check_short_compute_options_init(size_t caller_size) {
   return prefix_ok && short_suffix_ok && canary_ok;
 }
 
+/* Exercise the reusable workspace-query descriptor on a CPU-backed plan without
+ * requiring a real inference (the value contract is validated in the native
+ * plan tests; here we only prove the descriptor initializes and rejects short
+ * structs). */
+static int check_workspace_query_init(void) {
+  gpuxtb_workspace_query_t query;
+  if (gpuxtb_workspace_query_init(&query, sizeof(query)) != GPUXTB_STATUS_SUCCESS) {
+    return 0;
+  }
+  if (query.struct_size != GPUXTB_WORKSPACE_QUERY_V1_SIZE ||
+      query.api_version != GPUXTB_API_VERSION || query.compute_flags != 0 ||
+      query.host_required_bytes != 0u || query.host_required_alignment != 0u ||
+      query.device_required_bytes != 0u || query.device_required_alignment != 0u ||
+      query.reserved != 0u || query.reserved_v2 != 0u) {
+    return 0;
+  }
+  if (gpuxtb_workspace_query_init(&query, GPUXTB_WORKSPACE_QUERY_V1_SIZE - 1) !=
+      GPUXTB_STATUS_INVALID_ARGUMENT) {
+    return 0;
+  }
+  return 1;
+}
+
 int main(void) {
   if (sizeof(gpuxtb_status_t) != sizeof(int32_t) || sizeof(gpuxtb_backend_t) != sizeof(int32_t) ||
       sizeof(gpuxtb_memory_space_t) != sizeof(int32_t) ||
@@ -74,6 +97,10 @@ int main(void) {
       !check_short_compute_options_init(GPUXTB_COMPUTE_OPTIONS_V2_SIZE - 1)) {
     fprintf(stderr, "short compute-options initialization wrote beyond the caller allocation\n");
     return 3;
+  }
+  if (!check_workspace_query_init()) {
+    fprintf(stderr, "workspace-query descriptor initialization is incorrect\n");
+    return 4;
   }
 
   gpuxtb_context_options_t options;

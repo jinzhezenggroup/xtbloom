@@ -325,6 +325,27 @@ std::int64_t MullikenPlan::hamiltonian_scratch_elements() const noexcept {
   return data_ == nullptr ? 0 : data_->hamiltonian_scratch_elements;
 }
 
+std::size_t MullikenPlan::resident_bytes() const noexcept {
+  if (data_ == nullptr) {
+    return 0u;
+  }
+  return sizeof(*data_) + data_->atom_offsets.capacity() * sizeof(std::int64_t) +
+         data_->batch_shell_offsets.capacity() * sizeof(std::int64_t) +
+         data_->batch_orbital_offsets.capacity() * sizeof(std::int64_t) +
+         data_->matrix_offsets.capacity() * sizeof(std::int64_t) +
+         data_->shell_orbital_offsets.capacity() * sizeof(std::int64_t) +
+         data_->shell_to_atom.capacity() * sizeof(std::int64_t) +
+         data_->orbital_to_shell.capacity() * sizeof(std::int64_t) +
+         data_->orbital_to_atom.capacity() * sizeof(std::int64_t) +
+         data_->spin_channels.capacity() * sizeof(std::int32_t) +
+         data_->reference_shell_occupations.capacity() * sizeof(double) +
+         data_->density_offsets.capacity() * sizeof(std::int64_t) +
+         data_->shell_population_offsets.capacity() * sizeof(std::int64_t) +
+         data_->atom_population_offsets.capacity() * sizeof(std::int64_t) +
+         data_->dipole_population_offsets.capacity() * sizeof(std::int64_t) +
+         data_->quadrupole_population_offsets.capacity() * sizeof(std::int64_t);
+}
+
 const std::vector<std::int64_t>& MullikenPlan::atom_offsets() const noexcept {
   return data_ == nullptr ? kEmptyInt64Vector : data_->atom_offsets;
 }

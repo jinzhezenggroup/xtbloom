@@ -1061,6 +1061,176 @@ bool is_host_buffer(const gpuxtb_const_buffer_t& buffer) noexcept {
   return buffer.data != nullptr && buffer.memory_space == GPUXTB_MEMORY_HOST;
 }
 
+struct PlanDeleter {
+  void operator()(gpuxtb_plan_t* plan) const noexcept { gpuxtb_plan_destroy(plan); }
+};
+
+using PlanHandle = std::unique_ptr<gpuxtb_plan_t, PlanDeleter>;
+
+/* Fixed-topology CUDA plans reuse the prepared runtime, expose host/device
+ * workspace queries that differ by requested properties, and reject topology
+ * mismatches before output mutation (matching the CPU plan contract). */
+int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
+                       const gpuxtb_compute_options_t& base_options) {
+  g_scenario = "plan-api";
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+
+  PublicBatch batch;
+  CHECK(make_fixture_batch(4u, false, batch) == 0);
+  gpuxtb_compute_options_t options = base_options;
+
+  MaterializedResult reference;
+  CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
+
+  /* Plan identity is canonicalized by the CUDA owner, so a plan accepts the
+   * same all-device topology descriptors as gpuxtb_compute. */
+  DeviceBatchInputs device_inputs;
+  CUDA_CHECK(device_inputs.upload_all(batch));
+  bind_inputs(batch, &device_inputs, InputLayout::kDevice);
+  CHECK(verify_input_layout(batch, InputLayout::kDevice, false) == 0);
+
+  /* CUDA pointer ownership is checked before topology staging reads a buffer.
+   * A device pointer tagged as HOST must fail plan creation transactionally. */
+  gpuxtb_batch_t mislabeled = batch.descriptor;
+  mislabeled.atom_offsets.memory_space = GPUXTB_MEMORY_HOST;
+  gpuxtb_plan_t* raw_mislabeled_plan = reinterpret_cast<gpuxtb_plan_t*>(UINTPTR_MAX);
+  CHECK(gpuxtb_plan_create(context.get(), &mislabeled, &options, &raw_mislabeled_plan) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(raw_mislabeled_plan == nullptr);
+
+  gpuxtb_plan_t* raw_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(raw_plan != nullptr);
+  PlanHandle plan(raw_plan);
+
+  /* Host workspace is nonzero and well-aligned; the CUDA runtime reserves
+   * device workspace that grows when forces are requested. */
+  gpuxtb_workspace_query_t query{};
+  CHECK(gpuxtb_workspace_query_init(&query, sizeof(query)) == GPUXTB_STATUS_SUCCESS);
+  query.compute_flags = options.flags;
+  CHECK(gpuxtb_plan_query_workspace(plan.get(), &query) == GPUXTB_STATUS_SUCCESS);
+  CHECK(query.host_required_bytes > 0u);
+  CHECK(query.host_required_alignment >= 8u);
+  CHECK(query.device_required_bytes > 0u);
+  CHECK(query.device_required_alignment >= 8u);
+
+  gpuxtb_compute_options_t energy_options = options;
+  energy_options.flags = GPUXTB_COMPUTE_ENERGY;
+  gpuxtb_plan_t* raw_energy_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &batch.descriptor, &energy_options, &raw_energy_plan) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(raw_energy_plan != nullptr);
+  PlanHandle energy_plan(raw_energy_plan);
+
+  gpuxtb_workspace_query_t energy_query{};
+  CHECK(gpuxtb_workspace_query_init(&energy_query, sizeof(energy_query)) == GPUXTB_STATUS_SUCCESS);
+  energy_query.compute_flags = GPUXTB_COMPUTE_ENERGY;
+  CHECK(gpuxtb_plan_query_workspace(energy_plan.get(), &energy_query) == GPUXTB_STATUS_SUCCESS);
+  CHECK(energy_query.host_required_bytes > 0u);
+  CHECK(query.device_required_bytes >= energy_query.device_required_bytes);
+
+  /* Point-charge forces need the CUDA force arenas even when QM forces are
+   * not requested. Compare two plans over the exact same embedded topology so
+   * the property flag is the only source of the workspace-size difference. */
+  PublicBatch qmmm_batch;
+  CHECK(make_fixture_batch(4u, true, qmmm_batch) == 0);
+  gpuxtb_compute_options_t qmmm_energy_options = options;
+  qmmm_energy_options.flags = GPUXTB_COMPUTE_ENERGY;
+  gpuxtb_plan_t* raw_qmmm_energy_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &qmmm_batch.descriptor, &qmmm_energy_options,
+                           &raw_qmmm_energy_plan) == GPUXTB_STATUS_SUCCESS);
+  CHECK(raw_qmmm_energy_plan != nullptr);
+  PlanHandle qmmm_energy_plan(raw_qmmm_energy_plan);
+
+  gpuxtb_workspace_query_t qmmm_energy_query{};
+  CHECK(gpuxtb_workspace_query_init(&qmmm_energy_query, sizeof(qmmm_energy_query)) ==
+        GPUXTB_STATUS_SUCCESS);
+  qmmm_energy_query.compute_flags = qmmm_energy_options.flags;
+  CHECK(gpuxtb_plan_query_workspace(qmmm_energy_plan.get(), &qmmm_energy_query) ==
+        GPUXTB_STATUS_SUCCESS);
+
+  gpuxtb_compute_options_t qmmm_point_force_options = options;
+  qmmm_point_force_options.flags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_POINT_CHARGE_FORCES;
+  gpuxtb_plan_t* raw_qmmm_point_force_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &qmmm_batch.descriptor, &qmmm_point_force_options,
+                           &raw_qmmm_point_force_plan) == GPUXTB_STATUS_SUCCESS);
+  CHECK(raw_qmmm_point_force_plan != nullptr);
+  PlanHandle qmmm_point_force_plan(raw_qmmm_point_force_plan);
+
+  gpuxtb_workspace_query_t qmmm_point_force_query{};
+  CHECK(gpuxtb_workspace_query_init(&qmmm_point_force_query, sizeof(qmmm_point_force_query)) ==
+        GPUXTB_STATUS_SUCCESS);
+  qmmm_point_force_query.compute_flags = qmmm_point_force_options.flags;
+  CHECK(gpuxtb_plan_query_workspace(qmmm_point_force_plan.get(), &qmmm_point_force_query) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(qmmm_point_force_query.device_required_bytes > qmmm_energy_query.device_required_bytes);
+
+  /* Plan compute equals the CPU reference on the original and a changed
+   * geometry, proving fixed-topology reuse. */
+  {
+    ResultOwner owner;
+    CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
+    CHECK(gpuxtb_plan_compute(plan.get(), &batch.descriptor, &options, &owner.descriptor) ==
+          GPUXTB_STATUS_SUCCESS);
+    MaterializedResult actual;
+    CUDA_CHECK(owner.materialize(actual));
+    CHECK(compare_result(owner, actual, reference, options) == 0);
+  }
+
+  batch.perturb(0.003);
+  MaterializedResult changed_reference;
+  CHECK(run_cpu_reference(cpu_context, batch, options, changed_reference) == 0);
+  CUDA_CHECK(device_inputs.upload_numerical(batch));
+  bind_inputs(batch, &device_inputs, InputLayout::kDevice);
+  {
+    ResultOwner owner;
+    CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
+    CHECK(gpuxtb_plan_compute(plan.get(), &batch.descriptor, &options, &owner.descriptor) ==
+          GPUXTB_STATUS_SUCCESS);
+    MaterializedResult actual;
+    CUDA_CHECK(owner.materialize(actual));
+    CHECK(compare_result(owner, actual, changed_reference, options) == 0);
+  }
+
+  /* A mislabeled device topology on compute is rejected before output
+   * mutation, before host-side identity code could dereference it. */
+  {
+    ResultOwner owner;
+    CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
+    gpuxtb_batch_t mislabeled_compute = batch.descriptor;
+    mislabeled_compute.atomic_numbers.memory_space = GPUXTB_MEMORY_HOST;
+    CHECK(gpuxtb_plan_compute(plan.get(), &mislabeled_compute, &options, &owner.descriptor) ==
+          GPUXTB_STATUS_INVALID_ARGUMENT);
+    bool unchanged = false;
+    CUDA_CHECK(owner.unchanged(unchanged));
+    CHECK(unchanged);
+  }
+
+  /* A mismatched all-device topology fails before output mutation (corrupted
+   * plan) rather than rebuilding the plan-owned prepared runtime. */
+  PublicBatch other;
+  CHECK(make_fixture_batch(2u, false, other) == 0);
+  DeviceBatchInputs other_inputs;
+  CUDA_CHECK(other_inputs.upload_all(other));
+  bind_inputs(other, &other_inputs, InputLayout::kDevice);
+  ResultOwner other_result;
+  CUDA_CHECK(other_result.bind(other, ResultLayout::kDevice, options.flags));
+  CHECK(gpuxtb_plan_compute(plan.get(), &other.descriptor, &options, &other_result.descriptor) ==
+        GPUXTB_STATUS_INVALID_ARGUMENT);
+  bool unchanged = false;
+  CUDA_CHECK(other_result.unchanged(unchanged));
+  CHECK(unchanged);
+
+  g_scenario = "plan-api";
+  return 0;
+}
+
 int verify_input_layout(const PublicBatch& batch, InputLayout layout, bool qmmm) {
   if (layout == InputLayout::kDevice) {
     CHECK(is_cuda_buffer(batch.descriptor.atom_offsets));
@@ -1386,6 +1556,9 @@ int main() {
 
   if (const int line = test_host_device_mixed_and_streams(device, batch, options, reference);
       line != 0) {
+    return line;
+  }
+  if (const int line = test_cuda_plan_api(device, cpu_context.get(), options); line != 0) {
     return line;
   }
   if (const int line = test_public_representability_matrix(device, cpu_context.get(), options);

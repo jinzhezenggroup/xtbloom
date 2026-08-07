@@ -131,6 +131,8 @@ class Gfn2SccLoopCudaGraphOwner {
   [[nodiscard]] const std::uint32_t* canonical_active_count_device() const noexcept;
   [[nodiscard]] const std::uint64_t* numerical_body_count_device() const noexcept;
   [[nodiscard]] const std::uint32_t* device_launch_error_device() const noexcept;
+  /* Explicit device control storage retained by the graph owner. */
+  [[nodiscard]] std::size_t retained_device_bytes() const noexcept;
 
  private:
   [[nodiscard]] Gfn2SccLoopGraphBuildResult build_impl(
