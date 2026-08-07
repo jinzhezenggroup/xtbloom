@@ -46,6 +46,7 @@ enum class Gfn2PairListDeviceError : std::uint32_t {
   kStaleGeometry = 8u,
   kCoincidentAtoms = 9u,
   kNonfiniteArithmetic = 10u,
+  kInvalidMode = 11u,
 };
 
 /*
@@ -74,6 +75,12 @@ struct Gfn2PairListSystemMeta {
  * fixed-topology capacities; exceeding any of them fails that system closed
  * and never publishes a partial slice unless the caller opts into the
  * coordinate-unbounded dense fallback flag.
+ *
+ * Per-system dispatch: when system_modes is non-null it must name exactly
+ * batch_size kSparse/kDense decisions (host-set at setup from the per-system
+ * atom count), so heterogeneous batches no longer force one batch-wide
+ * strategy.  When null, every system follows `mode`.  The dense and bucketed
+ * paths emit the same canonical lists so consumers are strategy-agnostic.
  */
 struct Gfn2PairListDeviceBatch {
   std::int64_t batch_size = 0;
@@ -87,6 +94,10 @@ struct Gfn2PairListDeviceBatch {
   std::uint64_t plan_token = 0u;
   const std::int64_t* atom_offsets = nullptr;
   std::uint32_t flags = 0u;
+  /* Optional per-system kSparse/kDense dispatch decisions (host-uploaded at
+   * setup).  Null means "use `mode` for every system". */
+  const std::int32_t* system_modes = nullptr;
+  std::int64_t system_mode_elements = 0;
 };
 
 /*
@@ -94,15 +105,22 @@ struct Gfn2PairListDeviceBatch {
  * (first < second) pair list; neighbor_offsets partition the per-atom neighbor
  * ranges (each atom lists its own neighbors in ascending atom order, so a
  * consumer reproduces the dense packed-triangle reduction order for the
- * retained pairs).  pair_generations is per system.
+ * retained pairs).  pair_generations is per system.  pair_counts and
+ * neighbor_counts are the explicit per-system/per-atom committed counts, so a
+ * consumer can validate a peer's slice transactionally without assuming offset
+ * continuity across a failed peer.
  */
 struct Gfn2PairListDeviceCache {
   Gfn2AtomPair* pairs = nullptr;
   std::int64_t pair_elements = 0;
   std::int64_t* pair_offsets = nullptr;
   std::int64_t pair_offset_elements = 0;
+  std::int64_t* pair_counts = nullptr;
+  std::int64_t pair_count_elements = 0;
   std::int64_t* neighbor_offsets = nullptr;
   std::int64_t neighbor_offset_elements = 0;
+  std::int64_t* neighbor_counts = nullptr;
+  std::int64_t neighbor_count_elements = 0;
   std::int64_t* neighbors = nullptr;
   std::int64_t neighbor_elements = 0;
   std::uint64_t* pair_generations = nullptr;
@@ -156,9 +174,9 @@ static_assert(std::is_standard_layout_v<Gfn2PairListDeviceWorkspace>);
  * This is the setup-time companion to the failure-isolated device overflow
  * detection: callers size once from fixed topology, then never reallocate.
  *
- * cache elements: pairs = batch*max_pairs; neighbor_offsets = total_atoms+1;
- * neighbor indices = total_atoms*max_neighbors_per_atom; offsets = batch+1;
- * generations = batch.
+ * cache elements: pairs = batch*max_pairs; pair_counts = batch; neighbor_offsets
+ * = total_atoms+1; neighbor_counts = total_atoms; neighbor indices =
+ * total_atoms*max_neighbors_per_atom; offsets = batch+1; generations = batch.
  * workspace elements: meta = batch; atom_cells/cell_atoms/neighbor_cursor =
  * total_atoms; each cell array (counts, offsets, fill) =
  * batch*(max_cells + 1) (one trailing slot per system); neighbor scratch =
@@ -171,7 +189,8 @@ static_assert(std::is_standard_layout_v<Gfn2PairListDeviceWorkspace>);
     std::int64_t* cache_pair_offsets, std::int64_t* cache_generations, std::int64_t* ws_meta,
     std::int64_t* ws_atom_cells, std::int64_t* ws_cell_arrays, std::int64_t* ws_cell_atoms,
     std::int64_t* ws_neighbor_cursor, std::int64_t* ws_neighbor_scratch,
-    std::int64_t* ws_pair_cursor) noexcept;
+    std::int64_t* ws_pair_cursor, std::int64_t* cache_pair_counts = nullptr,
+    std::int64_t* cache_neighbor_counts = nullptr) noexcept;
 
 /* Clear per-system failures and the sequence-wide sticky first-error value. */
 cudaError_t reset_gfn2_pairlist_device_errors_cuda(std::int64_t batch_size,
@@ -212,6 +231,22 @@ cudaError_t update_gfn2_pairlist_cache_cuda(const Gfn2PairListDeviceBatch& batch
 cudaError_t evaluate_gfn2_pairlist_coordination_cuda(
     const Gfn2PairListDeviceBatch& batch, const double* positions, const double* covalent_radii,
     std::uint64_t pair_generation, const Gfn2PairListDeviceCache& cache, double* coordination,
+    const Gfn2PairListDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Accumulate gradients += (d coordination_numbers / d positions)^T * dE_dcn
+ * over the published sparse pair list, reproducing the dense geometry VJP
+ * bitwise for the retained pairs (ascending neighbor reduction, re-verified
+ * pair evaluation).  Gradients are dE/dR, not forces.  Failed systems retain
+ * their input gradients while healthy peers publish through caller-owned
+ * gradient_scratch, mirroring the dense add_gfn2_coordination_vjp_cuda
+ * transactionality (the launcher allocates and transfers nothing).
+ */
+cudaError_t add_gfn2_pairlist_coordination_vjp_cuda(
+    const Gfn2PairListDeviceBatch& batch, const double* positions, const double* covalent_radii,
+    std::uint64_t pair_generation, const Gfn2PairListDeviceCache& cache, const double* dE_dcn,
+    double* gradients, double* gradient_scratch, std::int64_t gradient_elements,
     const Gfn2PairListDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 

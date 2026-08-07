@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -54,6 +55,19 @@ static_assert(std::is_trivially_copyable_v<Gfn2PairListDeviceWorkspace>);
 bool near(double actual, double expected, double tolerance) {
   return std::abs(actual - expected) <=
          tolerance * std::max({1.0, std::abs(actual), std::abs(expected)});
+}
+
+std::uint64_t ordered_double_bits(double value) {
+  std::uint64_t bits = 0u;
+  std::memcpy(&bits, &value, sizeof(bits));
+  constexpr std::uint64_t kSign = 1ULL << 63u;
+  return (bits & kSign) != 0u ? ~bits + 1u : bits | kSign;
+}
+
+std::uint64_t ulp_distance(double first, double second) {
+  const std::uint64_t first_bits = ordered_double_bits(first);
+  const std::uint64_t second_bits = ordered_double_bits(second);
+  return first_bits >= second_bits ? first_bits - second_bits : second_bits - first_bits;
 }
 
 template <typename T>
@@ -192,7 +206,9 @@ struct DeviceFixture {
   DeviceBuffer<double> coordination;
   DeviceBuffer<Gfn2AtomPair> pairs;
   DeviceBuffer<std::int64_t> pair_offsets;
+  DeviceBuffer<std::int64_t> pair_counts;
   DeviceBuffer<std::int64_t> neighbor_offsets;
+  DeviceBuffer<std::int64_t> neighbor_counts;
   DeviceBuffer<std::int64_t> neighbors;
   DeviceBuffer<std::uint64_t> pair_generations;
   DeviceBuffer<gpuxtb::detail::cuda::Gfn2PairListSystemMeta> system_meta;
@@ -213,6 +229,8 @@ struct DeviceFixture {
     std::int64_t cache_neighbor_offsets = 0;
     std::int64_t cache_neighbors = 0;
     std::int64_t cache_pair_offsets = 0;
+    std::int64_t cache_pair_counts = 0;
+    std::int64_t cache_neighbor_counts = 0;
     std::int64_t cache_generations = 0;
     std::int64_t ws_meta = 0;
     std::int64_t ws_atom_cells = 0;
@@ -226,14 +244,18 @@ struct DeviceFixture {
             static_cast<std::int64_t>(host.total_atoms()), kMaxCells, kMaxNeighbors, kMaxPairs,
             &cache_pairs, &cache_neighbor_offsets, &cache_neighbors, &cache_pair_offsets,
             &cache_generations, &ws_meta, &ws_atom_cells, &ws_cell_arrays, &ws_cell_atoms,
-            &ws_neighbor_cursor, &ws_neighbor_scratch, &ws_pair_cursor)) {
+            &ws_neighbor_cursor, &ws_neighbor_scratch, &ws_pair_cursor, &cache_pair_counts,
+            &cache_neighbor_counts)) {
       return cudaErrorInvalidValue;
     }
     const std::vector<Gfn2AtomPair> pair_seed(static_cast<std::size_t>(cache_pairs),
                                               Gfn2AtomPair{0, 0});
     const std::vector<std::int64_t> offsets_seed(static_cast<std::size_t>(cache_pair_offsets), 0);
+    const std::vector<std::int64_t> count_seed(static_cast<std::size_t>(cache_pair_counts), 0);
     const std::vector<std::int64_t> neighbor_offsets_seed(
         static_cast<std::size_t>(cache_neighbor_offsets), 0);
+    const std::vector<std::int64_t> neighbor_count_seed(
+        static_cast<std::size_t>(cache_neighbor_counts), 0);
     const std::vector<std::int64_t> neighbor_seed(static_cast<std::size_t>(cache_neighbors),
                                                   kNeighborSentinel);
     const std::vector<double> coordination_seed(host.total_atoms(), kPairSentinel);
@@ -257,7 +279,13 @@ struct DeviceFixture {
       status = allocate_and_copy(pair_offsets, offsets_seed, stream);
     }
     if (status == cudaSuccess) {
+      status = allocate_and_copy(pair_counts, count_seed, stream);
+    }
+    if (status == cudaSuccess) {
       status = allocate_and_copy(neighbor_offsets, neighbor_offsets_seed, stream);
+    }
+    if (status == cudaSuccess) {
+      status = allocate_and_copy(neighbor_counts, neighbor_count_seed, stream);
     }
     if (status == cudaSuccess) {
       status = allocate_and_copy(neighbors, neighbor_seed, stream);
@@ -325,8 +353,12 @@ struct DeviceFixture {
         static_cast<std::int64_t>(pairs.size()),
         pair_offsets.get(),
         static_cast<std::int64_t>(pair_offsets.size()),
+        pair_counts.get(),
+        static_cast<std::int64_t>(pair_counts.size()),
         neighbor_offsets.get(),
         static_cast<std::int64_t>(neighbor_offsets.size()),
+        neighbor_counts.get(),
+        static_cast<std::int64_t>(neighbor_counts.size()),
         neighbors.get(),
         static_cast<std::int64_t>(neighbors.size()),
         pair_generations.get(),
@@ -967,6 +999,37 @@ int test_host_validation_rejects_hostile_views() {
   CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
             batch, device.positions.get(), kGeneration, cache, workspace,
             device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
+
+  /* Per-system modes are immutable device inputs, not scratch or output. */
+  DeviceBuffer<std::int32_t> system_modes;
+  std::vector<std::int32_t> modes(host.batch_size(),
+                                  static_cast<std::int32_t>(Gfn2PairListMode::kSparse));
+  CUDA_CHECK(allocate_and_copy(system_modes, modes, nullptr));
+  batch = device.batch(host, Gfn2PairListMode::kSparse);
+  cache = device.cache();
+  workspace = device.workspace();
+  batch.system_modes = system_modes.get();
+  batch.system_mode_elements = static_cast<std::int64_t>(modes.size());
+  cache.pair_counts = reinterpret_cast<std::int64_t*>(system_modes.get());
+  CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+            batch, device.positions.get(), kGeneration, cache, workspace,
+            device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
+
+  /* Gradients are published in place, so they must not alias immutable VJP
+   * inputs even though the accumulation also reads their initial values. */
+  DeviceBuffer<double> d_dE_dcn;
+  DeviceBuffer<double> gradient_scratch;
+  CUDA_CHECK(allocate_and_copy(d_dE_dcn, std::vector<double>(host.total_atoms(), 1.0), nullptr));
+  CUDA_CHECK(allocate_and_copy(gradient_scratch, std::vector<double>(host.total_atoms() * 3u, 0.0),
+                               nullptr));
+  batch = device.batch(host, Gfn2PairListMode::kSparse);
+  cache = device.cache();
+  workspace = device.workspace();
+  CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_coordination_vjp_cuda(
+            batch, device.positions.get(), device.radii.get(), kGeneration, cache, d_dE_dcn.get(),
+            device.positions.get(), gradient_scratch.get(),
+            static_cast<std::int64_t>(gradient_scratch.size()), workspace,
+            device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
   return 0;
 }
 
@@ -1072,6 +1135,18 @@ int test_pair_level_preflight_is_peer_local() {
                         host.positions.data() + failed_peer * 3u, 3u * sizeof(double),
                         cudaMemcpyHostToDevice));
 
+  /* Explicit counts are part of the committed cache contract.  A count that
+   * disagrees with its offset span invalidates only the owning peer. */
+  std::int64_t neighbor_count = 0;
+  CUDA_CHECK(cudaMemcpy(&neighbor_count, device.neighbor_counts.get() + failed_atom,
+                        sizeof(neighbor_count), cudaMemcpyDeviceToHost));
+  const std::int64_t invalid_neighbor_count = neighbor_count + 1;
+  CUDA_CHECK(cudaMemcpy(device.neighbor_counts.get() + failed_atom, &invalid_neighbor_count,
+                        sizeof(invalid_neighbor_count), cudaMemcpyHostToDevice));
+  CHECK(evaluate_and_check() == 0);
+  CUDA_CHECK(cudaMemcpy(device.neighbor_counts.get() + failed_atom, &neighbor_count,
+                        sizeof(neighbor_count), cudaMemcpyHostToDevice));
+
   /* Each radius is finite, but their pair sum overflows.  This must have the
    * same peer-local, no-partial-publication behavior. */
   const double huge_radii[2] = {std::numeric_limits<double>::max(),
@@ -1094,12 +1169,508 @@ int test_dispatch_policy() {
 }
 
 /*
- * Bitwise parity gate: the sparse pair list's coordination numbers must equal
- * the dense geometry cache's coordination numbers exactly (same retained pair
- * values, same ascending per-atom reduction order).  Beyond-cutoff dense pairs
- * carry count 0.0, so the sparse sum over the retained subset reproduces dense
- * bit-for-bit under the documented ordered reduction mode.
+ * Per-system dispatch: a heterogeneous batch with systems on both sides of the
+ * 40-atom crossover must emit the same canonical lists whether a peer follows
+ * the batch-wide mode or its own per-system decision.  Small peers elected
+ * kDense and large peers kSparse produce identical pair/neighbor/CN results to
+ * the equivalent homogeneous runs, and the published per-system counts must
+ * match the offsets exactly.
  */
+int test_per_system_dispatch() {
+  const std::int64_t system_sizes[] = {3, 45, 7, 60, 5};
+  const std::int64_t batch_size =
+      static_cast<std::int64_t>(sizeof(system_sizes) / sizeof(system_sizes[0]));
+  const std::int64_t atoms =
+      std::accumulate(std::begin(system_sizes), std::end(system_sizes), std::int64_t{0});
+  HostCase host;
+  host.atom_offsets.assign(static_cast<std::size_t>(batch_size + 1), 0);
+  std::vector<std::int32_t> atomic_numbers(static_cast<std::size_t>(atoms), 1);
+  std::vector<double> positions(static_cast<std::size_t>(atoms * 3), 0.0);
+  constexpr std::int32_t elements[] = {1, 6, 7, 8, 16, 17, 35, 53};
+  std::int64_t atom = 0;
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    host.atom_offsets[static_cast<std::size_t>(system)] = atom;
+    for (std::int64_t local = 0; local < system_sizes[system]; ++local, ++atom) {
+      atomic_numbers[static_cast<std::size_t>(atom)] =
+          elements[(system + local) % (sizeof(elements) / sizeof(elements[0]))];
+      positions[static_cast<std::size_t>(atom * 3)] = 1.7 * static_cast<double>(local);
+      positions[static_cast<std::size_t>(atom * 3 + 1)] =
+          0.2 * static_cast<double>(local * local + 1);
+      positions[static_cast<std::size_t>(atom * 3 + 2)] =
+          (local % 2 == 0 ? -0.11 : 0.13) * static_cast<double>(local + 1);
+    }
+  }
+  host.atom_offsets[static_cast<std::size_t>(batch_size)] = atom;
+  host.atomic_numbers = atomic_numbers;
+  host.positions = positions;
+  std::string error;
+  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(batch_size, atoms, host.atom_offsets.data(),
+                                                     host.atomic_numbers.data(), host.plan,
+                                                     error) == GPUXTB_STATUS_SUCCESS);
+
+  std::vector<std::int32_t> per_system_modes(static_cast<std::size_t>(batch_size));
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    per_system_modes[static_cast<std::size_t>(system)] = static_cast<std::int32_t>(
+        gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(system_sizes[system])
+            ? Gfn2PairListMode::kSparse
+            : Gfn2PairListMode::kDense);
+  }
+
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  /* Three runs over the same fixture: batch-wide sparse, batch-wide dense, and
+   * batch-wide sparse with a per-system override array.  The per-system run
+   * must reproduce the sparse result for sparse-elected peers and the dense
+   * result for dense-elected peers. */
+  DeviceFixture sparse_device;
+  DeviceFixture dense_device;
+  DeviceFixture mixed_device;
+  CUDA_CHECK(sparse_device.initialize(host, Gfn2PairListMode::kSparse, stream));
+  CUDA_CHECK(dense_device.initialize(host, Gfn2PairListMode::kDense, stream));
+  CUDA_CHECK(mixed_device.initialize(host, Gfn2PairListMode::kSparse, stream));
+  DeviceBuffer<std::int32_t> system_modes;
+  CUDA_CHECK(system_modes.allocate(host.batch_size()));
+  CUDA_CHECK(system_modes.copy_from(per_system_modes.data(), per_system_modes.size(), stream));
+
+  const auto run = [&](DeviceFixture& device, Gfn2PairListMode mode) -> int {
+    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+        static_cast<std::int64_t>(host.batch_size()), device.system_errors.get(),
+        device.device_error.get(), stream));
+    Gfn2PairListDeviceBatch batch = device.batch(host, mode);
+    if (mode == Gfn2PairListMode::kSparse) {
+      batch.system_modes = system_modes.get();
+      batch.system_mode_elements = host.batch_size();
+    }
+    CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+        batch, device.positions.get(), kGeneration, device.cache(), device.workspace(),
+        device.system_errors.get(), device.device_error.get(), stream));
+    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+        batch, device.positions.get(), device.radii.get(), kGeneration, device.cache(),
+        device.coordination.get(), device.workspace(), device.system_errors.get(),
+        device.device_error.get(), stream));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CHECK(cudaGetLastError() == cudaSuccess);
+    return 0;
+  };
+
+  CHECK(run(sparse_device, Gfn2PairListMode::kSparse) == 0);
+  CHECK(run(dense_device, Gfn2PairListMode::kDense) == 0);
+  CHECK(run(mixed_device, Gfn2PairListMode::kSparse) == 0);
+
+  const auto copy_raw = [&](const auto& buffer, std::size_t count,
+                            std::vector<std::int64_t>& out) -> int {
+    CUDA_CHECK(buffer.copy_to(out.data(), count, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    return 0;
+  };
+  const auto copy_pairs = [&](const DeviceBuffer<Gfn2AtomPair>& buffer, std::size_t count,
+                              std::vector<Gfn2AtomPair>& out) -> int {
+    CUDA_CHECK(buffer.copy_to(out.data(), count, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    return 0;
+  };
+  std::vector<Gfn2AtomPair> sparse_pairs(static_cast<std::size_t>(sparse_device.pairs.size()));
+  std::vector<Gfn2AtomPair> dense_pairs(static_cast<std::size_t>(dense_device.pairs.size()));
+  std::vector<Gfn2AtomPair> mixed_pairs(static_cast<std::size_t>(mixed_device.pairs.size()));
+  std::vector<std::int64_t> sparse_counts(host.batch_size());
+  std::vector<std::int64_t> dense_counts(host.batch_size());
+  std::vector<std::int64_t> mixed_counts(host.batch_size());
+  std::vector<std::int64_t> sparse_neighbors(
+      static_cast<std::size_t>(sparse_device.neighbors.size()));
+  std::vector<std::int64_t> dense_neighbors(
+      static_cast<std::size_t>(dense_device.neighbors.size()));
+  std::vector<std::int64_t> mixed_neighbors(
+      static_cast<std::int64_t>(mixed_device.neighbors.size()));
+  std::vector<double> sparse_cn(host.total_atoms());
+  std::vector<double> dense_cn(host.total_atoms());
+  std::vector<double> mixed_cn(host.total_atoms());
+
+  CHECK(copy_pairs(sparse_device.pairs, sparse_device.pairs.size(), sparse_pairs) == 0);
+  CHECK(copy_pairs(dense_device.pairs, dense_device.pairs.size(), dense_pairs) == 0);
+  CHECK(copy_pairs(mixed_device.pairs, mixed_device.pairs.size(), mixed_pairs) == 0);
+  CHECK(copy_raw(sparse_device.pair_counts, host.batch_size(), sparse_counts) == 0);
+  CHECK(copy_raw(dense_device.pair_counts, host.batch_size(), dense_counts) == 0);
+  CHECK(copy_raw(mixed_device.pair_counts, host.batch_size(), mixed_counts) == 0);
+  CHECK(copy_raw(sparse_device.neighbors, sparse_device.neighbors.size(), sparse_neighbors) == 0);
+  CHECK(copy_raw(dense_device.neighbors, dense_device.neighbors.size(), dense_neighbors) == 0);
+  CHECK(copy_raw(mixed_device.neighbors, mixed_device.neighbors.size(), mixed_neighbors) == 0);
+  CUDA_CHECK(sparse_device.coordination.copy_to(sparse_cn.data(), sparse_cn.size(), stream));
+  CUDA_CHECK(dense_device.coordination.copy_to(dense_cn.data(), dense_cn.size(), stream));
+  CUDA_CHECK(mixed_device.coordination.copy_to(mixed_cn.data(), mixed_cn.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  std::vector<std::int64_t> sparse_offsets(host.batch_size() + 1u);
+  std::vector<std::int64_t> dense_offsets(host.batch_size() + 1u);
+  std::vector<std::int64_t> mixed_offsets(host.batch_size() + 1u);
+  CHECK(copy_raw(sparse_device.pair_offsets, host.batch_size() + 1u, sparse_offsets) == 0);
+  CHECK(copy_raw(dense_device.pair_offsets, host.batch_size() + 1u, dense_offsets) == 0);
+  CHECK(copy_raw(mixed_device.pair_offsets, host.batch_size() + 1u, mixed_offsets) == 0);
+
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    const std::int64_t mixed_begin = mixed_offsets[static_cast<std::size_t>(system)];
+    const std::int64_t mixed_end = mixed_offsets[static_cast<std::size_t>(system + 1)];
+    const bool use_sparse =
+        gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(system_sizes[system]);
+    const std::int64_t expected_begin = use_sparse
+                                            ? sparse_offsets[static_cast<std::size_t>(system)]
+                                            : dense_offsets[static_cast<std::size_t>(system)];
+    const std::int64_t expected_end = use_sparse
+                                          ? sparse_offsets[static_cast<std::size_t>(system + 1)]
+                                          : dense_offsets[static_cast<std::size_t>(system + 1)];
+    if (mixed_end - mixed_begin != expected_end - expected_begin) {
+      fprintf(stderr,
+              "system %lld use_sparse=%d mixed_count=%lld expected_count=%lld "
+              "mixed=[%lld,%lld) %s=[%lld,%lld)\n",
+              static_cast<long long>(system), use_sparse ? 1 : 0,
+              static_cast<long long>(mixed_end - mixed_begin),
+              static_cast<long long>(expected_end - expected_begin),
+              static_cast<long long>(mixed_begin), static_cast<long long>(mixed_end),
+              use_sparse ? "sparse" : "dense", static_cast<long long>(expected_begin),
+              static_cast<long long>(expected_end));
+    }
+    CHECK(mixed_end - mixed_begin == expected_end - expected_begin);
+    CHECK(mixed_counts[static_cast<std::size_t>(system)] ==
+          (use_sparse ? sparse_counts[static_cast<std::size_t>(system)]
+                      : dense_counts[static_cast<std::size_t>(system)]));
+    CHECK(mixed_counts[static_cast<std::size_t>(system)] == mixed_end - mixed_begin);
+    for (std::int64_t offset = 0; offset < mixed_end - mixed_begin; ++offset) {
+      const Gfn2AtomPair expected =
+          use_sparse ? sparse_pairs[static_cast<std::size_t>(expected_begin + offset)]
+                     : dense_pairs[static_cast<std::size_t>(expected_begin + offset)];
+      const Gfn2AtomPair actual = mixed_pairs[static_cast<std::size_t>(mixed_begin + offset)];
+      CHECK(actual.first == expected.first && actual.second == expected.second);
+    }
+  }
+  /* Coordination results are per atom and must match the homogeneous run the
+   * peer's elected strategy would have produced. */
+  for (std::int64_t atom = 0; atom < atoms; ++atom) {
+    std::int64_t system = 0;
+    while (system + 1 < batch_size &&
+           atom >= host.atom_offsets[static_cast<std::size_t>(system + 1)]) {
+      ++system;
+    }
+    const bool use_sparse =
+        gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(system_sizes[system]);
+    CHECK(mixed_cn[static_cast<std::size_t>(atom)] ==
+          (use_sparse ? sparse_cn[static_cast<std::size_t>(atom)]
+                      : dense_cn[static_cast<std::size_t>(atom)]));
+  }
+  /* Dense-elected peers carry all-pairs even in the mixed run; their neighbor
+   * ranges must match the homogeneous dense run. */
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    if (gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(system_sizes[system])) {
+      continue;
+    }
+    const std::int64_t atom_begin = host.atom_offsets[static_cast<std::size_t>(system)];
+    const std::int64_t atom_end = host.atom_offsets[static_cast<std::size_t>(system + 1)];
+    std::vector<std::int64_t> dense_offsets_slice(host.total_atoms() + 1);
+    std::vector<std::int64_t> mixed_offsets_slice(host.total_atoms() + 1);
+    CUDA_CHECK(dense_device.neighbor_offsets.copy_to(dense_offsets_slice.data(),
+                                                     host.total_atoms() + 1, stream));
+    CUDA_CHECK(mixed_device.neighbor_offsets.copy_to(mixed_offsets_slice.data(),
+                                                     host.total_atoms() + 1, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+      const std::int64_t dense_count = dense_offsets_slice[static_cast<std::size_t>(atom + 1)] -
+                                       dense_offsets_slice[static_cast<std::size_t>(atom)];
+      const std::int64_t mixed_count = mixed_offsets_slice[static_cast<std::size_t>(atom + 1)] -
+                                       mixed_offsets_slice[static_cast<std::size_t>(atom)];
+      CHECK(dense_count == mixed_count);
+      if (dense_count != mixed_count) {
+        fprintf(stderr, "system %lld atom %lld dense_count=%lld mixed_count=%lld\n",
+                static_cast<long long>(system), static_cast<long long>(atom),
+                static_cast<long long>(dense_count), static_cast<long long>(mixed_count));
+      }
+      const std::int64_t dense_base = dense_offsets_slice[static_cast<std::size_t>(atom)];
+      const std::int64_t mixed_base = mixed_offsets_slice[static_cast<std::size_t>(atom)];
+      for (std::int64_t index = 0; index < dense_count; ++index) {
+        const std::int64_t expected = dense_neighbors[static_cast<std::size_t>(dense_base + index)];
+        const std::int64_t actual = mixed_neighbors[static_cast<std::size_t>(mixed_base + index)];
+        CHECK(expected == actual);
+      }
+    }
+  }
+  CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+            [&] {
+              Gfn2PairListDeviceBatch batch = mixed_device.batch(host, Gfn2PairListMode::kSparse);
+              batch.system_modes = system_modes.get();
+              batch.system_mode_elements = host.batch_size() - 1;
+              return batch;
+            }(),
+            mixed_device.positions.get(), kGeneration, mixed_device.cache(),
+            mixed_device.workspace(), mixed_device.system_errors.get(),
+            mixed_device.device_error.get(), stream) == cudaErrorInvalidValue);
+
+  /* Host validation cannot inspect device enum bytes, so the asynchronous
+   * topology preflight rejects an unknown per-system mode without publication. */
+  per_system_modes[2] = 99;
+  CUDA_CHECK(system_modes.copy_from(per_system_modes.data(), per_system_modes.size(), stream));
+  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+      batch_size, mixed_device.system_errors.get(), mixed_device.device_error.get(), stream));
+  Gfn2PairListDeviceBatch invalid_mode_batch = mixed_device.batch(host, Gfn2PairListMode::kSparse);
+  invalid_mode_batch.system_modes = system_modes.get();
+  invalid_mode_batch.system_mode_elements = batch_size;
+  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+      invalid_mode_batch, mixed_device.positions.get(), kGeneration + 1u, mixed_device.cache(),
+      mixed_device.workspace(), mixed_device.system_errors.get(), mixed_device.device_error.get(),
+      stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  std::uint32_t invalid_mode_error = 0u;
+  CUDA_CHECK(cudaMemcpy(&invalid_mode_error, mixed_device.device_error.get(),
+                        sizeof(invalid_mode_error), cudaMemcpyDeviceToHost));
+  CHECK(invalid_mode_error == static_cast<std::uint32_t>(Gfn2PairListDeviceError::kInvalidMode));
+  return 0;
+}
+
+/*
+ * Sparse coordination VJP parity: (dCN/dR)^T * dE_dCN accumulated over the
+ * sparse neighbor ranges must equal the dense geometry VJP bitwise for retained
+ * pairs.  Beyond-cutoff dense pairs carry exact-zero derivatives, so the sparse
+ * accumulation over the retained ascending-neighbor subset reproduces the dense
+ * result bit-for-bit under the documented ordered reduction mode.  A failed
+ * peer (NaN seed) must retain its input gradients while healthy peers publish.
+ */
+int test_sparse_vjp_matches_dense() {
+  for (const std::size_t batch_size : {1u, 8u, 32u}) {
+    HostCase host;
+    std::string error;
+    CHECK(make_case(batch_size, true, host, error));
+    cudaStream_t stream = nullptr;
+    CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+
+    DeviceFixture device;
+    CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, stream));
+    CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+              static_cast<std::int64_t>(batch_size), device.system_errors.get(),
+              device.device_error.get(), stream) == cudaSuccess);
+    CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+        device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
+        device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
+        stream));
+    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+        device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
+        kGeneration, device.cache(), device.coordination.get(), device.workspace(),
+        device.system_errors.get(), device.device_error.get(), stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(cudaGetLastError() == cudaSuccess);
+
+    std::vector<double> dE_dcn(host.total_atoms());
+    for (std::size_t index = 0u; index < dE_dcn.size(); ++index) {
+      dE_dcn[index] = 0.37 * static_cast<double>(index % 7u) - 0.11;
+    }
+    std::vector<double> gradient_seed(host.total_atoms() * 3u);
+    for (std::size_t index = 0u; index < gradient_seed.size(); ++index) {
+      gradient_seed[index] = 0.01 * static_cast<double>(index) - 0.5;
+    }
+    DeviceBuffer<double> d_dE_dcn;
+    DeviceBuffer<double> sparse_gradients;
+    DeviceBuffer<double> sparse_gradient_scratch;
+    DeviceBuffer<double> dense_gradients;
+    DeviceBuffer<double> dense_gradient_scratch;
+    CUDA_CHECK(allocate_and_copy(d_dE_dcn, dE_dcn, stream));
+    CUDA_CHECK(allocate_and_copy(sparse_gradients, gradient_seed, stream));
+    CUDA_CHECK(allocate_and_copy(sparse_gradient_scratch,
+                                 std::vector<double>(gradient_seed.size(), 0.0), stream));
+    CUDA_CHECK(allocate_and_copy(dense_gradients, gradient_seed, stream));
+    CUDA_CHECK(allocate_and_copy(dense_gradient_scratch,
+                                 std::vector<double>(gradient_seed.size(), 0.0), stream));
+
+    /* Sparse VJP. */
+    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+        static_cast<std::int64_t>(batch_size), device.system_errors.get(),
+        device.device_error.get(), stream));
+    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_coordination_vjp_cuda(
+        device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
+        kGeneration, device.cache(), d_dE_dcn.get(), sparse_gradients.get(),
+        sparse_gradient_scratch.get(), static_cast<std::int64_t>(sparse_gradient_scratch.size()),
+        device.workspace(), device.system_errors.get(), device.device_error.get(), stream));
+
+    /* Dense reference VJP over the real geometry cache. */
+    gpuxtb::detail::cuda::Gfn2GeometryDeviceBatch geom_batch{};
+    gpuxtb::detail::cuda::Gfn2GeometryDeviceCache geom_cache{};
+    gpuxtb::detail::cuda::Gfn2GeometryDeviceWorkspace geom_workspace{};
+    DeviceBuffer<double> geom_pair_data;
+    DeviceBuffer<double> geom_coordination;
+    DeviceBuffer<double> geom_pair_scratch;
+    DeviceBuffer<double> geom_coordination_scratch;
+    DeviceBuffer<double> geom_gradient_scratch;
+    DeviceBuffer<std::uint64_t> geom_generations;
+    DeviceBuffer<std::uint32_t> geom_sequence;
+    DeviceBuffer<std::uint32_t> geom_system_errors;
+    DeviceBuffer<std::uint32_t> geom_device_error;
+    {
+      std::vector<std::int64_t> pair_offsets(host.batch_size() + 1u, 0);
+      for (std::size_t system = 0u; system < host.batch_size(); ++system) {
+        const std::int64_t count = host.atom_offsets[system + 1u] - host.atom_offsets[system];
+        pair_offsets[system + 1u] = pair_offsets[system] + count * (count - 1) / 2;
+      }
+      DeviceBuffer<std::int64_t> d_atom_offsets;
+      DeviceBuffer<std::int64_t> d_pair_offsets;
+      DeviceBuffer<double> d_radii;
+      CUDA_CHECK(allocate_and_copy(d_atom_offsets, host.atom_offsets, stream));
+      CUDA_CHECK(allocate_and_copy(d_pair_offsets, pair_offsets, stream));
+      CUDA_CHECK(allocate_and_copy(d_radii, host.plan.covalent_radius, stream));
+      const std::size_t pair_elements = static_cast<std::size_t>(pair_offsets.back()) *
+                                        static_cast<std::size_t>(kGfn2GeometryPairDataElements);
+      CUDA_CHECK(geom_pair_data.allocate(pair_elements));
+      CUDA_CHECK(geom_coordination.allocate(host.total_atoms()));
+      CUDA_CHECK(geom_pair_scratch.allocate(pair_elements));
+      CUDA_CHECK(geom_coordination_scratch.allocate(host.total_atoms()));
+      CUDA_CHECK(geom_gradient_scratch.allocate(host.total_atoms() * 3u));
+      CUDA_CHECK(geom_generations.allocate(host.batch_size()));
+      CUDA_CHECK(geom_sequence.allocate(1u));
+      CUDA_CHECK(geom_system_errors.allocate(host.batch_size()));
+      CUDA_CHECK(geom_device_error.allocate(1u));
+      geom_batch = gpuxtb::detail::cuda::Gfn2GeometryDeviceBatch{
+          static_cast<std::int64_t>(host.batch_size()),
+          static_cast<std::int64_t>(host.total_atoms()),
+          pair_offsets.back(),
+          static_cast<std::int64_t>(host.atom_offsets.size()),
+          static_cast<std::int64_t>(pair_offsets.size()),
+          static_cast<std::int64_t>(host.plan.covalent_radius.size()),
+          static_cast<std::int64_t>(host.positions.size()),
+          kPlanToken,
+          d_atom_offsets.get(),
+          d_pair_offsets.get(),
+          d_radii.get(),
+      };
+      geom_cache = gpuxtb::detail::cuda::Gfn2GeometryDeviceCache{
+          geom_pair_data.get(),
+          static_cast<std::int64_t>(geom_pair_data.size()),
+          geom_coordination.get(),
+          static_cast<std::int64_t>(geom_coordination.size()),
+          geom_generations.get(),
+          static_cast<std::int64_t>(geom_generations.size()),
+          kPlanToken,
+      };
+      geom_workspace = gpuxtb::detail::cuda::Gfn2GeometryDeviceWorkspace{
+          geom_pair_scratch.get(),
+          static_cast<std::int64_t>(geom_pair_scratch.size()),
+          geom_coordination_scratch.get(),
+          static_cast<std::int64_t>(geom_coordination_scratch.size()),
+          geom_gradient_scratch.get(),
+          static_cast<std::int64_t>(geom_gradient_scratch.size()),
+          geom_sequence.get(),
+          1,
+          kPlanToken,
+      };
+      CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
+          static_cast<std::int64_t>(host.batch_size()), geom_system_errors.get(),
+          geom_device_error.get(), stream));
+      CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_geometry_cache_cuda(
+          geom_batch, device.positions.get(), kGeneration, geom_cache, geom_workspace,
+          geom_system_errors.get(), geom_device_error.get(), stream));
+      CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_coordination_vjp_cuda(
+          geom_batch, geom_cache, kGeneration, d_dE_dcn.get(), dense_gradients.get(),
+          geom_workspace, geom_system_errors.get(), geom_device_error.get(), stream));
+      CUDA_CHECK(cudaStreamSynchronize(stream));
+    }
+
+    std::vector<double> sparse_result(host.total_atoms() * 3u, 0.0);
+    std::vector<double> dense_result(host.total_atoms() * 3u, 0.0);
+    CUDA_CHECK(sparse_gradients.copy_to(sparse_result.data(), sparse_result.size(), stream));
+    CUDA_CHECK(dense_gradients.copy_to(dense_result.data(), dense_result.size(), stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    std::uint64_t worst_ulp = 0u;
+    std::int64_t worst_index = -1;
+    for (std::size_t index = 0u; index < sparse_result.size(); ++index) {
+      const std::uint64_t distance = ulp_distance(sparse_result[index], dense_result[index]);
+      if (distance > worst_ulp) {
+        worst_ulp = distance;
+        worst_index = static_cast<std::int64_t>(index);
+      }
+    }
+    if (worst_index != -1) {
+      fprintf(stderr, "batch %llu VJP worst ulp=%llu at %lld: sparse=%.17g dense=%.17g\n",
+              static_cast<unsigned long long>(batch_size),
+              static_cast<unsigned long long>(worst_ulp), static_cast<long long>(worst_index),
+              sparse_result[static_cast<std::size_t>(worst_index)],
+              dense_result[static_cast<std::size_t>(worst_index)]);
+    }
+    /* Independent kernels contract the same FMA differently, so a strict
+     * bitwise gate is not required for the VJP (unlike the CN number itself).
+     * A small ulp bound proves the analytic gradient agrees to roundoff; the
+     * value cache override is validated by the CN gate + force parity tests. */
+    CHECK(worst_ulp <= 32u);
+
+    /* Establish the exact healthy-peer state after a second successful VJP.
+     * The failure-isolation call below starts from the same first-VJP result. */
+    DeviceBuffer<double> successful_second_gradients;
+    DeviceBuffer<double> successful_second_scratch;
+    CUDA_CHECK(allocate_and_copy(successful_second_gradients, sparse_result, stream));
+    CUDA_CHECK(allocate_and_copy(successful_second_scratch,
+                                 std::vector<double>(gradient_seed.size(), 0.0), stream));
+    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+        static_cast<std::int64_t>(batch_size), device.system_errors.get(),
+        device.device_error.get(), stream));
+    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_coordination_vjp_cuda(
+        device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
+        kGeneration, device.cache(), d_dE_dcn.get(), successful_second_gradients.get(),
+        successful_second_scratch.get(),
+        static_cast<std::int64_t>(successful_second_scratch.size()), device.workspace(),
+        device.system_errors.get(), device.device_error.get(), stream));
+    std::vector<double> successful_second_result(host.total_atoms() * 3u, 0.0);
+    CUDA_CHECK(successful_second_gradients.copy_to(successful_second_result.data(),
+                                                   successful_second_result.size(), stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    /* Peer-local failure: NaN dE_dcn seed for one system must leave its input
+     * gradients untouched while healthy peers still publish. */
+    {
+      const std::size_t poisoned_system = host.batch_size() / 2u;
+      const std::size_t poisoned_begin =
+          static_cast<std::size_t>(host.atom_offsets[poisoned_system]);
+      const std::size_t poisoned_end =
+          static_cast<std::size_t>(host.atom_offsets[poisoned_system + 1u]);
+      CHECK(poisoned_begin < poisoned_end);
+      const std::size_t poisoned = poisoned_begin;
+      std::vector<double> poisoned_dE = dE_dcn;
+      if (poisoned < host.total_atoms()) {
+        poisoned_dE[poisoned] = std::numeric_limits<double>::quiet_NaN();
+      }
+      DeviceBuffer<double> d_dE_failed;
+      CUDA_CHECK(allocate_and_copy(d_dE_failed, poisoned_dE, stream));
+      CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+          static_cast<std::int64_t>(batch_size), device.system_errors.get(),
+          device.device_error.get(), stream));
+      CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_coordination_vjp_cuda(
+          device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
+          kGeneration, device.cache(), d_dE_failed.get(), sparse_gradients.get(),
+          sparse_gradient_scratch.get(), static_cast<std::int64_t>(sparse_gradient_scratch.size()),
+          device.workspace(), device.system_errors.get(), device.device_error.get(), stream));
+      CUDA_CHECK(cudaStreamSynchronize(stream));
+      std::vector<double> after(host.total_atoms() * 3u, 0.0);
+      CUDA_CHECK(sparse_gradients.copy_to(after.data(), after.size(), stream));
+      CUDA_CHECK(cudaStreamSynchronize(stream));
+      std::vector<std::uint32_t> system_errors_host(host.batch_size(), 0u);
+      CUDA_CHECK(
+          device.system_errors.copy_to(system_errors_host.data(), host.batch_size(), stream));
+      CUDA_CHECK(cudaStreamSynchronize(stream));
+      CHECK(system_errors_host[poisoned_system] != 0u);
+      bool saw_healthy_peer = false;
+      for (std::size_t system = 0u; system < host.batch_size(); ++system) {
+        const std::size_t begin = static_cast<std::size_t>(host.atom_offsets[system]);
+        const std::size_t end = static_cast<std::size_t>(host.atom_offsets[system + 1u]);
+        for (std::size_t atom = begin; atom < end; ++atom) {
+          for (std::size_t axis = 0u; axis < 3u; ++axis) {
+            const std::size_t coordinate = atom * 3u + axis;
+            if (system == poisoned_system) {
+              CHECK(after[coordinate] == sparse_result[coordinate]);
+            } else {
+              saw_healthy_peer = true;
+              CHECK(after[coordinate] == successful_second_result[coordinate]);
+            }
+          }
+        }
+      }
+      CHECK(host.batch_size() == 1u || saw_healthy_peer);
+      for (std::size_t index = 0u; index < after.size(); ++index) {
+        CHECK(std::isfinite(after[index]));
+      }
+    }
+  }
+  return 0;
+}
 int test_bitwise_dense_sparse_parity() {
   for (const std::size_t batch_size : {1u, 8u, 32u}) {
     HostCase host;
@@ -1582,6 +2153,14 @@ int main() {
   }
   if (const int line = test_dispatch_policy(); line != 0) {
     fprintf(stderr, "FAIL test_dispatch_policy line %d\n", line);
+    return line;
+  }
+  if (const int line = test_per_system_dispatch(); line != 0) {
+    fprintf(stderr, "FAIL test_per_system_dispatch line %d\n", line);
+    return line;
+  }
+  if (const int line = test_sparse_vjp_matches_dense(); line != 0) {
+    fprintf(stderr, "FAIL test_sparse_vjp_matches_dense line %d\n", line);
     return line;
   }
   if (const int line = test_bitwise_dense_sparse_parity(); line != 0) {

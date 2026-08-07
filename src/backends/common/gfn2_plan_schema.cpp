@@ -1,7 +1,9 @@
 #include "backends/common/gfn2_plan_schema.hpp"
 // gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -864,6 +866,311 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_geometry_provenance_host(
     if (active && provenance.system_geometry_generations[system] != expected_geometry_generation) {
       return failure(Gfn2PlanSchemaError::kStaleGeometry,
                      Gfn2PlanSchemaField::kSystemGeometryGenerations, system);
+    }
+  }
+  return success();
+}
+
+namespace {
+
+constexpr bool known_pair_list_state(Gfn2PairListState state) noexcept {
+  return state == Gfn2PairListState::kCandidate || state == Gfn2PairListState::kCommitted;
+}
+
+constexpr bool known_pair_list_role(Gfn2PairListRole role) noexcept {
+  return role == Gfn2PairListRole::kCoordination || role == Gfn2PairListRole::kD4Coordination ||
+         role == Gfn2PairListRole::kD4TwoBody || role == Gfn2PairListRole::kD4Atm;
+}
+
+constexpr double pair_list_role_cutoff(Gfn2PairListRole role) noexcept {
+  switch (role) {
+    case Gfn2PairListRole::kCoordination:
+    case Gfn2PairListRole::kD4Atm:
+      return 25.0;
+    case Gfn2PairListRole::kD4Coordination:
+      return 30.0;
+    case Gfn2PairListRole::kD4TwoBody:
+      return 50.0;
+  }
+  return 0.0;
+}
+
+}  // namespace
+
+Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_binding(
+    const Gfn2RaggedTopologyView& topology, const Gfn2PairListConsumerView& consumer,
+    Gfn2PlanMemorySpace expected_memory_space) noexcept {
+  Gfn2PlanSchemaDiagnostic diagnostic =
+      validate_gfn2_topology_binding(topology, expected_memory_space);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  if (consumer.memory_space != expected_memory_space) {
+    return failure(Gfn2PlanSchemaError::kInvalidMemorySpace,
+                   Gfn2PlanSchemaField::kPairListConsumer);
+  }
+  if (consumer.plan_token == 0u || consumer.plan_token != topology.plan_token) {
+    return failure(Gfn2PlanSchemaError::kCrossPlan, Gfn2PlanSchemaField::kPairListConsumer);
+  }
+  if (!known_pair_list_state(consumer.state)) {
+    return failure(Gfn2PlanSchemaError::kInvalidPairListState,
+                   Gfn2PlanSchemaField::kPairListConsumer);
+  }
+  if (consumer.state != Gfn2PairListState::kCommitted) {
+    return failure(Gfn2PlanSchemaError::kInvalidPairListState,
+                   Gfn2PlanSchemaField::kPairListConsumer);
+  }
+  if (!known_pair_list_role(consumer.role)) {
+    return failure(Gfn2PlanSchemaError::kInvalidPairListRole,
+                   Gfn2PlanSchemaField::kPairListConsumer);
+  }
+  if (consumer.pair_map_kind != Gfn2PairMapKind::kExplicit) {
+    return failure(Gfn2PlanSchemaError::kInvalidPairMap, Gfn2PlanSchemaField::kPairListConsumer);
+  }
+  if (consumer.batch_size != topology.batch_size || consumer.total_atoms != topology.total_atoms) {
+    return failure(Gfn2PlanSchemaError::kInvalidCount, Gfn2PlanSchemaField::kPairListConsumer);
+  }
+  const double required_cutoff = pair_list_role_cutoff(consumer.role);
+  if (!(consumer.cutoff_bohr > 0.0) || !std::isfinite(consumer.cutoff_bohr) ||
+      !(consumer.list_builder_cutoff_bohr > 0.0) ||
+      !std::isfinite(consumer.list_builder_cutoff_bohr) ||
+      consumer.cutoff_bohr != required_cutoff ||
+      consumer.list_builder_cutoff_bohr < consumer.cutoff_bohr) {
+    return failure(Gfn2PlanSchemaError::kInsufficientPairListCutoff,
+                   Gfn2PlanSchemaField::kPairListConsumer);
+  }
+  if (consumer.max_pairs_per_system <= 0 || consumer.max_neighbors_per_atom <= 0) {
+    return failure(Gfn2PlanSchemaError::kInvalidCount, Gfn2PlanSchemaField::kPairListConsumer);
+  }
+  if (consumer.pair_offset_count != consumer.batch_size + 1 ||
+      consumer.neighbor_offset_count != consumer.total_atoms + 1) {
+    return failure(Gfn2PlanSchemaError::kInvalidCount, Gfn2PlanSchemaField::kPairListOffsets);
+  }
+  if (consumer.pair_count < 0 || consumer.neighbor_count < 0 ||
+      consumer.pair_count_elements != consumer.batch_size ||
+      consumer.neighbor_count_elements != consumer.total_atoms) {
+    return failure(Gfn2PlanSchemaError::kInvalidCount, Gfn2PlanSchemaField::kPairListPairs);
+  }
+  std::int64_t pair_capacity = 0;
+  std::int64_t neighbor_capacity = 0;
+  if (!product(consumer.max_pairs_per_system, consumer.batch_size, pair_capacity) ||
+      !product(consumer.max_neighbors_per_atom, consumer.total_atoms, neighbor_capacity)) {
+    return failure(Gfn2PlanSchemaError::kCountOverflow, Gfn2PlanSchemaField::kPairListConsumer);
+  }
+  if (consumer.pair_count > pair_capacity || consumer.neighbor_count > neighbor_capacity) {
+    return failure(Gfn2PlanSchemaError::kInvalidCount, Gfn2PlanSchemaField::kPairListPairs);
+  }
+  if (consumer.committed_generation_count != consumer.batch_size ||
+      consumer.eligible_mask_count != consumer.batch_size) {
+    return failure(Gfn2PlanSchemaError::kInvalidCount, Gfn2PlanSchemaField::kPairListGenerations);
+  }
+  if (consumer.active_mask_count != 0 && consumer.active_mask_count != consumer.batch_size) {
+    return failure(Gfn2PlanSchemaError::kInvalidActiveMask,
+                   Gfn2PlanSchemaField::kPairListActiveMask);
+  }
+  if ((consumer.active_mask_count == 0) != (consumer.active_mask == nullptr)) {
+    return failure(Gfn2PlanSchemaError::kInvalidActiveMask,
+                   Gfn2PlanSchemaField::kPairListActiveMask);
+  }
+
+  std::array<AddressRange, 6> masks;
+  AddressRange generations{};
+  AddressRange eligible{};
+  AddressRange active{};
+  diagnostic = make_range(consumer.pair_offsets, consumer.pair_offset_count,
+                          Gfn2PlanSchemaField::kPairListOffsets, masks[0]);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  diagnostic = make_range(consumer.pairs, consumer.pair_count, Gfn2PlanSchemaField::kPairListPairs,
+                          masks[1]);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  diagnostic = make_range(consumer.pair_counts, consumer.pair_count_elements,
+                          Gfn2PlanSchemaField::kPairListOffsets, masks[4]);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  diagnostic = make_range(consumer.neighbor_counts, consumer.neighbor_count_elements,
+                          Gfn2PlanSchemaField::kPairListNeighborOffsets, masks[5]);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  diagnostic = make_range(consumer.neighbor_offsets, consumer.neighbor_offset_count,
+                          Gfn2PlanSchemaField::kPairListNeighborOffsets, masks[2]);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  diagnostic = make_range(consumer.neighbors, consumer.neighbor_count,
+                          Gfn2PlanSchemaField::kPairListNeighbors, masks[3]);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  diagnostic = make_range(consumer.committed_generations, consumer.committed_generation_count,
+                          Gfn2PlanSchemaField::kPairListGenerations, generations);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  diagnostic = make_range(consumer.eligible_mask, consumer.eligible_mask_count,
+                          Gfn2PlanSchemaField::kPairListEligibleMask, eligible);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  if (consumer.active_mask_count != 0) {
+    diagnostic = make_range(consumer.active_mask, consumer.active_mask_count,
+                            Gfn2PlanSchemaField::kPairListActiveMask, active);
+    if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+      return diagnostic;
+    }
+  }
+  for (std::size_t first = 0u; first < masks.size(); ++first) {
+    for (std::size_t second = first + 1u; second < masks.size(); ++second) {
+      if (overlap(masks[first], masks[second])) {
+        return failure(Gfn2PlanSchemaError::kAliasedRange, masks[second].field);
+      }
+    }
+    if (overlap(masks[first], generations) || overlap(masks[first], eligible) ||
+        overlap(masks[first], active)) {
+      return failure(Gfn2PlanSchemaError::kAliasedRange, masks[first].field);
+    }
+  }
+  if (overlap(generations, eligible) || overlap(generations, active) || overlap(eligible, active)) {
+    return failure(Gfn2PlanSchemaError::kAliasedRange, Gfn2PlanSchemaField::kPairListGenerations);
+  }
+  for (const AddressRange& range : masks) {
+    diagnostic = validate_no_topology_alias(topology, range);
+    if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+      return diagnostic;
+    }
+  }
+  diagnostic = validate_no_topology_alias(topology, generations);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  diagnostic = validate_no_topology_alias(topology, eligible);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  diagnostic = validate_no_topology_alias(topology, active);
+  return diagnostic.error != Gfn2PlanSchemaError::kSuccess ? diagnostic : success();
+}
+
+Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_host(
+    const Gfn2RaggedTopologyView& topology, const Gfn2PairListConsumerView& consumer,
+    std::uint64_t expected_geometry_generation) noexcept {
+  Gfn2PlanSchemaDiagnostic diagnostic =
+      validate_gfn2_pair_list_consumer_binding(topology, consumer, Gfn2PlanMemorySpace::kHost);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  if (expected_geometry_generation == 0u) {
+    return failure(Gfn2PlanSchemaError::kStaleGeometry, Gfn2PlanSchemaField::kPairListGenerations);
+  }
+  if (consumer.committed_generations == nullptr || consumer.eligible_mask == nullptr) {
+    return failure(Gfn2PlanSchemaError::kNullPointer, Gfn2PlanSchemaField::kPairListGenerations);
+  }
+  for (std::int64_t system = 0; system < consumer.batch_size; ++system) {
+    if (consumer.eligible_mask[system] > 1u) {
+      return failure(Gfn2PlanSchemaError::kInvalidActiveMask,
+                     Gfn2PlanSchemaField::kPairListEligibleMask, system);
+    }
+    if (consumer.active_mask != nullptr && consumer.active_mask[system] > 1u) {
+      return failure(Gfn2PlanSchemaError::kInvalidActiveMask,
+                     Gfn2PlanSchemaField::kPairListActiveMask, system);
+    }
+  }
+  if (consumer.pair_offsets[0] != 0 ||
+      consumer.pair_offsets[consumer.batch_size] != consumer.pair_count) {
+    return failure(Gfn2PlanSchemaError::kInvalidOffsets, Gfn2PlanSchemaField::kPairListOffsets, 0);
+  }
+  if (consumer.neighbor_offsets[0] != 0 ||
+      consumer.neighbor_offsets[consumer.total_atoms] != consumer.neighbor_count) {
+    return failure(Gfn2PlanSchemaError::kInvalidOffsets,
+                   Gfn2PlanSchemaField::kPairListNeighborOffsets, 0);
+  }
+  for (std::int64_t system = 0; system < consumer.batch_size; ++system) {
+    const std::int64_t atom_begin = topology.atom_offsets[system];
+    const std::int64_t atom_end = topology.atom_offsets[system + 1];
+    const std::int64_t pair_begin = consumer.pair_offsets[system];
+    const std::int64_t pair_end = consumer.pair_offsets[system + 1];
+    if (pair_begin < 0 || pair_begin > pair_end || pair_end > consumer.pair_count) {
+      return failure(Gfn2PlanSchemaError::kInvalidOffsets, Gfn2PlanSchemaField::kPairListOffsets,
+                     system);
+    }
+    if (pair_end - pair_begin != consumer.pair_counts[system] ||
+        pair_end - pair_begin > consumer.max_pairs_per_system) {
+      return failure(Gfn2PlanSchemaError::kInvalidOffsets, Gfn2PlanSchemaField::kPairListOffsets,
+                     system);
+    }
+    Gfn2AtomPair previous{};
+    bool have_previous = false;
+    for (std::int64_t pair = pair_begin; pair < pair_end; ++pair) {
+      const Gfn2AtomPair atom_pair = consumer.pairs[pair];
+      if (atom_pair.first < atom_begin || atom_pair.second > atom_end - 1 ||
+          atom_pair.first >= atom_pair.second) {
+        return failure(Gfn2PlanSchemaError::kInvalidPairMap, Gfn2PlanSchemaField::kPairListPairs,
+                       pair);
+      }
+      if (have_previous &&
+          (atom_pair.second < previous.second ||
+           (atom_pair.second == previous.second && atom_pair.first <= previous.first))) {
+        return failure(Gfn2PlanSchemaError::kInvalidPairMap, Gfn2PlanSchemaField::kPairListPairs,
+                       pair);
+      }
+      previous = atom_pair;
+      have_previous = true;
+    }
+    if (consumer.eligible_mask[system] == 1u &&
+        consumer.committed_generations[system] != expected_geometry_generation) {
+      return failure(Gfn2PlanSchemaError::kStaleGeometry, Gfn2PlanSchemaField::kPairListGenerations,
+                     system);
+    }
+  }
+  for (std::int64_t atom = 0; atom < consumer.total_atoms; ++atom) {
+    const std::int64_t begin = consumer.neighbor_offsets[atom];
+    const std::int64_t end = consumer.neighbor_offsets[atom + 1];
+    if (begin < 0 || begin > end || end > consumer.neighbor_count) {
+      return failure(Gfn2PlanSchemaError::kInvalidOffsets,
+                     Gfn2PlanSchemaField::kPairListNeighborOffsets, atom);
+    }
+    if (end - begin != consumer.neighbor_counts[atom] ||
+        end - begin > consumer.max_neighbors_per_atom) {
+      return failure(Gfn2PlanSchemaError::kInvalidOffsets,
+                     Gfn2PlanSchemaField::kPairListNeighborOffsets, atom);
+    }
+    std::int64_t system = 0;
+    while (system + 1 < consumer.batch_size && atom >= topology.atom_offsets[system + 1]) {
+      ++system;
+    }
+    const std::int64_t atom_begin = topology.atom_offsets[system];
+    const std::int64_t atom_end = topology.atom_offsets[system + 1];
+    std::int64_t previous = -1;
+    for (std::int64_t index = begin; index < end; ++index) {
+      const std::int64_t peer = consumer.neighbors[index];
+      if (peer < atom_begin || peer >= atom_end || peer == atom || peer <= previous) {
+        return failure(Gfn2PlanSchemaError::kInvalidPairMap,
+                       Gfn2PlanSchemaField::kPairListNeighbors, index);
+      }
+      previous = peer;
+    }
+  }
+  std::int64_t doubled_pairs = 0;
+  if (!product(consumer.pair_count, 2, doubled_pairs) || doubled_pairs != consumer.neighbor_count) {
+    return failure(Gfn2PlanSchemaError::kInvalidPairMap, Gfn2PlanSchemaField::kPairListPairs);
+  }
+  for (std::int64_t pair = 0; pair < consumer.pair_count; ++pair) {
+    const Gfn2AtomPair atom_pair = consumer.pairs[pair];
+    const std::int64_t first_begin = consumer.neighbor_offsets[atom_pair.first];
+    const std::int64_t first_end = consumer.neighbor_offsets[atom_pair.first + 1];
+    const std::int64_t second_begin = consumer.neighbor_offsets[atom_pair.second];
+    const std::int64_t second_end = consumer.neighbor_offsets[atom_pair.second + 1];
+    if (!std::binary_search(consumer.neighbors + first_begin, consumer.neighbors + first_end,
+                            atom_pair.second) ||
+        !std::binary_search(consumer.neighbors + second_begin, consumer.neighbors + second_end,
+                            atom_pair.first)) {
+      return failure(Gfn2PlanSchemaError::kInvalidPairMap, Gfn2PlanSchemaField::kPairListNeighbors,
+                     pair);
     }
   }
   return success();

@@ -134,15 +134,21 @@ bool all_tokens_match(const Gfn2PreprocessingDeviceBinding& binding) noexcept {
                        binding.plan.pairlist.atom_offsets == binding.plan.geometry.atom_offsets &&
                        binding.workspace.pairlist_candidate.plan_token == token &&
                        binding.workspace.pairlist.plan_token == token &&
+                       binding.workspace.pairlist_candidate.pair_counts != nullptr &&
+                       binding.workspace.pairlist_candidate.neighbor_counts != nullptr &&
                        binding.output.pairlist.plan_token == 0u &&
                        binding.output.pairlist.pairs == nullptr &&
                        binding.output.pairlist.pair_offsets == nullptr &&
+                       binding.output.pairlist.pair_counts == nullptr &&
                        binding.output.pairlist.neighbor_offsets == nullptr &&
+                       binding.output.pairlist.neighbor_counts == nullptr &&
                        binding.output.pairlist.neighbors == nullptr &&
                        binding.output.pairlist.pair_generations == nullptr &&
                        binding.output.pairlist.pair_elements == 0 &&
                        binding.output.pairlist.pair_offset_elements == 0 &&
+                       binding.output.pairlist.pair_count_elements == 0 &&
                        binding.output.pairlist.neighbor_offset_elements == 0 &&
+                       binding.output.pairlist.neighbor_count_elements == 0 &&
                        binding.output.pairlist.neighbor_elements == 0 &&
                        binding.output.pairlist.generation_elements == 0 &&
                        binding.diagnostics.sparse_system_errors != nullptr &&
@@ -150,6 +156,7 @@ bool all_tokens_match(const Gfn2PreprocessingDeviceBinding& binding) noexcept {
   } else {
     pairlist_matches =
         binding.plan.pairlist.plan_token == 0u && binding.plan.pairlist.atom_offsets == nullptr &&
+        binding.plan.pairlist.system_modes == nullptr &&
         binding.workspace.pairlist_candidate.plan_token == 0u &&
         binding.workspace.pairlist.plan_token == 0u &&
         binding.workspace.pairlist_candidate.pairs == nullptr &&
@@ -157,12 +164,16 @@ bool all_tokens_match(const Gfn2PreprocessingDeviceBinding& binding) noexcept {
         binding.workspace.sparse_coordination == nullptr &&
         binding.output.pairlist.plan_token == 0u && binding.output.pairlist.pairs == nullptr &&
         binding.output.pairlist.pair_offsets == nullptr &&
+        binding.output.pairlist.pair_counts == nullptr &&
         binding.output.pairlist.neighbor_offsets == nullptr &&
+        binding.output.pairlist.neighbor_counts == nullptr &&
         binding.output.pairlist.neighbors == nullptr &&
         binding.output.pairlist.pair_generations == nullptr &&
         binding.output.pairlist.pair_elements == 0 &&
         binding.output.pairlist.pair_offset_elements == 0 &&
+        binding.output.pairlist.pair_count_elements == 0 &&
         binding.output.pairlist.neighbor_offset_elements == 0 &&
+        binding.output.pairlist.neighbor_count_elements == 0 &&
         binding.output.pairlist.neighbor_elements == 0 &&
         binding.output.pairlist.generation_elements == 0 &&
         binding.diagnostics.sparse_system_errors == nullptr &&
@@ -468,12 +479,16 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
         pairlist.max_neighbors_per_atom > 0 && pairlist.max_pairs_per_system > 0 &&
         (pairlist.mode == Gfn2PairListMode::kSparse || pairlist.mode == Gfn2PairListMode::kDense) &&
         (pairlist.flags & ~kGfn2PairListAllowDenseFallback) == 0u &&
+        pairlist.system_modes != nullptr && pairlist.system_mode_elements == batch &&
+        canonical_pointer(pairlist.system_modes, batch) &&
         checked_multiply(atoms, pairlist.max_neighbors_per_atom, pairlist_scratch) &&
         workspace.sparse_coordination_elements == atoms &&
         canonical_pointer(workspace.sparse_coordination, atoms) &&
         workspace.pairlist_candidate.pair_elements >= pairlist_pairs_capacity &&
         workspace.pairlist_candidate.pair_offset_elements == batch + 1 &&
+        workspace.pairlist_candidate.pair_count_elements >= batch &&
         workspace.pairlist_candidate.neighbor_offset_elements == atoms + 1 &&
+        workspace.pairlist_candidate.neighbor_count_elements >= atoms &&
         workspace.pairlist_candidate.neighbor_elements >= pairlist_neighbors_capacity &&
         workspace.pairlist_candidate.generation_elements >= batch &&
         workspace.pairlist_candidate.plan_token == binding.plan_token &&
@@ -481,8 +496,12 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
                           workspace.pairlist_candidate.pair_elements) &&
         canonical_pointer(workspace.pairlist_candidate.pair_offsets,
                           workspace.pairlist_candidate.pair_offset_elements) &&
+        canonical_pointer(workspace.pairlist_candidate.pair_counts,
+                          workspace.pairlist_candidate.pair_count_elements) &&
         canonical_pointer(workspace.pairlist_candidate.neighbor_offsets,
                           workspace.pairlist_candidate.neighbor_offset_elements) &&
+        canonical_pointer(workspace.pairlist_candidate.neighbor_counts,
+                          workspace.pairlist_candidate.neighbor_count_elements) &&
         canonical_pointer(workspace.pairlist_candidate.neighbors,
                           workspace.pairlist_candidate.neighbor_elements) &&
         canonical_pointer(workspace.pairlist_candidate.pair_generations,
@@ -539,6 +558,8 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
       reads.add(aes2.multipole_radius, atoms) && reads.add(aes2.multipole_valence_cn, atoms) &&
       reads.add(binding.input.positions, coordinates) &&
       reads.add(binding.activity.requested_mask, batch) &&
+      (!pairlist_enabled ||
+       reads.add(binding.plan.pairlist.system_modes, binding.plan.pairlist.system_mode_elements)) &&
       writes.add(binding.activity.published_mask, batch) &&
       writes.add(output.geometry.pair_data, geometry_pair_elements) &&
       writes.add(output.geometry.coordination_numbers, atoms) &&
@@ -583,8 +604,12 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
        writes.add(workspace.pairlist_candidate.pairs, workspace.pairlist_candidate.pair_elements) &&
        writes.add(workspace.pairlist_candidate.pair_offsets,
                   workspace.pairlist_candidate.pair_offset_elements) &&
+       writes.add(workspace.pairlist_candidate.pair_counts,
+                  workspace.pairlist_candidate.pair_count_elements) &&
        writes.add(workspace.pairlist_candidate.neighbor_offsets,
                   workspace.pairlist_candidate.neighbor_offset_elements) &&
+       writes.add(workspace.pairlist_candidate.neighbor_counts,
+                  workspace.pairlist_candidate.neighbor_count_elements) &&
        writes.add(workspace.pairlist_candidate.neighbors,
                   workspace.pairlist_candidate.neighbor_elements) &&
        writes.add(workspace.pairlist_candidate.pair_generations,
@@ -863,6 +888,41 @@ __global__ void gate_sparse_coordination_kernel(Gfn2GeometryDeviceBatch geometry
   }
 }
 
+/*
+ * Make the sparse pair list the authoritative CN producer for the current
+ * epoch.  The gate above proved the sparse coordination numbers equal the
+ * dense geometry cache bitwise for every healthy requested peer; this kernel
+ * then overwrites the dense CN in the geometry candidate with the sparse
+ * value, so H0, AES2 geometry, and the publication path all consume the
+ * sparse-produced CN.  The dense path remains as the differential reference
+ * and its seven-value pair cache still feeds the coordination VJP until the
+ * sparse VJP is wired into the force path.  Failed/inactive peers are skipped.
+ */
+__global__ void promote_sparse_coordination_kernel(Gfn2GeometryDeviceBatch geometry,
+                                                   Gfn2PairListDeviceBatch pairlist,
+                                                   const double* sparse_coordination,
+                                                   double* dense_coordination,
+                                                   Gfn2PreprocessingDeviceActivity activity,
+                                                   Gfn2PreprocessingDeviceDiagnostics diagnostics) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  const bool requested = activity.requested_mask[system] == 1u;
+  if (!requested) {
+    return;
+  }
+  const bool geometry_healthy =
+      atomicAdd(const_cast<std::uint32_t*>(diagnostics.geometry_system_errors + system), 0u) ==
+      static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSuccess);
+  if (!geometry_healthy) {
+    return;
+  }
+  const std::int64_t atom_begin = geometry.atom_offsets[system];
+  const std::int64_t atom_end = geometry.atom_offsets[system + 1];
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    dense_coordination[atom] = sparse_coordination[atom];
+  }
+  static_cast<void>(pairlist);
+}
+
 __global__ void classify_plan_kernel(std::int64_t batch_size,
                                      const std::uint32_t* geometry_sequence,
                                      const std::uint32_t* integral_sequence,
@@ -1123,6 +1183,16 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
         binding.workspace.geometry_candidate.coordination_numbers,
         binding.workspace.sparse_coordination, binding.workspace.pairlist.sequence_active,
         binding.activity, binding.diagnostics);
+    status = check_launch();
+    if (status != cudaSuccess) return launch_failure({}, status);
+    /* After the bitwise gate passed, the sparse list is the authoritative CN
+     * producer: publish its values into the geometry candidate so H0, AES2,
+     * and the public cache consume sparse-produced CN.  The dense path remains
+     * the differential reference behind the gate. */
+    promote_sparse_coordination_kernel<<<sparse_blocks, kThreadsPerBlock, 0, stream>>>(
+        binding.plan.geometry, binding.plan.pairlist, binding.workspace.sparse_coordination,
+        binding.workspace.geometry_candidate.coordination_numbers, binding.activity,
+        binding.diagnostics);
     status = check_launch();
     if (status != cudaSuccess) return launch_failure({}, status);
   }
