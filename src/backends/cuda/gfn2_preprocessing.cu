@@ -888,6 +888,39 @@ __global__ void gate_sparse_coordination_kernel(Gfn2GeometryDeviceBatch geometry
   }
 }
 
+/*
+ * Make the sparse pair list the authoritative CN producer for the current
+ * epoch.  The gate above proved the sparse coordination numbers equal the
+ * dense geometry cache bitwise for every healthy requested peer; this kernel
+ * then overwrites the dense CN in the geometry candidate with the sparse
+ * value, so H0, AES2 geometry, and the publication path all consume the
+ * sparse-produced CN.  The dense path remains as the differential reference
+ * and its seven-value pair cache still feeds the coordination VJP until the
+ * sparse VJP is wired into the force path.  Failed/inactive peers are skipped.
+ */
+__global__ void promote_sparse_coordination_kernel(
+    Gfn2GeometryDeviceBatch geometry, Gfn2PairListDeviceBatch pairlist,
+    const double* sparse_coordination, double* dense_coordination,
+    Gfn2PreprocessingDeviceActivity activity, Gfn2PreprocessingDeviceDiagnostics diagnostics) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  const bool requested = activity.requested_mask[system] == 1u;
+  if (!requested) {
+    return;
+  }
+  const bool geometry_healthy =
+      atomicAdd(const_cast<std::uint32_t*>(diagnostics.geometry_system_errors + system), 0u) ==
+      static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSuccess);
+  if (!geometry_healthy) {
+    return;
+  }
+  const std::int64_t atom_begin = geometry.atom_offsets[system];
+  const std::int64_t atom_end = geometry.atom_offsets[system + 1];
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    dense_coordination[atom] = sparse_coordination[atom];
+  }
+  static_cast<void>(pairlist);
+}
+
 __global__ void classify_plan_kernel(std::int64_t batch_size,
                                      const std::uint32_t* geometry_sequence,
                                      const std::uint32_t* integral_sequence,
@@ -1148,6 +1181,16 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
         binding.workspace.geometry_candidate.coordination_numbers,
         binding.workspace.sparse_coordination, binding.workspace.pairlist.sequence_active,
         binding.activity, binding.diagnostics);
+    status = check_launch();
+    if (status != cudaSuccess) return launch_failure({}, status);
+    /* After the bitwise gate passed, the sparse list is the authoritative CN
+     * producer: publish its values into the geometry candidate so H0, AES2,
+     * and the public cache consume sparse-produced CN.  The dense path remains
+     * the differential reference behind the gate. */
+    promote_sparse_coordination_kernel<<<sparse_blocks, kThreadsPerBlock, 0, stream>>>(
+        binding.plan.geometry, binding.plan.pairlist, binding.workspace.sparse_coordination,
+        binding.workspace.geometry_candidate.coordination_numbers, binding.activity,
+        binding.diagnostics);
     status = check_launch();
     if (status != cudaSuccess) return launch_failure({}, status);
   }

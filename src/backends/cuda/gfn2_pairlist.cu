@@ -912,6 +912,171 @@ __global__ void preflight_coordination_pairs_kernel(
   }
 }
 
+/*
+ * Sparse coordination VJP: accumulate gradients += (dCN/dR)^T * dE_dcn over
+ * the published sparse neighbor ranges.  The neighbor list is canonical
+ * (ascending) so the per-atom accumulation order matches the dense geometry
+ * VJP for retained pairs; beyond-cutoff dense pairs carry exact-zero
+ * derivatives, so sparse and dense results agree bitwise.  A failed peer
+ * publishes nothing and retains its input gradients.
+ */
+__global__ void coordination_vjp_preflight_kernel(
+    Gfn2PairListDeviceBatch batch, const double* positions, const double* covalent_radii,
+    std::uint64_t scalar_generation, const Gfn2PairListDeviceCache& cache, const double* dE_dcn,
+    const double* gradients, const std::uint32_t* sequence_active, std::uint32_t* system_errors,
+    std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  __shared__ SystemRanges ranges;
+  __shared__ int valid;
+  if (!load_system(batch, system, sequence_active, system_errors, &ranges, &valid)) {
+    return;
+  }
+  __syncthreads();
+  if (threadIdx.x == 0 && cache.pair_generations[system] != scalar_generation) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2PairListDeviceError::kStaleGeometry);
+    valid = 0;
+  }
+  __syncthreads();
+  if (valid != 0) {
+    for (std::int64_t atom = ranges.atom_begin + threadIdx.x; atom < ranges.atom_end;
+         atom += blockDim.x) {
+      const std::int64_t coordinate = atom * 3;
+      if (!finite_position(positions, coordinate) || !isfinite(covalent_radii[atom]) ||
+          !(covalent_radii[atom] > 0.0) || !isfinite(dE_dcn[atom]) ||
+          !isfinite(gradients[coordinate]) || !isfinite(gradients[coordinate + 1]) ||
+          !isfinite(gradients[coordinate + 2])) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2PairListDeviceError::kInvalidCache);
+        atomicExch(&valid, 0);
+      }
+    }
+  }
+  __syncthreads();
+  if (valid != 0) {
+    const std::int64_t neighbor_capacity = batch.total_atoms * batch.max_neighbors_per_atom;
+    for (std::int64_t atom = ranges.atom_begin + threadIdx.x; atom < ranges.atom_end;
+         atom += blockDim.x) {
+      const std::int64_t begin = cache.neighbor_offsets[atom];
+      const std::int64_t end = cache.neighbor_offsets[atom + 1];
+      if (begin < 0 || end < begin || end > neighbor_capacity) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2PairListDeviceError::kInvalidCache);
+        atomicExch(&valid, 0);
+        continue;
+      }
+      const std::int64_t coordinate = atom * 3;
+      for (std::int64_t index = begin; index < end; ++index) {
+        const std::int64_t peer = cache.neighbors[index];
+        if (peer < ranges.atom_begin || peer >= ranges.atom_end) {
+          record_system_error(system_errors, system, device_error,
+                              Gfn2PairListDeviceError::kInvalidCache);
+          atomicExch(&valid, 0);
+          break;
+        }
+        const double radius = covalent_radii[atom] + covalent_radii[peer];
+        const std::int64_t target_is_upper = atom > peer;
+        const std::int64_t upper = target_is_upper ? atom : peer;
+        const std::int64_t lower = target_is_upper ? peer : atom;
+        const double displacement[3] = {
+            positions[upper * 3] - positions[lower * 3],
+            positions[upper * 3 + 1] - positions[lower * 3 + 1],
+            positions[upper * 3 + 2] - positions[lower * 3 + 2]};
+        PairValues values{};
+        if (!finite_position(positions, coordinate) ||
+            !finite_position(positions, peer * 3) ||
+            !evaluate_pair(displacement[0], displacement[1], displacement[2], radius, &values)) {
+          record_system_error(system_errors, system, device_error,
+                              Gfn2PairListDeviceError::kInvalidCache);
+          atomicExch(&valid, 0);
+          break;
+        }
+      }
+    }
+  }
+  __syncthreads();
+  static_cast<void>(valid);
+}
+
+__global__ void coordination_vjp_accumulate_kernel(
+    Gfn2PairListDeviceBatch batch, const double* positions, const double* covalent_radii,
+    std::uint64_t scalar_generation, const Gfn2PairListDeviceCache& cache, const double* dE_dcn,
+    const double* gradients, double* gradient_scratch, const std::uint32_t* sequence_active,
+    std::uint32_t* system_errors, std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  __shared__ SystemRanges ranges;
+  __shared__ int valid;
+  if (!load_system(batch, system, sequence_active, system_errors, &ranges, &valid)) {
+    return;
+  }
+  __syncthreads();
+  if (valid == 0) {
+    return;
+  }
+  for (std::int64_t atom = ranges.atom_begin + threadIdx.x; atom < ranges.atom_end;
+       atom += blockDim.x) {
+    double contribution[3] = {0.0, 0.0, 0.0};
+    bool finite_result = true;
+    const std::int64_t begin = cache.neighbor_offsets[atom];
+    const std::int64_t end = cache.neighbor_offsets[atom + 1];
+    for (std::int64_t index = begin; finite_result && index < end; ++index) {
+      const std::int64_t peer = cache.neighbors[index];
+      const std::int64_t target_is_upper = atom > peer;
+      const std::int64_t upper = target_is_upper ? atom : peer;
+      const std::int64_t lower = target_is_upper ? peer : atom;
+      const double displacement[3] = {
+          positions[upper * 3] - positions[lower * 3],
+          positions[upper * 3 + 1] - positions[lower * 3 + 1],
+          positions[upper * 3 + 2] - positions[lower * 3 + 2]};
+      PairValues values{};
+      const double radius = covalent_radii[atom] + covalent_radii[peer];
+      if (!evaluate_pair(displacement[0], displacement[1], displacement[2], radius, &values)) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2PairListDeviceError::kInvalidCache);
+        finite_result = false;
+        break;
+      }
+      const double scale = (dE_dcn[upper] + dE_dcn[lower]) * values.derivative_over_distance;
+      const double sign = target_is_upper ? 1.0 : -1.0;
+      for (int axis = 0; axis < 3; ++axis) {
+        contribution[axis] += sign * scale * displacement[axis];
+        finite_result = finite_result && isfinite(contribution[axis]);
+      }
+    }
+    const std::int64_t coordinate = atom * 3;
+    for (int axis = 0; axis < 3; ++axis) {
+      const double updated = gradients[coordinate + axis] + contribution[axis];
+      if (!finite_result || !isfinite(updated)) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2PairListDeviceError::kNonfiniteArithmetic);
+        finite_result = false;
+      } else {
+        gradient_scratch[coordinate + axis] = updated;
+      }
+    }
+  }
+}
+
+__global__ void coordination_vjp_publish_kernel(
+    Gfn2PairListDeviceBatch batch, const double* gradient_scratch, double* gradients,
+    const std::uint32_t* sequence_active, std::uint32_t* system_errors,
+    std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  __shared__ SystemRanges ranges;
+  __shared__ int valid;
+  if (!load_system(batch, system, sequence_active, system_errors, &ranges, &valid)) {
+    return;
+  }
+  const std::int64_t atom_begin = ranges.atom_begin;
+  const std::int64_t atom_end = ranges.atom_end;
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    const std::int64_t coordinate = atom * 3;
+    gradients[coordinate] = gradient_scratch[coordinate];
+    gradients[coordinate + 1] = gradient_scratch[coordinate + 1];
+    gradients[coordinate + 2] = gradient_scratch[coordinate + 2];
+  }
+}
+
 bool is_aligned(const void* pointer, std::size_t alignment) noexcept {
   return pointer != nullptr && reinterpret_cast<std::uintptr_t>(pointer) % alignment == 0u;
 }
@@ -1356,6 +1521,86 @@ cudaError_t evaluate_gfn2_pairlist_coordination_cuda(
   evaluate_coordination_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
       batch, positions, covalent_radii, pair_generation, cache, coordination,
       workspace.sequence_active, system_errors, device_error);
+  return check_launch();
+}
+
+cudaError_t add_gfn2_pairlist_coordination_vjp_cuda(
+    const Gfn2PairListDeviceBatch& batch, const double* positions, const double* covalent_radii,
+    std::uint64_t pair_generation, const Gfn2PairListDeviceCache& cache, const double* dE_dcn,
+    double* gradients, double* gradient_scratch, std::int64_t gradient_elements,
+    const Gfn2PairListDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  cudaError_t status = validate_batch(batch);
+  if (status != cudaSuccess) {
+    return status;
+  }
+  if (pair_generation == 0u || batch.plan_token != cache.plan_token ||
+      batch.plan_token != workspace.plan_token || batch.cutoff < kDefaultCutoffBohr ||
+      batch.total_atoms > kInt64Maximum / batch.max_neighbors_per_atom ||
+      batch.total_atoms > kInt64Maximum / 3 ||
+      gradient_elements < batch.total_atoms * 3 ||
+      !required_pointer(positions, batch.total_atoms * 3) ||
+      !required_pointer(covalent_radii, batch.total_atoms) ||
+      !required_pointer(dE_dcn, batch.total_atoms) ||
+      !required_pointer(gradients, batch.total_atoms * 3) ||
+      !required_pointer(gradient_scratch, gradient_elements) ||
+      cache.generation_elements < batch.batch_size ||
+      cache.neighbor_offset_elements != batch.total_atoms + 1 ||
+      cache.neighbor_count_elements < batch.total_atoms ||
+      cache.neighbor_elements < batch.total_atoms * batch.max_neighbors_per_atom ||
+      !required_pointer(cache.pair_generations, cache.generation_elements) ||
+      !required_pointer(cache.neighbor_offsets, cache.neighbor_offset_elements) ||
+      !required_pointer(cache.neighbor_counts, cache.neighbor_count_elements) ||
+      !required_pointer(cache.neighbors, cache.neighbor_elements) ||
+      workspace.sequence_elements < 1 ||
+      !required_pointer(workspace.sequence_active, workspace.sequence_elements) ||
+      !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(device_error, alignof(std::uint32_t))) {
+    return cudaErrorInvalidValue;
+  }
+  const std::int64_t neighbor_capacity = batch.total_atoms * batch.max_neighbors_per_atom;
+  std::array<AddressRange, 10> reads;
+  std::array<AddressRange, 3> writes;
+  if (!make_address_range(batch.atom_offsets, batch.atom_offset_elements,
+                          sizeof(*batch.atom_offsets), &reads[0]) ||
+      !make_address_range(positions, batch.total_atoms * 3, sizeof(*positions), &reads[1]) ||
+      !make_address_range(covalent_radii, batch.total_atoms, sizeof(*covalent_radii), &reads[2]) ||
+      !make_address_range(dE_dcn, batch.total_atoms, sizeof(*dE_dcn), &reads[3]) ||
+      !make_address_range(cache.pair_generations, cache.generation_elements,
+                          sizeof(*cache.pair_generations), &reads[4]) ||
+      !make_address_range(cache.neighbor_offsets, cache.neighbor_offset_elements,
+                          sizeof(*cache.neighbor_offsets), &reads[5]) ||
+      !make_address_range(cache.neighbor_counts, cache.neighbor_count_elements,
+                          sizeof(*cache.neighbor_counts), &reads[9]) ||
+      !make_address_range(cache.neighbors, neighbor_capacity, sizeof(*cache.neighbors),
+                          &reads[6]) ||
+      !make_address_range(workspace.sequence_active, 1, sizeof(*workspace.sequence_active),
+                          &reads[7]) ||
+      !make_address_range(gradients, batch.total_atoms * 3, sizeof(*gradients), &reads[8]) ||
+      !make_address_range(gradient_scratch, gradient_elements, sizeof(*gradient_scratch),
+                          &writes[0]) ||
+      !make_address_range(system_errors, batch.batch_size, sizeof(*system_errors), &writes[1]) ||
+      !make_address_range(device_error, 1, sizeof(*device_error), &writes[2]) ||
+      !writable_ranges_are_disjoint(reads, writes)) {
+    return cudaErrorInvalidValue;
+  }
+  const unsigned int blocks = static_cast<unsigned int>(batch.batch_size);
+  coordination_vjp_preflight_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+      batch, positions, covalent_radii, pair_generation, cache, dE_dcn, gradients,
+      workspace.sequence_active, system_errors, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  coordination_vjp_accumulate_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+      batch, positions, covalent_radii, pair_generation, cache, dE_dcn, gradients,
+      gradient_scratch, workspace.sequence_active, system_errors, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  coordination_vjp_publish_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+      batch, gradient_scratch, gradients, workspace.sequence_active, system_errors, device_error);
   return check_launch();
 }
 

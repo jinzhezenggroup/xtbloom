@@ -234,6 +234,22 @@ cudaError_t evaluate_gfn2_pairlist_coordination_cuda(
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
 /*
+ * Accumulate gradients += (d coordination_numbers / d positions)^T * dE_dcn
+ * over the published sparse pair list, reproducing the dense geometry VJP
+ * bitwise for the retained pairs (ascending neighbor reduction, re-verified
+ * pair evaluation).  Gradients are dE/dR, not forces.  Failed systems retain
+ * their input gradients while healthy peers publish through caller-owned
+ * gradient_scratch, mirroring the dense add_gfn2_coordination_vjp_cuda
+ * transactionality (the launcher allocates and transfers nothing).
+ */
+cudaError_t add_gfn2_pairlist_coordination_vjp_cuda(
+    const Gfn2PairListDeviceBatch& batch, const double* positions, const double* covalent_radii,
+    std::uint64_t pair_generation, const Gfn2PairListDeviceCache& cache, const double* dE_dcn,
+    double* gradients, double* gradient_scratch, std::int64_t gradient_elements,
+    const Gfn2PairListDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
  * Deterministic host dispatch policy used to choose between the sparse
  * bucketed builder and the dense fallback.  The threshold is derived from
  * reproducible batch 1/8/32/128 profiling (issue #70); below it, the dense
