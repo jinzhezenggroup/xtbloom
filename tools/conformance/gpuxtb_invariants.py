@@ -62,6 +62,21 @@ INVARIANT_CHARGE_ATOL = 1.0e-7  # charge invariance under rotation (elementary c
 INVARIANT_NET_FORCE_ATOL = 1.0e-9  # isolated-system total-force conservation.
 INVARIANT_NET_CHARGE_ATOL = 1.0e-9  # net charge versus declared molecular charge.
 
+# Corpus-wide analytic-vs-numeric force gate. ``FINITE_DIFFERENCE_STEP`` is the
+# central-difference displacement in bohr applied to one Cartesian coordinate
+# of one atom (or one external point charge) at a time.  Measured on the
+# committed 8-case corpus through the public C ABI (fresh SCC, charge tolerance
+# 1e-10, 300 K): the numeric central difference agrees with the analytic force
+# to about 1e-7 Ha/bohr for QM atoms and about 1e-11 Ha/bohr for point charges
+# at this step, where the QM residual is dominated by SCC convergence noise
+# rather than truncation error (steps of 2e-3 and 5e-3 increase it to ~1e-6).
+# The tolerances below sit two to four orders above those margins so a genuine
+# analytic-force defect (which is the size of the force itself, ~1e-2 Ha/bohr)
+# still fails decisively on both CPU and CUDA.
+FINITE_DIFFERENCE_STEP = 1.0e-3  # bohr
+FINITE_DIFFERENCE_FORCE_ATOL = 1.0e-5  # QM analytic vs numeric force (Ha/bohr).
+FINITE_DIFFERENCE_POINT_FORCE_ATOL = 1.0e-7  # point-charge analytic vs numeric force.
+
 # Deterministic rigid transforms shared by every backend and run so failures are
 # reproducible and comparable across machines. Rotations are proper (det = +1)
 # and deliberately mix all Cartesian components; the 90-degree z rotation has
@@ -247,6 +262,31 @@ def rotated(geometry: Geometry, matrix: Sequence[Sequence[float]]) -> Geometry:
         lambda vector: rotate_vector(matrix, vector),
     )
     return result
+
+
+def _displaced_copy(
+    geometry: Geometry, vertex_index: int, axis: int, delta: float, point: bool
+) -> Geometry:
+    """Return a copy with one atom or point-charge coordinate shifted by delta."""
+    result = copy.deepcopy(geometry)
+    target = result.point_positions if point else result.positions
+    coordinate = 3 * vertex_index + axis
+    target[coordinate] += delta
+    return result
+
+
+def displaced_atom(
+    geometry: Geometry, atom_index: int, axis: int, delta: float
+) -> Geometry:
+    """Return a copy with one atom's Cartesian coordinate shifted by delta (bohr)."""
+    return _displaced_copy(geometry, atom_index, axis, delta, point=False)
+
+
+def displaced_point(
+    geometry: Geometry, point_index: int, axis: int, delta: float
+) -> Geometry:
+    """Return a copy with one point charge's coordinate shifted by delta (bohr)."""
+    return _displaced_copy(geometry, point_index, axis, delta, point=True)
 
 
 def geometry_storage(geometries: Sequence[Geometry]) -> public_api.PublicBatchStorage:
@@ -598,6 +638,85 @@ def gate_charge_conservation(
         )
 
 
+def gate_central_finite_difference(
+    solver: Callable[[Sequence[Geometry]], list[InvariantResult]],
+    baseline: Sequence[InvariantResult],
+    geometries: Sequence[Geometry],
+    step: float,
+    atol_force: float,
+    atol_point_force: float,
+    failures: list[str],
+) -> None:
+    """Compare analytic forces with central finite differences of energy.
+
+    For every corpus case, every QM atom axis and (when present) every external
+    point-charge axis is displaced by ``+-step`` in isolation and the singleton
+    energy evaluates are combined into the numerical force
+    ``-(E(+)-E(-)) / (2*step)``, which must match the analytic force published
+    by the public C ABI for the undisplaced geometry.  This exercises the whole
+    corpus (including QM/MM coupling and point-charge force signs) through the
+    same descriptor path as the golden runner, complementing the analytic golden
+    and self-consistency gates with a direct force-definition check.
+    """
+    by_id = {result.case_id: result for result in baseline}
+    for geometry in geometries:
+        analytic = by_id[geometry.case_id]
+        for atom in range(len(geometry.atomic_numbers)):
+            for axis in range(3):
+                energies: list[float] = []
+                for delta in (-step, step):
+                    displaced = displaced_atom(geometry, atom, axis, delta)
+                    single = solver([displaced])
+                    if len(single) != 1 or single[0].case_id != geometry.case_id:
+                        raise conformance.ConformanceError(
+                            "finite-difference solve returned an unexpected "
+                            f"result set for {geometry.case_id} atom {atom} axis {axis}"
+                        )
+                    energies.append(single[0].energy)
+                numerical = -(energies[1] - energies[0]) / (2.0 * step)
+                analytic_force = analytic.forces[3 * atom + axis]
+                passed, message = _compare(
+                    geometry.case_id,
+                    f"forces_hartree_per_bohr finite_difference atom{atom}_axis{axis}",
+                    [analytic_force],
+                    [numerical],
+                    atol_force,
+                )
+                _report(failures, passed, message)
+        for point in range(len(geometry.point_values)):
+            for axis in range(3):
+                energies: list[float] = []
+                for delta in (-step, step):
+                    displaced = displaced_point(geometry, point, axis, delta)
+                    single = solver([displaced])
+                    if len(single) != 1 or single[0].case_id != geometry.case_id:
+                        raise conformance.ConformanceError(
+                            "finite-difference solve returned an unexpected "
+                            f"result set for {geometry.case_id} point {point} "
+                            f"axis {axis}"
+                        )
+                    energies.append(single[0].energy)
+                numerical = -(energies[1] - energies[0]) / (2.0 * step)
+                analytic_force = analytic.point_forces[3 * point + axis]
+                label = (
+                    f"point_charge_forces_hartree_per_bohr finite_difference "
+                    f"point{point}_axis{axis}"
+                )
+                if not analytic.point_forces:
+                    raise conformance.ConformanceError(
+                        f"{geometry.case_id} requests point-charge forces but the "
+                        "baseline result has none"
+                    )
+                passed, message = _compare(
+                    geometry.case_id,
+                    label,
+                    [analytic_force],
+                    [numerical],
+                    atol_point_force,
+                )
+                _report(failures, passed, message)
+
+
 def run_invariant_checks(
     solver: Callable[[Sequence[Geometry]], list[InvariantResult]],
     geometries: Sequence[Geometry],
@@ -679,6 +798,16 @@ def run_invariant_checks(
     gate_force_conservation(sequential, INVARIANT_NET_FORCE_ATOL, failures)
     print("charge conservation")  # noqa: T201 - CLI validation report
     gate_charge_conservation(sequential, INVARIANT_NET_CHARGE_ATOL, failures)
+    print("central finite differences")  # noqa: T201 - CLI validation report
+    gate_central_finite_difference(
+        solver,
+        sequential,
+        geometries,
+        FINITE_DIFFERENCE_STEP,
+        FINITE_DIFFERENCE_FORCE_ATOL,
+        FINITE_DIFFERENCE_POINT_FORCE_ATOL,
+        failures,
+    )
     return failures
 
 
