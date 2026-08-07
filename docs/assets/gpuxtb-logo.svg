@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="240" viewBox="0 0 880 240" role="img" aria-labelledby="title description">
+  <title id="title">gpuxtb logo</title>
+  <desc id="description">An abstract molecular orbital and parallel compute mark beside the gpuxtb wordmark.</desc>
+
+  <defs>
+    <style>
+      .ink { fill: none; stroke: #14212b; stroke-linecap: round; stroke-linejoin: round; }
+      .mint { fill: none; stroke: #52d6b2; stroke-linecap: round; stroke-linejoin: round; }
+      .blue { fill: none; stroke: #4b72e8; stroke-linecap: round; stroke-linejoin: round; }
+      .amber { fill: none; stroke: #eead45; stroke-linecap: round; stroke-linejoin: round; }
+      .wordmark { fill: #14212b; }
+      @media (prefers-color-scheme: dark) {
+        .ink { stroke: #f3f7f6; }
+        .wordmark { fill: #f3f7f6; }
+      }
+    </style>
+  </defs>
+
+  <!-- The open outer loop suggests a molecular orbital and the lowercase g. -->
+  <g transform="translate(18 30)">
+    <path class="ink" stroke-width="12" d="M137 74c-6-31-30-52-61-52C41 22 18 48 18 83c0 36 25 62 60 62 31 0 54-19 60-49"/>
+    <path class="ink" stroke-width="12" d="M137 74v43c0 31-18 49-48 49"/>
+
+    <!-- Three finite tracks turn the orbital into a parallel workload. -->
+    <path class="mint" stroke-width="8" d="M46 63c16-13 37-19 63-16"/>
+    <path class="blue" stroke-width="8" d="M38 86c20-11 43-14 72-9"/>
+    <path class="amber" stroke-width="8" d="M46 110c18-8 38-8 58-3"/>
+
+    <!-- Small nodes are the atoms / work items in a ragged batch. -->
+    <circle cx="111" cy="47" r="7" fill="#52d6b2"/>
+    <circle cx="112" cy="77" r="7" fill="#4b72e8"/>
+    <circle cx="106" cy="107" r="7" fill="#eead45"/>
+  </g>
+
+  <g transform="translate(210 0)">
+    <text class="wordmark" x="0" y="145" font-family="Inter, Avenir Next, Helvetica Neue, DejaVu Sans, sans-serif" font-size="104" font-weight="700" letter-spacing="0">gpu</text>
+    <text x="224" y="145" fill="#4b72e8" font-family="Inter, Avenir Next, Helvetica Neue, DejaVu Sans, sans-serif" font-size="104" font-weight="700" letter-spacing="0">xtb</text>
+    <path d="M4 177h432" stroke="#52d6b2" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="454" cy="177" r="5" fill="#eead45"/>
+  </g>
+</svg>

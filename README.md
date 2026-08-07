@@ -1,5 +1,7 @@
 # gpuxtb
 
+<img src="docs/assets/gpuxtb-logo.svg" alt="gpuxtb logo" width="440">
+
 gpuxtb is a native GFN2-xTB inference library for workloads made of many
 small and medium molecular systems. It combines a C++17 implementation, CPU
 and CUDA backends, one stable C ABI, and Python interfaces built on that same
