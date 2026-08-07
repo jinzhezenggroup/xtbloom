@@ -172,24 +172,13 @@ def test_producer_imports_without_copy_via_numpy() -> None:
     arena.close()
 
 
-def test_producer_imports_via_torch_and_jax_on_host() -> None:
-    """PyTorch and JAX consume the host arena slice through the producer.
-
-    Real-provider device imports live in the CUDA matrix; this host-path test
-    proves the same producer object is consumable by torch and JAX on CPU, so
-    the supported provider/device combinations are all covered honestly.
-    """
+def test_producer_imports_via_torch_on_host() -> None:
+    """PyTorch consumes and aliases the host arena slice."""
     import importlib.util
 
     if importlib.util.find_spec("torch") is None:
         pytest.skip("torch is not installed")
-    if importlib.util.find_spec("jax") is None:
-        pytest.skip("jax is not installed")
-    import jax
-    import jax.numpy as jnp
     import torch
-
-    jax.config.update("jax_enable_x64", True)
 
     arena = _host_arena()
     producer = _filled_buffer(arena)
@@ -203,9 +192,31 @@ def test_producer_imports_via_torch_and_jax_on_host() -> None:
         _producer_host_pointer(arena) + producer.byte_offset
     )
 
-    j_import = jax.dlpack.from_dlpack(producer)
+    producer.close()
+    arena.close()
+
+
+def test_producer_imports_via_jax_on_host() -> None:
+    """JAX consumes the host arena slice without copying it."""
+    import importlib.util
+
+    if importlib.util.find_spec("jax") is None:
+        pytest.skip("jax is not installed")
+    import jax
+    import jax.numpy as jnp
+
+    jax.config.update("jax_enable_x64", True)
+
+    arena = _host_arena()
+    producer = _filled_buffer(arena)
+    expected = np.arange(8, 16, dtype=np.float64) * 2.0
+
+    j_import = jax.dlpack.from_dlpack(producer, copy=False)
     assert j_import.dtype == jnp.float64
     np.testing.assert_array_equal(np.asarray(j_import), expected)
+    assert j_import.unsafe_buffer_pointer() == int(
+        _producer_host_pointer(arena) + producer.byte_offset
+    )
 
     producer.close()
     arena.close()

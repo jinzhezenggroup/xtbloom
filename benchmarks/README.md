@@ -310,18 +310,41 @@ compares `result_memory="cuda"` (one packed gpuxtb-owned device arena per call,
 returned as DLPackResultBuffer producers) with the caller-owned `out=` steady
 state on a real NVIDIA GPU through the public `gpuxtb.ArrayBatch` Python API.
 The timed interval is a synchronous `perf_counter_ns` window around each public
-`compute()` with `torch.cuda.synchronize()` on both sides; the arena mode
-closes every producer (and the result) inside the interval so the native
-`cudaFree` is measured, while Python garbage collection is kept outside the
-window so interpreter GC overhead cannot masquerade as gpuxtb cost. Correctness
-is gated per mode against the host CPU `compute_arrays` reference, and the JSON
-records raw per-sample latencies, full environment/library identity, and the
-timing boundary. The reproducer and NSight-derived memcpy/sync/api evidence are
-archived under `benchmarks/evidence/issue-214/`.
+`compute()` with `torch.cuda.synchronize()` on both sides. Arena/out calls are
+counterbalanced AB/BA pairs to limit temporal order bias; the final evidence
+gate is an arena mean no more than 5% above `out=`. Every producer is closed
+inside the timed interval so the native `cudaFree` is measured. Correctness is
+gated before and after timing against an explicit CPU `compute_arrays` reference
+(finite energy/force/charge parity, SCC status, and convergence). The JSON
+records raw samples, paired deltas and confidence bounds, full environment and
+adjacent CMake identity, and the timing boundary. The reproducer and sanitized
+Nsight-derived memcpy/sync/api/size evidence are archived under
+`benchmarks/evidence/issue-214/`.
 
 ```bash
-python benchmarks/dlpack_result_memory.py --warmup 30 --repetitions 300 \
+PYTHONPATH="$PWD/python" GPUXTB_LIBRARY="$PWD/build/pr226-cuda/libgpuxtb.so.0.1.0" \
+python benchmarks/dlpack_result_memory.py \
+  --library "$PWD/build/pr226-cuda/libgpuxtb.so.0.1.0" \
+  --warmup 30 --repetitions 300 \
   --output benchmarks/evidence/issue-214/<date>-<machine>/dlpack-result-memory.json
+```
+
+For each sanitized profiler capture, use the same committed runner. Profile
+mode omits the correctness and artifact-publication calls from the target
+process so the two output paths remain directly comparable:
+
+```bash
+nsys profile -o <mode> --force-overwrite true --cuda-memory-usage=true \
+  --trace=cuda,nvtx,osrt \
+  env PYTHONPATH="$PWD/python" \
+  GPUXTB_LIBRARY="$PWD/build/pr226-cuda/libgpuxtb.so.0.1.0" \
+  python benchmarks/dlpack_result_memory.py \
+  --library "$PWD/build/pr226-cuda/libgpuxtb.so.0.1.0" \
+  --profile-mode <arena|out> --warmup 3 --repetitions 10
+nsys stats --report cuda_gpu_kern_sum --format csv --force-export=true <mode>.nsys-rep
+nsys stats --report cuda_gpu_mem_time_sum --format csv --force-export=true <mode>.nsys-rep
+nsys stats --report cuda_gpu_mem_size_sum --format csv --force-export=true <mode>.nsys-rep
+nsys stats --report cuda_api_trace --format csv --force-export=true <mode>.nsys-rep
 ```
 
 Hardware-free protocol tests (no CUDA device or provider import needed):
