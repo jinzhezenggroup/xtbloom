@@ -7,7 +7,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
+
+import numpy as np
 
 from benchmarks import dlpack_result_memory as benchmark
 
@@ -79,6 +82,20 @@ class DlpackResultMemoryProtocolTest(unittest.TestCase):
             self.assertRaisesRegex(SystemExit, "CUDA backend is not usable"),
         ):
             benchmark._require_gpu()
+
+    def test_cpu_reference_gate_uses_array_batch_status_contract(self) -> None:
+        """ArrayBatchResult status arrays gate the explicit CPU reference."""
+        result = SimpleNamespace(
+            energies=np.array([-1.0]),
+            forces=np.zeros((1, 3)),
+            charges=np.zeros(1),
+            per_system_status=np.array([0], dtype=np.int32),
+            scc_converged=np.array([1], dtype=np.uint8),
+        )
+        benchmark._require_cpu_reference_success(result)
+        result.scc_converged[0] = 0
+        with self.assertRaisesRegex(RuntimeError, "CPU correctness reference failed"):
+            benchmark._require_cpu_reference_success(result)
 
     def test_dirty_source_is_rejected_before_gpu_work(self) -> None:
         """Final evidence cannot be emitted from unrecoverable source bytes."""

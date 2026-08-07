@@ -278,6 +278,22 @@ def _measure_pair(
             batch.close()
 
 
+def _require_cpu_reference_success(result: object) -> None:
+    """Reject a failed or non-finite CPU reference before CUDA comparison."""
+    status = np.asarray(result.per_system_status)
+    converged = np.asarray(result.scc_converged)
+    finite = all(
+        np.isfinite(np.asarray(getattr(result, name))).all()
+        for name in ("energies", "forces", "charges")
+    )
+    if not finite or np.any(status != 0) or np.any(converged != 1):
+        raise RuntimeError(
+            "CPU correctness reference failed: "
+            f"finite={finite}, status={status.tolist()}, "
+            f"converged={converged.tolist()}"
+        )
+
+
 def _correctness(packed: dict[str, np.ndarray], mode: str) -> dict[str, object]:
     """Require finite, converged CUDA results within the explicit CPU gate."""
     import torch
@@ -286,7 +302,7 @@ def _correctness(packed: dict[str, np.ndarray], mode: str) -> dict[str, object]:
     host = compute_arrays(
         **{name: value.copy() for name, value in packed.items()}, backend="cpu"
     )
-    host.raise_for_status()
+    _require_cpu_reference_success(host)
     batch = ArrayBatch(**packed, backend="cuda", stream=1)
     natoms = len(packed["atomic_numbers"])
     result = None
