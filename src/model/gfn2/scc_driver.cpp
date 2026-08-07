@@ -816,14 +816,30 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
     }
   }
 
-  /* Run every mixer transition against an unpublished clone. This makes the
-   * mixer history and wavefunction one transaction: even post-mix qsh->qat
-   * validation can fail without advancing the public history. */
-  std::memcpy(workspace.staged_mixer_state.workspace_base, mixer_state.workspace_base,
-              data.mixer.state_size_bytes());
+  /* Run every active mixer transition against a per-system staged copy. The
+   * prepare seam stages only the target system's history, so the public mixer
+   * history of converged and failed peers is never copied; commit publishes
+   * only the same system back after its post-mix atomic-charge validation
+   * passed. Each system's mixer history, wavefunction, and driver status thus
+   * form one per-system transaction whose cost tracks active-system history
+   * rather than the total batch history.
+   *
+   * Binding and initialized-state errors are rejected whole-call by
+   * validate_iteration_bindings before this loop, so the only structural
+   * returns inside it are defensive and unreachable; every numerical failure
+   * below is isolated per system, and a failed system's public history never
+   * advances ahead of its public wavefunction. */
   for (std::size_t system = 0u; system < batch; ++system) {
     if (workspace.active_systems[system] != 1u) {
       continue;
+    }
+
+    status =
+        prepare_scc_mixer_system_transaction_cpu(data.mixer, static_cast<std::int64_t>(system),
+                                                 mixer_state, workspace.staged_mixer_state, error);
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      /* Defensive, unreachable after validate_iteration_bindings. */
+      return status;
     }
 
     copy_raw_population_system(data.wavefunction, system, workspace);
@@ -831,11 +847,15 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
                                         workspace.staged_wavefunction, workspace.staged_mixer_state,
                                         workspace.mixer_workspace, error);
     if (status == GPUXTB_STATUS_INVALID_ARGUMENT) {
-      /* No public state has been changed, so a structural failure remains
-       * whole-call atomic even after earlier staged peers succeeded. */
+      /* Defensive, unreachable after validate_iteration_bindings. Earlier peers
+       * were already committed per system; only the failing system's staged
+       * transaction is discarded. */
       return status;
     }
     if (status != GPUXTB_STATUS_SUCCESS) {
+      /* Publish only the failed status. The system's public history arrays
+       * remain byte-identical to the input; its transaction is discarded. */
+      mixer_state.system_statuses[system] = workspace.staged_mixer_state.system_statuses[system];
       workspace.active_systems[system] = 3u;
       continue;
     }
@@ -843,8 +863,13 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
     const double old_free_energy = old_iteration == 0u ? 0.0 : state.free_energies[system];
     const double energy_change = workspace.free_energies[system] - old_free_energy;
     if (!std::isfinite(old_free_energy) || !std::isfinite(energy_change)) {
-      error = "SCC driver energy convergence history is not finite";
-      return GPUXTB_STATUS_INTERNAL_ERROR;
+      /* Non-finite convergence history of one active system is data-level:
+       * discard this system's staged transaction so successful peers still
+       * commit. */
+      workspace.staged_mixer_state.system_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
+      mixer_state.system_statuses[system] = workspace.staged_mixer_state.system_statuses[system];
+      workspace.active_systems[system] = 3u;
+      continue;
     }
     const bool residual_converged =
         workspace.staged_mixer_state.residual_rms[system] < data.mixer.rms_tolerance();
@@ -861,19 +886,24 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
     }
     status = rebuild_mixed_atomic_charges(data, system, workspace, error);
     if (status != GPUXTB_STATUS_SUCCESS) {
-      /* Discard the entire staged mixer transaction. This path is expected
-       * only for a finite-but-unrepresentable shell reduction, and it must
-       * never leave public history ahead of the public wavefunction. */
-      return status;
+      /* Discard this system's staged mixer transaction: its public history
+       * never advances ahead of its public wavefunction. This path is expected
+       * only for a finite-but-unrepresentable shell reduction, and it is
+       * isolated per system so successful peers can still commit. */
+      workspace.staged_mixer_state.system_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
+      mixer_state.system_statuses[system] = workspace.staged_mixer_state.system_statuses[system];
+      workspace.active_systems[system] = 3u;
+      continue;
     }
     workspace.active_systems[system] = 4u;
+    status =
+        commit_scc_mixer_system_transaction_cpu(data.mixer, static_cast<std::int64_t>(system),
+                                                workspace.staged_mixer_state, mixer_state, error);
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      /* Defensive, unreachable after validate_iteration_bindings. */
+      return status;
+    }
   }
-
-  /* Publication starts only after every active raw result and mixed atomic
-   * charge has passed. Mixer numerical failures modify only their staged
-   * status entry; their history arrays remain byte-identical to the input. */
-  std::memcpy(mixer_state.workspace_base, workspace.staged_mixer_state.workspace_base,
-              data.mixer.state_size_bytes());
 
   gpuxtb_status_t first_failure = GPUXTB_STATUS_SUCCESS;
   bool first_failure_was_periodic = false;

@@ -350,6 +350,45 @@ gpuxtb_status_t validate_call(const SccMixerPlan& plan, const WavefunctionView& 
   return GPUXTB_STATUS_SUCCESS;
 }
 
+gpuxtb_status_t validate_transaction(const SccMixerPlan& plan, const SccMixerState& source,
+                                     const SccMixerState& staged, std::string& error) {
+  gpuxtb_status_t status = validate_plan(plan, error);
+  if (status != GPUXTB_STATUS_SUCCESS ||
+      (status = validate_state(plan, source, error)) != GPUXTB_STATUS_SUCCESS ||
+      (status = validate_state(plan, staged, error)) != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  const SccMixerPlanData& data = *plan.identity();
+  AddressRange source_range;
+  AddressRange staged_range;
+  AddressRange plan_descriptor;
+  AddressRange source_descriptor;
+  AddressRange staged_descriptor;
+  AddressRange error_descriptor;
+  if (!make_range(source.workspace_base, data.state_size_bytes, source_range) ||
+      !make_range(staged.workspace_base, data.state_size_bytes, staged_range) ||
+      !make_range(&plan, sizeof(plan), plan_descriptor) ||
+      !make_range(&source, sizeof(source), source_descriptor) ||
+      !make_range(&staged, sizeof(staged), staged_descriptor) ||
+      !make_range(&error, sizeof(error), error_descriptor) ||
+      ranges_overlap(source_range, staged_range) || overlaps_plan_storage(plan, source_range) ||
+      overlaps_plan_storage(plan, staged_range)) {
+    error = "SCC mixer transaction source and staged storage must be disjoint and unaliased";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const std::array<AddressRange, 4> controls{
+      {plan_descriptor, source_descriptor, staged_descriptor, error_descriptor}};
+  for (const AddressRange& active : {source_range, staged_range}) {
+    for (const AddressRange& control : controls) {
+      if (ranges_overlap(active, control)) {
+        error = "SCC mixer transaction storage overlaps a control object";
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
+    }
+  }
+  return GPUXTB_STATUS_SUCCESS;
+}
+
 std::size_t system_index(std::int64_t system) { return static_cast<std::size_t>(system); }
 
 std::size_t system_dimension(const SccMixerPlanData& data, std::size_t system) {
@@ -410,6 +449,40 @@ void copy_raw_components(const SccMixerPlanData& data, const WavefunctionView& w
                          std::size_t system, double* destination) {
   for_each_raw_component(data, wavefunction, system,
                          [&](std::size_t packed, double value) { destination[packed] = value; });
+}
+
+/*
+ * Copy every mixer record that belongs to exactly one system between two
+ * full-layout bindings. The history buffers, omega tiles, and the batch-major
+ * scalar records of other systems are never read or written, which is what
+ * lets a per-system transaction cost scale with active-system history instead
+ * of the total batch history.
+ */
+void copy_mixer_system_state(const SccMixerPlanData& data, std::size_t system,
+                             const SccMixerState& source, const SccMixerState& destination) {
+  const std::size_t dimension = system_dimension(data, system);
+  const std::size_t vector_offset = system_vector_offset(data, system);
+  const std::size_t history_offset = system_history_offset(data, system);
+  const std::size_t memory = static_cast<std::size_t>(data.history_size);
+  const std::size_t history_elements = dimension * memory;
+  std::copy_n(source.current_inputs + vector_offset, dimension,
+              destination.current_inputs + vector_offset);
+  std::copy_n(source.previous_inputs + vector_offset, dimension,
+              destination.previous_inputs + vector_offset);
+  std::copy_n(source.previous_residuals + vector_offset, dimension,
+              destination.previous_residuals + vector_offset);
+  std::copy_n(source.df_history + history_offset, history_elements,
+              destination.df_history + history_offset);
+  std::copy_n(source.u_history + history_offset, history_elements,
+              destination.u_history + history_offset);
+  std::copy_n(source.omega + system * memory, memory, destination.omega + system * memory);
+  destination.residual_rms[system] = source.residual_rms[system];
+  destination.residual_maximum[system] = source.residual_maximum[system];
+  destination.iterations[system] = source.iterations[system];
+  destination.restart_counts[system] = source.restart_counts[system];
+  destination.system_statuses[system] = source.system_statuses[system];
+  destination.initialized[system] = source.initialized[system];
+  destination.converged[system] = source.converged[system];
 }
 
 gpuxtb_status_t record_numeric_failure(const SccMixerState& state, std::size_t system,
@@ -1127,6 +1200,50 @@ gpuxtb_status_t mix_scc_broyden_batch_cpu(const SccMixerPlan& plan,
     error = std::move(first_error);
     return first_failure;
   }
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t prepare_scc_mixer_system_transaction_cpu(const SccMixerPlan& plan,
+                                                         std::int64_t system,
+                                                         const SccMixerState& source,
+                                                         const SccMixerState& staged,
+                                                         std::string& error) {
+  gpuxtb_status_t status = validate_transaction(plan, source, staged, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  const SccMixerPlanData& data = *plan.identity();
+  if (system < 0 || system >= data.batch_size) {
+    error = "SCC mixer transaction requires a valid system index";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t index = system_index(system);
+  if (source.initialized[index] != 1u) {
+    error = "SCC mixer transaction source system must be initialized";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  copy_mixer_system_state(data, index, source, staged);
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t commit_scc_mixer_system_transaction_cpu(const SccMixerPlan& plan,
+                                                        std::int64_t system,
+                                                        const SccMixerState& staged,
+                                                        const SccMixerState& destination,
+                                                        std::string& error) {
+  gpuxtb_status_t status = validate_transaction(plan, staged, destination, error);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  const SccMixerPlanData& data = *plan.identity();
+  if (system < 0 || system >= data.batch_size) {
+    error = "SCC mixer transaction requires a valid system index";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t index = system_index(system);
+  copy_mixer_system_state(data, index, staged, destination);
   error.clear();
   return GPUXTB_STATUS_SUCCESS;
 }
