@@ -495,6 +495,64 @@ bool validate_top_level_shape(const Gfn2SccIterationDevicePlan& plan, Validator&
   return true;
 }
 
+/*
+ * ABI v3 projection authority gate.  The plan's sealed common projections are
+ * the single borrowing authority for every topology-derived leaf.  This step
+ * proves each projection is a valid exact-pointer projection of the master
+ * topology (or, for element identity, a valid setup-owned seal), so a later
+ * leaf that names a different-but-equal array is rejected here once instead of
+ * every leaf validator re-deriving the master.  It never dereferences device
+ * arrays and performs no CUDA work.
+ */
+bool validate_plan_projection_identity(const Gfn2SccIterationDevicePlan& plan,
+                                       Validator& validator) noexcept {
+  const Gfn2PlanSchemaDiagnostic atom = validate_gfn2_atom_projection_binding(
+      plan.topology, plan.atom_projection, Gfn2PlanMemorySpace::kCudaDevice);
+  if (atom.error != Gfn2PlanSchemaError::kSuccess) {
+    return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology, atom.index);
+  }
+  const Gfn2PlanSchemaDiagnostic shell = validate_gfn2_shell_ownership_projection_binding(
+      plan.topology, plan.shell_ownership_projection, Gfn2PlanMemorySpace::kCudaDevice);
+  if (shell.error != Gfn2PlanSchemaError::kSuccess) {
+    return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology, shell.index);
+  }
+  const Gfn2PlanSchemaDiagnostic ao = validate_gfn2_ao_matrix_projection_binding(
+      plan.topology, plan.ao_matrix_projection, Gfn2PlanMemorySpace::kCudaDevice);
+  if (ao.error != Gfn2PlanSchemaError::kSuccess) {
+    return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology, ao.index);
+  }
+  /* Packed-all-pair and AO-bucket projections are consumed only by the dense
+   * geometry/AES2 and eigensolver/P-W paths respectively.  They are required
+   * exactly when the master topology declares that domain; otherwise the
+   * projection must remain the canonical empty form so a stale foreign
+   * projection can never be mistaken for this plan. */
+  if (plan.topology.pair_map_kind == Gfn2PairMapKind::kPackedLowerTriangle) {
+    const Gfn2PlanSchemaDiagnostic pairs = validate_gfn2_packed_all_pair_projection_binding(
+        plan.topology, plan.packed_all_pair_projection, Gfn2PlanMemorySpace::kCudaDevice);
+    if (pairs.error != Gfn2PlanSchemaError::kSuccess) {
+      return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology, pairs.index);
+    }
+  } else if (plan.packed_all_pair_projection.plan_token != 0u) {
+    return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology);
+  }
+  if (plan.topology.bucket_count != 0) {
+    const Gfn2PlanSchemaDiagnostic buckets = validate_gfn2_ao_bucket_projection_binding(
+        plan.topology, plan.ao_bucket_projection, Gfn2PlanMemorySpace::kCudaDevice);
+    if (buckets.error != Gfn2PlanSchemaError::kSuccess) {
+      return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology,
+                            buckets.index);
+    }
+  } else if (plan.ao_bucket_projection.plan_token != 0u) {
+    return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology);
+  }
+  const Gfn2PlanSchemaDiagnostic element = validate_gfn2_element_identity_projection_binding(
+      plan.element_identity_projection, Gfn2PlanMemorySpace::kCudaDevice);
+  if (element.error != Gfn2PlanSchemaError::kSuccess) {
+    return validator.fail(BindingError::kInvalidTopology, BindingField::kD4, element.index);
+  }
+  return true;
+}
+
 bool validate_plan_shapes(const Gfn2SccIterationDevicePlan& plan, Validator& validator,
                           std::int64_t dipoles, std::int64_t quadrupoles, std::int64_t two_batch,
                           std::int64_t mixer_vector) noexcept {
@@ -2702,6 +2760,7 @@ Gfn2SccIterationBindingDiagnostic validate_gfn2_scc_iteration_binding_cuda(
   std::int64_t mixer_vector = 0;
   if (!validate_top_level_shape(plan, validator, dipoles, quadrupoles, two_batch, two_orbitals,
                                 mixer_vector) ||
+      !validate_plan_projection_identity(plan, validator) ||
       !validate_plan_tokens(plan, input, state, workspace, validator) ||
       !validate_plan_shapes(plan, validator, dipoles, quadrupoles, two_batch, mixer_vector) ||
       !validate_plan_pointer_shapes(plan, validator) ||

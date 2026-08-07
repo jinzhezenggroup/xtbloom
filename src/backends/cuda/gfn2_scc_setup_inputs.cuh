@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "backends/cuda/gfn2_plan_schema.cuh"
 #include "backends/cuda/gfn2_scc_iteration.cuh"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/basis.hpp"

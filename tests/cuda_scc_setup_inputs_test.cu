@@ -258,6 +258,29 @@ int test_all_optional_four_system_upload() {
   CHECK(plan.wavefunction_layout.spin_channels == fixture.device_wavefunction.spin_channels);
   CHECK(plan.wavefunction_layout.spin_shell_offsets ==
         fixture.device_wavefunction.spin_shell_offsets);
+  /* ABI v3: the plan publishes the sealed common projections as the sole
+   * borrowing authority, with exact pointer identity to the master topology. */
+  CHECK(plan.atom_projection.plan_token == kPlanToken);
+  CHECK(plan.atom_projection.atom_offsets == plan.topology.atom_offsets);
+  CHECK(plan.shell_ownership_projection.batch_shell_offsets ==
+        plan.topology.batch_shell_offsets);
+  CHECK(plan.shell_ownership_projection.atom_shell_offsets == plan.topology.atom_shell_offsets);
+  CHECK(plan.shell_ownership_projection.shell_to_atom == plan.topology.shell_to_atom);
+  CHECK(plan.ao_matrix_projection.batch_orbital_offsets ==
+        plan.topology.batch_orbital_offsets);
+  CHECK(plan.ao_matrix_projection.matrix_offsets == plan.topology.matrix_offsets);
+  CHECK(plan.ao_matrix_projection.shell_orbital_offsets == plan.topology.shell_orbital_offsets);
+  CHECK(plan.ao_matrix_projection.orbital_to_shell == plan.topology.orbital_to_shell);
+  CHECK(plan.ao_matrix_projection.orbital_to_atom == plan.topology.orbital_to_atom);
+  CHECK(plan.ao_bucket_projection.plan_token == kPlanToken);
+  CHECK(plan.ao_bucket_projection.bucket_offsets == plan.topology.bucket_offsets);
+  CHECK(plan.ao_bucket_projection.bucket_systems == plan.topology.bucket_systems);
+  /* Production topology uses kNone pair maps (packed pair offsets live in the
+   * setup-owned dense geometry/AES2 domain), so the packed projection stays
+   * the canonical empty form. */
+  CHECK(plan.packed_all_pair_projection.plan_token == 0u);
+  CHECK(plan.element_identity_projection.plan_token == kPlanToken);
+  CHECK(plan.element_identity_projection.element_fingerprint != 0u);
   CHECK(plan.publication_plan.wavefunction_layout.spin_channels ==
         fixture.device_wavefunction.spin_channels);
   CHECK(plan.publication_plan.wavefunction_layout.spin_shell_offsets ==

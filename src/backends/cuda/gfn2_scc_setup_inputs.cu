@@ -282,6 +282,9 @@ struct Gfn2SccSetupInputs::Impl {
   Gfn2EigensolverOptions eigensolver_options{};
   Gfn2RaggedTopologyView host_topology{};
   Gfn2WavefunctionLayoutView host_wavefunction{};
+  /* Setup-owned element identity seal over the exact atomic-number ordering;
+   * reused as the plan's CUDA element-identity projection in bind(). */
+  Gfn2ElementIdentityProjectionView host_element_identity{};
   std::int64_t spin_coupling_matrix_count = 0;
   std::int64_t mixer_vector_elements = 0;
   bool d4_enabled = false;
@@ -793,6 +796,15 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     pack_array(image, candidate->layout.covalent_radii, sources.covalent_radii);
     pack_array(image, candidate->layout.positions, sources.positions);
     pack_array(image, candidate->layout.atomic_numbers, sources.atomic_numbers);
+    /* Element identity is setup-owned term-specific input: seal the exact
+     * atomic-number ordering and plan token now so the device plan can borrow
+     * a CUDA element-identity projection without re-deriving atomic numbers. */
+    if (project_gfn2_element_identity_projection_host(
+            sources.atomic_numbers.data, sources.atomic_numbers.elements, plan_token,
+            candidate->host_element_identity)
+            .error != Gfn2PlanSchemaError::kSuccess) {
+      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kD4);
+    }
     pack_array(image, candidate->layout.h0, sources.h0);
     pack_array(image, candidate->layout.overlap, sources.overlap);
     pack_array(image, candidate->layout.dipole_integrals, sources.dipole_integrals);
@@ -948,6 +960,51 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
   candidate.geometry_generation = impl_->geometry_generation;
   candidate.topology = device_topology;
   candidate.wavefunction_layout = device_wavefunction;
+  /* ABI v3: publish the sealed common projections as the plan's sole borrowing
+   * authority.  Every leaf below already subscribes these exact arrays; the
+   * iteration binding validator proves each leaf's pointer/count identity
+   * against these projections once instead of re-deriving the master.  The
+   * binders return success and clear the projection on rejection, so the
+   * published-token check below is the fail-closed gate. */
+  static_cast<void>(bind_gfn2_atom_projection_cuda(device_topology, candidate.atom_projection));
+  static_cast<void>(bind_gfn2_shell_ownership_projection_cuda(
+      device_topology, candidate.shell_ownership_projection));
+  static_cast<void>(
+      bind_gfn2_ao_matrix_projection_cuda(device_topology, candidate.ao_matrix_projection));
+  if (device_topology.pair_map_kind == Gfn2PairMapKind::kPackedLowerTriangle) {
+    static_cast<void>(bind_gfn2_packed_all_pair_projection_cuda(
+        device_topology, candidate.packed_all_pair_projection));
+  }
+  if (device_topology.bucket_count != 0) {
+    static_cast<void>(
+        bind_gfn2_ao_bucket_projection_cuda(device_topology, candidate.ao_bucket_projection));
+  }
+  /* The topology binders clear the projection on rejection and return success,
+   * so setup must fail closed when any sealed projection is not published. */
+  if (candidate.atom_projection.plan_token != token ||
+      candidate.shell_ownership_projection.plan_token != token ||
+      candidate.ao_matrix_projection.plan_token != token ||
+      (device_topology.pair_map_kind == Gfn2PairMapKind::kPackedLowerTriangle &&
+       candidate.packed_all_pair_projection.plan_token != token) ||
+      (device_topology.bucket_count != 0 &&
+       candidate.ao_bucket_projection.plan_token != token)) {
+    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kTopology);
+  }
+  /* Element identity is setup-owned: reuse the host seal but name the uploaded
+   * device atomic-number array for the CUDA descriptor. */
+  {
+    const std::int32_t* device_atomic_numbers =
+        impl_->layout.atomic_numbers.elements == 0
+            ? nullptr
+            : cptr(impl_->layout.atomic_numbers, static_cast<std::int32_t*>(nullptr));
+    static_cast<void>(bind_gfn2_element_identity_projection_cuda(
+        impl_->host_element_identity, device_atomic_numbers,
+        candidate.element_identity_projection));
+    if (candidate.element_identity_projection.plan_token != token ||
+        impl_->host_element_identity.element_fingerprint == 0u) {
+      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kD4);
+    }
+  }
   candidate.activity_policy = {batch, impl_->maximum_iterations, token};
   candidate.state_policy = {impl_->maximum_iterations, impl_->residual_tolerance,
                             impl_->energy_tolerance, token};

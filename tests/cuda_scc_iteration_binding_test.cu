@@ -247,8 +247,71 @@ struct Fixture {
     topology.bucket_orbital_counts = ptr<std::int32_t>(1);
   }
 
+  void make_projections() {
+    auto& topology = plan.topology;
+    auto& atom = plan.atom_projection;
+    atom.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+    atom.plan_token = kToken;
+    atom.batch_size = kBatch;
+    atom.total_atoms = kAtoms;
+    atom.atom_offset_count = topology.atom_offset_count;
+    atom.atom_offsets = topology.atom_offsets;
+
+    auto& shell = plan.shell_ownership_projection;
+    shell.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+    shell.plan_token = kToken;
+    shell.batch_size = kBatch;
+    shell.total_atoms = kAtoms;
+    shell.total_shells = kShells;
+    shell.batch_shell_offset_count = topology.batch_shell_offset_count;
+    shell.atom_shell_offset_count = topology.atom_shell_offset_count;
+    shell.shell_to_atom_count = topology.shell_to_atom_count;
+    shell.batch_shell_offsets = topology.batch_shell_offsets;
+    shell.atom_shell_offsets = topology.atom_shell_offsets;
+    shell.shell_to_atom = topology.shell_to_atom;
+
+    auto& ao = plan.ao_matrix_projection;
+    ao.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+    ao.plan_token = kToken;
+    ao.batch_size = kBatch;
+    ao.total_shells = kShells;
+    ao.total_orbitals = kOrbitals;
+    ao.total_matrix_elements = kMatrices;
+    ao.batch_orbital_offset_count = topology.batch_orbital_offset_count;
+    ao.matrix_offset_count = topology.matrix_offset_count;
+    ao.shell_orbital_offset_count = topology.shell_orbital_offset_count;
+    ao.orbital_to_shell_count = topology.orbital_to_shell_count;
+    ao.orbital_to_atom_count = topology.orbital_to_atom_count;
+    ao.batch_orbital_offsets = topology.batch_orbital_offsets;
+    ao.matrix_offsets = topology.matrix_offsets;
+    ao.shell_orbital_offsets = topology.shell_orbital_offsets;
+    ao.orbital_to_shell = topology.orbital_to_shell;
+    ao.orbital_to_atom = topology.orbital_to_atom;
+
+    auto& buckets = plan.ao_bucket_projection;
+    buckets.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+    buckets.plan_token = kToken;
+    buckets.batch_size = kBatch;
+    buckets.bucket_count = topology.bucket_count;
+    buckets.bucket_offset_count = topology.bucket_offset_count;
+    buckets.bucket_system_count = topology.bucket_system_count;
+    buckets.bucket_orbital_count = topology.bucket_orbital_count;
+    buckets.bucket_offsets = topology.bucket_offsets;
+    buckets.bucket_systems = topology.bucket_systems;
+    buckets.bucket_orbital_counts = topology.bucket_orbital_counts;
+
+    auto& element = plan.element_identity_projection;
+    element.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+    element.plan_token = kToken;
+    element.total_atoms = kAtoms;
+    element.atomic_number_count = kAtoms;
+    element.atomic_numbers = ptr<std::int32_t>(1);
+    element.element_fingerprint = 0xa1b2c3d4e5f60718ULL;
+  }
+
   void make_plan() {
     make_topology();
+    make_projections();
     plan.abi_version = kGfn2SccIterationAbiVersion;
     plan.enabled_components = static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
                               static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
@@ -1280,15 +1343,52 @@ int test_launch_result_preserves_provider_domains() {
   return 0;
 }
 
+int test_projection_authority_rejection() {
+  /* The sealed common projections are the plan's only topology authority: a
+   * cross-plan token, a count/pointer substitution, or a forged element seal
+   * must fail the binding exactly like a wrong leaf. */
+  Fixture fixture;
+  const auto validate = [&fixture]() {
+    return validate_gfn2_scc_iteration_binding_cuda(fixture.plan, fixture.input, fixture.state,
+                                                    fixture.workspace);
+  };
+  CHECK(validate().error == Gfn2SccIterationBindingError::kSuccess);
+
+  /* Cross-plan token on the atom projection. */
+  fixture.plan.atom_projection.plan_token = Fixture::kToken + 1u;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidTopology);
+  fixture.plan.atom_projection.plan_token = Fixture::kToken;
+
+  /* Pointer substitution: leaf arrays must name the projection arrays, not a
+   * different-but-equal allocation.  Substitute a foreign offset domain. */
+  fixture.plan.ao_matrix_projection.matrix_offsets = fixture.plan.topology.atom_offsets;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidTopology);
+  fixture.plan.ao_matrix_projection.matrix_offsets = fixture.plan.topology.matrix_offsets;
+
+  /* Forged element identity seal: a CUDA descriptor proves identity through
+   * the nonzero setup-time seal, so a zero seal must be rejected. */
+  fixture.plan.element_identity_projection.element_fingerprint = 0u;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidTopology);
+  fixture.plan.element_identity_projection.element_fingerprint = 0xa1b2c3d4e5f60718ULL;
+
+  /* Presence mismatch: a packed-all-pair projection on a kNone plan. */
+  fixture.plan.packed_all_pair_projection.plan_token = Fixture::kToken;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidTopology);
+  fixture.plan.packed_all_pair_projection = {};
+  CHECK(validate().error == Gfn2SccIterationBindingError::kSuccess);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
-  const std::array<int (*)(), 6> tests{{test_valid_binding_and_fail_closed_copy,
+  const std::array<int (*)(), 7> tests{{test_valid_binding_and_fail_closed_copy,
                                         test_capacity_alignment_alias_and_bucket_rejection,
                                         test_unrestricted_layout_and_spin_projection_rejection,
                                         test_optional_canonical_null_and_report_extension_capacity,
                                         test_convergence_policy_has_one_rms_authority,
-                                        test_launch_result_preserves_provider_domains}};
+                                        test_launch_result_preserves_provider_domains,
+                                        test_projection_authority_rejection}};
   for (const auto test : tests) {
     if (const int line = test(); line != 0) {
       std::fprintf(stderr, "CUDA SCC iteration binding test failed at line %d\n", line);
