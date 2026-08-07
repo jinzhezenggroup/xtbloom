@@ -317,6 +317,7 @@ if(GPUXTB_CPU_LINALG_RUNTIME)
       )
       target_compile_features(gpuxtb_mkl_lp64_shim PRIVATE cxx_std_17)
       set_target_properties(gpuxtb_mkl_lp64_shim PROPERTIES
+        EXPORT_NAME mkl_lp64_shim
         OUTPUT_NAME gpuxtb_mkl_lp64_shim
         CXX_VISIBILITY_PRESET hidden
         VISIBILITY_INLINES_HIDDEN YES
@@ -332,8 +333,12 @@ if(GPUXTB_CPU_LINALG_RUNTIME)
       # The shim itself references none of the MKL symbols directly; its ELF
       # NEEDED records are what make dlopen resolve the whole LP64/sequential
       # component scope together. Force the records even on --as-needed hosts.
+      # Emit DT_RPATH deliberately: DT_RUNPATH is searched after LD_LIBRARY_PATH
+      # and would allow a same-SONAME component from another MKL installation to
+      # replace one member of the configure-time cohort.
       target_link_options(gpuxtb_mkl_lp64_shim PRIVATE
         "LINKER:--no-as-needed"
+        "LINKER:--disable-new-dtags"
       )
       set_target_properties(gpuxtb_mkl_lp64_shim PROPERTIES
         BUILD_RPATH "${gpuxtb_mkl_component_dir}"
@@ -342,7 +347,7 @@ if(GPUXTB_CPU_LINALG_RUNTIME)
         # installed shared libraries on the same relocation-safe contract.
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
       )
-      install(TARGETS gpuxtb_mkl_lp64_shim
+      install(TARGETS gpuxtb_mkl_lp64_shim EXPORT gpuxtbTargets
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
       )
       set(GPUXTB_CPU_LINALG_SHIM ON)
@@ -2484,6 +2489,35 @@ if(GPUXTB_BUILD_TESTS)
       # preselect LP64 through the generic provider-test environment.
       set_tests_properties(gpuxtb.cpu.linalg_isolation PROPERTIES
         ENVIRONMENT "MKL_THREADING_LAYER=SEQUENTIAL"
+      )
+
+      # Build deliberately unusable libraries with the same MKL component
+      # SONAMEs. The adversarial test puts them first in LD_LIBRARY_PATH; only
+      # the shim's configure-time DT_RPATH may select the verified cohort.
+      set(gpuxtb_mkl_decoy_targets "")
+      foreach(component IN ITEMS intel_lp64 sequential core)
+        set(decoy_target "gpuxtb_mkl_${component}_decoy")
+        add_library(${decoy_target} SHARED src/runtime/mkl_lp64_shim.cpp)
+        target_compile_features(${decoy_target} PRIVATE cxx_std_17)
+        set_target_properties(${decoy_target} PROPERTIES
+          OUTPUT_NAME "mkl_${component}"
+          SUFFIX "${gpuxtb_mkl_runtime_suffix}"
+          CXX_VISIBILITY_PRESET hidden
+          VISIBILITY_INLINES_HIDDEN YES
+          LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/mkl-decoy"
+        )
+        list(APPEND gpuxtb_mkl_decoy_targets ${decoy_target})
+      endforeach()
+      add_dependencies(
+        gpuxtb_cpu_linalg_isolation_test ${gpuxtb_mkl_decoy_targets}
+      )
+      add_test(
+        NAME gpuxtb.cpu.linalg_isolation_search_path
+        COMMAND gpuxtb_cpu_linalg_isolation_test --correctness
+      )
+      set_tests_properties(gpuxtb.cpu.linalg_isolation_search_path PROPERTIES
+        ENVIRONMENT
+          "MKL_THREADING_LAYER=SEQUENTIAL;LD_LIBRARY_PATH=${CMAKE_CURRENT_BINARY_DIR}/mkl-decoy:${GPUXTB_CPU_LINALG_DIRECTORY}"
       )
     endif()
   else()

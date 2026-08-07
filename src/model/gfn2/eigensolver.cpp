@@ -5,6 +5,9 @@
 
 #if !defined(_WIN32)
 #include <dlfcn.h>
+#endif
+
+#if defined(GPUXTB_CONFIGURED_CPU_LINALG_SHIM)
 #include <link.h>
 #endif
 
@@ -295,7 +298,7 @@ bool backend_self_test(const CpuLinearAlgebraBackend& backend) {
   return rhs[0] == 2.0 && product[0] == 4.0;
 }
 
-#if !defined(_WIN32)
+#if defined(GPUXTB_CONFIGURED_CPU_LINALG_SHIM)
 void* open_host_isolated_sibling(const char* soname) {
   /* A LOCAL handle still resolves relocations against already-global objects.
    * A new link-map namespace is required to keep a host's libmkl_rt ILP64
