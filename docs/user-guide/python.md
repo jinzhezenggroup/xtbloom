@@ -187,10 +187,11 @@ remains the preferred steady-state zero-copy route: it allocates no gpuxtb
 device memory per call and accepts preallocated caller buffers that the caller
 can reuse. The gpuxtb-owned `result_memory="cuda"` path is intended for
 callers that want finished device results without managing output buffers
-themselves; it is measured at allocation/free parity with `out=` on a real GPU
-for the small-molecule case (see
+themselves. On the archived RTX 5090 small-molecule workload it passed the
+explicit maximum 5% mean-overhead gate (`7.512 ms` arena versus `7.810 ms`
+`out=` across 300 counterbalanced pairs); see
 `benchmarks/evidence/issue-214/2026-08-07-rtx5090/` for the raw profiler and
-latency evidence).
+latency evidence.
 
 ## Open-shell calculations
 

@@ -10,23 +10,28 @@ The scientific claim is deliberately narrow and archived with raw samples so it
 can be re-derived, not restated from memory:
 
 - On the recorded RTX 5090 / CUDA 12.9 stack, `result_memory="cuda"`
-  (gpuxtb-owned device arena, no `out=`) has the same per-call wall latency as
-  the caller-owned `out=` path at 300 warm samples: `7.507 ms` mean
-  (`7.493..7.536` min..max) for arena vs `7.830 ms` mean for `out=`. The arena
-  path is effectively at parity and not measurably slower in this workload.
-- The arena path adds exactly one packed `cudaMalloc` per call and one
-  `cudaFree` per call (arena `cudaMalloc=45`/`cudaFree=50` vs `out=`
-  `cudaMalloc=32`/`cudaFree=37` over a 10-call timed window plus warmup); the
-  difference `+13`/`+13` equals the 13 arena-allocating calls (3 warmup + 10
-  timed).
+  (gpuxtb-owned device arena, no `out=`) passes the predefined mean-overhead
+  gate of no more than 5% above the caller-owned `out=` path. Across 300
+  counterbalanced pairs after 30 warmups per mode, arena mean latency is
+  `7.512 ms` (`7.497..7.541` min..max) versus `7.810 ms`
+  (`7.785..7.941`) for `out=`. The paired arena-minus-out mean is
+  `-0.2980 +/- 0.0015 ms` (95% confidence half-width), or `-3.82%`.
+- Each arena call adds one packed `cudaMalloc` and releases it with one
+  `cudaFree`; the caller-owned mode allocates its reusable output once before
+  the calls. The process-wide 3-warmup + 10-call profiles record arena
+  `cudaMalloc=45`/`cudaFree=51` versus `out=`
+  `cudaMalloc=33`/`cudaFree=38`. The traces include common process setup and
+  teardown as well as the 13 regular arena allocation/release pairs.
 - Neither path performs a device-to-host transfer of result data. The D2H
   memcpy profile is byte-identical between the two modes (49 copies / 1069
   bytes total) and corresponds to the internal numerical-host completion
   report that the synchronous public compute contract already requires;
-  result publication is device-to-device in both modes (16 copies / 8.9 MiB).
+  result publication is device-to-device in both modes (16 copies /
+  8,901,200 bytes).
 - Neither path adds an extra device-wide synchronization. `cudaDeviceSynchronize`
-  (34) and `cudaEventSynchronize` (43) call counts are identical in the two
-  captures; the per-call completion is the existing public completion event.
+  (43), `cudaEventSynchronize` (43), and `cudaStreamSynchronize` (16) call
+  counts are identical in the two captures; the per-call completion is the
+  existing public completion event.
 - Real-provider imports: `cupy.from_dlpack`, `torch.from_dlpack`, and
   `jax.dlpack.from_dlpack` each imported the same arena slice and observed the
   identical device pointer (no host round trip); values match the host CPU
@@ -46,15 +51,16 @@ can be re-derived, not restated from memory:
   against CUDA 12.9.
 - Python: 3.13.9. numpy 2.5.1, pytest 9.1.1, CuPy 14.1.1, JAX 0.11.0 (with
   `jax[cuda12]` compute 12.9 libs), PyTorch 2.13.0 (+cu130).
-- Source revision: `44058ebbe4161780aea2df1db7ea7c3938684f68` (PR #223 squash
-  merge). The measured native library is the CUDA wheel built from that
-  revision; its SHA-256 is embedded in `dlpack-result-memory.json`
-  (`library_sha256`).
+- Source revision: `d9b8d5e6d8dd94397fe3c2d7492491599320171b` (PR #226 evidence
+  branch). The measured native library is the explicit shared CMake build at
+  `build/pr226-cuda/libgpuxtb.so.0.1.0`; its SHA-256
+  (`53ad262937f1612fceee97f9bc88e0abac2126523e54f226092de5fed12b32ce`)
+  and adjacent CMake cache identity are embedded in
+  `dlpack-result-memory.json`.
 - Nsight Systems: 2025.1.3.140-251335620677v0.
-- The `nsys` captures were made with a separate target driving 3 warmup + 10
-  timed calls per mode and exporting the same arena release semantics as the
-  benchmark (explicit producer close per call, no Python `gc.collect()` in the
-  timed interval).
+- The `nsys` captures use the committed runner's `--profile-mode`, driving 3
+  warmup + 10 timed calls per mode with explicit producer close per call and
+  no Python `gc.collect()` in the timed interval.
 
 ## Files
 
@@ -65,9 +71,10 @@ can be re-derived, not restated from memory:
 - `dlpack-result-memory.csv` — compact raw-sample view of the same
   measurements (`mode, sample, latency_ms`).
 - `derived-profiler-reports/` — Nsight System-derived summaries:
-  `{arena,out}-kern_sum.csv` (kernel occupancy/time), `{arena,out}-mem_sum.csv`
-  (memcpy/memset totals), and `{arena,out}-api_trace.csv` (full CUDA API event
-  trace, raw, including every `cudaMalloc`/`cudaFree`/synchronize call).
+  `{arena,out}-kern_sum.csv` (kernel instances/time), `{arena,out}-mem_sum.csv`
+  (memcpy/memset time), `{arena,out}-mem_size_sum.csv` (memcpy/memset sizes),
+  and `{arena,out}-api_trace.csv` (full CUDA API event trace, raw, including
+  every `cudaMalloc`/`cudaFree`/synchronize call).
 
 The `.nsys-rep` captures are not committed; the raw CUDA API event traces in
 `*-api_trace.csv` are sufficient to re-derive the allocation and
@@ -86,43 +93,60 @@ synchronization counts, per the repository performance-evidence policy.
   mode deterministically closes every returned `DLPackResultBuffer` producer
   (and the result) inside the timed interval so the native `cudaFree` is
   included; Python garbage collection is never inside the timed interval.
-- Correctness: the first measured call of each mode is compared against a
-  host CPU `compute_arrays` reference; recorded max energy/force/charge
-  absolute errors are 0.0 (bit-identical CPU/CUDA on this workload). This is
-  a parity gate, not a claim of low error on arbitrary geometries.
+- Correctness: before and after timing, each mode is compared against an
+  explicit host CPU `compute_arrays(..., backend="cpu")` reference. All four
+  gates record finite output, status 0, SCC convergence in 9 iterations, and
+  maximum energy/force/charge errors of `3.56e-15`, `4.58e-16`, and
+  `1.89e-15`, respectively, within committed tolerances. This is a parity
+  gate, not a claim of low error on arbitrary geometries.
 
 ## Command lines
 
 ```bash
-# Allocation/latency benchmark (this bundle):
-python benchmarks/dlpack_result_memory.py --warmup 30 --repetitions 300 \
-  --output benchmarks/evidence/issue-214/2026-08-07-rtx5090/dlpack-result-memory.json
+# Allocation/latency benchmark:
+srun --gres=gpu:1 --ntasks=1 env PYTHONPATH="$PWD/python" \
+  GPUXTB_LIBRARY="$PWD/build/pr226-cuda/libgpuxtb.so.0.1.0" \
+  LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64 \
+  /tmp/venv-providers/bin/python benchmarks/dlpack_result_memory.py \
+  --library build/pr226-cuda/libgpuxtb.so.0.1.0 \
+  --warmup 30 --repetitions 300 \
+  --output /tmp/pr226-final-d9b8d5e/dlpack-result-memory.json
 
-# Profiler captures:
-nsys profile -o <mode> --force-overwrite true --cuda-memory-usage=true \
-  --trace=cuda,nvtx,osrt python /tmp/nsys_target.py <arena|out> 10
+# Profiler capture, executed once with <mode>=arena and once with <mode>=out:
+srun --gres=gpu:1 --ntasks=1 env PYTHONPATH="$PWD/python" \
+  GPUXTB_LIBRARY="$PWD/build/pr226-cuda/libgpuxtb.so.0.1.0" \
+  LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64 \
+  /group/software/cuda-12.9.1/bin/nsys profile \
+  -o /tmp/pr226-profile-d9b8d5e/<mode> \
+  --force-overwrite=true --cuda-memory-usage=true --trace=cuda,nvtx,osrt \
+  /tmp/venv-providers/bin/python benchmarks/dlpack_result_memory.py \
+  --library build/pr226-cuda/libgpuxtb.so.0.1.0 \
+  --warmup 3 --repetitions 10 --profile-mode <arena|out>
 
 # Derived reports (as committed):
-nsys stats --report cuda_gpu_kern_sum --format csv --force-export=true <mode>.nsys-rep
-nsys stats --report cuda_gpu_mem_time_sum --format csv --force-export=true <mode>.nsys-rep
-nsys stats --report cuda_api_trace --format csv --force-export=true <mode>.nsys-rep
+/group/software/cuda-12.9.1/bin/nsys stats \
+  --report cuda_gpu_kern_sum,cuda_gpu_mem_time_sum,cuda_gpu_mem_size_sum,cuda_api_trace \
+  --format csv --output /tmp/pr226-profile-d9b8d5e/<mode>-report \
+  --force-export=true --force-overwrite=true \
+  /tmp/pr226-profile-d9b8d5e/<mode>.nsys-rep
 ```
 
-The provider matrix was run against the freshly built CUDA wheel on a real
+The provider matrix was run against the exact shared CUDA library on a real
 GPU under `srun --gres=gpu:1`:
 
 ```bash
-pytest python/tests/test_dlpack_producer_cuda.py          # 10/10 passed (incl. new CuPy/JAX/pointer tests)
-pytest python/tests/test_dlpack_producer.py              # 17/17 passed (incl. torch+JAX CPU host producer)
+pytest python/tests/test_dlpack_producer_cuda.py          # 11/11 passed (incl. CuPy/JAX/pointer/stream tests)
+pytest python/tests/test_dlpack_producer.py              # 18/18 passed (incl. torch+JAX CPU host producer)
 pytest python/tests/test_array_batch_cuda.py              # 14/14 passed (CuPy/JAX/torch device arrays)
-pytest python/tests                                      # 214 passed, 0 skipped (ase/dpdata installed)
+pytest python/tests                                      # 211 passed, 0 skipped (ase/dpdata installed)
 ```
 
 ## Evaluation
 
-- `PASS` — allocation/free cost vs `out=`: 300-sample mean 7.507 ms (arena)
-  vs 7.830 ms (`out=`); parity plus one arena alloc/free per call with no
-  added device-wide sync, no result D2H (identical sync and D2H profiles).
+- `PASS` — allocation/free cost vs `out=`: 300-pair mean 7.512 ms (arena)
+  versus 7.810 ms (`out=`), passing the explicit maximum 5% mean-overhead gate
+  at -3.82%; one arena alloc/free per call with no added device-wide sync and
+  no result D2H (identical synchronization and D2H profiles).
 - `PASS` — real CuPy/JAX/torch device-provider import evidence: committed
   CUDA tests import the same arena through `cupy.from_dlpack`,
   `torch.from_dlpack`, and `jax.dlpack.from_dlpack`, assert the identical
@@ -132,8 +156,9 @@ pytest python/tests                                      # 214 passed, 0 skipped
   arena producer zero-copy (pointer and value parity); unsupported
   combinations are reported honestly (CuPy has no CPU-tensor import).
 - The benchmark harness unit test `benchmarks/test_dlpack_result_memory.py`
-  (5 tests, hardware-free) covers the packed workload, summary statistics,
-  refuse-overwrite guard, required-GPU precondition, and CSV schema.
+  (10 tests, hardware-free) covers the packed workload, statistics and gate,
+  CPU reference status, clean-source requirement, refuse-overwrite guards,
+  required-GPU precondition, and LF-only JSON/CSV publication.
 
 ## Limitations
 
@@ -143,6 +168,6 @@ pytest python/tests                                      # 214 passed, 0 skipped
   allocation/free cost will scale differently with larger outputs and batches.
 - Both modes verified on host-numpy inputs; device-resident inputs and larger
   ragged batches were not timed here.
-- The 58 ms first-sample outlier observed in one exploratory 40-sample run is
-  attributed to a cold first-touch allocation and was not reproducible with
-  30 warmup calls (none of the 300 committed samples exceeds 7.568 ms).
+- Profile-mode wall timings include Nsight instrumentation overhead and are
+  retained only for allocation, transfer, kernel, and synchronization
+  evidence; the 300-pair artifact is authoritative for latency.

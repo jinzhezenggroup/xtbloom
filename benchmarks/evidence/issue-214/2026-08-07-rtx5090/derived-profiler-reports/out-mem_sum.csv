@@ -1,7 +1,5 @@
-Generating SQLite file out.sqlite from out.nsys-rep
-Processing [out.sqlite] with [/group/software/cuda-12.9.1/nsight-systems-2025.1.3/host-linux-x64/reports/cuda_gpu_mem_time_sum.py]...
 Time (%),Total Time (ns),Count,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Operation
-75.0,390949,931,419.9,288.0,256,3456,366.8,[CUDA memset]
-18.5,96354,115,837.9,288.0,224,32321,4107.9,[CUDA memcpy Host-to-Device]
-3.6,18944,49,386.6,352.0,320,672,110.2,[CUDA memcpy Device-to-Host]
-2.9,15297,16,956.1,928.0,800,1120,78.3,[CUDA memcpy Device-to-Device]
+75.3,396324,931,425.7,288.0,224,3616,378.8,[CUDA memset]
+18.2,95616,115,831.4,288.0,224,32064,4084.9,[CUDA memcpy Host-to-Device]
+3.7,19232,49,392.5,352.0,320,896,128.6,[CUDA memcpy Device-to-Host]
+2.9,15264,16,954.0,928.0,800,1120,75.0,[CUDA memcpy Device-to-Device]
