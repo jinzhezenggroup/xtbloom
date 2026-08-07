@@ -81,15 +81,15 @@ cudaError_t bind_gfn2_shell_ownership_projection_cuda(
     const Gfn2RaggedTopologyView& device_topology,
     Gfn2ShellOwnershipProjectionView& binding) noexcept;
 
-cudaError_t bind_gfn2_ao_matrix_projection_cuda(
-    const Gfn2RaggedTopologyView& device_topology, Gfn2AOMatrixProjectionView& binding) noexcept;
+cudaError_t bind_gfn2_ao_matrix_projection_cuda(const Gfn2RaggedTopologyView& device_topology,
+                                                Gfn2AOMatrixProjectionView& binding) noexcept;
 
 cudaError_t bind_gfn2_packed_all_pair_projection_cuda(
     const Gfn2RaggedTopologyView& device_topology,
     Gfn2PackedAllPairProjectionView& binding) noexcept;
 
-cudaError_t bind_gfn2_ao_bucket_projection_cuda(
-    const Gfn2RaggedTopologyView& device_topology, Gfn2AOBucketProjectionView& binding) noexcept;
+cudaError_t bind_gfn2_ao_bucket_projection_cuda(const Gfn2RaggedTopologyView& device_topology,
+                                                Gfn2AOBucketProjectionView& binding) noexcept;
 
 /*
  * Element identity is owned by setup, not the topology: bind a host-computed

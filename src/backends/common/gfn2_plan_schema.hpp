@@ -587,23 +587,21 @@ static_assert(std::is_standard_layout_v<Gfn2ElementIdentityProjectionView>);
     const Gfn2RaggedTopologyView& topology, Gfn2AtomProjectionView& projection) noexcept;
 
 [[nodiscard]] Gfn2PlanSchemaDiagnostic project_gfn2_shell_ownership_projection_host(
-    const Gfn2RaggedTopologyView& topology,
-    Gfn2ShellOwnershipProjectionView& projection) noexcept;
+    const Gfn2RaggedTopologyView& topology, Gfn2ShellOwnershipProjectionView& projection) noexcept;
 
 [[nodiscard]] Gfn2PlanSchemaDiagnostic project_gfn2_ao_matrix_projection_host(
     const Gfn2RaggedTopologyView& topology, Gfn2AOMatrixProjectionView& projection) noexcept;
 
 [[nodiscard]] Gfn2PlanSchemaDiagnostic project_gfn2_packed_all_pair_projection_host(
-    const Gfn2RaggedTopologyView& topology,
-    Gfn2PackedAllPairProjectionView& projection) noexcept;
+    const Gfn2RaggedTopologyView& topology, Gfn2PackedAllPairProjectionView& projection) noexcept;
 
 [[nodiscard]] Gfn2PlanSchemaDiagnostic project_gfn2_ao_bucket_projection_host(
     const Gfn2RaggedTopologyView& topology, Gfn2AOBucketProjectionView& projection) noexcept;
 
 /* Fail-closed builder for the setup-owned element identity projection. */
 [[nodiscard]] Gfn2PlanSchemaDiagnostic project_gfn2_element_identity_projection_host(
-    const std::int32_t* atomic_numbers, std::int64_t atomic_number_count,
-    std::uint64_t plan_token, Gfn2ElementIdentityProjectionView& projection) noexcept;
+    const std::int32_t* atomic_numbers, std::int64_t atomic_number_count, std::uint64_t plan_token,
+    Gfn2ElementIdentityProjectionView& projection) noexcept;
 
 }  // namespace gpuxtb::detail
 

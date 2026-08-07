@@ -2125,11 +2125,11 @@ int test_consumer_vjp_matches_candidate_vjp() {
     DeviceBuffer<double> consumer_scratch;
     CUDA_CHECK(allocate_and_copy(d_dE_dcn, dE_dcn, stream));
     CUDA_CHECK(allocate_and_copy(candidate_gradients, gradient_seed, stream));
-    CUDA_CHECK(allocate_and_copy(candidate_scratch,
-                                 std::vector<double>(gradient_seed.size(), 0.0), stream));
+    CUDA_CHECK(allocate_and_copy(candidate_scratch, std::vector<double>(gradient_seed.size(), 0.0),
+                                 stream));
     CUDA_CHECK(allocate_and_copy(consumer_gradients, gradient_seed, stream));
-    CUDA_CHECK(allocate_and_copy(consumer_scratch,
-                                 std::vector<double>(gradient_seed.size(), 0.0), stream));
+    CUDA_CHECK(allocate_and_copy(consumer_scratch, std::vector<double>(gradient_seed.size(), 0.0),
+                                 stream));
     DeviceBuffer<std::uint32_t> consumer_sequence;
     CUDA_CHECK(consumer_sequence.allocate(1u));
     DeviceBuffer<std::uint32_t> consumer_system_errors;
@@ -2194,15 +2194,14 @@ int test_consumer_vjp_matches_candidate_vjp() {
         static_cast<std::int64_t>(batch_size), consumer_system_errors.get(),
         consumer_device_error.get(), stream));
     CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
-        consumer_batch, committed, device.positions.get(),
-        device.radii.get(), kGeneration, d_dE_dcn.get(), consumer_gradients.get(),
-        consumer_scratch.get(), static_cast<std::int64_t>(consumer_scratch.size()),
-        consumer_sequence.get(), consumer_system_errors.get(), consumer_device_error.get(), stream));
+        consumer_batch, committed, device.positions.get(), device.radii.get(), kGeneration,
+        d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
+        static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
+        consumer_system_errors.get(), consumer_device_error.get(), stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
     CHECK(cudaGetLastError() == cudaSuccess);
     std::vector<std::uint32_t> consumer_errors(batch_size, 0u);
-    CUDA_CHECK(
-        consumer_system_errors.copy_to(consumer_errors.data(), batch_size, stream));
+    CUDA_CHECK(consumer_system_errors.copy_to(consumer_errors.data(), batch_size, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
     for (std::size_t system = 0u; system < batch_size; ++system) {
       CHECK(consumer_errors[system] == 0u);
@@ -2210,15 +2209,14 @@ int test_consumer_vjp_matches_candidate_vjp() {
 
     std::vector<double> candidate_result(host.total_atoms() * 3u, 0.0);
     std::vector<double> consumer_result(host.total_atoms() * 3u, 0.0);
-    CUDA_CHECK(candidate_gradients.copy_to(candidate_result.data(), candidate_result.size(),
-                                           stream));
+    CUDA_CHECK(
+        candidate_gradients.copy_to(candidate_result.data(), candidate_result.size(), stream));
     CUDA_CHECK(consumer_gradients.copy_to(consumer_result.data(), consumer_result.size(), stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
     /* Identical kernel, identical arrays, identical seed: bitwise exact. */
     for (std::size_t index = 0u; index < candidate_result.size(); ++index) {
       if (candidate_result[index] != consumer_result[index]) {
-        fprintf(stderr,
-                "batch %llu consumer-vjp mismatch at %zu: candidate=%.17g consumer=%.17g\n",
+        fprintf(stderr, "batch %llu consumer-vjp mismatch at %zu: candidate=%.17g consumer=%.17g\n",
                 static_cast<unsigned long long>(batch_size), index, candidate_result[index],
                 consumer_result[index]);
         CHECK(false);

@@ -23,6 +23,7 @@ namespace {
 
 using gpuxtb::detail::bind_gfn2_topology_host;
 using gpuxtb::detail::bind_gfn2_wavefunction_layout_host;
+using gpuxtb::detail::gfn2_element_identity_fingerprint_host;
 using gpuxtb::detail::Gfn2AOBucketProjectionView;
 using gpuxtb::detail::Gfn2AOMatrixProjectionView;
 using gpuxtb::detail::Gfn2AtomPair;
@@ -42,7 +43,6 @@ using gpuxtb::detail::Gfn2PlanSchemaField;
 using gpuxtb::detail::Gfn2RaggedTopologyView;
 using gpuxtb::detail::Gfn2ShellOwnershipProjectionView;
 using gpuxtb::detail::Gfn2WavefunctionLayoutView;
-using gpuxtb::detail::gfn2_element_identity_fingerprint_host;
 using gpuxtb::detail::project_gfn2_ao_bucket_projection_host;
 using gpuxtb::detail::project_gfn2_ao_matrix_projection_host;
 using gpuxtb::detail::project_gfn2_atom_projection_host;
@@ -54,9 +54,9 @@ using gpuxtb::detail::validate_gfn2_ao_matrix_projection_binding;
 using gpuxtb::detail::validate_gfn2_atom_projection_binding;
 using gpuxtb::detail::validate_gfn2_element_identity_projection_binding;
 using gpuxtb::detail::validate_gfn2_geometry_provenance_host;
+using gpuxtb::detail::validate_gfn2_packed_all_pair_projection_binding;
 using gpuxtb::detail::validate_gfn2_pair_list_consumer_binding;
 using gpuxtb::detail::validate_gfn2_pair_list_consumer_host;
-using gpuxtb::detail::validate_gfn2_packed_all_pair_projection_binding;
 using gpuxtb::detail::validate_gfn2_shell_ownership_projection_binding;
 using gpuxtb::detail::validate_gfn2_topology_binding;
 using gpuxtb::detail::validate_gfn2_topology_host;
@@ -831,9 +831,9 @@ int test_projections() {
   CHECK(shell.batch_shell_offsets == host.view.batch_shell_offsets);
   CHECK(shell.atom_shell_offsets == host.view.atom_shell_offsets);
   CHECK(shell.shell_to_atom == host.view.shell_to_atom);
-  CHECK(validate_gfn2_shell_ownership_projection_binding(host.view, shell,
-                                                         Gfn2PlanMemorySpace::kHost)
-            .error == Gfn2PlanSchemaError::kSuccess);
+  CHECK(
+      validate_gfn2_shell_ownership_projection_binding(host.view, shell, Gfn2PlanMemorySpace::kHost)
+          .error == Gfn2PlanSchemaError::kSuccess);
 
   CHECK(project_gfn2_ao_matrix_projection_host(host.view, ao).error ==
         Gfn2PlanSchemaError::kSuccess);
@@ -845,16 +845,17 @@ int test_projections() {
   CHECK(ao.shell_orbital_offsets == host.view.shell_orbital_offsets);
   CHECK(ao.orbital_to_shell == host.view.orbital_to_shell);
   CHECK(ao.orbital_to_atom == host.view.orbital_to_atom);
-  CHECK(validate_gfn2_ao_matrix_projection_binding(host.view, ao, Gfn2PlanMemorySpace::kHost)
-            .error == Gfn2PlanSchemaError::kSuccess);
+  CHECK(
+      validate_gfn2_ao_matrix_projection_binding(host.view, ao, Gfn2PlanMemorySpace::kHost).error ==
+      Gfn2PlanSchemaError::kSuccess);
 
   CHECK(project_gfn2_packed_all_pair_projection_host(host.view, pairs).error ==
         Gfn2PlanSchemaError::kSuccess);
   CHECK(pairs.pair_offset_count == batch_offsets);
   CHECK(pairs.pair_offsets == host.view.pair_offsets);
-  CHECK(validate_gfn2_packed_all_pair_projection_binding(host.view, pairs,
-                                                         Gfn2PlanMemorySpace::kHost)
-            .error == Gfn2PlanSchemaError::kSuccess);
+  CHECK(
+      validate_gfn2_packed_all_pair_projection_binding(host.view, pairs, Gfn2PlanMemorySpace::kHost)
+          .error == Gfn2PlanSchemaError::kSuccess);
 
   CHECK(project_gfn2_ao_bucket_projection_host(host.view, buckets).error ==
         Gfn2PlanSchemaError::kSuccess);
@@ -868,10 +869,9 @@ int test_projections() {
   /* Element identity: order-sensitive fingerprint and count/token identity. */
   const std::vector<std::int32_t> atomic_numbers = {1, 6, 7, 8, 1, 6, 7, 8};
   Gfn2ElementIdentityProjectionView element{};
-  CHECK(project_gfn2_element_identity_projection_host(atomic_numbers.data(),
-                                                      static_cast<std::int64_t>(
-                                                          atomic_numbers.size()),
-                                                      kPlanToken, element)
+  CHECK(project_gfn2_element_identity_projection_host(
+            atomic_numbers.data(), static_cast<std::int64_t>(atomic_numbers.size()), kPlanToken,
+            element)
             .error == Gfn2PlanSchemaError::kSuccess);
   CHECK(element.element_fingerprint != 0u);
   CHECK(validate_gfn2_element_identity_projection_binding(element, Gfn2PlanMemorySpace::kHost)
@@ -891,9 +891,9 @@ int test_projections() {
   std::vector<std::int32_t> permuted = atomic_numbers;
   std::swap(permuted[0], permuted[1]);
   Gfn2ElementIdentityProjectionView permuted_element{};
-  CHECK(project_gfn2_element_identity_projection_host(
-            permuted.data(), static_cast<std::int64_t>(permuted.size()), kPlanToken,
-            permuted_element)
+  CHECK(project_gfn2_element_identity_projection_host(permuted.data(),
+                                                      static_cast<std::int64_t>(permuted.size()),
+                                                      kPlanToken, permuted_element)
             .error == Gfn2PlanSchemaError::kSuccess);
   CHECK(permuted_element.element_fingerprint != element.element_fingerprint);
 
@@ -972,10 +972,10 @@ int test_projections() {
 
   /* Empty element identity still fingerprints and validates. */
   Gfn2ElementIdentityProjectionView empty_element{};
-  CHECK(project_gfn2_element_identity_projection_host(nullptr, 0, kPlanToken, empty_element).error ==
-        Gfn2PlanSchemaError::kSuccess);
-  CHECK(validate_gfn2_element_identity_projection_binding(empty_element,
-                                                          Gfn2PlanMemorySpace::kHost)
+  CHECK(
+      project_gfn2_element_identity_projection_host(nullptr, 0, kPlanToken, empty_element).error ==
+      Gfn2PlanSchemaError::kSuccess);
+  CHECK(validate_gfn2_element_identity_projection_binding(empty_element, Gfn2PlanMemorySpace::kHost)
             .error == Gfn2PlanSchemaError::kSuccess);
 
   /* Projectors clear the output on a hostile master. */

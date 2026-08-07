@@ -202,7 +202,7 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
   if (binding.plan_token == 0u) {
     return binding_failure(BindingError::kInvalidPlanToken, BindingField::kBinding);
   }
-if (!all_tokens_match(binding)) {
+  if (!all_tokens_match(binding)) {
     return binding_failure(BindingError::kCrossPlan, BindingField::kPlan);
   }
   const bool epoch_disabled = binding.geometry_epoch.value == nullptr &&
@@ -522,20 +522,18 @@ if (!all_tokens_match(binding)) {
         committed.state == Gfn2PairListState::kCommitted &&
         committed.role == Gfn2PairListRole::kCoordination &&
         committed.pair_map_kind == Gfn2PairMapKind::kExplicit &&
-        committed.plan_token == binding.plan_token &&
-        committed.batch_size == batch && committed.total_atoms == atoms &&
+        committed.plan_token == binding.plan_token && committed.batch_size == batch &&
+        committed.total_atoms == atoms &&
         committed.max_pairs_per_system == pairlist.max_pairs_per_system &&
         committed.max_neighbors_per_atom == pairlist.max_neighbors_per_atom &&
         std::isfinite(committed.cutoff_bohr) && committed.cutoff_bohr > 0.0 &&
         committed.list_builder_cutoff_bohr >= committed.cutoff_bohr &&
-        committed.pair_offset_count == batch + 1 &&
-        committed.neighbor_offset_count == atoms + 1 &&
-        committed.pair_count_elements == batch &&
-        committed.neighbor_count_elements == atoms &&
+        committed.pair_offset_count == batch + 1 && committed.neighbor_offset_count == atoms + 1 &&
+        committed.pair_count_elements == batch && committed.neighbor_count_elements == atoms &&
         committed.pair_count == pairlist_pairs_capacity &&
         committed.neighbor_count == pairlist_neighbors_capacity &&
-        committed.committed_generation_count == batch &&
-        committed.eligible_mask_count == batch && committed.active_mask_count == 0 &&
+        committed.committed_generation_count == batch && committed.eligible_mask_count == batch &&
+        committed.active_mask_count == 0 &&
         checked_multiply(batch, pairlist.max_pairs_per_system, committed_pairs_capacity) &&
         checked_multiply(atoms, pairlist.max_neighbors_per_atom, committed_neighbors_capacity) &&
         committed.pair_count == committed_pairs_capacity &&
@@ -643,19 +641,19 @@ if (!all_tokens_match(binding)) {
                   workspace.pairlist.neighbor_cursor_elements) &&
        writes.add(workspace.pairlist.neighbor_scratch,
                   workspace.pairlist.neighbor_scratch_elements) &&
-writes.add(workspace.pairlist.pair_cursor, workspace.pairlist.pair_cursor_elements) &&
-        writes.add(workspace.pairlist.sequence_active, workspace.pairlist.sequence_elements) &&
-        writes.add(output.pairlist.pairs, output.pairlist.pair_count) &&
-        writes.add(output.pairlist.pair_offsets, output.pairlist.pair_offset_count) &&
-        writes.add(output.pairlist.pair_counts, output.pairlist.pair_count_elements) &&
-        writes.add(output.pairlist.neighbor_offsets, output.pairlist.neighbor_offset_count) &&
-        writes.add(output.pairlist.neighbor_counts, output.pairlist.neighbor_count_elements) &&
-        writes.add(output.pairlist.neighbors, output.pairlist.neighbor_count) &&
-        writes.add(output.pairlist.committed_generations,
-                   output.pairlist.committed_generation_count) &&
-        writes.add(output.pairlist.eligible_mask, output.pairlist.eligible_mask_count) &&
-        writes.add(diagnostics.sparse_system_errors, diagnostics.sparse_system_elements) &&
-        writes.add(diagnostics.sparse_device_error, 1));
+       writes.add(workspace.pairlist.pair_cursor, workspace.pairlist.pair_cursor_elements) &&
+       writes.add(workspace.pairlist.sequence_active, workspace.pairlist.sequence_elements) &&
+       writes.add(output.pairlist.pairs, output.pairlist.pair_count) &&
+       writes.add(output.pairlist.pair_offsets, output.pairlist.pair_offset_count) &&
+       writes.add(output.pairlist.pair_counts, output.pairlist.pair_count_elements) &&
+       writes.add(output.pairlist.neighbor_offsets, output.pairlist.neighbor_offset_count) &&
+       writes.add(output.pairlist.neighbor_counts, output.pairlist.neighbor_count_elements) &&
+       writes.add(output.pairlist.neighbors, output.pairlist.neighbor_count) &&
+       writes.add(output.pairlist.committed_generations,
+                  output.pairlist.committed_generation_count) &&
+       writes.add(output.pairlist.eligible_mask, output.pairlist.eligible_mask_count) &&
+       writes.add(diagnostics.sparse_system_errors, diagnostics.sparse_system_elements) &&
+       writes.add(diagnostics.sparse_device_error, 1));
   const bool epoch_range_valid =
       epoch_disabled ||
       writes.add(binding.geometry_epoch.value, binding.geometry_epoch.value_elements);
@@ -975,25 +973,20 @@ __global__ void commit_pairlist_kernel(Gfn2PairListDeviceBatch pairlist,
                                        Gfn2PreprocessingDeviceDiagnostics diagnostics) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   const bool requested = activity.requested_mask[system] == 1u;
-  const bool healthy =
-      atomicAdd(diagnostics.geometry_system_errors + system, 0u) ==
-      static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSuccess);
+  const bool healthy = atomicAdd(diagnostics.geometry_system_errors + system, 0u) ==
+                       static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSuccess);
   const std::uint64_t generation = load_geometry_generation(generation_source);
   const bool commit = requested && healthy && generation != 0u;
   /* The committed consumer view is a const projection; the output arrays are
    * the mutable publication target owned by the caller, so publish through
    * mutable local aliases. */
-  auto* const committed_pairs =
-      const_cast<gpuxtb::detail::Gfn2AtomPair*>(committed.pairs);
-  auto* const committed_pair_offsets =
-      const_cast<std::int64_t*>(committed.pair_offsets);
+  auto* const committed_pairs = const_cast<gpuxtb::detail::Gfn2AtomPair*>(committed.pairs);
+  auto* const committed_pair_offsets = const_cast<std::int64_t*>(committed.pair_offsets);
   auto* const committed_pair_counts = const_cast<std::int64_t*>(committed.pair_counts);
-  auto* const committed_neighbor_offsets =
-      const_cast<std::int64_t*>(committed.neighbor_offsets);
+  auto* const committed_neighbor_offsets = const_cast<std::int64_t*>(committed.neighbor_offsets);
   auto* const committed_neighbor_counts = const_cast<std::int64_t*>(committed.neighbor_counts);
   auto* const committed_neighbors = const_cast<std::int64_t*>(committed.neighbors);
-  auto* const committed_generations =
-      const_cast<std::uint64_t*>(committed.committed_generations);
+  auto* const committed_generations = const_cast<std::uint64_t*>(committed.committed_generations);
   auto* const committed_eligible_mask = const_cast<std::uint8_t*>(committed.eligible_mask);
   if (threadIdx.x == 0) {
     if (committed_eligible_mask != nullptr) {

@@ -799,9 +799,9 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     /* Element identity is setup-owned term-specific input: seal the exact
      * atomic-number ordering and plan token now so the device plan can borrow
      * a CUDA element-identity projection without re-deriving atomic numbers. */
-    if (project_gfn2_element_identity_projection_host(
-            sources.atomic_numbers.data, sources.atomic_numbers.elements, plan_token,
-            candidate->host_element_identity)
+    if (project_gfn2_element_identity_projection_host(sources.atomic_numbers.data,
+                                                      sources.atomic_numbers.elements, plan_token,
+                                                      candidate->host_element_identity)
             .error != Gfn2PlanSchemaError::kSuccess) {
       return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kD4);
     }
@@ -986,8 +986,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
       candidate.ao_matrix_projection.plan_token != token ||
       (device_topology.pair_map_kind == Gfn2PairMapKind::kPackedLowerTriangle &&
        candidate.packed_all_pair_projection.plan_token != token) ||
-      (device_topology.bucket_count != 0 &&
-       candidate.ao_bucket_projection.plan_token != token)) {
+      (device_topology.bucket_count != 0 && candidate.ao_bucket_projection.plan_token != token)) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kTopology);
   }
   /* Element identity is setup-owned: reuse the host seal but name the uploaded

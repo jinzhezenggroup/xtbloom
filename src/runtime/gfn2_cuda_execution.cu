@@ -2802,46 +2802,47 @@ struct Gfn2CudaExecutionCache::Impl {
      * peer never exposes a partial candidate slice; only eligible peers with a
      * current committed generation are consumable.  A disabled leaf keeps the
      * canonical empty viewed with a zero token. */
-    binding.output.pairlist = pairlist_enabled
-                                  ? gpuxtb::detail::Gfn2PairListConsumerView{
-                                        gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice,
-                                        gpuxtb::detail::Gfn2PairListState::kCommitted,
-                                        gpuxtb::detail::Gfn2PairListRole::kCoordination,
-                                        gpuxtb::detail::Gfn2PairMapKind::kExplicit,
-                                        token,
-                                        gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
-                                        gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
-                                        static_cast<std::int64_t>(batch),
-                                        static_cast<std::int64_t>(atoms),
-                                        sparse_pairs_per_system,
-                                        sparse_neighbors_per_atom,
-                                        batch + 1,
-                                        atoms + 1,
-                                        sparse_pair_capacity,
-                                        sparse_neighbor_capacity,
-                                        arena_pointer<std::int64_t>(arena,
-                                                                     offset.committed_pair_offsets),
-                                        arena_pointer<gpuxtb::detail::Gfn2AtomPair>(
-                                            arena, offset.committed_pairs),
-                                        static_cast<std::int64_t>(batch),
-                                        static_cast<std::int64_t>(atoms),
-                                        arena_pointer<std::int64_t>(
-                                            arena, offset.committed_pair_counts),
-                                        arena_pointer<std::int64_t>(
-                                            arena, offset.committed_neighbor_counts),
-                                        arena_pointer<std::int64_t>(
-                                            arena, offset.committed_neighbor_offsets),
-                                        arena_pointer<std::int64_t>(arena,
-                                                                    offset.committed_neighbors),
-                                        static_cast<std::int64_t>(batch),
-                                        static_cast<std::int64_t>(batch),
-                                        0,
-                                        arena_pointer<std::uint64_t>(
-                                            arena, offset.committed_pair_generations),
-                                        arena_pointer<std::uint8_t>(
-                                            arena, offset.committed_eligible_mask),
-                                        nullptr}
-                                  : gpuxtb::detail::Gfn2PairListConsumerView{};
+    binding.output.pairlist =
+        pairlist_enabled
+            ? gpuxtb::detail::
+                  Gfn2PairListConsumerView{gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice,
+                                           gpuxtb::detail::Gfn2PairListState::kCommitted,
+                                           gpuxtb::detail::Gfn2PairListRole::kCoordination,
+                                           gpuxtb::detail::Gfn2PairMapKind::kExplicit,
+                                           token,
+                                           gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
+                                           gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
+                                           static_cast<std::int64_t>(batch),
+                                           static_cast<std::int64_t>(atoms),
+                                           sparse_pairs_per_system,
+                                           sparse_neighbors_per_atom,
+                                           batch + 1,
+                                           atoms + 1,
+                                           sparse_pair_capacity,
+                                           sparse_neighbor_capacity,
+                                           arena_pointer<std::int64_t>(
+                                               arena, offset.committed_pair_offsets),
+                                           arena_pointer<gpuxtb::detail::Gfn2AtomPair>(
+                                               arena, offset.committed_pairs),
+                                           static_cast<std::int64_t>(batch),
+                                           static_cast<std::int64_t>(atoms),
+                                           arena_pointer<std::int64_t>(
+                                               arena, offset.committed_pair_counts),
+                                           arena_pointer<std::int64_t>(
+                                               arena, offset.committed_neighbor_counts),
+                                           arena_pointer<std::int64_t>(
+                                               arena, offset.committed_neighbor_offsets),
+                                           arena_pointer<std::int64_t>(arena,
+                                                                       offset.committed_neighbors),
+                                           static_cast<std::int64_t>(batch),
+                                           static_cast<std::int64_t>(batch),
+                                           0,
+                                           arena_pointer<std::uint64_t>(
+                                               arena, offset.committed_pair_generations),
+                                           arena_pointer<std::uint8_t>(
+                                               arena, offset.committed_eligible_mask),
+                                           nullptr}
+            : gpuxtb::detail::Gfn2PairListConsumerView{};
     binding.workspace.overlap_candidate = arena_pointer<double>(arena, offset.overlap_candidate);
     binding.workspace.overlap_elements = matrices;
     binding.workspace.dipole_candidate = arena_pointer<double>(arena, offset.dipole_candidate);

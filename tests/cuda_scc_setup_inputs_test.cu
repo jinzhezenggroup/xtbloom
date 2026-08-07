@@ -262,12 +262,10 @@ int test_all_optional_four_system_upload() {
    * borrowing authority, with exact pointer identity to the master topology. */
   CHECK(plan.atom_projection.plan_token == kPlanToken);
   CHECK(plan.atom_projection.atom_offsets == plan.topology.atom_offsets);
-  CHECK(plan.shell_ownership_projection.batch_shell_offsets ==
-        plan.topology.batch_shell_offsets);
+  CHECK(plan.shell_ownership_projection.batch_shell_offsets == plan.topology.batch_shell_offsets);
   CHECK(plan.shell_ownership_projection.atom_shell_offsets == plan.topology.atom_shell_offsets);
   CHECK(plan.shell_ownership_projection.shell_to_atom == plan.topology.shell_to_atom);
-  CHECK(plan.ao_matrix_projection.batch_orbital_offsets ==
-        plan.topology.batch_orbital_offsets);
+  CHECK(plan.ao_matrix_projection.batch_orbital_offsets == plan.topology.batch_orbital_offsets);
   CHECK(plan.ao_matrix_projection.matrix_offsets == plan.topology.matrix_offsets);
   CHECK(plan.ao_matrix_projection.shell_orbital_offsets == plan.topology.shell_orbital_offsets);
   CHECK(plan.ao_matrix_projection.orbital_to_shell == plan.topology.orbital_to_shell);

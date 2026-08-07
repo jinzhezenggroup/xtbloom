@@ -1665,16 +1665,15 @@ cudaError_t add_gfn2_pairlist_consumer_coordination_vjp_cuda(
       committed.neighbor_offsets == nullptr || committed.neighbor_counts == nullptr ||
       committed.neighbors == nullptr || committed.committed_generations == nullptr ||
       !required_pointer(sequence_active, 1) || !is_aligned(system_errors, alignof(std::uint32_t)) ||
-      !is_aligned(device_error, alignof(std::uint32_t)) ||
-      expected_generation == 0u || gradient_elements < batch.total_atoms * 3) {
+      !is_aligned(device_error, alignof(std::uint32_t)) || expected_generation == 0u ||
+      gradient_elements < batch.total_atoms * 3) {
     return cudaErrorInvalidValue;
   }
   const Gfn2PairListDeviceCache cache = pairlist_cache_from_consumer(committed);
 
   if (expected_generation == 0u || batch.plan_token != cache.plan_token ||
       batch.total_atoms > kInt64Maximum / batch.max_neighbors_per_atom ||
-      batch.total_atoms > kInt64Maximum / 3 ||
-      batch.total_atoms > kInt64Maximum / 3 ||
+      batch.total_atoms > kInt64Maximum / 3 || batch.total_atoms > kInt64Maximum / 3 ||
       !required_pointer(positions, batch.total_atoms * 3) ||
       !required_pointer(covalent_radii, batch.total_atoms) ||
       !required_pointer(dE_dcn, batch.total_atoms) ||

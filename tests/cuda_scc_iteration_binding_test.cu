@@ -1371,7 +1371,7 @@ int test_projection_authority_rejection() {
   CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidTopology);
   fixture.plan.element_identity_projection.element_fingerprint = 0xa1b2c3d4e5f60718ULL;
 
-/* Presence mismatch: a packed-all-pair projection on a kNone plan. */
+  /* Presence mismatch: a packed-all-pair projection on a kNone plan. */
   fixture.plan.packed_all_pair_projection.plan_token = Fixture::kToken;
   CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidTopology);
   fixture.plan.packed_all_pair_projection = {};
@@ -1399,13 +1399,12 @@ int test_projection_authority_rejection() {
 }  // namespace
 
 int main() {
-  const std::array<int (*)(), 7> tests{{test_valid_binding_and_fail_closed_copy,
-                                        test_capacity_alignment_alias_and_bucket_rejection,
-                                        test_unrestricted_layout_and_spin_projection_rejection,
-                                        test_optional_canonical_null_and_report_extension_capacity,
-                                        test_convergence_policy_has_one_rms_authority,
-                                        test_launch_result_preserves_provider_domains,
-                                        test_projection_authority_rejection}};
+  const std::array<int (*)(), 7> tests{
+      {test_valid_binding_and_fail_closed_copy, test_capacity_alignment_alias_and_bucket_rejection,
+       test_unrestricted_layout_and_spin_projection_rejection,
+       test_optional_canonical_null_and_report_extension_capacity,
+       test_convergence_policy_has_one_rms_authority, test_launch_result_preserves_provider_domains,
+       test_projection_authority_rejection}};
   for (const auto test : tests) {
     if (const int line = test(); line != 0) {
       std::fprintf(stderr, "CUDA SCC iteration binding test failed at line %d\n", line);

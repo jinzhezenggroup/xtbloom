@@ -539,8 +539,7 @@ bool validate_plan_projection_identity(const Gfn2SccIterationDevicePlan& plan,
     const Gfn2PlanSchemaDiagnostic buckets = validate_gfn2_ao_bucket_projection_binding(
         plan.topology, plan.ao_bucket_projection, Gfn2PlanMemorySpace::kCudaDevice);
     if (buckets.error != Gfn2PlanSchemaError::kSuccess) {
-      return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology,
-                            buckets.index);
+      return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology, buckets.index);
     }
   } else if (plan.ao_bucket_projection.plan_token != 0u) {
     return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology);
@@ -1010,8 +1009,8 @@ bool validate_leaf_projection_identity(const Gfn2SccIterationDevicePlan& plan,
   if (component_enabled(plan, Gfn2SccPotentialComponent::kExplicitPointCharge) &&
       (!same(plan.explicit_point_charge_batch.atom_offsets, atom.atom_offsets,
              BindingField::kExplicitPointCharge) ||
-       !same(plan.explicit_point_charge_batch.batch_shell_offsets,
-             shell.batch_shell_offsets, BindingField::kExplicitPointCharge))) {
+       !same(plan.explicit_point_charge_batch.batch_shell_offsets, shell.batch_shell_offsets,
+             BindingField::kExplicitPointCharge))) {
     return false;
   }
   if (component_enabled(plan, Gfn2SccPotentialComponent::kPeriodicEmbedding) &&
@@ -1021,21 +1020,18 @@ bool validate_leaf_projection_identity(const Gfn2SccIterationDevicePlan& plan,
   }
 
   /* Reducers and density/P/W/occupations: AO/matrix projection. */
-  if (!same(plan.density_batch.orbital_offsets, ao.batch_orbital_offsets,
-            BindingField::kDensity) ||
+  if (!same(plan.density_batch.orbital_offsets, ao.batch_orbital_offsets, BindingField::kDensity) ||
       !same(plan.density_batch.matrix_offsets, ao.matrix_offsets, BindingField::kDensity) ||
       !same(plan.occupations_batch.orbital_offsets, ao.batch_orbital_offsets,
             BindingField::kOccupations) ||
       !same(plan.electronic_energy_batch.matrix_offsets, ao.matrix_offsets,
             BindingField::kElectronicEnergy) ||
-      !same(plan.hamiltonian_batch.atom_offsets, atom.atom_offsets,
-            BindingField::kHamiltonian) ||
+      !same(plan.hamiltonian_batch.atom_offsets, atom.atom_offsets, BindingField::kHamiltonian) ||
       !same(plan.hamiltonian_batch.batch_shell_offsets, shell.batch_shell_offsets,
             BindingField::kHamiltonian) ||
       !same(plan.hamiltonian_batch.batch_orbital_offsets, ao.batch_orbital_offsets,
             BindingField::kHamiltonian) ||
-      !same(plan.hamiltonian_batch.matrix_offsets, ao.matrix_offsets,
-            BindingField::kHamiltonian) ||
+      !same(plan.hamiltonian_batch.matrix_offsets, ao.matrix_offsets, BindingField::kHamiltonian) ||
       !same(plan.hamiltonian_batch.atom_shell_offsets, shell.atom_shell_offsets,
             BindingField::kHamiltonian) ||
       !same(plan.hamiltonian_batch.shell_orbital_offsets, ao.shell_orbital_offsets,
@@ -1052,8 +1048,7 @@ bool validate_leaf_projection_identity(const Gfn2SccIterationDevicePlan& plan,
   /* Eigensolver: AO/matrix plus AO-bucket projections. */
   if (!same(plan.eigensolver_batch.orbital_offsets, ao.batch_orbital_offsets,
             BindingField::kEigensolver) ||
-      !same(plan.eigensolver_batch.matrix_offsets, ao.matrix_offsets,
-            BindingField::kEigensolver) ||
+      !same(plan.eigensolver_batch.matrix_offsets, ao.matrix_offsets, BindingField::kEigensolver) ||
       !same(plan.eigensolver_batch.bucket_systems, buckets.bucket_systems,
             BindingField::kEigensolver)) {
     return false;

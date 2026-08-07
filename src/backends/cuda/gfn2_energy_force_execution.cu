@@ -253,9 +253,9 @@ __global__ void copy_mask_kernel(std::int64_t batch_size, const std::uint8_t* in
  * follows the same per-peer transaction discipline as the other H0 stages.
  */
 __global__ void gate_cn_vjp_parity_kernel(
-    std::int64_t batch_size, const std::int64_t* atom_offsets,
-    const std::uint8_t* incoming_mask, const std::uint32_t* plan_failure,
-    const double* dense_gradients, const double* sparse_gradients, double* production_gradients,
+    std::int64_t batch_size, const std::int64_t* atom_offsets, const std::uint8_t* incoming_mask,
+    const std::uint32_t* plan_failure, const double* dense_gradients,
+    const double* sparse_gradients, double* production_gradients,
     std::uint32_t* coordination_errors, std::uint32_t* execution_device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   const std::int64_t atom_begin = atom_offsets[system];
@@ -305,8 +305,8 @@ __global__ void gate_cn_vjp_parity_kernel(
  * seed (the electronic gradient contributions before the CN VJP runs), so the
  * sparse consumer VJP accumulates onto exactly the same seed the dense VJP
  * uses. */
-__global__ void seed_sparse_gradient_kernel(std::int64_t total_orbitals,
-                                            const double* source, double* destination) {
+__global__ void seed_sparse_gradient_kernel(std::int64_t total_orbitals, const double* source,
+                                            double* destination) {
   const std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (index < total_orbitals) {
     destination[index] = source[index];
@@ -808,9 +808,8 @@ static cudaError_t execute_energy_force_impl(
    * path where the expected committed generation is a concrete host value;
    * the device-epoch path keeps the dense reference until a device-side epoch
    * version of the consumer VJP is wired. */
-  const bool sparse_vjp_enabled =
-      geometry == nullptr && plan.pairlist_committed.plan_token != 0u &&
-      plan.pairlist_batch.plan_token != 0u;
+  const bool sparse_vjp_enabled = geometry == nullptr && plan.pairlist_committed.plan_token != 0u &&
+                                  plan.pairlist_batch.plan_token != 0u;
   const std::int64_t gradient_elements = plan.integral_batch.total_atoms * 3;
   if (sparse_vjp_enabled) {
     arm_sparse_sequence_kernel<<<1, 1, 0, stream>>>(workspace.sparse_sequence_active);
@@ -818,11 +817,10 @@ static cudaError_t execute_energy_force_impl(
     if (status != cudaSuccess) {
       return status;
     }
-    seed_sparse_gradient_kernel<<<static_cast<unsigned int>(
-                                      (gradient_elements + kThreadsPerBlock - 1) /
-                                      kThreadsPerBlock),
-                                  kThreadsPerBlock, 0, stream>>>(
-        gradient_elements, intermediates.h0.gradients, workspace.sparse_gradient_scratch);
+    seed_sparse_gradient_kernel<<<
+        static_cast<unsigned int>((gradient_elements + kThreadsPerBlock - 1) / kThreadsPerBlock),
+        kThreadsPerBlock, 0, stream>>>(gradient_elements, intermediates.h0.gradients,
+                                       workspace.sparse_gradient_scratch);
     status = check_launch();
     if (status != cudaSuccess) {
       return status;

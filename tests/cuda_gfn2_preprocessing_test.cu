@@ -702,36 +702,35 @@ struct DeviceFixture {
                                   pairlist_sequence.get(),
                                   1,
                                   kPlanToken};
-    binding.output.pairlist = {
-        gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice,
-        gpuxtb::detail::Gfn2PairListState::kCommitted,
-        gpuxtb::detail::Gfn2PairListRole::kCoordination,
-        gpuxtb::detail::Gfn2PairMapKind::kExplicit,
-        kPlanToken,
-        gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
-        gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
-        batch,
-        atoms,
-        max_pairs_per_system,
-        max_neighbors_per_atom,
-        batch + 1,
-        atoms + 1,
-        batch * max_pairs_per_system,
-        atoms * max_neighbors_per_atom,
-        committed_pair_offsets.get(),
-        committed_pairs.get(),
-        batch,
-        atoms,
-        committed_pair_counts.get(),
-        committed_neighbor_counts.get(),
-        committed_neighbor_offsets.get(),
-        committed_neighbors.get(),
-        batch,
-        batch,
-        0,
-        committed_pair_generations.get(),
-        committed_eligible_mask.get(),
-        nullptr};
+    binding.output.pairlist = {gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice,
+                               gpuxtb::detail::Gfn2PairListState::kCommitted,
+                               gpuxtb::detail::Gfn2PairListRole::kCoordination,
+                               gpuxtb::detail::Gfn2PairMapKind::kExplicit,
+                               kPlanToken,
+                               gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
+                               gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
+                               batch,
+                               atoms,
+                               max_pairs_per_system,
+                               max_neighbors_per_atom,
+                               batch + 1,
+                               atoms + 1,
+                               batch * max_pairs_per_system,
+                               atoms * max_neighbors_per_atom,
+                               committed_pair_offsets.get(),
+                               committed_pairs.get(),
+                               batch,
+                               atoms,
+                               committed_pair_counts.get(),
+                               committed_neighbor_counts.get(),
+                               committed_neighbor_offsets.get(),
+                               committed_neighbors.get(),
+                               batch,
+                               batch,
+                               0,
+                               committed_pair_generations.get(),
+                               committed_eligible_mask.get(),
+                               nullptr};
     return cudaSuccess;
   }
 
@@ -1280,8 +1279,7 @@ int test_sparse_pairlist_gate() {
         CHECK(pair.first >= atom_begin && pair.first < pair.second && pair.second < atom_end);
       }
     }
-    CHECK(committed_view.committed_pair_offsets[static_cast<std::size_t>(batch)] ==
-          running_pairs);
+    CHECK(committed_view.committed_pair_offsets[static_cast<std::size_t>(batch)] == running_pairs);
     std::int64_t running_neighbors = 0;
     for (std::int64_t atom_index = 0; atom_index < host.basis.total_atoms; ++atom_index) {
       CHECK(committed_view.committed_neighbor_offsets[static_cast<std::size_t>(atom_index)] ==
@@ -1291,13 +1289,14 @@ int test_sparse_pairlist_gate() {
       running_neighbors += count;
       for (std::int64_t index = 0; index < count; ++index) {
         const std::int64_t peer =
-            committed_view.committed_neighbors[static_cast<std::size_t>(
-                running_neighbors - count + index)];
+            committed_view
+                .committed_neighbors[static_cast<std::size_t>(running_neighbors - count + index)];
         CHECK(peer >= 0 && peer < host.basis.total_atoms);
       }
     }
-    CHECK(committed_view.committed_neighbor_offsets[static_cast<std::size_t>(
-              host.basis.total_atoms)] == running_neighbors);
+    CHECK(committed_view
+              .committed_neighbor_offsets[static_cast<std::size_t>(host.basis.total_atoms)] ==
+          running_neighbors);
 
     Gfn2PreprocessingDeviceBinding aliased = device.binding;
     aliased.binding_seal = 0u;

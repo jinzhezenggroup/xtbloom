@@ -1236,9 +1236,9 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_atom_projection_binding(
     return diagnostic;
   }
   std::int64_t atom_offsets = 0;
-  if (projection.batch_size != topology.batch_size || projection.total_atoms != topology.total_atoms ||
-      !add_one(topology.batch_size, atom_offsets) ||
-      projection.atom_offset_count != atom_offsets ||
+  if (projection.batch_size != topology.batch_size ||
+      projection.total_atoms != topology.total_atoms ||
+      !add_one(topology.batch_size, atom_offsets) || projection.atom_offset_count != atom_offsets ||
       !exact_pointer(projection.atom_offsets, topology.atom_offsets, atom_offsets,
                      topology.atom_offset_count)) {
     return projection_failure(Gfn2PlanSchemaError::kInvalidProjection,
@@ -1448,8 +1448,7 @@ Gfn2PlanSchemaDiagnostic project_gfn2_atom_projection_host(
 }
 
 Gfn2PlanSchemaDiagnostic project_gfn2_shell_ownership_projection_host(
-    const Gfn2RaggedTopologyView& topology,
-    Gfn2ShellOwnershipProjectionView& projection) noexcept {
+    const Gfn2RaggedTopologyView& topology, Gfn2ShellOwnershipProjectionView& projection) noexcept {
   projection = {};
   Gfn2PlanSchemaDiagnostic diagnostic = validate_gfn2_topology_host(topology);
   if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
@@ -1510,8 +1509,7 @@ Gfn2PlanSchemaDiagnostic project_gfn2_ao_matrix_projection_host(
 }
 
 Gfn2PlanSchemaDiagnostic project_gfn2_packed_all_pair_projection_host(
-    const Gfn2RaggedTopologyView& topology,
-    Gfn2PackedAllPairProjectionView& projection) noexcept {
+    const Gfn2RaggedTopologyView& topology, Gfn2PackedAllPairProjectionView& projection) noexcept {
   projection = {};
   Gfn2PlanSchemaDiagnostic diagnostic = validate_gfn2_topology_host(topology);
   if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
@@ -1556,8 +1554,8 @@ Gfn2PlanSchemaDiagnostic project_gfn2_ao_bucket_projection_host(
 }
 
 Gfn2PlanSchemaDiagnostic project_gfn2_element_identity_projection_host(
-    const std::int32_t* atomic_numbers, std::int64_t atomic_number_count,
-    std::uint64_t plan_token, Gfn2ElementIdentityProjectionView& projection) noexcept {
+    const std::int32_t* atomic_numbers, std::int64_t atomic_number_count, std::uint64_t plan_token,
+    Gfn2ElementIdentityProjectionView& projection) noexcept {
   projection = {};
   if (plan_token == 0u) {
     return projection_failure(Gfn2PlanSchemaError::kInvalidPlanToken,
@@ -1573,9 +1571,8 @@ Gfn2PlanSchemaDiagnostic project_gfn2_element_identity_projection_host(
                                 Gfn2PlanSchemaField::kElementIdentity);
     }
     AddressRange range{};
-    Gfn2PlanSchemaDiagnostic diagnostic =
-        make_range(atomic_numbers, atomic_number_count, Gfn2PlanSchemaField::kElementIdentity,
-                   range);
+    Gfn2PlanSchemaDiagnostic diagnostic = make_range(atomic_numbers, atomic_number_count,
+                                                     Gfn2PlanSchemaField::kElementIdentity, range);
     if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
       return diagnostic;
     }

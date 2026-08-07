@@ -842,8 +842,7 @@ cudaError_t bind_gfn2_element_identity_projection_cuda(
       host_projection.total_atoms < 0) {
     return cudaSuccess;
   }
-  if (host_projection.atomic_number_count != 0 &&
-      !is_cuda_memory(device_atomic_numbers)) {
+  if (host_projection.atomic_number_count != 0 && !is_cuda_memory(device_atomic_numbers)) {
     return cudaSuccess;
   }
   Gfn2ElementIdentityProjectionView candidate = host_projection;
