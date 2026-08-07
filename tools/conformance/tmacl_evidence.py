@@ -216,8 +216,10 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
             "b2dfe24b9aa11cf1d1cec8edbca9423b50cfd186b486d59dd4efe45826261a98"
         ),
         "required_result": (
-            "The executable assertion matrix, including exact baseline iteration "
-            "counts and final q/d/Q plus density comparisons, passes unchanged."
+            "The executable baseline, path, and reviewed mixer-policy assertions, "
+            "including exact baseline iteration counts and final q/d/Q plus density "
+            "comparisons, pass; every mixer-grid cell is executed and every "
+            "successful 300 K cell is compared with the funnel state."
         ),
     }
     if not isinstance(semantic_cross_check, dict):

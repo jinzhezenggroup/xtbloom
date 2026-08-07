@@ -52,7 +52,10 @@ damping 0.4, charge tolerance 1e-6, energy tolerance 1e-8.
   {2,4,8,16} x {0.2,0.4,0.6}. At 300 K several policies (for example
   history 2 damping 0.2, history 8 damping 0.2, history 16 damping 0.4)
   converge fresh to the same localized state the funnel reaches, while the
-  default policy does not. All successful policies agree on the final
+  default policy does not. Every cell is executed; reviewed 300 K policies
+  are required to converge, while marginal cells may cross the iteration
+  ceiling across compatible BLAS reduction orders. All successful 300 K
+  policies agree on the final
   energy and fragment charges to ~1e-9 (energy) and ~2e-5 (charge).
 - `tmacl_path_sensitivity.txt` — terminal status/count matrix for two bounded
   funnels and the direct `1000 -> 300 K` and `800 -> 300 K` jumps. Both

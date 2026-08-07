@@ -255,8 +255,9 @@ diagnostics, bounded/coarse path matrix, and mixer-policy sweep are pinned by
 `data/conformance/evidence/tmacl-temperature-continuation/manifest.json`.
 The native CTest gate `gpuxtb.gfn2.scc_temperature_continuation`
 (`tests/scc_temperature_continuation_test.cpp`) drives the internal CPU GFN2
-SCC driver, checks the exact baseline counts and complete policy matrix, and
-compares terminal q/d/Q plus density between successful paths. Its explicit
+SCC driver, checks the exact baseline counts and executes the complete mixer
+policy grid, requiring reviewed 300 K policies plus terminal q/d/Q and density
+agreement for every successful 300 K cell and path. Its explicit
 `--write-evidence` mode is the only supported text-evidence generator;
 `tools/conformance/tmacl_evidence.py` verifies fixture, generator, and output
 hashes without rewriting them.
