@@ -83,6 +83,26 @@ test geometries, not xTB source code or binaries. Runtime hashes, command
 contracts, and the origin of the QM/MM fixtures are recorded in
 `data/conformance/manifest.json`.
 
+## xTB issue #678 difficult-SCC input
+
+Origin: <https://github.com/grimme-lab/xtb/issues/678>
+
+The test-only `data/conformance/inputs/tmacl.xyz` fixture reproduces the
+18 atom labels and Cartesian-coordinate rows posted by GitHub user
+`corinwagen` in upstream xTB issue #678. The upstream issue states no license
+for that user-provided input (`SPDX: NOASSERTION`). gpuxtb retains only these
+factual scientific input values, not the issue prose, xTB source, or an xTB
+binary. The fixture and gpuxtb-generated SCC diagnostics are source/test data;
+they are included in source distributions for test reproducibility, but are
+not installed by the native CMake package or bundled in wheels.
+
+The upstream issue node, timestamps, extraction description, fixture digest,
+gpuxtb evidence-generator digest, LP64 provider identities, and every generated
+output digest are pinned in
+`data/conformance/evidence/tmacl-temperature-continuation/manifest.json`.
+Generated diagnostics are original gpuxtb outputs under the repository
+license; they are not presented as upstream xTB oracle results.
+
 ## LAMMPS documentation reference
 
 `docs/theory/qmmm.md` cites the LAMMPS QMMM-XTB adapter at revision

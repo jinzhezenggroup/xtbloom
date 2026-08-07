@@ -2339,6 +2339,10 @@ if(GPUXTB_BUILD_TESTS)
     COMMAND ${Python3_EXECUTABLE} tools/conformance/gpuxtb_conformance.py check
   )
   add_test(
+    NAME gpuxtb.conformance.tmacl_evidence
+    COMMAND ${Python3_EXECUTABLE} tools/conformance/tmacl_evidence.py
+  )
+  add_test(
     NAME gpuxtb.conformance.python
     COMMAND ${Python3_EXECUTABLE} -m unittest discover
             -s tests/conformance -p "test_*.py" -v
@@ -2455,6 +2459,7 @@ if(GPUXTB_BUILD_TESTS)
     gpuxtb.licensing
     gpuxtb.licensing_unit
     gpuxtb.conformance.manifest
+    gpuxtb.conformance.tmacl_evidence
     gpuxtb.conformance.python
     gpuxtb.oracle.tblite_observer_patch
     PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
