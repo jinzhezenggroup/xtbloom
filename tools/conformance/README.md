@@ -250,9 +250,19 @@ grimme-lab/xtb issue #678. It is intentionally **not** a manifest golden: at
 300 K the default Johnson modified-Broyden policy (history 8, damping 0.4)
 does not converge under gpuxtb or upstream xTB within 250 iterations, so there
 is no oracle golden to compare against. The file is instead a machine-readable
-fixture whose provenance, baseline status matrix, per-iteration traces,
-temperature-continuation funnel, and mixer-policy sweep are pinned and
-reproduced by the native CTest gate `gpuxtb.gfn2.scc_temperature_continuation`
-(`tests/scc_temperature_continuation_test.cpp`), which drives the internal CPU
-GFN2 SCC driver on the exact fixture coordinates. See issue #217 for the full
-investigation evidence and decision.
+fixture whose provenance, baseline status matrix, per-iteration scalar
+diagnostics, bounded/coarse path matrix, and mixer-policy sweep are pinned by
+`data/conformance/evidence/tmacl-temperature-continuation/manifest.json`.
+The native CTest gate `gpuxtb.gfn2.scc_temperature_continuation`
+(`tests/scc_temperature_continuation_test.cpp`) drives the internal CPU GFN2
+SCC driver, checks the exact baseline counts and complete policy matrix, and
+compares terminal q/d/Q plus density between successful paths. Its explicit
+`--write-evidence` mode is the only supported text-evidence generator;
+`tools/conformance/tmacl_evidence.py` verifies fixture, generator, and output
+hashes without rewriting them.
+
+This is internal CPU numerical evidence, not an independent oracle or a public
+continuation contract. Analytic forces, per-iteration complete q/d/Q,
+ordinary-corpus regressions, and the CPU/CUDA/public-ABI implementation matrix
+remain open in #217. The current data does not by itself justify choosing
+temperature continuation over a deterministic mixer-policy change.
