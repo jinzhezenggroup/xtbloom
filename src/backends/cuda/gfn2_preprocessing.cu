@@ -136,21 +136,9 @@ bool all_tokens_match(const Gfn2PreprocessingDeviceBinding& binding) noexcept {
                        binding.workspace.pairlist.plan_token == token &&
                        binding.workspace.pairlist_candidate.pair_counts != nullptr &&
                        binding.workspace.pairlist_candidate.neighbor_counts != nullptr &&
-                       binding.output.pairlist.plan_token == 0u &&
-                       binding.output.pairlist.pairs == nullptr &&
-                       binding.output.pairlist.pair_offsets == nullptr &&
-                       binding.output.pairlist.pair_counts == nullptr &&
-                       binding.output.pairlist.neighbor_offsets == nullptr &&
-                       binding.output.pairlist.neighbor_counts == nullptr &&
-                       binding.output.pairlist.neighbors == nullptr &&
-                       binding.output.pairlist.pair_generations == nullptr &&
-                       binding.output.pairlist.pair_elements == 0 &&
-                       binding.output.pairlist.pair_offset_elements == 0 &&
-                       binding.output.pairlist.pair_count_elements == 0 &&
-                       binding.output.pairlist.neighbor_offset_elements == 0 &&
-                       binding.output.pairlist.neighbor_count_elements == 0 &&
-                       binding.output.pairlist.neighbor_elements == 0 &&
-                       binding.output.pairlist.generation_elements == 0 &&
+                       binding.output.pairlist.plan_token == token &&
+                       binding.output.pairlist.state == Gfn2PairListState::kCommitted &&
+                       binding.output.pairlist.role == Gfn2PairListRole::kCoordination &&
                        binding.diagnostics.sparse_system_errors != nullptr &&
                        binding.diagnostics.sparse_device_error != nullptr;
   } else {
@@ -163,19 +151,8 @@ bool all_tokens_match(const Gfn2PreprocessingDeviceBinding& binding) noexcept {
         binding.workspace.pairlist.system_meta == nullptr &&
         binding.workspace.sparse_coordination == nullptr &&
         binding.output.pairlist.plan_token == 0u && binding.output.pairlist.pairs == nullptr &&
-        binding.output.pairlist.pair_offsets == nullptr &&
-        binding.output.pairlist.pair_counts == nullptr &&
-        binding.output.pairlist.neighbor_offsets == nullptr &&
-        binding.output.pairlist.neighbor_counts == nullptr &&
-        binding.output.pairlist.neighbors == nullptr &&
-        binding.output.pairlist.pair_generations == nullptr &&
-        binding.output.pairlist.pair_elements == 0 &&
-        binding.output.pairlist.pair_offset_elements == 0 &&
-        binding.output.pairlist.pair_count_elements == 0 &&
-        binding.output.pairlist.neighbor_offset_elements == 0 &&
-        binding.output.pairlist.neighbor_count_elements == 0 &&
-        binding.output.pairlist.neighbor_elements == 0 &&
-        binding.output.pairlist.generation_elements == 0 &&
+        binding.output.pairlist.role == Gfn2PairListRole::kCoordination &&
+        binding.output.pairlist.state == Gfn2PairListState::kCommitted &&
         binding.diagnostics.sparse_system_errors == nullptr &&
         binding.diagnostics.sparse_device_error == nullptr;
   }
@@ -225,7 +202,7 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
   if (binding.plan_token == 0u) {
     return binding_failure(BindingError::kInvalidPlanToken, BindingField::kBinding);
   }
-  if (!all_tokens_match(binding)) {
+if (!all_tokens_match(binding)) {
     return binding_failure(BindingError::kCrossPlan, BindingField::kPlan);
   }
   const bool epoch_disabled = binding.geometry_epoch.value == nullptr &&
@@ -533,6 +510,48 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
     if (!pairlist_extents) {
       return binding_failure(BindingError::kInvalidWorkspace, BindingField::kPairlist);
     }
+    /* Committed output view (ABI step 4): the final per-system gate publishes
+     * the candidate list into fixed-stride per-system slices with explicit
+     * counts, per-system committed generations, and an eligibility mask, so a
+     * failed peer is ineligible and never shifts a later peer's slice. */
+    const Gfn2PairListConsumerView& committed = binding.output.pairlist;
+    std::int64_t committed_pairs_capacity = 0;
+    std::int64_t committed_neighbors_capacity = 0;
+    const bool committed_extents =
+        committed.memory_space == Gfn2PlanMemorySpace::kCudaDevice &&
+        committed.state == Gfn2PairListState::kCommitted &&
+        committed.role == Gfn2PairListRole::kCoordination &&
+        committed.pair_map_kind == Gfn2PairMapKind::kExplicit &&
+        committed.plan_token == binding.plan_token &&
+        committed.batch_size == batch && committed.total_atoms == atoms &&
+        committed.max_pairs_per_system == pairlist.max_pairs_per_system &&
+        committed.max_neighbors_per_atom == pairlist.max_neighbors_per_atom &&
+        std::isfinite(committed.cutoff_bohr) && committed.cutoff_bohr > 0.0 &&
+        committed.list_builder_cutoff_bohr >= committed.cutoff_bohr &&
+        committed.pair_offset_count == batch + 1 &&
+        committed.neighbor_offset_count == atoms + 1 &&
+        committed.pair_count_elements == batch &&
+        committed.neighbor_count_elements == atoms &&
+        committed.pair_count == pairlist_pairs_capacity &&
+        committed.neighbor_count == pairlist_neighbors_capacity &&
+        committed.committed_generation_count == batch &&
+        committed.eligible_mask_count == batch && committed.active_mask_count == 0 &&
+        checked_multiply(batch, pairlist.max_pairs_per_system, committed_pairs_capacity) &&
+        checked_multiply(atoms, pairlist.max_neighbors_per_atom, committed_neighbors_capacity) &&
+        committed.pair_count == committed_pairs_capacity &&
+        committed.neighbor_count == committed_neighbors_capacity &&
+        canonical_pointer(committed.pair_offsets, committed.pair_offset_count) &&
+        canonical_pointer(committed.pairs, committed.pair_count) &&
+        canonical_pointer(committed.pair_counts, committed.pair_count_elements) &&
+        canonical_pointer(committed.neighbor_offsets, committed.neighbor_offset_count) &&
+        canonical_pointer(committed.neighbor_counts, committed.neighbor_count_elements) &&
+        canonical_pointer(committed.neighbors, committed.neighbor_count) &&
+        canonical_pointer(committed.committed_generations, committed.committed_generation_count) &&
+        canonical_pointer(committed.eligible_mask, committed.eligible_mask_count) &&
+        committed.active_mask == nullptr;
+    if (!committed_extents) {
+      return binding_failure(BindingError::kInvalidExtent, BindingField::kOutput);
+    }
   }
 
   RangeList<40> reads;
@@ -624,10 +643,19 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
                   workspace.pairlist.neighbor_cursor_elements) &&
        writes.add(workspace.pairlist.neighbor_scratch,
                   workspace.pairlist.neighbor_scratch_elements) &&
-       writes.add(workspace.pairlist.pair_cursor, workspace.pairlist.pair_cursor_elements) &&
-       writes.add(workspace.pairlist.sequence_active, workspace.pairlist.sequence_elements) &&
-       writes.add(diagnostics.sparse_system_errors, diagnostics.sparse_system_elements) &&
-       writes.add(diagnostics.sparse_device_error, 1));
+writes.add(workspace.pairlist.pair_cursor, workspace.pairlist.pair_cursor_elements) &&
+        writes.add(workspace.pairlist.sequence_active, workspace.pairlist.sequence_elements) &&
+        writes.add(output.pairlist.pairs, output.pairlist.pair_count) &&
+        writes.add(output.pairlist.pair_offsets, output.pairlist.pair_offset_count) &&
+        writes.add(output.pairlist.pair_counts, output.pairlist.pair_count_elements) &&
+        writes.add(output.pairlist.neighbor_offsets, output.pairlist.neighbor_offset_count) &&
+        writes.add(output.pairlist.neighbor_counts, output.pairlist.neighbor_count_elements) &&
+        writes.add(output.pairlist.neighbors, output.pairlist.neighbor_count) &&
+        writes.add(output.pairlist.committed_generations,
+                   output.pairlist.committed_generation_count) &&
+        writes.add(output.pairlist.eligible_mask, output.pairlist.eligible_mask_count) &&
+        writes.add(diagnostics.sparse_system_errors, diagnostics.sparse_system_elements) &&
+        writes.add(diagnostics.sparse_device_error, 1));
   const bool epoch_range_valid =
       epoch_disabled ||
       writes.add(binding.geometry_epoch.value, binding.geometry_epoch.value_elements);
@@ -921,6 +949,87 @@ __global__ void promote_sparse_coordination_kernel(Gfn2GeometryDeviceBatch geome
     dense_coordination[atom] = sparse_coordination[atom];
   }
   static_cast<void>(pairlist);
+}
+
+/*
+ * Commit the sparse pair list into the stable public output view through the
+ * final per-system gate.  Only requested, healthy peers publish: their
+ * committed generation advances and their eligibility byte flips.  A failed or
+ * inactive peer keeps generation zero and an ineligible byte.  Consumers read
+ * only eligible peers and trust explicit per-peer counts + committed
+ * generations (the consumer-view contract), so one peer's failure can never
+ * publish a partial or shifted slice for another.
+ *
+ * Committed offsets mirror the candidate's per-system compact CSR offsets
+ * exactly; the consumer view validator requires pair_offsets/neighbor_offsets
+ * to be valid partitions with explicit counts matching per-system slices.
+ * The kernel writes no public byte before its own per-peer gate passes and is
+ * therefore safe in the same stream and Graph as the rest of the preprocessing
+ * DAG.
+ */
+__global__ void commit_pairlist_kernel(Gfn2PairListDeviceBatch pairlist,
+                                       const Gfn2PairListDeviceCache& candidate,
+                                       Gfn2PairListConsumerView committed,
+                                       GeometryGenerationSource generation_source,
+                                       Gfn2PreprocessingDeviceActivity activity,
+                                       Gfn2PreprocessingDeviceDiagnostics diagnostics) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  const bool requested = activity.requested_mask[system] == 1u;
+  const bool healthy =
+      atomicAdd(diagnostics.geometry_system_errors + system, 0u) ==
+      static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSuccess);
+  const std::uint64_t generation = load_geometry_generation(generation_source);
+  const bool commit = requested && healthy && generation != 0u;
+  /* The committed consumer view is a const projection; the output arrays are
+   * the mutable publication target owned by the caller, so publish through
+   * mutable local aliases. */
+  auto* const committed_pairs =
+      const_cast<gpuxtb::detail::Gfn2AtomPair*>(committed.pairs);
+  auto* const committed_pair_offsets =
+      const_cast<std::int64_t*>(committed.pair_offsets);
+  auto* const committed_pair_counts = const_cast<std::int64_t*>(committed.pair_counts);
+  auto* const committed_neighbor_offsets =
+      const_cast<std::int64_t*>(committed.neighbor_offsets);
+  auto* const committed_neighbor_counts = const_cast<std::int64_t*>(committed.neighbor_counts);
+  auto* const committed_neighbors = const_cast<std::int64_t*>(committed.neighbors);
+  auto* const committed_generations =
+      const_cast<std::uint64_t*>(committed.committed_generations);
+  auto* const committed_eligible_mask = const_cast<std::uint8_t*>(committed.eligible_mask);
+  if (threadIdx.x == 0) {
+    if (committed_eligible_mask != nullptr) {
+      committed_eligible_mask[system] = commit ? 1u : 0u;
+    }
+    if (committed_generations != nullptr) {
+      committed_generations[system] = commit ? generation : 0u;
+    }
+  }
+  if (!commit) {
+    return;
+  }
+  const std::int64_t atom_begin = pairlist.atom_offsets[system];
+  const std::int64_t atom_end = pairlist.atom_offsets[system + 1];
+  const std::int64_t pair_begin = candidate.pair_offsets[system];
+  const std::int64_t pair_end = candidate.pair_offsets[system + 1];
+  for (std::int64_t pair = pair_begin + threadIdx.x; pair < pair_end; pair += blockDim.x) {
+    committed_pairs[pair] = candidate.pairs[pair];
+  }
+  if (threadIdx.x == 0) {
+    committed_pair_counts[system] = pair_end - pair_begin;
+    committed_pair_offsets[system] = candidate.pair_offsets[system];
+    committed_pair_offsets[system + 1] = candidate.pair_offsets[system + 1];
+  }
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    const std::int64_t count = candidate.neighbor_counts[atom];
+    const std::int64_t begin = candidate.neighbor_offsets[atom];
+    for (std::int64_t index = 0; index < count; ++index) {
+      committed_neighbors[begin + index] = candidate.neighbors[begin + index];
+    }
+    committed_neighbor_counts[atom] = count;
+    committed_neighbor_offsets[atom] = candidate.neighbor_offsets[atom];
+    if (threadIdx.x == blockDim.x - 1 || atom + 1 == atom_end) {
+      committed_neighbor_offsets[atom + 1] = candidate.neighbor_offsets[atom + 1];
+    }
+  }
 }
 
 __global__ void classify_plan_kernel(std::int64_t batch_size,
@@ -1257,6 +1366,19 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
       generation_source);
   status = check_launch();
   if (status != cudaSuccess) return launch_failure({}, status);
+
+  /* Committed pair-list transaction: after the complete per-system gate,
+   * publish the sparse list into the stable output consumer view with
+   * per-peer generation + eligibility.  Healthy peers are eligible for the
+   * current generation; failed/inactive peers stay ineligible with generation
+   * zero so their slice is never consumed. */
+  if (binding.plan.pairlist.batch_size > 0) {
+    commit_pairlist_kernel<<<static_cast<unsigned int>(batch), kThreadsPerBlock, 0, stream>>>(
+        binding.plan.pairlist, binding.workspace.pairlist_candidate, binding.output.pairlist,
+        generation_source, binding.activity, binding.diagnostics);
+    status = check_launch();
+    if (status != cudaSuccess) return launch_failure({}, status);
+  }
 
   /* Only the legacy path can update host-side descriptor scalars. In either
    * mode, device-resident per-system generations plus published_mask are the

@@ -298,6 +298,12 @@ struct DeviceFixture {
   DeviceBuffer<gpuxtb::detail::cuda::Gfn2PairListSystemMeta> pairlist_meta;
   DeviceBuffer<std::uint32_t> pairlist_sequence, sparse_system_errors, sparse_device_error;
   DeviceBuffer<double> sparse_coordination;
+  /* Committed output pair-list storage (step 4), allocated by enable_pairlist(). */
+  DeviceBuffer<gpuxtb::detail::Gfn2AtomPair> committed_pairs;
+  DeviceBuffer<std::int64_t> committed_pair_offsets, committed_pair_counts,
+      committed_neighbor_offsets, committed_neighbor_counts, committed_neighbors;
+  DeviceBuffer<std::uint64_t> committed_pair_generations;
+  DeviceBuffer<std::uint8_t> committed_eligible_mask;
 
   Gfn2PreprocessingDeviceBinding binding{};
 
@@ -622,6 +628,14 @@ struct DeviceFixture {
     PL_ALLOC(pairlist_neighbor_scratch, atoms * max_neighbors_per_atom);
     PL_ALLOC(pairlist_pair_cursor, batch);
     PL_ALLOC(pairlist_sequence, 1u);
+    PL_ALLOC(committed_pairs, batch * max_pairs_per_system);
+    PL_ALLOC(committed_pair_offsets, batch + 1);
+    PL_ALLOC(committed_pair_counts, batch);
+    PL_ALLOC(committed_neighbor_offsets, atoms + 1);
+    PL_ALLOC(committed_neighbor_counts, atoms);
+    PL_ALLOC(committed_neighbors, atoms * max_neighbors_per_atom);
+    PL_ALLOC(committed_pair_generations, batch);
+    PL_ALLOC(committed_eligible_mask, batch);
 #undef PL_ALLOC
     if (status != cudaSuccess) return status;
     /* Host-set per-system dispatch decisions.  This fixture builds every system
@@ -688,7 +702,36 @@ struct DeviceFixture {
                                   pairlist_sequence.get(),
                                   1,
                                   kPlanToken};
-    binding.output.pairlist = {};
+    binding.output.pairlist = {
+        gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice,
+        gpuxtb::detail::Gfn2PairListState::kCommitted,
+        gpuxtb::detail::Gfn2PairListRole::kCoordination,
+        gpuxtb::detail::Gfn2PairMapKind::kExplicit,
+        kPlanToken,
+        gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
+        gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
+        batch,
+        atoms,
+        max_pairs_per_system,
+        max_neighbors_per_atom,
+        batch + 1,
+        atoms + 1,
+        batch * max_pairs_per_system,
+        atoms * max_neighbors_per_atom,
+        committed_pair_offsets.get(),
+        committed_pairs.get(),
+        batch,
+        atoms,
+        committed_pair_counts.get(),
+        committed_neighbor_counts.get(),
+        committed_neighbor_offsets.get(),
+        committed_neighbors.get(),
+        batch,
+        batch,
+        0,
+        committed_pair_generations.get(),
+        committed_eligible_mask.get(),
+        nullptr};
     return cudaSuccess;
   }
 
@@ -724,8 +767,39 @@ struct Downloaded {
   std::vector<std::uint64_t> geometry_generations, operator_generations;
   std::vector<std::uint8_t> published;
   std::vector<std::uint32_t> geometry_errors, integral_errors, aes2_errors, stages;
+  std::vector<gpuxtb::detail::Gfn2AtomPair> committed_pairs;
+  std::vector<std::int64_t> committed_pair_offsets, committed_pair_counts,
+      committed_neighbor_offsets, committed_neighbor_counts, committed_neighbors;
+  std::vector<std::uint64_t> committed_generations;
+  std::vector<std::uint8_t> committed_eligible;
   std::uint32_t plan_error = 0u;
 };
+
+cudaError_t download_committed(const HostCase& host, const DeviceFixture& device,
+                               Downloaded& values, cudaStream_t stream) {
+  values.committed_pairs.resize(device.committed_pairs.size());
+  values.committed_pair_offsets.resize(device.committed_pair_offsets.size());
+  values.committed_pair_counts.resize(device.committed_pair_counts.size());
+  values.committed_neighbor_offsets.resize(device.committed_neighbor_offsets.size());
+  values.committed_neighbor_counts.resize(device.committed_neighbor_counts.size());
+  values.committed_neighbors.resize(device.committed_neighbors.size());
+  values.committed_generations.resize(device.committed_pair_generations.size());
+  values.committed_eligible.resize(device.committed_eligible_mask.size());
+  cudaError_t status = device.committed_pairs.download(values.committed_pairs.data(),
+                                                       values.committed_pairs.size(), stream);
+#define DOWNLOAD_C(field, target) \
+  if (status == cudaSuccess)      \
+  status = device.field.download(values.target.data(), values.target.size(), stream)
+  DOWNLOAD_C(committed_pair_offsets, committed_pair_offsets);
+  DOWNLOAD_C(committed_pair_counts, committed_pair_counts);
+  DOWNLOAD_C(committed_neighbor_offsets, committed_neighbor_offsets);
+  DOWNLOAD_C(committed_neighbor_counts, committed_neighbor_counts);
+  DOWNLOAD_C(committed_neighbors, committed_neighbors);
+  DOWNLOAD_C(committed_pair_generations, committed_generations);
+  DOWNLOAD_C(committed_eligible_mask, committed_eligible);
+#undef DOWNLOAD_C
+  return status;
+}
 
 cudaError_t download(const HostCase& host, const DeviceFixture& device, Downloaded& values,
                      cudaStream_t stream) {
@@ -1176,6 +1250,54 @@ int test_sparse_pairlist_gate() {
             static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSuccess));
       CHECK(first.published[static_cast<std::size_t>(system)] == 1u);
     }
+
+    /* Step 4 committed pair-list transaction: after the per-system gate, the
+     * sparse candidate list is published into the stable output consumer view
+     * with per-peer eligibility and the current generation.  All requested
+     * healthy peers are eligible and their committed offsets/counts match the
+     * candidate's compact CSR layout. */
+    CHECK(seal_gfn2_preprocessing_binding_cuda(device.binding).success());
+    Downloaded committed_view;
+    CUDA_CHECK(download_committed(host, device, committed_view, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    for (std::int64_t system = 0; system < batch; ++system) {
+      CHECK(committed_view.committed_eligible[static_cast<std::size_t>(system)] == 1u);
+      CHECK(committed_view.committed_generations[static_cast<std::size_t>(system)] == 61u);
+    }
+    std::int64_t running_pairs = 0;
+    for (std::int64_t system = 0; system < batch; ++system) {
+      CHECK(committed_view.committed_pair_offsets[static_cast<std::size_t>(system)] ==
+            running_pairs);
+      const std::int64_t count =
+          committed_view.committed_pair_counts[static_cast<std::size_t>(system)];
+      CHECK(count >= 0);
+      running_pairs += count;
+      const std::int64_t atom_begin = host.atom_offsets[static_cast<std::size_t>(system)];
+      const std::int64_t atom_end = host.atom_offsets[static_cast<std::size_t>(system + 1)];
+      for (std::int64_t index = 0; index < count; ++index) {
+        const auto pair =
+            committed_view.committed_pairs[static_cast<std::size_t>(running_pairs - count + index)];
+        CHECK(pair.first >= atom_begin && pair.first < pair.second && pair.second < atom_end);
+      }
+    }
+    CHECK(committed_view.committed_pair_offsets[static_cast<std::size_t>(batch)] ==
+          running_pairs);
+    std::int64_t running_neighbors = 0;
+    for (std::int64_t atom_index = 0; atom_index < host.basis.total_atoms; ++atom_index) {
+      CHECK(committed_view.committed_neighbor_offsets[static_cast<std::size_t>(atom_index)] ==
+            running_neighbors);
+      const std::int64_t count =
+          committed_view.committed_neighbor_counts[static_cast<std::size_t>(atom_index)];
+      running_neighbors += count;
+      for (std::int64_t index = 0; index < count; ++index) {
+        const std::int64_t peer =
+            committed_view.committed_neighbors[static_cast<std::size_t>(
+                running_neighbors - count + index)];
+        CHECK(peer >= 0 && peer < host.basis.total_atoms);
+      }
+    }
+    CHECK(committed_view.committed_neighbor_offsets[static_cast<std::size_t>(
+              host.basis.total_atoms)] == running_neighbors);
 
     Gfn2PreprocessingDeviceBinding aliased = device.binding;
     aliased.binding_seal = 0u;
