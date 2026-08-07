@@ -442,6 +442,11 @@ def consume_from_dlpack(
             f"({device_type}, {device_id}) but exported capsule device "
             f"({parsed.device_type}, {parsed.device_id})"
         )
+    if parsed.is_copy and not copy:
+        raise BufferError(
+            f"{type(export_producer).__name__} returned a copied DLPack tensor "
+            "when copy=False; a borrowed zero-copy view is required"
+        )
 
     _validated_dtype(parsed, expected_dtype)
     pointer = _validated_pointer(parsed, expected_shape)
@@ -523,16 +528,19 @@ def _stream_argument(stream: int | None, device_type: int) -> int | None:
 def _produce_capsule(producer: object, stream_value: int | None, copy: bool) -> object:
     """Call ``__dlpack__`` and return the producer's capsule.
 
-    DLPack 1.0 is negotiated with ``max_version=(1, 0)``. A legacy producer is
-    retried without that keyword while retaining the CUDA consumer stream and
-    any Array API 2025.12 ``copy`` request. Producers that cannot honor those
-    safety requirements raise instead of silently returning an unsafe view.
+    DLPack 1.0 is negotiated with ``max_version=(1, 0)`` and an explicit copy
+    policy. A legacy producer is retried without unsupported keywords while
+    retaining the CUDA consumer stream; versioned copied flags are rejected
+    whenever the caller requires a borrowed zero-copy view.
     """
-    full_kwargs: dict[str, object] = {"max_version": tuple(_DLPACK_MAX_VERSION)}
+    full_kwargs: dict[str, object] = {
+        "max_version": tuple(_DLPACK_MAX_VERSION),
+        # ``None`` permits a producer copy. Always state the caller's policy so
+        # compliant modern producers can enforce zero-copy before exporting.
+        "copy": copy,
+    }
     if stream_value is not None:
         full_kwargs["stream"] = stream_value
-    if copy:
-        full_kwargs["copy"] = True
     try:
         return producer.__dlpack__(**full_kwargs)
     except TypeError:
@@ -543,13 +551,22 @@ def _produce_capsule(producer: object, stream_value: int | None, copy: bool) -> 
         legacy_kwargs.pop("max_version")
         try:
             return producer.__dlpack__(**legacy_kwargs)
-        except TypeError as exc:
+        except TypeError:
             if copy:
                 raise GPUxtbNotSupportedError(
                     f"{type(producer).__name__}.__dlpack__ does not accept a copy "
                     "request; supply an array matching the required dtype and layout "
                     "instead"
                 ) from None
+            # Pre-copy-keyword producers cannot negotiate ``copy=False``. The
+            # legacy protocol historically exported borrowed views, so retry
+            # without only that keyword while retaining CUDA synchronization.
+            no_copy_kwargs = dict(legacy_kwargs)
+            no_copy_kwargs.pop("copy")
+            try:
+                return producer.__dlpack__(**no_copy_kwargs)
+            except TypeError as no_copy_exc:
+                exc = no_copy_exc
             if stream_value is not None:
                 raise BufferError(
                     f"{type(producer).__name__}.__dlpack__ does not accept the "

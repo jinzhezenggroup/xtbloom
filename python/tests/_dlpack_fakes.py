@@ -138,6 +138,8 @@ class FakeArray:
         legacy ``dltensor`` capsule.
     readonly
         Set the versioned read-only flag (ignored for legacy capsules).
+    copied
+        Set the versioned copied-tensor flag (ignored for legacy capsules).
     stream_support
         Whether ``__dlpack__`` accepts the ``stream`` keyword.
     max_version_support
@@ -166,6 +168,7 @@ class FakeArray:
         capsule_ndim: int | None = None,
         versioned: bool = True,
         readonly: bool = False,
+        copied: bool = False,
         stream_support: bool = True,
         max_version_support: bool = True,
         copy_support: bool = True,
@@ -183,6 +186,7 @@ class FakeArray:
         self._capsule_ndim = capsule_ndim
         self._versioned = versioned
         self._readonly = readonly
+        self._copied = copied
         self._stream_support = stream_support
         self._max_version_support = max_version_support
         self._copy_support = copy_support
@@ -249,7 +253,11 @@ class FakeArray:
         if self._versioned:
             struct.version_major = self._major_version
             struct.version_minor = 0
-            struct.flags = dlpack._DLPACK_FLAG_READ_ONLY if self._readonly else 0
+            struct.flags = 0
+            if self._readonly:
+                struct.flags |= dlpack._DLPACK_FLAG_READ_ONLY
+            if self._copied:
+                struct.flags |= dlpack._DLPACK_FLAG_IS_COPIED
         tensor = struct.dl_tensor
         tensor.data = ctypes.c_void_p(data.ctypes.data)
         tensor.device.device_type = self._capsule_device[0]
