@@ -26,6 +26,7 @@ IMPLIB_MANIFEST_PATH = "cmake/3rdparty/implib_manifest.json"
 IMPLIB_VENDOR_PATH = "cmake/3rdparty/implib"
 IMPLIB_REVISION = "6f4fc02ae058ef11848046af01a1a756f3229c29"
 IMPLIB_TREE = "5fbe7e9f2c4efe0c2be4d2eed409e81f35458ba4"
+ARRAY_API_COMPAT_LICENSE = "LICENSES/array-api-compat-MIT.txt"
 SOURCE_FILES = (
     "LICENSE",
     EXCEPTION_FILE,
@@ -33,6 +34,7 @@ SOURCE_FILES = (
     "LICENSES/LGPL-3.0-or-later.txt",
     "LICENSES/Apache-2.0.txt",
     "LICENSES/MIT.txt",
+    ARRAY_API_COMPAT_LICENSE,
     "data/parameters/d4.NOTICE",
     "data/parameters/tblite_sto.hpp",
     "data/parameters/tblite_spin.hpp",
@@ -53,6 +55,7 @@ COMMON_ARCHIVE_SUFFIXES = (
     "LICENSES/LGPL-3.0-or-later.txt",
     "LICENSES/Apache-2.0.txt",
     "LICENSES/MIT.txt",
+    ARRAY_API_COMPAT_LICENSE,
 )
 SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/d4.NOTICE",
@@ -78,6 +81,7 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/gpuxtb/provenance/mctc_manifest.json",
     "share/licenses/gpuxtb/provenance/implib_manifest.json",
     "share/licenses/gpuxtb/third-party/MIT.txt",
+    "share/licenses/gpuxtb/third-party/array-api-compat-MIT.txt",
     "share/licenses/gpuxtb/third-party/d4/d4.NOTICE",
     "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING",
     "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING.LESSER",
@@ -91,6 +95,7 @@ INSTALL_FILES = (
     "share/licenses/gpuxtb/third-party/LGPL-3.0-or-later.txt",
     "share/licenses/gpuxtb/third-party/Apache-2.0.txt",
     "share/licenses/gpuxtb/third-party/MIT.txt",
+    "share/licenses/gpuxtb/third-party/array-api-compat-MIT.txt",
     "share/licenses/gpuxtb/provenance/manifest.json",
     "share/licenses/gpuxtb/provenance/sto_manifest.json",
     "share/licenses/gpuxtb/provenance/spin_manifest.json",
@@ -121,6 +126,9 @@ NOTICE_TOKENS = (
     "6f4fc02ae058ef11848046af01a1a756f3229c29",
     "No LAMMPS source code",
     "scipy-openblas32",
+    "array-api-compat",
+    "076218e4f5aa18578418c7d04fad9ab581a16bb8",
+    "Copyright (c) 2022 Consortium for Python Data API Standards",
     EXCEPTION_FILE,
 )
 EXCEPTION_TOKENS = (
@@ -206,6 +214,11 @@ def _require_dependency_policy(project: object) -> None:
         raise LicenseCheckError("pyproject dependency metadata is incomplete")
 
     mandatory = {_requirement_name(item): item for item in dependencies}
+    array_compat = mandatory.get("array-api-compat")
+    if array_compat is None or ">=1.15,<2" not in array_compat:
+        raise LicenseCheckError(
+            "array-api-compat must use the reviewed >=1.15,<2 runtime range"
+        )
     if "scipy-openblas32" not in mandatory:
         raise LicenseCheckError("Linux CPU installs must require scipy-openblas32")
     openblas = mandatory["scipy-openblas32"]
@@ -425,6 +438,17 @@ def check_source(root: Path) -> None:
     for token in NOTICE_TOKENS:
         if token not in notice:
             raise LicenseCheckError(f"THIRD_PARTY_NOTICES.md omits {token}")
+
+    array_compat_license = (root / ARRAY_API_COMPAT_LICENSE).read_text(encoding="utf-8")
+    for token in (
+        "MIT License",
+        "Copyright (c) 2022 Consortium for Python Data API Standards",
+        "Permission is hereby granted, free of charge",
+    ):
+        if token not in array_compat_license:
+            raise LicenseCheckError(
+                f"{ARRAY_API_COMPAT_LICENSE} omits required upstream text: {token}"
+            )
 
     _check_implib_provenance(root)
 

@@ -31,7 +31,8 @@ from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 
-from . import library
+from . import _array as _array_adapter
+from . import _dlpack, library
 from .exceptions import GPUxtbNotSupportedError, GPUxtbRuntimeError, GPUxtbValueError
 
 if TYPE_CHECKING:
@@ -454,6 +455,7 @@ class Context:
         backend: str | int = "auto",
         device_id: int | None = None,
         cpu_threads: int = 1,
+        stream: int | None = None,
     ) -> None:
         if isinstance(backend, str):
             try:
@@ -472,6 +474,15 @@ class Context:
         self._cpu_threads = int(cpu_threads)
         if self._cpu_threads < 0:
             raise GPUxtbValueError("cpu_threads must be nonnegative")
+        if stream is not None:
+            stream = int(stream)
+            if stream <= 0:
+                raise GPUxtbValueError("stream must be a positive CUstream handle")
+            if self._requested == library.BACKEND_CPU:
+                raise GPUxtbValueError(
+                    "a native GPU stream cannot be attached to the CPU backend"
+                )
+        self._stream = stream
         self._handle = None
         self._backend: int | None = None
         self._finalizer: weakref.finalize | None = None
@@ -491,6 +502,7 @@ class Context:
         options.backend = self._requested
         options.device_id = self._device_id
         options.cpu_threads = self._cpu_threads
+        options.stream = ctypes.c_void_p(self._stream or 0)
         handle = ctypes.c_void_p()
         status = library_instance.gpuxtb_context_create(
             ctypes.byref(options), ctypes.byref(handle)
@@ -525,6 +537,16 @@ class Context:
         """The backend device id (``-1`` for CPU)."""
         self._create()
         return int(library.load_library().gpuxtb_context_get_device_id(self._handle))
+
+    @property
+    def stream(self) -> int | None:
+        """The native ``CUstream`` handle attached to this context, if any.
+
+        ``None`` means the context uses the CUDA legacy default stream; the
+        DLPack consumer in :class:`ArrayBatch` translates that to the DLPack
+        stream value ``1``.
+        """
+        return self._stream
 
     def close(self) -> None:
         """Release the native context and its persistent resources."""
@@ -1512,9 +1534,852 @@ class BatchCalculator:
         self.close()
 
 
+# --- packed Array API / DLPack batch execution --------------------------------
+
+
+def _probe_shape(array: object) -> tuple[int, ...]:
+    """Read the logical shape from an eager Array API array.
+
+    Only the metadata is touched; nothing is evaluated or copied.  The shape
+    is used to derive the ragged-batch extents so the full request can be
+    validated before any DLPack capsule is consumed.
+    """
+    if _array_adapter.is_lazy(array):
+        raise GPUxtbNotSupportedError(
+            f"{_array_adapter.backend_name(array)} tracer/lazy objects cannot be "
+            "used with gpuxtb; pass a concrete eager array"
+        )
+    shape = getattr(array, "shape", None)
+    if shape is None:
+        raise GPUxtbValueError(
+            f"{_array_adapter.backend_name(array)} does not expose .shape; "
+            "gpuxtb requires eager Array API arrays"
+        )
+    return tuple(int(value) for value in shape)
+
+
+# Optional descriptor groups that must be supplied all-or-nothing, matching the
+# C ABI's single batch-wide descriptor sets.
+_POINT_CHARGE_FIELDS = (
+    "point_charge_offsets",
+    "point_charge_positions",
+    "point_charge_values",
+    "point_charge_gammas",
+)
+_CHARGE_RESPONSE_FIELDS = (
+    "atomic_potential_shifts",
+    "charge_response_offsets",
+    "charge_response_matrix",
+)
+
+
+class ArrayBatch:
+    """Packed ragged-batch inference over Array API/DLPack arrays.
+
+    This is the zero-copy entry point of the Python interface: every
+    positional descriptor takes a dense, single-device array implementing the
+    Array API ``__dlpack__``/``__dlpack_device__`` producer protocols (NumPy,
+    CuPy, JAX eager arrays, and PyTorch tensors).  gpuxtb never imports those
+    libraries; the caller's arrays are consumed through DLPack and their
+    buffers are bound directly to the C ABI descriptors:
+
+    * Host (CPU) arrays become ``GPUXTB_MEMORY_HOST`` descriptors.
+    * CUDA device arrays become ``GPUXTB_MEMORY_CUDA_DEVICE`` descriptors and
+      are executed by the CUDA backend without a host round trip.
+
+    ``copy=False`` (the default) requires exact dtype, shape, and compact
+    C-contiguous layout; anything else raises instead of silently copying.
+    Set ``copy=True`` to ask the producer for a contiguous copy.  CUDA-managed
+    memory, ROCm, and other device kinds are rejected with a precise error.
+    Lazy/tracer objects (``jit``/``grad``/``vmap`` inputs, ``torch.compile``
+    graphs) are rejected; framework autograd integration is not part of this
+    API.
+
+    The existing :class:`Structure`/:class:`Calculator` host-numpy path is
+    unchanged and remains the compatibility default.
+
+    Parameters
+    ----------
+    atom_offsets : (nsystems + 1,) int64
+        Ragged atom offsets; ``offsets[-1]`` is the total atom count.
+    atomic_numbers : (natoms,) int32
+        Concatenated atomic numbers.
+    positions : (natoms, 3) float64
+        Concatenated Cartesian positions in bohr.
+    molecular_charges : (nsystems,) float64
+        Total molecular charge of each system.
+    unpaired_electrons : (nsystems,) int32
+        Number of unpaired electrons of each system.
+    spin_channels : (nsystems,) int32, optional
+        Orbital channels (1 restricted / 2 unrestricted); defaults to all
+        restricted ``1`` on a host buffer.
+    point_charge_offsets, point_charge_positions, point_charge_values,
+    point_charge_gammas : optional
+        External point-charge group; must be supplied together.  Offsets are
+        ``(nsystems + 1,)`` int64, positions ``(npoints, 3)`` float64, values
+        and gammas ``(npoints,)`` float64.
+    atomic_potential_shifts, charge_response_offsets, charge_response_matrix : optional
+        Periodic charge-response ``b + A q`` group; must be supplied together.
+        Shifts are ``(natoms,)`` float64, offsets ``(nsystems + 1,)`` int64,
+        and the matrix packs all per-system ``A`` blocks row-major.
+    copy : bool
+        Allow a producer-side copy to pack a non-contiguous input. Dtypes must
+        still match the C ABI exactly.
+    backend, device_id, cpu_threads : optional
+        Same context selection as :class:`Calculator`.
+    stream : int, optional
+        Raw ``CUstream`` handle the native context should use.  ``None`` uses
+        the CUDA legacy default stream; CUDA producers receive DLPack stream
+        value ``1`` in that case and the raw handle otherwise.
+    """
+
+    def __init__(
+        self,
+        atom_offsets: object,
+        atomic_numbers: object,
+        positions: object,
+        molecular_charges: object,
+        unpaired_electrons: object,
+        spin_channels: object | None = None,
+        point_charge_offsets: object | None = None,
+        point_charge_positions: object | None = None,
+        point_charge_values: object | None = None,
+        point_charge_gammas: object | None = None,
+        atomic_potential_shifts: object | None = None,
+        charge_response_offsets: object | None = None,
+        charge_response_matrix: object | None = None,
+        *,
+        copy: bool = False,
+        backend: str | int = "auto",
+        device_id: int | None = None,
+        cpu_threads: int = 1,
+        stream: int | None = None,
+    ) -> None:
+        if not (
+            all(
+                hasattr(array, "__dlpack__") and hasattr(array, "__dlpack_device__")
+                for array in (
+                    atom_offsets,
+                    atomic_numbers,
+                    positions,
+                    molecular_charges,
+                    unpaired_electrons,
+                )
+            )
+        ):
+            raise GPUxtbValueError(
+                "ArrayBatch requires arrays implementing the DLPack producer "
+                "protocol (__dlpack__ and __dlpack_device__)"
+            )
+        _require_all_or_none("point charge", _POINT_CHARGE_FIELDS, locals())
+        _require_all_or_none("charge response", _CHARGE_RESPONSE_FIELDS, locals())
+        self._arrays: dict[str, object | None] = {
+            "atom_offsets": atom_offsets,
+            "atomic_numbers": atomic_numbers,
+            "positions": positions,
+            "molecular_charges": molecular_charges,
+            "unpaired_electrons": unpaired_electrons,
+            "spin_channels": spin_channels,
+            "point_charge_offsets": point_charge_offsets,
+            "point_charge_positions": point_charge_positions,
+            "point_charge_values": point_charge_values,
+            "point_charge_gammas": point_charge_gammas,
+            "atomic_potential_shifts": atomic_potential_shifts,
+            "charge_response_offsets": charge_response_offsets,
+            "charge_response_matrix": charge_response_matrix,
+        }
+        self._copy = bool(copy)
+        self._context = Context(backend, device_id, cpu_threads, stream)
+
+    @property
+    def backend(self) -> int:
+        """The resolved execution backend of this batch."""
+        return self._context.backend
+
+    @property
+    def context(self) -> Context:
+        """The native context this batch computes with."""
+        return self._context
+
+    def compute(
+        self,
+        *,
+        max_scc_iterations: int = 250,
+        charge_tolerance: float = 1.0e-6,
+        energy_tolerance: float = 1.0e-8,
+        electronic_temperature: float = 300.0,
+        compute_energy: bool = True,
+        compute_forces: bool = True,
+        compute_charges: bool = True,
+        compute_point_charge_forces: bool | None = None,
+        out: object | None = None,
+    ) -> ArrayBatchResult:
+        """Run one synchronous inference and return an :class:`ArrayBatchResult`.
+
+        Per-system SCC/eigensolver failures are data-level results, exactly as
+        in :meth:`BatchCalculator.compute`: peers stay independent and a
+        failed system's floating-point slices are NaNs.
+
+        ``out`` may map output names to writable, correctly-typed arrays of
+        any supported backend (NumPy, CuPy, or PyTorch); gpuxtb writes
+        directly into them instead of allocating host results.  JAX arrays are
+        never mutated and are rejected as mutable outputs.  Names:
+        ``energies``, ``forces``, ``charges`` (alias ``atomic_charges``),
+        ``point_charge_forces``, ``scc_iterations``, ``scc_converged``, and
+        ``per_system_status``.
+        """
+        self._context._create()
+        return _compute_array_batch(
+            self,
+            max_scc_iterations=max_scc_iterations,
+            charge_tolerance=charge_tolerance,
+            energy_tolerance=energy_tolerance,
+            electronic_temperature=electronic_temperature,
+            compute_energy=compute_energy,
+            compute_forces=compute_forces,
+            compute_charges=compute_charges,
+            compute_point_charge_forces=compute_point_charge_forces,
+            out=out,
+        )
+
+    def close(self) -> None:
+        """Release this batch's native context."""
+        self._context.close()
+
+    def __enter__(self) -> ArrayBatch:  # noqa: PYI034 - Python 3.10 lacks typing.Self
+        """Return this batch for use in a ``with`` block."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Release native resources when leaving a ``with`` block."""
+        self.close()
+
+
+# --- packed Array API / DLPack execution helpers ------------------------------
+
+
+def _require_all_or_none(
+    group_name: str, fields: Sequence[str], namespace: dict[str, object]
+) -> None:
+    """Require every field of an optional descriptor group or none of them."""
+    provided = [field for field in fields if namespace.get(field) is not None]
+    if provided and len(provided) != len(fields):
+        missing = [field for field in fields if field not in provided]
+        raise GPUxtbValueError(
+            f"{group_name} descriptors must be supplied together; missing "
+            + ", ".join(missing)
+        )
+
+
+def _array_shape(array: object) -> tuple[int, ...]:
+    """Return the validated logical shape of one eager Array API array."""
+    return _probe_shape(array)
+
+
+def _compute_array_batch(
+    batch: ArrayBatch,
+    *,
+    max_scc_iterations: int,
+    charge_tolerance: float,
+    energy_tolerance: float,
+    electronic_temperature: float,
+    compute_energy: bool,
+    compute_forces: bool,
+    compute_charges: bool,
+    compute_point_charge_forces: bool | None,
+    out: object | None,
+) -> ArrayBatchResult:
+    """Consume all DLPack views and run one synchronous compute call.
+
+    The full request is validated before any output buffer is touched; every
+    committed DLPack view is released exactly once on both the success and the
+    failure path.
+    """
+    arrays = batch._arrays
+    context = batch._context
+    context._create()
+
+    counts = _derive_batch_counts(arrays)
+    nsystems, natoms, npoints, response_elements = counts
+
+    out_spec = _normalize_out_spec(out)
+
+    views: list[_dlpack.DLPackView] = []
+    keepalive: list[object] = []
+    output_owners: dict[str, object] = {}
+    try:
+        batch_descriptor = library.Batch()
+        library._check_init(
+            "gpuxtb_batch_init",
+            library.load_library().gpuxtb_batch_init(
+                ctypes.byref(batch_descriptor), ctypes.sizeof(batch_descriptor)
+            ),
+        )
+        batch_descriptor.batch_size = nsystems
+        batch_descriptor.total_atoms = natoms
+        batch_descriptor.total_point_charges = npoints
+        batch_descriptor.total_charge_response_elements = response_elements
+
+        def consume_input(name: str, shape: tuple[int, ...]) -> _dlpack.DLPackView:
+            array = arrays.get(name)
+            if array is None:
+                values = np.empty(0, dtype=_dlpack.EXPECTED_INPUT_DTYPES[name])
+                keepalive.append(values)
+                array = values
+                shape = (0,)
+            view = _dlpack.consume_from_dlpack(
+                array,
+                expected_dtype=_dlpack.EXPECTED_INPUT_DTYPES[name],
+                expected_shape=shape,
+                stream=context.stream,
+                copy=batch._copy,
+            )
+            views.append(view)
+            setattr(batch_descriptor, name, view.descriptor)
+            return view
+
+        # --- ragged batch inputs ------------------------------------------------
+        consume_input("molecular_charges", (nsystems,))
+        consume_input("atom_offsets", (nsystems + 1,))
+        consume_input("atomic_numbers", (natoms,))
+        consume_input("positions", (natoms, 3))
+        consume_input("unpaired_electrons", (nsystems,))
+        if arrays.get("spin_channels") is None:
+            default_spin = np.full(nsystems, 1, dtype=np.int32)
+            keepalive.append(default_spin)
+            arrays["spin_channels"] = default_spin
+        consume_input("spin_channels", (nsystems,))
+        if arrays.get("point_charge_offsets") is not None:
+            consume_input("point_charge_offsets", (nsystems + 1,))
+            consume_input("point_charge_positions", (npoints, 3))
+            consume_input("point_charge_values", (npoints,))
+            consume_input("point_charge_gammas", (npoints,))
+        if arrays.get("charge_response_matrix") is not None:
+            consume_input("atomic_potential_shifts", (natoms,))
+            consume_input("charge_response_offsets", (nsystems + 1,))
+            consume_input("charge_response_matrix", (response_elements,))
+
+        _validate_device_consistency(views, context)
+        options = _build_compute_options(
+            nsystems,
+            npoints,
+            max_scc_iterations=max_scc_iterations,
+            charge_tolerance=charge_tolerance,
+            energy_tolerance=energy_tolerance,
+            electronic_temperature=electronic_temperature,
+            compute_energy=compute_energy,
+            compute_forces=compute_forces,
+            compute_charges=compute_charges,
+            compute_point_charge_forces=compute_point_charge_forces,
+        )
+        _validate_requested_outputs(out_spec, options.flags, npoints)
+        result = library.BatchResult()
+        library._check_init(
+            "gpuxtb_batch_result_init",
+            library.load_library().gpuxtb_batch_result_init(
+                ctypes.byref(result), ctypes.sizeof(result)
+            ),
+        )
+        _bind_outputs(
+            result,
+            out_spec,
+            views,
+            keepalive,
+            output_owners,
+            context.stream,
+            nsystems,
+            natoms,
+            npoints,
+            flags=options.flags,
+        )
+        # Output views are part of the same device contract as inputs. Check
+        # them after binding, before native validation or any publication.
+        _validate_device_consistency(views, context)
+        library.compute_checked(context._handle, batch_descriptor, options, result)
+        return ArrayBatchResult(output_owners, result_flags=int(result.flags))
+    finally:
+        _dlpack.release_all(views)
+
+
+def _derive_batch_counts(arrays: dict[str, object | None]) -> tuple[int, int, int, int]:
+    """Derive the ragged-batch extents from the input array shapes.
+
+    Only metadata is read; native offset-value validation remains the
+    authoritative check because it handles host and device storage
+    identically.
+    """
+    molecular_shape = _array_shape(arrays["molecular_charges"])
+    if len(molecular_shape) != 1:
+        raise GPUxtbValueError(
+            f"molecular_charges must be one-dimensional, got {molecular_shape}"
+        )
+    nsystems = molecular_shape[0]
+    if nsystems < 1:
+        raise GPUxtbValueError("a batch needs at least one system")
+    atom_offsets_shape = _array_shape(arrays["atom_offsets"])
+    if atom_offsets_shape != (nsystems + 1,):
+        raise GPUxtbValueError(
+            f"atom_offsets must have shape ({nsystems + 1},), got {atom_offsets_shape}"
+        )
+    atomic_numbers_shape = _array_shape(arrays["atomic_numbers"])
+    if len(atomic_numbers_shape) != 1:
+        raise GPUxtbValueError(
+            f"atomic_numbers must be one-dimensional, got {atomic_numbers_shape}"
+        )
+    natoms = atomic_numbers_shape[0]
+    if _array_shape(arrays["positions"]) != (natoms, 3):
+        raise GPUxtbValueError(
+            f"positions must have shape ({natoms}, 3), got "
+            f"{_array_shape(arrays['positions'])}"
+        )
+    npoints = 0
+    if arrays["point_charge_offsets"] is not None:
+        offsets_shape = _array_shape(arrays["point_charge_offsets"])
+        if offsets_shape != (nsystems + 1,):
+            raise GPUxtbValueError(
+                f"point_charge_offsets must have shape ({nsystems + 1},), "
+                f"got {offsets_shape}"
+            )
+        point_positions_shape = _array_shape(arrays["point_charge_positions"])
+        if len(point_positions_shape) != 2 or point_positions_shape[1] != 3:
+            raise GPUxtbValueError(
+                "point_charge_positions must have shape (npoints, 3), got "
+                f"{point_positions_shape}"
+            )
+        npoints = point_positions_shape[0]
+        if _array_shape(arrays["point_charge_values"]) != (npoints,):
+            raise GPUxtbValueError("point charge values must match the position count")
+        if _array_shape(arrays["point_charge_gammas"]) != (npoints,):
+            raise GPUxtbValueError("point charge gammas must match the position count")
+    response_elements = 0
+    if arrays["charge_response_matrix"] is not None:
+        response_matrix_shape = _array_shape(arrays["charge_response_matrix"])
+        if len(response_matrix_shape) != 1:
+            raise GPUxtbValueError(
+                "charge_response_matrix must be one-dimensional, got "
+                f"{response_matrix_shape}"
+            )
+        response_elements = response_matrix_shape[0]
+        if _array_shape(arrays["charge_response_offsets"]) != (nsystems + 1,):
+            raise GPUxtbValueError(
+                f"charge_response_offsets must have shape ({nsystems + 1},)"
+            )
+        if _array_shape(arrays["atomic_potential_shifts"]) != (natoms,):
+            raise GPUxtbValueError(
+                f"atomic_potential_shifts must have shape ({natoms},)"
+            )
+    return nsystems, natoms, npoints, response_elements
+
+
+def _validate_device_consistency(
+    views: Sequence[_dlpack.DLPackView], context: Context
+) -> None:
+    """Require all CUDA views to belong to the context's resolved device.
+
+    Host views are usable on any backend (a CUDA context stages host
+    buffers).  CUDA views require the CUDA backend and the exact context
+    device: gpuxtb never performs an implicit cross-device copy.
+    """
+    cuda_views = [v for v in views if v.memory_space == library.MEMORY_CUDA_DEVICE]
+    if not cuda_views:
+        return
+    if int(context.backend) != library.BACKEND_CUDA:
+        raise GPUxtbNotSupportedError("CUDA device arrays require the CUDA backend")
+    resolved = int(context.device_id)
+    for view in cuda_views:
+        if not _same_device(view.device_id, resolved):
+            raise GPUxtbNotSupportedError(
+                f"CUDA array on device {view.device_id} does not match the "
+                f"context's resolved device {resolved}"
+            )
+
+
+def _same_device(device_id: int, resolved_device: int) -> bool:
+    """Return whether one reported CUDA ordinal matches the context device."""
+    return int(device_id) == int(resolved_device)
+
+
+def _build_compute_options(
+    nsystems: int,
+    npoints: int,
+    *,
+    max_scc_iterations: int,
+    charge_tolerance: float,
+    energy_tolerance: float,
+    electronic_temperature: float,
+    compute_energy: bool,
+    compute_forces: bool,
+    compute_charges: bool,
+    compute_point_charge_forces: bool | None,
+) -> library.ComputeOptions:
+    """Validate settings and build the ``gpuxtb_compute_options_t`` mirror."""
+    options = library.ComputeOptions()
+    library._check_init(
+        "gpuxtb_compute_options_init",
+        library.load_library().gpuxtb_compute_options_init(
+            ctypes.byref(options), ctypes.sizeof(options)
+        ),
+    )
+    options.scc_start_mode = library.SCC_START_FRESH
+    options.model = library.MODEL_GFN2_XTB
+    flags = 0
+    if compute_energy:
+        flags |= library.COMPUTE_ENERGY
+    if compute_forces:
+        flags |= library.COMPUTE_FORCES
+    if compute_charges:
+        flags |= library.COMPUTE_ATOMIC_CHARGES
+    if npoints and compute_point_charge_forces is not False:
+        flags |= library.COMPUTE_POINT_CHARGE_FORCES
+    options.flags = flags
+    options.max_scc_iterations = _as_integer("max_scc_iterations", max_scc_iterations)
+    options.charge_tolerance = float(charge_tolerance)
+    options.energy_tolerance = float(energy_tolerance)
+    options.electronic_temperature = (
+        float(electronic_temperature) * library.KELVIN_TO_HARTREE
+    )
+    return options
+
+
+def _normalize_out_spec(out: object | None) -> dict[str, object]:
+    """Validate and normalize the ``out=`` output-policy mapping."""
+    if out is None:
+        return {}
+    if not isinstance(out, dict):
+        raise GPUxtbValueError("out must be a mapping of output names to arrays")
+    aliases = {"atomic_charges": "charges"}
+    normalized: dict[str, object] = {}
+    for name, array in out.items():
+        canonical = aliases.get(name, name)
+        if canonical not in _dlpack.EXPECTED_OUTPUT_DTYPES:
+            raise GPUxtbValueError(f"unknown output name {name!r}")
+        if canonical in normalized:
+            raise GPUxtbValueError(f"output {name!r} was supplied more than once")
+        if _array_adapter.is_lazy(array):
+            raise GPUxtbNotSupportedError(
+                f"lazy/tracer objects cannot be used as {name} output buffers"
+            )
+        if _array_adapter.is_writable(array) is False:
+            raise BufferError(
+                f"output array {name!r} from {_array_adapter.backend_name(array)} "
+                "is not writable; gpuxtb never mutates read-only or JAX arrays"
+            )
+        normalized[canonical] = array
+    return normalized
+
+
+def _validate_requested_outputs(
+    out_spec: dict[str, object], flags: int, npoints: int
+) -> None:
+    """Reject output buffers that the selected compute policy would ignore."""
+    requested = {
+        "energies": bool(flags & library.COMPUTE_ENERGY),
+        "forces": bool(flags & library.COMPUTE_FORCES),
+        "charges": bool(flags & library.COMPUTE_ATOMIC_CHARGES),
+        "point_charge_forces": bool(
+            npoints and flags & library.COMPUTE_POINT_CHARGE_FORCES
+        ),
+        # Native diagnostics are mandatory for every nonempty batch.
+        "scc_iterations": True,
+        "scc_converged": True,
+        "per_system_status": True,
+    }
+    ignored = [name for name in out_spec if not requested[name]]
+    if ignored:
+        raise GPUxtbValueError(
+            "out contains buffers for properties that were not requested: "
+            + ", ".join(ignored)
+        )
+
+
+def _bind_outputs(
+    result: library.BatchResult,
+    out_spec: dict[str, object],
+    views: list[_dlpack.DLPackView],
+    keepalive: list[object],
+    output_owners: dict[str, object],
+    stream: int | None,
+    nsystems: int,
+    natoms: int,
+    npoints: int,
+    *,
+    flags: int,
+) -> None:
+    """Bind every requested output buffer, honoring the ``out=`` policy."""
+    specs = (
+        ("energies", "energies", (nsystems,)),
+        ("forces", "forces", (natoms, 3)),
+        ("charges", "atomic_charges", (natoms,)),
+    )
+    for public_name, field_name, shape in specs:
+        requested = bool(
+            flags
+            & {
+                "energies": library.COMPUTE_ENERGY,
+                "forces": library.COMPUTE_FORCES,
+                "charges": library.COMPUTE_ATOMIC_CHARGES,
+            }[public_name]
+        )
+        if not requested:
+            setattr(result, field_name, library.Buffer(None, 0, library.MEMORY_HOST, 0))
+            continue
+        owner = _bind_one_output(
+            result,
+            field_name,
+            out_spec.get(public_name),
+            shape,
+            _dlpack.EXPECTED_OUTPUT_DTYPES[public_name],
+            views,
+            keepalive,
+            stream,
+        )
+        if owner is not None:
+            output_owners[public_name] = owner
+    if npoints and flags & library.COMPUTE_POINT_CHARGE_FORCES:
+        owner = _bind_one_output(
+            result,
+            "point_charge_forces",
+            out_spec.get("point_charge_forces"),
+            (npoints, 3),
+            _dlpack.EXPECTED_OUTPUT_DTYPES["point_charge_forces"],
+            views,
+            keepalive,
+            stream,
+        )
+        if owner is not None:
+            output_owners["point_charge_forces"] = owner
+    else:
+        result.point_charge_forces = library.Buffer(None, 0, library.MEMORY_HOST, 0)
+    for public_name, field_name in (
+        ("scc_iterations", "scc_iterations"),
+        ("scc_converged", "scc_converged"),
+        ("per_system_status", "per_system_status"),
+    ):
+        owner = _bind_one_output(
+            result,
+            field_name,
+            out_spec.get(public_name),
+            (nsystems,),
+            _dlpack.EXPECTED_OUTPUT_DTYPES[public_name],
+            views,
+            keepalive,
+            stream,
+        )
+        if owner is not None:
+            output_owners[public_name] = owner
+
+
+def _bind_one_output(
+    result: library.BatchResult,
+    field_name: str,
+    array: object | None,
+    shape: tuple[int, ...],
+    dtype: object,
+    views: list[_dlpack.DLPackView],
+    keepalive: list[object],
+    stream: int | None,
+) -> object | None:
+    """Bind one output descriptor and return the array the result must expose.
+
+    ``out=`` arrays are consumed as writable DLPack views; otherwise a host
+    numpy owner is allocated and returned.  Empty outputs bind the null
+    buffer and return ``None``.
+    """
+    if array is not None:
+        actual = _array_shape(array)
+        if actual != shape:
+            raise GPUxtbValueError(
+                f"output array must have shape {shape}, got {actual}"
+            )
+        view = _dlpack.consume_from_dlpack(
+            array,
+            expected_dtype=dtype,
+            expected_shape=shape,
+            stream=stream,
+            # Outputs must always alias the caller's buffer. Allowing the
+            # batch input copy policy here would make a producer-side temporary
+            # receive the result while the advertised ``out=`` array stays
+            # unchanged.
+            copy=False,
+            writable_required=True,
+            writable_hint=_array_adapter.is_writable(array),
+        )
+        views.append(view)
+        setattr(result, field_name, view.as_output_buffer())
+        return array
+    if not shape:
+        setattr(result, field_name, library.Buffer(None, 0, library.MEMORY_HOST, 0))
+        return None
+    owner = np.empty(shape, dtype=dtype)
+    keepalive.append(owner)
+    setattr(
+        result,
+        field_name,
+        library.Buffer(
+            ctypes.cast(owner.ctypes.data, ctypes.c_void_p),
+            owner.nbytes,
+            library.MEMORY_HOST,
+            0,
+        ),
+    )
+    return owner
+
+
+class ArrayBatchResult:
+    """Packed batch results whose arrays follow the caller's output policy.
+
+    By default every array is a freshly allocated host numpy array.  When the
+    associated ``out=`` buffers were supplied, the corresponding attributes
+    reference those caller-owned arrays instead.
+    """
+
+    def __init__(self, data: dict[str, object], result_flags: int) -> None:
+        self._data = dict(data)
+        self.result_flags = int(result_flags)
+
+    def _require(self, name: str) -> object:
+        if name not in self._data:
+            raise GPUxtbValueError(f"{name} was not requested or has no storage")
+        return self._data[name]
+
+    @property
+    def energies(self) -> object:
+        """Per-system energies in Hartree, shape ``(nsystems,)``."""
+        return self._require("energies")
+
+    @property
+    def forces(self) -> object:
+        """Per-atom forces in Hartree/bohr, shape ``(natoms, 3)``."""
+        return self._require("forces")
+
+    @property
+    def charges(self) -> object:
+        """Per-atom partial charges, shape ``(natoms,)``."""
+        return self._require("charges")
+
+    @property
+    def point_charge_forces(self) -> object:
+        """Per-point-charge forces, or ``None`` when no points were present."""
+        return self._data.get("point_charge_forces")
+
+    @property
+    def scc_iterations(self) -> object:
+        """Per-system SCC iteration counts, shape ``(nsystems,)``."""
+        return self._require("scc_iterations")
+
+    @property
+    def scc_converged(self) -> object:
+        """Per-system SCC convergence flags, shape ``(nsystems,)``."""
+        return self._require("scc_converged")
+
+    @property
+    def per_system_status(self) -> object:
+        """Per-system native status codes, shape ``(nsystems,)``."""
+        return self._require("per_system_status")
+
+    @property
+    def failed_indices(self) -> object:
+        """Indices whose SCC/eigensolver status is not successful.
+
+        Requires host numpy ``per_system_status``/``scc_converged`` (the
+        default output policy).
+        """
+        status = self._require("per_system_status")
+        converged = self._require("scc_converged")
+        if not isinstance(status, np.ndarray) or not isinstance(converged, np.ndarray):
+            raise GPUxtbNotSupportedError(
+                "failed_indices requires host numpy status arrays; provide "
+                "per_system_status/scc_converged without out= or keep them on the host"
+            )
+        return np.flatnonzero((status != library.STATUS_SUCCESS) | (converged != 1))
+
+    def get(self, name: str) -> object:
+        """Return one packed result array by name."""
+        if name == "point_charge_forces":
+            return self.point_charge_forces
+        if name not in {
+            "energies",
+            "forces",
+            "charges",
+            "scc_iterations",
+            "scc_converged",
+            "per_system_status",
+        }:
+            raise GPUxtbValueError(f"attribute {name!r} is not available")
+        return self._require(name)
+
+
+def compute_arrays(
+    atom_offsets: object,
+    atomic_numbers: object,
+    positions: object,
+    molecular_charges: object,
+    unpaired_electrons: object,
+    spin_channels: object | None = None,
+    point_charge_offsets: object | None = None,
+    point_charge_positions: object | None = None,
+    point_charge_values: object | None = None,
+    point_charge_gammas: object | None = None,
+    atomic_potential_shifts: object | None = None,
+    charge_response_offsets: object | None = None,
+    charge_response_matrix: object | None = None,
+    *,
+    copy: bool = False,
+    backend: str | int = "auto",
+    device_id: int | None = None,
+    cpu_threads: int = 1,
+    stream: int | None = None,
+    max_scc_iterations: int = 250,
+    charge_tolerance: float = 1.0e-6,
+    energy_tolerance: float = 1.0e-8,
+    electronic_temperature: float = 300.0,
+    out: object | None = None,
+) -> ArrayBatchResult:
+    """One-shot packed inference; a convenience alias of :class:`ArrayBatch`.
+
+    Builds a temporary :class:`ArrayBatch` from the flat descriptor arrays,
+    computes with the given options, and returns an :class:`ArrayBatchResult`.
+    """
+    batch = ArrayBatch(
+        atom_offsets,
+        atomic_numbers,
+        positions,
+        molecular_charges,
+        unpaired_electrons,
+        spin_channels=spin_channels,
+        point_charge_offsets=point_charge_offsets,
+        point_charge_positions=point_charge_positions,
+        point_charge_values=point_charge_values,
+        point_charge_gammas=point_charge_gammas,
+        atomic_potential_shifts=atomic_potential_shifts,
+        charge_response_offsets=charge_response_offsets,
+        charge_response_matrix=charge_response_matrix,
+        copy=copy,
+        backend=backend,
+        device_id=device_id,
+        cpu_threads=cpu_threads,
+        stream=stream,
+    )
+    with batch:
+        return batch.compute(
+            max_scc_iterations=max_scc_iterations,
+            charge_tolerance=charge_tolerance,
+            energy_tolerance=energy_tolerance,
+            electronic_temperature=electronic_temperature,
+            out=out,
+        )
+
+
 __all__ = [
     "ELEMENT_SYMBOLS",
     "SYMBOL_TO_NUMBER",
+    "ArrayBatch",
+    "ArrayBatchResult",
     "BatchCalculator",
     "BatchResult",
     "Calculator",
@@ -1523,6 +2388,7 @@ __all__ = [
     "PointCharge",
     "Result",
     "Structure",
+    "compute_arrays",
     "numbers_to_symbols",
     "symbols_to_numbers",
 ]

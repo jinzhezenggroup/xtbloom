@@ -19,6 +19,8 @@ from .exceptions import (
     GPUxtbValueError,
 )
 from .interface import (
+    ArrayBatch,
+    ArrayBatchResult,
     BatchCalculator,
     BatchResult,
     Calculator,
@@ -27,11 +29,14 @@ from .interface import (
     PointCharge,
     Result,
     Structure,
+    compute_arrays,
     numbers_to_symbols,
     symbols_to_numbers,
 )
 
 __all__ = [
+    "ArrayBatch",
+    "ArrayBatchResult",
     "BatchCalculator",
     "BatchResult",
     "Calculator",
@@ -45,6 +50,7 @@ __all__ = [
     "Result",
     "Structure",
     "__version__",
+    "compute_arrays",
     "numbers_to_symbols",
     "symbols_to_numbers",
 ]

@@ -137,6 +137,81 @@ chunks from current free memory. An integer such as
 `compute(auto_batch_size=20_000)` instead limits the target total atom count per
 native call while preserving input order.
 
+## Array API and DLPack input arrays
+
+`ArrayBatch` is the packed, zero-copy entry point: instead of building
+`Structure` objects, pass the flat ragged-batch descriptor arrays directly.
+Every array may come from any library that implements the Array API
+`__dlpack__`/`__dlpack_device__` producer protocols — NumPy, CuPy, JAX eager
+arrays, or PyTorch tensors — without gpuxtb importing any of those libraries.
+
+```python
+import numpy as np
+from gpuxtb import ArrayBatch
+
+atom_offsets = np.array([0, 2, 5], dtype=np.int64)
+atomic_numbers = np.array([8, 1, 1, 1, 1], dtype=np.int32)
+positions = np.array([
+    [0.0000, 0.0000, -0.7358],
+    [1.4418, 0.0000, 0.3679],
+    [-1.4418, 0.0000, 0.3679],
+    [-0.7, 0.0, 0.0],
+    [0.7, 0.0, 0.0],
+])
+molecular_charges = np.array([0.0, 0.0])
+unpaired_electrons = np.array([0, 0], dtype=np.int32)
+
+with ArrayBatch(
+    atom_offsets,
+    atomic_numbers,
+    positions,
+    molecular_charges,
+    unpaired_electrons,
+    backend="cuda",
+) as batch:
+    result = batch.compute()
+print(result.energies, result.forces, result.charges)
+```
+
+Host arrays become `GPUXTB_MEMORY_HOST` descriptors; CUDA device arrays (a
+PyTorch tensor or CuPy array on `cuda`) become `GPUXTB_MEMORY_CUDA_DEVICE`
+descriptors and are executed by the CUDA backend with no host round trip.
+CUDA-managed memory, ROCm, and lazy/tracer objects (`jit`/`grad`/`vmap`
+inputs, `torch.compile` graphs) are rejected with a precise error — pass a
+concrete eager array instead.
+
+- `copy=False` (default) requires the exact dtype, shape, and a compact
+  C-contiguous layout; anything else raises rather than silently copying. Set
+  `copy=True` to ask the producer for a compact copy. Copying never coerces
+  dtype; descriptors must still match the C ABI's exact scalar types.
+- The optional `point_charge_*` and `atomic_potential_shifts` /
+  `charge_response_offsets` / `charge_response_matrix` groups mirror the
+  `PointCharge`/`ChargeResponse` descriptors and must each be supplied
+  all-or-nothing.
+- `stream` selects the native `CUstream` for the context (the default `None`
+  means the CUDA legacy default stream; DLPack producers receive stream value
+  `1` in that case). `stream` is not meaningful for the CPU backend.
+
+### Output policy
+
+Results are ordinary host NumPy arrays by default, matching the rest of the
+Python API. Pass an `out=` mapping to have gpuxtb write directly into your own
+writable NumPy, CuPy, or PyTorch buffers (no copy); JAX arrays are never
+mutated and are rejected as outputs.
+
+```python
+out_forces = torch.empty((5, 3), dtype=torch.float64, device="cuda")
+result = batch.compute(out={"forces": out_forces})
+assert result.forces is out_forces
+```
+
+`out=` keys: `energies`, `forces`, `charges` (alias `atomic_charges`),
+`point_charge_forces`, `scc_iterations`, `scc_converged`, and
+`per_system_status`.
+
+`compute_arrays(...)` is a convenience alias that builds a temporary
+`ArrayBatch` and computes in one call.
+
 ## Explicit point charges
 
 Point charges participate in every SCC iteration. Their positions are in bohr,
