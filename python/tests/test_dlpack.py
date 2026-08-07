@@ -31,6 +31,7 @@ def _consume(
     stream: int | None = None,
     copy: bool = False,
     writable_required: bool = False,
+    writable_hint: bool | None = None,
 ) -> dlpack.DLPackView:
     return dlpack.consume_from_dlpack(
         producer,
@@ -39,20 +40,20 @@ def _consume(
         stream=stream,
         copy=copy,
         writable_required=writable_required,
+        writable_hint=writable_hint,
     )
 
 
 # --- real NumPy producer ------------------------------------------------------
 
 
-def test_numpy_versioned_view_is_borrowed_zero_copy() -> None:
+def test_numpy_view_is_borrowed_zero_copy() -> None:
     """The view must alias NumPy's own buffer with the exact ABI extents."""
     values = np.arange(12.0, dtype=np.float64).reshape(4, 3)
     view = _consume(values, shape=(4, 3))
     assert view.pointer == int(values.ctypes.data)
     assert view.size_bytes == values.nbytes
     assert view.memory_space == library.MEMORY_HOST
-    assert view.writable
     assert not view.is_copy
     try:
         view.release()
@@ -82,6 +83,13 @@ def test_numpy_shape_mismatch_is_rejected() -> None:
         _consume(np.zeros((2, 3)), shape=(3,))
 
 
+def test_capsule_rank_mismatch_is_rejected_before_shape_access() -> None:
+    """Rank is bounded before the parser walks producer-owned shape memory."""
+    fake = FakeArray(np.arange(3.0), capsule_ndim=1024)
+    with pytest.raises(GPUxtbValueError, match="ndim"):
+        _consume(fake, shape=(3,))
+
+
 def test_numpy_noncontiguous_copy_false_raises_bufffererror() -> None:
     """Non-contiguous views are rejected instead of silently copied."""
     values = np.arange(12.0).reshape(4, 3)[:, ::2]
@@ -106,18 +114,25 @@ def test_numpy_copy_true_makes_contiguous_copy() -> None:
     view.release()
 
 
+def test_numpy_copy_true_does_not_convert_dtype() -> None:
+    """A layout copy never hides an ABI dtype mismatch."""
+    values = np.arange(3, dtype=np.float32)
+    with pytest.raises(GPUxtbValueError, match="dtype"):
+        _consume(values, shape=(3,), copy=True)
+
+
 def test_numpy_writable_required_rejects_readonly() -> None:
     """Read-only output buffers fail deterministically."""
     values = np.arange(3.0)
     values.flags.writeable = False
-    with pytest.raises(BufferError, match=r"read-only|writable"):
+    with pytest.raises(BufferError, match=r"read.?only|writable"):
         _consume(values, writable_required=True)
 
 
 def test_numpy_writable_required_accepts_writable() -> None:
     """Writable output buffers pass the policy check."""
     values = np.arange(6.0)
-    view = _consume(values, shape=(6,), writable_required=True)
+    view = _consume(values, shape=(6,), writable_required=True, writable_hint=True)
     assert view.writable
     view.release()
 
@@ -158,6 +173,19 @@ def test_fake_legacy_capsule_is_consumed_as_readonly() -> None:
     assert fake.deleted_count() == 1
 
 
+def test_fake_legacy_writable_hint_allows_mutable_output() -> None:
+    """Prevalidated mutability enables outputs for pre-1.0 capsule producers."""
+    fake = FakeArray(np.arange(3.0), versioned=False)
+    view = _consume(
+        fake,
+        shape=(3,),
+        writable_required=True,
+        writable_hint=True,
+    )
+    assert view.writable
+    view.release()
+
+
 def test_fake_versioned_readonly_flag() -> None:
     """Versioned capsules carrying the read-only flag are rejected as outputs."""
     fake = FakeArray(np.arange(3.0), readonly=True)
@@ -191,6 +219,17 @@ def test_fake_cuda_maps_to_cuda_device_memory() -> None:
     assert view.memory_space == library.MEMORY_CUDA_DEVICE
     assert view.device_type == 2
     view.release()
+
+
+def test_reported_device_must_match_capsule_device() -> None:
+    """A producer cannot obtain a host tag for an embedded CUDA pointer."""
+    fake = FakeArray(
+        np.arange(3.0),
+        device=dlpack._DLPACK_DEVICE_CPU,
+        capsule_device=dlpack._DLPACK_DEVICE_CUDA,
+    )
+    with pytest.raises(BufferError, match="reported DLPack device"):
+        _consume(fake, shape=(3,))
 
 
 def test_fake_cuda_host_maps_to_host() -> None:
@@ -264,6 +303,32 @@ def test_fake_legacy_signature_fallback() -> None:
     view.release()
 
 
+def test_fake_cuda_legacy_signature_keeps_stream_argument() -> None:
+    """Dropping max_version must not discard CUDA producer synchronization."""
+    record: list[object] = []
+    fake = FakeArray(
+        np.arange(3.0),
+        device=dlpack._DLPACK_DEVICE_CUDA,
+        versioned=False,
+        max_version_support=False,
+        stream_record=record,
+    )
+    view = _consume(fake, shape=(3,), stream=7)
+    assert record == [7, 7]
+    view.release()
+
+
+def test_fake_cuda_without_stream_support_is_rejected() -> None:
+    """A CUDA producer that cannot synchronize with gpuxtb is unsafe to borrow."""
+    fake = FakeArray(
+        np.arange(3.0),
+        device=dlpack._DLPACK_DEVICE_CUDA,
+        stream_support=False,
+    )
+    with pytest.raises(BufferError, match="consumer CUDA stream"):
+        _consume(fake, shape=(3,), stream=7)
+
+
 def test_fake_copy_unsupported_raises_precise_error() -> None:
     """A copy request to a producer without copy support fails clearly."""
     fake = FakeArray(np.arange(3.0), copy_support=False)
@@ -277,6 +342,15 @@ def test_fake_unaligned_byte_offset_is_rejected() -> None:
     with pytest.raises(BufferError, match="aligned"):
         _consume(fake, shape=(8,))
     assert fake.deleted_count() == 0
+
+
+def test_naturally_aligned_int32_slice_is_accepted() -> None:
+    """The ABI needs scalar alignment, not allocation-base alignment."""
+    values = np.arange(9, dtype=np.int32)[1:]
+    assert values.ctypes.data % values.dtype.alignment == 0
+    view = _consume(values, dtype=I32, shape=(8,))
+    assert view.pointer == int(values.ctypes.data)
+    view.release()
 
 
 def test_fake_empty_tensor_has_null_descriptor() -> None:

@@ -11,7 +11,7 @@ to produce the redistributed data.
 
 Repository: <https://github.com/data-apis/array-api-compat>
 
-License: `MIT` (`LICENSES/MIT.txt`).
+License: `MIT` (`LICENSES/array-api-compat-MIT.txt`; Copyright (c) 2022 Consortium for Python Data API Standards).
 
 The gpuxtb Python package depends on `array-api-compat` (a backend-neutral
 shim, not an array backend) to probe dense eager arrays from NumPy, CuPy,

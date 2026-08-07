@@ -90,6 +90,22 @@ class LicenseArchiveTests(unittest.TestCase):
             ):
                 CHECKER.check_archive(wheel)
 
+    def test_wheel_must_retain_array_api_compat_license(self) -> None:
+        """Keep the new runtime dependency's distinct MIT grant in wheels."""
+        names = self._valid_wheel_names()
+        suffix = "LICENSES/array-api-compat-MIT.txt"
+        names.remove(f"gpuxtb-0.1.0.dist-info/licenses/{suffix}")
+        names.remove(
+            "gpuxtb/share/licenses/gpuxtb/third-party/array-api-compat-MIT.txt"
+        )
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-license-test-") as directory:
+            wheel = Path(directory) / "gpuxtb-test.whl"
+            self._write_wheel(wheel, names)
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "array-api-compat-MIT"
+            ):
+                CHECKER.check_archive(wheel)
+
     def test_wheel_must_not_bundle_vendor_library(self) -> None:
         """Reject wheels that bundle separately licensed vendor libraries."""
         names = self._valid_wheel_names()
@@ -114,6 +130,18 @@ class DependencyPolicyTests(unittest.TestCase):
     def test_current_dependency_policy_is_accepted(self) -> None:
         """Accept the repository's reviewed dependency policy."""
         CHECKER._require_dependency_policy(self.project)
+
+    def test_array_api_compat_must_use_reviewed_range(self) -> None:
+        """Require the provenance-reviewed runtime dependency range."""
+        project = copy.deepcopy(self.project)
+        project["dependencies"] = [
+            requirement.replace(">=1.15,<2", ">=1")
+            if requirement.startswith("array-api-compat")
+            else requirement
+            for requirement in project["dependencies"]
+        ]
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "reviewed"):
+            CHECKER._require_dependency_policy(project)
 
     def test_mkl_cannot_be_mandatory(self) -> None:
         """Reject MKL when added to mandatory dependencies."""

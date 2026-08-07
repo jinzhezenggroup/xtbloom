@@ -15,12 +15,13 @@ import numpy as np
 import pytest
 from _cases import case_by_id, structure_inputs
 from gpuxtb import ArrayBatch, Calculator
-from gpuxtb.exceptions import GPUxtbValueError
+from gpuxtb.exceptions import GPUxtbRuntimeError, GPUxtbValueError
 
 # --- environment probes ---------------------------------------------------------
 
 _TORCH = importlib.util.find_spec("torch")
 _CUPY = importlib.util.find_spec("cupy")
+_JAX = importlib.util.find_spec("jax")
 
 
 def _library_has_cuda() -> bool:
@@ -85,6 +86,24 @@ def _water_arrays(torch: object) -> dict[str, object]:
         "unpaired_electrons": _wrap(
             torch, "unpaired_electrons", np.array([0], np.int32)
         ),
+    }
+
+
+def _water_host_arrays() -> dict[str, np.ndarray]:
+    """Packed host descriptors for CUDA stream-state tests."""
+    return {
+        "atom_offsets": np.array([0, 3], dtype=np.int64),
+        "atomic_numbers": np.array([8, 1, 1], dtype=np.int32),
+        "positions": np.array(
+            [
+                [0.0000000000, 0.0000000000, -0.7357858611],
+                [1.4418315287, 0.0000000000, 0.3678929305],
+                [-1.4418315287, 0.0000000000, 0.3678929305],
+            ],
+            dtype=np.float64,
+        ),
+        "molecular_charges": np.array([0.0], dtype=np.float64),
+        "unpaired_electrons": np.array([0], dtype=np.int32),
     }
 
 
@@ -275,3 +294,194 @@ def test_torch_cuda_batch_with_spin() -> None:
     result = ArrayBatch(**arrays, backend="cuda").compute()
     assert abs(float(result.energies.item()) - reference.energy) < 1.0e-10
     assert np.allclose(result.forces, reference.forces, atol=1.0e-9)
+
+
+@pytest.mark.cuda
+def test_torch_custom_stream_and_changed_geometry() -> None:
+    """Repeated calls honor a custom stream and newly produced input data."""
+    reason = _device_ready()
+    if reason:
+        pytest.skip(reason)
+    if _TORCH is None:
+        pytest.skip("torch not installed")
+    import torch
+
+    arrays = _water_arrays(torch)
+    stream = torch.cuda.Stream()
+    out_energies = torch.full((1,), 123.0, dtype=torch.float64, device="cuda")
+    with ArrayBatch(**arrays, backend="cuda", stream=int(stream.cuda_stream)) as batch:
+        first = batch.compute(
+            compute_forces=False,
+            compute_charges=False,
+            out={"energies": out_energies},
+        )
+        first_energy = float(first.energies.item())
+        arrays["positions"][0, 2] += 0.2
+        second = batch.compute(
+            compute_forces=False,
+            compute_charges=False,
+            out={"energies": out_energies},
+        )
+        second_energy = float(second.energies.item())
+
+    assert batch.context.stream == int(stream.cuda_stream)
+    assert first.energies is out_energies
+    assert second.energies is out_energies
+    assert first_energy != pytest.approx(second_energy, abs=1.0e-8)
+
+
+@pytest.mark.cuda
+def test_cuda_validation_failure_leaves_device_output_unchanged() -> None:
+    """A pre-execution descriptor failure must not publish device outputs."""
+    reason = _device_ready()
+    if reason:
+        pytest.skip(reason)
+    if _TORCH is None:
+        pytest.skip("torch not installed")
+    import torch
+
+    arrays = _water_arrays(torch)
+    arrays["atom_offsets"] = torch.tensor([1, 3], dtype=torch.int64, device="cuda")
+    sentinel = -456.25
+    out_energies = torch.full((1,), sentinel, dtype=torch.float64, device="cuda")
+    with pytest.raises(GPUxtbRuntimeError, match="atom_offsets"):
+        ArrayBatch(**arrays, backend="cuda").compute(
+            compute_forces=False,
+            compute_charges=False,
+            out={"energies": out_energies},
+        )
+    assert out_energies.item() == sentinel
+
+
+@pytest.mark.cuda
+@pytest.mark.filterwarnings("ignore:The CUDA Graph is empty.*")
+def test_cuda_active_stream_capture_is_rejected() -> None:
+    """The synchronous public API refuses a stream already under capture."""
+    reason = _device_ready()
+    if reason:
+        pytest.skip(reason)
+    if _TORCH is None:
+        pytest.skip("torch not installed")
+    import torch
+
+    stream = torch.cuda.Stream()
+    batch = ArrayBatch(
+        **_water_host_arrays(), backend="cuda", stream=int(stream.cuda_stream)
+    )
+    # Create the native context before capture so the assertion targets the
+    # compute contract rather than context-initialization side effects.
+    _ = batch.context.backend
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.stream(stream):
+        graph.capture_begin()
+        try:
+            with pytest.raises(GPUxtbRuntimeError, match="capture"):
+                batch.compute()
+        finally:
+            graph.capture_end()
+    batch.close()
+
+
+@pytest.mark.cuda
+def test_cuda_compute_restores_callers_current_device() -> None:
+    """Normal and validation-failure exits preserve the caller's device."""
+    reason = _device_ready()
+    if reason:
+        pytest.skip(reason)
+    if _TORCH is None:
+        pytest.skip("torch not installed")
+    import torch
+
+    context_device = 0
+    caller_device = 1 if torch.cuda.device_count() > 1 else 0
+    with torch.cuda.device(context_device):
+        good = _water_arrays(torch)
+        bad = _water_arrays(torch)
+        bad["atom_offsets"] = torch.tensor(
+            [1, 3], dtype=torch.int64, device=f"cuda:{context_device}"
+        )
+    with torch.cuda.device(caller_device):
+        ArrayBatch(**good, backend="cuda", device_id=context_device).compute(
+            compute_forces=False, compute_charges=False
+        )
+        assert torch.cuda.current_device() == caller_device
+
+        with pytest.raises(GPUxtbRuntimeError, match="atom_offsets"):
+            ArrayBatch(**bad, backend="cuda", device_id=context_device).compute()
+        assert torch.cuda.current_device() == caller_device
+
+
+@pytest.mark.cuda
+def test_jax_eager_cuda_arrays_match_host_cuda() -> None:
+    """Concrete JAX CUDA arrays are valid immutable DLPack inputs."""
+    if not _library_has_cuda():
+        pytest.skip("CUDA backend is not available on this host")
+    if _JAX is None:
+        pytest.skip("JAX is not installed")
+    import jax
+    import jax.numpy as jnp
+
+    if not any(device.platform == "gpu" for device in jax.devices()):
+        pytest.skip("JAX has no CUDA device")
+    jax.config.update("jax_enable_x64", True)
+    host = _water_host_arrays()
+    arrays = {name: jax.device_put(jnp.asarray(value)) for name, value in host.items()}
+    reference = Calculator(
+        "GFN2-xTB",
+        host["atomic_numbers"],
+        host["positions"],
+        backend="cuda",
+    ).singlepoint()
+    result = ArrayBatch(**arrays, backend="cuda").compute()
+    assert result.energies == pytest.approx([reference.energy], abs=1.0e-10)
+    assert np.allclose(result.forces, reference.forces, atol=1.0e-9)
+
+
+@pytest.mark.cuda
+def test_jax_array_is_rejected_as_mutable_output() -> None:
+    """JAX arrays remain immutable even when their capsule is writable."""
+    if not _library_has_cuda():
+        pytest.skip("CUDA backend is not available on this host")
+    if _JAX is None:
+        pytest.skip("JAX is not installed")
+    import jax
+    import jax.numpy as jnp
+
+    if not any(device.platform == "gpu" for device in jax.devices()):
+        pytest.skip("JAX has no CUDA device")
+    jax.config.update("jax_enable_x64", True)
+    out = jax.device_put(jnp.empty((1,), dtype=jnp.float64))
+    with pytest.raises(BufferError, match="not writable"):
+        ArrayBatch(**_water_host_arrays(), backend="cuda").compute(
+            compute_forces=False,
+            compute_charges=False,
+            out={"energies": out},
+        )
+
+
+@pytest.mark.cuda
+def test_cupy_device_arrays_and_outputs_match_host_cuda() -> None:
+    """CuPy inputs and mutable outputs stay device-resident and in place."""
+    if not _library_has_cuda():
+        pytest.skip("CUDA backend is not available on this host")
+    if _CUPY is None:
+        pytest.skip("CuPy is not installed")
+    import cupy as cp
+
+    host = _water_host_arrays()
+    arrays = {name: cp.asarray(value) for name, value in host.items()}
+    reference = Calculator(
+        "GFN2-xTB",
+        host["atomic_numbers"],
+        host["positions"],
+        backend="cuda",
+    ).singlepoint()
+    out_energies = cp.full((1,), 123.0, dtype=cp.float64)
+    out_forces = cp.empty((3, 3), dtype=cp.float64)
+    result = ArrayBatch(**arrays, backend="cuda").compute(
+        out={"energies": out_energies, "forces": out_forces}
+    )
+    assert result.energies is out_energies
+    assert result.forces is out_forces
+    assert cp.asnumpy(out_energies) == pytest.approx([reference.energy], abs=1.0e-10)
+    assert np.allclose(cp.asnumpy(out_forces), reference.forces, atol=1.0e-9)

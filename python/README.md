@@ -182,7 +182,8 @@ concrete eager array instead.
 
 - `copy=False` (default) requires the exact dtype, shape, and a compact
   C-contiguous layout; anything else raises rather than silently copying. Set
-  `copy=True` to ask the producer for a compatible copy.
+  `copy=True` to ask the producer for a compact copy. Copying never coerces
+  dtype; descriptors must still match the C ABI's exact scalar types.
 - The optional `point_charge_*` and `atomic_potential_shifts` /
   `charge_response_offsets` / `charge_response_matrix` groups mirror the
   `PointCharge`/`ChargeResponse` descriptors and must each be supplied

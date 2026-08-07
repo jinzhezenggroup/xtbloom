@@ -9,8 +9,8 @@ package and without copying the array's data.
 The consumer follows the DLPack 1.0 Python specification:
 
 * DLPack 1.0 is negotiated with ``max_version=(1, 0)``; a producer whose
-  signature rejects that keyword falls back to the legacy no-argument
-  ``__dlpack__()`` call and its ``dltensor`` capsule.
+  signature rejects that keyword is retried without it while preserving the
+  CUDA consumer stream and any explicit copy request.
 * Both capsule forms (``dltensor`` and ``dltensor_versioned``) are accepted;
   unsupported major versions are rejected.
 * The producer object and the consumed capsule are kept alive through the
@@ -80,11 +80,11 @@ _DLPACK_MAX_VERSION = (1, 0)
 # an explicit, proven-safe design.
 _DLPACK_LEGACY_STREAM = 1
 
-# Every mainstream producer (NumPy, CuPy, PyTorch, JAX) aligns its allocations
-# to at least 16 bytes and reports ``byte_offset=0``.  Requiring this common
-# minimum makes an unaligned interior view fail deterministically instead of
-# silently misaligning the native solver.
-_MIN_POINTER_ALIGNMENT = 16
+# ``gpuxtb_buffer_t`` stores byte sizes as ``size_t`` and native validation
+# performs pointer-range arithmetic in ``uintptr_t``.  CPython exposes both
+# with pointer width on supported platforms, so this is the exact representable
+# upper bound for descriptors crossing the ctypes boundary.
+_POINTER_MAX = ctypes.c_size_t(-1).value
 
 # --- ctypes mirrors of the DLPack 1.0 C structs -------------------------------
 
@@ -227,6 +227,7 @@ class DLPackView:
     writable: bool
     is_copy: bool
     shape: tuple[int, ...]
+    _producer: object | None
     _capsule: object | None
     _deleter: Callable[[int], None] | None
     _managed_pointer: int
@@ -246,6 +247,7 @@ class DLPackView:
         deleter = self._deleter
         if deleter is not None and self._managed_pointer:
             deleter(self._managed_pointer)
+        self._producer = None
         self._capsule = None
         self._deleter = None
 
@@ -338,6 +340,7 @@ def consume_from_dlpack(
     stream: int | None,
     copy: bool = False,
     writable_required: bool = False,
+    writable_hint: bool | None = None,
 ) -> DLPackView:
     """Produce a validated, committed ``DLPackView`` for one array.
 
@@ -359,6 +362,10 @@ def consume_from_dlpack(
     writable_required
         When ``True`` the view must be writable (used for ``out=`` buffers);
         read-only producers raise :class:`BufferError`.
+    writable_hint
+        Backend-neutral mutability result supplied by the array adapter. This
+        is used only for legacy capsules, which predate DLPack's read-only
+        flag; versioned capsule flags remain authoritative.
 
     Returns
     -------
@@ -373,7 +380,17 @@ def consume_from_dlpack(
     its own destructor cleanly releases the producer when it is garbage
     collected.
     """
-    device_type, device_id = dlpack_device(producer)
+    export_producer = producer
+    copied_by_consumer = False
+    if copy and isinstance(producer, np.ndarray):
+        # NumPy releases predating the DLPack 1.0 keyword surface cannot honor
+        # ``copy=True`` themselves. NumPy is already a required gpuxtb runtime
+        # dependency, so provide the compact copy locally while preserving the
+        # producer dtype; exact-dtype validation below remains authoritative.
+        export_producer = np.array(producer, order="C", copy=True)
+        copied_by_consumer = True
+
+    device_type, device_id = dlpack_device(export_producer)
     memory_space = memory_space_for_device(device_type)
     if memory_space is None:
         raise GPUxtbNotSupportedError(
@@ -382,12 +399,14 @@ def consume_from_dlpack(
         )
 
     stream_value = _stream_argument(stream, device_type)
-    capsule = _produce_capsule(producer, stream_value, copy)
+    capsule = _produce_capsule(
+        export_producer, stream_value, copy and not copied_by_consumer
+    )
     versioned = bool(_pyapi.PyCapsule_IsValid(capsule, _CAPSULE_NAME_VERSIONED))
     legacy = bool(_pyapi.PyCapsule_IsValid(capsule, _CAPSULE_NAME))
     if not versioned and not legacy:
         raise BufferError(
-            f"{type(producer).__name__} returned a capsule that is neither "
+            f"{type(export_producer).__name__} returned a capsule that is neither "
             "dltensor_versioned nor dltensor"
         )
 
@@ -397,17 +416,19 @@ def consume_from_dlpack(
         )
     except ValueError:
         raise BufferError(
-            f"{type(producer).__name__} returned a malformed DLPack capsule"
+            f"{type(export_producer).__name__} returned a malformed DLPack capsule"
         ) from None
     if not managed_pointer:
         raise BufferError(
-            f"{type(producer).__name__} returned a NULL DLPack managed tensor"
+            f"{type(export_producer).__name__} returned a NULL DLPack managed tensor"
         )
 
-    parsed = _parse_managed_tensor(managed_pointer, versioned)
+    parsed = _parse_managed_tensor(
+        managed_pointer, versioned, expected_ndim=len(expected_shape)
+    )
     if versioned and parsed.version_major != 1:
         raise BufferError(
-            f"{type(producer).__name__} exported DLPack major version "
+            f"{type(export_producer).__name__} exported DLPack major version "
             f"{parsed.version_major}, which this consumer cannot read"
         )
     if parsed.lanes != 1:
@@ -415,17 +436,25 @@ def consume_from_dlpack(
             f"DLPack vector lanes {parsed.lanes} are not supported; "
             "gpuxtb requires lane-1 (scalar) descriptors"
         )
+    if (parsed.device_type, parsed.device_id) != (device_type, device_id):
+        raise BufferError(
+            f"{type(export_producer).__name__} reported DLPack device "
+            f"({device_type}, {device_id}) but exported capsule device "
+            f"({parsed.device_type}, {parsed.device_id})"
+        )
 
+    _validated_dtype(parsed, expected_dtype)
     pointer = _validated_pointer(parsed, expected_shape)
-    size_bytes = _validated_extent(parsed, pointer, expected_shape)
+    size_bytes = _validated_extent(parsed, pointer, expected_shape, expected_dtype)
     if size_bytes == 0:
         # Empty logical vectors use the ABI's null-buffer convention even when
         # the producer's data pointer is a valid zero-sized allocation.
         pointer = 0
-    _validated_dtype(parsed, expected_dtype)
     _validated_layout(parsed, size_bytes, expected_dtype, copy)
     if writable_required:
-        _validated_writable(parsed, producer)
+        _validated_writable(parsed, export_producer, writable_hint)
+
+    writable = parsed.writable or (parsed.version_major == 0 and writable_hint is True)
 
     if versioned:
         _pyapi.PyCapsule_SetName(capsule, _USED_CAPSULE_NAME_VERSIONED)
@@ -444,9 +473,10 @@ def consume_from_dlpack(
         memory_space=memory_space,
         device_type=device_type,
         device_id=device_id,
-        writable=parsed.writable,
-        is_copy=parsed.is_copy,
+        writable=writable,
+        is_copy=parsed.is_copy or copied_by_consumer,
         shape=tuple(int(value) for value in expected_shape),
+        _producer=export_producer,
         _capsule=capsule,
         _deleter=deleter,
         _managed_pointer=int(managed_pointer),
@@ -493,12 +523,10 @@ def _stream_argument(stream: int | None, device_type: int) -> int | None:
 def _produce_capsule(producer: object, stream_value: int | None, copy: bool) -> object:
     """Call ``__dlpack__`` and return the producer's capsule.
 
-    DLPack 1.0 is negotiated with ``max_version=(1, 0)``.  A producer whose
-    signature rejects the stream keyword falls back to the plain
-    ``max_version`` call, then to the legacy no-argument protocol.  A
-    requested copy is delegated to the Array API 2025.12 ``copy`` keyword;
-    producers that do not understand it raise a precise
-    ``GPUxtbNotSupportedError`` instead of silently returning a view.
+    DLPack 1.0 is negotiated with ``max_version=(1, 0)``. A legacy producer is
+    retried without that keyword while retaining the CUDA consumer stream and
+    any Array API 2025.12 ``copy`` request. Producers that cannot honor those
+    safety requirements raise instead of silently returning an unsafe view.
     """
     full_kwargs: dict[str, object] = {"max_version": tuple(_DLPACK_MAX_VERSION)}
     if stream_value is not None:
@@ -508,29 +536,34 @@ def _produce_capsule(producer: object, stream_value: int | None, copy: bool) -> 
     try:
         return producer.__dlpack__(**full_kwargs)
     except TypeError:
-        if copy:
-            raise GPUxtbNotSupportedError(
-                f"{type(producer).__name__}.__dlpack__ does not accept a copy "
-                "request; supply an array matching the required dtype and layout "
-                "instead"
-            ) from None
-        # The producer may predate the extended signature: retire keywords one
-        # at a time toward the legacy plain call.
-        if "stream" in full_kwargs:
-            try:
-                return producer.__dlpack__(max_version=tuple(_DLPACK_MAX_VERSION))
-            except TypeError:
-                pass
+        # A legacy producer may reject max_version, but CUDA synchronization is
+        # still mandatory. Retry without only that keyword so the consumer
+        # stream (and any explicit copy request) cannot be silently discarded.
+        legacy_kwargs = dict(full_kwargs)
+        legacy_kwargs.pop("max_version")
         try:
-            return producer.__dlpack__()
-        except (TypeError, BufferError) as exc:
+            return producer.__dlpack__(**legacy_kwargs)
+        except TypeError as exc:
+            if copy:
+                raise GPUxtbNotSupportedError(
+                    f"{type(producer).__name__}.__dlpack__ does not accept a copy "
+                    "request; supply an array matching the required dtype and layout "
+                    "instead"
+                ) from None
+            if stream_value is not None:
+                raise BufferError(
+                    f"{type(producer).__name__}.__dlpack__ does not accept the "
+                    "consumer CUDA stream; a safe zero-copy transfer cannot be made"
+                ) from exc
             raise BufferError(
                 f"{type(producer).__name__}.__dlpack__ is not callable without "
-                f"arguments and did not accept the requested arguments: {exc}"
+                f"arguments and did not accept max_version: {exc}"
             ) from exc
 
 
-def _parse_managed_tensor(managed_pointer: int, versioned: bool) -> _ParsedTensor:
+def _parse_managed_tensor(
+    managed_pointer: int, versioned: bool, expected_ndim: int
+) -> _ParsedTensor:
     """Copy and structurally validate one managed tensor from raw memory."""
     try:
         if versioned:
@@ -561,6 +594,10 @@ def _parse_managed_tensor(managed_pointer: int, versioned: bool) -> _ParsedTenso
     ndim = int(tensor.ndim)
     if ndim < 0:
         raise BufferError(f"DLPack tensor has a negative ndim ({ndim})")
+    if ndim != expected_ndim:
+        raise GPUxtbValueError(
+            f"DLPack ndim {ndim} does not match the expected ndim {expected_ndim}"
+        )
     if tensor.shape and ndim:
         shape = tuple(int(tensor.shape[index]) for index in range(ndim))
     else:
@@ -602,7 +639,7 @@ def _validated_dtype(parsed: _ParsedTensor, expected_dtype: np.dtype) -> None:
         raise GPUxtbValueError(
             f"DLPack dtype ({parsed.code}, {parsed.bits} bits) does not match "
             f"the required {expected} ({expected_code}, {expected_bits} bits); "
-            "convert the array with copy=True"
+            f"provide an array with dtype {expected}"
         )
 
 
@@ -624,29 +661,33 @@ def _validated_pointer(parsed: _ParsedTensor, expected_shape: Sequence[int]) -> 
         if _dlpack_bytes(expected_shape, 1) != 0:
             raise BufferError("DLPack tensor has a NULL data pointer")
         return 0
-    if offset > (1 << 63):
-        raise BufferError(f"DLPack byte_offset {offset} is out of range")
+    if offset > _POINTER_MAX - base:
+        raise BufferError("DLPack data pointer plus byte_offset overflows uintptr_t")
     pointer = base + offset
-    if pointer < base:
-        raise BufferError("DLPack data pointer plus byte_offset overflowed")
     return pointer
 
 
 def _validated_extent(
-    parsed: _ParsedTensor, pointer: int, expected_shape: Sequence[int]
+    parsed: _ParsedTensor,
+    pointer: int,
+    expected_shape: Sequence[int],
+    expected_dtype: np.dtype,
 ) -> int:
     """Compute the byte extent of the logical tensor with overflow checks."""
     itemsize = _itemsize(parsed)
     size_bytes = _dlpack_bytes(expected_shape, itemsize)
     if size_bytes == 0:
         return 0
-    if pointer and pointer % _MIN_POINTER_ALIGNMENT != 0:
+    alignment = np.dtype(expected_dtype).alignment
+    if pointer and pointer % alignment != 0:
         raise BufferError(
             f"DLPack data pointer 0x{pointer:x} is not aligned to "
-            f"{_MIN_POINTER_ALIGNMENT} bytes"
+            f"{alignment} bytes for {np.dtype(expected_dtype)}"
         )
-    if pointer and size_bytes > (1 << 63):
-        raise BufferError(f"DLPack logical extent {size_bytes} bytes is too large")
+    if size_bytes > _POINTER_MAX:
+        raise BufferError(f"DLPack logical extent {size_bytes} bytes exceeds size_t")
+    if pointer and size_bytes > _POINTER_MAX - pointer:
+        raise BufferError("DLPack data pointer plus logical extent overflows uintptr_t")
     return size_bytes
 
 
@@ -693,9 +734,17 @@ def _validated_layout(
         )
 
 
-def _validated_writable(parsed: _ParsedTensor, producer: object) -> None:
-    """Reject read-only buffers requested as mutable ``out=`` targets."""
-    if not parsed.writable:
+def _validated_writable(
+    parsed: _ParsedTensor, producer: object, writable_hint: bool | None
+) -> None:
+    """Reject read-only buffers requested as mutable ``out=`` targets.
+
+    Legacy managed tensors have no flags field. They are accepted only when
+    the backend-neutral adapter already established that the source array is
+    writable; versioned DLPack flags never use that compatibility hint.
+    """
+    legacy_writable = parsed.version_major == 0 and writable_hint is True
+    if not parsed.writable and not legacy_writable:
         raise BufferError(
             f"{type(producer).__name__} exported a read-only DLPack tensor and "
             "cannot be used as a mutable output buffer"

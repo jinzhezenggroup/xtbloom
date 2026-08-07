@@ -127,6 +127,12 @@ class FakeArray:
         Device kind reported by ``__dlpack_device__`` (``1`` CPU, ``2`` CUDA).
     device_id
         Ordinal reported alongside ``device``.
+    capsule_device, capsule_device_id
+        Optional device metadata embedded in the exported capsule. Defaults to
+        the values reported by ``__dlpack_device__``; differing values model a
+        malformed producer contract.
+    capsule_ndim
+        Optional rank embedded in the capsule, for malformed-rank tests.
     versioned
         Produce the DLPack 1.0 ``dltensor_versioned`` capsule (default) or the
         legacy ``dltensor`` capsule.
@@ -155,6 +161,9 @@ class FakeArray:
         *,
         device: int = 1,
         device_id: int = 0,
+        capsule_device: int | None = None,
+        capsule_device_id: int | None = None,
+        capsule_ndim: int | None = None,
         versioned: bool = True,
         readonly: bool = False,
         stream_support: bool = True,
@@ -167,6 +176,11 @@ class FakeArray:
     ) -> None:
         self._data = data
         self._device = (int(device), int(device_id))
+        self._capsule_device = (
+            int(device if capsule_device is None else capsule_device),
+            int(device_id if capsule_device_id is None else capsule_device_id),
+        )
+        self._capsule_ndim = capsule_ndim
         self._versioned = versioned
         self._readonly = readonly
         self._stream_support = stream_support
@@ -199,6 +213,10 @@ class FakeArray:
         if self._force_error is not None:
             raise self._force_error
         return self._device
+
+    def __array_namespace__(self, *, api_version: str | None = None) -> object:
+        """Mark the fake as an eager writable Array API object for output tests."""
+        return np
 
     def __dlpack__(self, **kwargs: object) -> object:
         """Build a fresh managed-tensor capsule for the wrapped buffer.
@@ -234,9 +252,9 @@ class FakeArray:
             struct.flags = dlpack._DLPACK_FLAG_READ_ONLY if self._readonly else 0
         tensor = struct.dl_tensor
         tensor.data = ctypes.c_void_p(data.ctypes.data)
-        tensor.device.device_type = self._device[0]
-        tensor.device.device_id = self._device[1]
-        tensor.ndim = ndim
+        tensor.device.device_type = self._capsule_device[0]
+        tensor.device.device_id = self._capsule_device[1]
+        tensor.ndim = ndim if self._capsule_ndim is None else self._capsule_ndim
         tensor.dtype.code = code
         tensor.dtype.bits = bits
         tensor.dtype.lanes = 1

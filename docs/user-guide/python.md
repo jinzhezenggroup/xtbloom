@@ -133,6 +133,9 @@ objects are rejected with precise diagnostics. `stream` selects the native
 `CUstream` used by the context and passed to CUDA producers (DLPack stream
 value `1` for the legacy default stream).
 
+Copies may pack a non-contiguous layout but do not coerce scalar types; every
+descriptor must still use the exact dtype required by the C ABI.
+
 `ArrayBatch.compute()` supports an explicit output policy: results are
 ordinary host NumPy arrays by default, or `out=` may name writable
 NumPy/CuPy/PyTorch buffers into which gpuxtb writes directly. JAX arrays are

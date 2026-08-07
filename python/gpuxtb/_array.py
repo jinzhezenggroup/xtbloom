@@ -65,8 +65,19 @@ def is_lazy(array: object) -> bool:
     )
 
 
-def is_writable(array: object) -> bool:
-    """Return whether the array may be used as a mutable ``out=`` buffer."""
+def is_writable(array: object) -> bool | None:
+    """Return a trustworthy mutability hint, or ``None`` when unavailable.
+
+    ``array_api_compat.is_writeable_array`` intentionally assumes unknown
+    Array API objects are writable.  That is useful for generic dispatch but
+    is not strong enough to authorize native writes through a legacy DLPack
+    capsule, which has no read-only flag of its own.
+    """
     if isinstance(array, np.ndarray):
         return bool(array.flags.writeable)
-    return bool(_compat().is_writeable_array(array))
+    compat = _compat()
+    if compat.is_jax_array(array):
+        return False
+    if compat.is_torch_array(array) or compat.is_cupy_array(array):
+        return bool(compat.is_writeable_array(array))
+    return None

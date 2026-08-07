@@ -284,6 +284,21 @@ def test_out_buffers_are_written_in_place() -> None:
     assert result.result_flags == 0
 
 
+def test_out_buffers_remain_zero_copy_when_input_copy_is_enabled() -> None:
+    """The input copy policy must never redirect writes to temporary outputs."""
+    water = _water()
+    reference = water.singlepoint()
+    packed = _pack_single([water])
+    out_energies = np.full(1, 123.0)
+    result = ArrayBatch(**packed, backend="cpu", copy=True).compute(
+        compute_forces=False,
+        compute_charges=False,
+        out={"energies": out_energies},
+    )
+    assert result.energies is out_energies
+    assert out_energies == pytest.approx([reference.energy], rel=1.0e-12)
+
+
 def test_out_alias_atomic_charges() -> None:
     """atomic_charges is accepted as an alias for charges."""
     water = _water()
@@ -332,6 +347,16 @@ def test_out_unknown_name_rejected() -> None:
         )
 
 
+def test_out_for_unrequested_property_is_rejected() -> None:
+    """An explicit output buffer must never be accepted and then ignored."""
+    packed = _pack_single([_water()])
+    with pytest.raises(GPUxtbValueError, match="not requested"):
+        ArrayBatch(**packed, backend="cpu").compute(
+            compute_energy=False,
+            out={"energies": np.empty(1)},
+        )
+
+
 def test_out_non_dict_rejected() -> None:
     """The output policy must be a mapping."""
     water = _water()
@@ -349,6 +374,31 @@ def test_incomplete_point_charge_group_rejected() -> None:
     packed["point_charge_offsets"] = np.asarray([0, 0], dtype=np.int64)
     with pytest.raises(GPUxtbValueError, match="together"):
         ArrayBatch(**packed, backend="cpu")
+
+
+def test_empty_point_charge_group_is_not_silently_discarded() -> None:
+    """Supplied zero-count offsets still participate in native validation."""
+    packed = _pack_single([_water()])
+    packed.update(
+        point_charge_offsets=np.asarray([0, 1], dtype=np.int64),
+        point_charge_positions=np.empty((0, 3), dtype=np.float64),
+        point_charge_values=np.empty(0, dtype=np.float64),
+        point_charge_gammas=np.empty(0, dtype=np.float64),
+    )
+    with pytest.raises(GPUxtbRuntimeError, match="point_charge_offsets"):
+        ArrayBatch(**packed, backend="cpu").compute()
+
+
+def test_empty_charge_response_group_is_not_silently_discarded() -> None:
+    """An explicitly supplied but empty response group is invalid, not absent."""
+    packed = _pack_single([_water()])
+    packed.update(
+        atomic_potential_shifts=np.zeros(3, dtype=np.float64),
+        charge_response_offsets=np.asarray([0, 0], dtype=np.int64),
+        charge_response_matrix=np.empty(0, dtype=np.float64),
+    )
+    with pytest.raises(GPUxtbRuntimeError, match="charge response"):
+        ArrayBatch(**packed, backend="cpu").compute()
 
 
 def test_dtype_mismatch_rejected() -> None:
@@ -394,6 +444,28 @@ def test_batch_count_mismatch_rejected() -> None:
         ArrayBatch(**packed, backend="cpu").compute()
 
 
+@pytest.mark.parametrize("name", ["molecular_charges", "atomic_numbers"])
+def test_scalar_count_descriptor_is_rejected(name: str) -> None:
+    """Count derivation reports a value error instead of leaking IndexError."""
+    packed = _pack_single([_water()])
+    packed[name] = np.asarray(packed[name][0])
+    with pytest.raises(GPUxtbValueError, match=name):
+        ArrayBatch(**packed, backend="cpu").compute()
+
+
+def test_scalar_point_charge_positions_are_rejected() -> None:
+    """Point-charge count derivation requires the full ``(n, 3)`` shape."""
+    packed = _pack_single([_water()])
+    packed.update(
+        point_charge_offsets=np.asarray([0, 1], dtype=np.int64),
+        point_charge_positions=np.asarray(1.0),
+        point_charge_values=np.asarray([1.0]),
+        point_charge_gammas=np.asarray([0.5]),
+    )
+    with pytest.raises(GPUxtbValueError, match="point_charge_positions"):
+        ArrayBatch(**packed, backend="cpu").compute()
+
+
 def test_cuda_fake_array_on_cpu_backend_rejected() -> None:
     """Device arrays cannot be routed to a CPU context."""
     water = _water()
@@ -401,6 +473,30 @@ def test_cuda_fake_array_on_cpu_backend_rejected() -> None:
     packed["positions"] = FakeArray(packed["positions"], device=2)
     with pytest.raises(GPUxtbNotSupportedError, match="CUDA backend"):
         ArrayBatch(**packed, backend="cpu").compute()
+
+
+def test_cuda_fake_output_on_cpu_backend_rejected() -> None:
+    """Output buffers follow the same backend/device contract as inputs."""
+    packed = _pack_single([_water()])
+    device_output = FakeArray(np.empty(1), device=2)
+    with pytest.raises(GPUxtbNotSupportedError, match="CUDA backend"):
+        ArrayBatch(**packed, backend="cpu").compute(
+            compute_forces=False,
+            compute_charges=False,
+            out={"energies": device_output},
+        )
+
+
+def test_unknown_legacy_output_requires_proven_writability() -> None:
+    """Unknown adapters cannot assert mutability for flagless old capsules."""
+    packed = _pack_single([_water()])
+    output = FakeArray(np.empty(1), versioned=False)
+    with pytest.raises(BufferError, match=r"read.?only|writable"):
+        ArrayBatch(**packed, backend="cpu").compute(
+            compute_forces=False,
+            compute_charges=False,
+            out={"energies": output},
+        )
 
 
 def test_wrong_offsets_rejected_by_native_validation() -> None:
@@ -437,20 +533,10 @@ def test_context_stream_property() -> None:
     assert batch.context.stream is None
     batch.close()
 
-    batch = ArrayBatch(
-        atom_offsets=np.asarray([0, 2], np.int64),
-        atomic_numbers=np.asarray([1, 1], np.int32),
-        positions=H2_POSITIONS,
-        molecular_charges=np.asarray([0.0]),
-        unpaired_electrons=np.asarray([0], np.int32),
-        backend="cpu",
-        stream=0x1234,
-    )
-    assert batch.context.stream == 0x1234
-    batch.close()
-
     from gpuxtb import Context
 
+    with pytest.raises(GPUxtbValueError, match="CPU backend"):
+        Context("cpu", stream=0x1234)
     with pytest.raises(GPUxtbValueError, match="stream"):
         Context("cpu", stream=0)
 
@@ -482,3 +568,10 @@ def test_missing_native_outputs_are_null() -> None:
     with pytest.raises(GPUxtbValueError, match="not requested"):
         _ = result.energies
     assert result.forces.shape == (3, 3)
+
+
+def test_get_does_not_evaluate_unrequested_outputs() -> None:
+    """Looking up one result must not require every optional property."""
+    packed = _pack_single([_water()])
+    result = ArrayBatch(**packed, backend="cpu").compute(compute_energy=False)
+    assert result.get("forces") is result.forces
