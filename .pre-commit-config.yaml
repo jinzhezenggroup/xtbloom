@@ -32,6 +32,15 @@ repos:
       - id: ruff-format
         types_or: [python, pyi, jupyter]
         exclude: ^cmake/3rdparty/implib/implib-gen\.py$
+  - repo: https://github.com/astral-sh/ty-pre-commit
+    rev: v0.0.69 # ty version
+    hooks:
+      - id: ty
+        # --isolated stops uv from rewriting the pinned uv.lock or the local
+        # environment. The typechecking group (ase, dpdata) that the checked
+        # modules import is a tool.uv default group, so no --group flag is
+        # needed for `uv check` to resolve it.
+        args: [--isolated]
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: f4d7745e17a28aad7eed2f4874ca8d1568c11c4c # v22.1.8
     hooks:
@@ -40,3 +49,9 @@ repos:
         # Only the two generated parameter headers are canonical exports;
         # future hand-written C/C++ files under data must still be formatted.
         exclude: ^data/parameters/(?:gfn2|d4)\.hpp$
+
+# pre-commit.ci blocks network access for hooks, but ty-pre-commit needs to
+# resolve dependencies, so it must be skipped there. The repository's own
+# CI runs ty through prek (.github/workflows/pre-commit.yml) instead.
+ci:
+  skip: [ty]

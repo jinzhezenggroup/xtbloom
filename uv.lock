@@ -448,6 +448,12 @@ test = [
     { name = "pytest-cov" },
 ]
 
+[package.dev-dependencies]
+typechecking = [
+    { name = "ase" },
+    { name = "dpdata" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "array-api-compat", specifier = ">=1.15,<2" },
@@ -466,6 +472,12 @@ requires-dist = [
     { name = "scipy-openblas32", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", specifier = ">=0.3.34.0.0" },
 ]
 provides-extras = ["ase", "dpdata", "cuda12", "test"]
+
+[package.metadata.requires-dev]
+typechecking = [
+    { name = "ase" },
+    { name = "dpdata" },
+]
 
 [[package]]
 name = "h5py"
