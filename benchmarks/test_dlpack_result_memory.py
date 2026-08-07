@@ -193,6 +193,41 @@ class DlpackResultMemoryProtocolTest(unittest.TestCase):
                 ):
                     benchmark._library_identity(revision)
 
+    def test_profile_mode_validates_library_provenance(self) -> None:
+        """Profiler captures cannot bypass selected-library provenance gates."""
+        with tempfile.TemporaryDirectory() as tmp:
+            native = Path(tmp) / "libgpuxtb.so"
+            native.write_bytes(b"test library")
+            with (
+                mock.patch(
+                    "sys.argv",
+                    [
+                        "dlpack_result_memory.py",
+                        "--library",
+                        str(native),
+                        "--profile-mode",
+                        "arena",
+                    ],
+                ),
+                mock.patch.object(
+                    benchmark, "_git_revision", return_value=("a" * 40, False)
+                ),
+                mock.patch.object(benchmark, "_require_gpu"),
+                mock.patch.object(
+                    benchmark,
+                    "_library_identity",
+                    side_effect=SystemExit("injected provenance failure"),
+                ) as identity,
+                mock.patch.object(
+                    benchmark,
+                    "_measure",
+                    side_effect=AssertionError("must not profile"),
+                ),
+                self.assertRaisesRegex(SystemExit, "provenance failure"),
+            ):
+                benchmark.main()
+            identity.assert_called_once_with("a" * 40)
+
     def test_invalid_repetitions_precede_identity_probe(self) -> None:
         """The CLI rejects an empty statistical protocol immediately."""
         with (

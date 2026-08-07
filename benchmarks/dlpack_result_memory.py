@@ -587,6 +587,9 @@ def main() -> int:
 
     _require_gpu()
     packed = _packed_water()
+    # Profile-only invocations must prove the same selected-library provenance
+    # as latency artifacts before Nsight is allowed to record final evidence.
+    library_identity = _library_identity(revision)
 
     if args.profile_mode is not None:
         latencies = _measure(
@@ -641,7 +644,7 @@ def main() -> int:
         "environment": {
             key: os.environ.get(key, "") for key in THREAD_ENVIRONMENT_NAMES
         },
-        "library": _library_identity(revision),
+        "library": library_identity,
         "workload": {
             "molecule": "water (8,1,1)",
             "nsystems": 1,
