@@ -45,6 +45,34 @@ not a general performance ranking.
 | [tblite](https://github.com/tblite/tblite) | Lightweight, extensible single-point library | GFN1-xTB, GFN2-xTB, IPEA1-xTB | Fortran/C/Python per-structure APIs; CPU/OpenMP; molecular and periodic inputs |
 | [dxtb](https://github.com/grimme-lab/dxtb) | Differentiable xTB in PyTorch and ML workflows | GFN1-xTB, GFN2-xTB | Batched PyTorch tensors on CPU/CUDA; autodiff forces and response properties |
 
+### Where gpuxtb is deliberately stronger
+
+gpuxtb makes several production-inference guarantees first-class rather than
+leaving them to each calling application:
+
+- A failed SCC or eigensolve is isolated to one ragged-batch member. Successful
+  peers remain valid, while every requested floating-point slice for the failed
+  member is replaced with quiet NaNs and accompanied by per-system diagnostics.
+- Exactly degenerate finite-temperature occupations have a documented
+  binary64 publication policy. In a reproduced three-hydrogen edge case,
+  gpuxtb returns a finite result where xTB, tblite, or dxtb fail on at least one
+  integer-charge variant; the exact versions, inputs, and outcomes are
+  [documented](docs/developer-guide/architecture.md#cross-engine-degenerate-occupation-evidence).
+- Explicit point-charge screening and caller-supplied periodic charge response
+  enter every SCC iteration. The same stable C ABI returns both QM and
+  point-charge forces. This covers embedding inputs that remain unavailable or
+  incomplete in the compared xTB/tblite C interfaces.
+- The high-level Python API accepts electronic temperature in kelvin, CPU work
+  partitioning is tested for bit-identical results, and strict `WARM` calls
+  never silently fall back to a fresh solve.
+- Archived, correctness-qualified CPU evidence shows strict `WARM` reducing
+  SCC work from 17-18 iterations to 2 and running 1.09x-1.54x faster than a
+  persistent tblite calculation for the measured 32-122 atom alkane corpus.
+
+The [user-guide comparison](docs/user-guide/index.md#where-gpuxtb-is-stronger)
+links each claim to its upstream issue, local regression test, or archived raw
+benchmark evidence.
+
 Choose xTB for its broad CLI workflows, optimizers, dynamics, solvation, and
 method coverage. Choose tblite for a mature reusable single-point library with
 periodic structures and customizable components. Choose dxtb when PyTorch

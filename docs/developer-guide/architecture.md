@@ -74,6 +74,67 @@ bound indicates genuine electron non-conservation and still fails deterministica
 spectra retain the strict publication tolerance, and the zero-temperature Aufbau path is unaffected.
 See issue #31 for the original representability question.
 
+### Cross-engine degenerate-occupation evidence
+
+The representability policy above is observable through the public API, rather
+than only through an internal occupation helper. Issue
+[#205](https://github.com/njzjz/gpuxtb/issues/205) records a cross-engine probe
+measured on 2026-08-07 with GFN2-xTB at 300 K. The common geometry is three
+hydrogen atoms on the x axis:
+
+```text
+atomic_numbers = [1, 1, 1]
+positions_bohr = [[0, 0, 0], [1e20, 0, 0], [2e20, 0, 0]]
+```
+
+From a source checkout with a compatible CPU linear-algebra runtime, the gpuxtb
+rows are reproduced through the same installed Python package and public C ABI
+used by applications:
+
+```console
+GPUXTB_ENABLE_CUDA=OFF uv sync --no-editable --extra test
+uv run --no-sync python - <<'PY'
+import numpy as np
+from gpuxtb import Calculator
+
+numbers = np.array([1, 1, 1])
+positions = np.array([[0.0, 0.0, 0.0], [1.0e20, 0.0, 0.0], [2.0e20, 0.0, 0.0]])
+fractional_charge = 3.0 - 2.0 * np.nextafter(3.0, 0.0)
+
+for charge, uhf in [(0.0, 1), (-3.0, 0), (fractional_charge, 0)]:
+    with Calculator(
+        "GFN2-xTB",
+        numbers,
+        positions,
+        charge=charge,
+        uhf=uhf,
+        backend="cpu",
+        electronic_temperature=300.0,
+    ) as calc:
+        result = calc.singlepoint()
+    print(charge, uhf, result.scc_status, f"{result.energy:.16f}")
+PY
+```
+
+At this separation the three one-center orbital blocks are bitwise identical
+and the inter-center interactions safely tend to zero. This creates an exact
+three-fold degeneracy without relying on an approximate molecular symmetry.
+
+| Electron case | gpuxtb, current public CPU path | xTB 6.7.1 (`edcfbbe`) | tblite | dxtb 0.4.0 (`libcint`) |
+| --- | --- | --- | --- | --- |
+| charge `0`, `uhf=1` | `SUCCESS`, finite energy `-1.1960140851592562 Eh` | SCC does not converge; abnormal termination with floating-point exception flags | 0.7.0 succeeds at `-1.184076585161 Eh`; 0.6.0 CLI segfaults | returns an invalid overflow-scale value near `3.46e47 Eh` |
+| charge `-3`, `uhf=0` | `SUCCESS`, finite energy `-1.8322400836158348 Eh` | Hamiltonian diagonalization fails and the process terminates abnormally | 0.7.0 raises `(sygvd) failed to solve eigenvalue problem, info=2` | raises `Fermi energy failed to converge` |
+| charge `3 - 2*nextafter(3,0)`, `uhf=0` | `SUCCESS`, finite energy `-1.8322400836158348 Eh`; each restricted spin requests exactly `nextafter(3,0)` electrons | not expressible through integer `--chrg`; no failure claim is made | 0.7.0 Python succeeds at `-1.832240082284 Eh`; the CLI expressibility difference is not treated as a failure | raises `Fermi energy failed to converge` |
+
+The comparison establishes a specific numerical advantage, not a universal
+ranking: tblite 0.7 handles two rows, while gpuxtb handles all three under one
+documented symmetric-publication rule. The fractional-charge row is included
+to exercise the exact binary64 policy and is not counted as an xTB failure
+because the xTB CLI cannot represent the input. The gpuxtb regression is
+`test_degenerate_occupation_representability_is_publicly_successful` in
+[`tests/cpu_public_inference_test.cpp`](../../tests/cpu_public_inference_test.cpp).
+Issue #205 retains the reference-engine environment and summarized outcomes.
+
 The public batch call has two failure levels. Any failure detected before the final caller-output
 commit begins leaves every result buffer and result flag unchanged. Once a CUDA caller-output
 commit has begun, a later catastrophic failure returns `INTERNAL_ERROR` with an explicit diagnostic;
