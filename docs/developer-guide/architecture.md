@@ -1,8 +1,10 @@
 # Architecture
 
-gpuxtb is organized around one stable C ABI and replaceable compute backends. The first physics
-target is gas-phase GFN2-xTB energy and analytic forces, followed by external point-charge
-embedding inside the SCC loop. GFN1-xTB and ROCm remain explicit extension points.
+gpuxtb is organized around one stable C ABI and replaceable compute backends.
+The implemented physics is restricted and unrestricted GFN2-xTB energy,
+charges, and analytic forces, including external point charges and periodic
+caller-supplied response inside SCC. GFN1-xTB and ROCm remain explicit,
+unimplemented extension points.
 
 ## Data model
 
@@ -17,7 +19,7 @@ matrices `A` support periodic QM/MM embeddings through `b + A*q` in every SCC it
 variational energy `q^T*b + 0.5*q^T*A*q`. The caller remains responsible for coordinate derivatives
 of `b` and `A`, classical MM-MM interactions, periodic electrostatics, and virtual-site force
 redistribution. The exact xTB-compatible equations and initial external-charge golden are documented
-in [qmmm.md](qmmm.md).
+in the [QM/MM theory guide](../theory/qmmm.md).
 
 All public real-valued quantities use binary64 and atomic units. Conversion belongs at language or
 simulation-package bindings, not inside numerical kernels. Keeping one unit system is particularly
@@ -27,10 +29,13 @@ Accordingly, `electronic_temperature` is the energy scale `k_B T` in Hartree; th
 
 ## Compute semantics
 
-At finite electronic temperature, the reported energy is the total electronic Helmholtz free
-energy `F = E_internal - T*S_electronic`, including the Fermi-occupation entropy term used by
-tblite. Forces are `-dF/dR`, which preserves the stationary finite-temperature SCC derivative. At
-zero electronic temperature, `F` reduces to the internal energy.
+At finite electronic temperature, the reported energy is the total electronic
+Helmholtz free energy
+$F = E_{\mathrm{internal}} - (k_{\mathrm B}T)S_{\mathrm{electronic}}$,
+including the Fermi-occupation entropy term used by tblite. Forces are
+$-\partial F/\partial R$, which preserves the stationary finite-temperature
+SCC derivative. At zero electronic temperature, $F$ reduces to the internal
+energy.
 
 Finite-temperature occupations of an exactly degenerate eigenspace are published symmetrically:
 every orbital in an equal-energy block shares one binary64 value, keeping the populations unitary-
@@ -166,14 +171,16 @@ provenance and packaging contract are recorded in `cmake/3rdparty/implib_manifes
 
 ## Correctness strategy
 
-Correctness gates optimization. Golden cases will be generated independently with tblite and xtb,
-covering elements, charges, spin states, SCC edge cases, and external point charges. Each physical
-term is tested in isolation before total energies and forces. Analytic forces must also pass central
-finite differences, including forces on embedding charges.
+Correctness gates optimization. Committed conformance cases are generated
+independently with pinned tblite and xTB workflows and cover charges, spin
+states, SCC behavior, and external point charges. Each physical term is tested
+in isolation before total energies and forces. Analytic forces also pass
+central finite differences, including forces on embedding charges.
 
-The initial tolerance target is defined by the conformance issue rather than hard-coded here. CPU
-and CUDA use the same equations and parameters, with deterministic reductions available for
-debugging even if the fastest production path relaxes reduction ordering.
+Tolerance targets belong to the versioned conformance corpus and executable
+tests rather than prose documentation. CPU and CUDA use the same equations and
+parameters, with deterministic reductions available for debugging even when a
+production path uses a different valid reduction order.
 
 ## Performance strategy
 

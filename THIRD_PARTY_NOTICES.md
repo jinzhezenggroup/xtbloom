@@ -66,7 +66,7 @@ contracts, and the origin of the QM/MM fixtures are recorded in
 
 ## LAMMPS documentation reference
 
-`docs/qmmm.md` cites the LAMMPS QMMM-XTB adapter at revision
+`docs/theory/qmmm.md` cites the LAMMPS QMMM-XTB adapter at revision
 `9ab8ca565e0f71d967587e0bca2015f7d689f19f` to document the external
 `b + A q` interface convention. No LAMMPS source code, binary, or numerical
 table is redistributed by gpuxtb.

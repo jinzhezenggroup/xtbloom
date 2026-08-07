@@ -1,191 +1,177 @@
-# gpuxtb Python package
+# gpuxtb for Python
 
-A Python binding around the gpuxtb public C ABI. The package builds the C++
-library through CMake with **scikit-build-core** and wraps it with `ctypes`, so
-there is no separate Python extension to compile. It follows the API shape of
-`tblite`/`xtb-python` and additionally exposes the native ragged-batch model of
-the C API.
+gpuxtb provides batched GFN2-xTB energies, analytic forces, and atomic charges
+through a NumPy-friendly Python interface. The package calls the same native C
+ABI used by C and C++ applications and can select a CPU or CUDA backend without
+changing the calculation API.
 
-## Install
+Current support includes restricted and unrestricted GFN2-xTB, ragged batches,
+explicit point charges with force output, periodic caller-supplied charge
+response, ASE, and dpdata. GFN1-xTB, ROCm, lattice/PBC inputs, solvation,
+optimization, and Hessians are not implemented.
 
-The package is installed with uv (the repository commits `uv.lock` generated
-against `https://pypi.org/simple`; do not point uv at a mirror index for this
-project or the lock will be rewritten). Run these commands from the repository
-root; `uv sync` creates the project virtual environment and honors the lock:
+## Installation
 
-```console
-uv sync --no-editable
-```
-
-This builds `libgpuxtb` from the repository CMake project and bundles it inside
-the wheel under `gpuxtb/lib`. Requires Python >= 3.10, a C++17 compiler, a
-working LP64 LAPACKE+CBLAS runtime, and `numpy`. Linux installs use the
-BSD-licensed `scipy-openblas32` runtime by default.
-If `GPUXTB_LIBRARY` overrides the bundled native library, keep it version-matched
-with the Python package; older libraries may not implement newer optional ABI
-suffixes such as unrestricted `spin_channels`.
-
-Optional extras:
+gpuxtb is being prepared for its first PyPI release. For a published release,
+install the CPU package with:
 
 ```console
-uv sync --no-editable --extra ase     # ASE calculator
-uv sync --no-editable --extra dpdata  # dpdata driver plugin
-uv sync --no-editable --extra cuda12  # CUDA 12 host runtime/math providers
-uv sync --no-editable --extra test    # pytest suite dependencies
+python -m pip install gpuxtb
 ```
 
-### CUDA wheels
-
-`GPUXTB_ENABLE_CUDA` defaults to `AUTO`: the CUDA backend is compiled in when a
-CUDA toolkit with `nvcc` is present at build time, and a CPU-only wheel is
-produced otherwise. To force a CUDA build, point CMake at the toolkit explicitly
-when it is not already on `PATH`:
+Optional extras install integrations or CUDA 12 host libraries:
 
 ```console
-PATH=/path/to/cuda/bin:$PATH \
-CUDACXX=/path/to/cuda/bin/nvcc \
-GPUXTB_ENABLE_CUDA=ON uv sync --no-editable --extra cuda12
+python -m pip install "gpuxtb[ase]"
+python -m pip install "gpuxtb[dpdata]"
+python -m pip install "gpuxtb[cuda12]"
 ```
 
-A CUDA-enabled wheel does **not** bundle the CUDA runtime libraries; at runtime
-it needs the system CUDA driver plus compatible system libraries or the PyPI
-CUDA packages. Install the `cuda12` extra to obtain those optional
-``nvidia-*`` providers. An ordinary `uv sync --no-editable` remains a complete
-CPU installation without the proprietary CUDA stack.
-The published CUDA 12.9 wheels contain SASS for sm_80, sm_89, sm_90, and
-sm_120; source builds can override this with ``GPUXTB_CUDA_ARCHITECTURES``.
+Python 3.10 or newer is required. Linux wheels use the separately installed
+`scipy-openblas32` package as the LP64 LAPACKE+CBLAS runtime for CPU inference.
+A CUDA-enabled wheel additionally needs an NVIDIA driver and compatible CUDA
+12 host libraries; the `cuda12` extra supplies the supported `nvidia-*`
+packages. CUDA libraries are not bundled inside the gpuxtb wheel.
 
-### Runtime libraries are loaded automatically
+The planned PyPI artifacts are Linux x86_64 and aarch64 wheels. macOS and
+Windows wheels are not supported yet. Source-build instructions are kept in the
+[developer guide](https://github.com/njzjz/gpuxtb/blob/main/docs/developer-guide/packaging.md).
 
-You never need to set ``LD_LIBRARY_PATH``. On import,
-:func:`gpuxtb.library` locates and preloads the runtime libraries the native
-library depends on:
+## Single-point calculation
 
-* the **BLAS** runtime for the CPU eigensolver — the LP64 OpenBLAS wheel
-  `scipy-openblas32` on linux x86_64 and aarch64. On other platforms,
-  compatible system OpenBLAS or MKL runtimes are discovered when available;
-  and
-* the **CUDA** runtime libraries (cuBLAS, cuSOLVER, ...) — resolved from the
-  installed ``nvidia-*`` PyPI packages or a CUDA toolkit.
-
-Only the CUDA *driver* interface (``libcuda``) is never shipped or preloaded by
-the package; it always comes from the system NVIDIA kernel driver.
-
-CI builds wheels with cibuildwheel (`.github/workflows/wheels.yml`) and tests
-them through cibuildwheel's own test feature:
-
-* **Linux x86_64 and aarch64** wheels build in the PyPA CUDA manylinux images
-  (`quay.io/manylinux_cuda/manylinux_2_28_*_cuda12_9`) with the CUDA backend
-  compiled in (aarch64 natively on a GitHub ARM runner, no QEMU). cuSOLVER,
-  which those images do not ship, is pulled from PyPI into the container before
-  the build. x86_64 additionally runs the full conformance suite as the
-  cibuildwheel test (deps from the package ``[test,cuda12]`` extras through
-  ``test-extras``).
-* **macOS and Windows** wheels are not published yet. Their CPU eigensolver
-  runtime is not functional, and gpuxtb does not ship import-only artifacts
-  that cannot perform inference.
-
-The public Python interface always uses host buffers on both backends; CUDA
-device-resident memory is a future extension. CUDA supports the same restricted
-and unrestricted GFN2 spin descriptors as the CPU backend.
-
-## Usage
-
-Atomic units throughout: positions in bohr, energies in Hartree, forces in
-Hartree/bohr, charges in elementary-charge units.
-
-### Single molecule (tblite-like)
+The high-level API uses atomic units: positions are in bohr, energies in
+Hartree, forces in Hartree/bohr, and charges in elementary-charge units.
+`electronic_temperature` is the one exception: Python accepts kelvin and
+converts it to the C ABI's `k_B T` energy scale.
 
 ```python
 import numpy as np
 from gpuxtb import Calculator
 
-calc = Calculator(
-    "GFN2-xTB",
-    numbers=np.array([8, 1, 1]),
-    positions=np.array([
-        [+0.00000000000000, +0.00000000000000, -0.73578586109551],
-        [+1.44183152868459, +0.00000000000000, +0.36789293054775],
-        [-1.44183152868459, +0.00000000000000, +0.36789293054775],
-    ]),
+numbers = np.array([8, 1, 1])
+positions = np.array(
+    [
+        [0.0000000000, 0.0000000000, -0.7357858611],
+        [1.4418315287, 0.0000000000, 0.3678929305],
+        [-1.4418315287, 0.0000000000, 0.3678929305],
+    ]
 )
-result = calc.singlepoint()
-print(result["energy"], result["forces"], result["charges"])
+
+with Calculator("GFN2-xTB", numbers, positions, backend="auto") as calc:
+    result = calc.singlepoint()
+
+print(result["energy"])
+print(result["forces"])
+print(result["charges"])
 ```
 
-Charge and spin multiplicity are supported directly:
+`result["gradient"]` is the negative of `result["forces"]`. At finite
+electronic temperature, the reported energy is the variational electronic
+Helmholtz free energy used by xTB and tblite.
+
+Set `backend="cpu"` or `backend="cuda"` to require a backend. `"auto"`
+prefers an available CUDA backend and otherwise selects CPU. `cpu_threads`
+controls molecule-level CPU parallelism and defaults to one in the Python API.
+The high-level Python interface uses host NumPy arrays for both backends; direct
+CUDA-device and mixed descriptors are available only through the low-level C
+ABI.
+
+## Charge and spin
+
+Use either `multiplicity` or `uhf = multiplicity - 1`. Open-shell Python
+calculations default to two unrestricted spin channels; `spin_channels=1`
+requests the restricted open-shell form explicitly.
 
 ```python
-calc = Calculator("GFN2-xTB", numbers, positions, charge=-1, multiplicity=2)
+with Calculator(
+    "GFN2-xTB",
+    numbers=[7, 1, 1],
+    positions=np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.8, 0.0, 0.0],
+            [-0.6, 1.7, 0.0],
+        ]
+    ),
+    charge=0,
+    multiplicity=2,
+) as calc:
+    radical = calc.singlepoint()
 ```
 
-* `charge` maps to the C ABI `molecular_charges`.
-* `multiplicity` (or `uhf = multiplicity - 1`) maps to `unpaired_electrons`.
-* `spin_channels` selects restricted (1) or unrestricted (2) orbitals. The
-  high-level Python interface defaults open-shell systems to unrestricted and
-  explicitly submits that choice to either backend; a missing C ABI suffix
-  itself remains the restricted compatibility default.
+## Native ragged batches
 
-### Batched (native)
-
-```python
-from gpuxtb import Structure, BatchCalculator
-
-structures = [Structure(numbers, positions, charge=0.0) for positions in many_positions]
-result = BatchCalculator(structures).compute()
-print(result.energies)   # per-system
-print(result[0].forces)  # per-system via Result
-```
-
-Large ragged batches can be split into several synchronous C calls while
-preserving system order and peer-local diagnostics:
-
-```python
-# Query current CUDA free memory and choose a conservative grouping target.
-result = BatchCalculator(structures, backend="cuda").compute(auto_batch_size=True)
-
-# Or set an explicit target maximum total atom count per call.
-result = BatchCalculator(structures).compute(auto_batch_size=20_000)
-```
-
-The integer is a grouping target rather than a promise that an individual
-system can be subdivided: a system larger than the target is attempted alone.
-Automatic CUDA sizing re-queries current free memory for each call, retains a
-fixed reserve, and retries native allocation failures by splitting only
-multi-system chunks. Other native failures, and allocation failure for one
-indivisible system, are returned unchanged. When CUDA memory cannot be queried,
-a conservative fixed target is used. ``None`` (the default) or ``False`` keeps
-the historical single-call behavior.
-
-Batch failures are peer-local: failed slices contain NaNs and are listed by
-``result.failed_indices``, while successful peer results remain accessible.
-Call ``result.raise_for_status()`` (or ``compute(raise_on_failure=True)``) when
-strict all-or-nothing exception behavior is desired.
-
-### Periodic charge response (b + A q)
-
-`ChargeResponse` exposes the periodic QM/MM coupling of the C ABI: per-atom SCC
-potential shifts ``b`` and a symmetric charge-response matrix ``A``, giving the
-shift ``b + A q`` and the variational energy ``q^T b + 0.5 q^T A q`` on the
-atomic-charge channel. Derivatives of ``b``/``A`` with respect to coordinates
-are outside gpuxtb and are not included in forces.
+`BatchCalculator` packs differently sized structures into one native request.
+Per-system SCC or eigensolver failures remain local: successful peers are
+preserved, and failed floating-point slices contain NaNs.
 
 ```python
 import numpy as np
-from gpuxtb import Calculator, ChargeResponse
+from gpuxtb import BatchCalculator, Structure
 
-response = ChargeResponse(
-    shifts=np.array([0.003, -0.002]),
-    matrix=np.array([[0.02, 0.001], [0.001, 0.018]]),
-)
-calc = Calculator("GFN2-xTB", numbers=[1, 1], positions=positions, charge_response=response)
-result = calc.singlepoint()
+structures = [
+    Structure([1, 1], np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]])),
+    Structure(
+        [8, 1, 1],
+        np.array(
+            [
+                [0.0000, 0.0000, -0.7358],
+                [1.4418, 0.0000, 0.3679],
+                [-1.4418, 0.0000, 0.3679],
+            ]
+        ),
+    ),
+]
+
+with BatchCalculator(structures, backend="auto") as calc:
+    batch = calc.compute()
+
+print(batch.energies)
+print(batch[1].forces)
+print(batch.failed_indices)
+batch.raise_for_status()
 ```
 
-The same object is accepted by ``Structure`` inside ``BatchCalculator``; systems
-without a charge response are treated with zero ``b``/``A``.
+For large workloads, `compute(auto_batch_size=True)` chooses conservative CUDA
+chunks from current free memory. An integer such as
+`compute(auto_batch_size=20_000)` instead limits the target total atom count per
+native call while preserving input order.
 
-### ASE
+## Explicit point charges
+
+Point charges participate in every SCC iteration. Their positions are in bohr,
+charges in elementary-charge units, and positive screening parameters
+`gammas` in Hartree. gpuxtb returns analytic forces on both QM atoms and point
+charges, but does not calculate point-charge/point-charge interactions.
+
+```python
+from gpuxtb import Calculator, PointCharge
+
+embedding = PointCharge(
+    positions=np.array([[4.0, 0.0, 0.0]]),
+    charges=np.array([0.5]),
+    gammas=np.array([0.405771]),
+)
+
+with Calculator(
+    "GFN2-xTB",
+    numbers=[1, 1],
+    positions=np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]]),
+    point_charges=embedding,
+) as calc:
+    embedded = calc.singlepoint()
+
+print(embedded.point_charge_forces)
+```
+
+`ChargeResponse(shifts=b, matrix=A)` additionally supplies a periodic
+`b + A q` operator on the atomic-charge channel. gpuxtb treats `b` and `A` as
+caller-owned fixed fields; returned forces exclude their coordinate
+derivatives. The caller must add those derivatives and classical MM-MM terms.
+
+## ASE
+
+ASE converts gpuxtb's atomic units to its usual eV and Angstrom conventions.
 
 ```python
 from ase.build import molecule
@@ -193,39 +179,28 @@ from gpuxtb.ase import GPUxtb
 
 atoms = molecule("H2O")
 atoms.calc = GPUxtb(method="GFN2-xTB")
-atoms.get_potential_energy()  # eV
-atoms.get_forces()            # eV/Angstrom
-atoms.get_charges()           # e
+energy_ev = atoms.get_potential_energy()
+forces_ev_per_angstrom = atoms.get_forces()
+charges_e = atoms.get_charges()
 ```
 
-### dpdata
+## dpdata
 
 ```python
 import dpdata
 
-system = dpdata.System("some_geometry.xyz", fmt="xyz")
-labeled = system.predict(driver="gpuxtb")          # whole system in one batch
-# or with explicit charge / multiplicity:
-labeled = system.predict(driver="gpuxtb", charge=0, multiplicity=2)
+system = dpdata.System("geometry.xyz", fmt="xyz")
+labeled = system.predict(driver="gpuxtb", charge=0, multiplicity=1)
 ```
 
-Importing the package registers the driver under the key `"gpuxtb"` through
-the `dpdata.plugins` entry point. Energies come back in eV and forces in
-eV/Angstrom, matching dpdata conventions. Periodic systems are not supported
-(the public C ABI has no lattice input).
+dpdata receives energies in eV and forces in eV/Angstrom. Periodic systems are
+rejected because gpuxtb does not expose a lattice/PBC descriptor.
 
-## Tests
+## More documentation
 
-The tests must resolve the bundled native library, so install the project
-non-editable and prevent `uv run` from re-syncing it as editable:
-
-```console
-GPUXTB_ENABLE_CUDA=OFF uv sync --no-editable --extra test
-uv run --no-sync pytest python/tests
-```
-
-The suite validates the bindings against the committed conformance goldens in
-`data/conformance` (neutral, charged, open-shell, and QM/MM point-charge cases).
-On Linux, installing the package supplies `scipy-openblas32`; no loader-path
-setup is required. Native builds may instead select an absolute compatible
-runtime with `GPUXTB_CPU_LINALG_LIBRARY`.
+- [Python user guide](https://github.com/njzjz/gpuxtb/blob/main/docs/user-guide/python.md)
+- [Units and model semantics](https://github.com/njzjz/gpuxtb/blob/main/docs/user-guide/index.md#units-and-result-meaning)
+- [QM/MM theory](https://github.com/njzjz/gpuxtb/blob/main/docs/theory/qmmm.md)
+- [Source repository](https://github.com/njzjz/gpuxtb)
+- [Issue tracker](https://github.com/njzjz/gpuxtb/issues)
+- [License and third-party notices](https://github.com/njzjz/gpuxtb/blob/main/THIRD_PARTY_NOTICES.md)
