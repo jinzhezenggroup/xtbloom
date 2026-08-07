@@ -182,6 +182,17 @@ NumPy arrays) and `"cuda"` (requires the resolved CUDA backend). The arena is
 laid out at 64-byte alignment so every exported slice satisfies the alignment
 requirements of common DLPack consumers (JAX, CuPy, PyTorch).
 
+For repeated inference on the same topology, the caller-owned `out=` path
+remains the preferred steady-state zero-copy route: it allocates no gpuxtb
+device memory per call and accepts preallocated caller buffers that the caller
+can reuse. The gpuxtb-owned `result_memory="cuda"` path is intended for
+callers that want finished device results without managing output buffers
+themselves. On the archived RTX 5090 small-molecule workload it passed the
+  explicit maximum 5% mean-overhead gate (`7.530 ms` arena versus `7.834 ms`
+`out=` across 300 counterbalanced pairs); see
+`benchmarks/evidence/issue-214/2026-08-07-rtx5090/` for the raw profiler and
+latency evidence.
+
 ## Open-shell calculations
 
 `multiplicity` and `uhf` describe the same state, with
