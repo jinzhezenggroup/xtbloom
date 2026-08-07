@@ -39,12 +39,30 @@ def _library_has_cuda() -> bool:
         return False
 
 
-def _device_ready() -> str | None:
+def _device_ready(provider: str = "torch") -> str | None:
     if not _library_has_cuda():
         return "CUDA backend is not available on this host"
-    if _TORCH is None:
+    if provider == "torch" and _TORCH is None:
         return "torch is required for CUDA producer tests"
+    if provider == "cupy" and _CUPY is None:
+        return "cupy is required for CUDA producer tests"
+    if provider == "jax" and _JAX is None:
+        return "jax is required for CUDA producer tests"
     return None
+
+
+def _producer_base_pointer(producer: object) -> int:
+    """Return this producer's slice pointer inside the native arena."""
+    import ctypes
+
+    buffer = library.Buffer()
+    library._check_init(
+        "gpuxtb_result_owner_buffer",
+        library.load_library().gpuxtb_result_owner_buffer(
+            producer.arena.handle, ctypes.byref(buffer)
+        ),
+    )
+    return int(buffer.data) + producer.byte_offset
 
 
 def _packed(case_id: str) -> dict[str, np.ndarray]:
@@ -100,6 +118,145 @@ def test_device_producer_imports_with_torch(tmp_path: object) -> None:
     t_energy2 = torch.from_dlpack(result.energies)
     np.testing.assert_array_equal(t_energy2.cpu().numpy(), t_energy.cpu().numpy())
 
+    batch.close()
+
+
+@pytest.mark.cuda
+def test_device_producer_imports_with_cupy(tmp_path: object) -> None:
+    """``cupy.from_dlpack`` imports the finished device bytes zero-copy."""
+    skip = _device_ready("cupy")
+    if skip is not None:
+        pytest.skip(skip)
+    import cupy as cp
+
+    packed = {
+        name: np.ascontiguousarray(value) for name, value in _packed("h3_plus").items()
+    }
+    batch = ArrayBatch(**packed, backend="cuda", stream=1)
+    result = batch.compute(result_memory="cuda")
+
+    energies = result.energies
+    assert isinstance(energies, dlpack.DLPackResultBuffer)
+    assert energies.__dlpack_device__() == (dlpack._DLPACK_DEVICE_CUDA, 0)
+
+    cp_energy = cp.from_dlpack(energies)
+    assert cp_energy.device.id == 0
+    assert cp_energy.dtype == cp.float64
+    cp_forces = cp.from_dlpack(result.forces)
+    cp_charges = cp.from_dlpack(result.charges)
+    assert cp_forces.shape == (len(_packed("h3_plus")["atomic_numbers"]), 3)
+
+    # Values must match the host CPU result (parity).
+    from gpuxtb.interface import compute_arrays
+
+    host = compute_arrays(
+        **{name: np.ascontiguousarray(value) for name, value in packed.items()}
+    )
+    np.testing.assert_allclose(cp_energy.get(), host.energies, rtol=1e-10)
+    np.testing.assert_allclose(cp_forces.get(), host.forces, atol=1e-9)
+    np.testing.assert_allclose(cp_charges.get(), host.charges, atol=1e-9)
+
+    # Zero-copy device import: the imported array aliases the arena bytes, so
+    # the CuPy data pointer equals the gpuxtb-owned slice pointer and no host
+    # transfer happened.
+    expected_pointer = _producer_base_pointer(energies)
+    assert cp_energy.data.ptr == expected_pointer
+
+    # A second independent export reads the same arena bytes.
+    cp_energy2 = cp.from_dlpack(result.energies)
+    np.testing.assert_array_equal(cp_energy2.get(), cp_energy.get())
+    assert cp_energy2.data.ptr == expected_pointer
+
+    # The arena stays alive through the imported array's native retain even
+    # after the result wrapper and batch are closed.
+    energy = cp_energy.get().copy()
+    result.close()
+    batch.close()
+    del result
+    import gc
+
+    gc.collect()
+    np.testing.assert_array_equal(cp_energy.get(), energy)
+    del cp_energy
+    del cp_energy2
+    del cp_forces
+    del cp_charges
+    gc.collect()
+
+
+@pytest.mark.cuda
+def test_device_producer_imports_with_jax(tmp_path: object) -> None:
+    """``jax.dlpack.from_dlpack`` imports the finished device bytes."""
+    skip = _device_ready("jax")
+    if skip is not None:
+        pytest.skip(skip)
+    import jax
+    import jax.numpy as jnp
+
+    jax.config.update("jax_enable_x64", True)
+
+    packed = {
+        name: np.ascontiguousarray(value) for name, value in _packed("ketene").items()
+    }
+    batch = ArrayBatch(**packed, backend="cuda", stream=1)
+    result = batch.compute(result_memory="cuda")
+
+    energies = result.energies
+    assert isinstance(energies, dlpack.DLPackResultBuffer)
+    assert energies.__dlpack_device__() == (dlpack._DLPACK_DEVICE_CUDA, 0)
+
+    jax_energy = jax.dlpack.from_dlpack(energies)
+    assert jax_energy.dtype == jnp.float64
+    jax_forces = jax.dlpack.from_dlpack(result.forces)
+    jax_charges = jax.dlpack.from_dlpack(result.charges)
+    assert jax_forces.shape == (len(_packed("ketene")["atomic_numbers"]), 3)
+
+    # Values must match the host CPU result (parity), read back through JAX.
+    from gpuxtb.interface import compute_arrays
+
+    host = compute_arrays(
+        **{name: np.ascontiguousarray(value) for name, value in packed.items()}
+    )
+    np.testing.assert_allclose(np.asarray(jax_energy), host.energies, rtol=1e-10)
+    np.testing.assert_allclose(np.asarray(jax_forces), host.forces, atol=1e-9)
+    np.testing.assert_allclose(np.asarray(jax_charges), host.charges, atol=1e-9)
+
+    # A second independent export reads the same arena bytes.
+    jax_energy2 = jax.dlpack.from_dlpack(result.energies)
+    np.testing.assert_array_equal(np.asarray(jax_energy2), np.asarray(jax_energy))
+
+    result.close()
+    batch.close()
+
+
+@pytest.mark.cuda
+def test_device_producer_providers_alias_same_device_bytes(tmp_path: object) -> None:
+    """torch, CuPy, and JAX all import the same arena without a host copy."""
+    skip = _device_ready()
+    if skip is not None:
+        pytest.skip(skip)
+    import cupy as cp
+    import jax
+    import torch
+
+    jax.config.update("jax_enable_x64", True)
+
+    packed = {
+        name: np.ascontiguousarray(value) for name, value in _packed("h3_plus").items()
+    }
+    batch = ArrayBatch(**packed, backend="cuda", stream=1)
+    result = batch.compute(result_memory="cuda")
+    energies = result.energies
+    expected_pointer = _producer_base_pointer(energies)
+
+    t_energy = torch.from_dlpack(energies)
+    cp_energy = cp.from_dlpack(energies)
+    jax_energy = jax.dlpack.from_dlpack(energies)
+
+    # Every provider observes the exact same device bytes by pointer.
+    assert t_energy.data_ptr() == cp_energy.data.ptr == expected_pointer
+    np.testing.assert_array_equal(t_energy.cpu().numpy(), cp_energy.get())
+    np.testing.assert_array_equal(t_energy.cpu().numpy(), np.asarray(jax_energy))
     batch.close()
 
 
