@@ -1387,6 +1387,16 @@ int test_projection_authority_rejection() {
   fixture.plan.packed_all_pair_projection = {};
   CHECK(validate().error == Gfn2SccIterationBindingError::kSuccess);
 
+  /* Disabled optional projections are canonical-empty, not merely tokenless.
+   * A stale count or borrowed pointer must not survive setup and become a
+   * future consumer's accidental topology authority. */
+  fixture.plan.packed_all_pair_projection.total_pairs = 1;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidTopology);
+  fixture.plan.packed_all_pair_projection = {};
+  /* The fixture's topology intentionally has one live AO bucket; its disabled
+   * form is exercised by the same plan gate in production setup when no bucket
+   * domain is present. */
+
   /* Persistent SCC and potential leaves cannot substitute physical offsets. */
   fixture.plan.scc_batch.shell_offsets = fixture.plan.topology.atom_offsets;
   CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);

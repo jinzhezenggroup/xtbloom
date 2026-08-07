@@ -543,6 +543,18 @@ bool validate_top_level_shape(const Gfn2SccIterationDevicePlan& plan, Validator&
  */
 bool validate_plan_projection_identity(const Gfn2SccIterationDevicePlan& plan,
                                        Validator& validator) noexcept {
+  const auto packed_projection_is_empty = [](const Gfn2PackedAllPairProjectionView& projection) {
+    return projection.memory_space == Gfn2PlanMemorySpace::kHost && projection.plan_token == 0u &&
+           projection.batch_size == 0 && projection.total_pairs == 0 &&
+           projection.pair_offset_count == 0 && projection.pair_offsets == nullptr;
+  };
+  const auto bucket_projection_is_empty = [](const Gfn2AOBucketProjectionView& projection) {
+    return projection.memory_space == Gfn2PlanMemorySpace::kHost && projection.plan_token == 0u &&
+           projection.batch_size == 0 && projection.bucket_count == 0 &&
+           projection.bucket_offset_count == 0 && projection.bucket_system_count == 0 &&
+           projection.bucket_orbital_count == 0 && projection.bucket_offsets == nullptr &&
+           projection.bucket_systems == nullptr && projection.bucket_orbital_counts == nullptr;
+  };
   const Gfn2PlanSchemaDiagnostic atom = validate_gfn2_atom_projection_binding(
       plan.topology, plan.atom_projection, Gfn2PlanMemorySpace::kCudaDevice);
   if (atom.error != Gfn2PlanSchemaError::kSuccess) {
@@ -569,7 +581,7 @@ bool validate_plan_projection_identity(const Gfn2SccIterationDevicePlan& plan,
     if (pairs.error != Gfn2PlanSchemaError::kSuccess) {
       return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology, pairs.index);
     }
-  } else if (plan.packed_all_pair_projection.plan_token != 0u) {
+  } else if (!packed_projection_is_empty(plan.packed_all_pair_projection)) {
     return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology);
   }
   if (plan.topology.bucket_count != 0) {
@@ -578,7 +590,7 @@ bool validate_plan_projection_identity(const Gfn2SccIterationDevicePlan& plan,
     if (buckets.error != Gfn2PlanSchemaError::kSuccess) {
       return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology, buckets.index);
     }
-  } else if (plan.ao_bucket_projection.plan_token != 0u) {
+  } else if (!bucket_projection_is_empty(plan.ao_bucket_projection)) {
     return validator.fail(BindingError::kInvalidTopology, BindingField::kTopology);
   }
   const Gfn2PlanSchemaDiagnostic element = validate_gfn2_element_identity_projection_binding(

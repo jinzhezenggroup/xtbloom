@@ -2285,6 +2285,17 @@ int test_consumer_vjp_matches_candidate_vjp() {
               static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
               consumer_system_errors.get(), consumer_device_error.get(),
               stream) == cudaErrorInvalidValue);
+    /* The active mask is a control view and may not alias committed topology
+     * or cache reads, even though both are read-only in this leaf. */
+    gpuxtb::detail::Gfn2PairListConsumerView aliased_active = committed;
+    aliased_active.active_mask_count = static_cast<std::int64_t>(batch_size);
+    aliased_active.active_mask = reinterpret_cast<const std::uint8_t*>(consumer_batch.atom_offsets);
+    CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+              consumer_batch, aliased_active, device.positions.get(), device.radii.get(),
+              kGeneration, d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
+              static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
+              consumer_system_errors.get(), consumer_device_error.get(),
+              stream) == cudaErrorInvalidValue);
     CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
         static_cast<std::int64_t>(batch_size), consumer_system_errors.get(),
         consumer_device_error.get(), stream));

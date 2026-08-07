@@ -2214,6 +2214,38 @@ int test_sequence_failure_precedes_hostile_sparse_parity_offset_read() {
   CHECK(plan_failure == expected);
   CHECK(execution_device_error == expected);
   CHECK(after == before);
+
+  /* Peer-local coordination failure is distinct from plan failure.  The gate
+   * must skip that peer before reading either gradient slice; passing a null
+   * sparse pointer makes a regression an immediate device invalid read. */
+  CUDA_CHECK(device.atom_offsets.copy_from(host.basis.atom_offsets.data(),
+                                           host.basis.atom_offsets.size(), stream));
+  CUDA_CHECK(device.plan_failure.copy_from(&zero, 1u, stream));
+  CUDA_CHECK(device.execution_device_error.copy_from(&zero, 1u, stream));
+  CUDA_CHECK(
+      device.coordination_system_errors.copy_from(no_errors.data(), no_errors.size(), stream));
+  std::vector<std::uint32_t> peer_error(host.batch_size, 0u);
+  peer_error[0] = static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kInvalidCache);
+  std::vector<std::uint8_t> only_failed_peer(host.batch_size, 0u);
+  only_failed_peer[0] = 1u;
+  CUDA_CHECK(
+      device.coordination_system_errors.copy_from(peer_error.data(), peer_error.size(), stream));
+  CUDA_CHECK(device.electronic_success.copy_from(only_failed_peer.data(), only_failed_peer.size(),
+                                                 stream));
+  CUDA_CHECK(device.sparse_sequence.copy_from(&one, 1u, stream));
+  CUDA_CHECK(device.coordination_sequence.copy_from(&one, 1u, stream));
+  CUDA_CHECK(device.electronic_gradient.copy_from(before.data(), before.size(), stream));
+  CUDA_CHECK(test_gate_gfn2_cn_vjp_parity_cuda(
+      static_cast<std::int64_t>(host.batch_size), device.atom_offsets.get(),
+      device.electronic_success.get(), device.sparse_sequence.get(),
+      device.coordination_sequence.get(), device.plan_failure.get(),
+      device.electronic_gradient.get(), nullptr, device.electronic_gradient.get(),
+      device.coordination_system_errors.get(), device.execution_device_error.get(), stream));
+  CUDA_CHECK(device.electronic_gradient.copy_to(after.data(), after.size(), stream));
+  CUDA_CHECK(device.plan_failure.copy_to(&plan_failure, 1u, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(plan_failure == 0u);
+  CHECK(after == before);
   CUDA_CHECK(cudaStreamDestroy(stream));
   return 0;
 }

@@ -1208,6 +1208,10 @@ bool make_address_range(const void* pointer, std::int64_t elements, std::size_t 
   return true;
 }
 
+bool ranges_overlap(const AddressRange& first, const AddressRange& second) noexcept {
+  return first.begin < second.end && second.begin < first.end;
+}
+
 template <std::size_t ReadCount, std::size_t WriteCount>
 bool writable_ranges_are_disjoint(const std::array<AddressRange, ReadCount>& reads,
                                   const std::array<AddressRange, WriteCount>& writes) noexcept {
@@ -1847,6 +1851,15 @@ static cudaError_t validate_gfn2_pairlist_consumer_coordination_vjp_impl(
       !make_address_range(sequence_active, 1, sizeof(*sequence_active), &writes[4]) ||
       !writable_ranges_are_disjoint(reads, writes)) {
     return cudaErrorInvalidValue;
+  }
+  /* active_mask is a caller-supplied control view, not another topology view.
+   * Reject read/read aliases with committed topology and cache arrays here so
+   * standalone device entry has the same fail-closed contract as the host
+   * schema validator. */
+  for (std::size_t read = 0u; read < 13u; ++read) {
+    if (ranges_overlap(reads[13], reads[read])) {
+      return cudaErrorInvalidValue;
+    }
   }
   return cudaSuccess;
 }

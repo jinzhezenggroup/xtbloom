@@ -335,6 +335,17 @@ __global__ void gate_cn_vjp_parity_kernel(
   if (atomicAdd(const_cast<std::uint32_t*>(plan_failure), 0u) != 0u) {
     return;
   }
+  /* A sparse or dense coordination VJP may close one peer while its peers
+   * continue.  That peer's gradient slices are deliberately unpublished, so
+   * the parity gate must not read either slice (or its offsets) before checking
+   * the peer-local error.  This is also the failure boundary that keeps an
+   * injected leaf error from turning an uninitialized scratch read into a
+   * published force. */
+  if (incoming_mask[system] != 1u ||
+      atomicAdd(const_cast<std::uint32_t*>(coordination_errors + system), 0u) !=
+          static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSuccess)) {
+    return;
+  }
   const std::int64_t atom_begin = atom_offsets[system];
   const std::int64_t atom_end = atom_offsets[system + 1];
   __shared__ unsigned int mismatched;
@@ -342,8 +353,7 @@ __global__ void gate_cn_vjp_parity_kernel(
     mismatched = 0u;
   }
   __syncthreads();
-  if (incoming_mask[system] == 1u &&
-      atomicAdd(const_cast<std::uint32_t*>(plan_failure), 0u) == 0u) {
+  if (atomicAdd(const_cast<std::uint32_t*>(plan_failure), 0u) == 0u) {
     for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
       for (int axis = 0; axis < 3; ++axis) {
         const std::int64_t index = atom * 3 + axis;
@@ -367,8 +377,7 @@ __global__ void gate_cn_vjp_parity_kernel(
     atomicCAS(execution_device_error, 0u, value);
     return;
   }
-  if (mismatched == 0u && incoming_mask[system] == 1u &&
-      atomicAdd(const_cast<std::uint32_t*>(plan_failure), 0u) == 0u) {
+  if (mismatched == 0u && atomicAdd(const_cast<std::uint32_t*>(plan_failure), 0u) == 0u) {
     for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
       for (int axis = 0; axis < 3; ++axis) {
         const std::int64_t index = atom * 3 + axis;
