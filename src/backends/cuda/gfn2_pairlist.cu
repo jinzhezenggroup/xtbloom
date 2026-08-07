@@ -932,7 +932,7 @@ __global__ void preflight_coordination_pairs_kernel(
  */
 __global__ void coordination_vjp_preflight_kernel(
     Gfn2PairListDeviceBatch batch, const double* positions, const double* covalent_radii,
-    std::uint64_t scalar_generation, const Gfn2PairListDeviceCache& cache, const double* dE_dcn,
+    std::uint64_t scalar_generation, Gfn2PairListDeviceCache cache, const double* dE_dcn,
     const double* gradients, const std::uint32_t* sequence_active, std::uint32_t* system_errors,
     std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
@@ -1010,7 +1010,7 @@ __global__ void coordination_vjp_preflight_kernel(
 
 __global__ void coordination_vjp_accumulate_kernel(
     Gfn2PairListDeviceBatch batch, const double* positions, const double* covalent_radii,
-    std::uint64_t scalar_generation, const Gfn2PairListDeviceCache& cache, const double* dE_dcn,
+    std::uint64_t scalar_generation, Gfn2PairListDeviceCache cache, const double* dE_dcn,
     const double* gradients, double* gradient_scratch, const std::uint32_t* sequence_active,
     std::uint32_t* system_errors, std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
@@ -1613,6 +1613,124 @@ cudaError_t add_gfn2_pairlist_coordination_vjp_cuda(
   }
   coordination_vjp_publish_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
       batch, gradient_scratch, gradients, workspace.sequence_active, system_errors, device_error);
+  return check_launch();
+}
+
+/*
+ * A zero-copy cache projection of a committed consumer view.  The VJP kernels
+ * read neighbor_offsets/neighbor_counts/neighbors plus per-peer generations;
+ * the committed view supplies committed_generations in the same slot.  The
+ * projection aliases the committed arrays, never copies or repacks, and is
+ * reconstructed per launch on the host like every other leaf descriptor.
+ */
+namespace {
+
+/* Rebuild the kernel-level cache projection from a committed consumer view.
+ * Returned by value so callers pass a true temporary into the kernel, exactly
+ * like the established device.cache() path. */
+Gfn2PairListDeviceCache pairlist_cache_from_consumer(
+    const Gfn2PairListConsumerView& committed) noexcept {
+  Gfn2PairListDeviceCache cache{};
+  cache.pairs = const_cast<Gfn2AtomPair*>(committed.pairs);
+  cache.pair_elements = committed.pair_count;
+  cache.pair_offsets = const_cast<std::int64_t*>(committed.pair_offsets);
+  cache.pair_offset_elements = committed.pair_offset_count;
+  cache.pair_counts = const_cast<std::int64_t*>(committed.pair_counts);
+  cache.pair_count_elements = committed.pair_count_elements;
+  cache.neighbor_offsets = const_cast<std::int64_t*>(committed.neighbor_offsets);
+  cache.neighbor_offset_elements = committed.neighbor_offset_count;
+  cache.neighbor_counts = const_cast<std::int64_t*>(committed.neighbor_counts);
+  cache.neighbor_count_elements = committed.neighbor_count_elements;
+  cache.neighbors = const_cast<std::int64_t*>(committed.neighbors);
+  cache.neighbor_elements = committed.neighbor_count;
+  cache.pair_generations = const_cast<std::uint64_t*>(committed.committed_generations);
+  cache.generation_elements = committed.committed_generation_count;
+  cache.plan_token = committed.plan_token;
+  return cache;
+}
+
+}  // namespace
+
+cudaError_t add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    const Gfn2PairListDeviceBatch& batch, const Gfn2PairListConsumerView& committed,
+    const double* positions, const double* covalent_radii, std::uint64_t expected_generation,
+    const double* dE_dcn, double* gradients, double* gradient_scratch,
+    std::int64_t gradient_elements, const std::uint32_t* sequence_active,
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  if (committed.plan_token == 0u || committed.plan_token != batch.plan_token ||
+      committed.state != Gfn2PairListState::kCommitted ||
+      committed.batch_size != batch.batch_size || committed.total_atoms != batch.total_atoms ||
+      committed.max_neighbors_per_atom != batch.max_neighbors_per_atom ||
+      committed.pair_offsets == nullptr || committed.pair_counts == nullptr ||
+      committed.neighbor_offsets == nullptr || committed.neighbor_counts == nullptr ||
+      committed.neighbors == nullptr || committed.committed_generations == nullptr ||
+      !required_pointer(sequence_active, 1) || !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(device_error, alignof(std::uint32_t)) ||
+      expected_generation == 0u || gradient_elements < batch.total_atoms * 3) {
+    return cudaErrorInvalidValue;
+  }
+  const Gfn2PairListDeviceCache cache = pairlist_cache_from_consumer(committed);
+
+  if (expected_generation == 0u || batch.plan_token != cache.plan_token ||
+      batch.total_atoms > kInt64Maximum / batch.max_neighbors_per_atom ||
+      batch.total_atoms > kInt64Maximum / 3 ||
+      batch.total_atoms > kInt64Maximum / 3 ||
+      !required_pointer(positions, batch.total_atoms * 3) ||
+      !required_pointer(covalent_radii, batch.total_atoms) ||
+      !required_pointer(dE_dcn, batch.total_atoms) ||
+      !required_pointer(gradients, batch.total_atoms * 3) ||
+      !required_pointer(gradient_scratch, gradient_elements) ||
+      cache.generation_elements < batch.batch_size ||
+      cache.neighbor_offset_elements != batch.total_atoms + 1 ||
+      cache.neighbor_count_elements < batch.total_atoms ||
+      cache.neighbor_elements < batch.total_atoms * batch.max_neighbors_per_atom ||
+      cache.pair_offsets == nullptr || cache.pair_counts == nullptr ||
+      cache.neighbor_offsets == nullptr || cache.neighbor_counts == nullptr ||
+      cache.neighbors == nullptr || cache.pair_generations == nullptr) {
+    return cudaErrorInvalidValue;
+  }
+  const std::int64_t neighbor_capacity = batch.total_atoms * batch.max_neighbors_per_atom;
+  std::array<AddressRange, 9> reads;
+  std::array<AddressRange, 4> writes;
+  if (!make_address_range(batch.atom_offsets, batch.atom_offset_elements,
+                          sizeof(*batch.atom_offsets), &reads[0]) ||
+      !make_address_range(positions, batch.total_atoms * 3, sizeof(*positions), &reads[1]) ||
+      !make_address_range(covalent_radii, batch.total_atoms, sizeof(*covalent_radii), &reads[2]) ||
+      !make_address_range(dE_dcn, batch.total_atoms, sizeof(*dE_dcn), &reads[3]) ||
+      !make_address_range(cache.pair_generations, cache.generation_elements,
+                          sizeof(*cache.pair_generations), &reads[4]) ||
+      !make_address_range(cache.neighbor_offsets, cache.neighbor_offset_elements,
+                          sizeof(*cache.neighbor_offsets), &reads[5]) ||
+      !make_address_range(cache.neighbor_counts, cache.neighbor_count_elements,
+                          sizeof(*cache.neighbor_counts), &reads[8]) ||
+      !make_address_range(cache.neighbors, neighbor_capacity, sizeof(*cache.neighbors),
+                          &reads[6]) ||
+      !make_address_range(sequence_active, 1, sizeof(*sequence_active), &reads[7]) ||
+      !make_address_range(gradients, batch.total_atoms * 3, sizeof(*gradients), &writes[0]) ||
+      !make_address_range(gradient_scratch, gradient_elements, sizeof(*gradient_scratch),
+                          &writes[1]) ||
+      !make_address_range(system_errors, batch.batch_size, sizeof(*system_errors), &writes[2]) ||
+      !make_address_range(device_error, 1, sizeof(*device_error), &writes[3]) ||
+      !writable_ranges_are_disjoint(reads, writes)) {
+    return cudaErrorInvalidValue;
+  }
+  const unsigned int blocks = static_cast<unsigned int>(batch.batch_size);
+  coordination_vjp_preflight_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+      batch, positions, covalent_radii, expected_generation, cache, dE_dcn, gradients,
+      sequence_active, system_errors, device_error);
+  cudaError_t status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  coordination_vjp_accumulate_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+      batch, positions, covalent_radii, expected_generation, cache, dE_dcn, gradients,
+      gradient_scratch, sequence_active, system_errors, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  coordination_vjp_publish_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+      batch, gradient_scratch, gradients, sequence_active, system_errors, device_error);
   return check_launch();
 }
 

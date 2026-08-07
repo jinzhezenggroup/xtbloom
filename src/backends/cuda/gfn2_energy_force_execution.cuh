@@ -12,6 +12,7 @@
 #include "backends/cuda/gfn2_electronic_gradient.cuh"
 #include "backends/cuda/gfn2_external_point_charges.cuh"
 #include "backends/cuda/gfn2_force_composition.cuh"
+#include "backends/cuda/gfn2_pairlist.cuh"
 #include "backends/cuda/gfn2_post_scc_potential.cuh"
 #include "backends/cuda/gfn2_scc_classical_energy.cuh"
 #include "backends/cuda/gfn2_scc_potential.cuh"
@@ -62,6 +63,13 @@ struct Gfn2EnergyForceExecutionDevicePlan {
   Gfn2ClassicalForceDevicePlan classical_plan{};
   Gfn2ExternalPointChargeDeviceBatch external_point_charge_batch{};
   Gfn2ForceCompositionDeviceBatch force_composition_batch{};
+  /* Step 5: optional sparse CN VJP leaf.  The committed pair-list consumer
+   * view is the projection published by the preprocessing final gate; when it
+   * is present (nonzero token) the H0 coordination VJP is computed with the
+   * sparse path and checked for dense parity.  pairlist_batch carries the
+   * per-system dispatch used by the builder. */
+  Gfn2PairListConsumerView pairlist_committed{};
+  Gfn2PairListDeviceBatch pairlist_batch{};
 };
 
 /* Converged SCC state plus all stationary post-SCC force inputs. */
@@ -116,6 +124,17 @@ struct Gfn2EnergyForceExecutionDeviceWorkspace {
   Gfn2ClassicalForceDeviceWorkspace classical{};
   Gfn2ExternalPointChargeForceDeviceWorkspace external_point_charge{};
   Gfn2ForceCompositionDeviceWorkspace force_composition{};
+  /* Step 5 sparse CN VJP differential scratch.  When plan.pairlist_committed
+   * is enabled, the H0 coordination VJP runs through both the dense geometry
+   * cache (production reference) and the committed sparse pair list; the two
+   * per-atom gradient results are compared bitwise and any peer whose slices
+   * disagree fails closed.  sparse_gradient_scratch is the sparse result
+   * buffer and sparse_sequence_active is the one-element VJP sequence watched
+   * by the paired kernels. */
+  double* sparse_gradient_scratch = nullptr;
+  std::int64_t sparse_gradient_elements = 0;
+  std::uint32_t* sparse_sequence_active = nullptr;
+  std::int64_t sparse_sequence_elements = 0;
 
   std::uint8_t* energy_success_mask = nullptr;
   std::uint8_t* post_scc_success_mask = nullptr;

@@ -251,6 +251,31 @@ cudaError_t add_gfn2_pairlist_coordination_vjp_cuda(
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
 /*
+ * Committed-consumer CN VJP (issue #84 step 5).  Operates on the committed
+ * Gfn2PairListConsumerView published by the preprocessing final gate, so a
+ * force consumer needs only the stable committed view plus positions/radii and
+ * the per-peer dE_dcn.  This entry points a zero-copy Gfn2PairListDeviceCache
+ * projection at the committed arrays (pair_offsets, pairs, pair_counts,
+ * neighbor_offsets, neighbor_counts, neighbors, committed_generations) and
+ * reuses the deterministic ascending-neighbor VJP kernels, so the sparse
+ * result stays bitwise identical to the dense geometry VJP for the retained
+ * pairs.  The committed generation is read per peer from
+ * committed_generations; a peer must be eligible and its generation must
+ * equal expected_generation, else it fails closed (kStaleGeometry).
+ *
+ * gradient_scratch is one caller-owned transient buffer shared with the dense
+ * VJP reference so the two paths can coexist without extra steady-state
+ * allocation.
+ */
+cudaError_t add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    const Gfn2PairListDeviceBatch& batch, const Gfn2PairListConsumerView& committed,
+    const double* positions, const double* covalent_radii, std::uint64_t expected_generation,
+    const double* dE_dcn, double* gradients, double* gradient_scratch,
+    std::int64_t gradient_elements, const std::uint32_t* sequence_active,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
+
+/*
  * Deterministic host dispatch policy used to choose between the sparse
  * bucketed builder and the dense fallback.  The threshold is derived from
  * reproducible batch 1/8/32/128 profiling (issue #70); below it, the dense

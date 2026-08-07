@@ -3334,6 +3334,8 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t coordination_gradient_scratch = 0u;
       std::size_t classical_gradient_scratch = 0u;
       std::size_t classical_force_scratch = 0u;
+      std::size_t sparse_gradient_scratch = 0u;
+      std::size_t sparse_sequence = 0u;
       std::size_t classical_coordination_adjoint = 0u;
       std::size_t classical_aes2_gradient = 0u;
       std::size_t classical_aes2_coordination = 0u;
@@ -3440,6 +3442,8 @@ struct Gfn2CudaExecutionCache::Impl {
       execution.coordination_gradient_scratch = execution_layout.append<double>(coordinates);
       execution.classical_gradient_scratch = execution_layout.append<double>(coordinates);
       execution.classical_force_scratch = execution_layout.append<double>(coordinates);
+      execution.sparse_gradient_scratch = execution_layout.append<double>(coordinates);
+      execution.sparse_sequence = execution_layout.append<std::uint32_t>(1);
       execution.classical_coordination_adjoint = execution_layout.append<double>(atoms);
       execution.classical_aes2_gradient = execution_layout.append<double>(coordinates);
       execution.classical_aes2_coordination = execution_layout.append<double>(atoms);
@@ -3707,6 +3711,15 @@ struct Gfn2CudaExecutionCache::Impl {
                                               external_batch.point_charge_offsets,
                                               composition_components,
                                               token};
+
+      /* Step 5 sparse CN VJP leaf: borrow the committed pair-list consumer view
+       * and the pair-list dispatch batch from the preprocessing binding.  The
+       * final per-system gate already published committed generations and
+       * eligibility, so the H0 CN VJP can parity-gate a sparse result against
+       * the dense reference.  A disabled leaf keeps zero tokens and disables
+       * the differential path. */
+      binding.plan.pairlist_committed = candidate.numerical.preprocessing.output.pairlist;
+      binding.plan.pairlist_batch = candidate.numerical.preprocessing.plan.pairlist;
 
       /* Project the committed spin-major state into stable physical arrays.
        * Every terminal force descriptor below consumes these buffers, never
@@ -4099,6 +4112,13 @@ struct Gfn2CudaExecutionCache::Impl {
       binding.workspace.classical_success_mask = mask(kClassicalSuccessMask);
       binding.workspace.external_success_mask = mask(kExternalSuccessMask);
       binding.workspace.mask_elements = batch;
+      /* Step 5 sparse CN VJP differential scratch and sequence. */
+      binding.workspace.sparse_gradient_scratch =
+          arena_pointer<double>(execution_arena, execution.sparse_gradient_scratch);
+      binding.workspace.sparse_gradient_elements = coordinates;
+      binding.workspace.sparse_sequence_active =
+          arena_pointer<std::uint32_t>(execution_arena, execution.sparse_sequence);
+      binding.workspace.sparse_sequence_elements = 1;
 
       binding.diagnostics.post_scc_potential = {system_errors(kPostSystemError),
                                                 device_error(kPostDeviceError), batch, token};

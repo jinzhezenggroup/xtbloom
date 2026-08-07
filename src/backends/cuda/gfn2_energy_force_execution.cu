@@ -243,6 +243,83 @@ __global__ void copy_mask_kernel(std::int64_t batch_size, const std::uint8_t* in
   }
 }
 
+/*
+ * Step 5 sparse/dense CN VJP parity gate.  Every requested, healthy peer whose
+ * H0 coordination VJP produced a bitwise-identical dense and sparse per-atom
+ * gradient slice is accepted; the sparse result (in sparse_gradients) is then
+ * published into the production gradients.  Any bitwise disagreement records a
+ * coordination error for that peer so a sparse/dense regression can never
+ * silently publish different forces.  The gate is one block per system and
+ * follows the same per-peer transaction discipline as the other H0 stages.
+ */
+__global__ void gate_cn_vjp_parity_kernel(
+    std::int64_t batch_size, const std::int64_t* atom_offsets,
+    const std::uint8_t* incoming_mask, const std::uint32_t* plan_failure,
+    const double* dense_gradients, const double* sparse_gradients, double* production_gradients,
+    std::uint32_t* coordination_errors, std::uint32_t* execution_device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t atom_begin = atom_offsets[system];
+  const std::int64_t atom_end = atom_offsets[system + 1];
+  __shared__ unsigned int mismatched;
+  if (threadIdx.x == 0) {
+    mismatched = 0u;
+  }
+  __syncthreads();
+  if (incoming_mask[system] == 1u &&
+      atomicAdd(const_cast<std::uint32_t*>(plan_failure), 0u) == 0u) {
+    for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+      for (int axis = 0; axis < 3; ++axis) {
+        const std::int64_t index = atom * 3 + axis;
+        const std::uint64_t dense_bits =
+            *reinterpret_cast<const std::uint64_t*>(dense_gradients + index);
+        const std::uint64_t sparse_bits =
+            *reinterpret_cast<const std::uint64_t*>(sparse_gradients + index);
+        if (dense_bits != sparse_bits) {
+          atomicExch(&mismatched, 1u);
+        }
+      }
+    }
+  }
+  __syncthreads();
+  if (mismatched != 0u && threadIdx.x == 0) {
+    atomicCAS(coordination_errors + system,
+              static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSuccess),
+              static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSparseCoordinationMismatch));
+    const std::uint32_t value = static_cast<std::uint32_t>(
+        Gfn2EnergyForceExecutionDeviceError::kCoordinationGradientFailure);
+    atomicCAS(execution_device_error, 0u, value);
+    return;
+  }
+  if (mismatched == 0u && incoming_mask[system] == 1u &&
+      atomicAdd(const_cast<std::uint32_t*>(plan_failure), 0u) == 0u) {
+    for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+      for (int axis = 0; axis < 3; ++axis) {
+        const std::int64_t index = atom * 3 + axis;
+        production_gradients[index] = sparse_gradients[index];
+      }
+    }
+  }
+}
+
+/* Seed the sparse CN VJP scratch with the current dense-coordination gradient
+ * seed (the electronic gradient contributions before the CN VJP runs), so the
+ * sparse consumer VJP accumulates onto exactly the same seed the dense VJP
+ * uses. */
+__global__ void seed_sparse_gradient_kernel(std::int64_t total_orbitals,
+                                            const double* source, double* destination) {
+  const std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (index < total_orbitals) {
+    destination[index] = source[index];
+  }
+}
+
+/* Arm the one-element sparse VJP sequence. */
+__global__ void arm_sparse_sequence_kernel(std::uint32_t* sequence_active) {
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    *sequence_active = 1u;
+  }
+}
+
 __global__ void merge_final_errors_kernel(std::int64_t batch_size,
                                           const std::uint8_t* incoming_mask,
                                           const std::uint32_t* composition_errors,
@@ -723,6 +800,44 @@ static cudaError_t execute_energy_force_impl(
   if (status != cudaSuccess) {
     return status;
   }
+  /* Step 5: when the committed sparse pair list is present, run the H0
+   * coordination VJP on the sparse consumer path as well and parity-gate it
+   * against the dense reference.  The dense VJP remains the production
+   * reference; the sparse path must match bitwise, so a regression can never
+   * silently change forces.  The gate is enabled only on the scalar-generation
+   * path where the expected committed generation is a concrete host value;
+   * the device-epoch path keeps the dense reference until a device-side epoch
+   * version of the consumer VJP is wired. */
+  const bool sparse_vjp_enabled =
+      geometry == nullptr && plan.pairlist_committed.plan_token != 0u &&
+      plan.pairlist_batch.plan_token != 0u;
+  const std::int64_t gradient_elements = plan.integral_batch.total_atoms * 3;
+  if (sparse_vjp_enabled) {
+    arm_sparse_sequence_kernel<<<1, 1, 0, stream>>>(workspace.sparse_sequence_active);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
+    seed_sparse_gradient_kernel<<<static_cast<unsigned int>(
+                                      (gradient_elements + kThreadsPerBlock - 1) /
+                                      kThreadsPerBlock),
+                                  kThreadsPerBlock, 0, stream>>>(
+        gradient_elements, intermediates.h0.gradients, workspace.sparse_gradient_scratch);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
+    status = add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+        plan.pairlist_batch, plan.pairlist_committed, input.h0.positions,
+        plan.coordination_batch.covalent_radii, plan.geometry_generation,
+        intermediates.h0.coordination_adjoint, workspace.sparse_gradient_scratch,
+        workspace.coordination.gradient_scratch, gradient_elements,
+        workspace.sparse_sequence_active, diagnostics.coordination_system_errors,
+        diagnostics.coordination_device_error, stream);
+    if (status != cudaSuccess) {
+      return status;
+    }
+  }
   status = geometry == nullptr
                ? add_gfn2_coordination_vjp_cuda(
                      plan.coordination_batch, plan.coordination_cache, plan.geometry_generation,
@@ -736,6 +851,18 @@ static cudaError_t execute_energy_force_impl(
                      diagnostics.coordination_device_error, stream);
   if (status != cudaSuccess) {
     return status;
+  }
+  if (sparse_vjp_enabled) {
+    gate_cn_vjp_parity_kernel<<<static_cast<unsigned int>(batch_size), kThreadsPerBlock, 0,
+                                stream>>>(
+        batch_size, plan.integral_batch.atom_offsets, workspace.electronic_success_mask,
+        workspace.plan_failure, intermediates.h0.gradients, workspace.sparse_gradient_scratch,
+        intermediates.h0.gradients, diagnostics.coordination_system_errors,
+        diagnostics.execution_device_error);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
   }
   record_sequence_plan_failure_kernel<<<1, 1, 0, stream>>>(
       workspace.coordination.sequence_active,
