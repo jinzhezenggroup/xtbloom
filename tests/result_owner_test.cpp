@@ -187,7 +187,11 @@ int test_owner_lifetime_and_failures() {
   gpuxtb_result_owner_release(owner); /* freed here */
 
   // NULL release is a no-op and must not crash.
+  gpuxtb_result_owner_buffer(NULL, NULL);
+  const std::string diagnostic_before_release = gpuxtb_get_last_error();
   gpuxtb_result_owner_release(NULL);
+  expect(std::string(gpuxtb_get_last_error()) == diagnostic_before_release,
+         "NULL release preserves the previous diagnostic");
 
   // Zero-size arena is rejected.
   options.size_bytes = 0;
@@ -200,6 +204,14 @@ int test_owner_lifetime_and_failures() {
   status = gpuxtb_result_owner_create(&options, &owner);
   expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && owner == NULL, "nonzero reserved rejected");
   options.reserved = 0;
+
+  // Host arenas use the sentinel device id -1; accepting a CUDA ordinal here
+  // would produce a descriptor whose public metadata contradicts its storage.
+  options.device_id = 0;
+  status = gpuxtb_result_owner_create(&options, &owner);
+  expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && owner == NULL,
+         "host arena rejects a non-sentinel device id");
+  options.device_id = -1;
 
   owner = NULL;
   status = gpuxtb_result_owner_create(&options, &owner);
@@ -234,6 +246,41 @@ int test_owner_lifetime_and_failures() {
   status = gpuxtb_result_owner_export_dltensor(owner, &bad_dtype, 1, &managed);
   expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && managed == NULL,
          "unsupported dtype rejected transactionally");
+
+  // The public ABI intentionally exposes only scalar integer and float dtypes
+  // documented in gpuxtb.h.  Do not silently accept wider unsigned or special
+  // DLPack encodings merely because they have a representable byte width.
+  const int32_t unsupported_codes[][2] = {{1, 16}, {1, 32}, {1, 64}, {4, 16}, {6, 8}};
+  for (const auto& dtype : unsupported_codes) {
+    gpuxtb_dlpack_view_t unsupported = bad_dtype;
+    unsupported.dtype_code = dtype[0];
+    unsupported.dtype_bits = dtype[1];
+    managed = reinterpret_cast<void*>(0x1234);
+    status = gpuxtb_result_owner_export_dltensor(owner, &unsupported, 1, &managed);
+    expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && managed == NULL,
+           "undocumented DLPack dtype rejected transactionally");
+  }
+
+  // Empty tensors are valid compact views and must not trigger a zero-divisor
+  // while validating subsequent shape extents.
+  const int64_t empty_shape[2] = {0, 3};
+  gpuxtb_dlpack_view_t empty = view;
+  empty.shape = empty_shape;
+  empty.dtype_code = 2;
+  empty.dtype_bits = 64;
+  empty.byte_offset = 0;
+  managed = NULL;
+  status = gpuxtb_result_owner_export_dltensor(owner, &empty, 1, &managed);
+  expect(status == GPUXTB_STATUS_SUCCESS && managed != NULL,
+         "empty DLPack shape exports successfully");
+  if (managed != NULL) {
+    DtManagedTensorVersioned* empty_tensor = static_cast<DtManagedTensorVersioned*>(managed);
+    expect(empty_tensor->dl_tensor.data == NULL && empty_tensor->dl_tensor.shape[0] == 0 &&
+               empty_tensor->dl_tensor.shape[1] == 3,
+           "empty DLPack shape publishes null data and copied extents");
+    empty_tensor->deleter(empty_tensor);
+    managed = NULL;
+  }
 
   // Unaligned offset must be rejected for an 8-byte scalar.
   gpuxtb_dlpack_view_t unaligned = view;

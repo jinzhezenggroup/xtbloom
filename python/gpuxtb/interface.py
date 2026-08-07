@@ -22,6 +22,7 @@ Charge and spin semantics are implemented directly on top of the C ABI:
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import math
 import operator
@@ -2183,33 +2184,34 @@ def _bind_outputs(
             and public_name not in out_spec
             and (shape and _dlpack._dlpack_bytes(shape, 1) != 0)
         ]
-        arena, offsets = _allocate_result_arena(context, cuda_owned)
-        arenas is not None and arenas.append(arena)
-        base_pointer = arena.base_pointer()
-        for public_name, field_name, shape, dtype in cuda_owned:
-            dtype = np.dtype(dtype)
-            view = _dlpack.DLPackResultBuffer(
-                arena=arena,
-                byte_offset=offsets[public_name],
-                size_bytes=_dlpack._dlpack_bytes(shape, dtype.itemsize),
-                shape=shape,
-                dtype=dtype,
-                memory_space=library.MEMORY_CUDA_DEVICE,
-                device_id=context.device_id,
-                stream=stream,
-            )
-            gpuxtb_owned is not None and gpuxtb_owned.append(view)
-            setattr(
-                result,
-                field_name,
-                library.Buffer(
-                    ctypes.c_void_p(base_pointer + offsets[public_name]),
-                    view.size_bytes,
-                    library.MEMORY_CUDA_DEVICE,
-                    0,
-                ),
-            )
-            output_owners[public_name] = view
+        if cuda_owned:
+            arena, offsets = _allocate_result_arena(context, cuda_owned)
+            arenas is not None and arenas.append(arena)
+            base_pointer = arena.base_pointer()
+            for public_name, field_name, shape, dtype in cuda_owned:
+                dtype = np.dtype(dtype)
+                view = _dlpack.DLPackResultBuffer(
+                    arena=arena,
+                    byte_offset=offsets[public_name],
+                    size_bytes=_dlpack._dlpack_bytes(shape, dtype.itemsize),
+                    shape=shape,
+                    dtype=dtype,
+                    memory_space=library.MEMORY_CUDA_DEVICE,
+                    device_id=context.device_id,
+                    stream=stream,
+                )
+                gpuxtb_owned is not None and gpuxtb_owned.append(view)
+                setattr(
+                    result,
+                    field_name,
+                    library.Buffer(
+                        ctypes.c_void_p(base_pointer + offsets[public_name]),
+                        view.size_bytes,
+                        library.MEMORY_CUDA_DEVICE,
+                        0,
+                    ),
+                )
+                output_owners[public_name] = view
     for public_name, field_name, shape, dtype in specs:
         if not requested[public_name]:
             setattr(result, field_name, library.Buffer(None, 0, library.MEMORY_HOST, 0))
@@ -2472,6 +2474,12 @@ class ArrayBatchResult:
         arenas, self._arenas = self._arenas, []
         for arena in arenas:
             arena.close()
+
+    def __del__(self) -> None:
+        """Release any gpuxtb-owned arena if the result is not closed explicitly."""
+        # Finalizers must never mask interpreter shutdown or user errors.
+        with contextlib.suppress(Exception):
+            self.close()
 
     def __enter__(self) -> ArrayBatchResult:  # noqa: PYI034 - 3.10 lacks Self
         """Use as a context manager so gpuxtb-owned storage is released."""

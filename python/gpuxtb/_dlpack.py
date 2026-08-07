@@ -914,29 +914,46 @@ class DLPackResultBuffer:
         """Export one gpuxtb-owned slice as a ``dltensor`` PyCapsule.
 
         ``max_version >= (1, 0)`` negotiates the versioned capsule; otherwise a
-        legacy ``dltensor`` capsule is produced.  ``copy`` never causes a copy:
-        the slice is already compact C-contiguous, and returning the same
-        allocation for ``copy=True`` is explicitly permitted by the DLPack
-        specification (the copied flag is therefore never set).  A foreign
-        ``dl_device`` is rejected before any capsule is created.
+        legacy ``dltensor`` capsule is produced.  ``copy=False`` and ``copy=None``
+        export the existing allocation.  ``copy=True`` is rejected because this
+        producer has no cross-device copy primitive.  A foreign ``dl_device`` is
+        rejected before any capsule is created.
         """
         self._ensure_open()
+        if copy is not None and not isinstance(copy, bool):
+            raise BufferError("copy must be None, True, or False")
+        if copy is True:
+            raise BufferError(
+                "copy=True is not supported by gpuxtb-owned result producers"
+            )
+        if stream is not None:
+            if isinstance(stream, bool) or not isinstance(stream, (int, np.integer)):
+                raise BufferError("stream must be a positive CUDA stream handle")
+            stream_value = int(stream)
+            if stream_value <= 0 or stream_value > _POINTER_MAX:
+                raise BufferError("stream must be a positive CUDA stream handle")
+            if self.memory_space != library.MEMORY_CUDA_DEVICE:
+                raise BufferError("host DLPack results do not accept a CUDA stream")
         if dl_device is not None and (
             not isinstance(dl_device, tuple)
             or len(dl_device) != 2
-            or tuple(int(value) for value in dl_device) != self.__dlpack_device__()
+            or _coerce_dlpack_device(dl_device) != self.__dlpack_device__()
         ):
             raise BufferError(
                 f"producer device {self.__dlpack_device__()} does not match the "
                 f"requested dl_device {dl_device!r}"
             )
-        versioned = max_version is not None and tuple(max_version) >= (1, 0)
+        versioned = _dlpack_versioned_requested(max_version)
         managed_pointer = _export_native_slice(self, versioned)
         capsule_name = _CAPSULE_NAME_VERSIONED if versioned else _CAPSULE_NAME
         destructor = _PRODUCER_CAPSULE_DESTRUCTORS[1 if versioned else 0]
-        capsule = _pyapi.PyCapsule_New(
-            ctypes.c_void_p(managed_pointer), capsule_name, destructor
-        )
+        try:
+            capsule = _pyapi.PyCapsule_New(
+                ctypes.c_void_p(managed_pointer), capsule_name, destructor
+            )
+        except BaseException:
+            _delete_native_managed(managed_pointer, versioned)
+            raise
         return capsule
 
     def close(self) -> None:
@@ -1014,6 +1031,67 @@ def _export_native_slice(buffer: DLPackResultBuffer, versioned: bool) -> int:
             status,
         )
     return int(managed_pointer.value or managed_pointer)
+
+
+def _delete_native_managed(managed_pointer: int, versioned: bool) -> None:
+    """Invoke a native managed-tensor deleter after capsule construction fails."""
+    if not managed_pointer:
+        return
+    try:
+        if versioned:
+            deleter = int(
+                ctypes.cast(
+                    managed_pointer, ctypes.POINTER(_DLManagedTensorVersioned)
+                ).contents.deleter
+                or 0
+            )
+        else:
+            deleter = int(
+                ctypes.cast(
+                    managed_pointer, ctypes.POINTER(_DLManagedTensor)
+                ).contents.deleter
+                or 0
+            )
+        if deleter:
+            _pyapi_void_deleter(deleter)(managed_pointer)
+    except (OSError, ValueError, TypeError):
+        # The native export already transferred ownership.  There is no safe
+        # Python fallback if its descriptor is malformed, so leave the native
+        # diagnostic path to report the original capsule allocation failure.
+        return
+
+
+def _coerce_dlpack_device(value: object) -> tuple[int, int] | None:
+    """Validate and normalize a DLPack ``(device_type, device_id)`` request."""
+    if not isinstance(value, tuple) or len(value) != 2:
+        return None
+    first, second = value
+    if (
+        isinstance(first, bool)
+        or isinstance(second, bool)
+        or not isinstance(first, (int, np.integer))
+        or not isinstance(second, (int, np.integer))
+    ):
+        return None
+    return int(first), int(second)
+
+
+def _dlpack_versioned_requested(max_version: object) -> bool:
+    """Validate a requested DLPack version and select the supported form."""
+    if max_version is None:
+        return False
+    try:
+        values = tuple(max_version)
+    except TypeError:
+        raise BufferError("max_version must contain two nonnegative integers") from None
+    if len(values) != 2 or any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, np.integer))
+        or int(value) < 0
+        for value in values
+    ):
+        raise BufferError("max_version must contain two nonnegative integers")
+    return tuple(int(value) for value in values) >= (1, 0)
 
 
 def _producer_dtype_fields(dtype: np.dtype) -> tuple[int, int]:

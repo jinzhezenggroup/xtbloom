@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 from gpuxtb import library
 from gpuxtb.exceptions import GPUxtbNotSupportedError, GPUxtbValueError
-from gpuxtb.interface import ArrayBatch, Calculator, Structure
+from gpuxtb.interface import ArrayBatch, ArrayBatchResult, Calculator, Structure
 
 
 def _water() -> Calculator:
@@ -213,6 +213,52 @@ def test_producer_foreign_dl_device_rejected() -> None:
     arena.close()
 
 
+def test_producer_rejects_invalid_protocol_arguments() -> None:
+    """Reject malformed stream, copy, device, and version requests early."""
+    arena = _host_arena()
+    producer = _filled_buffer(arena)
+    with pytest.raises(BufferError, match="host DLPack results"):
+        producer.__dlpack__(stream=1)
+    with pytest.raises(BufferError, match="stream"):
+        producer.__dlpack__(stream=1.5)  # type: ignore[arg-type]
+    with pytest.raises(BufferError, match="copy"):
+        producer.__dlpack__(copy=1)  # type: ignore[arg-type]
+    with pytest.raises(BufferError, match="copy=True"):
+        producer.__dlpack__(copy=True)
+    with pytest.raises(BufferError, match="max_version"):
+        producer.__dlpack__(max_version=(1, -1))
+    with pytest.raises(BufferError, match="dl_device"):
+        producer.__dlpack__(dl_device=("cuda", 0))  # type: ignore[arg-type]
+    with pytest.raises(BufferError, match="dl_device"):
+        producer.__dlpack__(dl_device=(1.0, 0))  # type: ignore[arg-type]
+    producer.close()
+    arena.close()
+
+
+def test_producer_capsule_allocation_failure_releases_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed PyCapsule allocation must release the native managed tensor."""
+    arena = _host_arena()
+    producer = _filled_buffer(arena)
+
+    def fail_capsule(*args: object, **kwargs: object) -> object:
+        raise MemoryError("injected capsule allocation failure")
+
+    capsule_new = dlpack._pyapi.PyCapsule_New
+    monkeypatch.setattr(dlpack._pyapi, "PyCapsule_New", fail_capsule)
+    with pytest.raises(MemoryError, match="capsule allocation"):
+        producer.__dlpack__(max_version=(1, 0))
+    monkeypatch.setattr(dlpack._pyapi, "PyCapsule_New", capsule_new)
+
+    # The native export reference was released by the failure path, so a
+    # subsequent export remains valid and can be consumed normally.
+    imported = np.from_dlpack(producer)
+    np.testing.assert_array_equal(imported, np.arange(8, 16, dtype=np.float64) * 2.0)
+    producer.close()
+    arena.close()
+
+
 def test_producer_export_after_close_raises() -> None:
     """Exports after close must fail with a precise error."""
     arena = _host_arena()
@@ -248,6 +294,25 @@ def test_producer_survives_import_wrapper_garbage_collection() -> None:
     del producer
     gc.collect()
     np.testing.assert_array_equal(imported, np.arange(8, 16, dtype=np.float64) * 2.0)
+    del imported
+    gc.collect()
+    arena.close()
+
+
+def test_array_result_finalizer_releases_coordinator_not_retained_producer() -> None:
+    """A retained result slice remains exportable after its result is collected."""
+    arena = _host_arena()
+    producer = _filled_buffer(arena)
+    result = ArrayBatchResult({"energies": producer}, result_flags=0)
+    result._attach_producers([arena], [producer])
+    retained = result.energies
+
+    del result
+    gc.collect()
+
+    imported = np.from_dlpack(retained)
+    np.testing.assert_array_equal(imported, np.arange(8, 16, dtype=np.float64) * 2.0)
+    retained.close()
     del imported
     gc.collect()
     arena.close()

@@ -4,6 +4,46 @@
 
 #include "gpuxtb/gpuxtb.h"
 
+/* Minimal DLPack 1.0 layout mirror used only to consume the managed tensor
+ * exported by the installed-library ABI.  The native producer owns this
+ * object until the importing consumer invokes its deleter. */
+typedef struct consumer_dl_tensor {
+  void* data;
+  struct {
+    int32_t device_type;
+    int32_t device_id;
+  } device;
+  int32_t ndim;
+  struct {
+    uint8_t code;
+    uint8_t bits;
+    uint16_t lanes;
+  } dtype;
+  int64_t* shape;
+  int64_t* strides;
+  uint64_t byte_offset;
+} consumer_dl_tensor_t;
+
+typedef struct consumer_dl_managed_tensor_versioned consumer_dl_managed_tensor_versioned_t;
+typedef void (*consumer_dlpack_deleter_t)(consumer_dl_managed_tensor_versioned_t*);
+struct consumer_dl_managed_tensor_versioned {
+  uint32_t version_major;
+  uint32_t version_minor;
+  void* manager_ctx;
+  consumer_dlpack_deleter_t deleter;
+  uint64_t flags;
+  consumer_dl_tensor_t dl_tensor;
+};
+
+_Static_assert(sizeof(consumer_dl_tensor_t) == 48,
+               "installed DLPack tensor mirror must remain 48 bytes");
+_Static_assert(sizeof(consumer_dl_managed_tensor_versioned_t) == 80,
+               "installed DLPack managed-tensor mirror must remain 80 bytes");
+_Static_assert(GPUXTB_RESULT_OWNER_OPTIONS_V1_SIZE <= sizeof(gpuxtb_result_owner_options_t),
+               "result-owner options prefix must fit the public layout");
+_Static_assert(GPUXTB_DLPACK_VIEW_V1_SIZE == sizeof(gpuxtb_dlpack_view_t),
+               "DLPack view v1 prefix must cover the complete public layout");
+
 _Static_assert(GPUXTB_COMPUTE_OPTIONS_V1_SIZE == 48,
                "installed ABI-v1 compute-options prefix must remain 48 bytes");
 _Static_assert(GPUXTB_COMPUTE_OPTIONS_V2_SIZE == 56,
@@ -65,13 +105,21 @@ static int run_installed_result_owner(void) {
     return 23;
   }
 
-  /* The managed tensor's native deleter owns the export; release the producer
-   * reference, then let the exported management path free the rest. In this
-   * host consumer we only verify the export pointer is usable for the
-   * documented lifetime contract (its fields mirror DLPack 1.0). */
-  gpuxtb_result_owner_retain(owner);
+  /* Release the producer reference, then consume the single-use DLPack
+   * transfer.  The managed-tensor deleter drops the export reference and
+   * frees both the copied descriptor and the arena exactly once. */
   gpuxtb_result_owner_release(owner);
-  gpuxtb_result_owner_release(owner);
+  consumer_dl_managed_tensor_versioned_t* tensor = (consumer_dl_managed_tensor_versioned_t*)managed;
+  if (tensor->version_major != 1u || tensor->version_minor != 0u || tensor->deleter == NULL ||
+      tensor->dl_tensor.device.device_type != 1 || tensor->dl_tensor.device.device_id != 0 ||
+      tensor->dl_tensor.ndim != 1 || tensor->dl_tensor.shape[0] != result_shape[0]) {
+    fprintf(stderr, "installed DLPack managed-tensor fields are inconsistent\n");
+    if (tensor->deleter != NULL) {
+      tensor->deleter(tensor);
+    }
+    return 24;
+  }
+  tensor->deleter(tensor);
   return 0;
 }
 

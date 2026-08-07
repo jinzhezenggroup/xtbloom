@@ -505,6 +505,15 @@ gpuxtb_status_t populate_dlpack_view(gpuxtb_result_owner_t* wrapper,
     if (shape[index] < 0) {
       return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "DLPack view has a negative shape extent");
     }
+    if (shape[index] == 0) {
+      /* Once one extent is zero the tensor has no elements; keep validating
+       * the remaining extents without dividing by a zero element count. */
+      element_count = 0u;
+      continue;
+    }
+    if (element_count == 0u) {
+      continue;
+    }
     if (static_cast<std::uint64_t>(shape[index]) >
         std::numeric_limits<std::uint64_t>::max() / element_count) {
       return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "DLPack view shape overflows element count");
@@ -629,6 +638,11 @@ gpuxtb_status_t gpuxtb_result_owner_create(const gpuxtb_result_owner_options_t* 
       options->memory_space != GPUXTB_MEMORY_CUDA_DEVICE) {
     return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "result owner uses an unsupported memory space");
   }
+  if ((options->memory_space == GPUXTB_MEMORY_HOST && options->device_id != -1) ||
+      (options->memory_space == GPUXTB_MEMORY_CUDA_DEVICE && options->device_id < 0)) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
+                "result owner device_id is inconsistent with its memory space");
+  }
   if (options->size_bytes == 0u) {
     return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "result owner arena size must be nonzero");
   }
@@ -709,7 +723,8 @@ void gpuxtb_result_owner_retain(gpuxtb_result_owner_t* owner) {
 
 void gpuxtb_result_owner_release(gpuxtb_result_owner_t* owner) {
   if (owner == nullptr || owner->implementation == nullptr) {
-    last_error = "result owner is NULL";
+    /* The public release contract makes NULL a harmless no-op.  Preserve any
+     * prior diagnostic so callers can still inspect the failing operation. */
     return;
   }
   gpuxtb::detail::ResultOwner* implementation = owner->implementation;

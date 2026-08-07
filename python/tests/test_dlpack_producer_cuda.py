@@ -128,6 +128,35 @@ def test_device_producer_out_precedence_mixed(tmp_path: object) -> None:
 
 
 @pytest.mark.cuda
+def test_device_producer_all_outputs_supplied_does_not_allocate_arena(
+    tmp_path: object,
+) -> None:
+    """An all-``out=`` CUDA call needs no empty gpuxtb-owned arena."""
+    skip = _device_ready()
+    if skip is not None:
+        pytest.skip(skip)
+    import torch
+
+    packed = {
+        name: np.ascontiguousarray(value) for name, value in _packed("h3_plus").items()
+    }
+    natoms = len(packed["atomic_numbers"])
+    out = {
+        "energies": torch.empty(1, dtype=torch.float64, device="cuda"),
+        "forces": torch.empty((natoms, 3), dtype=torch.float64, device="cuda"),
+        "charges": torch.empty(natoms, dtype=torch.float64, device="cuda"),
+        "scc_iterations": torch.empty(1, dtype=torch.int32, device="cuda"),
+        "scc_converged": torch.empty(1, dtype=torch.uint8, device="cuda"),
+        "per_system_status": torch.empty(1, dtype=torch.int32, device="cuda"),
+    }
+    batch = ArrayBatch(**packed, backend="cuda", stream=1)
+    result = batch.compute(result_memory="cuda", out=out)
+    for name, expected in out.items():
+        assert getattr(result, name) is expected
+    batch.close()
+
+
+@pytest.mark.cuda
 def test_device_producer_close_releases_reference(tmp_path: object) -> None:
     """Closing the result releases only the producer reference.
 

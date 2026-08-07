@@ -41,16 +41,16 @@ void free_host_result_arena(void* data) noexcept {
 std::size_t dlpack_dtype_size(std::int32_t code, std::int32_t bits) noexcept {
   switch (bits) {
     case 8:
-      if (code == kDlpackInt || code == kDlpackUInt || code == kDlpackBool) return 1u;
+      if (code == kDlpackInt || code == kDlpackUInt) return 1u;
       break;
     case 16:
-      if (code == kDlpackInt || code == kDlpackUInt || code == kDlpackBfloat) return 2u;
+      if (code == kDlpackInt) return 2u;
       break;
     case 32:
-      if (code == kDlpackInt || code == kDlpackUInt || code == kDlpackFloat) return 4u;
+      if (code == kDlpackInt || code == kDlpackFloat) return 4u;
       break;
     case 64:
-      if (code == kDlpackInt || code == kDlpackUInt || code == kDlpackFloat) return 8u;
+      if (code == kDlpackInt || code == kDlpackFloat) return 8u;
       break;
   }
   return 0u;
