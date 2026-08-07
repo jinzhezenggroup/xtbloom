@@ -113,8 +113,9 @@ GPU under `srun --gres=gpu:1`:
 
 ```bash
 pytest python/tests/test_dlpack_producer_cuda.py          # 10/10 passed (incl. new CuPy/JAX/pointer tests)
+pytest python/tests/test_dlpack_producer.py              # 17/17 passed (incl. torch+JAX CPU host producer)
 pytest python/tests/test_array_batch_cuda.py              # 14/14 passed (CuPy/JAX/torch device arrays)
-pytest python/tests                                      # 191 passed, 2 skipped (ase/dpdata absent)
+pytest python/tests                                      # 214 passed, 0 skipped (ase/dpdata installed)
 ```
 
 ## Evaluation
@@ -127,6 +128,9 @@ pytest python/tests                                      # 191 passed, 2 skipped
   `torch.from_dlpack`, and `jax.dlpack.from_dlpack`, assert the identical
   device pointer across providers (zero-copy, no host round trip), and check
   value parity with the host CPU result.
+- `PASS` — CPU-provider evidence: torch and JAX additionally import the host
+  arena producer zero-copy (pointer and value parity); unsupported
+  combinations are reported honestly (CuPy has no CPU-tensor import).
 - The benchmark harness unit test `benchmarks/test_dlpack_result_memory.py`
   (5 tests, hardware-free) covers the packed workload, summary statistics,
   refuse-overwrite guard, required-GPU precondition, and CSV schema.
