@@ -13,15 +13,17 @@ can be re-derived, not restated from memory:
   (gpuxtb-owned device arena, no `out=`) passes the predefined mean-overhead
   gate of no more than 5% above the caller-owned `out=` path. Across 300
   counterbalanced pairs after 30 warmups per mode, arena mean latency is
-  `7.512 ms` (`7.497..7.541` min..max) versus `7.810 ms`
-  (`7.785..7.941`) for `out=`. The paired arena-minus-out mean is
-  `-0.2980 +/- 0.0015 ms` (95% confidence half-width), or `-3.82%`.
+  `7.521 ms` (`7.495..7.770` min..max) versus `7.820 ms`
+  (`7.789..8.224`) for `out=`. The paired arena-minus-out mean is
+  `-0.2993 +/- 0.0045 ms` (95% confidence half-width), or `-3.83%`.
 - Each arena call adds one packed `cudaMalloc` and releases it with one
   `cudaFree`; the caller-owned mode allocates its reusable output once before
-  the calls. The process-wide 3-warmup + 10-call profiles record arena
+  the calls. Direct trace inspection identifies the 13 regular arena
+  allocation/release pairs from 3 warmups + 10 measured calls. Process-wide
+  totals also include provider setup and teardown: the profiles record arena
   `cudaMalloc=45`/`cudaFree=51` versus `out=`
-  `cudaMalloc=33`/`cudaFree=38`. The traces include common process setup and
-  teardown as well as the 13 regular arena allocation/release pairs.
+  `cudaMalloc=33`/`cudaFree=38`, a total difference of +12 allocations and +13
+  frees that is deliberately not substituted for the per-call trace count.
 - Neither path performs a device-to-host transfer of result data. The D2H
   memcpy profile is byte-identical between the two modes (49 copies / 1069
   bytes total) and corresponds to the internal numerical-host completion
@@ -51,12 +53,16 @@ can be re-derived, not restated from memory:
   against CUDA 12.9.
 - Python: 3.13.9. numpy 2.5.1, pytest 9.1.1, CuPy 14.1.1, JAX 0.11.0 (with
   `jax[cuda12]` compute 12.9 libs), PyTorch 2.13.0 (+cu130).
-- Source revision: `d9b8d5e6d8dd94397fe3c2d7492491599320171b` (PR #226 evidence
+- Source revision: `8ddd28766db581eafeb6088026e99e45415f29c1` (PR #226 evidence
   branch). The measured native library is the explicit shared CMake build at
   `build/pr226-cuda/libgpuxtb.so.0.1.0`; its SHA-256
   (`53ad262937f1612fceee97f9bc88e0abac2126523e54f226092de5fed12b32ce`)
-  and adjacent CMake cache identity are embedded in
-  `dlpack-result-memory.json`.
+  is embedded in `dlpack-result-memory.json` together with the exact adjacent
+  CMake-cache hash and entries, clean matching source Git identity, configured
+  C++/CUDA compiler paths and binary hashes, queried compiler versions, release
+  flags, architecture, generator, and CMake version. The committed harness
+  rejects missing metadata, dirty or different source trees, and revision
+  mismatches before it publishes final evidence.
 - Nsight Systems: 2025.1.3.140-251335620677v0.
 - The `nsys` captures use the committed runner's `--profile-mode`, driving 3
   warmup + 10 timed calls per mode with explicit producer close per call and
@@ -110,14 +116,14 @@ srun --gres=gpu:1 --ntasks=1 env PYTHONPATH="$PWD/python" \
   /tmp/venv-providers/bin/python benchmarks/dlpack_result_memory.py \
   --library build/pr226-cuda/libgpuxtb.so.0.1.0 \
   --warmup 30 --repetitions 300 \
-  --output /tmp/pr226-final-d9b8d5e/dlpack-result-memory.json
+  --output /tmp/pr226-final-8ddd287.YOaNlB/dlpack-result-memory.json
 
 # Profiler capture, executed once with <mode>=arena and once with <mode>=out:
 srun --gres=gpu:1 --ntasks=1 env PYTHONPATH="$PWD/python" \
   GPUXTB_LIBRARY="$PWD/build/pr226-cuda/libgpuxtb.so.0.1.0" \
   LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64 \
   /group/software/cuda-12.9.1/bin/nsys profile \
-  -o /tmp/pr226-profile-d9b8d5e/<mode> \
+  -o /tmp/pr226-final-8ddd287.YOaNlB/<mode> \
   --force-overwrite=true --cuda-memory-usage=true --trace=cuda,nvtx,osrt \
   /tmp/venv-providers/bin/python benchmarks/dlpack_result_memory.py \
   --library build/pr226-cuda/libgpuxtb.so.0.1.0 \
@@ -126,9 +132,9 @@ srun --gres=gpu:1 --ntasks=1 env PYTHONPATH="$PWD/python" \
 # Derived reports (as committed):
 /group/software/cuda-12.9.1/bin/nsys stats \
   --report cuda_gpu_kern_sum,cuda_gpu_mem_time_sum,cuda_gpu_mem_size_sum,cuda_api_trace \
-  --format csv --output /tmp/pr226-profile-d9b8d5e/<mode>-report \
+  --format csv --output /tmp/pr226-final-8ddd287.YOaNlB/<mode>-report \
   --force-export=true --force-overwrite=true \
-  /tmp/pr226-profile-d9b8d5e/<mode>.nsys-rep
+  /tmp/pr226-final-8ddd287.YOaNlB/<mode>.nsys-rep
 ```
 
 The provider matrix was run against the exact shared CUDA library on a real
@@ -143,9 +149,9 @@ pytest python/tests                                      # 211 passed, 0 skipped
 
 ## Evaluation
 
-- `PASS` — allocation/free cost vs `out=`: 300-pair mean 7.512 ms (arena)
-  versus 7.810 ms (`out=`), passing the explicit maximum 5% mean-overhead gate
-  at -3.82%; one arena alloc/free per call with no added device-wide sync and
+- `PASS` — allocation/free cost vs `out=`: 300-pair mean 7.521 ms (arena)
+  versus 7.820 ms (`out=`), passing the explicit maximum 5% mean-overhead gate
+  at -3.83%; one arena alloc/free per call with no added device-wide sync and
   no result D2H (identical synchronization and D2H profiles).
 - `PASS` — real CuPy/JAX/torch device-provider import evidence: committed
   CUDA tests import the same arena through `cupy.from_dlpack`,
@@ -156,9 +162,10 @@ pytest python/tests                                      # 211 passed, 0 skipped
   arena producer zero-copy (pointer and value parity); unsupported
   combinations are reported honestly (CuPy has no CPU-tensor import).
 - The benchmark harness unit test `benchmarks/test_dlpack_result_memory.py`
-  (10 tests, hardware-free) covers the packed workload, statistics and gate,
-  CPU reference status, clean-source requirement, refuse-overwrite guards,
-  required-GPU precondition, and LF-only JSON/CSV publication.
+  (11 tests, hardware-free) covers the packed workload, statistics and gate,
+  CPU reference status, clean runner and selected-library source/build
+  identity, refuse-overwrite guards, required-GPU precondition, and LF-only
+  JSON/CSV publication.
 
 ## Limitations
 
