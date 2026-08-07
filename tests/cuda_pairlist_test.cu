@@ -2296,6 +2296,26 @@ int test_consumer_vjp_matches_candidate_vjp() {
               static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
               consumer_system_errors.get(), consumer_device_error.get(),
               stream) == cudaErrorInvalidValue);
+    /* Every committed structural array has a distinct meaning even when its
+     * element type and extent happen to match another array. */
+    gpuxtb::detail::Gfn2PairListConsumerView aliased_structural = committed;
+    aliased_structural.pair_counts = committed.pair_offsets;
+    CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+              consumer_batch, aliased_structural, device.positions.get(), device.radii.get(),
+              kGeneration, d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
+              static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
+              consumer_system_errors.get(), consumer_device_error.get(),
+              stream) == cudaErrorInvalidValue);
+    /* A committed array also cannot borrow the topology partition: the host
+     * binding validator enforces the same zero-copy ownership boundary. */
+    gpuxtb::detail::Gfn2PairListConsumerView aliased_topology = committed;
+    aliased_topology.pair_offsets = consumer_batch.atom_offsets;
+    CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+              consumer_batch, aliased_topology, device.positions.get(), device.radii.get(),
+              kGeneration, d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
+              static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
+              consumer_system_errors.get(), consumer_device_error.get(),
+              stream) == cudaErrorInvalidValue);
     CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
         static_cast<std::int64_t>(batch_size), consumer_system_errors.get(),
         consumer_device_error.get(), stream));
