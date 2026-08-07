@@ -1,0 +1,24 @@
+T=   300 h= 2 d=0.2 : CONVERGED in 30 iters, E=-22.271821505173  q(M4N+)= 0.82851 q(Cl)=-0.82851 rms= 8.894e-07
+T=   300 h= 2 d=0.4 : CONVERGED in 27 iters, E=-22.271821505186  q(M4N+)= 0.82849 q(Cl)=-0.82849 rms= 5.684e-07
+T=   300 h= 2 d=0.6 : CONVERGED in 72 iters, E=-22.271821505191  q(M4N+)= 0.82849 q(Cl)=-0.82849 rms= 2.846e-07
+T=   300 h= 4 d=0.2 : NOT_CONVERGED in 250 iters, E=-22.259869120767  q(M4N+)= 0.74195 q(Cl)=-0.74195 rms= 3.156e-02
+T=   300 h= 4 d=0.4 : NOT_CONVERGED in 250 iters, E=-22.227905465937  q(M4N+)= 0.60044 q(Cl)=-0.60044 rms= 8.069e-02
+T=   300 h= 4 d=0.6 : CONVERGED in 41 iters, E=-22.271821505167  q(M4N+)= 0.82849 q(Cl)=-0.82849 rms= 8.696e-07
+T=   300 h= 8 d=0.2 : CONVERGED in 71 iters, E=-22.271821505192  q(M4N+)= 0.82850 q(Cl)=-0.82850 rms= 2.348e-07
+T=   300 h= 8 d=0.4 : NOT_CONVERGED in 250 iters, E=-22.255064664558  q(M4N+)= 0.81490 q(Cl)=-0.81490 rms= 4.293e-02
+T=   300 h= 8 d=0.6 : NOT_CONVERGED in 250 iters, E=-22.254831852127  q(M4N+)= 0.79873 q(Cl)=-0.79873 rms= 4.340e-02
+T=   300 h=16 d=0.2 : CONVERGED in 53 iters, E=-22.271821505191  q(M4N+)= 0.82849 q(Cl)=-0.82849 rms= 2.644e-07
+T=   300 h=16 d=0.4 : CONVERGED in 47 iters, E=-22.271821505193  q(M4N+)= 0.82850 q(Cl)=-0.82850 rms= 7.540e-08
+T=   300 h=16 d=0.6 : NOT_CONVERGED in 250 iters, E=-22.264915250320  q(M4N+)= 0.89964 q(Cl)=-0.89964 rms= 1.471e-02
+T=   450 h= 2 d=0.2 : CONVERGED in 28 iters, E=-22.272478576595  q(M4N+)= 0.82192 q(Cl)=-0.82192 rms= 6.394e-07
+T=   450 h= 2 d=0.4 : CONVERGED in 20 iters, E=-22.272478576602  q(M4N+)= 0.82192 q(Cl)=-0.82192 rms= 3.159e-07
+T=   450 h= 2 d=0.6 : CONVERGED in 36 iters, E=-22.272478576599  q(M4N+)= 0.82192 q(Cl)=-0.82192 rms= 4.760e-07
+T=   450 h= 4 d=0.2 : CONVERGED in 38 iters, E=-22.272478576592  q(M4N+)= 0.82192 q(Cl)=-0.82192 rms= 6.299e-07
+T=   450 h= 4 d=0.4 : NOT_CONVERGED in 250 iters, E=-22.268396173615  q(M4N+)= 0.87818 q(Cl)=-0.87818 rms= 1.108e-02
+T=   450 h= 4 d=0.6 : NOT_CONVERGED in 250 iters, E=-21.654182867991  q(M4N+)= 0.21365 q(Cl)=-0.21365 rms= 1.225e-01
+T=   450 h= 8 d=0.2 : CONVERGED in 58 iters, E=-22.272478576599  q(M4N+)= 0.82193 q(Cl)=-0.82193 rms= 2.950e-07
+T=   450 h= 8 d=0.4 : CONVERGED in 39 iters, E=-22.272478576591  q(M4N+)= 0.82193 q(Cl)=-0.82193 rms= 5.580e-07
+T=   450 h= 8 d=0.6 : NOT_CONVERGED in 250 iters, E=-22.254820487178  q(M4N+)= 0.80197 q(Cl)=-0.80197 rms= 4.341e-02
+T=   450 h=16 d=0.2 : CONVERGED in 221 iters, E=-22.272478576600  q(M4N+)= 0.82192 q(Cl)=-0.82192 rms= 2.570e-07
+T=   450 h=16 d=0.4 : CONVERGED in 33 iters, E=-22.272478576601  q(M4N+)= 0.82193 q(Cl)=-0.82193 rms= 1.369e-07
+T=   450 h=16 d=0.6 : NOT_CONVERGED in 250 iters, E=-22.209050059946  q(M4N+)= 0.47357 q(Cl)=-0.47357 rms= 9.773e-02
