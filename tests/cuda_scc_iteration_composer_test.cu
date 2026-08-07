@@ -40,7 +40,8 @@
  *
  * Coverage maps to the issue acceptance:
  *  - one-step CPU parity including raw-on-terminal versus next_mixed-on-nonterminal
- *    publication for batch 1/8/32/128 on custom and default streams;
+ *    publication for batch 1/8/32/128 on a custom stream (plus a default-stream
+ *    parity case at batch 8);
  *  - repeated launches with a reused binding (no descriptor rebuild);
  *  - changed-input CUDA Graph replay with unchanged descriptors and arenas;
  *  - peer-local numerical failure with healthy-peer full-DAG continuation;
@@ -136,11 +137,13 @@ class GraphResources {
   GraphResources& operator=(const GraphResources&) = delete;
 
   ~GraphResources() {
-    if (graph_ != nullptr) {
-      (void)cudaGraphDestroy(graph_);
-    }
+    /* Destroy the instantiated executable before the graph it was created
+     * from, mirroring the lifetime order used by production graph owners. */
     if (executable_ != nullptr) {
       (void)cudaGraphExecDestroy(executable_);
+    }
+    if (graph_ != nullptr) {
+      (void)cudaGraphDestroy(graph_);
     }
   }
 
@@ -562,13 +565,15 @@ bool download_value(const T* device, T& host, cudaStream_t stream) {
 }
 
 template <typename T>
-bool upload_fill(T* device, std::int64_t elements, T value) {
+bool upload_fill(T* device, std::int64_t elements, T value, cudaStream_t stream) {
   if (device == nullptr || elements < 0) {
     return false;
   }
+  /* Fill through the caller's stream so the sentinel writes order with the
+   * surrounding async transfers and launches on that stream. */
   std::vector<T> host(static_cast<std::size_t>(elements), value);
-  return elements == 0 || cudaMemcpy(device, host.data(), host.size() * sizeof(T),
-                                     cudaMemcpyHostToDevice) == cudaSuccess;
+  return elements == 0 || cudaMemcpyAsync(device, host.data(), host.size() * sizeof(T),
+                                          cudaMemcpyHostToDevice, stream) == cudaSuccess;
 }
 
 bool near(double first, double second, double tolerance) noexcept {
@@ -751,8 +756,6 @@ int test_composer_binding_and_repeat_launch() {
       validate_gfn2_scc_iteration_binding_cuda(fixture.binding.plan, fixture.binding.input,
                                                fixture.binding.state, fixture.binding.workspace);
   CHECK(validator.error == Gfn2SccIterationBindingError::kSuccess);
-  CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
-        Gfn2SccIterationProviderCaptureMode::kGraphSupported);
   CHECK(fixture.binding.plan.plan_token == kPlanToken);
   CHECK(fixture.binding.workspace.eigensolver_workspace.plan_token == kPlanToken);
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
@@ -902,11 +905,15 @@ int test_composer_one_step_cpu_parity(std::int64_t batch_size, bool optional_com
 int test_composer_raw_publication_policy(bool terminal) {
   ComposerFixture fixture;
   CHECK(fixture.create(4, false));
-  CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
-        Gfn2SccIterationProviderCaptureMode::kGraphSupported);
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
 
   if (terminal) {
+    /* The device-tail path requires a graph-capturable eigensolver provider;
+     * the nonterminal branch below executes the plain sealed launch and must
+     * stay meaningful even when the provider falls back to the uncaptured
+     * segment contract. */
+    CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
+          Gfn2SccIterationProviderCaptureMode::kGraphSupported);
     /* Terminal: run the device-tail graph owner until no peer is active, so
      * converged peers' raw Mulliken population is committed to the public
      * raw buffers by the state composer. */
@@ -922,7 +929,22 @@ int test_composer_raw_publication_policy(bool terminal) {
     CHECK(graph.ready());
     const Gfn2SccLoopLaunchResult launch = graph.launch(fixture.handles.stream());
     CHECK(launch.success());
+    /* Prove the device-tail Graph, not the bounded fallback, actually ran:
+     * the owner must report the device-tail mode, terminate the canonical
+     * active count at zero, and report no device-side launch error, exactly
+     * as the production device-tail test verifies. */
+    CHECK(launch.execution_mode == Gfn2SccLoopExecutionMode::kDeviceTailGraph);
+    std::uint32_t terminal_active_count = 1u;
+    std::uint32_t device_launch_error = cudaErrorUnknown;
+    CHECK(graph.canonical_active_count_device() != nullptr);
+    CHECK(graph.device_launch_error_device() != nullptr);
+    CHECK(download_value(graph.canonical_active_count_device(), terminal_active_count,
+                         fixture.handles.stream()));
+    CHECK(download_value(graph.device_launch_error_device(), device_launch_error,
+                         fixture.handles.stream()));
     CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    CHECK(terminal_active_count == 0u);
+    CHECK(device_launch_error == cudaSuccess);
     CHECK(run_host_until_globally_terminal(fixture.host) == 0);
 
     const auto& layout = fixture.host.wavefunction_layout();
@@ -1093,7 +1115,9 @@ int test_composer_changed_input_graph_replay(std::int64_t batch_size, bool optio
 }
 
 /* Healthy peers advance through the full DAG when one peer fails numerically
- * inside the mixed-gather stage (first consumer of the mixed shell charges). */
+ * inside the mixed-gather stage (first consumer of the mixed shell charges):
+ * the failed peer is isolated while peers 0/2/3 continue through the complete
+ * DAG one more iteration and publish fresh finite population. */
 int test_composer_peer_numerical_failure_dag() {
   constexpr std::int64_t kTarget = 1;
   ComposerFixture fixture;
@@ -1103,9 +1127,21 @@ int test_composer_peer_numerical_failure_dag() {
   const auto& layout = fixture.host.wavefunction_layout();
   const std::int64_t target_shell_begin = layout.qsh.system_offsets[kTarget];
   const double nan = std::numeric_limits<double>::quiet_NaN();
+
+  /* Snapshot the failed peer's public population before the launch: a peer
+   * failure must never rewrite its own public multipoles. */
+  std::vector<double> initial_qsh;
+  std::vector<double> initial_qat;
+  CHECK(download(fixture.binding.state.raw_population.qsh,
+                 fixture.binding.state.raw_population.qsh_elements, initial_qsh,
+                 fixture.handles.stream()));
+  CHECK(download(fixture.binding.state.raw_population.qat,
+                 fixture.binding.state.raw_population.qat_elements, initial_qat,
+                 fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
   CHECK(upload_value(nan,
-                     const_cast<double*>(fixture.binding.state.scc.current_inputs.shell_charges) +
-                         target_shell_begin,
+                     fixture.binding.state.scc.current_inputs.shell_charges + target_shell_begin,
                      fixture.handles.stream()));
 
   const Gfn2SccIterationLaunchResult launch =
@@ -1141,8 +1177,14 @@ int test_composer_peer_numerical_failure_dag() {
         failure_record(
             Gfn2SccStageId::kMixedGather,
             static_cast<std::uint32_t>(Gfn2SccPotentialDeviceError::kNonfiniteMixedShellCharge)));
+  /* A failed peer leaves its own public multipoles untouched, exactly as the
+   * production failure-publication policy (#87) requires. */
+  CHECK(system_slice_is_byte_stable(initial_qsh, public_qsh, layout.qsh.system_offsets, kTarget));
+  CHECK(system_slice_is_byte_stable(initial_qat, public_qat, layout.qat.system_offsets, kTarget));
   /* Peers 0/2/3 continue through the complete DAG and publish new finite
-   * population, matching the CPU oracle for the same healthy subset. */
+   * population; their per-peer iteration/status/failure ledger matches the
+   * expected peer-local isolation (no CPU reference values are compared here
+   * because the injected NaN has no CPU equivalent). */
   for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
     if (system == kTarget) {
       continue;
@@ -1156,11 +1198,11 @@ int test_composer_peer_numerical_failure_dag() {
   return 0;
 }
 
-/* A plan/provenance failure (stale geometry generation) suppresses every
- * downstream stage of the owning peer's DAG: no energy or population stage
- * runs, the failure publishes a quiet NaN energy plus the canonical stage
- * record, and the population/publication buffers stay byte-stable. Healthy
- * peers keep advancing through their complete DAG. */
+/* A per-system geometry-provenance failure (stale geometry generation) is
+ * attributed to the owning peer at the kGeometry stage: it suppresses every
+ * downstream stage of that peer's DAG, publishes a quiet NaN energy plus the
+ * canonical stage record, and leaves the population/publication buffers
+ * byte-stable. Healthy peers keep advancing through their complete DAG. */
 int test_composer_plan_provenance_failure_dag() {
   constexpr std::int64_t kTarget = 0;
   ComposerFixture fixture;
@@ -1196,7 +1238,7 @@ int test_composer_plan_provenance_failure_dag() {
   CHECK(failures[static_cast<std::size_t>(kTarget)] ==
         failure_record(Gfn2SccStageId::kGeometry,
                        static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kStaleGeneration)));
-  /* Plan-level failure publishes no partial numerical data: population and
+  /* The peer failure publishes no partial numerical data: population and
    * published multipole slices are byte-stable, while the failed peer's
    * per-system energy slice is filled with a quiet NaN by the failure
    * publication policy (never a partial or stale finite value). */
@@ -1264,30 +1306,35 @@ int test_composer_inactive_dormant_poisoning() {
   /* Geometry: coordination numbers and per-system generations. */
   CHECK(upload_fill(
       const_cast<double*>(fixture.binding.plan.geometry_cache.coordination_numbers) + atom_begin,
-      atom_end - atom_begin, kSentinel));
+      atom_end - atom_begin, kSentinel, fixture.handles.stream()));
   std::vector<std::uint64_t> sentinel_generation{std::numeric_limits<std::uint64_t>::max()};
   CHECK(upload(&sentinel_generation[0],
                fixture.binding.plan.geometry_cache.geometry_generations + kInactive, 1,
                fixture.handles.stream()));
   /* Multipoles: mixed shell charges. */
   CHECK(upload_fill(const_cast<double*>(state.scc.current_inputs.shell_charges) + shell_begin,
-                    shell_end - shell_begin, kSentinel));
+                    shell_end - shell_begin, kSentinel, fixture.handles.stream()));
   /* Mixer histories: df, u, and omega slices. */
   CHECK(upload_fill(state.mixer.df_history + vector_begin * history_size,
-                    mixer_vector * history_size, kSentinel));
+                    mixer_vector * history_size, kSentinel, fixture.handles.stream()));
   CHECK(upload_fill(state.mixer.u_history + vector_begin * history_size,
-                    mixer_vector * history_size, kSentinel));
-  CHECK(upload_fill(state.mixer.omega + kInactive * history_size, history_size, kSentinel));
+                    mixer_vector * history_size, kSentinel, fixture.handles.stream()));
+  CHECK(upload_fill(state.mixer.omega + kInactive * history_size, history_size, kSentinel,
+                    fixture.handles.stream()));
   /* Energies. */
-  CHECK(upload_fill(state.free_energy.internal_energy + kInactive, 1, kSentinel));
-  CHECK(upload_fill(state.free_energy.free_energy + kInactive, 1, kSentinel));
-  CHECK(upload_fill(state.free_energy.entropy + kInactive, 1, kSentinel));
-  CHECK(upload_fill(state.scc.free_energies + kInactive, 1, kSentinel));
+  CHECK(upload_fill(state.free_energy.internal_energy + kInactive, 1, kSentinel,
+                    fixture.handles.stream()));
+  CHECK(upload_fill(state.free_energy.free_energy + kInactive, 1, kSentinel,
+                    fixture.handles.stream()));
+  CHECK(upload_fill(state.free_energy.entropy + kInactive, 1, kSentinel, fixture.handles.stream()));
+  CHECK(upload_fill(state.scc.free_energies + kInactive, 1, kSentinel, fixture.handles.stream()));
   /* Publication buffers. */
-  CHECK(upload_fill(state.raw_population.qsh + shell_begin, shell_end - shell_begin, kSentinel));
-  CHECK(upload_fill(state.raw_population.qat + atom_begin, atom_end - atom_begin, kSentinel));
-  CHECK(
-      upload_fill(state.published.shell_charges + shell_begin, shell_end - shell_begin, kSentinel));
+  CHECK(upload_fill(state.raw_population.qsh + shell_begin, shell_end - shell_begin, kSentinel,
+                    fixture.handles.stream()));
+  CHECK(upload_fill(state.raw_population.qat + atom_begin, atom_end - atom_begin, kSentinel,
+                    fixture.handles.stream()));
+  CHECK(upload_fill(state.published.shell_charges + shell_begin, shell_end - shell_begin, kSentinel,
+                    fixture.handles.stream()));
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
 
   const Gfn2SccIterationLaunchResult launch =
