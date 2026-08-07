@@ -72,9 +72,50 @@ Helmholtz free energy used by xTB and tblite.
 Set `backend="cpu"` or `backend="cuda"` to require a backend. `"auto"`
 prefers an available CUDA backend and otherwise selects CPU. `cpu_threads`
 controls molecule-level CPU parallelism and defaults to one in the Python API.
-The high-level Python interface uses host NumPy arrays for both backends; direct
-CUDA-device and mixed descriptors are available only through the low-level C
-ABI.
+The high-level Python interface uses host NumPy arrays by default; through the
+`memory_space` option below the same calculators can place their C-ABI
+descriptors in CUDA device memory while still returning host arrays.
+
+## Device-resident CUDA memory
+
+The public C ABI accepts CUDA-device buffers, and the Python interface can
+place its input/output descriptors there through the CUDA runtime (libcudart)
+instead of staging them through the host. Select a placement per calculator:
+
+```python
+import numpy as np
+from gpuxtb import Calculator
+
+calc = Calculator(
+    "GFN2-xTB",
+    numbers=np.array([8, 1, 1]),
+    positions=np.array(
+        [
+            [0.0000000000, 0.0000000000, -0.7357858611],
+            [1.4418315287, 0.0000000000, 0.3678929305],
+            [-1.4418315287, 0.0000000000, 0.3678929305],
+        ]
+    ),
+    backend="cuda",
+    memory_space="device",  # or "mixed"
+)
+result = calc.singlepoint()  # energy/forces/charges are ordinary numpy arrays
+```
+
+- `memory_space="host"` (default) keeps every descriptor in CPU memory.
+- `memory_space="device"` places every descriptor in CUDA device memory.
+- `memory_space="mixed"` keeps small scalar/offset descriptors on the host
+  while large numerical inputs (`positions`, charges, point charges,
+  charge-response matrix) and outputs (`forces`, `point_charge_forces`,
+  `scc_converged`) stay on the device.
+
+Device modes require a CUDA backend context and a loadable CUDA runtime
+(libcudart, provided by the `cuda12` extra or a compatible system toolkit);
+the same placement is available on `BatchCalculator` and works with
+`auto_batch_size` slicing, point charges, and charge-response descriptors.
+Device buffers are uploaded before the call and downloaded back into host
+numpy arrays after it, so the returned `Result`/`BatchResult` objects are
+identical in shape and semantics to host-mode results.
 
 ## Charge and spin
 

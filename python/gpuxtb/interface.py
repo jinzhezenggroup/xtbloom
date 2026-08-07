@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 
+from . import cuda as _cuda
 from . import library
 from .exceptions import GPUxtbNotSupportedError, GPUxtbRuntimeError, GPUxtbValueError
 
@@ -132,6 +133,44 @@ _BACKENDS = {
     "cpu": library.BACKEND_CPU,
     "cuda": library.BACKEND_CUDA,
 }
+
+# Descriptor memory placement. ``host`` keeps every descriptor in ordinary
+# CPU memory (the historical behavior). ``device`` and ``mixed`` place
+# numerical descriptors in CUDA device memory through the optional
+# CUDA runtime (libcudart) so the CUDA backend can consume and publish them
+# without host staging; ``mixed`` mirrors the conformance-tool boundary by
+# keeping small scalar/offset descriptors on the host.
+_MEMORY_SPACES = ("host", "mixed", "device")
+
+# Roles kept on the host in ``mixed`` mode. These are the small scalar/offset
+# descriptors whose per-call host transfer is negligible, while the large
+# numerical inputs and outputs stay device-resident. The dense charge-response
+# matrix and its per-atom shifts are large numerical inputs and stay on the
+# device like the other property arrays.
+_MIXED_DEVICE_INPUTS = {
+    "positions",
+    "molecular_charges",
+    "unpaired_electrons",
+    "point_charge_positions",
+    "point_charge_values",
+    "point_charge_gammas",
+    "atomic_potential_shifts",
+    "charge_response_matrix",
+}
+_MIXED_DEVICE_OUTPUTS = {
+    "forces",
+    "point_charge_forces",
+    "scc_converged",
+}
+
+
+def _resolve_memory_space(value: str) -> str:
+    """Validate a ``memory_space`` choice and return its canonical name."""
+    if value not in _MEMORY_SPACES:
+        raise GPUxtbValueError(
+            f"unknown memory_space {value!r}; expected 'host', 'mixed', or 'device'"
+        )
+    return value
 
 
 def _default_spin_channels(uhf: int) -> int:
@@ -784,170 +823,253 @@ def _compute_batch(
     energy_tolerance: float,
     electronic_temperature: float,
     flags: int,
+    memory_space: str = "host",
 ) -> _ComputedBatch:
-    """Populate descriptors and run one synchronous ``gpuxtb_compute`` call."""
+    """Populate descriptors and run one synchronous ``gpuxtb_compute`` call.
+
+    ``memory_space`` selects where the descriptors live: ``host`` (default),
+    ``device`` (every descriptor in CUDA device memory), or ``mixed`` (large
+    numerical descriptors on the device, small scalar/offset descriptors on
+    the host). Device modes require the CUDA backend and a loadable CUDA
+    runtime (libcudart); results are always returned as host numpy arrays
+    regardless of placement.
+    """
     context._create()
+    memory_space = _resolve_memory_space(memory_space)
+    place_on_device = memory_space != "host"
+    device_context: _cuda.CudaDeviceContext | None = None
+    device_outputs: list[tuple[int, np.ndarray]] = []
+    cleanup_errors: list[BaseException] = []
+    if place_on_device:
+        if int(context.backend) != library.BACKEND_CUDA:
+            raise GPUxtbNotSupportedError(
+                f"memory_space={memory_space!r} requires the CUDA backend, but the "
+                "context resolved to CPU"
+            )
+        if not _cuda.device_memory_available():
+            raise GPUxtbNotSupportedError(
+                f"memory_space={memory_space!r} requires a loadable CUDA runtime "
+                "library (libcudart), which is not available"
+            )
 
-    # --- assemble the ragged inputs -------------------------------------------
-    atom_offsets = [0]
-    atomic_numbers: list[int] = []
-    positions: list[float] = []
-    molecular_charges: list[float] = []
-    unpaired_electrons: list[int] = []
-    spin_channels: list[int] = []
-    point_offsets = [0]
-    point_positions: list[float] = []
-    point_values: list[float] = []
-    point_gammas: list[float] = []
-    packed_responses = _pack_charge_responses(structures)
-    keepalive: list = []
+    def _is_device(role: str, *, output: bool = False) -> bool:
+        """Decide whether one descriptor role lives on the CUDA device."""
+        if memory_space == "device":
+            return True
+        return memory_space == "mixed" and (
+            role in (_MIXED_DEVICE_OUTPUTS if output else _MIXED_DEVICE_INPUTS)
+        )
 
-    for structure in structures:
-        atomic_numbers.extend(int(number) for number in structure.numbers)
-        positions.extend(float(value) for value in structure.positions.ravel())
-        molecular_charges.append(structure.charge)
-        unpaired_electrons.append(structure.uhf)
-        spin_channels.append(structure.spin_channels)
-        if structure.point_charges is not None:
-            points = structure.point_charges
-            point_positions.extend(float(value) for value in points.positions.ravel())
-            point_values.extend(float(value) for value in points.charges)
-            point_gammas.extend(float(value) for value in points.gammas)
-        atom_offsets.append(len(atomic_numbers))
-        point_offsets.append(len(point_values))
+    try:
+        if place_on_device:
+            device_context = _cuda.CudaDeviceContext(int(context.device_id))
 
-    total_atoms = len(atomic_numbers)
-    total_points = len(point_values)
+        # --- assemble the ragged inputs -------------------------------------------
+        atom_offsets = [0]
+        atomic_numbers: list[int] = []
+        positions: list[float] = []
+        molecular_charges: list[float] = []
+        unpaired_electrons: list[int] = []
+        spin_channels: list[int] = []
+        point_offsets = [0]
+        point_positions: list[float] = []
+        point_values: list[float] = []
+        point_gammas: list[float] = []
+        packed_responses = _pack_charge_responses(structures)
+        keepalive: list = []
 
-    # --- bind descriptors ------------------------------------------------------
-    library_instance = library.load_library()
-    batch = library.Batch()
-    library._check_init(
-        "gpuxtb_batch_init",
-        library_instance.gpuxtb_batch_init(ctypes.byref(batch), ctypes.sizeof(batch)),
-    )
-    batch.batch_size = len(structures)
-    batch.total_atoms = total_atoms
-    batch.total_point_charges = total_points
-    batch.total_charge_response_elements = (
-        len(packed_responses[2]) if packed_responses is not None else 0
-    )
+        for structure in structures:
+            atomic_numbers.extend(int(number) for number in structure.numbers)
+            positions.extend(float(value) for value in structure.positions.ravel())
+            molecular_charges.append(structure.charge)
+            unpaired_electrons.append(structure.uhf)
+            spin_channels.append(structure.spin_channels)
+            if structure.point_charges is not None:
+                points = structure.point_charges
+                point_positions.extend(
+                    float(value) for value in points.positions.ravel()
+                )
+                point_values.extend(float(value) for value in points.charges)
+                point_gammas.extend(float(value) for value in points.gammas)
+            atom_offsets.append(len(atomic_numbers))
+            point_offsets.append(len(point_values))
 
-    def bind(
-        descriptor_name: str,
-        values: Sequence[int | float],
-        dtype: object,
-    ) -> None:
-        if not values:
+        total_atoms = len(atomic_numbers)
+        total_points = len(point_values)
+
+        # --- bind descriptors ------------------------------------------------------
+        library_instance = library.load_library()
+        batch = library.Batch()
+        library._check_init(
+            "gpuxtb_batch_init",
+            library_instance.gpuxtb_batch_init(
+                ctypes.byref(batch), ctypes.sizeof(batch)
+            ),
+        )
+        batch.batch_size = len(structures)
+        batch.total_atoms = total_atoms
+        batch.total_point_charges = total_points
+        batch.total_charge_response_elements = (
+            len(packed_responses[2]) if packed_responses is not None else 0
+        )
+
+        def bind(
+            descriptor_name: str,
+            values: Sequence[int | float],
+            dtype: object,
+        ) -> None:
+            if not values:
+                setattr(
+                    batch,
+                    descriptor_name,
+                    library.ConstBuffer(None, 0, library.MEMORY_HOST, 0),
+                )
+                return
+            owner = np.ascontiguousarray(np.asarray(values, dtype=dtype))
+            keepalive.append(owner)
+            if _is_device(descriptor_name):
+                assert device_context is not None
+                setattr(
+                    batch,
+                    descriptor_name,
+                    library.ConstBuffer(
+                        device_context.upload(owner),
+                        owner.nbytes,
+                        library.MEMORY_CUDA_DEVICE,
+                        0,
+                    ),
+                )
+                return
             setattr(
                 batch,
                 descriptor_name,
-                library.ConstBuffer(None, 0, library.MEMORY_HOST, 0),
+                library.ConstBuffer(
+                    ctypes.cast(owner.ctypes.data, ctypes.c_void_p),
+                    owner.nbytes,
+                    library.MEMORY_HOST,
+                    0,
+                ),
             )
-            return
-        owner = np.ascontiguousarray(np.asarray(values, dtype=dtype))
-        keepalive.append(owner)
-        setattr(
-            batch,
-            descriptor_name,
-            library.ConstBuffer(
-                ctypes.cast(owner.ctypes.data, ctypes.c_void_p),
-                owner.nbytes,
-                library.MEMORY_HOST,
-                0,
+
+        bind("atom_offsets", atom_offsets, np.int64)
+        bind("atomic_numbers", atomic_numbers, np.int32)
+        bind("positions", positions, np.float64)
+        bind("molecular_charges", molecular_charges, np.float64)
+        bind("unpaired_electrons", unpaired_electrons, np.int32)
+        bind("spin_channels", spin_channels, np.int32)
+        if total_points:
+            bind("point_charge_offsets", point_offsets, np.int64)
+            bind("point_charge_positions", point_positions, np.float64)
+            bind("point_charge_values", point_values, np.float64)
+            bind("point_charge_gammas", point_gammas, np.float64)
+        if packed_responses is not None:
+            response_offsets, response_shifts, response_matrix = packed_responses
+            bind("atomic_potential_shifts", response_shifts, np.float64)
+            bind("charge_response_offsets", response_offsets, np.int64)
+            bind("charge_response_matrix", response_matrix, np.float64)
+
+        # --- compute options -------------------------------------------------------
+        options = library.ComputeOptions()
+        library._check_init(
+            "gpuxtb_compute_options_init",
+            library_instance.gpuxtb_compute_options_init(
+                ctypes.byref(options), ctypes.sizeof(options)
+            ),
+        )
+        # High-level calculators intentionally use reproducible independent SCC
+        # solves; persistent warm-start policy remains a low-level ABI feature.
+        options.scc_start_mode = library.SCC_START_FRESH
+        options.model = model
+        options.flags = flags
+        options.max_scc_iterations = int(max_scc_iterations)
+        options.charge_tolerance = float(charge_tolerance)
+        options.energy_tolerance = float(energy_tolerance)
+        options.electronic_temperature = (
+            float(electronic_temperature) * library.KELVIN_TO_HARTREE
+        )
+
+        # --- result buffers --------------------------------------------------------
+        result = library.BatchResult()
+        library._check_init(
+            "gpuxtb_batch_result_init",
+            library_instance.gpuxtb_batch_result_init(
+                ctypes.byref(result), ctypes.sizeof(result)
             ),
         )
 
-    bind("atom_offsets", atom_offsets, np.int64)
-    bind("atomic_numbers", atomic_numbers, np.int32)
-    bind("positions", positions, np.float64)
-    bind("molecular_charges", molecular_charges, np.float64)
-    bind("unpaired_electrons", unpaired_electrons, np.int32)
-    bind("spin_channels", spin_channels, np.int32)
-    if total_points:
-        bind("point_charge_offsets", point_offsets, np.int64)
-        bind("point_charge_positions", point_positions, np.float64)
-        bind("point_charge_values", point_values, np.float64)
-        bind("point_charge_gammas", point_gammas, np.float64)
-    if packed_responses is not None:
-        response_offsets, response_shifts, response_matrix = packed_responses
-        bind("atomic_potential_shifts", response_shifts, np.float64)
-        bind("charge_response_offsets", response_offsets, np.int64)
-        bind("charge_response_matrix", response_matrix, np.float64)
+        nsystems = len(structures)
+        energies = np.empty(nsystems, dtype=np.float64)
+        forces = np.empty((total_atoms, 3), dtype=np.float64)
+        charges = np.empty(total_atoms, dtype=np.float64)
+        point_charge_forces = (
+            np.empty((total_points, 3), dtype=np.float64) if total_points else None
+        )
+        scc_iterations = np.empty(nsystems, dtype=np.int32)
+        scc_converged = np.empty(nsystems, dtype=np.uint8)
+        per_system_status = np.empty(nsystems, dtype=np.int32)
 
-    # --- compute options -------------------------------------------------------
-    options = library.ComputeOptions()
-    library._check_init(
-        "gpuxtb_compute_options_init",
-        library_instance.gpuxtb_compute_options_init(
-            ctypes.byref(options), ctypes.sizeof(options)
-        ),
-    )
-    # High-level calculators intentionally use reproducible independent SCC
-    # solves; persistent warm-start policy remains a low-level ABI feature.
-    options.scc_start_mode = library.SCC_START_FRESH
-    options.model = model
-    options.flags = flags
-    options.max_scc_iterations = int(max_scc_iterations)
-    options.charge_tolerance = float(charge_tolerance)
-    options.energy_tolerance = float(energy_tolerance)
-    options.electronic_temperature = (
-        float(electronic_temperature) * library.KELVIN_TO_HARTREE
-    )
-
-    # --- result buffers --------------------------------------------------------
-    result = library.BatchResult()
-    library._check_init(
-        "gpuxtb_batch_result_init",
-        library_instance.gpuxtb_batch_result_init(
-            ctypes.byref(result), ctypes.sizeof(result)
-        ),
-    )
-
-    nsystems = len(structures)
-    energies = np.empty(nsystems, dtype=np.float64)
-    forces = np.empty((total_atoms, 3), dtype=np.float64)
-    charges = np.empty(total_atoms, dtype=np.float64)
-    point_charge_forces = (
-        np.empty((total_points, 3), dtype=np.float64) if total_points else None
-    )
-    scc_iterations = np.empty(nsystems, dtype=np.int32)
-    scc_converged = np.empty(nsystems, dtype=np.uint8)
-    per_system_status = np.empty(nsystems, dtype=np.int32)
-
-    def bind_output(
-        buffer_field: str, owner: np.ndarray | None, requested: bool
-    ) -> None:
-        if not requested or owner is None:
+        def bind_output(
+            buffer_field: str, owner: np.ndarray | None, requested: bool
+        ) -> None:
+            if not requested or owner is None:
+                setattr(
+                    result,
+                    buffer_field,
+                    library.Buffer(None, 0, library.MEMORY_HOST, 0),
+                )
+                return
+            keepalive.append(owner)
+            if _is_device(buffer_field, output=True):
+                assert device_context is not None
+                address = device_context.allocate(owner.nbytes)
+                device_outputs.append((address, owner))
+                setattr(
+                    result,
+                    buffer_field,
+                    library.Buffer(
+                        address, owner.nbytes, library.MEMORY_CUDA_DEVICE, 0
+                    ),
+                )
+                return
             setattr(
-                result, buffer_field, library.Buffer(None, 0, library.MEMORY_HOST, 0)
+                result,
+                buffer_field,
+                library.Buffer(
+                    ctypes.cast(owner.ctypes.data, ctypes.c_void_p),
+                    owner.nbytes,
+                    library.MEMORY_HOST,
+                    0,
+                ),
             )
-            return
-        keepalive.append(owner)
-        setattr(
-            result,
-            buffer_field,
-            library.Buffer(
-                ctypes.cast(owner.ctypes.data, ctypes.c_void_p),
-                owner.nbytes,
-                library.MEMORY_HOST,
-                0,
-            ),
+
+        bind_output("energies", energies, bool(flags & library.COMPUTE_ENERGY))
+        bind_output("forces", forces, bool(flags & library.COMPUTE_FORCES))
+        bind_output(
+            "atomic_charges", charges, bool(flags & library.COMPUTE_ATOMIC_CHARGES)
         )
+        bind_output(
+            "point_charge_forces",
+            point_charge_forces,
+            bool(flags & library.COMPUTE_POINT_CHARGE_FORCES),
+        )
+        bind_output("scc_iterations", scc_iterations, True)
+        bind_output("scc_converged", scc_converged, True)
+        bind_output("per_system_status", per_system_status, True)
 
-    bind_output("energies", energies, bool(flags & library.COMPUTE_ENERGY))
-    bind_output("forces", forces, bool(flags & library.COMPUTE_FORCES))
-    bind_output("atomic_charges", charges, bool(flags & library.COMPUTE_ATOMIC_CHARGES))
-    bind_output(
-        "point_charge_forces",
-        point_charge_forces,
-        bool(flags & library.COMPUTE_POINT_CHARGE_FORCES),
-    )
-    bind_output("scc_iterations", scc_iterations, True)
-    bind_output("scc_converged", scc_converged, True)
-    bind_output("per_system_status", per_system_status, True)
-
-    library.compute_checked(context._handle, batch, options, result)
+        library.compute_checked(context._handle, batch, options, result)
+        if device_context is not None:
+            device_context.download_all(device_outputs)
+    finally:
+        if device_context is not None:
+            try:
+                device_context.close()
+            except GPUxtbRuntimeError as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+    if cleanup_errors:
+        raise GPUxtbRuntimeError(
+            "CUDA device-memory cleanup failed: "
+            + "; ".join(str(error) for error in cleanup_errors)
+        )
 
     return _ComputedBatch(
         energies=energies,
@@ -1224,6 +1346,12 @@ def _resolve_method(method: str) -> int:
 class Calculator(Structure):
     """Single-point GFN2-xTB calculator for one structure (tblite-like API).
 
+    ``memory_space`` selects where the C-ABI descriptors live. The default
+    ``"host"`` keeps every buffer in CPU memory. ``"device"`` and ``"mixed"``
+    place numerical descriptors in CUDA device memory through the optional
+    CUDA runtime (libcudart) so the CUDA backend skips host staging; they
+    require the CUDA backend and return the same host numpy results.
+
     Example
     -------
     >>> import numpy as np
@@ -1256,6 +1384,7 @@ class Calculator(Structure):
         backend: str | int = "auto",
         device_id: int | None = None,
         cpu_threads: int = 1,
+        memory_space: str = "host",
         max_scc_iterations: int = 250,
         charge_tolerance: float = 1.0e-6,
         energy_tolerance: float = 1.0e-8,
@@ -1280,6 +1409,7 @@ class Calculator(Structure):
             energy_tolerance,
             electronic_temperature,
         )
+        self._memory_space = _resolve_memory_space(memory_space)
         self._context = Context(backend, device_id, cpu_threads)
         self._method = method
 
@@ -1337,6 +1467,7 @@ class Calculator(Structure):
             energy_tolerance=self._settings.energy_tolerance,
             electronic_temperature=self._settings.electronic_temperature,
             flags=flags,
+            memory_space=self._memory_space,
         )
         _raise_on_failure(computed)
         return Result(computed, index=0)
@@ -1364,6 +1495,10 @@ class BatchCalculator:
 
     The C API describes a ragged batch with flat arrays and offsets, so all
     systems are solved together while keeping per-system convergence state.
+
+    ``memory_space`` follows :class:`Calculator`: ``"host"`` (default),
+    ``"device"``, or ``"mixed"`` descriptor placement for the CUDA backend
+    through the CUDA runtime (libcudart).
     """
 
     def __init__(
@@ -1374,6 +1509,7 @@ class BatchCalculator:
         backend: str | int = "auto",
         device_id: int | None = None,
         cpu_threads: int = 1,
+        memory_space: str = "host",
         max_scc_iterations: int = 250,
         charge_tolerance: float = 1.0e-6,
         energy_tolerance: float = 1.0e-8,
@@ -1389,6 +1525,7 @@ class BatchCalculator:
             energy_tolerance,
             electronic_temperature,
         )
+        self._memory_space = _resolve_memory_space(memory_space)
         self._context = Context(backend, device_id, cpu_threads)
 
     def __len__(self) -> int:
@@ -1454,6 +1591,7 @@ class BatchCalculator:
                 energy_tolerance=self._settings.energy_tolerance,
                 electronic_temperature=self._settings.electronic_temperature,
                 flags=flags,
+                memory_space=self._memory_space,
             )
 
         if auto_batch_size is None or auto_batch_size is False:

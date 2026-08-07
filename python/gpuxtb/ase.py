@@ -25,7 +25,12 @@ from typing import Any, ClassVar
 import numpy as np
 
 from .exceptions import GPUxtbRuntimeError, GPUxtbValueError
-from .interface import Calculator, _resolve_uhf, _validated_compute_setting
+from .interface import (
+    Calculator,
+    _resolve_memory_space,
+    _resolve_uhf,
+    _validated_compute_setting,
+)
 
 
 class GPUxtb(ase.calculators.calculator.Calculator):
@@ -47,6 +52,7 @@ class GPUxtb(ase.calculators.calculator.Calculator):
      backend                  "auto"            Execution backend: auto/cpu/cuda
      device_id                None              CUDA device id
      cpu_threads              1                 CPU batch-parallelism ceiling
+     memory_space             "host"            Descriptor placement: host/mixed/device
      cache_api                True              Reuse the underlying API calculator
     ======================== ================= =========================================
     """
@@ -72,6 +78,7 @@ class GPUxtb(ase.calculators.calculator.Calculator):
         "backend": "auto",
         "device_id": None,
         "cpu_threads": 1,
+        "memory_space": "host",
         "cache_api": True,
     }
 
@@ -101,6 +108,8 @@ class GPUxtb(ase.calculators.calculator.Calculator):
         ):
             if attribute in kwargs:
                 _validated_compute_setting(attribute, kwargs[attribute])
+        if "memory_space" in kwargs:
+            _resolve_memory_space(kwargs["memory_space"])
         if kwargs.get("multiplicity") is not None:
             _resolve_uhf(None, kwargs["multiplicity"])
 
@@ -113,7 +122,8 @@ class GPUxtb(ase.calculators.calculator.Calculator):
         # A structural parameter change requires rebuilding the API calculator;
         # numerical SCC settings are pushed onto an existing one in place.
         if self._xtb is not None and not any(
-            key in changed for key in ("method", "backend", "device_id", "cpu_threads")
+            key in changed
+            for key in ("method", "backend", "device_id", "cpu_threads", "memory_space")
         ):
             if "electronic_temperature" in changed:
                 self._xtb.set(
@@ -212,6 +222,7 @@ def _create_api_calculator(
             backend=parameters.backend,
             device_id=parameters.device_id,
             cpu_threads=parameters.cpu_threads,
+            memory_space=parameters.memory_space,
             max_scc_iterations=parameters.max_scc_iterations,
             charge_tolerance=parameters.charge_tolerance,
             energy_tolerance=parameters.energy_tolerance,
