@@ -26,6 +26,23 @@ runtime Python dependency only and is not bundled in gpuxtb source archives,
 native installs, or wheels; the canonical resolution is recorded in
 `pyproject.toml` and `uv.lock`.
 
+## DLPack
+
+Specification: <https://github.com/dmlc/dlpack>
+
+License: `Apache-2.0` (`LICENSES/Apache-2.0.txt`).
+
+No DLPack header or source is bundled, linked, or vendored. gpuxtb
+independently reimplements the *byte layout* of the DLPack 1.0 managed-tensor
+data structures (`DLDataType`, `DLDevice`, `DLTensor`, `DLManagedTensor`, and
+`DLManagedTensorVersioned`) as literal C/C++ struct mirrors in
+`src/runtime/dlpack_layout.hpp` and as matching ctypes mirrors in
+`python/gpuxtb/_dlpack.py`, with byte-exact static assertions. These layouts
+are the public ABI of the DLPack specification and are used only to produce
+and consume capsules at the Python boundary; they are not a copy of the
+upstream codebase's implementation. The upstream project's Apache-2.0 license
+text is retained in `LICENSES/Apache-2.0.txt` for reference.
+
 ## tblite
 
 Repository: <https://github.com/tblite/tblite>

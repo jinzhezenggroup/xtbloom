@@ -28,8 +28,10 @@ module is an implementation detail of :class:`gpuxtb.interface.ArrayBatch`.
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import math
+import weakref
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
@@ -164,6 +166,10 @@ _pyapi.PyCapsule_SetName.restype = ctypes.c_int
 _pyapi.PyCapsule_SetName.argtypes = [ctypes.py_object, ctypes.c_char_p]
 _pyapi.PyCapsule_SetDestructor.restype = ctypes.c_int
 _pyapi.PyCapsule_SetDestructor.argtypes = [ctypes.py_object, ctypes.c_void_p]
+_pyapi.PyCapsule_New.restype = ctypes.py_object
+_pyapi.PyCapsule_New.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
+_pyapi.PyCapsule_GetName.restype = ctypes.c_char_p
+_pyapi.PyCapsule_GetName.argtypes = [ctypes.py_object]
 
 _NP_DTYPE_TO_DLPACK: dict[np.dtype, tuple[int, int]] = {
     np.dtype(np.int64): (_DLPACK_CODE_INT, 64),
@@ -778,3 +784,451 @@ def _pyapi_void_deleter(address: int) -> Callable[[int], None]:
         ctypes.cast(address, prototype)(managed_pointer)
 
     return deleter
+
+
+# --- gpuxtb-owned result producer --------------------------------------------
+
+
+class _ResultArena:
+    """Internal native arena wrapper shared by result-slice producers.
+
+    The native arena is ref-counted.  ``create`` leaves one producer reference
+    owned by this object, released exactly once when the arena is closed or
+    garbage-collected.  Every :class:`DLPackResultBuffer` retains one
+    additional reference on construction and releases its own reference on
+    close/GC; each exported capsule retains independently through its native
+    managed-tensor deleter.  The allocation is freed by the native side
+    exactly when the last reference (producer, buffers, or capsules) drops, so
+    it can never be freed while an imported array can still observe it.
+    """
+
+    __slots__ = ("__weakref__", "_finalizer", "_handle")
+
+    def __init__(self, handle: object) -> None:
+        self._handle = handle
+        self._finalizer = weakref.finalize(
+            self, _release_result_owner, library.load_library(), handle
+        )
+
+    @property
+    def handle(self) -> object:
+        """The native ``gpuxtb_result_owner_t`` handle (kept for exports)."""
+        return self._handle
+
+    def base_pointer(self) -> int:
+        """Return the arena base data pointer for slice arithmetic."""
+        buffer = library.Buffer()
+        library._check_init(
+            "gpuxtb_result_owner_buffer",
+            library.load_library().gpuxtb_result_owner_buffer(
+                self._handle, ctypes.byref(buffer)
+            ),
+        )
+        return int(buffer.data or 0)
+
+    def retain(self) -> None:
+        """Retain one arena reference for one producer slice."""
+        library.load_library().gpuxtb_result_owner_retain(self._handle)
+
+    def release(self) -> None:
+        """Release one arena reference held by one producer slice."""
+        library.load_library().gpuxtb_result_owner_release(self._handle)
+
+    def close(self) -> None:
+        """Release the arena's own producer reference (idempotent)."""
+        if self._finalizer is not None and self._finalizer.alive:
+            self._finalizer()
+
+    def __del__(self) -> None:
+        """Best-effort native cleanup on garbage collection."""
+        with contextlib.suppress(Exception):
+            self.close()
+
+
+def _release_result_owner(library_instance: object, handle: object) -> None:
+    """Release the arena producer reference (the finalizer target)."""
+    library_instance.gpuxtb_result_owner_release(handle)
+
+
+@dataclass
+class DLPackResultBuffer:
+    """A DLPack producer over one gpuxtb-owned result arena.
+
+    Wraps a native result arena and one compact C-contiguous slice of it, so
+    ``cupy.from_dlpack``, ``torch.from_dlpack``, ``jax.dlpack.from_dlpack``,
+    or a NumPy-conformant ``from_dlpack`` can import the finished result
+    without a host copy.
+
+    Lifecycle contract
+    ------------------
+    * The arena is ref-counted natively and outlives the compute context that
+      filled it.  Each exported capsule independently retains the arena; the
+      managed-tensor deleter is a plain native function that importing
+      frameworks may call from any thread after this Python wrapper is gone.
+    * :meth:`close` (aliased as :meth:`delete`) releases this producer's
+      reference and is idempotent; exports after close raise
+      :class:`GPUxtbValueError`.
+    * Repeated exports are supported: every :meth:`__dlpack__` call creates a
+      fresh single-use capsule that retains the shared arena, exactly as the
+      DLPack 1.0 Python protocol requires.
+    """
+
+    arena: _ResultArena
+    byte_offset: int
+    size_bytes: int
+    shape: tuple[int, ...]
+    dtype: np.dtype
+    memory_space: int
+    device_id: int
+    stream: int | None
+    _closed: bool = False
+
+    def __post_init__(self) -> None:
+        """Retain the shared arena for the lifetime of this slice."""
+        self.arena.retain()
+
+    @property
+    def device_type(self) -> int:
+        """The DLPack device kind this slice lives on."""
+        if self.memory_space == library.MEMORY_CUDA_DEVICE:
+            return _DLPACK_DEVICE_CUDA
+        return _DLPACK_DEVICE_CPU
+
+    def __dlpack_device__(self) -> tuple[int, int]:
+        """Return the ``(device_type, device_id)`` pair of this slice."""
+        self._ensure_open()
+        return (self.device_type, int(self.device_id))
+
+    def __array_namespace__(self, *, api_version: str | None = None) -> object:
+        """Report a namespace so Array-API probing sees a concrete eager array."""
+        self._ensure_open()
+        return np
+
+    def __dlpack__(
+        self,
+        stream: int | None = None,
+        max_version: tuple[int, int] | None = None,
+        copy: bool | None = None,
+        dl_device: tuple[int, int] | None = None,
+    ) -> object:
+        """Export one gpuxtb-owned slice as a ``dltensor`` PyCapsule.
+
+        ``max_version >= (1, 0)`` negotiates the versioned capsule; otherwise a
+        legacy ``dltensor`` capsule is produced.  ``copy=False`` and ``copy=None``
+        export the existing allocation.  ``copy=True`` is rejected because this
+        producer has no cross-device copy primitive.  A foreign ``dl_device`` is
+        rejected before any capsule is created.
+        """
+        self._ensure_open()
+        if copy is not None and not isinstance(copy, bool):
+            raise BufferError("copy must be None, True, or False")
+        if copy is True:
+            raise BufferError(
+                "copy=True is not supported by gpuxtb-owned result producers"
+            )
+        if stream is not None:
+            if isinstance(stream, bool) or not isinstance(stream, (int, np.integer)):
+                raise BufferError("stream must be a positive CUDA stream handle")
+            stream_value = int(stream)
+            if stream_value <= 0 or stream_value > _POINTER_MAX:
+                raise BufferError("stream must be a positive CUDA stream handle")
+            if self.memory_space != library.MEMORY_CUDA_DEVICE:
+                raise BufferError("host DLPack results do not accept a CUDA stream")
+        if dl_device is not None and (
+            not isinstance(dl_device, tuple)
+            or len(dl_device) != 2
+            or _coerce_dlpack_device(dl_device) != self.__dlpack_device__()
+        ):
+            raise BufferError(
+                f"producer device {self.__dlpack_device__()} does not match the "
+                f"requested dl_device {dl_device!r}"
+            )
+        versioned = _dlpack_versioned_requested(max_version)
+        managed_pointer = _export_native_slice(self, versioned)
+        capsule_name = _CAPSULE_NAME_VERSIONED if versioned else _CAPSULE_NAME
+        destructor = _PRODUCER_CAPSULE_DESTRUCTORS[1 if versioned else 0]
+        try:
+            capsule = _pyapi.PyCapsule_New(
+                ctypes.c_void_p(managed_pointer), capsule_name, destructor
+            )
+        except BaseException:
+            _delete_native_managed(managed_pointer, versioned)
+            raise
+        return capsule
+
+    def close(self) -> None:
+        """Release this producer's arena reference (idempotent)."""
+        if self._closed:
+            return
+        self._closed = True
+        self.arena.release()
+
+    delete = close
+
+    def __del__(self) -> None:
+        """Best-effort native cleanup when the wrapper is garbage-collected."""
+        with contextlib.suppress(Exception):
+            self.close()
+
+    def __enter__(self) -> DLPackResultBuffer:  # noqa: PYI034 - 3.10 lacks Self
+        """Use as a context manager so the arena reference is released."""
+        self._ensure_open()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: object,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> None:
+        """Release the arena reference when leaving a ``with`` block."""
+        self.close()
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise GPUxtbValueError(
+                "this gpuxtb-owned result buffer is closed and cannot be used"
+            )
+
+
+def _export_native_slice(buffer: DLPackResultBuffer, versioned: bool) -> int:
+    """Call ``gpuxtb_result_owner_export_dltensor`` for one slice."""
+    library_instance = library.load_library()
+    view = library.DlpackView()
+    code, bits = _producer_dtype_fields(buffer.dtype)
+    ndim = len(buffer.shape)
+    if ndim > library.DLPACK_MAX_NDIM:
+        raise GPUxtbValueError(
+            f"cannot export a {ndim}-dimensional result slice; the DLPack "
+            f"producer supports at most {library.DLPACK_MAX_NDIM} dimensions"
+        )
+    view.struct_size = ctypes.sizeof(library.DlpackView)
+    view.api_version = library.API_VERSION
+    view.byte_offset = int(buffer.byte_offset)
+    view.dtype_code = code
+    view.dtype_bits = bits
+    view.dtype_lanes = 1
+    view.ndim = ndim
+    view.reserved = 0
+    shape_storage: list[np.ndarray] = []
+    if ndim:
+        owner = np.ascontiguousarray(np.asarray(buffer.shape, dtype=np.int64))
+        shape_storage.append(owner)
+        view.shape = ctypes.cast(owner.ctypes.data, ctypes.POINTER(ctypes.c_int64))
+    else:
+        view.shape = None
+    managed_pointer = ctypes.c_void_p()
+    status = library_instance.gpuxtb_result_owner_export_dltensor(
+        buffer.arena.handle,
+        ctypes.byref(view),
+        int(versioned),
+        ctypes.byref(managed_pointer),
+    )
+    if status != library.STATUS_SUCCESS:
+        raise GPUxtbRuntimeError(
+            "gpuxtb_result_owner_export_dltensor failed with "
+            f"{library.status_string(status)}: {library.get_last_error()}",
+            status,
+        )
+    return int(managed_pointer.value or managed_pointer)
+
+
+def _delete_native_managed(managed_pointer: int, versioned: bool) -> None:
+    """Invoke a native managed-tensor deleter after capsule construction fails."""
+    if not managed_pointer:
+        return
+    try:
+        if versioned:
+            deleter = int(
+                ctypes.cast(
+                    managed_pointer, ctypes.POINTER(_DLManagedTensorVersioned)
+                ).contents.deleter
+                or 0
+            )
+        else:
+            deleter = int(
+                ctypes.cast(
+                    managed_pointer, ctypes.POINTER(_DLManagedTensor)
+                ).contents.deleter
+                or 0
+            )
+        if deleter:
+            _pyapi_void_deleter(deleter)(managed_pointer)
+    except (OSError, ValueError, TypeError):
+        # The native export already transferred ownership.  There is no safe
+        # Python fallback if its descriptor is malformed, so leave the native
+        # diagnostic path to report the original capsule allocation failure.
+        return
+
+
+def _coerce_dlpack_device(value: object) -> tuple[int, int] | None:
+    """Validate and normalize a DLPack ``(device_type, device_id)`` request."""
+    if not isinstance(value, tuple) or len(value) != 2:
+        return None
+    first, second = value
+    if (
+        isinstance(first, bool)
+        or isinstance(second, bool)
+        or not isinstance(first, (int, np.integer))
+        or not isinstance(second, (int, np.integer))
+    ):
+        return None
+    return int(first), int(second)
+
+
+def _dlpack_versioned_requested(max_version: object) -> bool:
+    """Validate a requested DLPack version and select the supported form."""
+    if max_version is None:
+        return False
+    try:
+        values = tuple(max_version)
+    except TypeError:
+        raise BufferError("max_version must contain two nonnegative integers") from None
+    if len(values) != 2 or any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, np.integer))
+        or int(value) < 0
+        for value in values
+    ):
+        raise BufferError("max_version must contain two nonnegative integers")
+    return tuple(int(value) for value in values) >= (1, 0)
+
+
+def _producer_dtype_fields(dtype: np.dtype) -> tuple[int, int]:
+    """Map a numpy dtype to its (DLPack code, bits) pair for export."""
+    dtype = np.dtype(dtype)
+    if dtype == np.dtype(np.float64):
+        return library.DLPACK_DTYPE_FLOAT, 64
+    if dtype == np.dtype(np.float32):
+        return library.DLPACK_DTYPE_FLOAT, 32
+    if dtype == np.dtype(np.int64):
+        return library.DLPACK_DTYPE_INT, 64
+    if dtype == np.dtype(np.int32):
+        return library.DLPACK_DTYPE_INT, 32
+    if dtype == np.dtype(np.int16):
+        return library.DLPACK_DTYPE_INT, 16
+    if dtype == np.dtype(np.int8):
+        return library.DLPACK_DTYPE_INT, 8
+    if dtype == np.dtype(np.uint8):
+        return library.DLPACK_DTYPE_UINT, 8
+    raise GPUxtbValueError(
+        f"cannot export numpy dtype {dtype} through the gpuxtb DLPack producer"
+    )
+
+
+@dataclass
+class _ProducerCapsuleDestructor:
+    """CPython capsule destructor forwarding to a native managed-tensor deleter.
+
+    The destructor is only invoked by CPython when a producer capsule is
+    garbage-collected *without* having been consumed (a consumer renames the
+    capsule to ``used_dltensor[_versioned]`` and detaches this destructor, then
+    invokes the managed tensor's own native deleter).  It therefore forwards to
+    the exact same native deleter, so an unconsumed capsule never leaks and no
+    allocation is ever freed twice.
+
+    The callback signature is ``void (*)(PyObject*)`` but the capsule is passed
+    as a raw address and every PyCapsule_* helper is declared with
+    ``c_void_p``/``c_char_p`` arguments: creating a ``py_object`` inside
+    ``capsule_dealloc`` would bump the dying capsule's refcount and
+    recursively re-enter deallocation.
+    """
+
+    versioned: bool
+
+    def __post_init__(self) -> None:
+        self._callback = self._build()
+
+    def __call__(self, capsule_pointer: int) -> None:
+        try:
+            name = _pyapi_raw.capsule_name(capsule_pointer)
+        except (ValueError, TypeError):
+            return
+        expected = _CAPSULE_NAME_VERSIONED if self.versioned else _CAPSULE_NAME
+        if name not in (expected,):
+            # Already consumed and renamed: the importing framework now owns
+            # the managed tensor and will invoke its native deleter itself.
+            return
+        pointer = _pyapi_raw.capsule_pointer(capsule_pointer, name)
+        if not pointer:
+            return
+        try:
+            if self.versioned:
+                struct = ctypes.cast(
+                    pointer, ctypes.POINTER(_DLManagedTensorVersioned)
+                ).contents
+                deleter = int(struct.deleter or 0)
+            else:
+                struct = ctypes.cast(pointer, ctypes.POINTER(_DLManagedTensor)).contents
+                deleter = int(struct.deleter or 0)
+        except (ValueError, OSError):
+            return
+        if deleter:
+            _pyapi_void_deleter(deleter)(pointer)
+
+    def _build(self) -> object:
+        @ctypes.CFUNCTYPE(None, ctypes.c_void_p)  # type: ignore[arg-type]
+        def destructor(capsule_pointer: int) -> None:
+            self(capsule_pointer)
+
+        return destructor
+
+
+def _producer_capsule_destructors() -> list[object]:
+    """One persistent CPython capsule destructor per capsule flavor."""
+    legacy = _ProducerCapsuleDestructor(versioned=False)
+    versioned = _ProducerCapsuleDestructor(versioned=True)
+    return [legacy._callback, versioned._callback]
+
+
+# Kept alive for the process lifetime: a produced capsule may outlive every
+# Python reference, and a dangling capsule destructor would crash CPython GC.
+_PRODUCER_CAPSULE_DESTRUCTORS = _producer_capsule_destructors()
+
+
+class _RawPyApi:
+    """Raw-address capsule access used only inside the producer destructor.
+
+    Accessing a dying capsule through ``ctypes.py_object`` would increment its
+    refcount during ``capsule_dealloc`` and recursively re-enter deallocation.
+    Passing the raw ``PyObject*`` as ``c_void_p`` and reading with
+    ``c_char_p`` avoids every refcount mutation.  Own CFUNCTYPE prototypes are
+    used so the shared ``ctypes.pythonapi`` attribute signatures used by the
+    consumer bridge are never mutated.
+    """
+
+    def __init__(self) -> None:
+        api = ctypes.pythonapi
+        get_name_address = ctypes.cast(api.PyCapsule_GetName, ctypes.c_void_p).value
+        get_pointer_address = ctypes.cast(
+            api.PyCapsule_GetPointer, ctypes.c_void_p
+        ).value
+        # Build dedicated function-pointer prototypes from the raw C addresses
+        # so the consumer-side py_object signatures on pythonapi are never
+        # consulted (and never mutated) for these destructive accesses.
+        self._get_name = ctypes.CFUNCTYPE(ctypes.c_char_p, ctypes.c_void_p)(
+            get_name_address
+        )
+        self._get_pointer = ctypes.CFUNCTYPE(
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p
+        )(get_pointer_address)
+        self._callbacks: list[object] = [self._get_name, self._get_pointer]
+
+    def capsule_name(self, capsule_pointer: int) -> bytes | None:
+        """Return the capsule's name, or None when it cannot be read."""
+        if not capsule_pointer:
+            return None
+        try:
+            return self._get_name(ctypes.c_void_p(capsule_pointer))
+        except (ValueError, TypeError):
+            return None
+
+    def capsule_pointer(self, capsule_pointer: int, name: bytes) -> int:
+        """Return the payload pointer of a raw capsule address."""
+        try:
+            return int(self._get_pointer(ctypes.c_void_p(capsule_pointer), name) or 0)
+        except (ValueError, TypeError):
+            return 0
+
+
+_pyapi_raw = _RawPyApi()

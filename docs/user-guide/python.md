@@ -141,6 +141,47 @@ ordinary host NumPy arrays by default, or `out=` may name writable
 NumPy/CuPy/PyTorch buffers into which gpuxtb writes directly. JAX arrays are
 never mutated in place.
 
+### gpuxtb-owned device results through DLPack
+
+With `result_memory="cuda"`, `ArrayBatch.compute()` (and the
+`compute_arrays()` convenience alias) allocates one gpuxtb-owned CUDA device
+arena on the context device for the outputs *not* supplied through `out=` and
+returns each slice as a `gpuxtb.DLPackResultBuffer` DLPack producer. Such a
+producer hands finished device bytes to importing frameworks without a host
+round trip:
+
+```python
+import torch
+from gpuxtb import ArrayBatch
+
+result = ArrayBatch(..., backend="cuda").compute(result_memory="cuda")
+energies = torch.from_dlpack(result.energies)   # CUDA tensor, zero-copy
+forces = torch.from_dlpack(result.forces)
+```
+
+- `cupy.from_dlpack`, `torch.from_dlpack`, and `jax.dlpack.from_dlpack` all
+  consume the same producer object; nothing is copied for the device case.
+- A supplied `out=` buffer always wins over the arena, so caller-owned and
+  gpuxtb-owned outputs can be mixed in one call.
+- Every gpuxtb-owned arena is ref-counted natively and survives the
+  `ArrayBatch`/`Context` that filled it. Each exported capsule retains the
+  arena independently; `DLPackResultBuffer.close()`/`delete()` (and the
+  context manager) release only that producer's reference. A repeated
+  `__dlpack__` call creates a fresh single-use capsule, so importing the same
+  output more than once is safe.
+- The managed-tensor deleter is a native gpuxtb function, so an importing
+  framework may release the tensor from its own code long after the Python
+  producer is gone; the arena is freed exactly once, when the last reference
+  (producer, producer slices, or exported capsules) drops.
+- Device-resident `per_system_status`/`scc_converged` diagnostics cannot be
+  inspected by `failed_indices`; that helper is a host-NumPy feature and
+  raises a precise error when the arrays are gpuxtb-owned device buffers.
+
+`result_memory` accepts only `"host"` (the historical default: fresh host
+NumPy arrays) and `"cuda"` (requires the resolved CUDA backend). The arena is
+laid out at 64-byte alignment so every exported slice satisfies the alignment
+requirements of common DLPack consumers (JAX, CuPy, PyTorch).
+
 ## Open-shell calculations
 
 `multiplicity` and `uhf` describe the same state, with
