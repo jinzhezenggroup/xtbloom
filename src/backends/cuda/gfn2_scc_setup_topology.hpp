@@ -103,6 +103,8 @@ class Gfn2SccSetupTopology {
   [[nodiscard]] const Gfn2WavefunctionLayoutView& host_wavefunction_layout() const noexcept;
   [[nodiscard]] const std::vector<Gfn2EigensolverBucket>& eigensolver_buckets() const noexcept;
   [[nodiscard]] Gfn2SccSetupTopologyRequirements requirements() const noexcept;
+  /* Host bytes retained by copied topology vectors and the pinned upload image. */
+  [[nodiscard]] std::size_t retained_host_bytes() const noexcept;
 
   /* Preflight the complete caller arena, enqueue every immutable upload on
    * stream, and publish the device descriptor only after all copies were

@@ -146,6 +146,26 @@ struct Gfn2CudaExecutionIdentity {
   std::size_t force_execution_arena_bytes = 0u;
   std::size_t numerical_refresh_arena_bytes = 0u;
   std::size_t inference_arena_bytes = 0u;
+  std::size_t numerical_host_staging_arena_bytes = 0u;
+  std::size_t public_result_device_arena_bytes = 0u;
+  std::size_t public_result_host_arena_bytes = 0u;
+  std::size_t candidate_validation_arena_bytes = 0u;
+  std::size_t topology_staging_host_bytes = 0u;
+  std::size_t topology_staging_device_bytes = 0u;
+  /* Heap bodies for the prepared cache and its retained topology candidate. */
+  std::size_t runtime_owner_host_bytes = 0u;
+  std::size_t host_plans_bytes = 0u;
+  std::size_t topology_setup_host_bytes = 0u;
+  std::size_t inputs_setup_host_bytes = 0u;
+  std::size_t eigensolver_setup_host_bytes = 0u;
+  /* Host implementation record retained beside the device checkpoint. */
+  std::size_t initializer_host_bytes = 0u;
+  std::size_t initializer_device_checkpoint_bytes = 0u;
+  std::size_t scc_loop_device_control_bytes = 0u;
+  /* Complete plan-owned reusable workspace totals. These include every arena
+   * and explicit owner allocation above plus mixed-memory topology staging. */
+  std::size_t retained_host_workspace_bytes = 0u;
+  std::size_t retained_device_workspace_bytes = 0u;
 };
 
 /* Runtime SCC initialization policy for one complete inference submission. */
@@ -215,6 +235,14 @@ class Gfn2CudaExecutionCache {
                                              const gpuxtb_compute_options_t& options, bool& reused,
                                              std::string& error);
 
+  /* Prepare a plan-owned runtime from topology metadata without reading the
+   * caller's numerical buffers. This permits device-resident geometry during
+   * plan creation; the first compute refreshes the prepared seed from the real
+   * descriptor before executing or publishing results. */
+  [[nodiscard]] gpuxtb_status_t prepare_topology_only(const gpuxtb_batch_t& batch,
+                                                      const gpuxtb_compute_options_t& options,
+                                                      std::string& error);
+
   /* Enqueue one allocation-free fixed-topology numerical transaction. */
   [[nodiscard]] gpuxtb_status_t refresh_numerical_async(const Gfn2CudaNumericalInputView& input,
                                                         std::string& error);
@@ -235,6 +263,12 @@ class Gfn2CudaExecutionCache {
   [[nodiscard]] Gfn2CudaExecutionIdentity identity() const noexcept;
 
  private:
+  friend gpuxtb_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache,
+                                                           const gpuxtb_batch_t& batch,
+                                                           const gpuxtb_compute_options_t& options,
+                                                           gpuxtb_batch_result_t& result,
+                                                           bool require_prepared_topology,
+                                                           std::string& error);
   friend gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
                                                       const gpuxtb_batch_t& batch,
                                                       const gpuxtb_compute_options_t& options,
@@ -260,6 +294,14 @@ class Gfn2CudaExecutionCache {
                                                            const gpuxtb_compute_options_t& options,
                                                            gpuxtb_batch_result_t& result,
                                                            std::string& error);
+
+/* Plan-owned variant of the public transaction. It uses the same pointer and
+ * canonical topology staging as gpuxtb_compute, but rejects a topology
+ * candidate before numerical refresh instead of rebuilding the prepared
+ * runtime. This is the fixed-topology corruption gate for device descriptors. */
+[[nodiscard]] gpuxtb_status_t execute_restricted_gfn2_cuda_plan(
+    Gfn2CudaExecutionCache& cache, const gpuxtb_batch_t& batch,
+    const gpuxtb_compute_options_t& options, gpuxtb_batch_result_t& result, std::string& error);
 
 }  // namespace gpuxtb::detail
 

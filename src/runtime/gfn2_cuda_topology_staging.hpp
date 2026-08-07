@@ -119,6 +119,15 @@ struct Gfn2CudaTopologyStagingIdentity {
   std::uint8_t candidate_pending = 0u;
 };
 
+/* Bytes retained by the mixed-memory topology transaction. The total includes
+ * the validation report and every active/pending device and pinned backing;
+ * callers use it to account for a plan-owned CUDA runtime without depending on
+ * the private packed layout. */
+struct Gfn2CudaTopologyStagingWorkspaceBytes {
+  std::size_t host_bytes = 0u;
+  std::size_t device_bytes = 0u;
+};
+
 /*
  * Context-owned mixed-memory topology staging owner.
  *
@@ -170,6 +179,7 @@ class Gfn2CudaTopologyStaging {
   [[nodiscard]] Gfn2CudaTopologyDeviceKeyIdentity committed_device_key() const noexcept;
   [[nodiscard]] Gfn2CudaTopologyDeviceKeyIdentity candidate_device_key() const noexcept;
   [[nodiscard]] Gfn2CudaTopologyStagingIdentity identity() const noexcept;
+  [[nodiscard]] Gfn2CudaTopologyStagingWorkspaceBytes workspace_bytes() const noexcept;
 
  private:
   struct Impl;

@@ -245,6 +245,8 @@ class Gfn2SccIterationInitializer {
 
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] std::size_t image_bytes() const noexcept;
+  /* Host implementation storage retained alongside the device checkpoint. */
+  [[nodiscard]] std::size_t retained_host_bytes() const noexcept;
   [[nodiscard]] std::uint64_t plan_token() const noexcept;
   [[nodiscard]] std::uint64_t initialization_generation() const noexcept;
   [[nodiscard]] Gfn2SccIterationInitializationMode mode() const noexcept;

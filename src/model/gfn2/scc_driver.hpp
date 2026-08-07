@@ -60,6 +60,7 @@ class SccDriverPlan {
   [[nodiscard]] bool periodic_embedding_enabled() const noexcept;
   [[nodiscard]] std::size_t state_size_bytes() const noexcept;
   [[nodiscard]] std::size_t workspace_size_bytes() const noexcept;
+  [[nodiscard]] std::size_t resident_bytes() const noexcept;
   [[nodiscard]] const SccDriverPlanData* identity() const noexcept;
 
  private:

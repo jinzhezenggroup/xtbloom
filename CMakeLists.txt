@@ -287,6 +287,7 @@ add_library(gpuxtb
   src/api.cpp
   src/runtime/backend.cpp
   src/runtime/gfn2_cpu_execution.cpp
+  src/runtime/gfn2_plan.cpp
   src/runtime/validation.cpp
   $<TARGET_OBJECTS:gpuxtb_gfn2_cpu>
 )
@@ -600,6 +601,7 @@ if(GPUXTB_HAS_CUDA)
     src/backends/cuda/gfn2_integrals.cu
     src/backends/cuda/gfn2_mulliken.cu
     src/backends/cuda/gfn2_occupations.cu
+    src/backends/cuda/gfn2_pairlist.cu
     src/backends/cuda/gfn2_parameters.cu
     src/backends/cuda/gfn2_plan_schema.cu
     src/backends/cuda/gfn2_periodic_embedding.cu
@@ -1087,6 +1089,47 @@ if(GPUXTB_BUILD_TESTS)
       CUDA_SEPARABLE_COMPILATION ON
     )
     add_test(NAME gpuxtb.cuda.geometry COMMAND gpuxtb_cuda_geometry_test)
+
+    add_executable(gpuxtb_cuda_pairlist_test tests/cuda_pairlist_test.cu)
+    target_link_libraries(gpuxtb_cuda_pairlist_test PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_pairlist_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_pairlist_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_pairlist_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME gpuxtb.cuda.pairlist COMMAND gpuxtb_cuda_pairlist_test)
+
+    # Focused #70 benchmark.  It measures the sparse bucket build, the dense
+    # fallback build, and the coordination reuse cost at batch 1/8/32/128 so
+    # the dispatch crossover is anchored by reproducible profiling.
+    add_executable(gpuxtb_cuda_pairlist_benchmark tests/cuda_pairlist_test.cu)
+    target_link_libraries(gpuxtb_cuda_pairlist_benchmark PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_pairlist_benchmark PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_pairlist_benchmark PRIVATE
+      GPUXTB_HAS_CUDA=1
+      GPUXTB_PAIRLIST_BENCHMARK_ONLY=1
+    )
+    set_target_properties(gpuxtb_cuda_pairlist_benchmark PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
 
     add_executable(gpuxtb_cuda_integrals_test tests/cuda_integrals_test.cu)
     target_link_libraries(gpuxtb_cuda_integrals_test PRIVATE
@@ -2221,6 +2264,13 @@ if(GPUXTB_BUILD_TESTS)
   target_link_libraries(gpuxtb_scc_driver_test PRIVATE gpuxtb_gfn2_cpu)
   target_compile_features(gpuxtb_scc_driver_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.scc_driver COMMAND gpuxtb_scc_driver_test)
+
+  # Focused #41 benchmark: per-iteration mixer history transactions must scale
+  # with active-system history rather than the total batch history. Not a CTest
+  # gate; run standalone to produce issue-scoped evidence.
+  add_executable(gpuxtb_scc_mixer_transaction_benchmark benchmarks/scc_mixer_transaction.cpp)
+  target_link_libraries(gpuxtb_scc_mixer_transaction_benchmark PRIVATE gpuxtb_gfn2_cpu)
+  target_compile_features(gpuxtb_scc_mixer_transaction_benchmark PRIVATE cxx_std_17)
 
   if(GPUXTB_CPU_LINALG_RUNTIME)
     add_executable(gpuxtb_eigensolver_test tests/eigensolver_test.cpp)

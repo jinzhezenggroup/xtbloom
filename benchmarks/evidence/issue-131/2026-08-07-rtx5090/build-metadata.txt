@@ -1,0 +1,21 @@
+source_revision=4f8b075f0317ebab1d5f0a8fa116ec97289abd35
+source_status=clean
+source_branch=perf/131-cuda-compaction-evidence
+benchmark_binary=build/cuda-sm120/gpuxtb_cuda_compaction_benchmark
+benchmark_binary_sha256=15b3b9694ece0ad56e498e3b22fdc687c6747d2bb437a9733a9021c5bd60b74f
+test_binary=build/cuda-sm120/gpuxtb_cuda_eigensolver_test
+test_binary_sha256=c6b457e932d0b4966e7e648c35ddd00ead5bfef4b5d69479bf393da18b775f17
+static_library=build/cuda-sm120/libgpuxtb.a
+static_library_sha256=03fd7e5a7d4fe453a08c49a3ed7bc8101e0557b5e11198652b8f24a4a19baa18
+eigensolver_test_source_sha256=d8f29914137077ae76a4f472e8325d1248a738de8f4179dc541a054a200f41bd
+cmake_cache_sha256=f6cf98cff4eba0f55f794840f3328fcb84330dbc3adf70665fed14cd1563bfdd
+cmake_generator=Ninja
+cuda_architectures=120
+cuda_enable=ON
+cuda_toolkit_version=Build cuda_12.9.r12.9/compiler.36037853_0
+gpu=NVIDIA GeForce RTX 5090, 580.95.05
+compiler=c++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+nsys_version=NVIDIA Nsight Systems version 2025.1.3.140-251335620677v0
+compute_sanitizer_version=NVIDIA (R) Compute Sanitizer
+Copyright (c) 2020-2025 NVIDIA Corporation
+Version 2025.2.1.0 (build 35969825) (public-release)

@@ -79,6 +79,52 @@ static int run_installed_inference(gpuxtb_context_t* context, const char* mode_n
             energy, gpuxtb_get_last_error());
     return 11;
   }
+
+  /* Exercise the installed fixed-topology plan and workspace-query ABI. */
+  gpuxtb_plan_t* plan = NULL;
+  if (gpuxtb_plan_create(context, &batch, &options, &plan) != GPUXTB_STATUS_SUCCESS ||
+      plan == NULL) {
+    fprintf(stderr, "installed %s plan creation failed: %s\n", mode_name, gpuxtb_get_last_error());
+    return 12;
+  }
+  gpuxtb_workspace_query_t workspace;
+  if (gpuxtb_workspace_query_init(&workspace, sizeof(workspace)) != GPUXTB_STATUS_SUCCESS) {
+    fprintf(stderr, "installed %s workspace-query init failed: %s\n", mode_name,
+            gpuxtb_get_last_error());
+    gpuxtb_plan_destroy(plan);
+    return 13;
+  }
+  workspace.compute_flags = GPUXTB_COMPUTE_ENERGY;
+  if (gpuxtb_plan_query_workspace(plan, &workspace) != GPUXTB_STATUS_SUCCESS) {
+    fprintf(stderr, "installed %s workspace query failed: %s\n", mode_name,
+            gpuxtb_get_last_error());
+    gpuxtb_plan_destroy(plan);
+    return 14;
+  }
+  const gpuxtb_backend_t backend = gpuxtb_context_get_backend(context);
+  const int device_workspace_invalid =
+      backend == GPUXTB_BACKEND_CUDA
+          ? workspace.device_required_bytes == 0u || workspace.device_required_alignment == 0u
+          : workspace.device_required_bytes != 0u || workspace.device_required_alignment != 1u;
+  if (workspace.host_required_bytes == 0u || workspace.host_required_alignment == 0u ||
+      device_workspace_invalid) {
+    fprintf(stderr, "installed %s workspace query returned inconsistent sizes\n", mode_name);
+    gpuxtb_plan_destroy(plan);
+    return 15;
+  }
+  /* Repeated changed-geometry plan calls must succeed like the convenience path. */
+  energy = NAN;
+  iterations = -1;
+  converged = 0;
+  system_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  if (gpuxtb_plan_compute(plan, &batch, &options, &result) != GPUXTB_STATUS_SUCCESS ||
+      system_status != GPUXTB_STATUS_SUCCESS || converged != 1 || iterations <= 0 ||
+      !isfinite(energy)) {
+    fprintf(stderr, "installed %s plan inference failed: %s\n", mode_name, gpuxtb_get_last_error());
+    gpuxtb_plan_destroy(plan);
+    return 16;
+  }
+  gpuxtb_plan_destroy(plan);
   return 0;
 }
 

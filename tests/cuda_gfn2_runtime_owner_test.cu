@@ -416,7 +416,23 @@ bool same_identity(const Gfn2CudaExecutionIdentity& first,
          first.force_immutable_arena_bytes == second.force_immutable_arena_bytes &&
          first.force_execution_arena_bytes == second.force_execution_arena_bytes &&
          first.numerical_refresh_arena_bytes == second.numerical_refresh_arena_bytes &&
-         first.inference_arena_bytes == second.inference_arena_bytes;
+         first.inference_arena_bytes == second.inference_arena_bytes &&
+         first.numerical_host_staging_arena_bytes == second.numerical_host_staging_arena_bytes &&
+         first.public_result_device_arena_bytes == second.public_result_device_arena_bytes &&
+         first.public_result_host_arena_bytes == second.public_result_host_arena_bytes &&
+         first.candidate_validation_arena_bytes == second.candidate_validation_arena_bytes &&
+         first.topology_staging_host_bytes == second.topology_staging_host_bytes &&
+         first.topology_staging_device_bytes == second.topology_staging_device_bytes &&
+         first.runtime_owner_host_bytes == second.runtime_owner_host_bytes &&
+         first.host_plans_bytes == second.host_plans_bytes &&
+         first.topology_setup_host_bytes == second.topology_setup_host_bytes &&
+         first.inputs_setup_host_bytes == second.inputs_setup_host_bytes &&
+         first.eigensolver_setup_host_bytes == second.eigensolver_setup_host_bytes &&
+         first.initializer_host_bytes == second.initializer_host_bytes &&
+         first.initializer_device_checkpoint_bytes == second.initializer_device_checkpoint_bytes &&
+         first.scc_loop_device_control_bytes == second.scc_loop_device_control_bytes &&
+         first.retained_host_workspace_bytes == second.retained_host_workspace_bytes &&
+         first.retained_device_workspace_bytes == second.retained_device_workspace_bytes;
 }
 
 int validate_identity(const Gfn2CudaExecutionIdentity& identity, std::int64_t batch_size,
@@ -462,6 +478,33 @@ int validate_identity(const Gfn2CudaExecutionIdentity& identity, std::int64_t ba
   CHECK(identity.force_execution_arena_bytes > 0u);
   CHECK(identity.numerical_refresh_arena_bytes > 0u);
   CHECK(identity.inference_arena_bytes > 0u);
+  CHECK(identity.numerical_host_staging_arena_bytes > 0u);
+  CHECK(identity.public_result_device_arena_bytes > 0u);
+  CHECK(identity.public_result_host_arena_bytes > 0u);
+  CHECK(identity.candidate_validation_arena_bytes > 0u);
+  CHECK(identity.topology_staging_host_bytes > 0u);
+  CHECK(identity.topology_staging_device_bytes > 0u);
+  CHECK(identity.runtime_owner_host_bytes > 0u);
+  CHECK(identity.host_plans_bytes > 0u);
+  CHECK(identity.topology_setup_host_bytes > 0u);
+  CHECK(identity.inputs_setup_host_bytes > 0u);
+  CHECK(identity.eigensolver_setup_host_bytes > 0u);
+  CHECK(identity.initializer_host_bytes > 0u);
+  CHECK(identity.initializer_device_checkpoint_bytes > 0u);
+  CHECK(identity.retained_host_workspace_bytes ==
+        identity.provider_host_workspace_bytes + identity.numerical_host_staging_arena_bytes +
+            identity.public_result_host_arena_bytes + identity.candidate_validation_arena_bytes +
+            identity.topology_staging_host_bytes + identity.runtime_owner_host_bytes +
+            identity.host_plans_bytes + identity.topology_setup_host_bytes +
+            identity.inputs_setup_host_bytes + identity.eigensolver_setup_host_bytes +
+            identity.initializer_host_bytes);
+  CHECK(identity.retained_device_workspace_bytes ==
+        identity.topology_arena_bytes + identity.input_arena_bytes +
+            identity.iteration_arena_bytes + identity.eigensolver_setup_arena_bytes +
+            identity.force_immutable_arena_bytes + identity.force_execution_arena_bytes +
+            identity.numerical_refresh_arena_bytes + identity.inference_arena_bytes +
+            identity.public_result_device_arena_bytes + identity.topology_staging_device_bytes +
+            identity.initializer_device_checkpoint_bytes + identity.scc_loop_device_control_bytes);
   CHECK(identity.numerical_refresh_binding != 0u);
   CHECK(identity.numerical_epoch != 0u);
   CHECK(identity.committed_generations != 0u);
@@ -801,6 +844,69 @@ int test_device_refresh_and_peer_rollback(cudaStream_t stream, std::int32_t devi
   CHECK(after_rejection.epoch == third.epoch);
   CHECK(after_rejection.committed == third.committed);
   CHECK(after_rejection.factors == third.factors);
+  return 0;
+}
+
+/*
+ * Production path with the sparse pair-list consistency gate active.  A single
+ * 62-atom C20H42 chain crosses the 40-atom dense-fallback crossover, so the
+ * runtime provisioning enables the bucketed CN gate.  A fresh numerical
+ * refresh and full inference must complete with no peer failure: the sparse
+ * coordination numbers agree bitwise with the dense geometry cache, and any
+ * leak of that record into the debug surface stays a precondition that is
+ * asserted by the unit-level gate tests.
+ */
+int test_large_system_sparse_gate(cudaStream_t stream, std::int32_t device_id) {
+  Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
+  HostSccCase host;
+  std::string error;
+  HostSccCaseOptions case_options =
+      homogeneous_case_options(1, SmallSystemKind::kC20H42, false, false, false);
+  case_options.maximum_iterations = 100u;
+  case_options.electronic_temperature = 300.0 * 3.166811563e-06;
+  CHECK(HostSccCase::create(case_options, host, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(host.total_atoms() == 62u);
+  PublicHostBatch batch = PublicHostBatch::from_host(host, false);
+  gpuxtb_compute_options_t options = compute_options(false);
+  options.max_scc_iterations = 200;
+  options.electronic_temperature = 300.0 * 3.166811563e-06;
+  bool reused = true;
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(!reused);
+  const Gfn2CudaExecutionIdentity initial = cache.identity();
+
+  PinnedHostBuffer<double> caller_positions;
+  PinnedHostBuffer<std::uint8_t> caller_requested;
+  CHECK(caller_positions.assign(batch.positions) == cudaSuccess);
+  CHECK(caller_requested.assign(std::vector<std::uint8_t>{1u}) == cudaSuccess);
+
+  Gfn2CudaNumericalInputView numerical{};
+  numerical.positions = caller_positions.view();
+  numerical.requested_mask = caller_requested.view();
+  CHECK(cache.refresh_numerical_async(numerical, error) == GPUXTB_STATUS_SUCCESS);
+  RefreshSnapshot refreshed;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, refreshed) == 0);
+  CHECK(refreshed.epoch == 2u);
+  CHECK(std::all_of(refreshed.committed.begin(), refreshed.committed.end(),
+                    [](std::uint64_t value) { return value == 2u; }));
+  CHECK(std::all_of(refreshed.factor_statuses.begin(), refreshed.factor_statuses.end(),
+                    [](std::uint32_t value) { return value == 0u; }));
+
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kFresh, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  InferenceSnapshot result;
+  CHECK(download_inference_snapshot(cache.identity(), stream, false, result) == 0);
+  CHECK(result.publication_epoch == 2u);
+  CHECK(result.publication_plan_error ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationPlanError::kSuccess));
+  /* The sparse consistency gate is applied during the numerical-refresh
+   * transaction; a peer that disagreed with the dense geometry cache would
+   * already fail closed there.  The inference therefore must publish normally
+   * and report a finite energy; SCC convergence on this 62-atom chain within
+   * the fixture's bounded iteration budget is not the gate's concern. */
+  CHECK(result.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(std::isnan(result.energies[0]) == false);
+  CHECK(std::isfinite(result.energies[0]));
   return 0;
 }
 
@@ -1507,6 +1613,7 @@ int main() {
   if (status == 0) status = test_independent_optional_configurations(stream, device_id);
   if (status == 0) status = test_reuse_and_transactions(stream, device_id);
   if (status == 0) status = test_device_refresh_and_peer_rollback(stream, device_id);
+  if (status == 0) status = test_large_system_sparse_gate(stream, device_id);
   if (status == 0) status = test_host_refresh_snapshot_lifetime(stream, device_id);
   if (status == 0) status = test_refresh_cuda_graph_replay(stream, device_id);
   if (status == 0) status = test_host_refresh_rejected_during_cuda_graph_capture(stream, device_id);

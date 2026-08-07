@@ -522,6 +522,19 @@ std::size_t D4Plan::workspace_size_bytes() const noexcept {
   return data_ ? data_->workspace_size_bytes : 0u;
 }
 
+std::size_t D4Plan::resident_bytes() const noexcept {
+  if (data_ == nullptr) {
+    return 0u;
+  }
+  return sizeof(*data_) + data_->atom_offsets.capacity() * sizeof(std::int64_t) +
+         data_->pair_offsets.capacity() * sizeof(std::int64_t) +
+         data_->element_indices.capacity() * sizeof(std::uint8_t) +
+         data_->pair_coordination_radii.capacity() * sizeof(double) +
+         data_->pair_en_factors.capacity() * sizeof(double) +
+         data_->pair_rrij.capacity() * sizeof(double) +
+         data_->pair_damping_radii.capacity() * sizeof(double);
+}
+
 const D4PlanData* D4Plan::identity() const noexcept { return data_.get(); }
 
 gpuxtb_status_t make_d4_plan(std::int64_t batch_size, std::int64_t total_atoms,

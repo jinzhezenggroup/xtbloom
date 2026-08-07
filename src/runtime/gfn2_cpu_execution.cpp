@@ -169,6 +169,10 @@ class CpuWorkerPool final {
     task_count_ = 0u;
   }
 
+  [[nodiscard]] std::size_t resident_bytes() const noexcept {
+    return workers_.capacity() * sizeof(std::thread);
+  }
+
  private:
   void drain_tasks(Task task, void* context, std::size_t task_count) noexcept {
     for (;;) {
@@ -642,6 +646,12 @@ struct SystemExecution {
                         const double* input_response, std::uint32_t compute_flags, bool warm_start,
                         SystemOutput& output, std::string& error);
 
+  /* Steady-state host reservation: every persistent buffer this system owns.
+   * Capacities are reported because repeated inference reuses them; the value
+   * is topology- and spin-dependent but independent of the requested property
+   * flags (all scratch is preallocated up front). */
+  std::size_t resident_bytes() const noexcept;
+
  private:
   gpuxtb_status_t refresh_geometry(const CpuLinearAlgebraBackend& backend, bool warm_start,
                                    std::string& error);
@@ -862,6 +872,144 @@ gpuxtb_status_t SystemExecution::build(std::string& error) {
   };
   error.clear();
   return GPUXTB_STATUS_SUCCESS;
+}
+
+namespace {
+
+template <typename T>
+std::size_t vector_bytes(const std::vector<T>& values) noexcept {
+  return values.capacity() * sizeof(T);
+}
+
+std::size_t sum_double_vectors(std::initializer_list<const std::vector<double>*> vectors) noexcept {
+  std::size_t total = 0u;
+  for (const std::vector<double>* vector : vectors) {
+    total += vector_bytes(*vector);
+  }
+  return total;
+}
+
+}  // namespace
+
+std::size_t SystemExecution::resident_bytes() const noexcept {
+  const std::size_t small_vectors = vector_bytes(key.atomic_numbers) + vector_bytes(atom_offsets) +
+                                    vector_bytes(point_offsets) + vector_bytes(molecular_charges) +
+                                    vector_bytes(unpaired_electrons) + vector_bytes(spin_channels) +
+                                    vector_bytes(periodic_status);
+  const std::size_t basis_plan_vectors =
+      vector_bytes(basis.atom_offsets) + vector_bytes(basis.batch_shell_offsets) +
+      vector_bytes(basis.batch_orbital_offsets) +
+      vector_bytes(basis.batch_cartesian_orbital_offsets) +
+      vector_bytes(basis.batch_primitive_offsets) + vector_bytes(basis.atom_shell_offsets) +
+      vector_bytes(basis.atom_orbital_offsets) +
+      vector_bytes(basis.atom_cartesian_orbital_offsets) +
+      vector_bytes(basis.atom_primitive_offsets) + vector_bytes(basis.shell_orbital_offsets) +
+      vector_bytes(basis.shell_cartesian_orbital_offsets) +
+      vector_bytes(basis.shell_primitive_offsets) + vector_bytes(basis.shell_to_atom) +
+      vector_bytes(basis.principal_quantum_numbers) + vector_bytes(basis.angular_momenta) +
+      vector_bytes(basis.slater_exponents) + vector_bytes(basis.primitive_exponents) +
+      vector_bytes(basis.primitive_coefficients);
+  const std::size_t direct_plan_vectors =
+      basis_plan_vectors + vector_bytes(integrals.matrix_offsets) +
+      vector_bytes(coordination.atom_offsets) + vector_bytes(coordination.covalent_radius) +
+      vector_bytes(repulsion.atom_offsets) + vector_bytes(repulsion.sqrt_alpha) +
+      vector_bytes(repulsion.effective_charge) + vector_bytes(repulsion.light_element) +
+      vector_bytes(h0.atom_offsets) + vector_bytes(h0.batch_shell_offsets) +
+      vector_bytes(h0.batch_orbital_offsets) + vector_bytes(h0.matrix_offsets) +
+      vector_bytes(h0.shell_pair_offsets) + vector_bytes(h0.atomic_radii) +
+      vector_bytes(h0.shell_levels) + vector_bytes(h0.shell_coordination_scale) +
+      vector_bytes(h0.shell_polynomial) + vector_bytes(h0.shell_pair_scale) +
+      vector_bytes(es3.batch_shell_offsets) + vector_bytes(es3.shell_gamma3) +
+      vector_bytes(spin.atom_offsets) + vector_bytes(spin.batch_shell_offsets) +
+      vector_bytes(spin.atom_shell_offsets) + vector_bytes(spin.shell_population_offsets) +
+      vector_bytes(spin.spin_channels) + vector_bytes(spin.coupling_offsets) +
+      vector_bytes(spin.coupling_matrices) + vector_bytes(external.atom_offsets) +
+      vector_bytes(external.batch_shell_offsets) + vector_bytes(external.point_charge_offsets) +
+      vector_bytes(external.shell_to_atom) + vector_bytes(external.shell_hardness);
+  const std::size_t wavefunction_plan_vectors =
+      vector_bytes(wavefunction_layout.atom_offsets) +
+      vector_bytes(wavefunction_layout.batch_shell_offsets) +
+      vector_bytes(wavefunction_layout.batch_orbital_offsets) +
+      vector_bytes(wavefunction_layout.atomic_numbers) +
+      vector_bytes(wavefunction_layout.molecular_charges) +
+      vector_bytes(wavefunction_layout.unpaired_electrons) +
+      vector_bytes(wavefunction_layout.spin_channels) +
+      vector_bytes(wavefunction_layout.reference_atom_occupations) +
+      vector_bytes(wavefunction_layout.reference_shell_occupations) +
+      vector_bytes(wavefunction_layout.electron_counts) +
+      vector_bytes(wavefunction_layout.alpha_electron_counts) +
+      vector_bytes(wavefunction_layout.beta_electron_counts) +
+      vector_bytes(wavefunction_layout.coefficients.system_offsets) +
+      vector_bytes(wavefunction_layout.eigenvalues.system_offsets) +
+      vector_bytes(wavefunction_layout.occupations.system_offsets) +
+      vector_bytes(wavefunction_layout.density.system_offsets) +
+      vector_bytes(wavefunction_layout.qsh.system_offsets) +
+      vector_bytes(wavefunction_layout.qat.system_offsets) +
+      vector_bytes(wavefunction_layout.dipole.system_offsets) +
+      vector_bytes(wavefunction_layout.quadrupole.system_offsets) +
+      vector_bytes(wavefunction_layout.energy_weighted_density.system_offsets);
+  const std::size_t opaque_plan_storage = es2.resident_bytes() + aes2.resident_bytes() +
+                                          mulliken.resident_bytes() + eigensolver.resident_bytes() +
+                                          mixer.resident_bytes() + d4.resident_bytes() +
+                                          periodic.resident_bytes() + driver.resident_bytes();
+  const std::size_t planar_vectors = sum_double_vectors({
+      &positions,
+      &point_positions,
+      &point_charges,
+      &point_hardnesses,
+      &periodic_shifts,
+      &periodic_response,
+      &coordination_numbers,
+      &overlap,
+      &dipole_integrals,
+      &quadrupole_integrals,
+      &core_hamiltonian,
+      &es2_matrix,
+      &es2_matrix_scratch,
+      &es2_shell_scratch,
+      &es2_batch_scratch,
+      &es2_gradient_scratch,
+      &aes2_pairs,
+      &aes2_pair_scratch,
+      &aes2_potential_scratch,
+      &aes2_batch_scratch,
+      &aes2_gradient_scratch,
+      &aes2_coordination_scratch,
+      &d4_pairs,
+      &d4_coordination,
+      &explicit_point_shell_potential,
+      &component_shell_potential,
+      &scalar_shell_potential,
+      &atomic_potential,
+      &d4_atomic_potential,
+      &periodic_atomic_potential,
+      &dipole_potential,
+      &quadrupole_potential,
+      &periodic_energy,
+      &energy_scratch,
+      &component_energy_scratch,
+      &total_gradient,
+      &component_gradient,
+      &force_scratch,
+      &point_force_scratch,
+      &overlap_adjoint,
+      &dipole_adjoint,
+      &quadrupole_adjoint,
+      &coordination_adjoint,
+      &stationary_density,
+      &stationary_energy_weighted_density,
+      &stationary_spin_density,
+      &packed_spin_shell_potential,
+      &stationary_spin_shell_potential,
+      &spin_energy_scratch,
+  });
+  const std::size_t aligned_buffers =
+      integral_workspace.size() + d4_workspace_storage.size() + wavefunction_storage.size() +
+      warm_checkpoint_wavefunction_storage.size() + overlap_cache_storage.size() +
+      eigensolver_workspace_storage.size() + mixer_state_storage.size() +
+      driver_state_storage.size() + driver_workspace_storage.size();
+  return small_vectors + direct_plan_vectors + wavefunction_plan_vectors + opaque_plan_storage +
+         planar_vectors + aligned_buffers;
 }
 
 gpuxtb_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend& backend,
@@ -1246,6 +1394,20 @@ struct Gfn2CpuExecutionCache::Impl {
     const double nan = std::numeric_limits<double>::quiet_NaN();
 
     outputs.resize(batch_size);
+    /* Plan creation calls prepare_staging before the first inference. Reserve
+     * the per-system publication vectors here so the first plan call has the
+     * same allocation-free behavior as later calls. */
+    for (std::size_t index = 0u; index < batch_size; ++index) {
+      const std::int64_t atom_begin = request.atom_offsets[index];
+      const std::int64_t atom_end = request.atom_offsets[index + 1u];
+      const std::int64_t point_begin = request.point_offsets[index];
+      const std::int64_t point_end = request.point_offsets[index + 1u];
+      const std::size_t atoms = static_cast<std::size_t>(atom_end - atom_begin);
+      const std::size_t points = static_cast<std::size_t>(point_end - point_begin);
+      outputs[index].forces.reserve(3u * atoms);
+      outputs[index].atomic_charges.reserve(atoms);
+      outputs[index].point_forces.reserve(3u * points);
+    }
     system_errors.resize(batch_size);
     inference_statuses.assign(batch_size, GPUXTB_STATUS_INTERNAL_ERROR);
     task_failures.assign(batch_size, TaskFailure::kNone);
@@ -1464,6 +1626,100 @@ gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
     error = "failed to allocate CPU GFN2 execution staging";
     return GPUXTB_STATUS_ALLOCATION_FAILED;
   }
+}
+
+gpuxtb_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
+                                            const gpuxtb_batch_t& batch,
+                                            const gpuxtb_compute_options_t& options, bool& reused,
+                                            std::string& error) {
+  reused = false;
+  try {
+    std::lock_guard<std::mutex> lock(cache.impl_->mutex);
+    Gfn2CpuExecutionCache::Impl& implementation = *cache.impl_;
+    stage_request(batch, implementation.request);
+    gpuxtb_status_t status = validate_host_numerics(implementation.request, error);
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      return status;
+    }
+    make_system_keys(implementation.request, options, implementation.requested_keys);
+    reused = implementation.requested_keys == implementation.keys;
+    status = implementation.ensure_backend(error);
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      return status;
+    }
+    /* Plan setup is the allocation-permitted path: build every per-system
+     * execution object now so a subsequent gpuxtb_plan_compute performs no
+     * steady-state allocation. Only a rebuild invalidates a retained warm
+     * checkpoint; a reused identity keeps its checkpoint consumable. */
+    if (!reused) {
+      implementation.systems_ready_for_warm = false;
+    }
+    status = implementation.ensure_systems(implementation.requested_keys, error);
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      return status;
+    }
+    implementation.prepare_staging(options.flags);
+    error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    error = "failed to allocate CPU GFN2 plan setup state";
+    return GPUXTB_STATUS_ALLOCATION_FAILED;
+  }
+}
+
+std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache) noexcept {
+  std::lock_guard<std::mutex> lock(cache.impl_->mutex);
+  const Gfn2CpuExecutionCache::Impl& implementation = *cache.impl_;
+  /* Count every retained allocation owned by the plan cache. The object sizes
+   * cover inline metadata; vector capacities cover their heap reservations. */
+  std::size_t total = sizeof(Gfn2CpuExecutionCache::Impl) +
+                      implementation.workers.resident_bytes() +
+                      vector_bytes(implementation.systems);
+  for (const std::unique_ptr<SystemExecution>& system : implementation.systems) {
+    total += sizeof(SystemExecution) + system->resident_bytes();
+  }
+
+  const auto key_vector_bytes = [](const std::vector<SystemKey>& keys) noexcept {
+    std::size_t bytes = vector_bytes(keys);
+    for (const SystemKey& key : keys) bytes += vector_bytes(key.atomic_numbers);
+    return bytes;
+  };
+  const auto output_vector_bytes = [](const std::vector<SystemOutput>& outputs) noexcept {
+    std::size_t bytes = vector_bytes(outputs);
+    for (const SystemOutput& output : outputs) {
+      bytes += vector_bytes(output.forces) + vector_bytes(output.atomic_charges) +
+               vector_bytes(output.point_forces);
+    }
+    return bytes;
+  };
+  const auto string_vector_bytes = [](const std::vector<std::string>& strings) noexcept {
+    std::size_t bytes = vector_bytes(strings);
+    /* capacity()+1 is a conservative reservation for implementations whose
+     * empty diagnostic uses small-string storage inside the vector element. */
+    for (const std::string& value : strings) bytes += value.capacity() + 1u;
+    return bytes;
+  };
+
+  /* Batch-level topology/policy keys and transaction staging all survive
+   * steady-state calls and must be represented by the workspace query. */
+  total += key_vector_bytes(implementation.keys) + key_vector_bytes(implementation.requested_keys) +
+           output_vector_bytes(implementation.outputs) +
+           string_vector_bytes(implementation.system_errors) +
+           vector_bytes(implementation.inference_statuses) +
+           vector_bytes(implementation.task_failures) + vector_bytes(implementation.energies) +
+           vector_bytes(implementation.forces) + vector_bytes(implementation.atomic_charges) +
+           vector_bytes(implementation.point_forces) + vector_bytes(implementation.iterations) +
+           vector_bytes(implementation.converged) + vector_bytes(implementation.system_statuses);
+
+  const HostRequest& request = implementation.request;
+  total += vector_bytes(request.atom_offsets) + vector_bytes(request.atomic_numbers) +
+           vector_bytes(request.positions) + vector_bytes(request.molecular_charges) +
+           vector_bytes(request.unpaired_electrons) + vector_bytes(request.spin_channels) +
+           vector_bytes(request.point_offsets) + vector_bytes(request.point_positions) +
+           vector_bytes(request.point_charges) + vector_bytes(request.point_hardnesses) +
+           vector_bytes(request.periodic_shifts) + vector_bytes(request.response_offsets) +
+           vector_bytes(request.response_matrices);
+  return total;
 }
 
 }  // namespace gpuxtb::detail

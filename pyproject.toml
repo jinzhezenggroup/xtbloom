@@ -18,6 +18,7 @@ license-files = [
 ]
 requires-python = ">=3.10"
 authors = [{ name = "gpuxtb developers" }]
+maintainers = [{ name = "Jinzhe Zeng", email = "jinzhe.zeng@ustc.edu.cn" }]
 keywords = ["xtb", "tight-binding", "semiempirical", "qm", "gpu"]
 classifiers = [
   "Intended Audience :: Science/Research",

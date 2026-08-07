@@ -86,6 +86,23 @@ def test_abi_struct_sizes() -> None:
     assert options.scc_start_mode == library.SCC_START_FRESH
     assert options.reserved_v2 == 0
     assert library.SCC_START_WARM == 2
+    # gpuxtb_workspace_query_t: struct_size/api_version/flags/reserved (16) +
+    # host bytes (8) + host alignment (4) + device bytes (8) + device alignment
+    # (4) + reserved_v2 (4) = 48 bytes, with device bytes aligned to 8.
+    assert ctypes.sizeof(library.WorkspaceQuery) == 48
+    assert library.WorkspaceQuery.host_required_bytes.offset == 16
+    assert library.WorkspaceQuery.host_required_alignment.offset == 24
+    assert library.WorkspaceQuery.device_required_bytes.offset == 32
+    assert library.WorkspaceQuery.device_required_alignment.offset == 40
+    query = library.WorkspaceQuery()
+    library.load_library().gpuxtb_workspace_query_init(
+        ctypes.byref(query), ctypes.sizeof(query)
+    )
+    assert query.compute_flags == 0
+    assert query.host_required_bytes == 0
+    assert query.host_required_alignment == 0
+    assert query.device_required_bytes == 0
+    assert query.device_required_alignment == 0
 
 
 def test_unknown_method_rejected() -> None:

@@ -44,6 +44,12 @@ class Gfn2CpuExecutionCache {
                                                      const gpuxtb_compute_options_t& options,
                                                      gpuxtb_batch_result_t& result,
                                                      std::string& error);
+  friend gpuxtb_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
+                                                     const gpuxtb_batch_t& batch,
+                                                     const gpuxtb_compute_options_t& options,
+                                                     bool& reused, std::string& error);
+  friend std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(
+      Gfn2CpuExecutionCache& cache) noexcept;
 };
 
 /*
@@ -58,6 +64,28 @@ gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
                                             const gpuxtb_batch_t& batch,
                                             const gpuxtb_compute_options_t& options,
                                             gpuxtb_batch_result_t& result, std::string& error);
+
+/*
+ * Allocation-permitted fixed-topology setup for a public plan.
+ *
+ * Stages and validates the request and builds (or reuses) the per-system
+ * SystemExecution objects for the requested identity, leaving the cache warm
+ * so the following gpuxtb_plan_compute runs allocation-free. `reused` is true
+ * when the cache already held an identical identity and no system was rebuilt.
+ */
+gpuxtb_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
+                                            const gpuxtb_batch_t& batch,
+                                            const gpuxtb_compute_options_t& options, bool& reused,
+                                            std::string& error);
+
+/*
+ * Topology- and spin-dependent persistent host reservation (per-system
+ * storage plus the copied input request), independent of the requested
+ * property flags. Returned value is used by fixed-topology plan queries so
+ * their result stays correct even after another topology replaced the shared
+ * cache's prepared systems.
+ */
+std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache) noexcept;
 
 }  // namespace gpuxtb::detail
 

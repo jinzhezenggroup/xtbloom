@@ -166,6 +166,26 @@ class BatchResult(ctypes.Structure):
     ]
 
 
+class WorkspaceQuery(ctypes.Structure):
+    """ctypes mirror of ``gpuxtb_workspace_query_t`` ABI version 1.
+
+    ``compute_flags`` is an input; the four sizing fields are filled by
+    ``gpuxtb_plan_query_workspace``.
+    """
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("api_version", ctypes.c_uint32),
+        ("compute_flags", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+        ("host_required_bytes", ctypes.c_uint64),
+        ("host_required_alignment", ctypes.c_uint32),
+        ("device_required_bytes", ctypes.c_uint64),
+        ("device_required_alignment", ctypes.c_uint32),
+        ("reserved_v2", ctypes.c_uint32),
+    ]
+
+
 # --- Shared-library discovery -------------------------------------------------
 
 
@@ -258,6 +278,32 @@ def _configure_library(library: ctypes.CDLL) -> None:
         ctypes.c_size_t,
     ]
     library.gpuxtb_batch_result_init.restype = ctypes.c_int32
+    library.gpuxtb_workspace_query_init.argtypes = [
+        ctypes.POINTER(WorkspaceQuery),
+        ctypes.c_size_t,
+    ]
+    library.gpuxtb_workspace_query_init.restype = ctypes.c_int32
+    library.gpuxtb_plan_create.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(Batch),
+        ctypes.POINTER(ComputeOptions),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.gpuxtb_plan_create.restype = ctypes.c_int32
+    library.gpuxtb_plan_destroy.argtypes = [ctypes.c_void_p]
+    library.gpuxtb_plan_destroy.restype = None
+    library.gpuxtb_plan_query_workspace.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(WorkspaceQuery),
+    ]
+    library.gpuxtb_plan_query_workspace.restype = ctypes.c_int32
+    library.gpuxtb_plan_compute.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(Batch),
+        ctypes.POINTER(ComputeOptions),
+        ctypes.POINTER(BatchResult),
+    ]
+    library.gpuxtb_plan_compute.restype = ctypes.c_int32
     library.gpuxtb_context_create.argtypes = [
         ctypes.POINTER(ContextOptions),
         ctypes.POINTER(ctypes.c_void_p),
@@ -575,6 +621,116 @@ def compute_checked(
         )
 
 
+class Plan:
+    """`ctypes` ownership wrapper around a ``gpuxtb_plan_t``.
+
+    A fixed-topology plan is created from one validated batch descriptor and
+    keeps its topology and backend workspace reserved so repeated
+    ``plan_compute`` calls (changing geometry only) perform zero steady-state
+    allocations. The plan must be destroyed before the context it was created
+    from.
+    """
+
+    def __init__(
+        self,
+        context: ctypes.c_void_p,
+        batch: Batch,
+        options: ComputeOptions,
+        context_owner: object | None = None,
+    ) -> None:
+        library = load_library()
+        handle = ctypes.c_void_p()
+        status = library.gpuxtb_plan_create(
+            context, ctypes.byref(batch), ctypes.byref(options), ctypes.byref(handle)
+        )
+        if status != STATUS_SUCCESS:
+            raise GPUxtbRuntimeError(
+                "gpuxtb_plan_create failed with "
+                f"{status_string(status)}: {get_last_error()}",
+                status,
+            )
+        self._handle = handle
+        self._library = library
+        self._closed = False
+        # The native plan borrows the context lifetime. Retaining the Python
+        # owner prevents garbage collection from invalidating a live plan.
+        self._context_owner = context_owner
+
+    @property
+    def handle(self) -> ctypes.c_void_p:
+        """:return: the opaque native handle (kept for ctypes consumers)."""
+        return self._handle
+
+    def query_workspace(self, compute_flags: int) -> WorkspaceQuery:
+        """Query reserved host/device workspace for the requested properties."""
+        self._ensure_open()
+        query = WorkspaceQuery()
+        self._check_init(query, "gpuxtb_workspace_query_init")
+        query.compute_flags = int(compute_flags)
+        status = self._library.gpuxtb_plan_query_workspace(
+            self._handle, ctypes.byref(query)
+        )
+        if status != STATUS_SUCCESS:
+            raise GPUxtbRuntimeError(
+                "gpuxtb_plan_query_workspace failed with "
+                f"{status_string(status)}: {get_last_error()}",
+                status,
+            )
+        return query
+
+    def compute(
+        self,
+        batch: Batch,
+        options: ComputeOptions,
+        result: BatchResult,
+    ) -> None:
+        """Run one fixed-topology inference; raises on a non-success status."""
+        self._ensure_open()
+        status = self._library.gpuxtb_plan_compute(
+            self._handle,
+            ctypes.byref(batch),
+            ctypes.byref(options),
+            ctypes.byref(result),
+        )
+        if status != STATUS_SUCCESS:
+            raise GPUxtbRuntimeError(
+                f"gpuxtb_plan_compute failed with {status_string(status)}: "
+                f"{get_last_error()}",
+                status,
+            )
+
+    def destroy(self) -> None:
+        """Release the native plan handle (idempotent)."""
+        if self._closed:
+            return
+        self._closed = True
+        self._library.gpuxtb_plan_destroy(self._handle)
+        self._handle = ctypes.c_void_p()
+        self._context_owner = None
+
+    def __del__(self) -> None:
+        """Best-effort native cleanup when the wrapper is garbage-collected."""
+        with contextlib.suppress(Exception):
+            self.destroy()
+
+    @staticmethod
+    def _check_init(query: WorkspaceQuery, operation: str) -> None:
+        status = load_library().gpuxtb_workspace_query_init(
+            ctypes.byref(query), ctypes.sizeof(query)
+        )
+        if status != STATUS_SUCCESS:
+            raise GPUxtbRuntimeError(
+                f"{operation} failed with {status_string(status)}: {get_last_error()}",
+                status,
+            )
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise GPUxtbRuntimeError(
+                "fixed-topology plan is closed", STATUS_INVALID_ARGUMENT
+            )
+
+
 # --- Host descriptor helpers ----------------------------------------------------
 
 
@@ -659,6 +815,8 @@ __all__ = [
     "ComputeOptions",
     "ConstBuffer",
     "ContextOptions",
+    "Plan",
+    "WorkspaceQuery",
     "compute_checked",
     "device_memory_info",
     "empty_result_shape",

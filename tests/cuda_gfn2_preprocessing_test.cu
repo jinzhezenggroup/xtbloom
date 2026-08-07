@@ -286,6 +286,16 @@ struct DeviceFixture {
   DeviceBuffer<std::uint32_t> geometry_sequence, integral_sequence, geometry_system_errors,
       geometry_device_error, integral_system_errors, integral_device_error, es2_device_error,
       aes2_system_errors, aes2_device_error, system_stages, plan_error;
+  /* Sparse pair-list gate buffers, allocated only by enable_pairlist(). */
+  DeviceBuffer<gpuxtb::detail::Gfn2AtomPair> pairlist_pairs;
+  DeviceBuffer<std::int64_t> pairlist_offsets, pairlist_neighbor_offsets, pairlist_neighbors,
+      pairlist_atom_cells, pairlist_cell_counts, pairlist_cell_offsets, pairlist_cell_fill,
+      pairlist_cell_atoms, pairlist_neighbor_cursor, pairlist_neighbor_scratch,
+      pairlist_pair_cursor;
+  DeviceBuffer<std::uint64_t> pairlist_generations;
+  DeviceBuffer<gpuxtb::detail::cuda::Gfn2PairListSystemMeta> pairlist_meta;
+  DeviceBuffer<std::uint32_t> pairlist_sequence, sparse_system_errors, sparse_device_error;
+  DeviceBuffer<double> sparse_coordination;
 
   Gfn2PreprocessingDeviceBinding binding{};
 
@@ -519,6 +529,9 @@ struct DeviceFixture {
                            system_stages.get(),
                            batch,
                            plan_error.get(),
+                           nullptr,
+                           0,
+                           nullptr,
                            kPlanToken};
     binding.workspace.positions_scratch = position_scratch.get();
     binding.workspace.position_elements = 3 * atoms;
@@ -564,6 +577,97 @@ struct DeviceFixture {
         aes2_scratch.get(), aes2_pairs, nullptr, 0, nullptr, 0, nullptr, 0, nullptr, 0, nullptr, 0};
     binding.workspace.plan_token = kPlanToken;
     binding.plan_token = kPlanToken;
+  }
+
+  /* Wire the optional sparse pair-list leaf and its gate buffers.  Capacities
+   * are conservative fixed-topology upper bounds: neighbors and pairs use the
+   * all-pairs maximum and cells scale with the largest system, so the
+   * documented overflow detection cannot trigger for a valid system.  After
+   * this call the binding must be re-sealed before composing. */
+  cudaError_t enable_pairlist(const HostCase& host, cudaStream_t stream) {
+    const std::int64_t batch = host.batch;
+    const std::int64_t atoms = host.basis.total_atoms;
+    std::int64_t max_atoms = 0;
+    for (std::int64_t system = 0; system < batch; ++system) {
+      max_atoms = std::max(max_atoms, host.atom_offsets[static_cast<std::size_t>(system + 1)] -
+                                          host.atom_offsets[static_cast<std::size_t>(system)]);
+    }
+    const std::int64_t max_pairs_per_system = max_atoms * (max_atoms - 1) / 2;
+    const std::int64_t max_cells_per_system = std::max<std::int64_t>(16, 8 * max_atoms);
+    const std::int64_t max_neighbors_per_atom = max_atoms;
+    cudaError_t status = cudaSuccess;
+#define PL_ALLOC(field, count) \
+  if (status == cudaSuccess) status = field.allocate(static_cast<std::size_t>(count))
+    PL_ALLOC(sparse_system_errors, batch);
+    PL_ALLOC(sparse_device_error, 1u);
+    PL_ALLOC(sparse_coordination, atoms);
+    PL_ALLOC(pairlist_pairs, batch * max_pairs_per_system);
+    PL_ALLOC(pairlist_offsets, batch + 1);
+    PL_ALLOC(pairlist_neighbor_offsets, atoms + 1);
+    PL_ALLOC(pairlist_neighbors, atoms * max_neighbors_per_atom);
+    PL_ALLOC(pairlist_generations, batch);
+    PL_ALLOC(pairlist_meta, batch);
+    PL_ALLOC(pairlist_atom_cells, atoms);
+    const std::int64_t cell_storage = batch * (max_cells_per_system + 1);
+    PL_ALLOC(pairlist_cell_counts, cell_storage);
+    PL_ALLOC(pairlist_cell_offsets, cell_storage);
+    PL_ALLOC(pairlist_cell_fill, cell_storage);
+    PL_ALLOC(pairlist_cell_atoms, atoms);
+    PL_ALLOC(pairlist_neighbor_cursor, atoms);
+    PL_ALLOC(pairlist_neighbor_scratch, atoms * max_neighbors_per_atom);
+    PL_ALLOC(pairlist_pair_cursor, batch);
+    PL_ALLOC(pairlist_sequence, 1u);
+#undef PL_ALLOC
+    if (status != cudaSuccess) return status;
+    binding.plan.pairlist = {batch,
+                             atoms,
+                             batch + 1,
+                             gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
+                             max_cells_per_system,
+                             max_neighbors_per_atom,
+                             max_pairs_per_system,
+                             gpuxtb::detail::cuda::Gfn2PairListMode::kSparse,
+                             kPlanToken,
+                             atom_offsets.get()};
+    binding.diagnostics.sparse_system_errors = sparse_system_errors.get();
+    binding.diagnostics.sparse_system_elements = batch;
+    binding.diagnostics.sparse_device_error = sparse_device_error.get();
+    binding.workspace.sparse_coordination = sparse_coordination.get();
+    binding.workspace.sparse_coordination_elements = atoms;
+    binding.workspace.pairlist_candidate = {pairlist_pairs.get(),
+                                            batch * max_pairs_per_system,
+                                            pairlist_offsets.get(),
+                                            batch + 1,
+                                            pairlist_neighbor_offsets.get(),
+                                            atoms + 1,
+                                            pairlist_neighbors.get(),
+                                            atoms * max_neighbors_per_atom,
+                                            pairlist_generations.get(),
+                                            batch,
+                                            kPlanToken};
+    binding.workspace.pairlist = {pairlist_meta.get(),
+                                  batch,
+                                  pairlist_atom_cells.get(),
+                                  atoms,
+                                  pairlist_cell_counts.get(),
+                                  cell_storage,
+                                  pairlist_cell_offsets.get(),
+                                  cell_storage,
+                                  pairlist_cell_fill.get(),
+                                  cell_storage,
+                                  pairlist_cell_atoms.get(),
+                                  atoms,
+                                  pairlist_neighbor_cursor.get(),
+                                  atoms,
+                                  pairlist_neighbor_scratch.get(),
+                                  atoms * max_neighbors_per_atom,
+                                  pairlist_pair_cursor.get(),
+                                  batch,
+                                  pairlist_sequence.get(),
+                                  1,
+                                  kPlanToken};
+    binding.output.pairlist = {};
+    return cudaSuccess;
   }
 
   cudaError_t seed_public(cudaStream_t stream) {
@@ -998,6 +1102,106 @@ int test_graph_replay_changed_positions_stable_binding() {
   return 0;
 }
 
+/*
+ * The optional sparse pair-list consistency gate.  A correctly wired enabled
+ * binding validates, seals, and composes with the gate running -- every
+ * healthy peer's sparse coordination numbers agree bitwise with the dense
+ * geometry cache, so the peer publishes normally.  A clobbered sparse
+ * output must instead fail that peer closed through the geometry error slot,
+ * which the enclosing publication gate turns into a skipped commit.
+ */
+int test_sparse_pairlist_gate() {
+  for (const std::int64_t batch : {4}) {
+    HostCase host;
+    std::string error;
+    CHECK(host.create(batch, error));
+    cudaStream_t stream = nullptr;
+    CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    DeviceFixture device;
+    CUDA_CHECK(device.initialize(host, stream));
+    CHECK(seal_gfn2_preprocessing_binding_cuda(device.binding).success());
+    const Gfn2PreprocessingLaunchDiagnostic disabled_gate_diagnostic =
+        gate_gfn2_sparse_coordination_cuda(device.binding, stream);
+    CHECK(!disabled_gate_diagnostic.success());
+    CHECK(disabled_gate_diagnostic.binding.error ==
+          Gfn2PreprocessingBindingError::kInvalidWorkspace);
+    CHECK(disabled_gate_diagnostic.binding.field == Gfn2PreprocessingBindingField::kPairlist);
+    CHECK(disabled_gate_diagnostic.cuda_status == cudaErrorInvalidValue);
+    CUDA_CHECK(device.enable_pairlist(host, stream));
+    CHECK(seal_gfn2_preprocessing_binding_cuda(device.binding).success());
+    /* Pair-generation storage is a stable binding field, even though the
+     * device values change per refresh.  Changing its extent after sealing
+     * must invalidate the seal rather than silently changing the graph view. */
+    Gfn2PreprocessingDeviceBinding stale_generation = device.binding;
+    stale_generation.workspace.pairlist_candidate.generation_elements += 1;
+    CHECK(validate_gfn2_preprocessing_binding_cuda(stale_generation).error ==
+          Gfn2PreprocessingBindingError::kStaleSeal);
+    /* A short cell-atom arena must fail during descriptor validation, before
+     * any preprocessing kernel is queued. */
+    Gfn2PreprocessingDeviceBinding short_cell_atoms = device.binding;
+    short_cell_atoms.workspace.pairlist.cell_atom_elements = host.basis.total_atoms - 1;
+    short_cell_atoms.binding_seal = 0u;
+    CHECK(seal_gfn2_preprocessing_binding_cuda(short_cell_atoms).error ==
+          Gfn2PreprocessingBindingError::kInvalidWorkspace);
+    CHECK(compose_gfn2_preprocessing_cuda(device.binding, 61u, stream).success());
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    Downloaded first;
+    CUDA_CHECK(download(host, device, first, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(first.plan_error == 0u);
+    for (std::int64_t system = 0; system < batch; ++system) {
+      CHECK(first.geometry_errors[static_cast<std::size_t>(system)] ==
+            static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSuccess));
+      CHECK(first.published[static_cast<std::size_t>(system)] == 1u);
+    }
+
+    Gfn2PreprocessingDeviceBinding aliased = device.binding;
+    aliased.binding_seal = 0u;
+    aliased.workspace.pairlist_candidate.pairs = reinterpret_cast<gpuxtb::detail::Gfn2AtomPair*>(
+        const_cast<double*>(aliased.input.positions));
+    const Gfn2PreprocessingBindingDiagnostic alias_diagnostic =
+        seal_gfn2_preprocessing_binding_cuda(aliased);
+    CHECK(alias_diagnostic.error == Gfn2PreprocessingBindingError::kInvalidAlias);
+    CHECK(alias_diagnostic.field == Gfn2PreprocessingBindingField::kWorkspace);
+
+    /* The standalone gate is an execution entry point too.  A sealed binding
+     * whose pairlist scalar is mutated must be rejected before the gate kernel
+     * is queued, just like the full composer. */
+    Gfn2PreprocessingDeviceBinding stale_gate = device.binding;
+    stale_gate.plan.pairlist.cutoff += 1.0;
+    const Gfn2PreprocessingLaunchDiagnostic stale_gate_diagnostic =
+        gate_gfn2_sparse_coordination_cuda(stale_gate, stream);
+    CHECK(!stale_gate_diagnostic.success());
+    CHECK(stale_gate_diagnostic.binding.error == Gfn2PreprocessingBindingError::kStaleSeal);
+    CHECK(stale_gate_diagnostic.binding.field == Gfn2PreprocessingBindingField::kSeal);
+    CHECK(stale_gate_diagnostic.cuda_status == cudaErrorInvalidValue);
+
+    /* Run the gate in isolation with a deliberately clobbered sparse output
+     * to prove the fail-closed flag: the composed dense geometry candidate is
+     * untouched, the corrupted sparse coordination disagrees bitwise, and the
+     * gate records kSparseCoordinationMismatch for exactly the corrupted peer.
+     * Healthy peers keep a clean geometry-error slot.  (Rejection of any
+     * nonzero geometry error by the publication pass is covered by the peer
+     * transaction test; the standalone gate entry intentionally stops before
+     * re-publishing.) */
+    const double wrong = -123.5;
+    CUDA_CHECK(device.sparse_coordination.upload(&wrong, 1u, stream));
+    CHECK(gate_gfn2_sparse_coordination_cuda(device.binding, stream).success());
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    Downloaded second;
+    CUDA_CHECK(download(host, device, second, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(second.geometry_errors[0] ==
+          static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSparseCoordinationMismatch));
+    for (std::int64_t system = 1; system < batch; ++system) {
+      CHECK(second.geometry_errors[static_cast<std::size_t>(system)] ==
+            static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSuccess));
+    }
+    CUDA_CHECK(cudaStreamDestroy(stream));
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -1010,9 +1214,10 @@ int main() {
   }
   CUDA_CHECK(count_status);
   CUDA_CHECK(cudaSetDevice(0));
-  for (const auto test : {test_cpu_parity_batches, test_peer_transaction_and_inactive_mask,
-                          test_plan_failure_and_seal_fail_closed,
-                          test_graph_replay_changed_positions_stable_binding}) {
+  for (const auto test :
+       {test_cpu_parity_batches, test_peer_transaction_and_inactive_mask,
+        test_plan_failure_and_seal_fail_closed, test_graph_replay_changed_positions_stable_binding,
+        test_sparse_pairlist_gate}) {
     const int status = test();
     if (status != 0) return status;
   }

@@ -977,4 +977,38 @@ Gfn2CudaTopologyStagingIdentity Gfn2CudaTopologyStaging::identity() const noexce
   return result;
 }
 
+Gfn2CudaTopologyStagingWorkspaceBytes Gfn2CudaTopologyStaging::workspace_bytes() const noexcept {
+  Gfn2CudaTopologyStagingWorkspaceBytes result{};
+  if (!impl_) return result;
+
+  result.host_bytes += sizeof(*impl_);
+  if (impl_->device_report != nullptr) result.device_bytes += sizeof(DeviceReport);
+  if (impl_->pinned_report != nullptr) result.host_bytes += sizeof(DeviceReport);
+  const auto add_backing = [&result](const std::unique_ptr<Backing>& backing) noexcept {
+    if (!backing) return;
+    /* Each backing owns staging and canonical device images plus one pinned
+     * image used to materialize the canonical host snapshot. */
+    result.host_bytes += sizeof(*backing);
+    result.device_bytes += 2u * backing->layout.bytes;
+    result.host_bytes += backing->layout.bytes;
+  };
+  const auto add_snapshot =
+      [&result](const std::unique_ptr<Gfn2CudaTopologyHostSnapshot>& snapshot) noexcept {
+        if (!snapshot) return;
+        const auto bytes = [](const auto& values) noexcept {
+          return values.capacity() * sizeof(typename std::decay_t<decltype(values)>::value_type);
+        };
+        result.host_bytes += sizeof(*snapshot) + bytes(snapshot->atom_offsets) +
+                             bytes(snapshot->atomic_numbers) + bytes(snapshot->molecular_charges) +
+                             bytes(snapshot->unpaired_electrons) + bytes(snapshot->spin_channels) +
+                             bytes(snapshot->point_charge_offsets) +
+                             bytes(snapshot->charge_response_offsets);
+      };
+  add_backing(impl_->active);
+  add_backing(impl_->pending);
+  add_snapshot(impl_->committed_snapshot);
+  add_snapshot(impl_->pending_snapshot);
+  return result;
+}
+
 }  // namespace gpuxtb::detail

@@ -465,6 +465,14 @@ std::int64_t PeriodicEmbeddingPlan::maximum_atoms() const noexcept {
   return data_ == nullptr ? 0 : data_->maximum_atoms;
 }
 
+std::size_t PeriodicEmbeddingPlan::resident_bytes() const noexcept {
+  if (data_ == nullptr) {
+    return 0u;
+  }
+  return sizeof(*data_) + data_->atom_offsets.capacity() * sizeof(std::int64_t) +
+         data_->matrix_offsets.capacity() * sizeof(std::int64_t);
+}
+
 const std::vector<std::int64_t>& PeriodicEmbeddingPlan::atom_offsets() const noexcept {
   return data_ == nullptr ? kEmptyInt64Vector : data_->atom_offsets;
 }

@@ -864,6 +864,11 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
 
 bool Gfn2SccSetupInputs::valid() const noexcept { return impl_ != nullptr; }
 
+std::size_t Gfn2SccSetupInputs::retained_host_bytes() const noexcept {
+  if (impl_ == nullptr) return 0u;
+  return sizeof(*impl_) + (impl_->upload_image == nullptr ? 0u : impl_->layout.total_bytes);
+}
+
 Gfn2SccSetupInputsRequirements Gfn2SccSetupInputs::requirements() const noexcept {
   Gfn2SccSetupInputsRequirements result{};
   if (impl_ != nullptr) {

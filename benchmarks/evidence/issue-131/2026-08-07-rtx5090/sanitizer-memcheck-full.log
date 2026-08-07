@@ -1,2 +1,3 @@
 ========= COMPUTE-SANITIZER
+CUDA eigensolver tests passed
 ========= ERROR SUMMARY: 0 errors

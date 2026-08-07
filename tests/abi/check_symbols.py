@@ -17,8 +17,13 @@ EXPECTED_SYMBOLS = {
     "gpuxtb_context_get_device_id",
     "gpuxtb_context_options_init",
     "gpuxtb_get_last_error",
+    "gpuxtb_plan_compute",
+    "gpuxtb_plan_create",
+    "gpuxtb_plan_destroy",
+    "gpuxtb_plan_query_workspace",
     "gpuxtb_status_string",
     "gpuxtb_version_string",
+    "gpuxtb_workspace_query_init",
 }
 
 
