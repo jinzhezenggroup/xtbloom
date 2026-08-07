@@ -4,6 +4,28 @@ gpuxtb is a single-point GFN2-xTB inference library. It is most useful when an
 application needs many independent molecules, reusable native state, direct
 CUDA integration, or a stable C deployment boundary.
 
+## Where gpuxtb is stronger
+
+gpuxtb deliberately specializes in embedded, high-throughput inference. The
+following advantages are public contracts with regression or archived evidence,
+not expectations that callers must reconstruct from implementation details.
+
+| Production concern | gpuxtb contract | Comparison evidence |
+| --- | --- | --- |
+| Failure containment | A per-system SCC or eigensolver failure is local to one ragged-batch member. Healthy peers remain valid; every requested floating-point slice for the failed member is quiet NaN, with status and iteration diagnostics. | [dxtb #223](https://github.com/grimme-lab/dxtb/issues/223) shows how unconverged default SCF produced batch-dependent apparent energies until stronger settings were supplied. gpuxtb instead makes nonconvergence explicit and preserves peers in [Python](../../python/tests/test_batch.py) and [native](../../tests/cpu_public_inference_test.cpp) public-API tests. |
+| Degenerate finite-temperature occupations | Exactly degenerate orbitals receive symmetric binary64 occupations. A target between representable symmetric states uses the nearest state under a documented electron-count bound instead of failing unpredictably. | The [three-hydrogen comparison](../developer-guide/architecture.md#cross-engine-degenerate-occupation-evidence) records finite gpuxtb results alongside xTB 6.7.1, tblite 0.6/0.7, and dxtb 0.4 failures or invalid output on integer-charge variants. |
+| QM/MM embedding | Each external point charge has an explicit screening `gamma`; the interaction participates in every SCC iteration, and both QM and point-charge forces are available. A caller-supplied periodic `b + A q` response can participate in the same variational solve. | xTB [#920](https://github.com/grimme-lab/xtb/issues/920) tracks the missing point-charge-hardness setter in its C API. tblite [#22](https://github.com/tblite/tblite/issues/22) tracks external point charges and [#33](https://github.com/tblite/tblite/issues/33) tracks general C interaction bindings. See [QM/MM usage](qmmm.md) for gpuxtb's exact scope. |
+| Temperature-unit safety | The high-level Python API accepts kelvin and converts explicitly to the native `k_B T` Hartree scale. | tblite [#73](https://github.com/tblite/tblite/issues/73) records a real `temperature=300` mistake that meant `300 Eh` and changed an energy from about `-31.716 Eh` to `-31158.785 Eh`. gpuxtb keeps atomic units in the C ABI while making the Python boundary unit explicit. |
+| Reproducible work partitioning | For a fixed backend and configuration, explicit CPU thread counts, repeated fresh calls, and automatic batch slicing are tested for bit-identical results. | xTB [#999](https://github.com/grimme-lab/xtb/issues/999) records thread-count-dependent optimized structures; version 6.7.1 greatly reduced the effect but still reported small differences. gpuxtb's narrower guarantee is enforced by [native thread](../../tests/cpu_public_inference_test.cpp) and [Python batch-slicing](../../python/tests/test_auto_batch.py) tests. |
+| Strict electronic reuse | `WARM` consumes only a fully converged compatible checkpoint. A first call or identity mismatch fails atomically and never silently falls back to `FRESH`. | The [issue #168 evidence](../../benchmarks/evidence/issue-168/2026-08-06-epyc7k62/README.md) covers 360 correctness-qualified samples: 17-18 SCC iterations fell to 2, gpuxtb WARM was 3.09x-4.76x faster than gpuxtb FRESH and 1.09x-1.54x faster than persistent tblite on the measured 32-122 atom alkanes. |
+
+These are scoped advantages, not a claim that gpuxtb replaces every xTB-family
+package. xTB provides much broader end-user workflows and method coverage;
+tblite provides periodic structures and mature extensibility; dxtb provides
+PyTorch autodiff and response properties. gpuxtb is the stronger fit when the
+priority is a stable native ABI, ragged CPU/CUDA inference, direct device
+buffers, explicit failure semantics, and reproducible reusable state.
+
 ## Installation paths
 
 ### Python
