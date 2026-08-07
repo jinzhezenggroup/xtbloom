@@ -73,6 +73,70 @@ The [user-guide comparison](docs/user-guide/index.md#where-gpuxtb-is-stronger)
 links each claim to its upstream issue, local regression test, or archived raw
 benchmark evidence.
 
+### Cross-engine scaling benchmark
+
+The figure below is a correctness-qualified, end-to-end steady-state
+comparison of GFN2-xTB energy + analytic forces from public interfaces only:
+gpuxtb CPU (16 threads) and gpuxtb CUDA versus vanilla xTB, tblite, and dxtb.
+Every batch of 128 is built from 128 *distinct* thermal-like conformers of one
+alkane (identical atomic numbers, different coordinates), so no engine can
+win by reusing one geometry. The MD-trajectory panel streams nearly identical
+frames and runs gpuxtb with strict `WARM` SCC continuation, its documented
+massively-parallel mode.
+
+![Cross-engine GFN2-xTB scaling benchmark](docs/assets/natoms_cross_engine.png)
+
+Hardware: AMD EPYC 7K62 (48 cores, gpuxtb CPU pinned to 16 workers) and an
+NVIDIA GeForce RTX 5090 (sm_120). gpuxtb runs the conformance-tight SCC
+(tolerance 1e-10 on charges / 1e-12 on energy, up to 500 iterations) while the
+reference engines use their default `--acc 1e-4`, so gpuxtb's timings include
+strictly *more* SCC work. Raw samples, hardware, and commit `3644cff` are
+archived under
+[`benchmarks/evidence/issue-13/2026-08-08-node3/`](benchmarks/evidence/issue-13/2026-08-08-node3/).
+
+The measured pattern is exactly what ragged high-throughput inference is for:
+
+- **Single molecule (batch = 1):** gpuxtb CPU is in the same range as xTB and
+  tblite at small sizes; its advantage appears once systems are collected into
+  batches rather than solved one at a time.
+- **128 systems per call (batch = 128):** is where gpuxtb separates. From
+  14-atom systems up to 62 atoms, gpuxtb CPU is roughly 11x faster than xTB,
+  roughly 5-8x faster than tblite, and roughly 24-45x faster than dxtb CPU.
+  Because gpuxtb solves the whole ragged batch in one call, the per-system cost
+  collapses to a fraction of what a serial per-system loop pays. This build's
+  CUDA single-point path carries a fixed per-call cost at these sizes, so the
+  CPU ragged batch is the fastest measured configuration.
+- **MD trajectory (WARM):** gpuxtb CPU keeps a small-molecule trajectory in
+  the same time as xTB while running the tight SCC settings, and is several
+  times faster than dxtb.
+
+Reproduce it with the committed runner, then regenerate the figure:
+
+```bash
+# CPU engines (gpuxtb, xTB, tblite need a compatible LP64 runtime):
+srun -n 1 -c 16 env OMP_NUM_THREADS=16 MKL_NUM_THREADS=16 \
+  python3 benchmarks/natoms_cross_engine.py \
+    --library build/bench-cpu-shared/libgpuxtb.so.0.1.0 \
+    --xtb-library /path/to/libxtb.so.6.7.1 \
+    --tblite-library /path/to/libtblite.so.0.7.0 \
+    --engines gpuxtb-cpu,xtb,tblite --natoms 14,32,62,122,242 \
+    --natoms-large-batch 14,32,62 --batch-sizes 1,128 \
+    --warmups 1 --repetitions 5 --cpu-threads 16 \
+    --trajectory --trajectory-natoms 62 --trajectory-frames 12 \
+    --output-json build/benchmarks/final/cpu.json --output-csv build/benchmarks/final/cpu.csv
+
+# dxtb CPU, then CUDA runs with --gres=gpu:1 (dxtb needs its own env), then:
+python3 benchmarks/plot_natoms_cross_engine.py \
+  --artifact build/benchmarks/final/cpu.json ... --commit "$(git rev-parse HEAD)" \
+  --output docs/assets/natoms_cross_engine.png
+```
+
+Plotting requires matplotlib in the active Python environment.
+
+The same public-API protocol measures energy-only and force workloads, host or
+device pointers, and ragged mixed chemistry; see the
+[benchmark harness](benchmarks/README.md) for scope and limits.
+
 Choose xTB for its broad CLI workflows, optimizers, dynamics, solvation, and
 method coverage. Choose tblite for a mature reusable single-point library with
 periodic structures and customizable components. Choose dxtb when PyTorch

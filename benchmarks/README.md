@@ -91,6 +91,37 @@ python3 -m unittest -v benchmarks.test_run
 python3 -m unittest -v benchmarks.test_dxtb_adapter
 ```
 
+## Cross-engine natoms scaling and README figure
+
+`natoms_cross_engine.py` measures steady-state GFN2-xTB energy + analytic
+forces from public interfaces only across gpuxtb CPU/CUDA, xTB, tblite, and
+dxtb. Unlike `natoms_scaling.py`, every batch above size one is built from
+*distinct* seeded thermal-like conformers of one alkane (identical atomic
+numbers, slightly different coordinates), so no engine can win a batch row by
+reusing one geometry. An optional `--trajectory` mode streams nearly identical
+frames through persistent descriptors and runs gpuxtb with strict `WARM` SCC
+continuation.
+
+`plot_natoms_cross_engine.py` merges any number of `--artifact` JSON files and
+renders the three-panel scaling + trajectory figure used in the README and
+user guide; it annotates the CPU/GPU hardware, thread count, and repository
+commit. Both scripts are exercised by `test_natoms_cross_engine.py` without a
+GPU or reference engines (matplotlib required for the plot-path test).
+
+Typical CSV rows retain engine, natoms, batch size, total atoms in the batch,
+CPU threads, device, availability, and the full timing summary; JSON retains
+raw per-sample latencies, energies, SCC iterations, status, correctness, and
+run identity.
+
+Hardware-free self-check:
+
+```bash
+python3 -m unittest -v benchmarks.test_natoms_cross_engine
+```
+
+See the archived evidence and reproduction commands in
+`benchmarks/evidence/issue-13/2026-08-08-node3/README.md`.
+
 ## CPU FRESH/WARM natoms evidence
 
 `natoms_scaling.py` is a public-C-ABI latency sweep for strict gpuxtb SCC start

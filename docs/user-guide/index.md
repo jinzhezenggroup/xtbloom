@@ -18,6 +18,7 @@ not expectations that callers must reconstruct from implementation details.
 | Temperature-unit safety | The high-level Python API accepts kelvin and converts explicitly to the native `k_B T` Hartree scale. | tblite [#73](https://github.com/tblite/tblite/issues/73) records a real `temperature=300` mistake that meant `300 Eh` and changed an energy from about `-31.716 Eh` to `-31158.785 Eh`. gpuxtb keeps atomic units in the C ABI while making the Python boundary unit explicit. |
 | Reproducible work partitioning | For a fixed backend and configuration, explicit CPU thread counts, repeated fresh calls, and automatic batch slicing are tested for bit-identical results. | xTB [#999](https://github.com/grimme-lab/xtb/issues/999) records thread-count-dependent optimized structures; version 6.7.1 greatly reduced the effect but still reported small differences. gpuxtb's narrower guarantee is enforced by [native thread](../../tests/cpu_public_inference_test.cpp) and [Python batch-slicing](../../python/tests/test_auto_batch.py) tests. |
 | Strict electronic reuse | `WARM` consumes only a fully converged compatible checkpoint. A first call or identity mismatch fails atomically and never silently falls back to `FRESH`. | The [issue #168 evidence](../../benchmarks/evidence/issue-168/2026-08-06-epyc7k62/README.md) covers 360 correctness-qualified samples: 17-18 SCC iterations fell to 2, gpuxtb WARM was 3.09x-4.76x faster than gpuxtb FRESH and 1.09x-1.54x faster than persistent tblite on the measured 32-122 atom alkanes. |
+| Ragged batch throughput | One public call solves a whole ragged batch of distinct molecules on CPU or CUDA; per-system cost collapses well below a serial per-system loop. | The [issue #13 scaling benchmark](index.md#cross-engine-scaling-benchmark) and its [archived evidence](../../benchmarks/evidence/issue-13/2026-08-08-node3/README.md) show gpuxtb CPU solving 128 distinct 14-62 atom systems about 11x faster than xTB, 5-8x faster than tblite, and 24-45x faster than dxtb CPU. |
 
 These are scoped advantages, not a claim that gpuxtb replaces every xTB-family
 package. xTB provides much broader end-user workflows and method coverage;
@@ -25,6 +26,34 @@ tblite provides periodic structures and mature extensibility; dxtb provides
 PyTorch autodiff and response properties. gpuxtb is the stronger fit when the
 priority is a stable native ABI, ragged CPU/CUDA inference, direct device
 buffers, explicit failure semantics, and reproducible reusable state.
+
+### Cross-engine scaling benchmark
+
+![Cross-engine GFN2-xTB scaling benchmark](../assets/natoms_cross_engine.png)
+
+The figure compares steady-state GFN2-xTB energy + analytic forces from public
+interfaces only: gpuxtb CPU (16 threads) and gpuxtb CUDA versus xTB, tblite,
+and dxtb. Every batch of 128 uses 128 *distinct* thermal-like conformers of an
+alkane (identical atomic numbers, different coordinates) so no engine can win
+by reusing one geometry. The trajectory panel streams nearly identical frames;
+gpuxtb uses strict `WARM` continuation there.
+
+- **batch = 1**: gpuxtb CPU stays in the same range as xTB and tblite at small
+  sizes. Its strength is collecting systems into batches, not running them one
+  at a time.
+- **batch = 128**: gpuxtb CPU is about 11x faster than xTB, 5-8x faster than
+  tblite, and 24-45x faster than dxtb CPU over 14-62 atom systems. The CUDA
+  path carries a fixed per-call cost at these sizes, so the CPU ragged batch is
+  the fastest measured configuration in this build.
+- **MD trajectory**: gpuxtb CPU matches xTB per-frame time while running
+  conformance-tight SCC, and is several times faster than dxtb.
+
+Hardware: AMD EPYC 7K62 with gpuxtb CPU pinned to 16 workers, plus an NVIDIA
+GeForce RTX 5090 (sm_120). gpuxtb runs SCC to charge tolerance 1e-10 and energy
+tolerance 1e-12 while the reference engines use their default `--acc 1e-4`, so
+gpuxtb's timings include strictly more SCC work. Raw samples, revisions, and
+reproduction commands are archived under
+[`benchmarks/evidence/issue-13/2026-08-08-node3/`](../../benchmarks/evidence/issue-13/2026-08-08-node3/).
 
 ## Installation paths
 

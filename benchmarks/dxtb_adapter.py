@@ -272,12 +272,12 @@ class DxtbAdapter:
                 [float(value) for value in storage.molecular_charges],
                 dtype=self.torch.float64,
                 device=self.device,
-            )
+            ).reshape(-1, 1)
             self.spins = self.torch.tensor(
                 [float(value) for value in storage.unpaired_electrons],
                 dtype=self.torch.float64,
                 device=self.device,
-            )
+            ).reshape(-1, 1)
             self.options = {
                 "verbosity": 0,
                 "batch_mode": self.batch_mode,
