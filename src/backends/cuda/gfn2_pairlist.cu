@@ -36,8 +36,7 @@ struct SystemRanges {
 /* Per-system strategy.  A non-null system_modes array overrides the batch-wide
  * `mode`, letting heterogeneous batches dispatch dense and bucketed peers
  * independently.  The two paths emit identical canonical lists. */
-__device__ Gfn2PairListMode system_mode(const Gfn2PairListDeviceBatch& batch,
-                                        std::int64_t system) {
+__device__ Gfn2PairListMode system_mode(const Gfn2PairListDeviceBatch& batch, std::int64_t system) {
   if (batch.system_modes != nullptr) {
     return static_cast<Gfn2PairListMode>(batch.system_modes[system]);
   }
@@ -978,13 +977,11 @@ __global__ void coordination_vjp_preflight_kernel(
         const std::int64_t target_is_upper = atom > peer;
         const std::int64_t upper = target_is_upper ? atom : peer;
         const std::int64_t lower = target_is_upper ? peer : atom;
-        const double displacement[3] = {
-            positions[upper * 3] - positions[lower * 3],
-            positions[upper * 3 + 1] - positions[lower * 3 + 1],
-            positions[upper * 3 + 2] - positions[lower * 3 + 2]};
+        const double displacement[3] = {positions[upper * 3] - positions[lower * 3],
+                                        positions[upper * 3 + 1] - positions[lower * 3 + 1],
+                                        positions[upper * 3 + 2] - positions[lower * 3 + 2]};
         PairValues values{};
-        if (!finite_position(positions, coordinate) ||
-            !finite_position(positions, peer * 3) ||
+        if (!finite_position(positions, coordinate) || !finite_position(positions, peer * 3) ||
             !evaluate_pair(displacement[0], displacement[1], displacement[2], radius, &values)) {
           record_system_error(system_errors, system, device_error,
                               Gfn2PairListDeviceError::kInvalidCache);
@@ -1024,10 +1021,9 @@ __global__ void coordination_vjp_accumulate_kernel(
       const std::int64_t target_is_upper = atom > peer;
       const std::int64_t upper = target_is_upper ? atom : peer;
       const std::int64_t lower = target_is_upper ? peer : atom;
-      const double displacement[3] = {
-          positions[upper * 3] - positions[lower * 3],
-          positions[upper * 3 + 1] - positions[lower * 3 + 1],
-          positions[upper * 3 + 2] - positions[lower * 3 + 2]};
+      const double displacement[3] = {positions[upper * 3] - positions[lower * 3],
+                                      positions[upper * 3 + 1] - positions[lower * 3 + 1],
+                                      positions[upper * 3 + 2] - positions[lower * 3 + 2]};
       PairValues values{};
       const double radius = covalent_radii[atom] + covalent_radii[peer];
       if (!evaluate_pair(displacement[0], displacement[1], displacement[2], radius, &values)) {
@@ -1057,10 +1053,11 @@ __global__ void coordination_vjp_accumulate_kernel(
   }
 }
 
-__global__ void coordination_vjp_publish_kernel(
-    Gfn2PairListDeviceBatch batch, const double* gradient_scratch, double* gradients,
-    const std::uint32_t* sequence_active, std::uint32_t* system_errors,
-    std::uint32_t* device_error) {
+__global__ void coordination_vjp_publish_kernel(Gfn2PairListDeviceBatch batch,
+                                                const double* gradient_scratch, double* gradients,
+                                                const std::uint32_t* sequence_active,
+                                                std::uint32_t* system_errors,
+                                                std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   __shared__ SystemRanges ranges;
   __shared__ int valid;
@@ -1215,8 +1212,8 @@ cudaError_t validate_update(const Gfn2PairListDeviceBatch& batch, const double* 
       !make_address_range(cache.pairs, pair_capacity, sizeof(*cache.pairs), &writes[0]) ||
       !make_address_range(cache.pair_offsets, cache.pair_offset_elements,
                           sizeof(*cache.pair_offsets), &writes[1]) ||
-      !make_address_range(cache.pair_counts, cache.pair_count_elements,
-                          sizeof(*cache.pair_counts), &writes[17]) ||
+      !make_address_range(cache.pair_counts, cache.pair_count_elements, sizeof(*cache.pair_counts),
+                          &writes[17]) ||
       !make_address_range(cache.neighbor_offsets, cache.neighbor_offset_elements,
                           sizeof(*cache.neighbor_offsets), &writes[2]) ||
       !make_address_range(cache.neighbor_counts, cache.neighbor_count_elements,
@@ -1537,8 +1534,7 @@ cudaError_t add_gfn2_pairlist_coordination_vjp_cuda(
   if (pair_generation == 0u || batch.plan_token != cache.plan_token ||
       batch.plan_token != workspace.plan_token || batch.cutoff < kDefaultCutoffBohr ||
       batch.total_atoms > kInt64Maximum / batch.max_neighbors_per_atom ||
-      batch.total_atoms > kInt64Maximum / 3 ||
-      gradient_elements < batch.total_atoms * 3 ||
+      batch.total_atoms > kInt64Maximum / 3 || gradient_elements < batch.total_atoms * 3 ||
       !required_pointer(positions, batch.total_atoms * 3) ||
       !required_pointer(covalent_radii, batch.total_atoms) ||
       !required_pointer(dE_dcn, batch.total_atoms) ||
@@ -1593,8 +1589,8 @@ cudaError_t add_gfn2_pairlist_coordination_vjp_cuda(
     return status;
   }
   coordination_vjp_accumulate_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, positions, covalent_radii, pair_generation, cache, dE_dcn, gradients,
-      gradient_scratch, workspace.sequence_active, system_errors, device_error);
+      batch, positions, covalent_radii, pair_generation, cache, dE_dcn, gradients, gradient_scratch,
+      workspace.sequence_active, system_errors, device_error);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;

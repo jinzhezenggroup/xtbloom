@@ -898,10 +898,12 @@ __global__ void gate_sparse_coordination_kernel(Gfn2GeometryDeviceBatch geometry
  * and its seven-value pair cache still feeds the coordination VJP until the
  * sparse VJP is wired into the force path.  Failed/inactive peers are skipped.
  */
-__global__ void promote_sparse_coordination_kernel(
-    Gfn2GeometryDeviceBatch geometry, Gfn2PairListDeviceBatch pairlist,
-    const double* sparse_coordination, double* dense_coordination,
-    Gfn2PreprocessingDeviceActivity activity, Gfn2PreprocessingDeviceDiagnostics diagnostics) {
+__global__ void promote_sparse_coordination_kernel(Gfn2GeometryDeviceBatch geometry,
+                                                   Gfn2PairListDeviceBatch pairlist,
+                                                   const double* sparse_coordination,
+                                                   double* dense_coordination,
+                                                   Gfn2PreprocessingDeviceActivity activity,
+                                                   Gfn2PreprocessingDeviceDiagnostics diagnostics) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   const bool requested = activity.requested_mask[system] == 1u;
   if (!requested) {

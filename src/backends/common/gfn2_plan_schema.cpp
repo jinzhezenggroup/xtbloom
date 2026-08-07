@@ -892,16 +892,19 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_binding(
     return diagnostic;
   }
   if (consumer.memory_space != expected_memory_space) {
-    return failure(Gfn2PlanSchemaError::kInvalidMemorySpace, Gfn2PlanSchemaField::kPairListConsumer);
+    return failure(Gfn2PlanSchemaError::kInvalidMemorySpace,
+                   Gfn2PlanSchemaField::kPairListConsumer);
   }
   if (consumer.plan_token == 0u || consumer.plan_token != topology.plan_token) {
     return failure(Gfn2PlanSchemaError::kCrossPlan, Gfn2PlanSchemaField::kPairListConsumer);
   }
   if (!known_pair_list_state(consumer.state)) {
-    return failure(Gfn2PlanSchemaError::kInvalidPairListState, Gfn2PlanSchemaField::kPairListConsumer);
+    return failure(Gfn2PlanSchemaError::kInvalidPairListState,
+                   Gfn2PlanSchemaField::kPairListConsumer);
   }
   if (!known_pair_list_role(consumer.role)) {
-    return failure(Gfn2PlanSchemaError::kInvalidPairListRole, Gfn2PlanSchemaField::kPairListConsumer);
+    return failure(Gfn2PlanSchemaError::kInvalidPairListRole,
+                   Gfn2PlanSchemaField::kPairListConsumer);
   }
   if (consumer.pair_map_kind != Gfn2PairMapKind::kExplicit) {
     return failure(Gfn2PlanSchemaError::kInvalidPairMap, Gfn2PlanSchemaField::kPairListConsumer);
@@ -932,18 +935,17 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_binding(
       consumer.eligible_mask_count != consumer.batch_size) {
     return failure(Gfn2PlanSchemaError::kInvalidCount, Gfn2PlanSchemaField::kPairListGenerations);
   }
-  if (consumer.active_mask_count != 0 &&
-      consumer.active_mask_count != consumer.batch_size) {
-    return failure(Gfn2PlanSchemaError::kInvalidActiveMask, Gfn2PlanSchemaField::kPairListActiveMask);
+  if (consumer.active_mask_count != 0 && consumer.active_mask_count != consumer.batch_size) {
+    return failure(Gfn2PlanSchemaError::kInvalidActiveMask,
+                   Gfn2PlanSchemaField::kPairListActiveMask);
   }
 
   std::array<AddressRange, 6> masks;
   AddressRange generations{};
   AddressRange eligible{};
   AddressRange active{};
-  diagnostic =
-      make_range(consumer.pair_offsets, consumer.pair_offset_count, Gfn2PlanSchemaField::kPairListOffsets,
-                 masks[0]);
+  diagnostic = make_range(consumer.pair_offsets, consumer.pair_offset_count,
+                          Gfn2PlanSchemaField::kPairListOffsets, masks[0]);
   if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
     return diagnostic;
   }
@@ -957,9 +959,8 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_binding(
   if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
     return diagnostic;
   }
-  diagnostic =
-      make_range(consumer.neighbors, consumer.neighbor_count, Gfn2PlanSchemaField::kPairListNeighbors,
-                 masks[3]);
+  diagnostic = make_range(consumer.neighbors, consumer.neighbor_count,
+                          Gfn2PlanSchemaField::kPairListNeighbors, masks[3]);
   if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
     return diagnostic;
   }
@@ -1009,9 +1010,7 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_binding(
     return diagnostic;
   }
   diagnostic = validate_no_topology_alias(topology, active);
-  return diagnostic.error != Gfn2PlanSchemaError::kSuccess
-             ? diagnostic
-             : success();
+  return diagnostic.error != Gfn2PlanSchemaError::kSuccess ? diagnostic : success();
 }
 
 Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_host(
@@ -1041,7 +1040,8 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_host(
                      Gfn2PlanSchemaField::kPairListActiveMask, system);
     }
   }
-  if (consumer.pair_offsets[0] != 0 || consumer.pair_offsets[consumer.batch_size] != consumer.pair_count) {
+  if (consumer.pair_offsets[0] != 0 ||
+      consumer.pair_offsets[consumer.batch_size] != consumer.pair_count) {
     return failure(Gfn2PlanSchemaError::kInvalidOffsets, Gfn2PlanSchemaField::kPairListOffsets, 0);
   }
   if (consumer.neighbor_offsets[0] != 0 ||

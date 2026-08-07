@@ -1148,9 +1148,9 @@ int test_per_system_dispatch() {
   host.atomic_numbers = atomic_numbers;
   host.positions = positions;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(
-            batch_size, atoms, host.atom_offsets.data(), host.atomic_numbers.data(), host.plan,
-            error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(batch_size, atoms, host.atom_offsets.data(),
+                                                     host.atomic_numbers.data(), host.plan,
+                                                     error) == GPUXTB_STATUS_SUCCESS);
 
   std::vector<std::int32_t> per_system_modes(static_cast<std::size_t>(batch_size));
   for (std::int64_t system = 0; system < batch_size; ++system) {
@@ -1249,12 +1249,14 @@ int test_per_system_dispatch() {
   for (std::int64_t system = 0; system < batch_size; ++system) {
     const std::int64_t mixed_begin = mixed_offsets[static_cast<std::size_t>(system)];
     const std::int64_t mixed_end = mixed_offsets[static_cast<std::size_t>(system + 1)];
-    const bool use_sparse = gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(
-        system_sizes[system]);
-    const std::int64_t expected_begin = use_sparse ? sparse_offsets[static_cast<std::size_t>(system)]
-                                                   : dense_offsets[static_cast<std::size_t>(system)];
-    const std::int64_t expected_end = use_sparse ? sparse_offsets[static_cast<std::size_t>(system + 1)]
-                                                 : dense_offsets[static_cast<std::size_t>(system + 1)];
+    const bool use_sparse =
+        gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(system_sizes[system]);
+    const std::int64_t expected_begin = use_sparse
+                                            ? sparse_offsets[static_cast<std::size_t>(system)]
+                                            : dense_offsets[static_cast<std::size_t>(system)];
+    const std::int64_t expected_end = use_sparse
+                                          ? sparse_offsets[static_cast<std::size_t>(system + 1)]
+                                          : dense_offsets[static_cast<std::size_t>(system + 1)];
     if (mixed_end - mixed_begin != expected_end - expected_begin) {
       fprintf(stderr,
               "system %lld use_sparse=%d mixed_count=%lld expected_count=%lld "
@@ -1263,8 +1265,8 @@ int test_per_system_dispatch() {
               static_cast<long long>(mixed_end - mixed_begin),
               static_cast<long long>(expected_end - expected_begin),
               static_cast<long long>(mixed_begin), static_cast<long long>(mixed_end),
-              use_sparse ? "sparse" : "dense",
-              static_cast<long long>(expected_begin), static_cast<long long>(expected_end));
+              use_sparse ? "sparse" : "dense", static_cast<long long>(expected_begin),
+              static_cast<long long>(expected_end));
     }
     CHECK(mixed_end - mixed_begin == expected_end - expected_begin);
     CHECK(mixed_counts[static_cast<std::size_t>(system)] ==
@@ -1272,9 +1274,9 @@ int test_per_system_dispatch() {
                       : dense_counts[static_cast<std::size_t>(system)]));
     CHECK(mixed_counts[static_cast<std::size_t>(system)] == mixed_end - mixed_begin);
     for (std::int64_t offset = 0; offset < mixed_end - mixed_begin; ++offset) {
-      const Gfn2AtomPair expected = use_sparse
-                                        ? sparse_pairs[static_cast<std::size_t>(expected_begin + offset)]
-                                        : dense_pairs[static_cast<std::size_t>(expected_begin + offset)];
+      const Gfn2AtomPair expected =
+          use_sparse ? sparse_pairs[static_cast<std::size_t>(expected_begin + offset)]
+                     : dense_pairs[static_cast<std::size_t>(expected_begin + offset)];
       const Gfn2AtomPair actual = mixed_pairs[static_cast<std::size_t>(mixed_begin + offset)];
       CHECK(actual.first == expected.first && actual.second == expected.second);
     }
@@ -1283,7 +1285,8 @@ int test_per_system_dispatch() {
    * peer's elected strategy would have produced. */
   for (std::int64_t atom = 0; atom < atoms; ++atom) {
     std::int64_t system = 0;
-    while (system + 1 < batch_size && atom >= host.atom_offsets[static_cast<std::size_t>(system + 1)]) {
+    while (system + 1 < batch_size &&
+           atom >= host.atom_offsets[static_cast<std::size_t>(system + 1)]) {
       ++system;
     }
     const bool use_sparse =
@@ -1308,9 +1311,8 @@ int test_per_system_dispatch() {
                                                      host.total_atoms() + 1, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
     for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
-      const std::int64_t dense_count =
-          dense_offsets_slice[static_cast<std::size_t>(atom + 1)] -
-          dense_offsets_slice[static_cast<std::size_t>(atom)];
+      const std::int64_t dense_count = dense_offsets_slice[static_cast<std::size_t>(atom + 1)] -
+                                       dense_offsets_slice[static_cast<std::size_t>(atom)];
       const std::int64_t mixed_count = mixed_offsets_slice[static_cast<std::size_t>(atom + 1)] -
                                        mixed_offsets_slice[static_cast<std::size_t>(atom)];
       CHECK(dense_count == mixed_count);
@@ -1322,8 +1324,7 @@ int test_per_system_dispatch() {
       const std::int64_t dense_base = dense_offsets_slice[static_cast<std::size_t>(atom)];
       const std::int64_t mixed_base = mixed_offsets_slice[static_cast<std::size_t>(atom)];
       for (std::int64_t index = 0; index < dense_count; ++index) {
-        const std::int64_t expected =
-            dense_neighbors[static_cast<std::size_t>(dense_base + index)];
+        const std::int64_t expected = dense_neighbors[static_cast<std::size_t>(dense_base + index)];
         const std::int64_t actual = mixed_neighbors[static_cast<std::size_t>(mixed_base + index)];
         CHECK(expected == actual);
       }
@@ -1336,9 +1337,9 @@ int test_per_system_dispatch() {
               batch.system_mode_elements = host.batch_size() - 1;
               return batch;
             }(),
-            mixed_device.positions.get(), kGeneration, mixed_device.cache(), mixed_device.workspace(),
-            mixed_device.system_errors.get(), mixed_device.device_error.get(), stream) ==
-        cudaErrorInvalidValue);
+            mixed_device.positions.get(), kGeneration, mixed_device.cache(),
+            mixed_device.workspace(), mixed_device.system_errors.get(),
+            mixed_device.device_error.get(), stream) == cudaErrorInvalidValue);
   return 0;
 }
 
@@ -1389,9 +1390,11 @@ int test_sparse_vjp_matches_dense() {
     DeviceBuffer<double> dense_gradient_scratch;
     CUDA_CHECK(allocate_and_copy(d_dE_dcn, dE_dcn, stream));
     CUDA_CHECK(allocate_and_copy(sparse_gradients, gradient_seed, stream));
-    CUDA_CHECK(allocate_and_copy(sparse_gradient_scratch, std::vector<double>(gradient_seed.size(), 0.0), stream));
+    CUDA_CHECK(allocate_and_copy(sparse_gradient_scratch,
+                                 std::vector<double>(gradient_seed.size(), 0.0), stream));
     CUDA_CHECK(allocate_and_copy(dense_gradients, gradient_seed, stream));
-    CUDA_CHECK(allocate_and_copy(dense_gradient_scratch, std::vector<double>(gradient_seed.size(), 0.0), stream));
+    CUDA_CHECK(allocate_and_copy(dense_gradient_scratch,
+                                 std::vector<double>(gradient_seed.size(), 0.0), stream));
 
     /* Sparse VJP. */
     CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
@@ -1493,10 +1496,10 @@ int test_sparse_vjp_matches_dense() {
     std::int64_t worst_index = -1;
     for (std::size_t index = 0u; index < sparse_result.size(); ++index) {
       const double reference = dense_result[index];
-      const double ulp = std::abs(reference) < 1e-300
-                             ? 5e-324
-                             : std::numeric_limits<double>::epsilon() *
-                                   std::max(1.0, std::abs(reference)) / 2.0;
+      const double ulp =
+          std::abs(reference) < 1e-300
+              ? 5e-324
+              : std::numeric_limits<double>::epsilon() * std::max(1.0, std::abs(reference)) / 2.0;
       const std::int64_t ulp_distance = static_cast<std::int64_t>(
           std::abs(sparse_result[index] - reference) / std::max(ulp, 1e-300));
       if (ulp_distance > worst_ulp) {
@@ -1505,10 +1508,10 @@ int test_sparse_vjp_matches_dense() {
       }
     }
     if (worst_index != -1) {
-      fprintf(stderr,
-              "batch %llu VJP worst ulp=%lld at %lld: sparse=%.17g dense=%.17g\n",
+      fprintf(stderr, "batch %llu VJP worst ulp=%lld at %lld: sparse=%.17g dense=%.17g\n",
               static_cast<unsigned long long>(batch_size), static_cast<long long>(worst_ulp),
-              static_cast<long long>(worst_index), sparse_result[static_cast<std::size_t>(worst_index)],
+              static_cast<long long>(worst_index),
+              sparse_result[static_cast<std::size_t>(worst_index)],
               dense_result[static_cast<std::size_t>(worst_index)]);
     }
     /* Independent kernels contract the same FMA differently, so a strict
@@ -1545,7 +1548,8 @@ int test_sparse_vjp_matches_dense() {
       CUDA_CHECK(sparse_gradients.copy_to(after.data(), after.size(), stream));
       CUDA_CHECK(cudaStreamSynchronize(stream));
       std::vector<std::uint32_t> system_errors_host(host.batch_size(), 0u);
-      CUDA_CHECK(device.system_errors.copy_to(system_errors_host.data(), host.batch_size(), stream));
+      CUDA_CHECK(
+          device.system_errors.copy_to(system_errors_host.data(), host.batch_size(), stream));
       CUDA_CHECK(cudaStreamSynchronize(stream));
       CHECK(system_errors_host[poisoned_system] != 0u);
       /* All published values remain finite even for the failed peer. */

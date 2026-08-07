@@ -628,9 +628,9 @@ struct DeviceFixture {
      * dense (kDense) so the bucketed and all-pairs paths can be exercised and
      * compared; the binding requires system_modes when the leaf is enabled. */
     {
-      std::vector<std::int32_t> modes(static_cast<std::size_t>(batch),
-                                      static_cast<std::int32_t>(
-                                          gpuxtb::detail::cuda::Gfn2PairListMode::kDense));
+      std::vector<std::int32_t> modes(
+          static_cast<std::size_t>(batch),
+          static_cast<std::int32_t>(gpuxtb::detail::cuda::Gfn2PairListMode::kDense));
       status = pairlist_system_modes.upload(modes.data(), modes.size(), stream);
       if (status != cudaSuccess) return status;
     }

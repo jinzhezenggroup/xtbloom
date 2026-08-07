@@ -500,14 +500,14 @@ struct HostPairListConsumer {
   }
 };
 
-HostPairListConsumer make_pair_list_consumer(const HostTopology& topology, std::uint64_t generation) {
+HostPairListConsumer make_pair_list_consumer(const HostTopology& topology,
+                                             std::uint64_t generation) {
   HostPairListConsumer consumer;
   consumer.pair_offsets.push_back(0);
   consumer.neighbor_offsets.push_back(0);
   for (std::int64_t system = 0; system < topology.view.batch_size; ++system) {
     const std::int64_t atom_begin = topology.view.atom_offsets[static_cast<std::size_t>(system)];
-    const std::int64_t atom_end =
-        topology.view.atom_offsets[static_cast<std::size_t>(system + 1)];
+    const std::int64_t atom_end = topology.view.atom_offsets[static_cast<std::size_t>(system + 1)];
     for (std::int64_t first = atom_begin; first < atom_end; ++first) {
       for (std::int64_t second = first + 1; second < atom_end; ++second) {
         consumer.pairs.push_back({first, second});
@@ -593,7 +593,8 @@ int test_pair_list_consumer() {
 
   /* Host inspection: stale eligible peer. */
   consumer.committed_generations[3] = kGeneration - 1u;
-  CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).index == 3);
+  CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).index ==
+        3);
   consumer.eligible_mask[3] = 0u;
   CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).error ==
         Gfn2PlanSchemaError::kSuccess);
@@ -635,7 +636,7 @@ int test_pair_list_consumer() {
   consumer.view.pair_offsets = topology.view.atom_offsets;
   CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
                                                  Gfn2PlanMemorySpace::kHost)
-            .field == Gfn2PlanSchemaField::kPairListPairs ||
+                .field == Gfn2PlanSchemaField::kPairListPairs ||
         validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
                                                  Gfn2PlanMemorySpace::kHost)
                 .error == Gfn2PlanSchemaError::kAliasedRange);
