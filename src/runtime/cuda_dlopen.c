@@ -692,6 +692,14 @@ static cublasStatus_t gpu_xtb_cublas_set_stream(cublasHandle_t handle, cudaStrea
   return CUBLAS_STATUS_NOT_INITIALIZED;
 }
 
+static cublasStatus_t gpu_xtb_cublas_set_workspace(cublasHandle_t handle, void* workspace,
+                                                   size_t workspace_size) {
+  (void)handle;
+  (void)workspace;
+  (void)workspace_size;
+  return CUBLAS_STATUS_NOT_INITIALIZED;
+}
+
 /* cuSOLVER fallbacks. Device-resident info arrays are not dereferenced. */
 static cusolverStatus_t gpu_xtb_cusolver_create(cusolverDnHandle_t* handle) {
   if (handle != NULL) {
@@ -908,6 +916,7 @@ GPU_XTB_CHECK_SIGNATURE(cublasGetVersion_v2, gpu_xtb_cublas_get_version);
 GPU_XTB_CHECK_SIGNATURE(cublasSetMathMode, gpu_xtb_cublas_set_math_mode);
 GPU_XTB_CHECK_SIGNATURE(cublasSetPointerMode_v2, gpu_xtb_cublas_set_pointer_mode);
 GPU_XTB_CHECK_SIGNATURE(cublasSetStream_v2, gpu_xtb_cublas_set_stream);
+GPU_XTB_CHECK_SIGNATURE(cublasSetWorkspace_v2, gpu_xtb_cublas_set_workspace);
 
 GPU_XTB_CHECK_SIGNATURE(cusolverDnCreate, gpu_xtb_cusolver_create);
 GPU_XTB_CHECK_SIGNATURE(cusolverDnCreateParams, gpu_xtb_cusolver_create_params);
@@ -1050,6 +1059,7 @@ static void* gpu_xtb_fallback_for_symbol(const char* symbol) {
   GPU_XTB_SYMBOL("cublasSetMathMode", gpu_xtb_cublas_set_math_mode)
   GPU_XTB_SYMBOL("cublasSetPointerMode_v2", gpu_xtb_cublas_set_pointer_mode)
   GPU_XTB_SYMBOL("cublasSetStream_v2", gpu_xtb_cublas_set_stream)
+  GPU_XTB_SYMBOL("cublasSetWorkspace_v2", gpu_xtb_cublas_set_workspace)
 
   GPU_XTB_SYMBOL("cusolverDnCreate", gpu_xtb_cusolver_create)
   GPU_XTB_SYMBOL("cusolverDnCreateParams", gpu_xtb_cusolver_create_params)

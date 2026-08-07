@@ -1660,6 +1660,65 @@ bool test_graph_capture() {
   return true;
 }
 
+/* Large-AO batched TRSM must use the setup-owned workspace. Without it,
+ * cuBLAS captures allocation/free nodes and the SCC device-tail graph cannot
+ * be instantiated for device launch, forcing every configured SCC iteration. */
+bool test_large_ao_device_launch_capture() {
+  constexpr std::int64_t kBatchSize = 128;
+  constexpr std::int32_t kOrbitalCount = 122;
+  constexpr std::uint64_t kGeneration = 67u;
+
+  DeviceFixture fixture;
+  if (!fixture.create(make_batch(kBatchSize, false, -1, kOrbitalCount)) ||
+      !fixture.fill_outputs(kSentinel) || !factor(fixture, kGeneration)) {
+    return false;
+  }
+  if (!cuda_ok(cudaStreamBeginCapture(fixture.providers.stream, cudaStreamCaptureModeThreadLocal),
+               "large-AO cudaStreamBeginCapture")) {
+    return false;
+  }
+  const cudaError_t reset_status = reset_gfn2_eigensolver_device_errors_cuda(
+      fixture.host.batch_size, fixture.system_errors.get(), fixture.device_error.get(),
+      fixture.providers.stream);
+  const auto solve_launch = solve_gfn2_eigensystems_cuda(
+      fixture.batch, fixture.host.buckets.data(),
+      static_cast<std::int64_t>(fixture.host.buckets.size()), fixture.cache, kGeneration,
+      fixture.hamiltonian.get(), Gfn2EigensolverOptions{}, fixture.providers.solver,
+      fixture.providers.parameters, fixture.providers.blas, fixture.workspace, fixture.results,
+      fixture.system_errors.get(), fixture.device_error.get(), fixture.providers.stream);
+  cudaGraph_t graph = nullptr;
+  const cudaError_t capture_status = cudaStreamEndCapture(fixture.providers.stream, &graph);
+  if (reset_status != cudaSuccess || !solve_launch.success() || capture_status != cudaSuccess ||
+      graph == nullptr) {
+    if (graph != nullptr) {
+      (void)cudaGraphDestroy(graph);
+    }
+    std::cerr << "large-AO provider capture failed: reset=" << cudaGetErrorString(reset_status)
+              << " solve=" << static_cast<unsigned int>(solve_launch.status)
+              << " capture=" << cudaGetErrorString(capture_status) << '\n';
+    return false;
+  }
+
+  cudaGraphExec_t executable = nullptr;
+  const cudaError_t instantiate_status =
+      cudaGraphInstantiate(&executable, graph, cudaGraphInstantiateFlagDeviceLaunch);
+  bool ok = instantiate_status == cudaSuccess;
+  if (!ok) {
+    std::cerr << "large-AO device-launch graph instantiate failed: "
+              << cudaGetErrorString(instantiate_status) << '\n';
+  } else {
+    ok = cuda_ok(cudaGraphUpload(executable, fixture.providers.stream),
+                 "large-AO cudaGraphUpload") &&
+         cuda_ok(cudaStreamSynchronize(fixture.providers.stream),
+                 "large-AO graph upload synchronize");
+  }
+  if (executable != nullptr) {
+    (void)cudaGraphExecDestroy(executable);
+  }
+  (void)cudaGraphDestroy(graph);
+  return ok;
+}
+
 /* Benchmark-facing variant of make_batch() with caller-selected AO
  * dimensions. Homogeneous benchmarks use one n=32 bucket; heterogeneous
  * benchmarks interleave n=16 and n=40 so the two buckets are separable in
@@ -2212,7 +2271,8 @@ int main(int argc, char** argv) {
       !test_ill_conditioned_peer_isolation() || !test_cache_generation_staleness() ||
       !test_single_cache_member_peer_isolation() ||
       !test_sticky_error_and_invalid_bucket_map_fail_closed() ||
-      !test_host_validation_aliases_and_limits() || !test_graph_capture()) {
+      !test_host_validation_aliases_and_limits() || !test_graph_capture() ||
+      !test_large_ao_device_launch_capture()) {
     return 1;
   }
   std::cout << "CUDA eigensolver tests passed\n";
