@@ -95,6 +95,49 @@ smaller chunk size. An integer sets a target maximum total atom count per
 chunk. Systems are indivisible, and chunking preserves input order and
 peer-local diagnostics.
 
+## Array API and DLPack input arrays
+
+`ArrayBatch` takes the flat ragged-batch descriptor arrays directly and is
+the zero-copy entry point. Each array can come from any library implementing
+the Array API `__dlpack__`/`__dlpack_device__` producer protocols (NumPy,
+CuPy, JAX eager arrays, PyTorch tensors); gpuxtb imports none of those
+libraries, consumed buffers are caller-owned, and interface devices are
+accepted without a host round trip on the CUDA backend.
+
+```python
+from gpuxtb import ArrayBatch
+
+batch = ArrayBatch(
+    atom_offsets=np.array([0, 2, 5], dtype=np.int64),
+    atomic_numbers=np.array([8, 1, 1, 1, 1], dtype=np.int32),
+    positions=positions_np,          # (natoms, 3) float64
+    molecular_charges=np.array([0.0, 0.0]),
+    unpaired_electrons=np.array([0, 0], dtype=np.int32),
+    backend="cuda",
+)
+result = batch.compute()
+```
+
+Host arrays become `GPUXTB_MEMORY_HOST` descriptors; CUDA device arrays
+become `GPUXTB_MEMORY_CUDA_DEVICE` descriptors that skip host staging. The
+optional `point_charge_*` group and the `atomic_potential_shifts` /
+`charge_response_offsets` / `charge_response_matrix` response group mirror
+`PointCharge`/`ChargeResponse` and must be supplied all-or-nothing.
+
+Zero-copy is the default contract: `copy=False` requires the exact dtype,
+shape, and a compact C-contiguous layout, and anything else raises instead of
+silently copying. `copy=True` asks the producer for a suitable copy. CUDA
+device arrays are only accepted on the CUDA backend and must belong to the
+context's resolved device; CUDA-managed memory, ROCm, and lazy/tracer
+objects are rejected with precise diagnostics. `stream` selects the native
+`CUstream` used by the context and passed to CUDA producers (DLPack stream
+value `1` for the legacy default stream).
+
+`ArrayBatch.compute()` supports an explicit output policy: results are
+ordinary host NumPy arrays by default, or `out=` may name writable
+NumPy/CuPy/PyTorch buffers into which gpuxtb writes directly. JAX arrays are
+never mutated in place.
+
 ## Open-shell calculations
 
 `multiplicity` and `uhf` describe the same state, with

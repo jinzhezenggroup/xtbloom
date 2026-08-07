@@ -7,6 +7,25 @@ retained under its own terms and is not relicensed by that permission.
 The manifests named below pin the source revisions and content digests used
 to produce the redistributed data.
 
+## array-api-compat
+
+Repository: <https://github.com/data-apis/array-api-compat>
+
+License: `MIT` (`LICENSES/MIT.txt`).
+
+The gpuxtb Python package depends on `array-api-compat` (a backend-neutral
+shim, not an array backend) to probe dense eager arrays from NumPy, CuPy,
+JAX, and PyTorch without importing those packages. Reviewed release 1.15.0,
+commit `076218e4f5aa18578418c7d04fad9ab581a16bb8`, Python `>=3.10`, with no
+`Requires-Dist` entries. The `py3-none-any` wheel is
+`array_api_compat-1.15.0-py3-none-any.whl` (SHA-256
+`7b1b9c53269061403fd5f45a8de349f16e7887653328bfa0c5f2d45299ff0a8e`); the
+sdist is SHA-256
+`53c5f922491bf15f62847afafc4e39eedfae57d218988fefb8cce39c2a9b3dea`. It is a
+runtime Python dependency only and is not bundled in gpuxtb source archives,
+native installs, or wheels; the canonical resolution is recorded in
+`pyproject.toml` and `uv.lock`.
+
 ## tblite
 
 Repository: <https://github.com/tblite/tblite>
