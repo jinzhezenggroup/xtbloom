@@ -405,8 +405,8 @@ struct Fixture {
     potential.shell_to_atom_count = kShells;
     potential.atom_offsets = plan.topology.atom_offsets;
     potential.batch_shell_offsets = plan.topology.batch_shell_offsets;
-    potential.qsh_offsets = ptr<std::int64_t>(2);
-    potential.qat_offsets = ptr<std::int64_t>(2);
+    potential.qsh_offsets = plan.topology.batch_shell_offsets;
+    potential.qat_offsets = plan.topology.atom_offsets;
     potential.dipole_offsets = ptr<std::int64_t>(2);
     potential.quadrupole_offsets = ptr<std::int64_t>(2);
     potential.shell_to_atom = plan.topology.shell_to_atom;
@@ -446,7 +446,7 @@ struct Fixture {
     aes2.multipole_radius_count = kAtoms;
     aes2.multipole_valence_cn_count = kAtoms;
     aes2.atom_offsets = plan.topology.atom_offsets;
-    aes2.pair_offsets = ptr<std::int64_t>(2);
+    aes2.pair_offsets = plan.geometry_batch.pair_offsets;
     aes2.dipole_kernel = ptr<double>(kAtoms);
     aes2.quadrupole_kernel = ptr<double>(kAtoms);
     aes2.multipole_radius = ptr<double>(kAtoms);
@@ -1359,6 +1359,16 @@ int test_projection_authority_rejection() {
   CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidTopology);
   fixture.plan.atom_projection.plan_token = Fixture::kToken;
 
+  /* The setup-owned element seal is still part of this plan and atom domain. */
+  fixture.plan.element_identity_projection.plan_token = Fixture::kToken + 1u;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kCrossPlan);
+  fixture.plan.element_identity_projection.plan_token = Fixture::kToken;
+  fixture.plan.element_identity_projection.total_atoms = Fixture::kAtoms + 1;
+  fixture.plan.element_identity_projection.atomic_number_count = Fixture::kAtoms + 1;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidCount);
+  fixture.plan.element_identity_projection.total_atoms = Fixture::kAtoms;
+  fixture.plan.element_identity_projection.atomic_number_count = Fixture::kAtoms;
+
   /* Pointer substitution: leaf arrays must name the projection arrays, not a
    * different-but-equal allocation.  Substitute a foreign offset domain. */
   fixture.plan.ao_matrix_projection.matrix_offsets = fixture.plan.topology.atom_offsets;
@@ -1376,6 +1386,68 @@ int test_projection_authority_rejection() {
   CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidTopology);
   fixture.plan.packed_all_pair_projection = {};
   CHECK(validate().error == Gfn2SccIterationBindingError::kSuccess);
+
+  /* Persistent SCC and potential leaves cannot substitute physical offsets. */
+  fixture.plan.scc_batch.shell_offsets = fixture.plan.topology.atom_offsets;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.scc_batch.shell_offsets = fixture.plan.topology.batch_shell_offsets;
+  fixture.plan.potential_batch.qsh_offsets = fixture.plan.topology.atom_offsets;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.potential_batch.qsh_offsets = fixture.plan.topology.batch_shell_offsets;
+  fixture.plan.potential_batch.shell_to_atom = fixture.plan.topology.orbital_to_atom;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.potential_batch.shell_to_atom = fixture.plan.topology.shell_to_atom;
+
+  /* Spin's physical maps and nspin-expanded fields have separate authorities. */
+  fixture.plan.spin_batch.atom_shell_offsets = fixture.plan.topology.shell_orbital_offsets;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.spin_batch.atom_shell_offsets = fixture.plan.topology.atom_shell_offsets;
+  fixture.plan.spin_batch.spin_channels = fixture.plan.element_identity_projection.atomic_numbers;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.spin_batch.spin_channels = fixture.plan.wavefunction_layout.spin_channels;
+
+  /* ES2/ES3 and optional point-charge topology all borrow shell ownership. */
+  fixture.plan.es2_batch.shell_to_atom = fixture.plan.topology.orbital_to_atom;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.es2_batch.shell_to_atom = fixture.plan.topology.shell_to_atom;
+  fixture.plan.es3_batch.batch_shell_offsets = fixture.plan.topology.atom_offsets;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.es3_batch.batch_shell_offsets = fixture.plan.topology.batch_shell_offsets;
+
+  fixture.plan.enabled_components |=
+      static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kExplicitPointCharge);
+  fixture.plan.explicit_point_charge_batch.atom_offsets = fixture.plan.topology.atom_offsets;
+  fixture.plan.explicit_point_charge_batch.batch_shell_offsets =
+      fixture.plan.topology.batch_shell_offsets;
+  fixture.plan.explicit_point_charge_batch.shell_to_atom = fixture.plan.topology.orbital_to_atom;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.enabled_components &=
+      ~static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kExplicitPointCharge);
+  fixture.plan.explicit_point_charge_batch = {};
+
+  /* D4's atom order and the common dense pair partition are setup authorities. */
+  fixture.plan.enabled_components |=
+      static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kD4TwoBody);
+  fixture.plan.d4_batch.atom_offsets = fixture.plan.topology.atom_offsets;
+  fixture.plan.d4_batch.pair_offsets = fixture.plan.geometry_batch.pair_offsets;
+  fixture.plan.d4_batch.atomic_numbers = fixture.plan.wavefunction_layout.spin_channels;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.enabled_components &=
+      ~static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kD4TwoBody);
+  fixture.plan.d4_batch = {};
+
+  fixture.plan.aes2_batch.pair_offsets = fixture.plan.topology.atom_offsets;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.aes2_batch.pair_offsets = fixture.plan.geometry_batch.pair_offsets;
+
+  /* The bridge carries the complete master topology, not a partial facsimile. */
+  fixture.plan.scalar_bridge_batch.topology.orbital_to_atom = fixture.plan.topology.shell_to_atom;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.scalar_bridge_batch.topology.orbital_to_atom = fixture.plan.topology.orbital_to_atom;
+
+  fixture.plan.publication_plan.matrix_offsets = fixture.plan.topology.atom_offsets;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.plan.publication_plan.matrix_offsets = fixture.plan.topology.matrix_offsets;
 
   /* Leaf-vs-projection identity: a topology-only consumer (density reducers)
    * must name the sealed projection arrays, not a different allocation. */

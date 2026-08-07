@@ -1081,28 +1081,33 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_host(
     }
   }
   if (consumer.pair_offsets[0] != 0 ||
-      consumer.pair_offsets[consumer.batch_size] != consumer.pair_count) {
+      consumer.pair_offsets[consumer.batch_size] > consumer.pair_count) {
     return failure(Gfn2PlanSchemaError::kInvalidOffsets, Gfn2PlanSchemaField::kPairListOffsets, 0);
   }
   if (consumer.neighbor_offsets[0] != 0 ||
-      consumer.neighbor_offsets[consumer.total_atoms] != consumer.neighbor_count) {
+      consumer.neighbor_offsets[consumer.total_atoms] > consumer.neighbor_count) {
     return failure(Gfn2PlanSchemaError::kInvalidOffsets,
                    Gfn2PlanSchemaField::kPairListNeighborOffsets, 0);
   }
+  std::int64_t published_pair_count = 0;
   for (std::int64_t system = 0; system < consumer.batch_size; ++system) {
     const std::int64_t atom_begin = topology.atom_offsets[system];
     const std::int64_t atom_end = topology.atom_offsets[system + 1];
     const std::int64_t pair_begin = consumer.pair_offsets[system];
-    const std::int64_t pair_end = consumer.pair_offsets[system + 1];
-    if (pair_begin < 0 || pair_begin > pair_end || pair_end > consumer.pair_count) {
+    const std::int64_t next_pair_begin = consumer.pair_offsets[system + 1];
+    const std::int64_t count = consumer.pair_counts[system];
+    if (pair_begin < 0 || next_pair_begin < pair_begin || next_pair_begin > consumer.pair_count ||
+        count < 0 || count > consumer.max_pairs_per_system ||
+        count > next_pair_begin - pair_begin) {
       return failure(Gfn2PlanSchemaError::kInvalidOffsets, Gfn2PlanSchemaField::kPairListOffsets,
                      system);
     }
-    if (pair_end - pair_begin != consumer.pair_counts[system] ||
-        pair_end - pair_begin > consumer.max_pairs_per_system) {
-      return failure(Gfn2PlanSchemaError::kInvalidOffsets, Gfn2PlanSchemaField::kPairListOffsets,
+    if (count > consumer.pair_count - published_pair_count) {
+      return failure(Gfn2PlanSchemaError::kCountOverflow, Gfn2PlanSchemaField::kPairListPairs,
                      system);
     }
+    published_pair_count += count;
+    const std::int64_t pair_end = pair_begin + count;
     Gfn2AtomPair previous{};
     bool have_previous = false;
     for (std::int64_t pair = pair_begin; pair < pair_end; ++pair) {
@@ -1127,18 +1132,22 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_host(
                      system);
     }
   }
+  std::int64_t published_neighbor_count = 0;
   for (std::int64_t atom = 0; atom < consumer.total_atoms; ++atom) {
     const std::int64_t begin = consumer.neighbor_offsets[atom];
-    const std::int64_t end = consumer.neighbor_offsets[atom + 1];
-    if (begin < 0 || begin > end || end > consumer.neighbor_count) {
+    const std::int64_t next_begin = consumer.neighbor_offsets[atom + 1];
+    const std::int64_t count = consumer.neighbor_counts[atom];
+    if (begin < 0 || next_begin < begin || next_begin > consumer.neighbor_count || count < 0 ||
+        count > consumer.max_neighbors_per_atom || count > next_begin - begin) {
       return failure(Gfn2PlanSchemaError::kInvalidOffsets,
                      Gfn2PlanSchemaField::kPairListNeighborOffsets, atom);
     }
-    if (end - begin != consumer.neighbor_counts[atom] ||
-        end - begin > consumer.max_neighbors_per_atom) {
-      return failure(Gfn2PlanSchemaError::kInvalidOffsets,
-                     Gfn2PlanSchemaField::kPairListNeighborOffsets, atom);
+    if (count > consumer.neighbor_count - published_neighbor_count) {
+      return failure(Gfn2PlanSchemaError::kCountOverflow, Gfn2PlanSchemaField::kPairListNeighbors,
+                     atom);
     }
+    published_neighbor_count += count;
+    const std::int64_t end = begin + count;
     std::int64_t system = 0;
     while (system + 1 < consumer.batch_size && atom >= topology.atom_offsets[system + 1]) {
       ++system;
@@ -1156,21 +1165,26 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_host(
     }
   }
   std::int64_t doubled_pairs = 0;
-  if (!product(consumer.pair_count, 2, doubled_pairs) || doubled_pairs != consumer.neighbor_count) {
+  if (!product(published_pair_count, 2, doubled_pairs) ||
+      doubled_pairs != published_neighbor_count) {
     return failure(Gfn2PlanSchemaError::kInvalidPairMap, Gfn2PlanSchemaField::kPairListPairs);
   }
-  for (std::int64_t pair = 0; pair < consumer.pair_count; ++pair) {
-    const Gfn2AtomPair atom_pair = consumer.pairs[pair];
-    const std::int64_t first_begin = consumer.neighbor_offsets[atom_pair.first];
-    const std::int64_t first_end = consumer.neighbor_offsets[atom_pair.first + 1];
-    const std::int64_t second_begin = consumer.neighbor_offsets[atom_pair.second];
-    const std::int64_t second_end = consumer.neighbor_offsets[atom_pair.second + 1];
-    if (!std::binary_search(consumer.neighbors + first_begin, consumer.neighbors + first_end,
-                            atom_pair.second) ||
-        !std::binary_search(consumer.neighbors + second_begin, consumer.neighbors + second_end,
-                            atom_pair.first)) {
-      return failure(Gfn2PlanSchemaError::kInvalidPairMap, Gfn2PlanSchemaField::kPairListNeighbors,
-                     pair);
+  for (std::int64_t system = 0; system < consumer.batch_size; ++system) {
+    const std::int64_t pair_begin = consumer.pair_offsets[system];
+    const std::int64_t pair_end = pair_begin + consumer.pair_counts[system];
+    for (std::int64_t pair = pair_begin; pair < pair_end; ++pair) {
+      const Gfn2AtomPair atom_pair = consumer.pairs[pair];
+      const std::int64_t first_begin = consumer.neighbor_offsets[atom_pair.first];
+      const std::int64_t first_end = first_begin + consumer.neighbor_counts[atom_pair.first];
+      const std::int64_t second_begin = consumer.neighbor_offsets[atom_pair.second];
+      const std::int64_t second_end = second_begin + consumer.neighbor_counts[atom_pair.second];
+      if (!std::binary_search(consumer.neighbors + first_begin, consumer.neighbors + first_end,
+                              atom_pair.second) ||
+          !std::binary_search(consumer.neighbors + second_begin, consumer.neighbors + second_end,
+                              atom_pair.first)) {
+        return failure(Gfn2PlanSchemaError::kInvalidPairMap,
+                       Gfn2PlanSchemaField::kPairListNeighbors, pair);
+      }
     }
   }
   return success();

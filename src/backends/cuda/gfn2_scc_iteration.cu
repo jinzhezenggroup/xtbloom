@@ -169,6 +169,43 @@ bool same_wavefunction_layout(const Gfn2WavefunctionLayoutView& first,
          first.spin_atom_offsets == second.spin_atom_offsets;
 }
 
+bool same_topology_view(const Gfn2RaggedTopologyView& first,
+                        const Gfn2RaggedTopologyView& second) noexcept {
+  return first.memory_space == second.memory_space && first.pair_map_kind == second.pair_map_kind &&
+         first.plan_token == second.plan_token && first.batch_size == second.batch_size &&
+         first.total_atoms == second.total_atoms && first.total_shells == second.total_shells &&
+         first.total_orbitals == second.total_orbitals &&
+         first.total_matrix_elements == second.total_matrix_elements &&
+         first.total_pairs == second.total_pairs && first.bucket_count == second.bucket_count &&
+         first.atom_offset_count == second.atom_offset_count &&
+         first.batch_shell_offset_count == second.batch_shell_offset_count &&
+         first.batch_orbital_offset_count == second.batch_orbital_offset_count &&
+         first.matrix_offset_count == second.matrix_offset_count &&
+         first.atom_shell_offset_count == second.atom_shell_offset_count &&
+         first.shell_orbital_offset_count == second.shell_orbital_offset_count &&
+         first.shell_to_atom_count == second.shell_to_atom_count &&
+         first.orbital_to_shell_count == second.orbital_to_shell_count &&
+         first.orbital_to_atom_count == second.orbital_to_atom_count &&
+         first.pair_offset_count == second.pair_offset_count &&
+         first.atom_pair_count == second.atom_pair_count &&
+         first.bucket_offset_count == second.bucket_offset_count &&
+         first.bucket_system_count == second.bucket_system_count &&
+         first.bucket_orbital_count == second.bucket_orbital_count &&
+         first.atom_offsets == second.atom_offsets &&
+         first.batch_shell_offsets == second.batch_shell_offsets &&
+         first.batch_orbital_offsets == second.batch_orbital_offsets &&
+         first.matrix_offsets == second.matrix_offsets &&
+         first.atom_shell_offsets == second.atom_shell_offsets &&
+         first.shell_orbital_offsets == second.shell_orbital_offsets &&
+         first.shell_to_atom == second.shell_to_atom &&
+         first.orbital_to_shell == second.orbital_to_shell &&
+         first.orbital_to_atom == second.orbital_to_atom &&
+         first.pair_offsets == second.pair_offsets && first.atom_pairs == second.atom_pairs &&
+         first.bucket_offsets == second.bucket_offsets &&
+         first.bucket_systems == second.bucket_systems &&
+         first.bucket_orbital_counts == second.bucket_orbital_counts;
+}
+
 bool same_eigenpairs(const Gfn2EigensolverDeviceResults& first,
                      const Gfn2EigensolverDeviceResults& second) noexcept {
   return first.eigenvalues == second.eigenvalues &&
@@ -549,6 +586,14 @@ bool validate_plan_projection_identity(const Gfn2SccIterationDevicePlan& plan,
   if (element.error != Gfn2PlanSchemaError::kSuccess) {
     return validator.fail(BindingError::kInvalidTopology, BindingField::kD4, element.index);
   }
+  if (!validator.token(plan.element_identity_projection.plan_token, plan.plan_token,
+                       BindingField::kD4) ||
+      !validator.exact_count(plan.element_identity_projection.total_atoms,
+                             plan.topology.total_atoms, BindingField::kD4) ||
+      !validator.exact_count(plan.element_identity_projection.atomic_number_count,
+                             plan.topology.total_atoms, BindingField::kD4)) {
+    return false;
+  }
   return true;
 }
 
@@ -589,6 +634,8 @@ bool validate_plan_shapes(const Gfn2SccIterationDevicePlan& plan, Validator& val
       !exact(plan.scc_batch.batch_size, batch, BindingField::kStatePublication) ||
       !exact(plan.scc_batch.total_atoms, atoms, BindingField::kStatePublication) ||
       !exact(plan.scc_batch.total_shells, shells, BindingField::kStatePublication) ||
+      !exact(plan.scc_batch.shell_offset_count, batch + 1, BindingField::kStatePublication) ||
+      !exact(plan.scc_batch.atom_offset_count, batch + 1, BindingField::kStatePublication) ||
       !exact(plan.potential_batch.batch_size, batch, BindingField::kPotential) ||
       !exact(plan.potential_batch.total_atoms, atoms, BindingField::kPotential) ||
       !exact(plan.potential_batch.total_shells, shells, BindingField::kPotential) ||
@@ -997,19 +1044,62 @@ bool validate_leaf_projection_identity(const Gfn2SccIterationDevicePlan& plan,
     return true;
   };
 
-  /* Geometry/AES2/D4/atom-reduction domain: atom projection. */
+  /* Persistent SCC state and geometry/AES2 atom domains. */
+  if (!same(plan.scc_batch.shell_offsets, shell.batch_shell_offsets,
+            BindingField::kStatePublication) ||
+      !same(plan.scc_batch.atom_offsets, atom.atom_offsets, BindingField::kStatePublication)) {
+    return false;
+  }
   if (!same(plan.geometry_batch.atom_offsets, atom.atom_offsets, BindingField::kGeometry) ||
       !same(plan.aes2_batch.atom_offsets, atom.atom_offsets, BindingField::kAES2)) {
     return false;
   }
+
+  /* The potential and scalar bridge use physical charge-channel partitions.
+   * They therefore borrow the atom and shell projections directly instead of
+   * setup-owned copies whose equal values could conceal a foreign plan. */
+  if (!same(plan.potential_batch.atom_offsets, atom.atom_offsets, BindingField::kPotential) ||
+      !same(plan.potential_batch.batch_shell_offsets, shell.batch_shell_offsets,
+            BindingField::kPotential) ||
+      !same(plan.potential_batch.qsh_offsets, shell.batch_shell_offsets,
+            BindingField::kPotential) ||
+      !same(plan.potential_batch.qat_offsets, atom.atom_offsets, BindingField::kPotential) ||
+      !same(plan.potential_batch.shell_to_atom, shell.shell_to_atom, BindingField::kPotential)) {
+    return false;
+  }
+
+  /* Spin topology comes from the physical projections, while its expanded
+   * population partition and channel count come from WavefunctionLayout. */
+  if (!same(plan.spin_batch.atom_offsets, atom.atom_offsets, BindingField::kSpin) ||
+      !same(plan.spin_batch.batch_shell_offsets, shell.batch_shell_offsets, BindingField::kSpin) ||
+      !same(plan.spin_batch.atom_shell_offsets, shell.atom_shell_offsets, BindingField::kSpin) ||
+      !same(plan.spin_batch.shell_population_offsets, plan.wavefunction_layout.spin_shell_offsets,
+            BindingField::kSpin) ||
+      !same(plan.spin_batch.spin_channels, plan.wavefunction_layout.spin_channels,
+            BindingField::kSpin)) {
+    return false;
+  }
+
+  if (!same(plan.es2_batch.atom_offsets, atom.atom_offsets, BindingField::kES2) ||
+      !same(plan.es2_batch.batch_shell_offsets, shell.batch_shell_offsets, BindingField::kES2) ||
+      !same(plan.es2_batch.atom_shell_offsets, shell.atom_shell_offsets, BindingField::kES2) ||
+      !same(plan.es2_batch.shell_to_atom, shell.shell_to_atom, BindingField::kES2) ||
+      !same(plan.es3_batch.batch_shell_offsets, shell.batch_shell_offsets, BindingField::kES3)) {
+    return false;
+  }
+
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody) &&
-      !same(plan.d4_batch.atom_offsets, atom.atom_offsets, BindingField::kD4)) {
+      (!same(plan.d4_batch.atom_offsets, atom.atom_offsets, BindingField::kD4) ||
+       !same(plan.d4_batch.atomic_numbers, plan.element_identity_projection.atomic_numbers,
+             BindingField::kD4))) {
     return false;
   }
   if (component_enabled(plan, Gfn2SccPotentialComponent::kExplicitPointCharge) &&
       (!same(plan.explicit_point_charge_batch.atom_offsets, atom.atom_offsets,
              BindingField::kExplicitPointCharge) ||
        !same(plan.explicit_point_charge_batch.batch_shell_offsets, shell.batch_shell_offsets,
+             BindingField::kExplicitPointCharge) ||
+       !same(plan.explicit_point_charge_batch.shell_to_atom, shell.shell_to_atom,
              BindingField::kExplicitPointCharge))) {
     return false;
   }
@@ -1069,10 +1159,28 @@ bool validate_leaf_projection_identity(const Gfn2SccIterationDevicePlan& plan,
     return false;
   }
 
-  /* Scalar bridge owns the full master topology leaf directly. */
-  if (plan.scalar_bridge_batch.topology.atom_offsets != atom.atom_offsets ||
-      plan.scalar_bridge_batch.topology.batch_shell_offsets != shell.batch_shell_offsets) {
+  /* Scalar bridge owns an exact copy of the complete master topology leaf and
+   * its charge partitions borrow the same physical projections. */
+  if (!same_topology_view(plan.scalar_bridge_batch.topology, plan.topology) ||
+      !same(plan.scalar_bridge_batch.qsh_offsets, shell.batch_shell_offsets,
+            BindingField::kScalarBridge) ||
+      !same(plan.scalar_bridge_batch.qat_offsets, atom.atom_offsets, BindingField::kScalarBridge)) {
     return validator.fail(BindingError::kInvalidZeroCopyView, BindingField::kScalarBridge);
+  }
+
+  /* Publication is another consumer of the sealed physical partitions.  Its
+   * complete WavefunctionLayout equality is checked with the plan shapes. */
+  if (!same(plan.publication_plan.atom_offsets, atom.atom_offsets,
+            BindingField::kStatePublication) ||
+      !same(plan.publication_plan.shell_offsets, shell.batch_shell_offsets,
+            BindingField::kStatePublication) ||
+      !same(plan.publication_plan.orbital_offsets, ao.batch_orbital_offsets,
+            BindingField::kStatePublication) ||
+      !same(plan.publication_plan.matrix_offsets, ao.matrix_offsets,
+            BindingField::kStatePublication) ||
+      !same(plan.publication_plan.shell_to_atom, shell.shell_to_atom,
+            BindingField::kStatePublication)) {
+    return false;
   }
 
   /* Packed all-pair: dense geometry and AES2 use the packed projection when the
@@ -1080,9 +1188,19 @@ bool validate_leaf_projection_identity(const Gfn2SccIterationDevicePlan& plan,
    * keep their setup-owned distinct pair offsets). */
   if (plan.topology.pair_map_kind == Gfn2PairMapKind::kPackedLowerTriangle) {
     if (!same(plan.geometry_batch.pair_offsets, pairs.pair_offsets, BindingField::kGeometry) ||
-        !same(plan.aes2_batch.pair_offsets, pairs.pair_offsets, BindingField::kAES2)) {
+        !same(plan.aes2_batch.pair_offsets, pairs.pair_offsets, BindingField::kAES2) ||
+        (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody) &&
+         !same(plan.d4_batch.pair_offsets, pairs.pair_offsets, BindingField::kD4))) {
       return false;
     }
+  } else if (!same(plan.aes2_batch.pair_offsets, plan.geometry_batch.pair_offsets,
+                   BindingField::kAES2) ||
+             (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody) &&
+              !same(plan.d4_batch.pair_offsets, plan.geometry_batch.pair_offsets,
+                    BindingField::kD4))) {
+    /* Production plans currently use kNone and a setup-owned dense pair
+     * partition.  Geometry is the authority for that non-topology domain. */
+    return false;
   }
   return true;
 }

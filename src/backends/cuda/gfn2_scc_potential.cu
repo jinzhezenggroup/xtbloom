@@ -1716,7 +1716,24 @@ bool validate_spin_compose(const Gfn2SccPotentialDeviceBatch& batch,
       !make_range(device_error, 1, sizeof(std::uint32_t), &ranges[31])) {
     return false;
   }
-  return pairwise_disjoint_bindings(ranges);
+  /* The physical topology projections intentionally borrow the same
+   * read-only offset arrays: qsh_offsets aliases batch_shell_offsets and
+   * qat_offsets aliases atom_offsets.  Read/read aliasing is therefore valid;
+   * only writable outputs must remain mutually disjoint and isolated from all
+   * read ranges. */
+  for (std::size_t lhs = 20u; lhs < ranges.size(); ++lhs) {
+    for (std::size_t rhs = lhs + 1u; rhs < ranges.size(); ++rhs) {
+      if (ranges_overlap(ranges[lhs], ranges[rhs])) {
+        return false;
+      }
+    }
+    for (std::size_t rhs = 0u; rhs < 20u; ++rhs) {
+      if (ranges_overlap(ranges[lhs], ranges[rhs])) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 bool validate_canonical_compose(const Gfn2SccPotentialDeviceBatch& batch,

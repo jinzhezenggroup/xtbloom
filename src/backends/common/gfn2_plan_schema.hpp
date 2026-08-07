@@ -303,9 +303,12 @@ struct Gfn2PairListConsumerView {
   std::int64_t max_pairs_per_system = 0;
   std::int64_t max_neighbors_per_atom = 0;
 
-  /* Fixed-topology published arrays; pair_offsets partitions the canonical
-   * second-major first<second pair stream per system, neighbor_offsets
-   * partitions the per-atom ascending neighbor ranges. */
+  /* Fixed-topology published arrays.  pair_offsets and neighbor_offsets name
+   * the start of each system/atom slot; pair_counts and neighbor_counts name
+   * the live prefix in that slot.  Compact CSR is valid, but publishers may
+   * leave padding between slots so one failed peer never shifts another peer's
+   * storage.  pair_count and neighbor_count are backing-array extents, not the
+   * number of live entries. */
   std::int64_t pair_offset_count = 0;
   std::int64_t neighbor_offset_count = 0;
   std::int64_t pair_count = 0;

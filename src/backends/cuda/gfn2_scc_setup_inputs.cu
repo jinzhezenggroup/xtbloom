@@ -221,8 +221,6 @@ struct Gfn2SccSetupInputs::Impl {
     Segment quadrupole_integrals;
     Segment spin_coupling_offsets;
     Segment spin_coupling_matrices;
-    Segment qsh_offsets;
-    Segment qat_offsets;
     Segment dipole_offsets;
     Segment quadrupole_offsets;
     Segment es2_matrix_offsets;
@@ -332,8 +330,6 @@ struct Gfn2SccSetupInputs::Impl {
            append_segment<std::int64_t>(total_atoms + 1, cursor, layout.spin_coupling_offsets) &&
            append_segment<double>(spin_coupling_matrix_count, cursor,
                                   layout.spin_coupling_matrices) &&
-           append_segment<std::int64_t>(batch_offsets, cursor, layout.qsh_offsets) &&
-           append_segment<std::int64_t>(batch_offsets, cursor, layout.qat_offsets) &&
            append_segment<std::int64_t>(batch_offsets, cursor, layout.dipole_offsets) &&
            append_segment<std::int64_t>(batch_offsets, cursor, layout.quadrupole_offsets) &&
            append_segment<std::int64_t>(batch_offsets, cursor, layout.es2_matrix_offsets) &&
@@ -758,8 +754,6 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     std::memset(image, 0, candidate->layout.total_bytes);
 
     Gfn2SccSetupHostArray<std::int64_t> pair_offsets{aes2.pair_offsets().data(), batch + 1};
-    Gfn2SccSetupHostArray<std::int64_t> qsh_offsets{basis.batch_shell_offsets.data(), batch + 1};
-    Gfn2SccSetupHostArray<std::int64_t> qat_offsets{basis.atom_offsets.data(), batch + 1};
     std::vector<std::int64_t> physical_dipole_offsets(static_cast<std::size_t>(batch) + 1u);
     std::vector<std::int64_t> physical_quadrupole_offsets(static_cast<std::size_t>(batch) + 1u);
     for (std::int64_t system = 0; system <= batch; ++system) {
@@ -811,8 +805,6 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     pack_array(image, candidate->layout.quadrupole_integrals, sources.quadrupole_integrals);
     pack_vector(image, candidate->layout.spin_coupling_offsets, spin.coupling_offsets);
     pack_vector(image, candidate->layout.spin_coupling_matrices, spin.coupling_matrices);
-    pack_array(image, candidate->layout.qsh_offsets, qsh_offsets);
-    pack_array(image, candidate->layout.qat_offsets, qat_offsets);
     pack_array(image, candidate->layout.dipole_offsets, dipole_offsets);
     pack_array(image, candidate->layout.quadrupole_offsets, quadrupole_offsets);
     pack_array(image, candidate->layout.es2_matrix_offsets, es2_matrix_offsets);
@@ -1071,8 +1063,8 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
       shells,
       device_topology.atom_offsets,
       device_topology.batch_shell_offsets,
-      cptr(impl_->layout.qsh_offsets, static_cast<std::int64_t*>(nullptr)),
-      cptr(impl_->layout.qat_offsets, static_cast<std::int64_t*>(nullptr)),
+      device_topology.batch_shell_offsets,
+      device_topology.atom_offsets,
       cptr(impl_->layout.dipole_offsets, static_cast<std::int64_t*>(nullptr)),
       cptr(impl_->layout.quadrupole_offsets, static_cast<std::int64_t*>(nullptr)),
       device_topology.shell_to_atom};
@@ -1187,10 +1179,9 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
         impl_->geometry_generation};
   }
 
-  candidate.scalar_bridge_batch = {
-      device_topology, batch + 1, batch + 1,
-      cptr(impl_->layout.qsh_offsets, static_cast<std::int64_t*>(nullptr)),
-      cptr(impl_->layout.qat_offsets, static_cast<std::int64_t*>(nullptr))};
+  candidate.scalar_bridge_batch = {device_topology, batch + 1, batch + 1,
+                                   device_topology.batch_shell_offsets,
+                                   device_topology.atom_offsets};
   candidate.hamiltonian_batch = {batch,
                                  atoms,
                                  shells,

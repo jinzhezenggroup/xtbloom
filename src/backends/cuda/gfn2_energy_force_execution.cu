@@ -1,6 +1,9 @@
 #include <cuda_runtime.h>
 // gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
+#include <array>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 
@@ -11,6 +14,73 @@ namespace {
 
 constexpr int kThreadsPerBlock = 128;
 constexpr std::uint32_t kInactivePrimitiveError = std::numeric_limits<std::uint32_t>::max();
+
+struct AddressRange {
+  std::uintptr_t begin = 0u;
+  std::uintptr_t end = 0u;
+};
+
+bool make_address_range(const void* pointer, std::int64_t elements, std::size_t element_size,
+                        AddressRange* range) noexcept {
+  if (elements < 0 || element_size == 0u ||
+      static_cast<std::uint64_t>(elements) >
+          static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() / element_size)) {
+    return false;
+  }
+  const std::size_t bytes = static_cast<std::size_t>(elements) * element_size;
+  if (bytes == 0u) {
+    *range = {};
+    return true;
+  }
+  if (pointer == nullptr) {
+    return false;
+  }
+  const std::uintptr_t begin = reinterpret_cast<std::uintptr_t>(pointer);
+  if (begin > std::numeric_limits<std::uintptr_t>::max() - bytes) {
+    return false;
+  }
+  *range = {begin, begin + bytes};
+  return true;
+}
+
+bool ranges_overlap(const AddressRange& first, const AddressRange& second) noexcept {
+  return first.begin < second.end && second.begin < first.end;
+}
+
+bool checked_product(std::int64_t first, std::int64_t second, std::int64_t* result) noexcept {
+  if (result == nullptr || first < 0 || second < 0 ||
+      (first != 0 && second > std::numeric_limits<std::int64_t>::max() / first)) {
+    return false;
+  }
+  *result = first * second;
+  return true;
+}
+
+template <std::size_t Capacity>
+class AddressRangeList {
+ public:
+  template <typename T>
+  bool add(const T* pointer, std::int64_t elements) noexcept {
+    if (size_ == Capacity || !make_address_range(pointer, elements, sizeof(T), &ranges_[size_])) {
+      return false;
+    }
+    ++size_;
+    return true;
+  }
+
+  bool disjoint_from(const AddressRange& candidate) const noexcept {
+    for (std::size_t index = 0u; index < size_; ++index) {
+      if (ranges_overlap(candidate, ranges_[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+ private:
+  std::array<AddressRange, Capacity> ranges_{};
+  std::size_t size_ = 0u;
+};
 
 __device__ void record_execution_error(std::uint32_t* system_errors, std::int64_t system,
                                        std::uint32_t* device_error,
@@ -258,6 +328,13 @@ __global__ void gate_cn_vjp_parity_kernel(
     const double* sparse_gradients, double* production_gradients,
     std::uint32_t* coordination_errors, std::uint32_t* execution_device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  /* Both VJP leaves promote a failed topology sequence to plan_failure before
+   * this gate.  Do not interpret device-resident offsets after that fail-closed
+   * decision: hostile values could otherwise index the gradient arrays even
+   * though neither VJP published a result. */
+  if (atomicAdd(const_cast<std::uint32_t*>(plan_failure), 0u) != 0u) {
+    return;
+  }
   const std::int64_t atom_begin = atom_offsets[system];
   const std::int64_t atom_end = atom_offsets[system + 1];
   __shared__ unsigned int mismatched;
@@ -301,15 +378,24 @@ __global__ void gate_cn_vjp_parity_kernel(
   }
 }
 
-/* Seed the sparse CN VJP scratch with the current dense-coordination gradient
- * seed (the electronic gradient contributions before the CN VJP runs), so the
- * sparse consumer VJP accumulates onto exactly the same seed the dense VJP
- * uses. */
-__global__ void seed_sparse_gradient_kernel(std::int64_t total_orbitals, const double* source,
+/* Seed only peers that survived the electronic-force stages.  Failed and
+ * inactive peers intentionally have unpublished gradient slices, so reading
+ * the complete flat array here would violate the composed transaction. */
+__global__ void seed_sparse_gradient_kernel(std::int64_t batch_size,
+                                            const std::int64_t* atom_offsets,
+                                            const std::uint8_t* electronic_success_mask,
+                                            const std::uint32_t* plan_failure, const double* source,
                                             double* destination) {
-  const std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (index < total_orbitals) {
-    destination[index] = source[index];
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (system >= batch_size || electronic_success_mask[system] != 1u ||
+      atomicAdd(const_cast<std::uint32_t*>(plan_failure), 0u) != 0u) {
+    return;
+  }
+  const std::int64_t coordinate_begin = atom_offsets[system] * 3;
+  const std::int64_t coordinate_end = atom_offsets[system + 1] * 3;
+  for (std::int64_t coordinate = coordinate_begin + threadIdx.x; coordinate < coordinate_end;
+       coordinate += blockDim.x) {
+    destination[coordinate] = source[coordinate];
   }
 }
 
@@ -494,13 +580,13 @@ cudaError_t reset_execution_errors(std::int64_t batch_size,
              : status;
 }
 
-cudaError_t validate_force_binding(
-    const Gfn2EnergyForceExecutionDevicePlan& plan,
-    const Gfn2EnergyForceExecutionDeviceInput& input,
-    const Gfn2EnergyForceExecutionDeviceResults& results,
-    const Gfn2EnergyForceExecutionDeviceIntermediates& intermediates,
-    const Gfn2EnergyForceExecutionDeviceWorkspace& workspace,
-    const Gfn2EnergyForceExecutionDeviceDiagnostics& diagnostics) noexcept {
+cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& plan,
+                                   const Gfn2EnergyForceExecutionDeviceInput& input,
+                                   const Gfn2EnergyForceExecutionDeviceResults& results,
+                                   const Gfn2EnergyForceExecutionDeviceIntermediates& intermediates,
+                                   const Gfn2EnergyForceExecutionDeviceWorkspace& workspace,
+                                   const Gfn2EnergyForceExecutionDeviceDiagnostics& diagnostics,
+                                   const Gfn2GeometryEpochConsumerDevice* geometry) noexcept {
   const std::uint64_t token = plan.plan_token;
   const std::int64_t batch_size = plan.total_energy_batch.batch_size;
   const bool has_spin = input.hamiltonian.spin_density != nullptr;
@@ -521,6 +607,13 @@ cudaError_t validate_force_binding(
       input.post_scc_potential.activity.plan_token != token ||
       input.force_activity.batch_elements != batch_size ||
       input.force_activity.system_statuses != input.scc_state.system_statuses ||
+      batch_size == std::numeric_limits<std::int64_t>::max() ||
+      plan.integral_batch.total_atoms < 0 ||
+      plan.integral_batch.total_atoms > std::numeric_limits<std::int64_t>::max() / 3 ||
+      plan.external_point_charge_batch.total_shells < 0 ||
+      plan.external_point_charge_batch.total_point_charges < 0 ||
+      plan.external_point_charge_batch.total_point_charges >
+          std::numeric_limits<std::int64_t>::max() / 3 ||
       workspace.mask_elements < batch_size || diagnostics.batch_elements < batch_size ||
       workspace.energy_success_mask == nullptr || workspace.post_scc_success_mask == nullptr ||
       workspace.electronic_success_mask == nullptr ||
@@ -587,7 +680,55 @@ cudaError_t validate_force_binding(
       diagnostics.classical_system_errors == nullptr ||
       diagnostics.classical_device_error == nullptr ||
       diagnostics.force_composition_system_errors == nullptr ||
-      diagnostics.force_composition_plan_error == nullptr) {
+      diagnostics.force_composition_plan_error == nullptr ||
+      ((plan.pairlist_committed.plan_token != 0u || plan.pairlist_batch.plan_token != 0u) &&
+       (plan.pairlist_committed.plan_token != token || plan.pairlist_batch.plan_token != token ||
+        plan.pairlist_batch.batch_size != batch_size ||
+        plan.pairlist_batch.total_atoms != plan.integral_batch.total_atoms ||
+        plan.pairlist_batch.atom_offsets != plan.integral_batch.atom_offsets ||
+        plan.pairlist_batch.max_pairs_per_system <= 0 ||
+        plan.pairlist_batch.max_neighbors_per_atom <= 0 ||
+        plan.pairlist_batch.cutoff != kDefaultPairlistCutoffBohr ||
+        plan.pairlist_committed.memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
+        plan.pairlist_committed.state != Gfn2PairListState::kCommitted ||
+        plan.pairlist_committed.role != Gfn2PairListRole::kCoordination ||
+        plan.pairlist_committed.pair_map_kind != Gfn2PairMapKind::kExplicit ||
+        plan.pairlist_committed.cutoff_bohr != kDefaultPairlistCutoffBohr ||
+        !std::isfinite(plan.pairlist_committed.list_builder_cutoff_bohr) ||
+        plan.pairlist_committed.list_builder_cutoff_bohr < plan.pairlist_committed.cutoff_bohr ||
+        plan.pairlist_committed.batch_size != batch_size ||
+        plan.pairlist_committed.total_atoms != plan.integral_batch.total_atoms ||
+        plan.pairlist_committed.max_pairs_per_system != plan.pairlist_batch.max_pairs_per_system ||
+        plan.pairlist_committed.max_pairs_per_system >
+            std::numeric_limits<std::int64_t>::max() / batch_size ||
+        plan.pairlist_committed.pair_count !=
+            batch_size * plan.pairlist_committed.max_pairs_per_system ||
+        plan.pairlist_committed.max_neighbors_per_atom !=
+            plan.pairlist_batch.max_neighbors_per_atom ||
+        (plan.integral_batch.total_atoms != 0 &&
+         plan.pairlist_committed.max_neighbors_per_atom >
+             std::numeric_limits<std::int64_t>::max() / plan.integral_batch.total_atoms) ||
+        plan.pairlist_committed.neighbor_count !=
+            plan.integral_batch.total_atoms * plan.pairlist_committed.max_neighbors_per_atom ||
+        plan.pairlist_committed.pair_offset_count != batch_size + 1 ||
+        plan.pairlist_committed.neighbor_offset_count != plan.integral_batch.total_atoms + 1 ||
+        plan.pairlist_committed.pair_count_elements != batch_size ||
+        plan.pairlist_committed.neighbor_count_elements != plan.integral_batch.total_atoms ||
+        plan.pairlist_committed.committed_generation_count != batch_size ||
+        plan.pairlist_committed.eligible_mask_count != batch_size ||
+        plan.pairlist_committed.pair_offsets == nullptr ||
+        plan.pairlist_committed.pairs == nullptr ||
+        plan.pairlist_committed.pair_counts == nullptr ||
+        plan.pairlist_committed.neighbor_offsets == nullptr ||
+        plan.pairlist_committed.neighbor_counts == nullptr ||
+        plan.pairlist_committed.neighbors == nullptr ||
+        plan.pairlist_committed.committed_generations == nullptr ||
+        plan.pairlist_committed.eligible_mask == nullptr ||
+        plan.pairlist_committed.active_mask_count != 0 ||
+        plan.pairlist_committed.active_mask != nullptr ||
+        workspace.sparse_gradient_scratch == nullptr ||
+        workspace.sparse_gradient_elements < plan.integral_batch.total_atoms * 3 ||
+        workspace.sparse_sequence_active == nullptr || workspace.sparse_sequence_elements < 1))) {
     return cudaErrorInvalidValue;
   }
   if (explicit_pc &&
@@ -610,10 +751,331 @@ cudaError_t validate_force_binding(
          diagnostics.external_device_error == nullptr)))) {
     return cudaErrorInvalidValue;
   }
+  const bool sparse_vjp_enabled =
+      plan.pairlist_committed.plan_token != 0u && plan.pairlist_batch.plan_token != 0u;
+  if (sparse_vjp_enabled) {
+    Gfn2PairListConsumerView sparse_consumer = plan.pairlist_committed;
+    sparse_consumer.active_mask = workspace.electronic_success_mask;
+    sparse_consumer.active_mask_count = batch_size;
+    /* The leaf's exact pointer, range, alias, and epoch gate must run before
+     * reset_execution_errors or any numerical stage is enqueued. */
+    const cudaError_t sparse_status =
+        geometry == nullptr
+            ? validate_gfn2_pairlist_consumer_coordination_vjp_cuda(
+                  plan.pairlist_batch, sparse_consumer, input.h0.positions,
+                  plan.coordination_batch.covalent_radii, plan.geometry_generation,
+                  intermediates.h0.coordination_adjoint, workspace.sparse_gradient_scratch,
+                  workspace.coordination.gradient_scratch, plan.integral_batch.total_atoms * 3,
+                  workspace.sparse_sequence_active, diagnostics.coordination_system_errors,
+                  diagnostics.coordination_device_error)
+            : validate_gfn2_pairlist_consumer_coordination_vjp_cuda(
+                  plan.pairlist_batch, sparse_consumer, input.h0.positions,
+                  plan.coordination_batch.covalent_radii, geometry->epoch,
+                  intermediates.h0.coordination_adjoint, workspace.sparse_gradient_scratch,
+                  workspace.coordination.gradient_scratch, plan.integral_batch.total_atoms * 3,
+                  workspace.sparse_sequence_active, diagnostics.coordination_system_errors,
+                  diagnostics.coordination_device_error);
+    if (sparse_status != cudaSuccess) {
+      return sparse_status;
+    }
+
+    const std::int64_t coordinates = plan.integral_batch.total_atoms * 3;
+    AddressRange sparse_gradient;
+    AddressRange sparse_sequence;
+    if (!make_address_range(workspace.sparse_gradient_scratch, coordinates,
+                            sizeof(*workspace.sparse_gradient_scratch), &sparse_gradient) ||
+        !make_address_range(workspace.sparse_sequence_active, 1,
+                            sizeof(*workspace.sparse_sequence_active), &sparse_sequence)) {
+      return cudaErrorInvalidValue;
+    }
+
+    /* These two buffers are written after the electronic stage and before
+     * terminal publication.  Keep them disjoint from every value still read or
+     * published by the remainder of the composed execution, including caller
+     * outputs.  Leaf validation above covers the sparse VJP's own inputs. */
+    const std::int64_t points = plan.external_point_charge_batch.total_point_charges;
+    const std::int64_t point_coordinates = points * 3;
+    const std::int64_t shells = plan.external_point_charge_batch.total_shells;
+    const bool explicit_point_force = explicit_pc && points != 0;
+    const std::uint32_t classical_components = plan.classical_plan.enabled_components;
+    const bool classical_es2 =
+        (classical_components & static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kES2)) !=
+        0u;
+    const bool classical_aes2 =
+        (classical_components & static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kAES2)) !=
+        0u;
+    const bool classical_d4 =
+        (classical_components &
+         (static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4TwoBody) |
+          static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4ATM))) != 0u;
+    const bool classical_d4_two_body =
+        (classical_components &
+         static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4TwoBody)) != 0u;
+    std::int64_t coordination_pair_elements = 0;
+    std::int64_t classical_geometry_pair_elements = 0;
+    std::int64_t classical_aes2_pair_elements = 0;
+    std::int64_t classical_d4_pair_elements = 0;
+    if (!checked_product(plan.coordination_batch.total_pairs, kGfn2GeometryPairDataElements,
+                         &coordination_pair_elements) ||
+        (classical_aes2 &&
+         (!checked_product(plan.classical_plan.geometry_batch.total_pairs,
+                           kGfn2GeometryPairDataElements, &classical_geometry_pair_elements) ||
+          !checked_product(plan.classical_plan.aes2_batch.total_pairs, kGfn2AES2PairDataElements,
+                           &classical_aes2_pair_elements))) ||
+        (classical_d4 && !checked_product(plan.classical_plan.d4_batch.total_pairs,
+                                          kGfn2D4PairDataElements, &classical_d4_pair_elements))) {
+      return cudaErrorInvalidValue;
+    }
+    AddressRangeList<160> live_ranges;
+    const bool live_ranges_valid =
+        live_ranges.add(results.energy.total_energy, results.energy.elements) &&
+        live_ranges.add(results.forces.qm_forces, results.forces.qm_force_elements) &&
+        live_ranges.add(results.forces.point_forces, results.forces.point_force_elements) &&
+        live_ranges.add(intermediates.energy.total_energy, intermediates.energy.elements) &&
+        live_ranges.add(intermediates.h0.gradients, intermediates.h0.gradient_elements) &&
+        live_ranges.add(intermediates.classical.forces, intermediates.classical.force_elements) &&
+        live_ranges.add(intermediates.explicit_qm_forces,
+                        explicit_point_force ? intermediates.explicit_qm_force_elements : 0) &&
+        live_ranges.add(intermediates.explicit_point_forces,
+                        explicit_point_force ? intermediates.explicit_point_force_elements : 0) &&
+        live_ranges.add(intermediates.forces.qm_forces, intermediates.forces.qm_force_elements) &&
+        live_ranges.add(intermediates.forces.point_forces,
+                        intermediates.forces.point_force_elements) &&
+        live_ranges.add(input.force_activity.requested_mask, batch_size) &&
+        live_ranges.add(input.force_activity.system_statuses, batch_size) &&
+        live_ranges.add(input.scc_state.converged, batch_size) &&
+        live_ranges.add(input.scc_state.system_statuses, batch_size) &&
+        live_ranges.add(input.classical.positions, input.classical.position_elements) &&
+        live_ranges.add(input.classical.coordination_numbers,
+                        classical_aes2 ? input.classical.coordination_elements : 0) &&
+        live_ranges.add(input.classical.shell_charges,
+                        classical_es2 ? input.classical.shell_elements : 0) &&
+        live_ranges.add(input.classical.atomic_charges, classical_aes2 || classical_d4_two_body
+                                                            ? input.classical.atom_elements
+                                                            : 0) &&
+        live_ranges.add(input.classical.atomic_dipoles,
+                        classical_aes2 ? input.classical.dipole_elements : 0) &&
+        live_ranges.add(input.classical.atomic_quadrupoles,
+                        classical_aes2 ? input.classical.quadrupole_elements : 0) &&
+        live_ranges.add(input.external_shell_charges,
+                        explicit_point_force ? input.external_shell_elements : 0) &&
+        live_ranges.add(plan.integral_batch.atom_offsets, batch_size + 1) &&
+        live_ranges.add(plan.coordination_batch.atom_offsets, batch_size + 1) &&
+        live_ranges.add(plan.coordination_batch.pair_offsets, batch_size + 1) &&
+        live_ranges.add(plan.coordination_batch.covalent_radii, plan.integral_batch.total_atoms) &&
+        live_ranges.add(plan.coordination_cache.pair_data, coordination_pair_elements) &&
+        live_ranges.add(plan.coordination_cache.coordination_numbers,
+                        plan.integral_batch.total_atoms) &&
+        live_ranges.add(plan.coordination_cache.geometry_generations, batch_size) &&
+        live_ranges.add(intermediates.h0.coordination_adjoint,
+                        intermediates.h0.coordination_adjoint_elements) &&
+        live_ranges.add(plan.classical_plan.atom_offsets, batch_size + 1) &&
+        live_ranges.add(plan.classical_plan.atomic_numbers, plan.integral_batch.total_atoms) &&
+        live_ranges.add(plan.classical_plan.es2_batch.batch_shell_offsets,
+                        classical_es2 ? batch_size + 1 : 0) &&
+        live_ranges.add(plan.classical_plan.es2_batch.atom_shell_offsets,
+                        classical_es2 ? plan.integral_batch.total_atoms + 1 : 0) &&
+        live_ranges.add(plan.classical_plan.es2_batch.matrix_offsets,
+                        classical_es2 ? batch_size + 1 : 0) &&
+        live_ranges.add(plan.classical_plan.es2_batch.shell_to_atom,
+                        classical_es2 ? plan.integral_batch.total_shells : 0) &&
+        live_ranges.add(plan.classical_plan.es2_batch.shell_hardness,
+                        classical_es2 ? plan.integral_batch.total_shells : 0) &&
+        live_ranges.add(plan.classical_plan.es2_cache.coulomb_matrix,
+                        classical_es2 ? plan.classical_plan.es2_batch.total_matrix_elements : 0) &&
+        live_ranges.add(plan.classical_plan.aes2_batch.pair_offsets,
+                        classical_aes2 ? batch_size + 1 : 0) &&
+        live_ranges.add(plan.classical_plan.aes2_batch.dipole_kernel,
+                        classical_aes2 ? plan.integral_batch.total_atoms : 0) &&
+        live_ranges.add(plan.classical_plan.aes2_batch.quadrupole_kernel,
+                        classical_aes2 ? plan.integral_batch.total_atoms : 0) &&
+        live_ranges.add(plan.classical_plan.aes2_batch.multipole_radius,
+                        classical_aes2 ? plan.integral_batch.total_atoms : 0) &&
+        live_ranges.add(plan.classical_plan.aes2_batch.multipole_valence_cn,
+                        classical_aes2 ? plan.integral_batch.total_atoms : 0) &&
+        live_ranges.add(plan.classical_plan.aes2_cache.pair_data,
+                        classical_aes2 ? classical_aes2_pair_elements : 0) &&
+        live_ranges.add(plan.classical_plan.geometry_batch.pair_offsets,
+                        classical_aes2 ? batch_size + 1 : 0) &&
+        live_ranges.add(plan.classical_plan.geometry_batch.covalent_radii,
+                        classical_aes2 ? plan.integral_batch.total_atoms : 0) &&
+        live_ranges.add(plan.classical_plan.geometry_cache.pair_data,
+                        classical_aes2 ? classical_geometry_pair_elements : 0) &&
+        live_ranges.add(plan.classical_plan.geometry_cache.coordination_numbers,
+                        classical_aes2 ? plan.integral_batch.total_atoms : 0) &&
+        live_ranges.add(plan.classical_plan.geometry_cache.geometry_generations,
+                        classical_aes2 ? batch_size : 0) &&
+        live_ranges.add(plan.classical_plan.d4_batch.pair_offsets,
+                        classical_d4 ? batch_size + 1 : 0) &&
+        live_ranges.add(plan.classical_plan.d4_parameters.elements,
+                        classical_d4 ? plan.classical_plan.d4_parameters.element_count : 0) &&
+        live_ranges.add(plan.classical_plan.d4_parameters.references,
+                        classical_d4 ? plan.classical_plan.d4_parameters.reference_count : 0) &&
+        live_ranges.add(
+            plan.classical_plan.d4_parameters.reference_c6,
+            classical_d4 ? plan.classical_plan.d4_parameters.reference_c6_elements : 0) &&
+        live_ranges.add(plan.classical_plan.d4_cache.pair_data,
+                        classical_d4 ? classical_d4_pair_elements : 0) &&
+        live_ranges.add(plan.classical_plan.d4_cache.coordination_numbers,
+                        classical_d4 ? plan.integral_batch.total_atoms : 0) &&
+        live_ranges.add(plan.external_point_charge_batch.atom_offsets,
+                        explicit_point_force ? batch_size + 1 : 0) &&
+        live_ranges.add(plan.external_point_charge_batch.batch_shell_offsets,
+                        explicit_point_force ? batch_size + 1 : 0) &&
+        live_ranges.add(plan.external_point_charge_batch.point_charge_offsets,
+                        explicit_point_force ? batch_size + 1 : 0) &&
+        live_ranges.add(plan.external_point_charge_batch.shell_to_atom,
+                        explicit_point_force ? shells : 0) &&
+        live_ranges.add(plan.external_point_charge_batch.shell_hardness,
+                        explicit_point_force ? shells : 0) &&
+        live_ranges.add(plan.external_point_charge_batch.qm_positions,
+                        explicit_point_force ? coordinates : 0) &&
+        live_ranges.add(plan.external_point_charge_batch.point_positions,
+                        explicit_point_force ? point_coordinates : 0) &&
+        live_ranges.add(plan.external_point_charge_batch.point_charges,
+                        explicit_point_force ? points : 0) &&
+        live_ranges.add(plan.external_point_charge_batch.point_hardnesses,
+                        explicit_point_force ? points : 0) &&
+        live_ranges.add(workspace.classical.gradient_scratch,
+                        workspace.classical.gradient_elements) &&
+        live_ranges.add(workspace.classical.force_scratch, workspace.classical.force_elements) &&
+        live_ranges.add(workspace.classical.coordination_adjoints,
+                        workspace.classical.coordination_elements) &&
+        live_ranges.add(workspace.classical.selected_mask, workspace.classical.selected_elements) &&
+        live_ranges.add(workspace.classical.primitive_system_errors,
+                        workspace.classical.primitive_system_error_elements) &&
+        live_ranges.add(workspace.classical.primitive_device_error,
+                        workspace.classical.primitive_device_error_elements) &&
+        live_ranges.add(workspace.classical.sequence_active,
+                        workspace.classical.sequence_elements) &&
+        live_ranges.add(workspace.classical.aes2_workspace.pair_scratch,
+                        classical_aes2 ? workspace.classical.aes2_workspace.pair_elements : 0) &&
+        live_ranges.add(
+            workspace.classical.aes2_workspace.potential_scratch,
+            classical_aes2 ? workspace.classical.aes2_workspace.potential_elements : 0) &&
+        live_ranges.add(workspace.classical.aes2_workspace.batch_scratch,
+                        classical_aes2 ? workspace.classical.aes2_workspace.batch_elements : 0) &&
+        live_ranges.add(
+            workspace.classical.aes2_workspace.gradient_scratch,
+            classical_aes2 ? workspace.classical.aes2_workspace.gradient_elements : 0) &&
+        live_ranges.add(
+            workspace.classical.aes2_workspace.coordination_scratch,
+            classical_aes2 ? workspace.classical.aes2_workspace.coordination_elements : 0) &&
+        live_ranges.add(
+            workspace.classical.aes2_workspace.scc_peer_error_scratch,
+            classical_aes2 ? workspace.classical.aes2_workspace.scc_peer_error_elements : 0) &&
+        live_ranges.add(workspace.classical.d4_workspace.weights,
+                        classical_d4 ? workspace.classical.d4_workspace.weight_elements : 0) &&
+        live_ranges.add(workspace.classical.d4_workspace.weight_cn_derivatives,
+                        classical_d4 ? workspace.classical.d4_workspace.weight_elements : 0) &&
+        live_ranges.add(workspace.classical.d4_workspace.weight_charge_derivatives,
+                        classical_d4 ? workspace.classical.d4_workspace.weight_elements : 0) &&
+        live_ranges.add(workspace.classical.d4_workspace.atom_scratch,
+                        classical_d4 ? workspace.classical.d4_workspace.atom_elements : 0) &&
+        live_ranges.add(workspace.classical.d4_workspace.coordination_adjoints,
+                        classical_d4 ? workspace.classical.d4_workspace.atom_elements : 0) &&
+        live_ranges.add(workspace.classical.d4_workspace.batch_scratch,
+                        classical_d4 ? workspace.classical.d4_workspace.batch_elements : 0) &&
+        live_ranges.add(workspace.classical.d4_workspace.gradient_scratch,
+                        classical_d4 ? workspace.classical.d4_workspace.gradient_elements : 0) &&
+        live_ranges.add(
+            workspace.classical.d4_workspace.system_errors,
+            classical_d4 ? workspace.classical.d4_workspace.system_error_elements : 0) &&
+        live_ranges.add(
+            workspace.classical.geometry_workspace.pair_scratch,
+            classical_aes2 ? workspace.classical.geometry_workspace.pair_elements : 0) &&
+        live_ranges.add(
+            workspace.classical.geometry_workspace.coordination_scratch,
+            classical_aes2 ? workspace.classical.geometry_workspace.coordination_elements : 0) &&
+        live_ranges.add(
+            workspace.classical.geometry_workspace.gradient_scratch,
+            classical_aes2 ? workspace.classical.geometry_workspace.gradient_elements : 0) &&
+        live_ranges.add(
+            workspace.classical.geometry_workspace.sequence_active,
+            classical_aes2 ? workspace.classical.geometry_workspace.sequence_elements : 0) &&
+        live_ranges.add(workspace.coordination.gradient_scratch,
+                        workspace.coordination.gradient_elements) &&
+        live_ranges.add(workspace.coordination.sequence_active,
+                        workspace.coordination.sequence_elements) &&
+        live_ranges.add(workspace.external_point_charge.qm_scratch,
+                        explicit_point_force ? workspace.external_point_charge.qm_elements : 0) &&
+        live_ranges.add(
+            workspace.external_point_charge.point_scratch,
+            explicit_point_force ? workspace.external_point_charge.point_elements : 0) &&
+        live_ranges.add(
+            workspace.external_point_charge.sequence_active,
+            explicit_point_force ? workspace.external_point_charge.sequence_elements : 0) &&
+        live_ranges.add(workspace.force_composition.qm_force_scratch,
+                        workspace.force_composition.qm_force_elements) &&
+        live_ranges.add(workspace.force_composition.point_force_scratch,
+                        workspace.force_composition.point_force_elements) &&
+        live_ranges.add(workspace.force_composition.sequence_active,
+                        workspace.force_composition.sequence_elements) &&
+        live_ranges.add(plan.force_composition_batch.atom_offsets, batch_size + 1) &&
+        live_ranges.add(plan.force_composition_batch.point_charge_offsets, batch_size + 1) &&
+        live_ranges.add(workspace.energy_success_mask, workspace.mask_elements) &&
+        live_ranges.add(workspace.electronic_success_mask, workspace.mask_elements) &&
+        live_ranges.add(workspace.coordination_success_mask, workspace.mask_elements) &&
+        live_ranges.add(workspace.classical_success_mask, workspace.mask_elements) &&
+        live_ranges.add(workspace.external_success_mask, workspace.mask_elements) &&
+        live_ranges.add(workspace.plan_failure, workspace.plan_failure_elements) &&
+        live_ranges.add(diagnostics.execution_system_errors, diagnostics.batch_elements) &&
+        live_ranges.add(diagnostics.execution_device_error, 1) &&
+        live_ranges.add(diagnostics.total_energy_system_errors, diagnostics.batch_elements) &&
+        live_ranges.add(diagnostics.total_energy_device_error, 1) &&
+        live_ranges.add(diagnostics.coordination_system_errors, diagnostics.batch_elements) &&
+        live_ranges.add(diagnostics.coordination_device_error, 1) &&
+        live_ranges.add(diagnostics.classical_system_errors, diagnostics.batch_elements) &&
+        live_ranges.add(diagnostics.classical_device_error, 1) &&
+        live_ranges.add(diagnostics.external_system_errors,
+                        explicit_pc && points != 0 ? diagnostics.batch_elements : 0) &&
+        live_ranges.add(diagnostics.external_device_error, explicit_pc && points != 0 ? 1 : 0) &&
+        live_ranges.add(diagnostics.force_composition_system_errors, diagnostics.batch_elements) &&
+        live_ranges.add(diagnostics.force_composition_plan_error, 1) &&
+        live_ranges.add(geometry == nullptr ? nullptr : geometry->epoch.value,
+                        geometry == nullptr ? 0 : 1) &&
+        live_ranges.add(geometry == nullptr ? nullptr : geometry->committed_generations,
+                        geometry == nullptr ? 0 : batch_size) &&
+        live_ranges.add(geometry == nullptr ? nullptr : geometry->eligible_mask,
+                        geometry == nullptr ? 0 : batch_size);
+    if (!live_ranges_valid || !live_ranges.disjoint_from(sparse_gradient) ||
+        !live_ranges.disjoint_from(sparse_sequence)) {
+      return cudaErrorInvalidValue;
+    }
+  }
   return cudaSuccess;
 }
 
 cudaError_t check_launch() noexcept { return cudaPeekAtLastError(); }
+
+cudaError_t promote_cn_vjp_sequence_failures_and_gate(
+    bool sparse_vjp_enabled, std::int64_t batch_size, const std::int64_t* atom_offsets,
+    const std::uint8_t* incoming_mask, const std::uint32_t* sparse_sequence_active,
+    const std::uint32_t* dense_sequence_active, std::uint32_t* plan_failure,
+    const double* dense_gradients, const double* sparse_gradients, double* production_gradients,
+    std::uint32_t* coordination_errors, std::uint32_t* execution_device_error,
+    cudaStream_t stream) noexcept {
+  if (sparse_vjp_enabled) {
+    record_sequence_plan_failure_kernel<<<1, 1, 0, stream>>>(
+        sparse_sequence_active, Gfn2EnergyForceExecutionDeviceError::kCoordinationGradientFailure,
+        plan_failure, execution_device_error);
+    cudaError_t status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
+  }
+  record_sequence_plan_failure_kernel<<<1, 1, 0, stream>>>(
+      dense_sequence_active, Gfn2EnergyForceExecutionDeviceError::kCoordinationGradientFailure,
+      plan_failure, execution_device_error);
+  cudaError_t status = check_launch();
+  if (status != cudaSuccess || !sparse_vjp_enabled) {
+    return status;
+  }
+  gate_cn_vjp_parity_kernel<<<static_cast<unsigned int>(batch_size), kThreadsPerBlock, 0, stream>>>(
+      batch_size, atom_offsets, incoming_mask, plan_failure, dense_gradients, sparse_gradients,
+      production_gradients, coordination_errors, execution_device_error);
+  return check_launch();
+}
 
 }  // namespace
 
@@ -655,8 +1117,8 @@ static cudaError_t execute_energy_force_impl(
     return cudaErrorInvalidValue;
   }
   if (plan.compute_forces == 1u) {
-    const cudaError_t binding_status =
-        validate_force_binding(plan, input, results, intermediates, workspace, diagnostics);
+    const cudaError_t binding_status = validate_force_binding(plan, input, results, intermediates,
+                                                              workspace, diagnostics, geometry);
     if (binding_status != cudaSuccess) {
       return binding_status;
     }
@@ -800,38 +1262,47 @@ static cudaError_t execute_energy_force_impl(
   if (status != cudaSuccess) {
     return status;
   }
-  /* Step 5: when the committed sparse pair list is present, run the H0
-   * coordination VJP on the sparse consumer path as well and parity-gate it
-   * against the dense reference.  The dense VJP remains the production
-   * reference; the sparse path must match bitwise, so a regression can never
-   * silently change forces.  The gate is enabled only on the scalar-generation
-   * path where the expected committed generation is a concrete host value;
-   * the device-epoch path keeps the dense reference until a device-side epoch
-   * version of the consumer VJP is wired. */
-  const bool sparse_vjp_enabled = geometry == nullptr && plan.pairlist_committed.plan_token != 0u &&
-                                  plan.pairlist_batch.plan_token != 0u;
+  /* Step 5: the committed sparse pair list is a second H0 coordination VJP
+   * candidate.  It is parity-gated against the dense reference on both scalar
+   * and device-epoch execution, so Graph replay receives the same protection
+   * without capturing a host generation. */
+  const bool sparse_vjp_enabled =
+      plan.pairlist_committed.plan_token != 0u && plan.pairlist_batch.plan_token != 0u;
   const std::int64_t gradient_elements = plan.integral_batch.total_atoms * 3;
   if (sparse_vjp_enabled) {
+    Gfn2PairListConsumerView sparse_consumer = plan.pairlist_committed;
+    sparse_consumer.active_mask = workspace.electronic_success_mask;
+    sparse_consumer.active_mask_count = batch_size;
     arm_sparse_sequence_kernel<<<1, 1, 0, stream>>>(workspace.sparse_sequence_active);
     status = check_launch();
     if (status != cudaSuccess) {
       return status;
     }
-    seed_sparse_gradient_kernel<<<
-        static_cast<unsigned int>((gradient_elements + kThreadsPerBlock - 1) / kThreadsPerBlock),
-        kThreadsPerBlock, 0, stream>>>(gradient_elements, intermediates.h0.gradients,
-                                       workspace.sparse_gradient_scratch);
-    status = check_launch();
-    if (status != cudaSuccess) {
-      return status;
+    if (gradient_elements != 0) {
+      seed_sparse_gradient_kernel<<<static_cast<unsigned int>(batch_size), kThreadsPerBlock, 0,
+                                    stream>>>(
+          batch_size, plan.integral_batch.atom_offsets, workspace.electronic_success_mask,
+          workspace.plan_failure, intermediates.h0.gradients, workspace.sparse_gradient_scratch);
+      status = check_launch();
+      if (status != cudaSuccess) {
+        return status;
+      }
     }
-    status = add_gfn2_pairlist_consumer_coordination_vjp_cuda(
-        plan.pairlist_batch, plan.pairlist_committed, input.h0.positions,
-        plan.coordination_batch.covalent_radii, plan.geometry_generation,
-        intermediates.h0.coordination_adjoint, workspace.sparse_gradient_scratch,
-        workspace.coordination.gradient_scratch, gradient_elements,
-        workspace.sparse_sequence_active, diagnostics.coordination_system_errors,
-        diagnostics.coordination_device_error, stream);
+    status = geometry == nullptr
+                 ? add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+                       plan.pairlist_batch, sparse_consumer, input.h0.positions,
+                       plan.coordination_batch.covalent_radii, plan.geometry_generation,
+                       intermediates.h0.coordination_adjoint, workspace.sparse_gradient_scratch,
+                       workspace.coordination.gradient_scratch, gradient_elements,
+                       workspace.sparse_sequence_active, diagnostics.coordination_system_errors,
+                       diagnostics.coordination_device_error, stream)
+                 : add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+                       plan.pairlist_batch, sparse_consumer, input.h0.positions,
+                       plan.coordination_batch.covalent_radii, geometry->epoch,
+                       intermediates.h0.coordination_adjoint, workspace.sparse_gradient_scratch,
+                       workspace.coordination.gradient_scratch, gradient_elements,
+                       workspace.sparse_sequence_active, diagnostics.coordination_system_errors,
+                       diagnostics.coordination_device_error, stream);
     if (status != cudaSuccess) {
       return status;
     }
@@ -850,22 +1321,18 @@ static cudaError_t execute_energy_force_impl(
   if (status != cudaSuccess) {
     return status;
   }
-  if (sparse_vjp_enabled) {
-    gate_cn_vjp_parity_kernel<<<static_cast<unsigned int>(batch_size), kThreadsPerBlock, 0,
-                                stream>>>(
-        batch_size, plan.integral_batch.atom_offsets, workspace.electronic_success_mask,
-        workspace.plan_failure, intermediates.h0.gradients, workspace.sparse_gradient_scratch,
-        intermediates.h0.gradients, diagnostics.coordination_system_errors,
-        diagnostics.execution_device_error);
-    status = check_launch();
-    if (status != cudaSuccess) {
-      return status;
-    }
+  /* A device-side topology preflight closes its leaf sequence.  Promote both
+   * sparse and dense sequence failures before the parity kernel can traverse
+   * atom_offsets or inspect either gradient candidate. */
+  status = promote_cn_vjp_sequence_failures_and_gate(
+      sparse_vjp_enabled, batch_size, plan.integral_batch.atom_offsets,
+      workspace.electronic_success_mask, workspace.sparse_sequence_active,
+      workspace.coordination.sequence_active, workspace.plan_failure, intermediates.h0.gradients,
+      workspace.sparse_gradient_scratch, intermediates.h0.gradients,
+      diagnostics.coordination_system_errors, diagnostics.execution_device_error, stream);
+  if (status != cudaSuccess) {
+    return status;
   }
-  record_sequence_plan_failure_kernel<<<1, 1, 0, stream>>>(
-      workspace.coordination.sequence_active,
-      Gfn2EnergyForceExecutionDeviceError::kCoordinationGradientFailure, workspace.plan_failure,
-      diagnostics.execution_device_error);
   merge_stage_errors_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
       batch_size, workspace.electronic_success_mask, diagnostics.coordination_system_errors,
       workspace.plan_failure, workspace.coordination_success_mask,
@@ -1024,5 +1491,19 @@ cudaError_t execute_gfn2_energy_force_cuda(
   return execute_energy_force_impl(plan, input, results, intermediates, workspace, diagnostics,
                                    &geometry, stream);
 }
+
+#if defined(GPUXTB_CUDA_TEST_HOOKS)
+cudaError_t test_gate_gfn2_cn_vjp_parity_cuda(
+    std::int64_t batch_size, const std::int64_t* atom_offsets, const std::uint8_t* incoming_mask,
+    const std::uint32_t* sparse_sequence_active, const std::uint32_t* dense_sequence_active,
+    std::uint32_t* plan_failure, const double* dense_gradients, const double* sparse_gradients,
+    double* production_gradients, std::uint32_t* coordination_errors,
+    std::uint32_t* execution_device_error, cudaStream_t stream) noexcept {
+  return promote_cn_vjp_sequence_failures_and_gate(
+      true, batch_size, atom_offsets, incoming_mask, sparse_sequence_active, dense_sequence_active,
+      plan_failure, dense_gradients, sparse_gradients, production_gradients, coordination_errors,
+      execution_device_error, stream);
+}
+#endif
 
 }  // namespace gpuxtb::detail::cuda

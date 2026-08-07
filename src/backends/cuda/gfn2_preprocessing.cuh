@@ -159,8 +159,10 @@ struct Gfn2PreprocessingDeviceOutput {
    * never shifts a later peer's slice.  The final per-system publication gate
    * copies candidate pairs/neighbors, writes explicit counts, sets the
    * committed generation, and flips eligibility so consumers accept only
-   * complete, current per-peer slices.  Generation zero plus an ineligible
-   * mask byte means unpublished. */
+   * complete, current per-peer slices.  A peer-local failed or inactive
+   * refresh clears current eligibility but preserves the last committed
+   * payload; a plan-wide failure preserves every committed byte. Setup
+   * initializes never-published metadata to zero. */
   Gfn2PairListConsumerView pairlist{};
   /* Per-system generation for the complete S/D/Q/H0/ES2/AES2 transaction. */
   std::uint64_t* operator_generations = nullptr;

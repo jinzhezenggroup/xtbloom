@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 // gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
@@ -142,18 +143,53 @@ bool all_tokens_match(const Gfn2PreprocessingDeviceBinding& binding) noexcept {
                        binding.diagnostics.sparse_system_errors != nullptr &&
                        binding.diagnostics.sparse_device_error != nullptr;
   } else {
+    const auto& batch = binding.plan.pairlist;
+    const auto& candidate = binding.workspace.pairlist_candidate;
+    const auto& workspace = binding.workspace.pairlist;
+    const auto& output = binding.output.pairlist;
     pairlist_matches =
-        binding.plan.pairlist.plan_token == 0u && binding.plan.pairlist.atom_offsets == nullptr &&
-        binding.plan.pairlist.system_modes == nullptr &&
-        binding.workspace.pairlist_candidate.plan_token == 0u &&
-        binding.workspace.pairlist.plan_token == 0u &&
-        binding.workspace.pairlist_candidate.pairs == nullptr &&
-        binding.workspace.pairlist.system_meta == nullptr &&
-        binding.workspace.sparse_coordination == nullptr &&
-        binding.output.pairlist.plan_token == 0u && binding.output.pairlist.pairs == nullptr &&
-        binding.output.pairlist.role == Gfn2PairListRole::kCoordination &&
-        binding.output.pairlist.state == Gfn2PairListState::kCommitted &&
+        batch.batch_size == 0 && batch.total_atoms == 0 && batch.atom_offset_elements == 0 &&
+        batch.cutoff == 0.0 && batch.max_cells_per_system == 0 &&
+        batch.max_neighbors_per_atom == 0 && batch.max_pairs_per_system == 0 &&
+        batch.mode == Gfn2PairListMode::kSparse && batch.plan_token == 0u &&
+        batch.atom_offsets == nullptr && batch.flags == 0u && batch.system_modes == nullptr &&
+        batch.system_mode_elements == 0 && candidate.pairs == nullptr &&
+        candidate.pair_elements == 0 && candidate.pair_offsets == nullptr &&
+        candidate.pair_offset_elements == 0 && candidate.pair_counts == nullptr &&
+        candidate.pair_count_elements == 0 && candidate.neighbor_offsets == nullptr &&
+        candidate.neighbor_offset_elements == 0 && candidate.neighbor_counts == nullptr &&
+        candidate.neighbor_count_elements == 0 && candidate.neighbors == nullptr &&
+        candidate.neighbor_elements == 0 && candidate.pair_generations == nullptr &&
+        candidate.generation_elements == 0 && candidate.plan_token == 0u &&
+        workspace.system_meta == nullptr && workspace.system_meta_elements == 0 &&
+        workspace.atom_cells == nullptr && workspace.atom_cell_elements == 0 &&
+        workspace.cell_counts == nullptr && workspace.cell_count_elements == 0 &&
+        workspace.cell_offsets == nullptr && workspace.cell_offset_elements == 0 &&
+        workspace.cell_fill == nullptr && workspace.cell_fill_elements == 0 &&
+        workspace.cell_atoms == nullptr && workspace.cell_atom_elements == 0 &&
+        workspace.neighbor_cursor == nullptr && workspace.neighbor_cursor_elements == 0 &&
+        workspace.neighbor_scratch == nullptr && workspace.neighbor_scratch_elements == 0 &&
+        workspace.pair_cursor == nullptr && workspace.pair_cursor_elements == 0 &&
+        workspace.sequence_active == nullptr && workspace.sequence_elements == 0 &&
+        workspace.plan_token == 0u && binding.workspace.sparse_coordination == nullptr &&
+        binding.workspace.sparse_coordination_elements == 0 &&
+        output.memory_space == Gfn2PlanMemorySpace::kHost &&
+        output.state == Gfn2PairListState::kCommitted &&
+        output.role == Gfn2PairListRole::kCoordination &&
+        output.pair_map_kind == Gfn2PairMapKind::kExplicit && output.plan_token == 0u &&
+        output.cutoff_bohr == 0.0 && output.list_builder_cutoff_bohr == 0.0 &&
+        output.batch_size == 0 && output.total_atoms == 0 && output.max_pairs_per_system == 0 &&
+        output.max_neighbors_per_atom == 0 && output.pair_offset_count == 0 &&
+        output.neighbor_offset_count == 0 && output.pair_count == 0 && output.neighbor_count == 0 &&
+        output.pair_offsets == nullptr && output.pairs == nullptr &&
+        output.pair_count_elements == 0 && output.neighbor_count_elements == 0 &&
+        output.pair_counts == nullptr && output.neighbor_counts == nullptr &&
+        output.neighbor_offsets == nullptr && output.neighbors == nullptr &&
+        output.committed_generation_count == 0 && output.eligible_mask_count == 0 &&
+        output.active_mask_count == 0 && output.committed_generations == nullptr &&
+        output.eligible_mask == nullptr && output.active_mask == nullptr &&
         binding.diagnostics.sparse_system_errors == nullptr &&
+        binding.diagnostics.sparse_system_elements == 0 &&
         binding.diagnostics.sparse_device_error == nullptr;
   }
   return token != 0u && binding.plan.plan_token == token &&
@@ -201,6 +237,14 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
   }
   if (binding.plan_token == 0u) {
     return binding_failure(BindingError::kInvalidPlanToken, BindingField::kBinding);
+  }
+  /* Once sealed, any descriptor mutation is stale before its new value is
+   * interpreted.  seal_gfn2_preprocessing_binding_cuda still runs the full
+   * structural/canonical validation with require_seal=false. */
+  if (require_seal && binding.binding_seal != binding_seal(binding)) {
+    return binding_failure(
+        binding.binding_seal == 0u ? BindingError::kUnsealedBinding : BindingError::kStaleSeal,
+        BindingField::kSeal);
   }
   if (!all_tokens_match(binding)) {
     return binding_failure(BindingError::kCrossPlan, BindingField::kPlan);
@@ -451,8 +495,8 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
         pairlist_capacity_products && pairlist.plan_token == binding.plan_token &&
         pairlist.batch_size == batch && pairlist.total_atoms == atoms &&
         pairlist.atom_offset_elements == batch + 1 &&
-        pairlist.atom_offsets == geometry.atom_offsets && pairlist.cutoff > 0.0 &&
-        std::isfinite(pairlist.cutoff) && pairlist.max_cells_per_system > 0 &&
+        pairlist.atom_offsets == geometry.atom_offsets &&
+        pairlist.cutoff == kDefaultPairlistCutoffBohr && pairlist.max_cells_per_system > 0 &&
         pairlist.max_neighbors_per_atom > 0 && pairlist.max_pairs_per_system > 0 &&
         (pairlist.mode == Gfn2PairListMode::kSparse || pairlist.mode == Gfn2PairListMode::kDense) &&
         (pairlist.flags & ~kGfn2PairListAllowDenseFallback) == 0u &&
@@ -526,8 +570,8 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
         committed.total_atoms == atoms &&
         committed.max_pairs_per_system == pairlist.max_pairs_per_system &&
         committed.max_neighbors_per_atom == pairlist.max_neighbors_per_atom &&
-        std::isfinite(committed.cutoff_bohr) && committed.cutoff_bohr > 0.0 &&
-        committed.list_builder_cutoff_bohr >= committed.cutoff_bohr &&
+        committed.cutoff_bohr == kDefaultPairlistCutoffBohr &&
+        committed.list_builder_cutoff_bohr == pairlist.cutoff &&
         committed.pair_offset_count == batch + 1 && committed.neighbor_offset_count == atoms + 1 &&
         committed.pair_count_elements == batch && committed.neighbor_count_elements == atoms &&
         committed.pair_count == pairlist_pairs_capacity &&
@@ -664,14 +708,6 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
     return binding_failure(BindingError::kInvalidAlias, BindingField::kWorkspace);
   }
 
-  if (require_seal) {
-    if (binding.binding_seal == 0u) {
-      return binding_failure(BindingError::kUnsealedBinding, BindingField::kSeal);
-    }
-    if (binding.binding_seal != binding_seal(binding)) {
-      return binding_failure(BindingError::kStaleSeal, BindingField::kSeal);
-    }
-  }
   return {};
 }
 
@@ -953,37 +989,59 @@ __global__ void promote_sparse_coordination_kernel(Gfn2GeometryDeviceBatch geome
  * Commit the sparse pair list into the stable public output view through the
  * final per-system gate.  Only requested, healthy peers publish: their
  * committed generation advances and their eligibility byte flips.  A failed or
- * inactive peer keeps generation zero and an ineligible byte.  Consumers read
+ * inactive peer keeps its last good payload/counts/generation and receives an
+ * ineligible byte for the attempted refresh.  Consumers read
  * only eligible peers and trust explicit per-peer counts + committed
  * generations (the consumer-view contract), so one peer's failure can never
  * publish a partial or shifted slice for another.
  *
- * Committed offsets mirror the candidate's per-system compact CSR offsets
- * exactly; the consumer view validator requires pair_offsets/neighbor_offsets
- * to be valid partitions with explicit counts matching per-system slices.
- * The kernel writes no public byte before its own per-peer gate passes and is
- * therefore safe in the same stream and Graph as the rest of the preprocessing
- * DAG.
+ * Committed offsets address fixed-capacity slots.  Explicit counts delimit the
+ * live prefix copied from the compact candidate, so a failed peer cannot move
+ * another peer's bytes.  Fixed slot offsets may be rewritten after plan-wide
+ * validation; the per-peer kernel changes persistent metadata and payload only
+ * for a peer that passed the final publication gate.
  */
+__global__ void initialize_committed_pairlist_metadata_kernel(Gfn2PairListDeviceBatch pairlist,
+                                                              Gfn2PairListConsumerView committed,
+                                                              const std::uint32_t* plan_error) {
+  if (atomicAdd(const_cast<std::uint32_t*>(plan_error), 0u) != 0u) {
+    return;
+  }
+  const std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  auto* const pair_offsets = const_cast<std::int64_t*>(committed.pair_offsets);
+  auto* const neighbor_offsets = const_cast<std::int64_t*>(committed.neighbor_offsets);
+  if (index <= pairlist.batch_size) {
+    pair_offsets[index] = index * pairlist.max_pairs_per_system;
+  }
+  if (index <= pairlist.total_atoms) {
+    neighbor_offsets[index] = index * pairlist.max_neighbors_per_atom;
+  }
+}
+
 __global__ void commit_pairlist_kernel(Gfn2PairListDeviceBatch pairlist,
                                        const Gfn2PairListDeviceCache& candidate,
                                        Gfn2PairListConsumerView committed,
                                        GeometryGenerationSource generation_source,
                                        Gfn2PreprocessingDeviceActivity activity,
-                                       Gfn2PreprocessingDeviceDiagnostics diagnostics) {
+                                       const std::uint32_t* plan_error) {
+  /* A plan-wide failure is transactional for every committed array.  In
+   * particular, do not clear generations or eligibility after the metadata
+   * initializer has already declined to run. */
+  if (atomicAdd(const_cast<std::uint32_t*>(plan_error), 0u) != 0u) {
+    return;
+  }
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
-  const bool requested = activity.requested_mask[system] == 1u;
-  const bool healthy = atomicAdd(diagnostics.geometry_system_errors + system, 0u) ==
-                       static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kSuccess);
   const std::uint64_t generation = load_geometry_generation(generation_source);
-  const bool commit = requested && healthy && generation != 0u;
+  /* published_mask is the single final transaction gate.  Geometry can be
+   * healthy while integral/H0/AES2 or a plan-wide failure has already closed
+   * publication, so re-deriving eligibility from the geometry error alone
+   * would expose a partial operator transaction to sparse consumers. */
+  const bool commit = activity.published_mask[system] == 1u && generation != 0u;
   /* The committed consumer view is a const projection; the output arrays are
    * the mutable publication target owned by the caller, so publish through
    * mutable local aliases. */
   auto* const committed_pairs = const_cast<gpuxtb::detail::Gfn2AtomPair*>(committed.pairs);
-  auto* const committed_pair_offsets = const_cast<std::int64_t*>(committed.pair_offsets);
   auto* const committed_pair_counts = const_cast<std::int64_t*>(committed.pair_counts);
-  auto* const committed_neighbor_offsets = const_cast<std::int64_t*>(committed.neighbor_offsets);
   auto* const committed_neighbor_counts = const_cast<std::int64_t*>(committed.neighbor_counts);
   auto* const committed_neighbors = const_cast<std::int64_t*>(committed.neighbors);
   auto* const committed_generations = const_cast<std::uint64_t*>(committed.committed_generations);
@@ -992,8 +1050,8 @@ __global__ void commit_pairlist_kernel(Gfn2PairListDeviceBatch pairlist,
     if (committed_eligible_mask != nullptr) {
       committed_eligible_mask[system] = commit ? 1u : 0u;
     }
-    if (committed_generations != nullptr) {
-      committed_generations[system] = commit ? generation : 0u;
+    if (commit && committed_generations != nullptr) {
+      committed_generations[system] = generation;
     }
   }
   if (!commit) {
@@ -1001,42 +1059,43 @@ __global__ void commit_pairlist_kernel(Gfn2PairListDeviceBatch pairlist,
   }
   const std::int64_t atom_begin = pairlist.atom_offsets[system];
   const std::int64_t atom_end = pairlist.atom_offsets[system + 1];
-  const std::int64_t pair_begin = candidate.pair_offsets[system];
-  const std::int64_t pair_end = candidate.pair_offsets[system + 1];
-  for (std::int64_t pair = pair_begin + threadIdx.x; pair < pair_end; pair += blockDim.x) {
-    committed_pairs[pair] = candidate.pairs[pair];
+  const std::int64_t candidate_pair_begin = candidate.pair_offsets[system];
+  const std::int64_t pair_count = candidate.pair_counts[system];
+  const std::int64_t committed_pair_begin = system * pairlist.max_pairs_per_system;
+  for (std::int64_t index = threadIdx.x; index < pair_count; index += blockDim.x) {
+    committed_pairs[committed_pair_begin + index] = candidate.pairs[candidate_pair_begin + index];
   }
   if (threadIdx.x == 0) {
-    committed_pair_counts[system] = pair_end - pair_begin;
-    committed_pair_offsets[system] = candidate.pair_offsets[system];
-    committed_pair_offsets[system + 1] = candidate.pair_offsets[system + 1];
+    committed_pair_counts[system] = pair_count;
   }
   for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
     const std::int64_t count = candidate.neighbor_counts[atom];
-    const std::int64_t begin = candidate.neighbor_offsets[atom];
+    const std::int64_t candidate_begin = candidate.neighbor_offsets[atom];
+    const std::int64_t committed_begin = atom * pairlist.max_neighbors_per_atom;
     for (std::int64_t index = 0; index < count; ++index) {
-      committed_neighbors[begin + index] = candidate.neighbors[begin + index];
+      committed_neighbors[committed_begin + index] = candidate.neighbors[candidate_begin + index];
     }
     committed_neighbor_counts[atom] = count;
-    committed_neighbor_offsets[atom] = candidate.neighbor_offsets[atom];
-    if (threadIdx.x == blockDim.x - 1 || atom + 1 == atom_end) {
-      committed_neighbor_offsets[atom + 1] = candidate.neighbor_offsets[atom + 1];
-    }
   }
 }
 
-__global__ void classify_plan_kernel(std::int64_t batch_size,
-                                     const std::uint32_t* geometry_sequence,
-                                     const std::uint32_t* integral_sequence,
-                                     const std::uint32_t* geometry_errors,
-                                     const std::uint32_t* integral_errors,
-                                     const std::uint32_t* es2_error,
-                                     const std::uint32_t* aes2_errors, std::uint32_t* plan_error) {
+__global__ void classify_plan_kernel(
+    std::int64_t batch_size, const std::uint32_t* geometry_sequence,
+    const std::uint32_t* sparse_sequence, const std::uint32_t* integral_sequence,
+    const std::uint32_t* geometry_errors, const std::uint32_t* integral_errors,
+    const std::uint32_t* es2_error, const std::uint32_t* aes2_errors, std::uint32_t* plan_error) {
   if (threadIdx.x != 0 || blockIdx.x != 0 || read_u32(plan_error) != 0u) {
     return;
   }
   if (read_u32(geometry_sequence) == 0u) {
     record_plan_error(plan_error, Gfn2PreprocessingDeviceError::kGeometryPlanFailure);
+    return;
+  }
+  if (sparse_sequence != nullptr && read_u32(sparse_sequence) == 0u) {
+    /* Pair-list preflight validates one shared topology and dispatch vector.
+     * A closed sequence is plan-wide and must stop committed metadata
+     * initialization, rather than being reclassified as peer-local CN drift. */
+    record_plan_error(plan_error, Gfn2PreprocessingDeviceError::kSparsePairlistFailure);
     return;
   }
   if (read_u32(integral_sequence) == 0u) {
@@ -1146,10 +1205,8 @@ __global__ void publish_preprocessing_kernel(Gfn2PreprocessingDevicePlan plan,
   for (std::int64_t element = es2_begin + threadIdx.x; element < es2_end; element += blockDim.x) {
     output.es2.coulomb_matrix[element] = workspace.es2_candidate.coulomb_matrix[element];
   }
-  /* The sparse list remains an internal candidate for the dense/CN gate.  It
-   * is deliberately not copied into output: compact pair/neighbor offsets
-   * cannot be published independently per peer without exposing partial
-   * slices when a later operator fails. */
+  /* The sparse list is committed by commit_pairlist_kernel after this final
+   * operator gate has published the authoritative per-peer decision. */
   if (threadIdx.x == 0) {
     output.geometry.geometry_generations[system] = generation;
     output.operator_generations[system] = generation;
@@ -1349,6 +1406,7 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
 
   classify_plan_kernel<<<1, 1, 0, stream>>>(
       batch, binding.workspace.geometry.sequence_active,
+      binding.plan.pairlist.batch_size > 0 ? binding.workspace.pairlist.sequence_active : nullptr,
       binding.workspace.integrals.sequence_active, binding.diagnostics.geometry_system_errors,
       binding.diagnostics.integral_system_errors, binding.diagnostics.es2_device_error,
       binding.diagnostics.aes2_system_errors, binding.diagnostics.plan_error);
@@ -1360,15 +1418,21 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
   status = check_launch();
   if (status != cudaSuccess) return launch_failure({}, status);
 
-  /* Committed pair-list transaction: after the complete per-system gate,
-   * publish the sparse list into the stable output consumer view with
-   * per-peer generation + eligibility.  Healthy peers are eligible for the
-   * current generation; failed/inactive peers stay ineligible with generation
-   * zero so their slice is never consumed. */
+  /* Committed pair-list transaction: initialize fixed-capacity slot metadata
+   * only after plan validation, then publish each healthy peer into its own
+   * stable slot with the current generation and eligibility. */
   if (binding.plan.pairlist.batch_size > 0) {
+    const std::int64_t metadata_elements =
+        std::max<std::int64_t>(batch + 1, binding.plan.pairlist.total_atoms + 1);
+    initialize_committed_pairlist_metadata_kernel<<<
+        static_cast<unsigned int>((metadata_elements + kThreadsPerBlock - 1) / kThreadsPerBlock),
+        kThreadsPerBlock, 0, stream>>>(binding.plan.pairlist, binding.output.pairlist,
+                                       binding.diagnostics.plan_error);
+    status = check_launch();
+    if (status != cudaSuccess) return launch_failure({}, status);
     commit_pairlist_kernel<<<static_cast<unsigned int>(batch), kThreadsPerBlock, 0, stream>>>(
         binding.plan.pairlist, binding.workspace.pairlist_candidate, binding.output.pairlist,
-        generation_source, binding.activity, binding.diagnostics);
+        generation_source, binding.activity, binding.diagnostics.plan_error);
     status = check_launch();
     if (status != cudaSuccess) return launch_failure({}, status);
   }

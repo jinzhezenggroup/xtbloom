@@ -33,6 +33,21 @@ struct SystemRanges {
   std::int64_t cells;
 };
 
+/* Scalar mode is retained for legacy launches; the device pointer is used by
+ * replay-safe execution so a graph never captures a host generation value. */
+struct PairListGenerationSource {
+  std::uint64_t scalar = 0u;
+  const std::uint64_t* device = nullptr;
+};
+
+__device__ std::uint64_t load_generation(PairListGenerationSource source) {
+  return source.device == nullptr
+             ? source.scalar
+             : atomicAdd(
+                   reinterpret_cast<unsigned long long*>(const_cast<std::uint64_t*>(source.device)),
+                   0ULL);
+}
+
 /* Per-system strategy.  A non-null system_modes array overrides the batch-wide
  * `mode`, letting heterogeneous batches dispatch dense and bucketed peers
  * independently.  The two paths emit identical canonical lists. */
@@ -180,6 +195,39 @@ __global__ void topology_preflight_kernel(Gfn2PairListDeviceBatch batch,
       atomicExch(sequence_active, 0u);
       record_error(device_error, Gfn2PairListDeviceError::kInvalidMode);
     }
+  }
+}
+
+/* Committed consumers may be launched without the builder transaction that
+ * normally validates device-resident topology. Preserve the caller's sequence
+ * gate while rejecting hostile offset mutation before load_system can use an
+ * unchecked range. */
+__global__ void consumer_topology_preflight_kernel(Gfn2PairListDeviceBatch batch,
+                                                   std::uint32_t* sequence_active,
+                                                   std::uint32_t* device_error) {
+  __shared__ int invalid;
+  if (threadIdx.x == 0) {
+    invalid = atomicAdd(sequence_active, 0u) == 1u &&
+                      (batch.atom_offsets[0] != 0 ||
+                       batch.atom_offsets[batch.batch_size] != batch.total_atoms)
+                  ? 1
+                  : 0;
+  }
+  __syncthreads();
+  if (atomicAdd(sequence_active, 0u) != 1u) {
+    return;
+  }
+  for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
+    const std::int64_t begin = batch.atom_offsets[system];
+    const std::int64_t end = batch.atom_offsets[system + 1];
+    if (begin < 0 || begin > end || end > batch.total_atoms) {
+      atomicExch(&invalid, 1);
+    }
+  }
+  __syncthreads();
+  if (threadIdx.x == 0 && invalid != 0) {
+    atomicExch(sequence_active, 0u);
+    record_error(device_error, Gfn2PairListDeviceError::kInvalidOffsets);
   }
 }
 
@@ -932,20 +980,46 @@ __global__ void preflight_coordination_pairs_kernel(
  */
 __global__ void coordination_vjp_preflight_kernel(
     Gfn2PairListDeviceBatch batch, const double* positions, const double* covalent_radii,
-    std::uint64_t scalar_generation, Gfn2PairListDeviceCache cache, const double* dE_dcn,
-    const double* gradients, const std::uint32_t* sequence_active, std::uint32_t* system_errors,
+    PairListGenerationSource generation_source, Gfn2PairListDeviceCache cache, const double* dE_dcn,
+    const double* gradients, const std::uint8_t* eligible_mask, const std::uint8_t* active_mask,
+    const std::uint32_t* sequence_active, std::uint32_t* system_errors,
     std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!sequence_is_active(sequence_active)) {
+    return;
+  }
+  if (active_mask != nullptr) {
+    const std::uint8_t active = active_mask[system];
+    if (active > 1u) {
+      if (threadIdx.x == 0) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2PairListDeviceError::kInvalidCache);
+      }
+      return;
+    }
+    if (active != 1u) {
+      return;
+    }
+  }
   __shared__ SystemRanges ranges;
   __shared__ int valid;
   if (!load_system(batch, system, sequence_active, system_errors, &ranges, &valid)) {
     return;
   }
   __syncthreads();
-  if (threadIdx.x == 0 && cache.pair_generations[system] != scalar_generation) {
-    record_system_error(system_errors, system, device_error,
-                        Gfn2PairListDeviceError::kStaleGeometry);
-    valid = 0;
+  if (threadIdx.x == 0) {
+    const std::uint8_t eligible = eligible_mask == nullptr ? 1u : eligible_mask[system];
+    const std::uint64_t expected_generation = load_generation(generation_source);
+    if (eligible > 1u) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2PairListDeviceError::kInvalidCache);
+      valid = 0;
+    } else if (eligible != 1u || expected_generation == 0u ||
+               cache.pair_generations[system] != expected_generation) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2PairListDeviceError::kStaleGeometry);
+      valid = 0;
+    }
   }
   __syncthreads();
   if (valid != 0) {
@@ -968,15 +1042,16 @@ __global__ void coordination_vjp_preflight_kernel(
     for (std::int64_t atom = ranges.atom_begin + threadIdx.x; atom < ranges.atom_end;
          atom += blockDim.x) {
       const std::int64_t begin = cache.neighbor_offsets[atom];
-      const std::int64_t end = cache.neighbor_offsets[atom + 1];
+      const std::int64_t next_begin = cache.neighbor_offsets[atom + 1];
       const std::int64_t count = cache.neighbor_counts[atom];
-      if (begin < 0 || end < begin || end > neighbor_capacity || count < 0 ||
-          count > batch.max_neighbors_per_atom || end - begin != count) {
+      if (begin < 0 || next_begin < begin || next_begin > neighbor_capacity || count < 0 ||
+          count > batch.max_neighbors_per_atom || count > next_begin - begin) {
         record_system_error(system_errors, system, device_error,
                             Gfn2PairListDeviceError::kInvalidCache);
         atomicExch(&valid, 0);
         continue;
       }
+      const std::int64_t end = begin + count;
       const std::int64_t coordinate = atom * 3;
       for (std::int64_t index = begin; index < end; ++index) {
         const std::int64_t peer = cache.neighbors[index];
@@ -1010,10 +1085,14 @@ __global__ void coordination_vjp_preflight_kernel(
 
 __global__ void coordination_vjp_accumulate_kernel(
     Gfn2PairListDeviceBatch batch, const double* positions, const double* covalent_radii,
-    std::uint64_t scalar_generation, Gfn2PairListDeviceCache cache, const double* dE_dcn,
-    const double* gradients, double* gradient_scratch, const std::uint32_t* sequence_active,
+    Gfn2PairListDeviceCache cache, const double* dE_dcn, const double* gradients,
+    double* gradient_scratch, const std::uint8_t* active_mask, const std::uint32_t* sequence_active,
     std::uint32_t* system_errors, std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!sequence_is_active(sequence_active) ||
+      (active_mask != nullptr && active_mask[system] != 1u)) {
+    return;
+  }
   __shared__ SystemRanges ranges;
   __shared__ int valid;
   if (!load_system(batch, system, sequence_active, system_errors, &ranges, &valid)) {
@@ -1028,7 +1107,7 @@ __global__ void coordination_vjp_accumulate_kernel(
     double contribution[3] = {0.0, 0.0, 0.0};
     bool finite_result = true;
     const std::int64_t begin = cache.neighbor_offsets[atom];
-    const std::int64_t end = cache.neighbor_offsets[atom + 1];
+    const std::int64_t end = begin + cache.neighbor_counts[atom];
     for (std::int64_t index = begin; finite_result && index < end; ++index) {
       const std::int64_t peer = cache.neighbors[index];
       const std::int64_t target_is_upper = atom > peer;
@@ -1068,10 +1147,15 @@ __global__ void coordination_vjp_accumulate_kernel(
 
 __global__ void coordination_vjp_publish_kernel(Gfn2PairListDeviceBatch batch,
                                                 const double* gradient_scratch, double* gradients,
+                                                const std::uint8_t* active_mask,
                                                 const std::uint32_t* sequence_active,
                                                 std::uint32_t* system_errors,
                                                 std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!sequence_is_active(sequence_active) ||
+      (active_mask != nullptr && active_mask[system] != 1u)) {
+    return;
+  }
   __shared__ SystemRanges ranges;
   __shared__ int valid;
   if (!load_system(batch, system, sequence_active, system_errors, &ranges, &valid)) {
@@ -1150,7 +1234,9 @@ cudaError_t validate_batch(const Gfn2PairListDeviceBatch& batch) noexcept {
       batch.total_atoms > kInt64Maximum / 3 || batch.atom_offset_elements != batch.batch_size + 1 ||
       batch.max_cells_per_system <= 0 || batch.max_cells_per_system == kInt64Maximum ||
       batch.max_neighbors_per_atom <= 0 || batch.max_pairs_per_system <= 0 ||
-      !(batch.cutoff > 0.0) || !isfinite(batch.cutoff) ||
+      batch.batch_size > kInt64Maximum / batch.max_pairs_per_system ||
+      batch.total_atoms > kInt64Maximum / batch.max_neighbors_per_atom || !(batch.cutoff > 0.0) ||
+      !isfinite(batch.cutoff) ||
       (batch.mode != Gfn2PairListMode::kSparse && batch.mode != Gfn2PairListMode::kDense) ||
       (batch.flags & ~kGfn2PairListAllowDenseFallback) != 0u || batch.plan_token == 0u ||
       !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
@@ -1597,22 +1683,24 @@ cudaError_t add_gfn2_pairlist_coordination_vjp_cuda(
     return cudaErrorInvalidValue;
   }
   const unsigned int blocks = static_cast<unsigned int>(batch.batch_size);
+  const PairListGenerationSource generation_source{pair_generation, nullptr};
   coordination_vjp_preflight_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, positions, covalent_radii, pair_generation, cache, dE_dcn, gradients,
-      workspace.sequence_active, system_errors, device_error);
+      batch, positions, covalent_radii, generation_source, cache, dE_dcn, gradients, nullptr,
+      nullptr, workspace.sequence_active, system_errors, device_error);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;
   }
   coordination_vjp_accumulate_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, positions, covalent_radii, pair_generation, cache, dE_dcn, gradients, gradient_scratch,
+      batch, positions, covalent_radii, cache, dE_dcn, gradients, gradient_scratch, nullptr,
       workspace.sequence_active, system_errors, device_error);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;
   }
   coordination_vjp_publish_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, gradient_scratch, gradients, workspace.sequence_active, system_errors, device_error);
+      batch, gradient_scratch, gradients, nullptr, workspace.sequence_active, system_errors,
+      device_error);
   return check_launch();
 }
 
@@ -1651,29 +1739,57 @@ Gfn2PairListDeviceCache pairlist_cache_from_consumer(
 
 }  // namespace
 
-cudaError_t add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+static cudaError_t validate_gfn2_pairlist_consumer_coordination_vjp_impl(
     const Gfn2PairListDeviceBatch& batch, const Gfn2PairListConsumerView& committed,
-    const double* positions, const double* covalent_radii, std::uint64_t expected_generation,
-    const double* dE_dcn, double* gradients, double* gradient_scratch,
-    std::int64_t gradient_elements, const std::uint32_t* sequence_active,
-    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
-  if (committed.plan_token == 0u || committed.plan_token != batch.plan_token ||
+    const double* positions, const double* covalent_radii, std::uint64_t scalar_generation,
+    const Gfn2GeometryEpochDevice* geometry_epoch, const double* dE_dcn, double* gradients,
+    double* gradient_scratch, std::int64_t gradient_elements, const std::uint32_t* sequence_active,
+    std::uint32_t* system_errors, std::uint32_t* device_error) noexcept {
+  cudaError_t status = validate_batch(batch);
+  if (status != cudaSuccess) {
+    return status;
+  }
+  if ((geometry_epoch != nullptr &&
+       (geometry_epoch->value_elements != 1 || geometry_epoch->plan_token != batch.plan_token ||
+        !is_aligned(geometry_epoch->value, alignof(std::uint64_t)))) ||
+      (geometry_epoch == nullptr && scalar_generation == 0u) || committed.plan_token == 0u ||
+      committed.plan_token != batch.plan_token ||
+      committed.memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
       committed.state != Gfn2PairListState::kCommitted ||
+      committed.role != Gfn2PairListRole::kCoordination ||
+      committed.pair_map_kind != Gfn2PairMapKind::kExplicit ||
+      committed.cutoff_bohr != kDefaultPairlistCutoffBohr ||
+      !isfinite(committed.list_builder_cutoff_bohr) ||
+      committed.list_builder_cutoff_bohr < committed.cutoff_bohr ||
       committed.batch_size != batch.batch_size || committed.total_atoms != batch.total_atoms ||
+      committed.max_pairs_per_system != batch.max_pairs_per_system ||
+      committed.max_pairs_per_system > kInt64Maximum / batch.batch_size ||
+      committed.pair_count != batch.batch_size * committed.max_pairs_per_system ||
       committed.max_neighbors_per_atom != batch.max_neighbors_per_atom ||
-      committed.pair_offsets == nullptr || committed.pair_counts == nullptr ||
+      committed.neighbor_count != batch.total_atoms * committed.max_neighbors_per_atom ||
+      committed.pair_offset_count != batch.batch_size + 1 ||
+      committed.neighbor_offset_count != batch.total_atoms + 1 ||
+      committed.pair_count_elements != batch.batch_size ||
+      committed.neighbor_count_elements != batch.total_atoms ||
+      committed.committed_generation_count != batch.batch_size ||
+      committed.eligible_mask_count != batch.batch_size || committed.pair_offsets == nullptr ||
+      committed.pair_counts == nullptr || committed.pairs == nullptr ||
       committed.neighbor_offsets == nullptr || committed.neighbor_counts == nullptr ||
       committed.neighbors == nullptr || committed.committed_generations == nullptr ||
+      committed.eligible_mask == nullptr ||
+      !((committed.active_mask == nullptr && committed.active_mask_count == 0) ||
+        (committed.active_mask != nullptr && committed.active_mask_count == batch.batch_size &&
+         is_aligned(committed.active_mask, alignof(std::uint8_t)))) ||
       !required_pointer(sequence_active, 1) || !is_aligned(system_errors, alignof(std::uint32_t)) ||
-      !is_aligned(device_error, alignof(std::uint32_t)) || expected_generation == 0u ||
+      !is_aligned(device_error, alignof(std::uint32_t)) ||
       gradient_elements < batch.total_atoms * 3) {
     return cudaErrorInvalidValue;
   }
   const Gfn2PairListDeviceCache cache = pairlist_cache_from_consumer(committed);
 
-  if (expected_generation == 0u || batch.plan_token != cache.plan_token ||
+  if (batch.plan_token != cache.plan_token ||
       batch.total_atoms > kInt64Maximum / batch.max_neighbors_per_atom ||
-      batch.total_atoms > kInt64Maximum / 3 || batch.total_atoms > kInt64Maximum / 3 ||
+      batch.total_atoms > kInt64Maximum / 3 ||
       !required_pointer(positions, batch.total_atoms * 3) ||
       !required_pointer(covalent_radii, batch.total_atoms) ||
       !required_pointer(dE_dcn, batch.total_atoms) ||
@@ -1683,14 +1799,20 @@ cudaError_t add_gfn2_pairlist_consumer_coordination_vjp_cuda(
       cache.neighbor_offset_elements != batch.total_atoms + 1 ||
       cache.neighbor_count_elements < batch.total_atoms ||
       cache.neighbor_elements < batch.total_atoms * batch.max_neighbors_per_atom ||
-      cache.pair_offsets == nullptr || cache.pair_counts == nullptr ||
-      cache.neighbor_offsets == nullptr || cache.neighbor_counts == nullptr ||
-      cache.neighbors == nullptr || cache.pair_generations == nullptr) {
+      !required_pointer(cache.pairs, cache.pair_elements) ||
+      !required_pointer(cache.pair_offsets, cache.pair_offset_elements) ||
+      !required_pointer(cache.pair_counts, cache.pair_count_elements) ||
+      !required_pointer(cache.neighbor_offsets, cache.neighbor_offset_elements) ||
+      !required_pointer(cache.neighbor_counts, cache.neighbor_count_elements) ||
+      !required_pointer(cache.neighbors, cache.neighbor_elements) ||
+      !required_pointer(cache.pair_generations, cache.generation_elements) ||
+      !required_pointer(committed.eligible_mask, committed.eligible_mask_count)) {
     return cudaErrorInvalidValue;
   }
   const std::int64_t neighbor_capacity = batch.total_atoms * batch.max_neighbors_per_atom;
-  std::array<AddressRange, 9> reads;
-  std::array<AddressRange, 4> writes;
+  const std::int64_t pair_capacity = batch.batch_size * batch.max_pairs_per_system;
+  std::array<AddressRange, 14> reads;
+  std::array<AddressRange, 5> writes;
   if (!make_address_range(batch.atom_offsets, batch.atom_offset_elements,
                           sizeof(*batch.atom_offsets), &reads[0]) ||
       !make_address_range(positions, batch.total_atoms * 3, sizeof(*positions), &reads[1]) ||
@@ -1701,36 +1823,118 @@ cudaError_t add_gfn2_pairlist_consumer_coordination_vjp_cuda(
       !make_address_range(cache.neighbor_offsets, cache.neighbor_offset_elements,
                           sizeof(*cache.neighbor_offsets), &reads[5]) ||
       !make_address_range(cache.neighbor_counts, cache.neighbor_count_elements,
-                          sizeof(*cache.neighbor_counts), &reads[8]) ||
+                          sizeof(*cache.neighbor_counts), &reads[7]) ||
       !make_address_range(cache.neighbors, neighbor_capacity, sizeof(*cache.neighbors),
                           &reads[6]) ||
-      !make_address_range(sequence_active, 1, sizeof(*sequence_active), &reads[7]) ||
+      !make_address_range(committed.eligible_mask, committed.eligible_mask_count,
+                          sizeof(*committed.eligible_mask), &reads[8]) ||
+      !make_address_range(geometry_epoch == nullptr ? nullptr : geometry_epoch->value,
+                          geometry_epoch == nullptr ? 0 : 1, sizeof(std::uint64_t), &reads[9]) ||
+      !make_address_range(cache.pair_offsets, cache.pair_offset_elements,
+                          sizeof(*cache.pair_offsets), &reads[10]) ||
+      !make_address_range(cache.pairs, pair_capacity, sizeof(*cache.pairs), &reads[11]) ||
+      !make_address_range(cache.pair_counts, cache.pair_count_elements, sizeof(*cache.pair_counts),
+                          &reads[12]) ||
+      !make_address_range(committed.active_mask, committed.active_mask_count,
+                          sizeof(*committed.active_mask), &reads[13]) ||
       !make_address_range(gradients, batch.total_atoms * 3, sizeof(*gradients), &writes[0]) ||
       !make_address_range(gradient_scratch, gradient_elements, sizeof(*gradient_scratch),
                           &writes[1]) ||
       !make_address_range(system_errors, batch.batch_size, sizeof(*system_errors), &writes[2]) ||
       !make_address_range(device_error, 1, sizeof(*device_error), &writes[3]) ||
+      /* Composite callers arm this gate immediately before the VJP.  Reserve
+       * it as exclusive control storage even though this leaf only reads it. */
+      !make_address_range(sequence_active, 1, sizeof(*sequence_active), &writes[4]) ||
       !writable_ranges_are_disjoint(reads, writes)) {
     return cudaErrorInvalidValue;
   }
+  return cudaSuccess;
+}
+
+static cudaError_t add_gfn2_pairlist_consumer_coordination_vjp_impl(
+    const Gfn2PairListDeviceBatch& batch, const Gfn2PairListConsumerView& committed,
+    const double* positions, const double* covalent_radii, std::uint64_t scalar_generation,
+    const Gfn2GeometryEpochDevice* geometry_epoch, const double* dE_dcn, double* gradients,
+    double* gradient_scratch, std::int64_t gradient_elements, const std::uint32_t* sequence_active,
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  cudaError_t status = validate_gfn2_pairlist_consumer_coordination_vjp_impl(
+      batch, committed, positions, covalent_radii, scalar_generation, geometry_epoch, dE_dcn,
+      gradients, gradient_scratch, gradient_elements, sequence_active, system_errors, device_error);
+  if (status != cudaSuccess) {
+    return status;
+  }
+  const Gfn2PairListDeviceCache cache = pairlist_cache_from_consumer(committed);
   const unsigned int blocks = static_cast<unsigned int>(batch.batch_size);
+  const PairListGenerationSource generation_source{
+      scalar_generation, geometry_epoch == nullptr ? nullptr : geometry_epoch->value};
+  consumer_topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+      batch, const_cast<std::uint32_t*>(sequence_active), device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
   coordination_vjp_preflight_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, positions, covalent_radii, expected_generation, cache, dE_dcn, gradients,
-      sequence_active, system_errors, device_error);
-  cudaError_t status = check_launch();
+      batch, positions, covalent_radii, generation_source, cache, dE_dcn, gradients,
+      committed.eligible_mask, committed.active_mask, sequence_active, system_errors, device_error);
+  status = check_launch();
   if (status != cudaSuccess) {
     return status;
   }
   coordination_vjp_accumulate_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, positions, covalent_radii, expected_generation, cache, dE_dcn, gradients,
-      gradient_scratch, sequence_active, system_errors, device_error);
+      batch, positions, covalent_radii, cache, dE_dcn, gradients, gradient_scratch,
+      committed.active_mask, sequence_active, system_errors, device_error);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;
   }
   coordination_vjp_publish_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, gradient_scratch, gradients, sequence_active, system_errors, device_error);
+      batch, gradient_scratch, gradients, committed.active_mask, sequence_active, system_errors,
+      device_error);
   return check_launch();
+}
+
+cudaError_t add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    const Gfn2PairListDeviceBatch& batch, const Gfn2PairListConsumerView& committed,
+    const double* positions, const double* covalent_radii, std::uint64_t expected_generation,
+    const double* dE_dcn, double* gradients, double* gradient_scratch,
+    std::int64_t gradient_elements, const std::uint32_t* sequence_active,
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  return add_gfn2_pairlist_consumer_coordination_vjp_impl(
+      batch, committed, positions, covalent_radii, expected_generation, nullptr, dE_dcn, gradients,
+      gradient_scratch, gradient_elements, sequence_active, system_errors, device_error, stream);
+}
+
+cudaError_t validate_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    const Gfn2PairListDeviceBatch& batch, const Gfn2PairListConsumerView& committed,
+    const double* positions, const double* covalent_radii, std::uint64_t expected_generation,
+    const double* dE_dcn, double* gradients, double* gradient_scratch,
+    std::int64_t gradient_elements, const std::uint32_t* sequence_active,
+    std::uint32_t* system_errors, std::uint32_t* device_error) noexcept {
+  return validate_gfn2_pairlist_consumer_coordination_vjp_impl(
+      batch, committed, positions, covalent_radii, expected_generation, nullptr, dE_dcn, gradients,
+      gradient_scratch, gradient_elements, sequence_active, system_errors, device_error);
+}
+
+cudaError_t add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    const Gfn2PairListDeviceBatch& batch, const Gfn2PairListConsumerView& committed,
+    const double* positions, const double* covalent_radii,
+    const Gfn2GeometryEpochDevice& geometry_epoch, const double* dE_dcn, double* gradients,
+    double* gradient_scratch, std::int64_t gradient_elements, const std::uint32_t* sequence_active,
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  return add_gfn2_pairlist_consumer_coordination_vjp_impl(
+      batch, committed, positions, covalent_radii, 0u, &geometry_epoch, dE_dcn, gradients,
+      gradient_scratch, gradient_elements, sequence_active, system_errors, device_error, stream);
+}
+
+cudaError_t validate_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    const Gfn2PairListDeviceBatch& batch, const Gfn2PairListConsumerView& committed,
+    const double* positions, const double* covalent_radii,
+    const Gfn2GeometryEpochDevice& geometry_epoch, const double* dE_dcn, double* gradients,
+    double* gradient_scratch, std::int64_t gradient_elements, const std::uint32_t* sequence_active,
+    std::uint32_t* system_errors, std::uint32_t* device_error) noexcept {
+  return validate_gfn2_pairlist_consumer_coordination_vjp_impl(
+      batch, committed, positions, covalent_radii, 0u, &geometry_epoch, dE_dcn, gradients,
+      gradient_scratch, gradient_elements, sequence_active, system_errors, device_error);
 }
 
 bool gfn2_pairlist_use_sparse_for(std::int64_t atoms_per_system) noexcept {

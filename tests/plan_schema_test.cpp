@@ -561,6 +561,37 @@ HostPairListConsumer make_pair_list_consumer(const HostTopology& topology,
   return consumer;
 }
 
+HostPairListConsumer make_fixed_stride_pair_list_consumer(const HostTopology& topology,
+                                                          std::uint64_t generation) {
+  const HostPairListConsumer compact = make_pair_list_consumer(topology, generation);
+  HostPairListConsumer padded;
+  padded.pair_offsets.resize(static_cast<std::size_t>(topology.view.batch_size + 1));
+  padded.pair_counts = compact.pair_counts;
+  padded.pairs.resize(static_cast<std::size_t>(topology.view.batch_size * 10));
+  for (std::int64_t system = 0; system < topology.view.batch_size; ++system) {
+    const std::int64_t source = compact.pair_offsets[static_cast<std::size_t>(system)];
+    const std::int64_t count = compact.pair_counts[static_cast<std::size_t>(system)];
+    const std::int64_t destination = system * 10;
+    padded.pair_offsets[static_cast<std::size_t>(system)] = destination;
+    std::copy_n(compact.pairs.begin() + source, count, padded.pairs.begin() + destination);
+  }
+  padded.pair_offsets.back() = topology.view.batch_size * 10;
+
+  padded.neighbor_offsets.resize(static_cast<std::size_t>(topology.view.total_atoms + 1));
+  padded.neighbor_counts = compact.neighbor_counts;
+  padded.neighbors.resize(static_cast<std::size_t>(topology.view.total_atoms * 10));
+  for (std::int64_t atom = 0; atom < topology.view.total_atoms; ++atom) {
+    const std::int64_t source = compact.neighbor_offsets[static_cast<std::size_t>(atom)];
+    const std::int64_t count = compact.neighbor_counts[static_cast<std::size_t>(atom)];
+    const std::int64_t destination = atom * 10;
+    padded.neighbor_offsets[static_cast<std::size_t>(atom)] = destination;
+    std::copy_n(compact.neighbors.begin() + source, count, padded.neighbors.begin() + destination);
+  }
+  padded.neighbor_offsets.back() = topology.view.total_atoms * 10;
+  padded.refresh_view(topology, generation);
+  return padded;
+}
+
 int test_pair_list_consumer() {
   static_assert(std::is_trivially_copyable_v<Gfn2PairListConsumerView>);
   static_assert(std::is_standard_layout_v<Gfn2PairListConsumerView>);
@@ -572,6 +603,9 @@ int test_pair_list_consumer() {
               .error == Gfn2PlanSchemaError::kSuccess);
     CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).error ==
           Gfn2PlanSchemaError::kSuccess);
+    HostPairListConsumer fixed_stride = make_fixed_stride_pair_list_consumer(topology, kGeneration);
+    CHECK(validate_gfn2_pair_list_consumer_host(topology.view, fixed_stride.view, kGeneration)
+              .error == Gfn2PlanSchemaError::kSuccess);
 
     consumer.view.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
     CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
@@ -705,7 +739,7 @@ int test_pair_list_consumer() {
     consumer = make_pair_list_consumer(topology, kGeneration);
   }
 
-  /* Counts are an independent commit record and must match compact offsets. */
+  /* Counts are an independent commit record and must fit within each slot. */
   consumer.pair_counts[3] += 1;
   CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).error ==
         Gfn2PlanSchemaError::kInvalidOffsets);
