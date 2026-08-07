@@ -84,6 +84,9 @@ enum class Gfn2PlanSchemaError : std::uint32_t {
   kInvalidPairListRole = 21u,
   kInvalidPairListState = 22u,
   kInsufficientPairListCutoff = 23u,
+  kInvalidElementFingerprint = 24u,
+  kInvalidProjection = 25u,
+  kElementCountMismatch = 26u,
 };
 
 /* Identifies the first field involved in a setup failure. */
@@ -122,6 +125,9 @@ enum class Gfn2PlanSchemaField : std::uint32_t {
   kPairListGenerations = 31u,
   kPairListEligibleMask = 32u,
   kPairListActiveMask = 33u,
+  kProjection = 34u,
+  kElementIdentity = 35u,
+  kElementFingerprint = 36u,
 };
 
 struct Gfn2PlanSchemaDiagnostic {
@@ -324,6 +330,101 @@ struct Gfn2PairListConsumerView {
   const std::uint8_t* active_mask = nullptr;
 };
 
+/*
+ * Device-neutral projections of the authoritative Gfn2RaggedTopologyView.
+ *
+ * A projection borrows a strict subset of the master topology's fields and
+ * never allocates, transfers, or converts layout.  Projectors prove exact
+ * pointer/count/token identity against the master view and fail closed, so a
+ * consumer can never read a different plan's arrays even when the extents
+ * happen to match.  The same struct layout is valid in host and CUDA-device
+ * memory; only the setup-time validator used to inspect it differs.
+ *
+ * Physically different offset domains (shell Coulomb matrices, atom response
+ * matrices, packed atom pairs, shell-pair launch grids) remain distinct and
+ * are deliberately NOT projected here even when their element counts coincide.
+ */
+struct Gfn2AtomProjectionView {
+  Gfn2PlanMemorySpace memory_space = Gfn2PlanMemorySpace::kHost;
+  std::uint64_t plan_token = 0u;
+  std::int64_t batch_size = 0;
+  std::int64_t total_atoms = 0;
+  std::int64_t atom_offset_count = 0;
+  const std::int64_t* atom_offsets = nullptr;
+};
+
+struct Gfn2ShellOwnershipProjectionView {
+  Gfn2PlanMemorySpace memory_space = Gfn2PlanMemorySpace::kHost;
+  std::uint64_t plan_token = 0u;
+  std::int64_t batch_size = 0;
+  std::int64_t total_atoms = 0;
+  std::int64_t total_shells = 0;
+  std::int64_t batch_shell_offset_count = 0;
+  std::int64_t atom_shell_offset_count = 0;
+  std::int64_t shell_to_atom_count = 0;
+  const std::int64_t* batch_shell_offsets = nullptr;
+  const std::int64_t* atom_shell_offsets = nullptr;
+  const std::int64_t* shell_to_atom = nullptr;
+};
+
+struct Gfn2AOMatrixProjectionView {
+  Gfn2PlanMemorySpace memory_space = Gfn2PlanMemorySpace::kHost;
+  std::uint64_t plan_token = 0u;
+  std::int64_t batch_size = 0;
+  std::int64_t total_shells = 0;
+  std::int64_t total_orbitals = 0;
+  std::int64_t total_matrix_elements = 0;
+  std::int64_t batch_orbital_offset_count = 0;
+  std::int64_t matrix_offset_count = 0;
+  std::int64_t shell_orbital_offset_count = 0;
+  std::int64_t orbital_to_shell_count = 0;
+  std::int64_t orbital_to_atom_count = 0;
+  const std::int64_t* batch_orbital_offsets = nullptr;
+  const std::int64_t* matrix_offsets = nullptr;
+  const std::int64_t* shell_orbital_offsets = nullptr;
+  const std::int64_t* orbital_to_shell = nullptr;
+  const std::int64_t* orbital_to_atom = nullptr;
+};
+
+struct Gfn2PackedAllPairProjectionView {
+  Gfn2PlanMemorySpace memory_space = Gfn2PlanMemorySpace::kHost;
+  std::uint64_t plan_token = 0u;
+  std::int64_t batch_size = 0;
+  std::int64_t total_pairs = 0;
+  std::int64_t pair_offset_count = 0;
+  const std::int64_t* pair_offsets = nullptr;
+};
+
+struct Gfn2AOBucketProjectionView {
+  Gfn2PlanMemorySpace memory_space = Gfn2PlanMemorySpace::kHost;
+  std::uint64_t plan_token = 0u;
+  std::int64_t batch_size = 0;
+  std::int64_t bucket_count = 0;
+  std::int64_t bucket_offset_count = 0;
+  std::int64_t bucket_system_count = 0;
+  std::int64_t bucket_orbital_count = 0;
+  const std::int64_t* bucket_offsets = nullptr;
+  const std::int32_t* bucket_systems = nullptr;
+  const std::int32_t* bucket_orbital_counts = nullptr;
+};
+
+/*
+ * Element identity is owned by setup, not by the topology: atomic numbers are
+ * term-specific immutable input.  The projection therefore carries its own
+ * order-sensitive fingerprint (a host setup seal like
+ * gfn2_wavefunction_layout_fingerprint_host) plus the plan token, so a CUDA
+ * consumer can prove it reads the same element ordering without pulling device
+ * metadata back to the host.  Zero denotes an invalid fingerprint.
+ */
+struct Gfn2ElementIdentityProjectionView {
+  Gfn2PlanMemorySpace memory_space = Gfn2PlanMemorySpace::kHost;
+  std::uint64_t plan_token = 0u;
+  std::int64_t total_atoms = 0;
+  std::int64_t atomic_number_count = 0;
+  std::uint64_t element_fingerprint = 0u;
+  const std::int32_t* atomic_numbers = nullptr;
+};
+
 static_assert(std::is_trivially_copyable_v<Gfn2PlanSchemaDiagnostic>);
 static_assert(std::is_standard_layout_v<Gfn2PlanSchemaDiagnostic>);
 static_assert(std::is_trivially_copyable_v<Gfn2AtomPair>);
@@ -336,6 +437,18 @@ static_assert(std::is_trivially_copyable_v<Gfn2GeometryCacheProvenanceView>);
 static_assert(std::is_standard_layout_v<Gfn2GeometryCacheProvenanceView>);
 static_assert(std::is_trivially_copyable_v<Gfn2PairListConsumerView>);
 static_assert(std::is_standard_layout_v<Gfn2PairListConsumerView>);
+static_assert(std::is_trivially_copyable_v<Gfn2AtomProjectionView>);
+static_assert(std::is_standard_layout_v<Gfn2AtomProjectionView>);
+static_assert(std::is_trivially_copyable_v<Gfn2ShellOwnershipProjectionView>);
+static_assert(std::is_standard_layout_v<Gfn2ShellOwnershipProjectionView>);
+static_assert(std::is_trivially_copyable_v<Gfn2AOMatrixProjectionView>);
+static_assert(std::is_standard_layout_v<Gfn2AOMatrixProjectionView>);
+static_assert(std::is_trivially_copyable_v<Gfn2PackedAllPairProjectionView>);
+static_assert(std::is_standard_layout_v<Gfn2PackedAllPairProjectionView>);
+static_assert(std::is_trivially_copyable_v<Gfn2AOBucketProjectionView>);
+static_assert(std::is_standard_layout_v<Gfn2AOBucketProjectionView>);
+static_assert(std::is_trivially_copyable_v<Gfn2ElementIdentityProjectionView>);
+static_assert(std::is_standard_layout_v<Gfn2ElementIdentityProjectionView>);
 
 /*
  * Validate counts, extents, alignment, address arithmetic, and aliases without
@@ -415,6 +528,82 @@ static_assert(std::is_standard_layout_v<Gfn2PairListConsumerView>);
 [[nodiscard]] Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_host(
     const Gfn2RaggedTopologyView& topology, const Gfn2PairListConsumerView& consumer,
     std::uint64_t expected_geometry_generation) noexcept;
+
+/*
+ * Recompute the order-sensitive element-identity seal for a populated host
+ * descriptor.  The fingerprint intentionally excludes pointer values,
+ * memory_space, and its own stored fingerprint so the same immutable
+ * atomic-number ordering has one identity in host, CUDA, and future HIP
+ * descriptors.  Zero denotes an invalid input.
+ */
+[[nodiscard]] std::uint64_t gfn2_element_identity_fingerprint_host(
+    const Gfn2ElementIdentityProjectionView& element) noexcept;
+
+/*
+ * Structural validation of a projection borrowed from the authoritative master
+ * view.  Proves plan/memory-space/batch identity, exact required offset counts,
+ * and exact pointer identity with the corresponding master arrays (fail
+ * closed), without dereferencing any array in any address space.  A projection
+ * must never name arrays owned by another plan, and hosts/CUDA copies of the
+ * same projection must agree field-for-field.
+ */
+[[nodiscard]] Gfn2PlanSchemaDiagnostic validate_gfn2_atom_projection_binding(
+    const Gfn2RaggedTopologyView& topology, const Gfn2AtomProjectionView& projection,
+    Gfn2PlanMemorySpace expected_memory_space) noexcept;
+
+[[nodiscard]] Gfn2PlanSchemaDiagnostic validate_gfn2_shell_ownership_projection_binding(
+    const Gfn2RaggedTopologyView& topology, const Gfn2ShellOwnershipProjectionView& projection,
+    Gfn2PlanMemorySpace expected_memory_space) noexcept;
+
+[[nodiscard]] Gfn2PlanSchemaDiagnostic validate_gfn2_ao_matrix_projection_binding(
+    const Gfn2RaggedTopologyView& topology, const Gfn2AOMatrixProjectionView& projection,
+    Gfn2PlanMemorySpace expected_memory_space) noexcept;
+
+[[nodiscard]] Gfn2PlanSchemaDiagnostic validate_gfn2_packed_all_pair_projection_binding(
+    const Gfn2RaggedTopologyView& topology, const Gfn2PackedAllPairProjectionView& projection,
+    Gfn2PlanMemorySpace expected_memory_space) noexcept;
+
+[[nodiscard]] Gfn2PlanSchemaDiagnostic validate_gfn2_ao_bucket_projection_binding(
+    const Gfn2RaggedTopologyView& topology, const Gfn2AOBucketProjectionView& projection,
+    Gfn2PlanMemorySpace expected_memory_space) noexcept;
+
+/*
+ * Element identity is owned by setup (atomic numbers are term-specific
+ * immutable input), so it validates against the authoritative host atomic
+ * numbers and plan token rather than the master topology.  Proves
+ * count/token identity and the exact order-sensitive fingerprint.
+ */
+[[nodiscard]] Gfn2PlanSchemaDiagnostic validate_gfn2_element_identity_projection_binding(
+    const Gfn2ElementIdentityProjectionView& projection,
+    Gfn2PlanMemorySpace expected_memory_space) noexcept;
+
+/*
+ * Fail-closed host builders for the atomic projections of a validated master
+ * topology.  Each proves exact pointer identity with the master arrays and
+ * clears `projection` unless complete validation succeeds.  They allocate
+ * nothing and never convert layout.
+ */
+[[nodiscard]] Gfn2PlanSchemaDiagnostic project_gfn2_atom_projection_host(
+    const Gfn2RaggedTopologyView& topology, Gfn2AtomProjectionView& projection) noexcept;
+
+[[nodiscard]] Gfn2PlanSchemaDiagnostic project_gfn2_shell_ownership_projection_host(
+    const Gfn2RaggedTopologyView& topology,
+    Gfn2ShellOwnershipProjectionView& projection) noexcept;
+
+[[nodiscard]] Gfn2PlanSchemaDiagnostic project_gfn2_ao_matrix_projection_host(
+    const Gfn2RaggedTopologyView& topology, Gfn2AOMatrixProjectionView& projection) noexcept;
+
+[[nodiscard]] Gfn2PlanSchemaDiagnostic project_gfn2_packed_all_pair_projection_host(
+    const Gfn2RaggedTopologyView& topology,
+    Gfn2PackedAllPairProjectionView& projection) noexcept;
+
+[[nodiscard]] Gfn2PlanSchemaDiagnostic project_gfn2_ao_bucket_projection_host(
+    const Gfn2RaggedTopologyView& topology, Gfn2AOBucketProjectionView& projection) noexcept;
+
+/* Fail-closed builder for the setup-owned element identity projection. */
+[[nodiscard]] Gfn2PlanSchemaDiagnostic project_gfn2_element_identity_projection_host(
+    const std::int32_t* atomic_numbers, std::int64_t atomic_number_count,
+    std::uint64_t plan_token, Gfn2ElementIdentityProjectionView& projection) noexcept;
 
 }  // namespace gpuxtb::detail
 
