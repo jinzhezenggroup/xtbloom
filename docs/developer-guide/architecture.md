@@ -213,7 +213,13 @@ forbidden on the steady-state inference path; the context grows and reuses works
 libgpuxtb does not require a proprietary BLAS or CUDA host shared library merely to load. The CPU
 eigensolver dlopens an LP64 BLAS/LAPACK runtime (Intel MKL or OpenBLAS) by SONAME on first use
 (`src/model/gfn2/eigensolver.cpp`), so a machine without a compatible provider still loads the
-library. On Linux the CUDA build generates one ELF trampoline shim per wrapped host library
+library. The MKL path is host-isolated: CMake builds a private
+`libgpuxtb_mkl_lp64_shim` with fixed `DT_NEEDED` dependencies on `libmkl_intel_lp64`,
+`libmkl_sequential`, and `libmkl_core`, and the factory dlopens that shim with `RTLD_LOCAL`.
+gpuxtb never loads `libmkl_rt`, never calls `MKL_Set_Interface_Layer`, and never reads
+`MKL_INTERFACE_LAYER`, so an embedding process's MKL interface/threading state is untouched and
+LP64 gpuxtb calls stay correct even when the host uses ILP64. On Linux the CUDA build generates
+one ELF trampoline shim per wrapped host library
 (cudart, cuBLAS, cuSOLVER, and libcuda) from the byte-pinned
 `cmake/3rdparty/implib` source and compiles those shims into libgpuxtb itself
 (`src/runtime/cuda_dlopen.c`). An early ELF constructor opens the exact build-major SONAMEs and

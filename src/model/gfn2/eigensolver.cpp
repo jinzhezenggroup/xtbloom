@@ -1147,11 +1147,16 @@ bool CpuLinearAlgebraBackend::ready() const noexcept {
 }
 
 bool CpuLinearAlgebraBackend::production() const noexcept {
-  return origin_ == Origin::kMklRtLp64 || origin_ == Origin::kOpenBlasLp64;
+  return origin_ == Origin::kMklShimLp64 || origin_ == Origin::kMklRtLp64 ||
+         origin_ == Origin::kOpenBlasLp64;
 }
 
 bool CpuLinearAlgebraBackend::production_mkl() const noexcept {
-  return origin_ == Origin::kMklRtLp64;
+  return origin_ == Origin::kMklShimLp64 || origin_ == Origin::kMklRtLp64;
+}
+
+bool CpuLinearAlgebraBackend::production_mkl_isolated() const noexcept {
+  return origin_ == Origin::kMklShimLp64;
 }
 
 gpuxtb_status_t make_internal_test_lp64_backend(
@@ -1185,6 +1190,56 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
     state.message = "CPU linear-algebra runtime loading is not ported to Windows yet";
     return state;
 #else
+#ifdef GPUXTB_CONFIGURED_CPU_LINALG_SHIM
+    /* Preferred isolated MKL provider: a private shim built at CMake time with
+     * fixed DT_NEEDED dependencies on libmkl_intel_lp64, libmkl_sequential, and
+     * libmkl_core. dlopen with RTLD_LOCAL so the component symbols resolve only
+     * inside the shim's own scope and never leak into the host namespace. We
+     * never load libmkl_rt, never call MKL_Set_Interface_Layer, and never read
+     * MKL interface-layer state, so an embedding process's MKL lifecycle is
+     * untouched and LP64 calls stay correct even under a host ILP64 runtime. */
+    {
+      const char* const shim_candidates[] = {
+          GPUXTB_CONFIGURED_CPU_LINALG_SHIM,
+          "libgpuxtb_mkl_lp64_shim.so",
+          nullptr,
+      };
+      for (const char* shim_name : shim_candidates) {
+        dlerror();
+        void* handle = dlopen(shim_name, RTLD_NOW | RTLD_LOCAL);
+        if (handle == nullptr) {
+          continue;
+        }
+        LapackDpotrfWork dpotrf_work = nullptr;
+        LapackDpoconWork dpocon_work = nullptr;
+        LapackDsyevdWork dsyevd_work = nullptr;
+        CblasDtrsm dtrsm = nullptr;
+        CblasDgemm dgemm = nullptr;
+        BlasSetNumThreadsLocal set_threads = nullptr;
+        if (load_lapacke_cblas_symbols(handle, false, dpotrf_work, dpocon_work, dsyevd_work, dtrsm,
+                                       dgemm) &&
+            load_symbol(handle, "MKL_Set_Num_Threads_Local", set_threads)) {
+          CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
+              CpuLinearAlgebraBackend::Origin::kMklShimLp64, dpotrf_work, dpocon_work, dsyevd_work,
+              dtrsm, dgemm, set_threads);
+          if (backend_self_test(created)) {
+            /* Retain one process-lifetime loader reference so all dispatch
+             * pointers stay valid. The handle intentionally leaks by design,
+             * exactly like the legacy runtime handles. */
+            state.backend = created;
+            state.status = GPUXTB_STATUS_SUCCESS;
+            return state;
+          }
+        }
+        static_cast<void>(dlclose(handle));
+      }
+      state.message =
+          "host-isolated MKL provider shim is configured but did not verify "
+          "(libgpuxtb_mkl_lp64_shim)";
+      return state;
+    }
+#else
+#endif
 #ifdef GPUXTB_CONFIGURED_CPU_LINALG_RUNTIME
     constexpr const char* kConfiguredRuntime = GPUXTB_CONFIGURED_CPU_LINALG_RUNTIME;
 #else

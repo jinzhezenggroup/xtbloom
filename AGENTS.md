@@ -156,6 +156,14 @@ A C ABI change normally requires coordinated review of at least:
 - The CPU eigensolver requires one dlopen-able monolithic LP64 LAPACKE+CBLAS
   runtime. Do not accept ILP64 providers, static archives, or introduce a hard
   `DT_NEEDED` dependency merely to simplify discovery.
+- MKL providers must be host-isolated (issue #30). When CMake selects MKL, it
+  builds a private shim with fixed `DT_NEEDED` dependencies on
+  `libmkl_intel_lp64`, `libmkl_sequential`, and `libmkl_core`, and the runtime
+  factory dlopens that shim with `RTLD_LOCAL`. gpuxtb must never call
+  `MKL_Set_Interface_Layer`, never read `MKL_INTERFACE_LAYER` for the isolated
+  path, and never expose provider libraries with `RTLD_GLOBAL`. Do not regress
+  host coexistence: LP64 gpuxtb calls must stay correct when the host uses
+  ILP64, both before and after gpuxtb backend creation.
 
 ## Generated, canonical, and licensed artifacts
 

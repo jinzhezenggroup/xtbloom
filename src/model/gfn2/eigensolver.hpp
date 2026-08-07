@@ -44,13 +44,21 @@ using BlasSetNumThreadsLocal = int (*)(int threads);
  * factory dlopens and verifies all required symbols from the configured LP64
  * runtime (OpenBLAS is the default Linux package dependency; native users may
  * select MKL) or from common SONAMEs. A production provider must expose local
- * thread control so gpuxtb's outer batch workers can keep BLAS sequential. The
- * factory rejects an explicit or already-active ILP64 MKL runtime rather than
- * switching it. Call it during single-threaded runtime initialization, before
- * concurrent BLAS use or a host's first MKL interface selection. The testing
- * factory is kept in this internal namespace so tests can install spies and
- * deterministic LAPACK failures without making ABI claims on behalf of an
- * external provider.
+ * thread control so gpuxtb's outer batch workers can keep BLAS sequential.
+ *
+ * The MKL path is host-isolated. When CMake can locate the MKL component
+ * libraries, it builds a private shim with fixed DT_NEEDED dependencies on
+ * libmkl_intel_lp64, libmkl_sequential, and libmkl_core, and the factory loads
+ * that shim with RTLD_LOCAL instead of libmkl_rt. The components are
+ * intrinsically LP64 and sequential, so gpuxtb never calls MKL_Set_Interface_Layer,
+ * never reads MKL interface-layer state, and never mutates an embedding
+ * process's MKL state. Only when the shim is unavailable does the factory use
+ * the documented legacy libmkl_rt path, which rejects an explicit or already
+ * active ILP64 runtime rather than switching it, or a plain OpenBLAS library.
+ * Call it during single-threaded runtime initialization, before concurrent
+ * BLAS use or a host's first MKL interface selection. The testing factory is
+ * kept in this internal namespace so tests can install spies and deterministic
+ * LAPACK failures without making ABI claims on behalf of an external provider.
  */
 class CpuLinearAlgebraBackend {
  public:
@@ -59,12 +67,16 @@ class CpuLinearAlgebraBackend {
   [[nodiscard]] bool ready() const noexcept;
   /* True for any verified lazily-loaded production backend (MKL or OpenBLAS). */
   [[nodiscard]] bool production() const noexcept;
-  /* True only when the loaded production backend is MKL (libmkl_rt). */
+  /* True only when the loaded production backend is MKL (shim or libmkl_rt). */
   [[nodiscard]] bool production_mkl() const noexcept;
+  /* True only for the host-isolated MKL shim provider, which never mutates the
+   * embedding process's MKL interface/threading state. */
+  [[nodiscard]] bool production_mkl_isolated() const noexcept;
 
  private:
   enum class Origin : std::uint8_t {
     kNone,
+    kMklShimLp64,
     kMklRtLp64,
     kOpenBlasLp64,
     kInternalTestLp64,

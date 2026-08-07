@@ -950,6 +950,14 @@ int run_mkl_ilp64_rejection_child() {
      * there is nothing to reject; accept the vacuous success. */
     return 0;
   }
+  if (status == GPUXTB_STATUS_SUCCESS && production.ready() &&
+      production.production_mkl_isolated()) {
+    /* The host-isolated MKL shim never reads MKL_INTERFACE_LAYER and never
+     * switches the embedding process's MKL interface layer, so an explicit
+     * ILP64 environment is ignored and LP64 correctness is preserved. This is
+     * the required coexistence outcome for issue #30, not a rejection. */
+    return 0;
+  }
   return status == GPUXTB_STATUS_BACKEND_UNAVAILABLE && !production.ready() &&
                  error.find("ILP64") != std::string::npos
              ? 0
