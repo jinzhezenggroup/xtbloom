@@ -202,6 +202,21 @@ def test_fake_unsupported_major_version_is_rejected() -> None:
     assert fake.deleted_count() == 0
 
 
+def test_fake_copy_false_rejects_copied_flag() -> None:
+    """A producer-side temporary cannot satisfy the zero-copy contract."""
+    fake = FakeArray(np.arange(3.0), copied=True)
+    with pytest.raises(BufferError, match=r"copied.*copy=False"):
+        _consume(fake, shape=(3,), copy=False)
+
+
+def test_fake_copy_true_accepts_copied_flag() -> None:
+    """The copied flag is valid only when the caller permitted a copy."""
+    fake = FakeArray(np.arange(3.0), copied=True)
+    view = _consume(fake, shape=(3,), copy=True)
+    assert view.is_copy
+    view.release()
+
+
 def test_fake_producer_exception_propagates() -> None:
     """Producer failures surface to the caller, not as generic errors."""
     fake = FakeArray(np.arange(3.0), force_error=RuntimeError("boom"))

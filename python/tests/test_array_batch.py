@@ -499,6 +499,18 @@ def test_unknown_legacy_output_requires_proven_writability() -> None:
         )
 
 
+def test_copied_output_capsule_is_rejected() -> None:
+    """Native writes must target the caller's exact ``out=`` allocation."""
+    packed = _pack_single([_water()])
+    output = FakeArray(np.full(1, 321.0), copied=True)
+    with pytest.raises(BufferError, match=r"copied.*copy=False"):
+        ArrayBatch(**packed, backend="cpu").compute(
+            compute_forces=False,
+            compute_charges=False,
+            out={"energies": output},
+        )
+
+
 def test_wrong_offsets_rejected_by_native_validation() -> None:
     """Non-monotonic offsets are the native layer's authoritative check."""
     water = _water()
