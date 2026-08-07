@@ -2461,15 +2461,14 @@ class ArrayBatchResult:
         return self._require(name)
 
     def close(self) -> None:
-        """Release gpuxtb-owned arena producer references (idempotent).
+        """Release the gpuxtb-owned arena producer references (idempotent).
 
-        Host numpy and caller-owned ``out=`` arrays are unaffected.  Live
-        :class:`DLPackResultBuffer` producers and their exported capsules keep
-        the native arena alive through their own retained references.
+        Host NumPy and caller-owned ``out=`` arrays are unaffected. The
+        returned :class:`DLPackResultBuffer` producers retain the arena
+        independently, so they keep the finished bytes alive after this result
+        is closed and can still be exported; their own ``close()``/``delete()``
+        (or garbage collection) releases each of those references.
         """
-        producers, self._producers = self._producers, []
-        for producer in producers:
-            producer.close()
         arenas, self._arenas = self._arenas, []
         for arena in arenas:
             arena.close()
