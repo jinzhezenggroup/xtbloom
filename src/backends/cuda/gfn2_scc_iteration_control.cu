@@ -600,4 +600,22 @@ cudaError_t normalize_gfn2_scc_stage_cuda(const Gfn2SccStageDeviceReport& report
   return cudaPeekAtLastError();
 }
 
+__global__ void open_stage_active_kernel(const std::uint32_t* active) {
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    *const_cast<std::uint32_t*>(active) = 1u;
+  }
+}
+
+cudaError_t open_gfn2_scc_stage_cuda(const Gfn2SccStageDeviceReport& report,
+                                     cudaStream_t stream) noexcept {
+  if (!gfn2_scc_stage_id_is_valid(report.stage) || report.plan_token == 0u ||
+      report.stage_sequence_active == nullptr || report.stage_sequence_elements != 1 ||
+      !is_aligned(report.stage_sequence_active, alignof(std::uint32_t))) {
+    return cudaErrorInvalidValue;
+  }
+  open_stage_active_kernel<<<1, 1, 0, stream>>>(
+      const_cast<std::uint32_t*>(report.stage_sequence_active));
+  return cudaPeekAtLastError();
+}
+
 }  // namespace gpuxtb::detail::cuda
