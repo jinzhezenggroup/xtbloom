@@ -13,9 +13,9 @@ can be re-derived, not restated from memory:
   (gpuxtb-owned device arena, no `out=`) passes the predefined mean-overhead
   gate of no more than 5% above the caller-owned `out=` path. Across 300
   counterbalanced pairs after 30 warmups per mode, arena mean latency is
-  `7.521 ms` (`7.495..7.770` min..max) versus `7.820 ms`
-  (`7.789..8.224`) for `out=`. The paired arena-minus-out mean is
-  `-0.2993 +/- 0.0045 ms` (95% confidence half-width), or `-3.83%`.
+  `7.530 ms` (`7.517..7.673` min..max) versus `7.834 ms`
+  (`7.807..7.863`) for `out=`. The paired arena-minus-out mean is
+  `-0.3038 +/- 0.0015 ms` (95% confidence half-width), or `-3.88%`.
 - Each arena call adds one packed `cudaMalloc` and releases it with one
   `cudaFree`; the caller-owned mode allocates its reusable output once before
   the calls. Direct trace inspection identifies the 13 regular arena
@@ -53,7 +53,7 @@ can be re-derived, not restated from memory:
   against CUDA 12.9.
 - Python: 3.13.9. numpy 2.5.1, pytest 9.1.1, CuPy 14.1.1, JAX 0.11.0 (with
   `jax[cuda12]` compute 12.9 libs), PyTorch 2.13.0 (+cu130).
-- Source revision: `8ddd28766db581eafeb6088026e99e45415f29c1` (PR #226 evidence
+- Source revision: `68ef635f1b00fab01373dad910c07164b9d0fd19` (PR #226 evidence
   branch). The measured native library is the explicit shared CMake build at
   `build/pr226-cuda/libgpuxtb.so.0.1.0`; its SHA-256
   (`53ad262937f1612fceee97f9bc88e0abac2126523e54f226092de5fed12b32ce`)
@@ -116,14 +116,14 @@ srun --gres=gpu:1 --ntasks=1 env PYTHONPATH="$PWD/python" \
   /tmp/venv-providers/bin/python benchmarks/dlpack_result_memory.py \
   --library build/pr226-cuda/libgpuxtb.so.0.1.0 \
   --warmup 30 --repetitions 300 \
-  --output /tmp/pr226-final-8ddd287.YOaNlB/dlpack-result-memory.json
+  --output /tmp/pr226-final-68ef635.P82Vxc/dlpack-result-memory.json
 
 # Profiler capture, executed once with <mode>=arena and once with <mode>=out:
 srun --gres=gpu:1 --ntasks=1 env PYTHONPATH="$PWD/python" \
   GPUXTB_LIBRARY="$PWD/build/pr226-cuda/libgpuxtb.so.0.1.0" \
   LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64 \
   /group/software/cuda-12.9.1/bin/nsys profile \
-  -o /tmp/pr226-final-8ddd287.YOaNlB/<mode> \
+  -o /tmp/pr226-final-68ef635.P82Vxc/<mode> \
   --force-overwrite=true --cuda-memory-usage=true --trace=cuda,nvtx,osrt \
   /tmp/venv-providers/bin/python benchmarks/dlpack_result_memory.py \
   --library build/pr226-cuda/libgpuxtb.so.0.1.0 \
@@ -132,9 +132,9 @@ srun --gres=gpu:1 --ntasks=1 env PYTHONPATH="$PWD/python" \
 # Derived reports (as committed):
 /group/software/cuda-12.9.1/bin/nsys stats \
   --report cuda_gpu_kern_sum,cuda_gpu_mem_time_sum,cuda_gpu_mem_size_sum,cuda_api_trace \
-  --format csv --output /tmp/pr226-final-8ddd287.YOaNlB/<mode>-report \
+  --format csv --output /tmp/pr226-final-68ef635.P82Vxc/<mode>-report \
   --force-export=true --force-overwrite=true \
-  /tmp/pr226-final-8ddd287.YOaNlB/<mode>.nsys-rep
+  /tmp/pr226-final-68ef635.P82Vxc/<mode>.nsys-rep
 ```
 
 The provider matrix was run against the exact shared CUDA library on a real
@@ -149,9 +149,9 @@ pytest python/tests                                      # 211 passed, 0 skipped
 
 ## Evaluation
 
-- `PASS` — allocation/free cost vs `out=`: 300-pair mean 7.521 ms (arena)
-  versus 7.820 ms (`out=`), passing the explicit maximum 5% mean-overhead gate
-  at -3.83%; one arena alloc/free per call with no added device-wide sync and
+- `PASS` — allocation/free cost vs `out=`: 300-pair mean 7.530 ms (arena)
+  versus 7.834 ms (`out=`), passing the explicit maximum 5% mean-overhead gate
+  at -3.88%; one arena alloc/free per call with no added device-wide sync and
   no result D2H (identical synchronization and D2H profiles).
 - `PASS` — real CuPy/JAX/torch device-provider import evidence: committed
   CUDA tests import the same arena through `cupy.from_dlpack`,
@@ -162,10 +162,10 @@ pytest python/tests                                      # 211 passed, 0 skipped
   arena producer zero-copy (pointer and value parity); unsupported
   combinations are reported honestly (CuPy has no CPU-tensor import).
 - The benchmark harness unit test `benchmarks/test_dlpack_result_memory.py`
-  (11 tests, hardware-free) covers the packed workload, statistics and gate,
+  (12 tests, hardware-free) covers the packed workload, statistics and gate,
   CPU reference status, clean runner and selected-library source/build
-  identity, refuse-overwrite guards, required-GPU precondition, and LF-only
-  JSON/CSV publication.
+  identity, profiler provenance ordering, refuse-overwrite guards, required-GPU
+  precondition, and LF-only JSON/CSV publication.
 
 ## Limitations
 
