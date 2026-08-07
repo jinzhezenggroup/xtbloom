@@ -46,6 +46,7 @@ enum class Gfn2PairListDeviceError : std::uint32_t {
   kStaleGeometry = 8u,
   kCoincidentAtoms = 9u,
   kNonfiniteArithmetic = 10u,
+  kInvalidMode = 11u,
 };
 
 /*

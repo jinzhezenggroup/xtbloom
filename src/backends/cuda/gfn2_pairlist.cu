@@ -43,6 +43,11 @@ __device__ Gfn2PairListMode system_mode(const Gfn2PairListDeviceBatch& batch, st
   return batch.mode;
 }
 
+__device__ bool valid_system_mode_value(std::int32_t value) {
+  return value == static_cast<std::int32_t>(Gfn2PairListMode::kSparse) ||
+         value == static_cast<std::int32_t>(Gfn2PairListMode::kDense);
+}
+
 __device__ bool finite_position(const double* positions, std::int64_t coordinate) {
   return isfinite(positions[coordinate]) && isfinite(positions[coordinate + 1]) &&
          isfinite(positions[coordinate + 2]);
@@ -170,6 +175,10 @@ __global__ void topology_preflight_kernel(Gfn2PairListDeviceBatch batch,
     if (!valid) {
       atomicExch(sequence_active, 0u);
       record_error(device_error, Gfn2PairListDeviceError::kInvalidOffsets);
+    }
+    if (batch.system_modes != nullptr && !valid_system_mode_value(batch.system_modes[system])) {
+      atomicExch(sequence_active, 0u);
+      record_error(device_error, Gfn2PairListDeviceError::kInvalidMode);
     }
   }
 }
@@ -884,7 +893,9 @@ __global__ void preflight_coordination_pairs_kernel(
     }
     const std::int64_t begin = cache.neighbor_offsets[atom];
     const std::int64_t end = cache.neighbor_offsets[atom + 1];
-    if (begin < 0 || end < begin || end > neighbor_capacity) {
+    const std::int64_t count = cache.neighbor_counts[atom];
+    if (begin < 0 || end < begin || end > neighbor_capacity || count < 0 ||
+        count > batch.max_neighbors_per_atom || end - begin != count) {
       record_system_error(system_errors, system, device_error,
                           Gfn2PairListDeviceError::kInvalidCache);
       continue;
@@ -958,7 +969,9 @@ __global__ void coordination_vjp_preflight_kernel(
          atom += blockDim.x) {
       const std::int64_t begin = cache.neighbor_offsets[atom];
       const std::int64_t end = cache.neighbor_offsets[atom + 1];
-      if (begin < 0 || end < begin || end > neighbor_capacity) {
+      const std::int64_t count = cache.neighbor_counts[atom];
+      if (begin < 0 || end < begin || end > neighbor_capacity || count < 0 ||
+          count > batch.max_neighbors_per_atom || end - begin != count) {
         record_system_error(system_errors, system, device_error,
                             Gfn2PairListDeviceError::kInvalidCache);
         atomicExch(&valid, 0);
@@ -1141,6 +1154,7 @@ cudaError_t validate_batch(const Gfn2PairListDeviceBatch& batch) noexcept {
       (batch.mode != Gfn2PairListMode::kSparse && batch.mode != Gfn2PairListMode::kDense) ||
       (batch.flags & ~kGfn2PairListAllowDenseFallback) != 0u || batch.plan_token == 0u ||
       !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
+      (!per_system_dispatch && batch.system_mode_elements != 0) ||
       (per_system_dispatch && batch.system_mode_elements != batch.batch_size) ||
       (per_system_dispatch && !is_aligned(batch.system_modes, alignof(std::int32_t)))) {
     return batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max())
@@ -1204,11 +1218,13 @@ cudaError_t validate_update(const Gfn2PairListDeviceBatch& batch, const double* 
   const std::int64_t neighbor_capacity = batch.total_atoms * batch.max_neighbors_per_atom;
   const std::int64_t pair_capacity = batch.batch_size * batch.max_pairs_per_system;
 
-  std::array<AddressRange, 2> reads;
+  std::array<AddressRange, 3> reads;
   std::array<AddressRange, 19> writes;
   if (!make_address_range(batch.atom_offsets, batch.atom_offset_elements,
                           sizeof(*batch.atom_offsets), &reads[0]) ||
       !make_address_range(positions, batch.total_atoms * 3, sizeof(*positions), &reads[1]) ||
+      !make_address_range(batch.system_modes, batch.system_mode_elements,
+                          sizeof(*batch.system_modes), &reads[2]) ||
       !make_address_range(cache.pairs, pair_capacity, sizeof(*cache.pairs), &writes[0]) ||
       !make_address_range(cache.pair_offsets, cache.pair_offset_elements,
                           sizeof(*cache.pair_offsets), &writes[1]) ||
@@ -1555,8 +1571,8 @@ cudaError_t add_gfn2_pairlist_coordination_vjp_cuda(
     return cudaErrorInvalidValue;
   }
   const std::int64_t neighbor_capacity = batch.total_atoms * batch.max_neighbors_per_atom;
-  std::array<AddressRange, 10> reads;
-  std::array<AddressRange, 3> writes;
+  std::array<AddressRange, 9> reads;
+  std::array<AddressRange, 4> writes;
   if (!make_address_range(batch.atom_offsets, batch.atom_offset_elements,
                           sizeof(*batch.atom_offsets), &reads[0]) ||
       !make_address_range(positions, batch.total_atoms * 3, sizeof(*positions), &reads[1]) ||
@@ -1567,16 +1583,16 @@ cudaError_t add_gfn2_pairlist_coordination_vjp_cuda(
       !make_address_range(cache.neighbor_offsets, cache.neighbor_offset_elements,
                           sizeof(*cache.neighbor_offsets), &reads[5]) ||
       !make_address_range(cache.neighbor_counts, cache.neighbor_count_elements,
-                          sizeof(*cache.neighbor_counts), &reads[9]) ||
+                          sizeof(*cache.neighbor_counts), &reads[8]) ||
       !make_address_range(cache.neighbors, neighbor_capacity, sizeof(*cache.neighbors),
                           &reads[6]) ||
       !make_address_range(workspace.sequence_active, 1, sizeof(*workspace.sequence_active),
                           &reads[7]) ||
-      !make_address_range(gradients, batch.total_atoms * 3, sizeof(*gradients), &reads[8]) ||
+      !make_address_range(gradients, batch.total_atoms * 3, sizeof(*gradients), &writes[0]) ||
       !make_address_range(gradient_scratch, gradient_elements, sizeof(*gradient_scratch),
-                          &writes[0]) ||
-      !make_address_range(system_errors, batch.batch_size, sizeof(*system_errors), &writes[1]) ||
-      !make_address_range(device_error, 1, sizeof(*device_error), &writes[2]) ||
+                          &writes[1]) ||
+      !make_address_range(system_errors, batch.batch_size, sizeof(*system_errors), &writes[2]) ||
+      !make_address_range(device_error, 1, sizeof(*device_error), &writes[3]) ||
       !writable_ranges_are_disjoint(reads, writes)) {
     return cudaErrorInvalidValue;
   }

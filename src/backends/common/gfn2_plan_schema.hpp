@@ -49,10 +49,10 @@ enum class Gfn2PairListRole : std::uint32_t {
 };
 
 /*
- * Publication stage of the sparse list a consumer is bound to.  Candidate
- * storage is unpublished scratch owned by the numerical refresh transaction;
- * committed storage is the long-lived per-system cache a consumer may reduce
- * over once its per-system generation and eligibility match the current epoch.
+ * Publication stage of a sparse list.  Candidate storage is unpublished
+ * scratch owned by the numerical refresh transaction; the consumer validators
+ * below accept only committed storage whose per-system generation and
+ * eligibility match the current epoch.
  */
 enum class Gfn2PairListState : std::uint32_t {
   kCandidate = 0u,
@@ -261,10 +261,11 @@ struct Gfn2GeometryCacheProvenanceView {
  * Device-neutral projection of the sparse pair list that a consumer (CN, D4,
  * ...) reduces over.  It deliberately carries neither the builder strategy nor
  * any numerical value cache: pair indices, per-atom neighbor ranges, and
- * canonical (first < second) ordering are the traversal contract, while each
- * consumer re-derives its own value cache from positions and its own inclusive
- * cutoff predicate.  This keeps "pair-index traversal" and "numerical value
- * cache" separate and lets one 50-bohr superset list feed several D4 roles.
+ * canonical ordering are the traversal contract: second endpoint ascending,
+ * then first endpoint ascending, with first < second.  Each consumer re-derives
+ * its own value cache from positions and its own inclusive cutoff predicate.
+ * This keeps "pair-index traversal" and "numerical value cache" separate and
+ * lets one 50-bohr superset list feed several D4 roles.
  *
  * Contract guarantees enforced by validation:
  *   - one plan token plus per-system committed generations; a consumer must
@@ -297,14 +298,20 @@ struct Gfn2PairListConsumerView {
   std::int64_t max_neighbors_per_atom = 0;
 
   /* Fixed-topology published arrays; pair_offsets partitions the canonical
-   * first<second pair stream per system, neighbor_offsets partitions the
-   * per-atom ascending neighbor ranges. */
+   * second-major first<second pair stream per system, neighbor_offsets
+   * partitions the per-atom ascending neighbor ranges. */
   std::int64_t pair_offset_count = 0;
   std::int64_t neighbor_offset_count = 0;
   std::int64_t pair_count = 0;
   std::int64_t neighbor_count = 0;
   const std::int64_t* pair_offsets = nullptr;
   const Gfn2AtomPair* pairs = nullptr;
+  /* Explicit committed counts are validated independently from the compact
+   * offsets, so a consumer does not trust neighboring prefix entries alone. */
+  std::int64_t pair_count_elements = 0;
+  std::int64_t neighbor_count_elements = 0;
+  const std::int64_t* pair_counts = nullptr;
+  const std::int64_t* neighbor_counts = nullptr;
   const std::int64_t* neighbor_offsets = nullptr;
   const std::int64_t* neighbors = nullptr;
 
@@ -386,7 +393,7 @@ static_assert(std::is_standard_layout_v<Gfn2PairListConsumerView>);
 /*
  * Structural validation of a sparse pair-list consumer projection without
  * dereferencing any array.  Enforces one plan token, matching batch/atom
- * counts, role/state/map-kind enumeration values, positive physical and
+ * counts, a committed state, role/map-kind enumeration values, positive physical and
  * builder cutoffs with the builder cutoff covering the role cutoff, fixed
  * positive capacity metadata, exact offset counts vs batch/atoms, and full
  * pairwise address disjointness between every published array and immutable
@@ -401,8 +408,8 @@ static_assert(std::is_standard_layout_v<Gfn2PairListConsumerView>);
 /* Full host inspection of every published pair/neighbor value, committed
  * generation, and eligible/active mask byte.  Offsets must form valid
  * partitions, pairs must store first < second within their system slice,
- * neighbors must stay inside their owning system, generations and mask bytes
- * must be zero-or-one, and the eligible/active masks must not alias other
+ * neighbors must stay inside their owning system, mask bytes must be
+ * zero-or-one, and the eligible/active masks must not alias other
  * published arrays.  Batch-scope validation: committed_generations must be
  * the expected generation for every eligible system. */
 [[nodiscard]] Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_host(

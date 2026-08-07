@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -463,8 +464,10 @@ int test_wavefunction_layout() {
 struct HostPairListConsumer {
   std::vector<std::int64_t> pair_offsets;
   std::vector<Gfn2AtomPair> pairs;
+  std::vector<std::int64_t> pair_counts;
   std::vector<std::int64_t> neighbor_offsets;
   std::vector<std::int64_t> neighbors;
+  std::vector<std::int64_t> neighbor_counts;
   std::vector<std::uint64_t> committed_generations;
   std::vector<std::uint8_t> eligible_mask;
   Gfn2PairListConsumerView view{};
@@ -487,13 +490,17 @@ struct HostPairListConsumer {
     view.neighbor_offset_count = static_cast<std::int64_t>(neighbor_offsets.size());
     view.pair_count = static_cast<std::int64_t>(pairs.size());
     view.neighbor_count = static_cast<std::int64_t>(neighbors.size());
+    view.pair_count_elements = static_cast<std::int64_t>(pair_counts.size());
+    view.neighbor_count_elements = static_cast<std::int64_t>(neighbor_counts.size());
     view.committed_generation_count = static_cast<std::int64_t>(committed_generations.size());
     view.eligible_mask_count = static_cast<std::int64_t>(eligible_mask.size());
     view.active_mask_count = 0;
-    view.pair_offsets = pair_offsets.data();
-    view.pairs = pairs.data();
-    view.neighbor_offsets = neighbor_offsets.data();
-    view.neighbors = neighbors.data();
+    view.pair_offsets = pointer_or_null(pair_offsets);
+    view.pairs = pointer_or_null(pairs);
+    view.pair_counts = pointer_or_null(pair_counts);
+    view.neighbor_counts = pointer_or_null(neighbor_counts);
+    view.neighbor_offsets = pointer_or_null(neighbor_offsets);
+    view.neighbors = pointer_or_null(neighbors);
     view.committed_generations = committed_generations.data();
     view.eligible_mask = eligible_mask.data();
     view.active_mask = nullptr;
@@ -508,19 +515,24 @@ HostPairListConsumer make_pair_list_consumer(const HostTopology& topology,
   for (std::int64_t system = 0; system < topology.view.batch_size; ++system) {
     const std::int64_t atom_begin = topology.view.atom_offsets[static_cast<std::size_t>(system)];
     const std::int64_t atom_end = topology.view.atom_offsets[static_cast<std::size_t>(system + 1)];
-    for (std::int64_t first = atom_begin; first < atom_end; ++first) {
-      for (std::int64_t second = first + 1; second < atom_end; ++second) {
+    const std::int64_t pair_begin = static_cast<std::int64_t>(consumer.pairs.size());
+    for (std::int64_t second = atom_begin + 1; second < atom_end; ++second) {
+      for (std::int64_t first = atom_begin; first < second; ++first) {
         consumer.pairs.push_back({first, second});
       }
     }
     consumer.pair_offsets.push_back(static_cast<std::int64_t>(consumer.pairs.size()));
+    consumer.pair_counts.push_back(static_cast<std::int64_t>(consumer.pairs.size()) - pair_begin);
     for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+      const std::int64_t neighbor_begin = static_cast<std::int64_t>(consumer.neighbors.size());
       for (std::int64_t peer = atom_begin; peer < atom_end; ++peer) {
         if (peer != atom) {
           consumer.neighbors.push_back(peer);
         }
       }
       consumer.neighbor_offsets.push_back(static_cast<std::int64_t>(consumer.neighbors.size()));
+      consumer.neighbor_counts.push_back(static_cast<std::int64_t>(consumer.neighbors.size()) -
+                                         neighbor_begin);
     }
   }
   consumer.committed_generations.assign(static_cast<std::size_t>(topology.view.batch_size),
@@ -560,11 +572,29 @@ int test_pair_list_consumer() {
               .error == Gfn2PlanSchemaError::kInsufficientPairListCutoff);
     consumer.view.list_builder_cutoff_bohr = 25.0;
 
+    consumer.view.cutoff_bohr = std::nextafter(25.0, 0.0);
+    CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                   Gfn2PlanMemorySpace::kHost)
+              .error == Gfn2PlanSchemaError::kInsufficientPairListCutoff);
+    consumer.view.cutoff_bohr = 25.0;
+
+    consumer.view.list_builder_cutoff_bohr = std::nextafter(25.0, 0.0);
+    CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                   Gfn2PlanMemorySpace::kHost)
+              .error == Gfn2PlanSchemaError::kInsufficientPairListCutoff);
+    consumer.view.list_builder_cutoff_bohr = 25.0;
+
     consumer.view.role = static_cast<Gfn2PairListRole>(99u);
     CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
                                                    Gfn2PlanMemorySpace::kHost)
               .error == Gfn2PlanSchemaError::kInvalidPairListRole);
     consumer.view.role = Gfn2PairListRole::kCoordination;
+
+    consumer.view.state = Gfn2PairListState::kCandidate;
+    CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                   Gfn2PlanMemorySpace::kHost)
+              .error == Gfn2PlanSchemaError::kInvalidPairListState);
+    consumer.view.state = Gfn2PairListState::kCommitted;
 
     consumer.view.pair_map_kind = Gfn2PairMapKind::kPackedLowerTriangle;
     CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
@@ -578,6 +608,14 @@ int test_pair_list_consumer() {
               .error == Gfn2PlanSchemaError::kInvalidCount);
     consumer.view.max_pairs_per_system = 10;
 
+    if (batch_size > 1) {
+      consumer.view.max_pairs_per_system = std::numeric_limits<std::int64_t>::max();
+      CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                     Gfn2PlanMemorySpace::kHost)
+                .error == Gfn2PlanSchemaError::kCountOverflow);
+      consumer.view.max_pairs_per_system = 10;
+    }
+
     /* Device-space structural validation (no dereference). */
     HostTopology device_topology = topology;
     device_topology.view.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
@@ -590,6 +628,29 @@ int test_pair_list_consumer() {
 
   HostTopology topology = make_topology(8, /*explicit_pairs=*/true);
   HostPairListConsumer consumer = make_pair_list_consumer(topology, kGeneration);
+
+  struct RoleCutoffCase {
+    Gfn2PairListRole role;
+    double cutoff;
+  };
+  for (const RoleCutoffCase& role_case : {
+           RoleCutoffCase{Gfn2PairListRole::kCoordination, 25.0},
+           RoleCutoffCase{Gfn2PairListRole::kD4Coordination, 30.0},
+           RoleCutoffCase{Gfn2PairListRole::kD4TwoBody, 50.0},
+           RoleCutoffCase{Gfn2PairListRole::kD4Atm, 25.0},
+       }) {
+    consumer.view.role = role_case.role;
+    consumer.view.cutoff_bohr = role_case.cutoff;
+    consumer.view.list_builder_cutoff_bohr = role_case.cutoff;
+    CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                   Gfn2PlanMemorySpace::kHost)
+              .error == Gfn2PlanSchemaError::kSuccess);
+    consumer.view.list_builder_cutoff_bohr = std::nextafter(role_case.cutoff, 0.0);
+    CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                   Gfn2PlanMemorySpace::kHost)
+              .error == Gfn2PlanSchemaError::kInsufficientPairListCutoff);
+  }
+  consumer = make_pair_list_consumer(topology, kGeneration);
 
   /* Host inspection: stale eligible peer. */
   consumer.committed_generations[3] = kGeneration - 1u;
@@ -606,8 +667,34 @@ int test_pair_list_consumer() {
     std::swap(consumer.pairs.front().first, consumer.pairs.front().second);
     CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).error ==
           Gfn2PlanSchemaError::kInvalidPairMap);
-    consumer.refresh_view(topology, kGeneration);
+    consumer = make_pair_list_consumer(topology, kGeneration);
   }
+
+  /* Host inspection: the CUDA publisher's second-major pair order is strict. */
+  if (consumer.pairs.size() >= 2u) {
+    std::swap(consumer.pairs[0], consumer.pairs[1]);
+    CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).error ==
+          Gfn2PlanSchemaError::kInvalidPairMap);
+    consumer = make_pair_list_consumer(topology, kGeneration);
+  }
+
+  /* Host inspection: neighbor ranges are strictly ascending and exclude self. */
+  if (consumer.neighbors.size() >= 2u) {
+    consumer.neighbors[1] = consumer.neighbors[0];
+    CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).error ==
+          Gfn2PlanSchemaError::kInvalidPairMap);
+    consumer = make_pair_list_consumer(topology, kGeneration);
+  }
+
+  /* Counts are an independent commit record and must match compact offsets. */
+  consumer.pair_counts[3] += 1;
+  CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).error ==
+        Gfn2PlanSchemaError::kInvalidOffsets);
+  consumer = make_pair_list_consumer(topology, kGeneration);
+  consumer.neighbor_counts[3] += 1;
+  CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).error ==
+        Gfn2PlanSchemaError::kInvalidOffsets);
+  consumer = make_pair_list_consumer(topology, kGeneration);
 
   /* Host inspection: neighbor escapes its owning system. */
   {
@@ -656,6 +743,35 @@ int test_pair_list_consumer() {
                                                  Gfn2PlanMemorySpace::kHost)
             .error == Gfn2PlanSchemaError::kInvalidActiveMask);
   consumer.refresh_view(topology, kGeneration);
+
+  consumer.view.active_mask_count = topology.view.batch_size;
+  consumer.view.active_mask = nullptr;
+  CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                 Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kInvalidActiveMask);
+
+  /* All-empty batches still validate generations and mask bytes. */
+  HostTopology empty = make_topology(1, /*explicit_pairs=*/true);
+  empty.atom_offsets = {0, 0};
+  empty.batch_shell_offsets = {0, 0};
+  empty.batch_orbital_offsets = {0, 0};
+  empty.matrix_offsets = {0, 0};
+  empty.atom_shell_offsets = {0};
+  empty.shell_orbital_offsets = {0};
+  empty.shell_to_atom.clear();
+  empty.orbital_to_shell.clear();
+  empty.orbital_to_atom.clear();
+  empty.pair_offsets = {0, 0};
+  empty.atom_pairs.clear();
+  empty.bucket_offsets = {0, 1};
+  empty.bucket_systems = {0};
+  empty.bucket_orbital_counts = {0};
+  empty.refresh_view(Gfn2PairMapKind::kExplicit);
+  CHECK(validate_gfn2_topology_host(empty.view).error == Gfn2PlanSchemaError::kSuccess);
+  HostPairListConsumer empty_consumer = make_pair_list_consumer(empty, kGeneration);
+  empty_consumer.eligible_mask[0] = 2u;
+  CHECK(validate_gfn2_pair_list_consumer_host(empty.view, empty_consumer.view, kGeneration).error ==
+        Gfn2PlanSchemaError::kInvalidActiveMask);
   return 0;
 }
 

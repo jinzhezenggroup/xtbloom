@@ -1,6 +1,7 @@
 #include "backends/common/gfn2_plan_schema.hpp"
 // gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -881,6 +882,19 @@ constexpr bool known_pair_list_role(Gfn2PairListRole role) noexcept {
          role == Gfn2PairListRole::kD4TwoBody || role == Gfn2PairListRole::kD4Atm;
 }
 
+constexpr double pair_list_role_cutoff(Gfn2PairListRole role) noexcept {
+  switch (role) {
+    case Gfn2PairListRole::kCoordination:
+    case Gfn2PairListRole::kD4Atm:
+      return 25.0;
+    case Gfn2PairListRole::kD4Coordination:
+      return 30.0;
+    case Gfn2PairListRole::kD4TwoBody:
+      return 50.0;
+  }
+  return 0.0;
+}
+
 }  // namespace
 
 Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_binding(
@@ -902,6 +916,10 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_binding(
     return failure(Gfn2PlanSchemaError::kInvalidPairListState,
                    Gfn2PlanSchemaField::kPairListConsumer);
   }
+  if (consumer.state != Gfn2PairListState::kCommitted) {
+    return failure(Gfn2PlanSchemaError::kInvalidPairListState,
+                   Gfn2PlanSchemaField::kPairListConsumer);
+  }
   if (!known_pair_list_role(consumer.role)) {
     return failure(Gfn2PlanSchemaError::kInvalidPairListRole,
                    Gfn2PlanSchemaField::kPairListConsumer);
@@ -912,10 +930,12 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_binding(
   if (consumer.batch_size != topology.batch_size || consumer.total_atoms != topology.total_atoms) {
     return failure(Gfn2PlanSchemaError::kInvalidCount, Gfn2PlanSchemaField::kPairListConsumer);
   }
+  const double required_cutoff = pair_list_role_cutoff(consumer.role);
   if (!(consumer.cutoff_bohr > 0.0) || !std::isfinite(consumer.cutoff_bohr) ||
       !(consumer.list_builder_cutoff_bohr > 0.0) ||
       !std::isfinite(consumer.list_builder_cutoff_bohr) ||
-      consumer.list_builder_cutoff_bohr + 1e-12 < consumer.cutoff_bohr) {
+      consumer.cutoff_bohr != required_cutoff ||
+      consumer.list_builder_cutoff_bohr < consumer.cutoff_bohr) {
     return failure(Gfn2PlanSchemaError::kInsufficientPairListCutoff,
                    Gfn2PlanSchemaField::kPairListConsumer);
   }
@@ -927,8 +947,17 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_binding(
     return failure(Gfn2PlanSchemaError::kInvalidCount, Gfn2PlanSchemaField::kPairListOffsets);
   }
   if (consumer.pair_count < 0 || consumer.neighbor_count < 0 ||
-      consumer.pair_count > consumer.max_pairs_per_system * consumer.batch_size ||
-      consumer.neighbor_count > consumer.max_neighbors_per_atom * consumer.total_atoms) {
+      consumer.pair_count_elements != consumer.batch_size ||
+      consumer.neighbor_count_elements != consumer.total_atoms) {
+    return failure(Gfn2PlanSchemaError::kInvalidCount, Gfn2PlanSchemaField::kPairListPairs);
+  }
+  std::int64_t pair_capacity = 0;
+  std::int64_t neighbor_capacity = 0;
+  if (!product(consumer.max_pairs_per_system, consumer.batch_size, pair_capacity) ||
+      !product(consumer.max_neighbors_per_atom, consumer.total_atoms, neighbor_capacity)) {
+    return failure(Gfn2PlanSchemaError::kCountOverflow, Gfn2PlanSchemaField::kPairListConsumer);
+  }
+  if (consumer.pair_count > pair_capacity || consumer.neighbor_count > neighbor_capacity) {
     return failure(Gfn2PlanSchemaError::kInvalidCount, Gfn2PlanSchemaField::kPairListPairs);
   }
   if (consumer.committed_generation_count != consumer.batch_size ||
@@ -936,6 +965,10 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_binding(
     return failure(Gfn2PlanSchemaError::kInvalidCount, Gfn2PlanSchemaField::kPairListGenerations);
   }
   if (consumer.active_mask_count != 0 && consumer.active_mask_count != consumer.batch_size) {
+    return failure(Gfn2PlanSchemaError::kInvalidActiveMask,
+                   Gfn2PlanSchemaField::kPairListActiveMask);
+  }
+  if ((consumer.active_mask_count == 0) != (consumer.active_mask == nullptr)) {
     return failure(Gfn2PlanSchemaError::kInvalidActiveMask,
                    Gfn2PlanSchemaField::kPairListActiveMask);
   }
@@ -951,6 +984,16 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_binding(
   }
   diagnostic = make_range(consumer.pairs, consumer.pair_count, Gfn2PlanSchemaField::kPairListPairs,
                           masks[1]);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  diagnostic = make_range(consumer.pair_counts, consumer.pair_count_elements,
+                          Gfn2PlanSchemaField::kPairListOffsets, masks[4]);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  diagnostic = make_range(consumer.neighbor_counts, consumer.neighbor_count_elements,
+                          Gfn2PlanSchemaField::kPairListNeighborOffsets, masks[5]);
   if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
     return diagnostic;
   }
@@ -974,7 +1017,7 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_binding(
   if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
     return diagnostic;
   }
-  if (consumer.active_mask != nullptr) {
+  if (consumer.active_mask_count != 0) {
     diagnostic = make_range(consumer.active_mask, consumer.active_mask_count,
                             Gfn2PlanSchemaField::kPairListActiveMask, active);
     if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
@@ -1024,9 +1067,6 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_host(
   if (expected_geometry_generation == 0u) {
     return failure(Gfn2PlanSchemaError::kStaleGeometry, Gfn2PlanSchemaField::kPairListGenerations);
   }
-  if (consumer.total_atoms == 0) {
-    return success();
-  }
   if (consumer.committed_generations == nullptr || consumer.eligible_mask == nullptr) {
     return failure(Gfn2PlanSchemaError::kNullPointer, Gfn2PlanSchemaField::kPairListGenerations);
   }
@@ -1058,6 +1098,13 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_host(
       return failure(Gfn2PlanSchemaError::kInvalidOffsets, Gfn2PlanSchemaField::kPairListOffsets,
                      system);
     }
+    if (pair_end - pair_begin != consumer.pair_counts[system] ||
+        pair_end - pair_begin > consumer.max_pairs_per_system) {
+      return failure(Gfn2PlanSchemaError::kInvalidOffsets, Gfn2PlanSchemaField::kPairListOffsets,
+                     system);
+    }
+    Gfn2AtomPair previous{};
+    bool have_previous = false;
     for (std::int64_t pair = pair_begin; pair < pair_end; ++pair) {
       const Gfn2AtomPair atom_pair = consumer.pairs[pair];
       if (atom_pair.first < atom_begin || atom_pair.second > atom_end - 1 ||
@@ -1065,6 +1112,14 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_host(
         return failure(Gfn2PlanSchemaError::kInvalidPairMap, Gfn2PlanSchemaField::kPairListPairs,
                        pair);
       }
+      if (have_previous &&
+          (atom_pair.second < previous.second ||
+           (atom_pair.second == previous.second && atom_pair.first <= previous.first))) {
+        return failure(Gfn2PlanSchemaError::kInvalidPairMap, Gfn2PlanSchemaField::kPairListPairs,
+                       pair);
+      }
+      previous = atom_pair;
+      have_previous = true;
     }
     if (consumer.eligible_mask[system] == 1u &&
         consumer.committed_generations[system] != expected_geometry_generation) {
@@ -1079,18 +1134,43 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_host(
       return failure(Gfn2PlanSchemaError::kInvalidOffsets,
                      Gfn2PlanSchemaField::kPairListNeighborOffsets, atom);
     }
+    if (end - begin != consumer.neighbor_counts[atom] ||
+        end - begin > consumer.max_neighbors_per_atom) {
+      return failure(Gfn2PlanSchemaError::kInvalidOffsets,
+                     Gfn2PlanSchemaField::kPairListNeighborOffsets, atom);
+    }
     std::int64_t system = 0;
     while (system + 1 < consumer.batch_size && atom >= topology.atom_offsets[system + 1]) {
       ++system;
     }
     const std::int64_t atom_begin = topology.atom_offsets[system];
     const std::int64_t atom_end = topology.atom_offsets[system + 1];
+    std::int64_t previous = -1;
     for (std::int64_t index = begin; index < end; ++index) {
       const std::int64_t peer = consumer.neighbors[index];
-      if (peer < atom_begin || peer >= atom_end) {
+      if (peer < atom_begin || peer >= atom_end || peer == atom || peer <= previous) {
         return failure(Gfn2PlanSchemaError::kInvalidPairMap,
                        Gfn2PlanSchemaField::kPairListNeighbors, index);
       }
+      previous = peer;
+    }
+  }
+  std::int64_t doubled_pairs = 0;
+  if (!product(consumer.pair_count, 2, doubled_pairs) || doubled_pairs != consumer.neighbor_count) {
+    return failure(Gfn2PlanSchemaError::kInvalidPairMap, Gfn2PlanSchemaField::kPairListPairs);
+  }
+  for (std::int64_t pair = 0; pair < consumer.pair_count; ++pair) {
+    const Gfn2AtomPair atom_pair = consumer.pairs[pair];
+    const std::int64_t first_begin = consumer.neighbor_offsets[atom_pair.first];
+    const std::int64_t first_end = consumer.neighbor_offsets[atom_pair.first + 1];
+    const std::int64_t second_begin = consumer.neighbor_offsets[atom_pair.second];
+    const std::int64_t second_end = consumer.neighbor_offsets[atom_pair.second + 1];
+    if (!std::binary_search(consumer.neighbors + first_begin, consumer.neighbors + first_end,
+                            atom_pair.second) ||
+        !std::binary_search(consumer.neighbors + second_begin, consumer.neighbors + second_end,
+                            atom_pair.first)) {
+      return failure(Gfn2PlanSchemaError::kInvalidPairMap, Gfn2PlanSchemaField::kPairListNeighbors,
+                     pair);
     }
   }
   return success();
