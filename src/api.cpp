@@ -17,6 +17,7 @@
 #if defined(GPUXTB_HAS_CUDA)
 #include "runtime/gfn2_cuda_execution.hpp"
 #endif
+#include "runtime/result_owner.hpp"
 #include "runtime/validation.hpp"
 
 struct gpuxtb_context {
@@ -25,6 +26,10 @@ struct gpuxtb_context {
 
 struct gpuxtb_plan {
   gpuxtb::detail::Gfn2Plan* implementation;
+};
+
+struct gpuxtb_result_owner {
+  gpuxtb::detail::ResultOwner* implementation;
 };
 
 namespace {
@@ -406,6 +411,356 @@ gpuxtb_status_t gpuxtb_plan_compute(gpuxtb_plan_t* plan, const gpuxtb_batch_t* b
   } catch (...) {
     return fail(GPUXTB_STATUS_INTERNAL_ERROR,
                 "unknown exception while executing a plan compute request");
+  }
+}
+
+namespace {
+
+/*
+ * The exported managed tensor is one allocation: the managed-tensor struct
+ * followed by the copied shape storage. manager_ctx holds the arena owner
+ * (retained once per export). The deleter is a plain native function that
+ * importing frameworks may call from any thread after the Python wrapper is
+ * gone, so it never touches Python state.
+ */
+void* dlpack_export_block(std::size_t managed_size, std::size_t ndim) {
+  const std::size_t shape_bytes = ndim * sizeof(std::int64_t);
+  if (shape_bytes > std::numeric_limits<std::size_t>::max() - managed_size) {
+    return nullptr;
+  }
+  return ::operator new(managed_size + shape_bytes, std::nothrow);
+}
+
+/*
+ * Both deleters receive the managed tensor whose manager_ctx is the public
+ * wrapper handle. Releasing the wrapper may be the final reference, in which
+ * case the wrapper must be freed here because the Python producer has already
+ * closed: importing frameworks can call this deleter from any thread and long
+ * after the producer is gone.
+ */
+gpuxtb_result_owner_t* wrapper_from_manager_ctx(const void* manager_ctx) noexcept {
+  return static_cast<gpuxtb_result_owner_t*>(const_cast<void*>(manager_ctx));
+}
+
+void finish_dlpack_deletion(gpuxtb_result_owner_t* wrapper, void* block) noexcept {
+  gpuxtb::detail::ResultOwner* implementation = wrapper->implementation;
+  const bool final = implementation->release();
+  ::operator delete(block);
+  if (final) {
+    delete wrapper;
+  }
+}
+
+void legacy_dlpack_deleter(gpuxtb::detail::DlpackManagedTensor* self) {
+  if (self == nullptr) {
+    return;
+  }
+  finish_dlpack_deletion(wrapper_from_manager_ctx(self->manager_ctx), self);
+}
+
+void versioned_dlpack_deleter(gpuxtb::detail::DlpackManagedTensorVersioned* self) {
+  if (self == nullptr) {
+    return;
+  }
+  finish_dlpack_deletion(wrapper_from_manager_ctx(self->manager_ctx), self);
+}
+
+gpuxtb_status_t populate_dlpack_view(gpuxtb_result_owner_t* wrapper,
+                                     gpuxtb::detail::ResultOwner* owner,
+                                     const gpuxtb_dlpack_view_t* view, bool versioned,
+                                     void** out_managed) {
+  if (view == nullptr || out_managed == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "DLPack export view or output pointer is NULL");
+  }
+  if (!valid_header(view, GPUXTB_DLPACK_VIEW_V1_SIZE)) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
+                "DLPack view is NULL, too small, or uses an unsupported API version");
+  }
+  if (view->reserved != 0) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "DLPack view reserved field must be zero");
+  }
+  if (view->ndim < 0 || view->ndim > GPUXTB_DLPACK_MAX_NDIM) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
+                "DLPack view ndim must lie between 0 and GPUXTB_DLPACK_MAX_NDIM");
+  }
+  if (view->dtype_lanes != 1) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
+                "DLPack view lanes must be 1 (scalar descriptors only)");
+  }
+  const std::size_t dtype_size =
+      gpuxtb::detail::dlpack_dtype_size(view->dtype_code, view->dtype_bits);
+  if (dtype_size == 0u) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
+                "DLPack view uses an unsupported dtype code/bits combination");
+  }
+  if (view->ndim > 0 && view->shape == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
+                "DLPack view with ndim > 0 requires a shape pointer");
+  }
+
+  /* Validate extents before touching the arena or the output pointer. */
+  std::uint64_t element_count = 1u;
+  const std::int64_t* shape = view->shape;
+  for (std::int32_t index = 0; index < view->ndim; ++index) {
+    if (shape[index] < 0) {
+      return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "DLPack view has a negative shape extent");
+    }
+    if (shape[index] == 0) {
+      /* Once one extent is zero the tensor has no elements; keep validating
+       * the remaining extents without dividing by a zero element count. */
+      element_count = 0u;
+      continue;
+    }
+    if (element_count == 0u) {
+      continue;
+    }
+    if (static_cast<std::uint64_t>(shape[index]) >
+        std::numeric_limits<std::uint64_t>::max() / element_count) {
+      return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "DLPack view shape overflows element count");
+    }
+    element_count *= static_cast<std::uint64_t>(shape[index]);
+  }
+  std::uint64_t payload_bytes = 0u;
+  if (element_count != 0u) {
+    if (element_count > std::numeric_limits<std::uint64_t>::max() / dtype_size) {
+      return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "DLPack view payload size overflows uint64_t");
+    }
+    payload_bytes = element_count * dtype_size;
+  }
+  const std::uint64_t arena_size = static_cast<std::uint64_t>(owner->size_bytes());
+  if (view->byte_offset > arena_size) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "DLPack view starts past the arena end");
+  }
+  if (payload_bytes > arena_size - view->byte_offset) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "DLPack view payload extends past the arena end");
+  }
+  if (payload_bytes != 0u) {
+    const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(owner->data());
+    const std::uintptr_t address = base + static_cast<std::uintptr_t>(view->byte_offset);
+    if (address % dtype_size != 0u) {
+      return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
+                  "DLPack view offset does not preserve the dtype alignment");
+    }
+  }
+
+  const std::size_t managed_size = versioned ? sizeof(gpuxtb::detail::DlpackManagedTensorVersioned)
+                                             : sizeof(gpuxtb::detail::DlpackManagedTensor);
+  void* block = dlpack_export_block(managed_size, static_cast<std::size_t>(view->ndim));
+  if (block == nullptr) {
+    return fail(GPUXTB_STATUS_ALLOCATION_FAILED,
+                "failed to allocate a DLPack managed tensor export");
+  }
+
+  /* Transfer definitely: from here on the deleter owns the block and the
+   * retained arena reference; a failure must not leave either behind. */
+  std::int64_t* shape_storage =
+      reinterpret_cast<std::int64_t*>(static_cast<unsigned char*>(block) + managed_size);
+  void* data = payload_bytes == 0u ? nullptr
+                                   : static_cast<unsigned char*>(owner->data()) + view->byte_offset;
+  const std::int32_t device_id =
+      owner->memory_space() == GPUXTB_MEMORY_CUDA_DEVICE ? owner->device_id() : 0;
+  const std::int32_t device_type = gpuxtb::detail::dlpack_device_type(owner->memory_space());
+
+  if (versioned) {
+    gpuxtb::detail::DlpackManagedTensorVersioned* managed =
+        static_cast<gpuxtb::detail::DlpackManagedTensorVersioned*>(block);
+    managed->version_major = gpuxtb::detail::kDlpackVersionMajor;
+    managed->version_minor = gpuxtb::detail::kDlpackVersionMinor;
+    managed->manager_ctx = wrapper;
+    managed->deleter = &versioned_dlpack_deleter;
+    managed->flags = 0u;
+    managed->dl_tensor.data = data;
+    managed->dl_tensor.device.device_type = device_type;
+    managed->dl_tensor.device.device_id = device_id;
+    managed->dl_tensor.ndim = view->ndim;
+    managed->dl_tensor.dtype.code = static_cast<std::uint8_t>(view->dtype_code);
+    managed->dl_tensor.dtype.bits = static_cast<std::uint8_t>(view->dtype_bits);
+    managed->dl_tensor.dtype.lanes = static_cast<std::uint16_t>(view->dtype_lanes);
+    managed->dl_tensor.shape = shape_storage;
+    managed->dl_tensor.strides = nullptr; /* compact row-major by convention */
+    managed->dl_tensor.byte_offset = 0u;
+    for (std::int32_t index = 0; index < view->ndim; ++index) {
+      shape_storage[index] = shape[index];
+    }
+  } else {
+    gpuxtb::detail::DlpackManagedTensor* managed =
+        static_cast<gpuxtb::detail::DlpackManagedTensor*>(block);
+    managed->manager_ctx = wrapper;
+    managed->deleter = &legacy_dlpack_deleter;
+    managed->dl_tensor.data = data;
+    managed->dl_tensor.device.device_type = device_type;
+    managed->dl_tensor.device.device_id = device_id;
+    managed->dl_tensor.ndim = view->ndim;
+    managed->dl_tensor.dtype.code = static_cast<std::uint8_t>(view->dtype_code);
+    managed->dl_tensor.dtype.bits = static_cast<std::uint8_t>(view->dtype_bits);
+    managed->dl_tensor.dtype.lanes = static_cast<std::uint16_t>(view->dtype_lanes);
+    managed->dl_tensor.shape = shape_storage;
+    managed->dl_tensor.strides = nullptr;
+    managed->dl_tensor.byte_offset = 0u;
+    for (std::int32_t index = 0; index < view->ndim; ++index) {
+      shape_storage[index] = shape[index];
+    }
+  }
+
+  owner->retain();
+  *out_managed = block;
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+}  // namespace
+
+gpuxtb_status_t gpuxtb_result_owner_options_init(gpuxtb_result_owner_options_t* options,
+                                                 size_t struct_size) {
+  const gpuxtb_status_t status = initialize_structure(
+      options, struct_size, GPUXTB_RESULT_OWNER_OPTIONS_V1_SIZE, "result owner options");
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  options->memory_space = GPUXTB_MEMORY_HOST;
+  options->device_id = -1;
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t gpuxtb_result_owner_create(const gpuxtb_result_owner_options_t* options,
+                                           gpuxtb_result_owner_t** owner) {
+  if (owner == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "result owner output pointer is NULL");
+  }
+  *owner = nullptr;
+  if (!valid_header(options, GPUXTB_RESULT_OWNER_OPTIONS_V1_SIZE)) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
+                "result owner options are NULL, too small, or use an unsupported API version");
+  }
+  if (options->reserved != 0) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "result owner options reserved field must be zero");
+  }
+  if (options->memory_space != GPUXTB_MEMORY_HOST &&
+      options->memory_space != GPUXTB_MEMORY_CUDA_DEVICE) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "result owner uses an unsupported memory space");
+  }
+  if ((options->memory_space == GPUXTB_MEMORY_HOST && options->device_id != -1) ||
+      (options->memory_space == GPUXTB_MEMORY_CUDA_DEVICE && options->device_id < 0)) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
+                "result owner device_id is inconsistent with its memory space");
+  }
+  if (options->size_bytes == 0u) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "result owner arena size must be nonzero");
+  }
+  if (options->size_bytes > std::numeric_limits<std::size_t>::max()) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "result owner arena size overflows size_t");
+  }
+
+  try {
+    void* data = nullptr;
+    std::string error;
+    gpuxtb_status_t status = GPUXTB_STATUS_INVALID_ARGUMENT;
+    if (options->memory_space == GPUXTB_MEMORY_HOST) {
+      status = gpuxtb::detail::allocate_host_result_arena(
+          static_cast<std::size_t>(options->size_bytes), &data, error);
+    } else {
+#if defined(GPUXTB_HAS_CUDA)
+      status = gpuxtb::detail::allocate_cuda_result_arena(
+          options->device_id, static_cast<std::size_t>(options->size_bytes), &data, error);
+#else
+      return fail(GPUXTB_STATUS_BACKEND_UNAVAILABLE,
+                  "the gpuxtb library was built without CUDA support");
+#endif
+    }
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      return fail(status, std::move(error));
+    }
+
+    gpuxtb::detail::ResultOwner* implementation = new (std::nothrow)
+        gpuxtb::detail::ResultOwner(options->memory_space, options->device_id,
+                                    static_cast<std::size_t>(options->size_bytes), data);
+    if (implementation == nullptr) {
+      if (options->memory_space == GPUXTB_MEMORY_HOST) {
+        gpuxtb::detail::free_host_result_arena(data);
+      } else {
+#if defined(GPUXTB_HAS_CUDA)
+        gpuxtb::detail::free_cuda_result_arena(options->device_id, data);
+#endif
+      }
+      return fail(GPUXTB_STATUS_ALLOCATION_FAILED, "failed to allocate a result owner handle");
+    }
+    gpuxtb_result_owner_t* wrapper = new (std::nothrow) gpuxtb_result_owner_t{implementation};
+    if (wrapper == nullptr) {
+      implementation->release();
+      return fail(GPUXTB_STATUS_ALLOCATION_FAILED, "failed to allocate a result owner wrapper");
+    }
+    *owner = wrapper;
+    last_error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  } catch (const std::exception& exception) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR, "unknown exception while creating a result owner");
+  }
+}
+
+gpuxtb_status_t gpuxtb_result_owner_buffer(const gpuxtb_result_owner_t* owner,
+                                           gpuxtb_buffer_t* buffer) {
+  if (owner == nullptr || owner->implementation == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "result owner is NULL");
+  }
+  if (buffer == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "result owner buffer output is NULL");
+  }
+  *buffer = {owner->implementation->data(), owner->implementation->size_bytes(),
+             owner->implementation->memory_space(), 0u};
+  last_error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+void gpuxtb_result_owner_retain(gpuxtb_result_owner_t* owner) {
+  if (owner == nullptr || owner->implementation == nullptr) {
+    last_error = "result owner is NULL";
+    return;
+  }
+  owner->implementation->retain();
+  last_error.clear();
+}
+
+void gpuxtb_result_owner_release(gpuxtb_result_owner_t* owner) {
+  if (owner == nullptr || owner->implementation == nullptr) {
+    /* The public release contract makes NULL a harmless no-op.  Preserve any
+     * prior diagnostic so callers can still inspect the failing operation. */
+    return;
+  }
+  gpuxtb::detail::ResultOwner* implementation = owner->implementation;
+  const bool final = implementation->release();
+  last_error.clear();
+  if (final) {
+    /* ResultOwner::release() already destroyed the implementation. */
+    delete owner;
+  }
+}
+
+gpuxtb_status_t gpuxtb_result_owner_export_dltensor(const gpuxtb_result_owner_t* owner,
+                                                    const gpuxtb_dlpack_view_t* view, int version,
+                                                    void** out_managed) {
+  /* On any failure *out_managed is set to NULL and no arena reference is
+   * taken, so callers can treat a non-success status uniformly. */
+  if (out_managed != nullptr) {
+    *out_managed = nullptr;
+  }
+  if (owner == nullptr || owner->implementation == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "result owner is NULL");
+  }
+  if (version != 0 && version != 1) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
+                "DLPack export version must be 0 (legacy) or 1 (versioned)");
+  }
+  try {
+    return populate_dlpack_view(const_cast<gpuxtb_result_owner_t*>(owner), owner->implementation,
+                                view, version != 0, out_managed);
+  } catch (const std::bad_alloc&) {
+    return fail(GPUXTB_STATUS_ALLOCATION_FAILED, "failed to allocate a DLPack managed tensor");
+  } catch (const std::exception& exception) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR,
+                "unknown exception while exporting a DLPack managed tensor");
   }
 }
 

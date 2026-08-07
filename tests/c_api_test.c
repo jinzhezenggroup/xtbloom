@@ -14,6 +14,20 @@ _Static_assert(offsetof(gpuxtb_compute_options_t, reserved_v2) == 52,
                "compute-options ABI-v2 reserved field must follow the mode");
 _Static_assert(sizeof(gpuxtb_compute_options_t) == GPUXTB_COMPUTE_OPTIONS_V2_SIZE,
                "compute-options public layout must end at the ABI-v2 suffix");
+_Static_assert(sizeof(gpuxtb_result_owner_options_t) >= GPUXTB_RESULT_OWNER_OPTIONS_V1_SIZE,
+               "result-owner options prefix must fit the public layout");
+_Static_assert(offsetof(gpuxtb_result_owner_options_t, memory_space) == 8,
+               "result-owner memory-space offset must remain stable");
+_Static_assert(offsetof(gpuxtb_result_owner_options_t, size_bytes) == 16,
+               "result-owner size offset must remain stable");
+_Static_assert(offsetof(gpuxtb_result_owner_options_t, reserved) == 24,
+               "result-owner reserved offset must remain stable");
+_Static_assert(sizeof(gpuxtb_dlpack_view_t) == GPUXTB_DLPACK_VIEW_V1_SIZE,
+               "DLPack view public layout must end at the ABI-v1 suffix");
+_Static_assert(offsetof(gpuxtb_dlpack_view_t, byte_offset) == 8,
+               "DLPack view byte-offset offset must remain stable");
+_Static_assert(offsetof(gpuxtb_dlpack_view_t, shape) == 40,
+               "DLPack view shape offset must remain stable");
 
 static int check_short_compute_options_init(size_t caller_size) {
   enum { CANARY_BYTES = 16 };

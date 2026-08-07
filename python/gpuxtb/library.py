@@ -62,6 +62,17 @@ COMPUTE_FORCES = 1 << 1
 COMPUTE_ATOMIC_CHARGES = 1 << 2
 COMPUTE_POINT_CHARGE_FORCES = 1 << 3
 
+# DLPack device/dtype codes used by the gpuxtb-owned result producer
+# (mirrors DLPack 1.0; see gpuxtb._dlpack for the consumer-side constants).
+DLPACK_DEVICE_CPU = 1
+DLPACK_DEVICE_CUDA = 2
+DLPACK_DTYPE_INT = 0
+DLPACK_DTYPE_UINT = 1
+DLPACK_DTYPE_FLOAT = 2
+DLPACK_DTYPE_BFLOAT = 4
+DLPACK_DTYPE_BOOL = 6
+DLPACK_MAX_NDIM = 8
+
 KELVIN_TO_HARTREE = 3.166808578545117e-6
 DEFAULT_ELECTRONIC_TEMPERATURE = 300.0 * KELVIN_TO_HARTREE
 
@@ -186,6 +197,39 @@ class WorkspaceQuery(ctypes.Structure):
     ]
 
 
+class ResultOwnerOptions(ctypes.Structure):
+    """ctypes mirror of ``gpuxtb_result_owner_options_t`` ABI version 1."""
+
+    _fields_: ClassVar[list[tuple[str, object]]] = [
+        ("struct_size", ctypes.c_uint32),
+        ("api_version", ctypes.c_uint32),
+        ("memory_space", ctypes.c_int32),
+        ("device_id", ctypes.c_int32),
+        ("size_bytes", ctypes.c_uint64),
+        ("reserved", ctypes.c_uint32),
+    ]
+
+
+class DlpackView(ctypes.Structure):
+    """ctypes mirror of ``gpuxtb_dlpack_view_t`` ABI version 1.
+
+    ``shape`` is a caller-owned pointer to ``ndim`` ``int64`` extents that is
+    copied by gpuxtb during the export call.
+    """
+
+    _fields_: ClassVar[list[tuple[str, object]]] = [
+        ("struct_size", ctypes.c_uint32),
+        ("api_version", ctypes.c_uint32),
+        ("byte_offset", ctypes.c_uint64),
+        ("dtype_code", ctypes.c_int32),
+        ("dtype_bits", ctypes.c_int32),
+        ("dtype_lanes", ctypes.c_int32),
+        ("ndim", ctypes.c_int32),
+        ("reserved", ctypes.c_uint32),
+        ("shape", ctypes.POINTER(ctypes.c_int64)),
+    ]
+
+
 # --- Shared-library discovery -------------------------------------------------
 
 
@@ -283,6 +327,32 @@ def _configure_library(library: ctypes.CDLL) -> None:
         ctypes.c_size_t,
     ]
     library.gpuxtb_workspace_query_init.restype = ctypes.c_int32
+    library.gpuxtb_result_owner_options_init.argtypes = [
+        ctypes.POINTER(ResultOwnerOptions),
+        ctypes.c_size_t,
+    ]
+    library.gpuxtb_result_owner_options_init.restype = ctypes.c_int32
+    library.gpuxtb_result_owner_create.argtypes = [
+        ctypes.POINTER(ResultOwnerOptions),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.gpuxtb_result_owner_create.restype = ctypes.c_int32
+    library.gpuxtb_result_owner_buffer.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(Buffer),
+    ]
+    library.gpuxtb_result_owner_buffer.restype = ctypes.c_int32
+    library.gpuxtb_result_owner_retain.argtypes = [ctypes.c_void_p]
+    library.gpuxtb_result_owner_retain.restype = None
+    library.gpuxtb_result_owner_release.argtypes = [ctypes.c_void_p]
+    library.gpuxtb_result_owner_release.restype = None
+    library.gpuxtb_result_owner_export_dltensor.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(DlpackView),
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.gpuxtb_result_owner_export_dltensor.restype = ctypes.c_int32
     library.gpuxtb_plan_create.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(Batch),
@@ -792,6 +862,14 @@ __all__ = [
     "COMPUTE_FORCES",
     "COMPUTE_POINT_CHARGE_FORCES",
     "DEFAULT_ELECTRONIC_TEMPERATURE",
+    "DLPACK_DEVICE_CPU",
+    "DLPACK_DEVICE_CUDA",
+    "DLPACK_DTYPE_BFLOAT",
+    "DLPACK_DTYPE_BOOL",
+    "DLPACK_DTYPE_FLOAT",
+    "DLPACK_DTYPE_INT",
+    "DLPACK_DTYPE_UINT",
+    "DLPACK_MAX_NDIM",
     "KELVIN_TO_HARTREE",
     "MEMORY_CUDA_DEVICE",
     "MEMORY_HOST",
@@ -815,7 +893,9 @@ __all__ = [
     "ComputeOptions",
     "ConstBuffer",
     "ContextOptions",
+    "DlpackView",
     "Plan",
+    "ResultOwnerOptions",
     "WorkspaceQuery",
     "compute_checked",
     "device_memory_info",

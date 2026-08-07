@@ -4,6 +4,46 @@
 
 #include "gpuxtb/gpuxtb.h"
 
+/* Minimal DLPack 1.0 layout mirror used only to consume the managed tensor
+ * exported by the installed-library ABI.  The native producer owns this
+ * object until the importing consumer invokes its deleter. */
+typedef struct consumer_dl_tensor {
+  void* data;
+  struct {
+    int32_t device_type;
+    int32_t device_id;
+  } device;
+  int32_t ndim;
+  struct {
+    uint8_t code;
+    uint8_t bits;
+    uint16_t lanes;
+  } dtype;
+  int64_t* shape;
+  int64_t* strides;
+  uint64_t byte_offset;
+} consumer_dl_tensor_t;
+
+typedef struct consumer_dl_managed_tensor_versioned consumer_dl_managed_tensor_versioned_t;
+typedef void (*consumer_dlpack_deleter_t)(consumer_dl_managed_tensor_versioned_t*);
+struct consumer_dl_managed_tensor_versioned {
+  uint32_t version_major;
+  uint32_t version_minor;
+  void* manager_ctx;
+  consumer_dlpack_deleter_t deleter;
+  uint64_t flags;
+  consumer_dl_tensor_t dl_tensor;
+};
+
+_Static_assert(sizeof(consumer_dl_tensor_t) == 48,
+               "installed DLPack tensor mirror must remain 48 bytes");
+_Static_assert(sizeof(consumer_dl_managed_tensor_versioned_t) == 80,
+               "installed DLPack managed-tensor mirror must remain 80 bytes");
+_Static_assert(GPUXTB_RESULT_OWNER_OPTIONS_V1_SIZE <= sizeof(gpuxtb_result_owner_options_t),
+               "result-owner options prefix must fit the public layout");
+_Static_assert(GPUXTB_DLPACK_VIEW_V1_SIZE == sizeof(gpuxtb_dlpack_view_t),
+               "DLPack view v1 prefix must cover the complete public layout");
+
 _Static_assert(GPUXTB_COMPUTE_OPTIONS_V1_SIZE == 48,
                "installed ABI-v1 compute-options prefix must remain 48 bytes");
 _Static_assert(GPUXTB_COMPUTE_OPTIONS_V2_SIZE == 56,
@@ -18,6 +58,70 @@ typedef enum consumer_mode {
   CONSUMER_MODE_CPU,
   CONSUMER_MODE_CUDA
 } consumer_mode_t;
+
+/* Exercise the installed gpuxtb-owned result arena and DLPack export ABI on a
+ * host arena (works on every backend without a CUDA compiler in this
+ * consumer, and proves the additive #214 symbols are exported and usable). */
+static const int64_t result_shape[] = {4};
+static int run_installed_result_owner(void) {
+  gpuxtb_result_owner_options_t options;
+  if (gpuxtb_result_owner_options_init(&options, sizeof(options)) != GPUXTB_STATUS_SUCCESS) {
+    fprintf(stderr, "installed result-owner options init failed: %s\n", gpuxtb_get_last_error());
+    return 20;
+  }
+  options.memory_space = GPUXTB_MEMORY_HOST;
+  options.device_id = -1;
+  options.size_bytes = 128;
+
+  gpuxtb_result_owner_t* owner = NULL;
+  if (gpuxtb_result_owner_create(&options, &owner) != GPUXTB_STATUS_SUCCESS || owner == NULL) {
+    fprintf(stderr, "installed result-owner create failed: %s\n", gpuxtb_get_last_error());
+    return 21;
+  }
+
+  gpuxtb_buffer_t arena;
+  if (gpuxtb_result_owner_buffer(owner, &arena) != GPUXTB_STATUS_SUCCESS || arena.data == NULL ||
+      arena.size_bytes != 128u || arena.memory_space != GPUXTB_MEMORY_HOST) {
+    fprintf(stderr, "installed result-owner buffer view is inconsistent\n");
+    gpuxtb_result_owner_release(owner);
+    return 22;
+  }
+
+  gpuxtb_dlpack_view_t view;
+  memset(&view, 0, sizeof(view));
+  view.struct_size = sizeof(view);
+  view.api_version = GPUXTB_API_VERSION;
+  view.byte_offset = 0;
+  view.dtype_code = 2;
+  view.dtype_bits = 64;
+  view.dtype_lanes = 1;
+  view.ndim = 1;
+  view.shape = result_shape;
+  void* managed = NULL;
+  if (gpuxtb_result_owner_export_dltensor(owner, &view, 1, &managed) != GPUXTB_STATUS_SUCCESS ||
+      managed == NULL) {
+    fprintf(stderr, "installed result-owner DLPack export failed: %s\n", gpuxtb_get_last_error());
+    gpuxtb_result_owner_release(owner);
+    return 23;
+  }
+
+  /* Release the producer reference, then consume the single-use DLPack
+   * transfer.  The managed-tensor deleter drops the export reference and
+   * frees both the copied descriptor and the arena exactly once. */
+  gpuxtb_result_owner_release(owner);
+  consumer_dl_managed_tensor_versioned_t* tensor = (consumer_dl_managed_tensor_versioned_t*)managed;
+  if (tensor->version_major != 1u || tensor->version_minor != 0u || tensor->deleter == NULL ||
+      tensor->dl_tensor.device.device_type != 1 || tensor->dl_tensor.device.device_id != 0 ||
+      tensor->dl_tensor.ndim != 1 || tensor->dl_tensor.shape[0] != result_shape[0]) {
+    fprintf(stderr, "installed DLPack managed-tensor fields are inconsistent\n");
+    if (tensor->deleter != NULL) {
+      tensor->deleter(tensor);
+    }
+    return 24;
+  }
+  tensor->deleter(tensor);
+  return 0;
+}
 
 static gpuxtb_const_buffer_t input_buffer(const void* data, size_t size_bytes) {
   gpuxtb_const_buffer_t buffer = {data, size_bytes, GPUXTB_MEMORY_HOST, 0};
@@ -184,5 +288,8 @@ int main(int argc, char** argv) {
         run_installed_inference(context, mode == CONSUMER_MODE_CUDA ? "CUDA" : "CPU");
   }
   gpuxtb_context_destroy(context);
-  return inference_status;
+  if (inference_status != 0) {
+    return inference_status;
+  }
+  return run_installed_result_owner();
 }

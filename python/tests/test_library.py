@@ -75,6 +75,13 @@ def test_abi_struct_sizes() -> None:
     assert library.ComputeOptions.scc_start_mode.offset == 48
     assert library.ComputeOptions.reserved_v2.offset == 52
     assert ctypes.sizeof(library.BatchResult) == 184
+    assert ctypes.sizeof(library.ResultOwnerOptions) == 32
+    assert library.ResultOwnerOptions.memory_space.offset == 8
+    assert library.ResultOwnerOptions.size_bytes.offset == 16
+    assert library.ResultOwnerOptions.reserved.offset == 24
+    assert ctypes.sizeof(library.DlpackView) == 48
+    assert library.DlpackView.byte_offset.offset == 8
+    assert library.DlpackView.shape.offset == 40
     options = library.ComputeOptions()
     library.load_library().gpuxtb_compute_options_init(
         ctypes.byref(options), ctypes.sizeof(options)

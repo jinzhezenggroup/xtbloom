@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "fixture": {
+    "path": "data/conformance/inputs/tmacl.xyz",
+    "sha256": "7e5b80ecc7a8058d91d08afce9f5b12ec1413417c2a1defe819523b33e21ca74",
+    "source": {
+      "url": "https://github.com/grimme-lab/xtb/issues/678",
+      "issue_node_id": "I_kwDODKCtwM5PRfQc",
+      "author": "corinwagen",
+      "created_at": "2022-08-05T14:04:47Z",
+      "retrieved_at": "2026-08-07",
+      "extraction": "Verbatim 18-atom XYZ fenced block from the public issue body.",
+      "excerpt_sha256": "7e5b80ecc7a8058d91d08afce9f5b12ec1413417c2a1defe819523b33e21ca74",
+      "licensing": {
+        "spdx": "NOASSERTION",
+        "assessment": "The upstream issue states no license. gpuxtb retains only the factual atom labels and Cartesian coordinates needed to reproduce the reported numerical case; no upstream prose, source code, or executable content is included."
+      }
+    }
+  },
+  "generator": {
+    "source": "tests/scc_temperature_continuation_test.cpp",
+    "source_sha256": "eb500245640757984a228d82cc0d584f2b6a4cd3318a996f792875bc8249d89e",
+    "command": "gpuxtb_scc_temperature_continuation_test --write-evidence data/conformance/evidence/tmacl-temperature-continuation",
+    "physics_baseline_commit": "9fd7d4ddce3d5cb576b5bce8005a1f90647d37c0",
+    "refresh_base_commit": "66ae5e7b7fb622d263f2f94974ffbb9f2e3b7d23",
+    "generated_at": "2026-08-07",
+    "runtime": {
+      "provider": "Intel oneAPI Math Kernel Library",
+      "version": "2026.1.0",
+      "interface": "LP64",
+      "threading": "sequential",
+      "library_sha256": "b2ff0e31d7cd18c91813d8f6500f37665597d89de22649d90687aa6bf7bd2c0f"
+    }
+  },
+  "semantic_cross_check": {
+    "provider": "scipy-openblas32",
+    "version": "0.3.34.0.0",
+    "interface": "LP64 with scipy_ symbol prefix",
+    "library_sha256": "b2dfe24b9aa11cf1d1cec8edbca9423b50cfd186b486d59dd4efe45826261a98",
+    "required_result": "The executable baseline, path, and reviewed mixer-policy assertions, including exact baseline iteration counts and final q/d/Q plus density comparisons, pass; every mixer-grid cell is executed and every successful 300 K cell is compared with the funnel state."
+  },
+  "distribution": {
+    "classification": "copied test fixture and gpuxtb-generated test diagnostics",
+    "source_distribution": true,
+    "native_install": false,
+    "wheel": false,
+    "notice": "THIRD_PARTY_NOTICES.md"
+  },
+  "evidence_files": [
+    {
+      "path": "data/conformance/evidence/tmacl-temperature-continuation/tmacl_continuation_funnel.txt",
+      "sha256": "b4d99306df30d072e1ab7364b7be0c3d0b51d410b81113c92e80ee816e27fe85"
+    },
+    {
+      "path": "data/conformance/evidence/tmacl-temperature-continuation/tmacl_mixer_sweep.txt",
+      "sha256": "fe63127f692a6664efbb049c3b1bbbd3364d6c5444348681dad6b41acc293fae"
+    },
+    {
+      "path": "data/conformance/evidence/tmacl-temperature-continuation/tmacl_path_sensitivity.txt",
+      "sha256": "a5a37caa80ceb5d7062b727a1e0fbaa6fb433a0774f6e8e916bbfcbfb3d4c72c"
+    },
+    {
+      "path": "data/conformance/evidence/tmacl-temperature-continuation/tmacl_trace_300K.txt",
+      "sha256": "454d65a68b8c6f478612481c9997679dba2b94227843e6f22a5fa303f5f865ed"
+    },
+    {
+      "path": "data/conformance/evidence/tmacl-temperature-continuation/tmacl_trace_400K.txt",
+      "sha256": "13ba1c19ba71a1d5bd61bbb6660b3f98f0123de33f17d4a45098c880595e6e30"
+    },
+    {
+      "path": "data/conformance/evidence/tmacl-temperature-continuation/tmacl_trace_450K.txt",
+      "sha256": "74987cbd726b889fd8190cf5652aa2a16d3021a61337bd4ac79954da16443839"
+    },
+    {
+      "path": "data/conformance/evidence/tmacl-temperature-continuation/tmacl_trace_500K.txt",
+      "sha256": "fce15b1306bb36038eae42086b49b16f1c611ce6f3ef4297521247c0df5b7a1d"
+    },
+    {
+      "path": "data/conformance/evidence/tmacl-temperature-continuation/tmacl_trace_1000K.txt",
+      "sha256": "a86d588fe95288b8655bdaa561e99544aacf05a5653b29cf9214c1189821ee40"
+    }
+  ]
+}

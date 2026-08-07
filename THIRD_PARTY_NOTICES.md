@@ -26,6 +26,23 @@ runtime Python dependency only and is not bundled in gpuxtb source archives,
 native installs, or wheels; the canonical resolution is recorded in
 `pyproject.toml` and `uv.lock`.
 
+## DLPack
+
+Specification: <https://github.com/dmlc/dlpack>
+
+License: `Apache-2.0` (`LICENSES/Apache-2.0.txt`).
+
+No DLPack header or source is bundled, linked, or vendored. gpuxtb
+independently reimplements the *byte layout* of the DLPack 1.0 managed-tensor
+data structures (`DLDataType`, `DLDevice`, `DLTensor`, `DLManagedTensor`, and
+`DLManagedTensorVersioned`) as literal C/C++ struct mirrors in
+`src/runtime/dlpack_layout.hpp` and as matching ctypes mirrors in
+`python/gpuxtb/_dlpack.py`, with byte-exact static assertions. These layouts
+are the public ABI of the DLPack specification and are used only to produce
+and consume capsules at the Python boundary; they are not a copy of the
+upstream codebase's implementation. The upstream project's Apache-2.0 license
+text is retained in `LICENSES/Apache-2.0.txt` for reference.
+
 ## tblite
 
 Repository: <https://github.com/tblite/tblite>
@@ -82,6 +99,26 @@ oracle. The repository redistributes normalized numerical outputs and small
 test geometries, not xTB source code or binaries. Runtime hashes, command
 contracts, and the origin of the QM/MM fixtures are recorded in
 `data/conformance/manifest.json`.
+
+## xTB issue #678 difficult-SCC input
+
+Origin: <https://github.com/grimme-lab/xtb/issues/678>
+
+The test-only `data/conformance/inputs/tmacl.xyz` fixture reproduces the
+18 atom labels and Cartesian-coordinate rows posted by GitHub user
+`corinwagen` in upstream xTB issue #678. The upstream issue states no license
+for that user-provided input (`SPDX: NOASSERTION`). gpuxtb retains only these
+factual scientific input values, not the issue prose, xTB source, or an xTB
+binary. The fixture and gpuxtb-generated SCC diagnostics are source/test data;
+they are included in source distributions for test reproducibility, but are
+not installed by the native CMake package or bundled in wheels.
+
+The upstream issue node, timestamps, extraction description, fixture digest,
+gpuxtb evidence-generator digest, LP64 provider identities, and every generated
+output digest are pinned in
+`data/conformance/evidence/tmacl-temperature-continuation/manifest.json`.
+Generated diagnostics are original gpuxtb outputs under the repository
+license; they are not presented as upstream xTB oracle results.
 
 ## LAMMPS documentation reference
 
