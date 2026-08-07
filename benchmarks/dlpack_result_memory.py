@@ -78,66 +78,159 @@ THREAD_ENVIRONMENT_NAMES = (
 )
 
 
-def _git_revision() -> tuple[str, bool]:
-    """Return the exact repository revision and dirty bit."""
-    rev = subprocess.run(
-        ["git", "-C", str(REPOSITORY_ROOT), "rev-parse", "HEAD"],
+def _parse_cmake_cache(cache: Path) -> dict[str, str]:
+    """Parse typed CMake cache entries without losing configured flags."""
+    entries: dict[str, str] = {}
+    for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line or line.startswith(("#", "//")) or "=" not in line:
+            continue
+        declaration, value = line.split("=", 1)
+        if ":" not in declaration:
+            continue
+        name, _type_name = declaration.rsplit(":", 1)
+        entries[name] = value
+    return entries
+
+
+def _git_state(source: Path) -> dict[str, object]:
+    """Return a source checkout's exact revision and dirty status."""
+    revision = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "HEAD"],
         capture_output=True,
         text=True,
         check=False,
     )
     status = subprocess.run(
-        ["git", "-C", str(REPOSITORY_ROOT), "status", "--porcelain"],
+        ["git", "-C", str(source), "status", "--porcelain"],
         capture_output=True,
         text=True,
         check=False,
     )
-    if rev.returncode != 0 or status.returncode != 0 or not rev.stdout.strip():
+    if revision.returncode != 0 or status.returncode != 0:
+        raise SystemExit(f"cannot resolve Git identity for selected source {source}")
+    return {
+        "path": str(source),
+        "revision": revision.stdout.strip(),
+        "dirty": bool(status.stdout.strip()),
+    }
+
+
+def _file_identity(path: Path, *, run_version: bool = False) -> dict[str, object]:
+    """Record a configured tool or file without resolving a different PATH entry."""
+    resolved = path.resolve()
+    identity: dict[str, object] = {
+        "path": str(resolved),
+        "is_file": resolved.is_file(),
+        "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest()
+        if resolved.is_file()
+        else None,
+    }
+    if run_version:
+        if not resolved.is_file():
+            raise SystemExit(
+                f"configured compiler is not an executable file: {resolved}"
+            )
+        version = subprocess.run(
+            [str(resolved), "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if version.returncode != 0:
+            raise SystemExit(f"cannot query configured compiler version: {resolved}")
+        identity["version"] = version.stdout.strip()
+    return identity
+
+
+def _git_revision() -> tuple[str, bool]:
+    """Return the exact repository revision and dirty bit."""
+    state = _git_state(REPOSITORY_ROOT)
+    if not state["revision"]:
         raise SystemExit("cannot resolve the benchmark repository Git identity")
-    return rev.stdout.strip(), bool(status.stdout.strip())
+    return str(state["revision"]), bool(state["dirty"])
 
 
-def _library_identity() -> dict[str, object]:
-    """Report the selected native library and adjacent CMake build identity."""
+def _library_identity(expected_revision: str) -> dict[str, object]:
+    """Require and report the selected library's exact clean CMake provenance."""
     import gpuxtb
     from gpuxtb import library
 
     path = Path(str(library.library_path())).resolve()
+    if not path.is_file():
+        raise SystemExit(f"selected gpuxtb library is not a regular file: {path}")
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    identity: dict[str, object] = {
+    cache = path.parent / "CMakeCache.txt"
+    if not cache.is_file():
+        raise SystemExit(
+            "final evidence requires an adjacent CMakeCache.txt for the "
+            f"selected library: {path}"
+        )
+    entries = _parse_cmake_cache(cache)
+    source_text = entries.get("CMAKE_HOME_DIRECTORY")
+    if not source_text:
+        raise SystemExit("selected library CMake cache has no CMAKE_HOME_DIRECTORY")
+    source = Path(source_text).resolve()
+    if source != REPOSITORY_ROOT:
+        raise SystemExit(
+            "selected library was configured from a different source tree: "
+            f"{source} != {REPOSITORY_ROOT}"
+        )
+    source_git = _git_state(source)
+    if source_git["dirty"]:
+        raise SystemExit("selected library source tree is dirty")
+    if source_git["revision"] != expected_revision:
+        raise SystemExit(
+            "selected library source revision does not match benchmark revision: "
+            f"{source_git['revision']} != {expected_revision}"
+        )
+
+    selected_names = (
+        "BUILD_SHARED_LIBS",
+        "CMAKE_BUILD_TYPE",
+        "CMAKE_CXX_COMPILER",
+        "CMAKE_CXX_FLAGS",
+        "CMAKE_CXX_FLAGS_RELEASE",
+        "CMAKE_CUDA_COMPILER",
+        "CMAKE_CUDA_FLAGS",
+        "CMAKE_CUDA_FLAGS_RELEASE",
+        "CMAKE_CUDA_ARCHITECTURES",
+        "CMAKE_EXE_LINKER_FLAGS",
+        "CMAKE_SHARED_LINKER_FLAGS",
+        "CMAKE_GENERATOR",
+        "CMAKE_HOME_DIRECTORY",
+        "GPUXTB_ENABLE_CUDA",
+        "GPUXTB_MKL_RT_LIBRARY",
+    )
+    selected = {name: entries.get(name) for name in selected_names}
+    compilers: dict[str, object] = {}
+    for language, key in (
+        ("cxx", "CMAKE_CXX_COMPILER"),
+        ("cuda", "CMAKE_CUDA_COMPILER"),
+    ):
+        compiler = entries.get(key)
+        if not compiler:
+            raise SystemExit(f"selected library CMake cache has no {key}")
+        compilers[language] = _file_identity(Path(compiler), run_version=True)
+
+    return {
         "library_path": str(path),
         "library_sha256": digest,
         "python_package": str(Path(gpuxtb.__file__).resolve()),
+        "build": {
+            "build_system": "cmake",
+            "build_directory": str(path.parent),
+            "cmake_version": subprocess.run(
+                ["cmake", "--version"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip(),
+            "cache": _file_identity(cache),
+            "cache_entries": selected,
+            "source": source_git,
+            "compilers": compilers,
+        },
     }
-    cache = path.parent / "CMakeCache.txt"
-    if cache.is_file():
-        cache_text = cache.read_text(encoding="utf-8", errors="replace")
-        keys = (
-            "CMAKE_BUILD_TYPE",
-            "CMAKE_CXX_COMPILER",
-            "CMAKE_CXX_COMPILER_VERSION",
-            "CMAKE_CUDA_COMPILER",
-            "CMAKE_CUDA_COMPILER_VERSION",
-            "CMAKE_CUDA_ARCHITECTURES",
-            "CMAKE_GENERATOR",
-            "GPUXTB_ENABLE_CUDA",
-        )
-        values: dict[str, str] = {}
-        for line in cache_text.splitlines():
-            if "=" not in line or ":" not in line:
-                continue
-            key_with_type, value = line.split("=", 1)
-            key = key_with_type.split(":", 1)[0]
-            if key in keys:
-                values[key] = value
-        identity["cmake"] = {
-            "cache_path": str(cache),
-            "cache_sha256": hashlib.sha256(cache.read_bytes()).hexdigest(),
-            "values": values,
-        }
-    else:
-        identity["cmake"] = {"status": "not_adjacent_to_library"}
-    return identity
 
 
 def _packed_water() -> dict[str, np.ndarray]:
@@ -548,7 +641,7 @@ def main() -> int:
         "environment": {
             key: os.environ.get(key, "") for key in THREAD_ENVIRONMENT_NAMES
         },
-        "library": _library_identity(),
+        "library": _library_identity(revision),
         "workload": {
             "molecule": "water (8,1,1)",
             "nsystems": 1,

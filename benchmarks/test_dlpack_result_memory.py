@@ -124,6 +124,75 @@ class DlpackResultMemoryProtocolTest(unittest.TestCase):
             ):
                 benchmark.main()
 
+    def test_library_identity_requires_clean_matching_cmake_source(self) -> None:
+        """Final evidence ties the selected library to this clean revision."""
+        from gpuxtb import library as gpuxtb_library
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source"
+            build = source / "build"
+            build.mkdir(parents=True)
+            native = build / "libgpuxtb.so"
+            native.write_bytes(b"test library")
+            compiler = Path("/bin/true").resolve()
+            (build / "CMakeCache.txt").write_text(
+                "\n".join(
+                    (
+                        "BUILD_SHARED_LIBS:BOOL=ON",
+                        "CMAKE_BUILD_TYPE:STRING=Release",
+                        f"CMAKE_CXX_COMPILER:FILEPATH={compiler}",
+                        "CMAKE_CXX_FLAGS:STRING=-Wall",
+                        "CMAKE_CXX_FLAGS_RELEASE:STRING=-O3 -DNDEBUG",
+                        f"CMAKE_CUDA_COMPILER:FILEPATH={compiler}",
+                        "CMAKE_CUDA_FLAGS:STRING=--use_fast_math",
+                        "CMAKE_CUDA_FLAGS_RELEASE:STRING=-O3 -DNDEBUG",
+                        "CMAKE_CUDA_ARCHITECTURES:STRING=120",
+                        "CMAKE_GENERATOR:INTERNAL=Ninja",
+                        f"CMAKE_HOME_DIRECTORY:INTERNAL={source}",
+                        "GPUXTB_ENABLE_CUDA:STRING=ON",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            revision = "a" * 40
+            clean_state = {
+                "path": str(source),
+                "revision": revision,
+                "dirty": False,
+            }
+            with (
+                mock.patch.object(gpuxtb_library, "library_path", return_value=native),
+                mock.patch.object(benchmark, "REPOSITORY_ROOT", source),
+                mock.patch.object(benchmark, "_git_state", return_value=clean_state),
+            ):
+                identity = benchmark._library_identity(revision)
+
+            build_identity = identity["build"]
+            self.assertEqual(build_identity["source"], clean_state)
+            self.assertEqual(
+                build_identity["cache_entries"]["CMAKE_CUDA_FLAGS_RELEASE"],
+                "-O3 -DNDEBUG",
+            )
+            self.assertIn("version", build_identity["compilers"]["cxx"])
+            self.assertIn("version", build_identity["compilers"]["cuda"])
+
+            for source_state, message in (
+                ({**clean_state, "dirty": True}, "source tree is dirty"),
+                ({**clean_state, "revision": "b" * 40}, "does not match"),
+            ):
+                with (
+                    mock.patch.object(
+                        gpuxtb_library, "library_path", return_value=native
+                    ),
+                    mock.patch.object(benchmark, "REPOSITORY_ROOT", source),
+                    mock.patch.object(
+                        benchmark, "_git_state", return_value=source_state
+                    ),
+                    self.assertRaisesRegex(SystemExit, message),
+                ):
+                    benchmark._library_identity(revision)
+
     def test_invalid_repetitions_precede_identity_probe(self) -> None:
         """The CLI rejects an empty statistical protocol immediately."""
         with (
