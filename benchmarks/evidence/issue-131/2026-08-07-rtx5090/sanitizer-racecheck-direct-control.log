@@ -1,0 +1,3 @@
+========= COMPUTE-SANITIZER
+direct exact-capacity solve control passed: batch=64 heterogeneous=1 loops=20
+========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)

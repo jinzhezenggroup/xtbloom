@@ -1471,6 +1471,32 @@ if(GPUXTB_BUILD_TESTS)
     )
     add_test(NAME gpuxtb.cuda.eigensolver COMMAND gpuxtb_cuda_eigensolver_test)
 
+    # Focused #80/#131 compaction benchmark. Builds homogeneous and
+    # heterogeneous restricted eigensolver buckets, drives canonical
+    # active-count tier sweeps, and reports exact-capacity bucket activity
+    # (active vs submitted vs completed) with compacted/uncompacted latency
+    # crossover for batch sizes 1/8/32/128. Not a CTest test: it is a
+    # measurement runner like gpuxtb_cuda_scc_loop_benchmark.
+    add_executable(gpuxtb_cuda_compaction_benchmark tests/cuda_eigensolver_test.cu)
+    target_link_libraries(gpuxtb_cuda_compaction_benchmark PRIVATE
+      gpuxtb::gpuxtb
+      gpuxtb_cuda_backend
+      gpuxtb_gfn2_cpu
+    )
+    target_include_directories(gpuxtb_cuda_compaction_benchmark PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_compaction_benchmark PRIVATE
+      GPUXTB_HAS_CUDA=1
+      GPUXTB_COMPACTION_BENCHMARK_ONLY=1
+    )
+    set_target_properties(gpuxtb_cuda_compaction_benchmark PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+
     add_executable(gpuxtb_cuda_es3_test tests/cuda_es3_test.cu)
     target_link_libraries(gpuxtb_cuda_es3_test PRIVATE
       gpuxtb::gpuxtb
