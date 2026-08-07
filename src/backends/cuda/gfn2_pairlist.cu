@@ -1861,6 +1861,25 @@ static cudaError_t validate_gfn2_pairlist_consumer_coordination_vjp_impl(
       return cudaErrorInvalidValue;
     }
   }
+  /* Match validate_gfn2_pair_list_consumer_binding's structural alias
+   * contract for the device-only entry.  These indices cover the committed
+   * pair/neighbor metadata, payloads, generation, eligibility, and optional
+   * active mask.  Each range has a distinct semantic type and must therefore
+   * be disjoint from its peers and from the topology partition consumed by
+   * this leaf, even though every range is read-only during the VJP. */
+  constexpr std::array<std::size_t, 9> kCommittedReadIndices = {4u,  5u,  6u,  7u, 8u,
+                                                                10u, 11u, 12u, 13u};
+  for (std::size_t first = 0u; first < kCommittedReadIndices.size(); ++first) {
+    const std::size_t first_index = kCommittedReadIndices[first];
+    if (ranges_overlap(reads[first_index], reads[0])) {
+      return cudaErrorInvalidValue;
+    }
+    for (std::size_t second = first + 1u; second < kCommittedReadIndices.size(); ++second) {
+      if (ranges_overlap(reads[first_index], reads[kCommittedReadIndices[second]])) {
+        return cudaErrorInvalidValue;
+      }
+    }
+  }
   return cudaSuccess;
 }
 
