@@ -2140,6 +2140,19 @@ struct Gfn2CudaExecutionCache::Impl {
                    candidate.host.basis.atom_offsets[static_cast<std::size_t>(system + 1)] -
                        candidate.host.basis.atom_offsets[static_cast<std::size_t>(system)]);
     }
+    /* Per-system sparse/dense dispatch decisions, uploaded once at setup.  Each
+     * peer independently crosses the measured 40-atom crossover, so a
+     * heterogeneous batch no longer applies one strategy to every member. */
+    std::vector<std::int32_t> pairlist_system_modes(static_cast<std::size_t>(batch));
+    for (std::int64_t system = 0; system < batch; ++system) {
+      const std::int64_t atoms_per_system =
+          candidate.host.basis.atom_offsets[static_cast<std::size_t>(system + 1)] -
+          candidate.host.basis.atom_offsets[static_cast<std::size_t>(system)];
+      pairlist_system_modes[static_cast<std::size_t>(system)] = static_cast<std::int32_t>(
+          gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(atoms_per_system)
+              ? gpuxtb::detail::cuda::Gfn2PairListMode::kSparse
+              : gpuxtb::detail::cuda::Gfn2PairListMode::kDense);
+    }
     std::int64_t scaled_cells = 0;
     if (!checked_elements(maximum_system_atoms, 8, scaled_cells)) {
       error = "numerical refresh sparse cell capacity overflows int64_t";
@@ -2256,9 +2269,12 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t sparse_coordination = 0u;
       std::size_t pairlist_pairs = 0u;
       std::size_t pairlist_offsets = 0u;
+      std::size_t pairlist_pair_counts = 0u;
       std::size_t pairlist_neighbor_offsets = 0u;
+      std::size_t pairlist_neighbor_counts = 0u;
       std::size_t pairlist_neighbors = 0u;
       std::size_t pairlist_generations = 0u;
+      std::size_t pairlist_system_modes = 0u;
       std::size_t pairlist_meta = 0u;
       std::size_t pairlist_atom_cells = 0u;
       std::size_t pairlist_cell_counts = 0u;
@@ -2389,9 +2405,12 @@ struct Gfn2CudaExecutionCache::Impl {
     offset.sparse_coordination = layout.append<double>(atoms);
     offset.pairlist_pairs = layout.append<gpuxtb::detail::Gfn2AtomPair>(sparse_pair_capacity);
     offset.pairlist_offsets = layout.append<std::int64_t>(batch + 1);
+    offset.pairlist_pair_counts = layout.append<std::int64_t>(batch);
     offset.pairlist_neighbor_offsets = layout.append<std::int64_t>(atoms + 1);
+    offset.pairlist_neighbor_counts = layout.append<std::int64_t>(atoms);
     offset.pairlist_neighbors = layout.append<std::int64_t>(sparse_neighbor_capacity);
     offset.pairlist_generations = layout.append<std::uint64_t>(batch);
+    offset.pairlist_system_modes = layout.append<std::int32_t>(batch);
     offset.pairlist_meta = layout.append<gpuxtb::detail::cuda::Gfn2PairListSystemMeta>(batch);
     offset.pairlist_atom_cells = layout.append<std::int64_t>(atoms);
     const std::int64_t sparse_cell_storage = sparse_cell_capacity + batch;
@@ -2493,6 +2512,7 @@ struct Gfn2CudaExecutionCache::Impl {
     upload_vector(offset.h0_coordination_scale, candidate.host.h0.shell_coordination_scale);
     upload_vector(offset.h0_polynomial, candidate.host.h0.shell_polynomial);
     upload_vector(offset.h0_pair_scale, candidate.host.h0.shell_pair_scale);
+    upload_vector(offset.pairlist_system_modes, pairlist_system_modes);
     upload_vector(offset.committed_positions, candidate.host.positions);
     upload_vector(offset.committed_point_positions, candidate.host.point_positions);
     upload_vector(offset.committed_point_values, candidate.host.point_values);
@@ -2656,8 +2676,10 @@ struct Gfn2CudaExecutionCache::Impl {
           gpuxtb::detail::cuda::Gfn2PairListMode::kSparse,
           token,
           candidate.device_topology.atom_offsets,
+          gpuxtb::detail::cuda::kGfn2PairListAllowDenseFallback,
+          arena_pointer<std::int32_t>(arena, offset.pairlist_system_modes),
+          batch,
       };
-      binding.plan.pairlist.flags = gpuxtb::detail::cuda::kGfn2PairListAllowDenseFallback;
     }
     binding.diagnostics = {
         arena_pointer<std::uint32_t>(arena, offset.geometry_system_errors),
@@ -2708,9 +2730,15 @@ struct Gfn2CudaExecutionCache::Impl {
         pairlist_enabled ? sparse_pair_capacity : 0,
         pairlist_enabled ? arena_pointer<std::int64_t>(arena, offset.pairlist_offsets) : nullptr,
         pairlist_enabled ? batch + 1 : 0,
+        pairlist_enabled ? arena_pointer<std::int64_t>(arena, offset.pairlist_pair_counts)
+                         : nullptr,
+        pairlist_enabled ? batch : 0,
         pairlist_enabled ? arena_pointer<std::int64_t>(arena, offset.pairlist_neighbor_offsets)
                          : nullptr,
         pairlist_enabled ? atoms + 1 : 0,
+        pairlist_enabled ? arena_pointer<std::int64_t>(arena, offset.pairlist_neighbor_counts)
+                         : nullptr,
+        pairlist_enabled ? atoms : 0,
         pairlist_enabled ? arena_pointer<std::int64_t>(arena, offset.pairlist_neighbors) : nullptr,
         pairlist_enabled ? sparse_neighbor_capacity : 0,
         pairlist_enabled ? arena_pointer<std::uint64_t>(arena, offset.pairlist_generations)

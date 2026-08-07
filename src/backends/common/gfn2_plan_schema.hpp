@@ -30,6 +30,35 @@ enum class Gfn2GenerationScope : std::uint32_t {
   kPerSystem = 2u,
 };
 
+/*
+ * Physical role a sparse pair-list consumer computes.  The pair-map schema
+ * deliberately separates the physical inclusion cutoff of each role from the
+ * builder/dispatch strategy that produces the list (kSparse buckets versus the
+ * kDense all-pairs fallback).  A 50-bohr D4 superset view may feed several D4
+ * roles only when each consumer applies its own inclusive predicate.
+ */
+enum class Gfn2PairListRole : std::uint32_t {
+  /* GFN2 coordination-number reduction over the 25-bohr reference cutoff. */
+  kCoordination = 0u,
+  /* D4 coordination number (erf form), 30 bohr physical cutoff. */
+  kD4Coordination = 1u,
+  /* D4 two-body dispersion, 50 bohr physical cutoff. */
+  kD4TwoBody = 2u,
+  /* D4 Axilrod--Teller--Muto, 25 bohr physical cutoff with ordered triples. */
+  kD4Atm = 3u,
+};
+
+/*
+ * Publication stage of the sparse list a consumer is bound to.  Candidate
+ * storage is unpublished scratch owned by the numerical refresh transaction;
+ * committed storage is the long-lived per-system cache a consumer may reduce
+ * over once its per-system generation and eligibility match the current epoch.
+ */
+enum class Gfn2PairListState : std::uint32_t {
+  kCandidate = 0u,
+  kCommitted = 1u,
+};
+
 enum class Gfn2PlanSchemaError : std::uint32_t {
   kSuccess = 0u,
   kInvalidMemorySpace = 1u,
@@ -52,6 +81,9 @@ enum class Gfn2PlanSchemaError : std::uint32_t {
   kInvalidSpinChannels = 18u,
   kInvalidWavefunctionExtent = 19u,
   kInvalidLayoutFingerprint = 20u,
+  kInvalidPairListRole = 21u,
+  kInvalidPairListState = 22u,
+  kInsufficientPairListCutoff = 23u,
 };
 
 /* Identifies the first field involved in a setup failure. */
@@ -82,6 +114,14 @@ enum class Gfn2PlanSchemaField : std::uint32_t {
   kSpinShellOffsets = 23u,
   kSpinAtomOffsets = 24u,
   kWavefunctionLayoutFingerprint = 25u,
+  kPairListConsumer = 26u,
+  kPairListOffsets = 27u,
+  kPairListPairs = 28u,
+  kPairListNeighborOffsets = 29u,
+  kPairListNeighbors = 30u,
+  kPairListGenerations = 31u,
+  kPairListEligibleMask = 32u,
+  kPairListActiveMask = 33u,
 };
 
 struct Gfn2PlanSchemaDiagnostic {
@@ -217,6 +257,66 @@ struct Gfn2GeometryCacheProvenanceView {
   const std::uint64_t* system_geometry_generations = nullptr;
 };
 
+/*
+ * Device-neutral projection of the sparse pair list that a consumer (CN, D4,
+ * ...) reduces over.  It deliberately carries neither the builder strategy nor
+ * any numerical value cache: pair indices, per-atom neighbor ranges, and
+ * canonical (first < second) ordering are the traversal contract, while each
+ * consumer re-derives its own value cache from positions and its own inclusive
+ * cutoff predicate.  This keeps "pair-index traversal" and "numerical value
+ * cache" separate and lets one 50-bohr superset list feed several D4 roles.
+ *
+ * Contract guarantees enforced by validation:
+ *   - one plan token plus per-system committed generations; a consumer must
+ *     never read a list from a different plan or geometry epoch;
+ *   - eligible_mask (0/1 per system) marks peers whose committed list is
+ *     usable for the current epoch; active_mask is optional caller intent,
+ *     disjoint from every other array;
+ *   - fixed-topology bucket/capacity metadata (max pairs per system, max
+ *     neighbors per atom) is host-set at setup and never changes;
+ *   - candidates and committed slices never alias topology; committed
+ *     generations and eligible_mask never alias each other or the masks.
+ *
+ * All element counts are in elements, never bytes.
+ */
+struct Gfn2PairListConsumerView {
+  Gfn2PlanMemorySpace memory_space = Gfn2PlanMemorySpace::kHost;
+  Gfn2PairListState state = Gfn2PairListState::kCommitted;
+  Gfn2PairListRole role = Gfn2PairListRole::kCoordination;
+  Gfn2PairMapKind pair_map_kind = Gfn2PairMapKind::kExplicit;
+  std::uint64_t plan_token = 0u;
+  /* Physical inclusion cutoff in bohr for this role; validates both length and
+   * that the list cutoff covers it (list_builder_cutoff_bohr >= cutoff_bohr).
+   * Zero on a disabled leaf. */
+  double cutoff_bohr = 0.0;
+  double list_builder_cutoff_bohr = 0.0;
+
+  std::int64_t batch_size = 0;
+  std::int64_t total_atoms = 0;
+  std::int64_t max_pairs_per_system = 0;
+  std::int64_t max_neighbors_per_atom = 0;
+
+  /* Fixed-topology published arrays; pair_offsets partitions the canonical
+   * first<second pair stream per system, neighbor_offsets partitions the
+   * per-atom ascending neighbor ranges. */
+  std::int64_t pair_offset_count = 0;
+  std::int64_t neighbor_offset_count = 0;
+  std::int64_t pair_count = 0;
+  std::int64_t neighbor_count = 0;
+  const std::int64_t* pair_offsets = nullptr;
+  const Gfn2AtomPair* pairs = nullptr;
+  const std::int64_t* neighbor_offsets = nullptr;
+  const std::int64_t* neighbors = nullptr;
+
+  /* Per-system committed generations and eligibility, published host tensors. */
+  std::int64_t committed_generation_count = 0;
+  std::int64_t eligible_mask_count = 0;
+  std::int64_t active_mask_count = 0;
+  const std::uint64_t* committed_generations = nullptr;
+  const std::uint8_t* eligible_mask = nullptr;
+  const std::uint8_t* active_mask = nullptr;
+};
+
 static_assert(std::is_trivially_copyable_v<Gfn2PlanSchemaDiagnostic>);
 static_assert(std::is_standard_layout_v<Gfn2PlanSchemaDiagnostic>);
 static_assert(std::is_trivially_copyable_v<Gfn2AtomPair>);
@@ -227,6 +327,8 @@ static_assert(std::is_trivially_copyable_v<Gfn2WavefunctionLayoutView>);
 static_assert(std::is_standard_layout_v<Gfn2WavefunctionLayoutView>);
 static_assert(std::is_trivially_copyable_v<Gfn2GeometryCacheProvenanceView>);
 static_assert(std::is_standard_layout_v<Gfn2GeometryCacheProvenanceView>);
+static_assert(std::is_trivially_copyable_v<Gfn2PairListConsumerView>);
+static_assert(std::is_standard_layout_v<Gfn2PairListConsumerView>);
 
 /*
  * Validate counts, extents, alignment, address arithmetic, and aliases without
@@ -280,6 +382,32 @@ static_assert(std::is_standard_layout_v<Gfn2GeometryCacheProvenanceView>);
     const Gfn2RaggedTopologyView& topology, const Gfn2GeometryCacheProvenanceView& provenance,
     std::uint64_t expected_geometry_generation, const std::uint8_t* active_mask = nullptr,
     std::int64_t active_mask_elements = 0) noexcept;
+
+/*
+ * Structural validation of a sparse pair-list consumer projection without
+ * dereferencing any array.  Enforces one plan token, matching batch/atom
+ * counts, role/state/map-kind enumeration values, positive physical and
+ * builder cutoffs with the builder cutoff covering the role cutoff, fixed
+ * positive capacity metadata, exact offset counts vs batch/atoms, and full
+ * pairwise address disjointness between every published array and immutable
+ * topology.  The active mask is optional; when present it must be disjoint
+ * from every other array.  host tuning constants are validated by the host
+ * inspector, not here.
+ */
+[[nodiscard]] Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_binding(
+    const Gfn2RaggedTopologyView& topology, const Gfn2PairListConsumerView& consumer,
+    Gfn2PlanMemorySpace expected_memory_space) noexcept;
+
+/* Full host inspection of every published pair/neighbor value, committed
+ * generation, and eligible/active mask byte.  Offsets must form valid
+ * partitions, pairs must store first < second within their system slice,
+ * neighbors must stay inside their owning system, generations and mask bytes
+ * must be zero-or-one, and the eligible/active masks must not alias other
+ * published arrays.  Batch-scope validation: committed_generations must be
+ * the expected generation for every eligible system. */
+[[nodiscard]] Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_host(
+    const Gfn2RaggedTopologyView& topology, const Gfn2PairListConsumerView& consumer,
+    std::uint64_t expected_geometry_generation) noexcept;
 
 }  // namespace gpuxtb::detail
 

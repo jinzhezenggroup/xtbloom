@@ -33,6 +33,17 @@ struct SystemRanges {
   std::int64_t cells;
 };
 
+/* Per-system strategy.  A non-null system_modes array overrides the batch-wide
+ * `mode`, letting heterogeneous batches dispatch dense and bucketed peers
+ * independently.  The two paths emit identical canonical lists. */
+__device__ Gfn2PairListMode system_mode(const Gfn2PairListDeviceBatch& batch,
+                                        std::int64_t system) {
+  if (batch.system_modes != nullptr) {
+    return static_cast<Gfn2PairListMode>(batch.system_modes[system]);
+  }
+  return batch.mode;
+}
+
 __device__ bool finite_position(const double* positions, std::int64_t coordinate) {
   return isfinite(positions[coordinate]) && isfinite(positions[coordinate + 1]) &&
          isfinite(positions[coordinate + 2]);
@@ -212,16 +223,22 @@ __global__ void build_buckets_kernel(Gfn2PairListDeviceBatch batch, const double
   meta.nx = 1;
   meta.ny = 1;
   meta.nz = 1;
-  meta.cells = 1;
+  meta.cells = (system_mode(batch, system) == Gfn2PairListMode::kDense) ? 0 : 1;
   for (int axis = 0; axis < 3; ++axis) {
     meta.origin[axis] = 0.0;
   }
   /* Empty and failed systems still publish the single-bucket default meta so
-   * later stages never read a stale value from a previous inference. */
+   * later stages never read a stale value from a previous inference.  A
+   * per-system dense-dispatch peer publishes cells==0 so build_neighbors runs
+   * the deterministic all-pairs scan for that peer regardless of the batch
+   * strategy; the two paths emit the same canonical lists. */
   if (threadIdx.x == 0) {
     system_meta[system] = meta;
   }
   __syncthreads();
+  if (meta.cells == 0) {
+    return;
+  }
 
   if (atom_count > 0 && threadIdx.x == 0) {
     const double edge = batch.cutoff;
@@ -434,7 +451,7 @@ __global__ void build_neighbors_kernel(
   }
   __syncthreads();
 
-  const bool mode_sparse = batch.mode == Gfn2PairListMode::kSparse;
+  const bool mode_sparse = system_mode(batch, system) == Gfn2PairListMode::kSparse;
   Gfn2PairListSystemMeta meta{};
   if (mode_sparse) {
     meta = system_meta[system];
@@ -653,7 +670,9 @@ __global__ void prefix_pair_offsets_kernel(Gfn2PairListDeviceBatch batch,
       std::int64_t running = 0;
       for (std::int64_t system = 0; system < batch.batch_size; ++system) {
         cache.pair_offsets[system] = running;
-        running += pair_cursor[system];
+        const std::int64_t count = system_is_valid(system_errors, system) ? pair_cursor[system] : 0;
+        cache.pair_counts[system] = count;
+        running += count;
         if (!system_is_valid(system_errors, system)) {
           cache.pair_generations[system] = 0u;
         }
@@ -665,10 +684,10 @@ __global__ void prefix_pair_offsets_kernel(Gfn2PairListDeviceBatch batch,
 
 /*
  * Global exclusive prefix of the per-atom neighbor counts into the public
- * neighbor_offsets.  Failed systems contribute a zero-length range so healthy
- * peers keep contiguous, correct slices.  The whole call is a no-op when the
- * sequence is inactive, so caller outputs are never touched before
- * publication.
+ * neighbor_offsets, publishing the explicit per-atom neighbor_counts.  Failed
+ * systems contribute a zero-length range so healthy peers keep contiguous,
+ * correct slices.  The whole call is a no-op when the sequence is inactive, so
+ * caller outputs are never touched before publication.
  */
 __global__ void prefix_neighbor_offsets_kernel(Gfn2PairListDeviceBatch batch,
                                                const std::int64_t* neighbor_cursor,
@@ -685,9 +704,10 @@ __global__ void prefix_neighbor_offsets_kernel(Gfn2PairListDeviceBatch batch,
         while (system + 1 < batch.batch_size && atom >= batch.atom_offsets[system + 1]) {
           ++system;
         }
-        if (system_is_valid(system_errors, system)) {
-          running += neighbor_cursor[atom];
-        }
+        const std::int64_t count =
+            system_is_valid(system_errors, system) ? neighbor_cursor[atom] : 0;
+        cache.neighbor_counts[atom] = count;
+        running += count;
       }
       cache.neighbor_offsets[batch.total_atoms] = running;
     }
@@ -948,6 +968,7 @@ bool writable_ranges_are_disjoint(const std::array<AddressRange, ReadCount>& rea
 }
 
 cudaError_t validate_batch(const Gfn2PairListDeviceBatch& batch) noexcept {
+  const bool per_system_dispatch = batch.system_modes != nullptr;
   if (batch.batch_size <= 0 || batch.total_atoms < 0 ||
       batch.batch_size == std::numeric_limits<std::int64_t>::max() ||
       batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
@@ -957,7 +978,9 @@ cudaError_t validate_batch(const Gfn2PairListDeviceBatch& batch) noexcept {
       !(batch.cutoff > 0.0) || !isfinite(batch.cutoff) ||
       (batch.mode != Gfn2PairListMode::kSparse && batch.mode != Gfn2PairListMode::kDense) ||
       (batch.flags & ~kGfn2PairListAllowDenseFallback) != 0u || batch.plan_token == 0u ||
-      !is_aligned(batch.atom_offsets, alignof(std::int64_t))) {
+      !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
+      (per_system_dispatch && batch.system_mode_elements != batch.batch_size) ||
+      (per_system_dispatch && !is_aligned(batch.system_modes, alignof(std::int32_t)))) {
     return batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max())
                ? cudaErrorInvalidConfiguration
                : cudaErrorInvalidValue;
@@ -977,14 +1000,18 @@ cudaError_t validate_update(const Gfn2PairListDeviceBatch& batch, const double* 
       cache.plan_token != batch.plan_token || workspace.plan_token != batch.plan_token ||
       batch.batch_size > kInt64Maximum / batch.max_pairs_per_system ||
       cache.pair_elements < batch.max_pairs_per_system * batch.batch_size ||
-      cache.pair_offset_elements != batch.batch_size + 1 || batch.total_atoms == kInt64Maximum ||
+      cache.pair_offset_elements != batch.batch_size + 1 ||
+      cache.pair_count_elements < batch.batch_size || batch.total_atoms == kInt64Maximum ||
       batch.total_atoms > kInt64Maximum / batch.max_neighbors_per_atom ||
       cache.neighbor_offset_elements != batch.total_atoms + 1 ||
+      cache.neighbor_count_elements < batch.total_atoms ||
       cache.neighbor_elements < batch.total_atoms * batch.max_neighbors_per_atom ||
       cache.generation_elements < batch.batch_size ||
       !required_pointer(cache.pairs, cache.pair_elements) ||
       !required_pointer(cache.pair_offsets, cache.pair_offset_elements) ||
+      !required_pointer(cache.pair_counts, cache.pair_count_elements) ||
       !required_pointer(cache.neighbor_offsets, cache.neighbor_offset_elements) ||
+      !required_pointer(cache.neighbor_counts, cache.neighbor_count_elements) ||
       !required_pointer(cache.neighbors, cache.neighbor_elements) ||
       !required_pointer(cache.pair_generations, cache.generation_elements) ||
       workspace.system_meta_elements < batch.batch_size ||
@@ -1016,15 +1043,19 @@ cudaError_t validate_update(const Gfn2PairListDeviceBatch& batch, const double* 
   const std::int64_t pair_capacity = batch.batch_size * batch.max_pairs_per_system;
 
   std::array<AddressRange, 2> reads;
-  std::array<AddressRange, 17> writes;
+  std::array<AddressRange, 19> writes;
   if (!make_address_range(batch.atom_offsets, batch.atom_offset_elements,
                           sizeof(*batch.atom_offsets), &reads[0]) ||
       !make_address_range(positions, batch.total_atoms * 3, sizeof(*positions), &reads[1]) ||
       !make_address_range(cache.pairs, pair_capacity, sizeof(*cache.pairs), &writes[0]) ||
       !make_address_range(cache.pair_offsets, cache.pair_offset_elements,
                           sizeof(*cache.pair_offsets), &writes[1]) ||
+      !make_address_range(cache.pair_counts, cache.pair_count_elements,
+                          sizeof(*cache.pair_counts), &writes[17]) ||
       !make_address_range(cache.neighbor_offsets, cache.neighbor_offset_elements,
                           sizeof(*cache.neighbor_offsets), &writes[2]) ||
+      !make_address_range(cache.neighbor_counts, cache.neighbor_count_elements,
+                          sizeof(*cache.neighbor_counts), &writes[18]) ||
       !make_address_range(cache.neighbors, neighbor_capacity, sizeof(*cache.neighbors),
                           &writes[3]) ||
       !make_address_range(cache.pair_generations, cache.generation_elements,
@@ -1068,7 +1099,8 @@ bool query_gfn2_pairlist_requirements_cuda(
     std::int64_t* cache_pair_offsets, std::int64_t* cache_generations, std::int64_t* ws_meta,
     std::int64_t* ws_atom_cells, std::int64_t* ws_cell_arrays, std::int64_t* ws_cell_atoms,
     std::int64_t* ws_neighbor_cursor, std::int64_t* ws_neighbor_scratch,
-    std::int64_t* ws_pair_cursor) noexcept {
+    std::int64_t* ws_pair_cursor, std::int64_t* cache_pair_counts,
+    std::int64_t* cache_neighbor_counts) noexcept {
   if (batch_size <= 0 || total_atoms < 0 || max_cells_per_system <= 0 ||
       max_neighbors_per_atom <= 0 || max_pairs_per_system <= 0) {
     return false;
@@ -1109,6 +1141,12 @@ bool query_gfn2_pairlist_requirements_cuda(
   if (cache_pair_offsets != nullptr) {
     if (batch_size == kInt64Maximum) return false;
     *cache_pair_offsets = batch_size + 1;
+  }
+  if (cache_pair_counts != nullptr) {
+    *cache_pair_counts = batch_size;
+  }
+  if (cache_neighbor_counts != nullptr) {
+    *cache_neighbor_counts = total_atoms;
   }
   if (cache_generations != nullptr) {
     *cache_generations = batch_size;
@@ -1184,7 +1222,11 @@ cudaError_t update_gfn2_pairlist_cache_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  if (batch.mode == Gfn2PairListMode::kSparse) {
+  /* Bucket construction runs when the batch is sparse-mode or per-system
+   * dispatch is active (dense peers then publish a cells==0 meta and scan the
+   * full triangle inside build_neighbors).  A pure kDense batch skips buckets
+   * entirely. */
+  if (batch.mode == Gfn2PairListMode::kSparse || batch.system_modes != nullptr) {
     build_buckets_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
         batch, positions, workspace.system_meta, workspace.atom_cells, workspace.cell_counts,
         workspace.sequence_active, system_errors, device_error);
@@ -1265,9 +1307,11 @@ cudaError_t evaluate_gfn2_pairlist_coordination_cuda(
       !required_pointer(positions, batch.total_atoms * 3) ||
       cache.generation_elements < batch.batch_size ||
       cache.neighbor_offset_elements != batch.total_atoms + 1 ||
+      cache.neighbor_count_elements < batch.total_atoms ||
       cache.neighbor_elements < batch.total_atoms * batch.max_neighbors_per_atom ||
       !required_pointer(cache.pair_generations, cache.generation_elements) ||
       !required_pointer(cache.neighbor_offsets, cache.neighbor_offset_elements) ||
+      !required_pointer(cache.neighbor_counts, cache.neighbor_count_elements) ||
       !required_pointer(cache.neighbors, cache.neighbor_elements) ||
       workspace.sequence_elements < 1 ||
       !required_pointer(workspace.sequence_active, workspace.sequence_elements) ||
@@ -1276,7 +1320,7 @@ cudaError_t evaluate_gfn2_pairlist_coordination_cuda(
     return cudaErrorInvalidValue;
   }
   const std::int64_t neighbor_capacity = batch.total_atoms * batch.max_neighbors_per_atom;
-  std::array<AddressRange, 7> reads;
+  std::array<AddressRange, 8> reads;
   std::array<AddressRange, 3> writes;
   if (!make_address_range(batch.atom_offsets, batch.atom_offset_elements,
                           sizeof(*batch.atom_offsets), &reads[0]) ||
@@ -1286,6 +1330,8 @@ cudaError_t evaluate_gfn2_pairlist_coordination_cuda(
                           sizeof(*cache.pair_generations), &reads[3]) ||
       !make_address_range(cache.neighbor_offsets, cache.neighbor_offset_elements,
                           sizeof(*cache.neighbor_offsets), &reads[4]) ||
+      !make_address_range(cache.neighbor_counts, cache.neighbor_count_elements,
+                          sizeof(*cache.neighbor_counts), &reads[7]) ||
       !make_address_range(cache.neighbors, neighbor_capacity, sizeof(*cache.neighbors),
                           &reads[5]) ||
       !make_address_range(workspace.sequence_active, 1, sizeof(*workspace.sequence_active),

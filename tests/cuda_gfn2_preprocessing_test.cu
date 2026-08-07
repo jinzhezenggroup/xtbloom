@@ -292,6 +292,8 @@ struct DeviceFixture {
       pairlist_atom_cells, pairlist_cell_counts, pairlist_cell_offsets, pairlist_cell_fill,
       pairlist_cell_atoms, pairlist_neighbor_cursor, pairlist_neighbor_scratch,
       pairlist_pair_cursor;
+  DeviceBuffer<std::int64_t> pairlist_pair_counts, pairlist_neighbor_counts;
+  DeviceBuffer<std::int32_t> pairlist_system_modes;
   DeviceBuffer<std::uint64_t> pairlist_generations;
   DeviceBuffer<gpuxtb::detail::cuda::Gfn2PairListSystemMeta> pairlist_meta;
   DeviceBuffer<std::uint32_t> pairlist_sequence, sparse_system_errors, sparse_device_error;
@@ -603,11 +605,14 @@ struct DeviceFixture {
     PL_ALLOC(sparse_coordination, atoms);
     PL_ALLOC(pairlist_pairs, batch * max_pairs_per_system);
     PL_ALLOC(pairlist_offsets, batch + 1);
+    PL_ALLOC(pairlist_pair_counts, batch);
     PL_ALLOC(pairlist_neighbor_offsets, atoms + 1);
+    PL_ALLOC(pairlist_neighbor_counts, atoms);
     PL_ALLOC(pairlist_neighbors, atoms * max_neighbors_per_atom);
     PL_ALLOC(pairlist_generations, batch);
     PL_ALLOC(pairlist_meta, batch);
     PL_ALLOC(pairlist_atom_cells, atoms);
+    PL_ALLOC(pairlist_system_modes, batch);
     const std::int64_t cell_storage = batch * (max_cells_per_system + 1);
     PL_ALLOC(pairlist_cell_counts, cell_storage);
     PL_ALLOC(pairlist_cell_offsets, cell_storage);
@@ -619,6 +624,16 @@ struct DeviceFixture {
     PL_ALLOC(pairlist_sequence, 1u);
 #undef PL_ALLOC
     if (status != cudaSuccess) return status;
+    /* Host-set per-system dispatch decisions.  This fixture builds every system
+     * dense (kDense) so the bucketed and all-pairs paths can be exercised and
+     * compared; the binding requires system_modes when the leaf is enabled. */
+    {
+      std::vector<std::int32_t> modes(static_cast<std::size_t>(batch),
+                                      static_cast<std::int32_t>(
+                                          gpuxtb::detail::cuda::Gfn2PairListMode::kDense));
+      status = pairlist_system_modes.upload(modes.data(), modes.size(), stream);
+      if (status != cudaSuccess) return status;
+    }
     binding.plan.pairlist = {batch,
                              atoms,
                              batch + 1,
@@ -628,7 +643,10 @@ struct DeviceFixture {
                              max_pairs_per_system,
                              gpuxtb::detail::cuda::Gfn2PairListMode::kSparse,
                              kPlanToken,
-                             atom_offsets.get()};
+                             atom_offsets.get(),
+                             kGfn2PairListAllowDenseFallback,
+                             pairlist_system_modes.get(),
+                             batch};
     binding.diagnostics.sparse_system_errors = sparse_system_errors.get();
     binding.diagnostics.sparse_system_elements = batch;
     binding.diagnostics.sparse_device_error = sparse_device_error.get();
@@ -638,8 +656,12 @@ struct DeviceFixture {
                                             batch * max_pairs_per_system,
                                             pairlist_offsets.get(),
                                             batch + 1,
+                                            pairlist_pair_counts.get(),
+                                            batch,
                                             pairlist_neighbor_offsets.get(),
                                             atoms + 1,
+                                            pairlist_neighbor_counts.get(),
+                                            atoms,
                                             pairlist_neighbors.get(),
                                             atoms * max_neighbors_per_atom,
                                             pairlist_generations.get(),

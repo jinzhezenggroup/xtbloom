@@ -25,6 +25,9 @@ using gpuxtb::detail::bind_gfn2_wavefunction_layout_host;
 using gpuxtb::detail::Gfn2AtomPair;
 using gpuxtb::detail::Gfn2GenerationScope;
 using gpuxtb::detail::Gfn2GeometryCacheProvenanceView;
+using gpuxtb::detail::Gfn2PairListConsumerView;
+using gpuxtb::detail::Gfn2PairListRole;
+using gpuxtb::detail::Gfn2PairListState;
 using gpuxtb::detail::Gfn2PairMapKind;
 using gpuxtb::detail::Gfn2PlanMemorySpace;
 using gpuxtb::detail::Gfn2PlanSchemaDiagnostic;
@@ -33,6 +36,8 @@ using gpuxtb::detail::Gfn2PlanSchemaField;
 using gpuxtb::detail::Gfn2RaggedTopologyView;
 using gpuxtb::detail::Gfn2WavefunctionLayoutView;
 using gpuxtb::detail::validate_gfn2_geometry_provenance_host;
+using gpuxtb::detail::validate_gfn2_pair_list_consumer_binding;
+using gpuxtb::detail::validate_gfn2_pair_list_consumer_host;
 using gpuxtb::detail::validate_gfn2_topology_binding;
 using gpuxtb::detail::validate_gfn2_topology_host;
 using gpuxtb::detail::validate_gfn2_wavefunction_layout_binding;
@@ -455,6 +460,204 @@ int test_wavefunction_layout() {
   return 0;
 }
 
+struct HostPairListConsumer {
+  std::vector<std::int64_t> pair_offsets;
+  std::vector<Gfn2AtomPair> pairs;
+  std::vector<std::int64_t> neighbor_offsets;
+  std::vector<std::int64_t> neighbors;
+  std::vector<std::uint64_t> committed_generations;
+  std::vector<std::uint8_t> eligible_mask;
+  Gfn2PairListConsumerView view{};
+
+  void refresh_view(const HostTopology& topology, std::uint64_t generation) {
+    committed_generations.assign(static_cast<std::size_t>(topology.view.batch_size), generation);
+    eligible_mask.assign(static_cast<std::size_t>(topology.view.batch_size), 1u);
+    view.memory_space = Gfn2PlanMemorySpace::kHost;
+    view.state = Gfn2PairListState::kCommitted;
+    view.role = Gfn2PairListRole::kCoordination;
+    view.pair_map_kind = Gfn2PairMapKind::kExplicit;
+    view.plan_token = topology.view.plan_token;
+    view.cutoff_bohr = 25.0;
+    view.list_builder_cutoff_bohr = 25.0;
+    view.batch_size = topology.view.batch_size;
+    view.total_atoms = topology.view.total_atoms;
+    view.max_pairs_per_system = 10;
+    view.max_neighbors_per_atom = 10;
+    view.pair_offset_count = static_cast<std::int64_t>(pair_offsets.size());
+    view.neighbor_offset_count = static_cast<std::int64_t>(neighbor_offsets.size());
+    view.pair_count = static_cast<std::int64_t>(pairs.size());
+    view.neighbor_count = static_cast<std::int64_t>(neighbors.size());
+    view.committed_generation_count = static_cast<std::int64_t>(committed_generations.size());
+    view.eligible_mask_count = static_cast<std::int64_t>(eligible_mask.size());
+    view.active_mask_count = 0;
+    view.pair_offsets = pair_offsets.data();
+    view.pairs = pairs.data();
+    view.neighbor_offsets = neighbor_offsets.data();
+    view.neighbors = neighbors.data();
+    view.committed_generations = committed_generations.data();
+    view.eligible_mask = eligible_mask.data();
+    view.active_mask = nullptr;
+  }
+};
+
+HostPairListConsumer make_pair_list_consumer(const HostTopology& topology, std::uint64_t generation) {
+  HostPairListConsumer consumer;
+  consumer.pair_offsets.push_back(0);
+  consumer.neighbor_offsets.push_back(0);
+  for (std::int64_t system = 0; system < topology.view.batch_size; ++system) {
+    const std::int64_t atom_begin = topology.view.atom_offsets[static_cast<std::size_t>(system)];
+    const std::int64_t atom_end =
+        topology.view.atom_offsets[static_cast<std::size_t>(system + 1)];
+    for (std::int64_t first = atom_begin; first < atom_end; ++first) {
+      for (std::int64_t second = first + 1; second < atom_end; ++second) {
+        consumer.pairs.push_back({first, second});
+      }
+    }
+    consumer.pair_offsets.push_back(static_cast<std::int64_t>(consumer.pairs.size()));
+    for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+      for (std::int64_t peer = atom_begin; peer < atom_end; ++peer) {
+        if (peer != atom) {
+          consumer.neighbors.push_back(peer);
+        }
+      }
+      consumer.neighbor_offsets.push_back(static_cast<std::int64_t>(consumer.neighbors.size()));
+    }
+  }
+  consumer.committed_generations.assign(static_cast<std::size_t>(topology.view.batch_size),
+                                        generation);
+  consumer.eligible_mask.assign(static_cast<std::size_t>(topology.view.batch_size), 1u);
+  consumer.refresh_view(topology, generation);
+  return consumer;
+}
+
+int test_pair_list_consumer() {
+  static_assert(std::is_trivially_copyable_v<Gfn2PairListConsumerView>);
+  static_assert(std::is_standard_layout_v<Gfn2PairListConsumerView>);
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    HostTopology topology = make_topology(batch_size, /*explicit_pairs=*/true);
+    HostPairListConsumer consumer = make_pair_list_consumer(topology, kGeneration);
+    CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                   Gfn2PlanMemorySpace::kHost)
+              .error == Gfn2PlanSchemaError::kSuccess);
+    CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).error ==
+          Gfn2PlanSchemaError::kSuccess);
+
+    consumer.view.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+    CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                   Gfn2PlanMemorySpace::kHost)
+              .error == Gfn2PlanSchemaError::kInvalidMemorySpace);
+    consumer.view.memory_space = Gfn2PlanMemorySpace::kHost;
+
+    consumer.view.plan_token += 1u;
+    CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                   Gfn2PlanMemorySpace::kHost)
+              .error == Gfn2PlanSchemaError::kCrossPlan);
+    consumer.view.plan_token -= 1u;
+
+    consumer.view.list_builder_cutoff_bohr = 20.0;
+    CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                   Gfn2PlanMemorySpace::kHost)
+              .error == Gfn2PlanSchemaError::kInsufficientPairListCutoff);
+    consumer.view.list_builder_cutoff_bohr = 25.0;
+
+    consumer.view.role = static_cast<Gfn2PairListRole>(99u);
+    CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                   Gfn2PlanMemorySpace::kHost)
+              .error == Gfn2PlanSchemaError::kInvalidPairListRole);
+    consumer.view.role = Gfn2PairListRole::kCoordination;
+
+    consumer.view.pair_map_kind = Gfn2PairMapKind::kPackedLowerTriangle;
+    CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                   Gfn2PlanMemorySpace::kHost)
+              .error == Gfn2PlanSchemaError::kInvalidPairMap);
+    consumer.view.pair_map_kind = Gfn2PairMapKind::kExplicit;
+
+    consumer.view.max_pairs_per_system = 0;
+    CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                   Gfn2PlanMemorySpace::kHost)
+              .error == Gfn2PlanSchemaError::kInvalidCount);
+    consumer.view.max_pairs_per_system = 10;
+
+    /* Device-space structural validation (no dereference). */
+    HostTopology device_topology = topology;
+    device_topology.view.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+    Gfn2PairListConsumerView device_view = consumer.view;
+    device_view.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+    CHECK(validate_gfn2_pair_list_consumer_binding(device_topology.view, device_view,
+                                                   Gfn2PlanMemorySpace::kCudaDevice)
+              .error == Gfn2PlanSchemaError::kSuccess);
+  }
+
+  HostTopology topology = make_topology(8, /*explicit_pairs=*/true);
+  HostPairListConsumer consumer = make_pair_list_consumer(topology, kGeneration);
+
+  /* Host inspection: stale eligible peer. */
+  consumer.committed_generations[3] = kGeneration - 1u;
+  CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).index == 3);
+  consumer.eligible_mask[3] = 0u;
+  CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).error ==
+        Gfn2PlanSchemaError::kSuccess);
+  consumer.eligible_mask[3] = 1u;
+  consumer.committed_generations[3] = kGeneration;
+
+  /* Host inspection: inverted pair ordering is rejected. */
+  if (!consumer.pairs.empty()) {
+    std::swap(consumer.pairs.front().first, consumer.pairs.front().second);
+    CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).error ==
+          Gfn2PlanSchemaError::kInvalidPairMap);
+    consumer.refresh_view(topology, kGeneration);
+  }
+
+  /* Host inspection: neighbor escapes its owning system. */
+  {
+    HostTopology single = make_topology(1, /*explicit_pairs=*/true);
+    HostPairListConsumer single_consumer = make_pair_list_consumer(single, kGeneration);
+    const std::int64_t atom_end = single.view.atom_offsets[1];
+    bool neighbor_fixed = false;
+    for (std::size_t index = 0; index < single_consumer.neighbors.size(); ++index) {
+      const std::int64_t peer = single_consumer.neighbors[index];
+      std::int64_t system_begin = 0;
+      std::int64_t system_end = atom_end;
+      if (peer == system_end - 1) {
+        single_consumer.neighbors[index] = system_end;
+        neighbor_fixed = true;
+        break;
+      }
+      static_cast<void>(system_begin);
+    }
+    if (neighbor_fixed) {
+      CHECK(validate_gfn2_pair_list_consumer_host(single.view, single_consumer.view, kGeneration)
+                .error == Gfn2PlanSchemaError::kInvalidPairMap);
+    }
+  }
+
+  /* Binding alias: pair_offsets aliasing a topology array. */
+  consumer.view.pair_offsets = topology.view.atom_offsets;
+  CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                 Gfn2PlanMemorySpace::kHost)
+            .field == Gfn2PlanSchemaField::kPairListPairs ||
+        validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                 Gfn2PlanMemorySpace::kHost)
+                .error == Gfn2PlanSchemaError::kAliasedRange);
+  consumer.refresh_view(topology, kGeneration);
+
+  /* Binding alias: eligible_mask aliasing a topology array. */
+  consumer.view.eligible_mask = reinterpret_cast<const std::uint8_t*>(topology.view.atom_offsets);
+  CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                 Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kAliasedRange);
+  consumer.refresh_view(topology, kGeneration);
+
+  /* Binding: active mask length mismatch. */
+  consumer.view.active_mask_count = topology.view.batch_size - 1;
+  consumer.view.active_mask = reinterpret_cast<const std::uint8_t*>(consumer.pairs.data());
+  CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
+                                                 Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kInvalidActiveMask);
+  consumer.refresh_view(topology, kGeneration);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -467,6 +670,9 @@ int main() {
   }
   if (status == 0) {
     status = test_wavefunction_layout();
+  }
+  if (status == 0) {
+    status = test_pair_list_consumer();
   }
   return status;
 }
