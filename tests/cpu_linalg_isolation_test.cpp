@@ -7,7 +7,7 @@
 // runtime through the factory, so this process is a clean host in which we can
 // prove:
 //   1. gpuxtb never exposes MKL or LAPACK symbols into the global namespace
-//      (RTLD_DEFAULT); provider libraries are loaded RTLD_LOCAL.
+//      (RTLD_DEFAULT); the provider lives in a separate glibc link-map.
 //   2. gpuxtb never loads libmkl_rt at all when the private MKL shim is used.
 //   3. A real LP64 generalized eigensolve through the production backend stays
 //      correct while the host drives its own MKL instance into and out of ILP64,
@@ -26,11 +26,13 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
 
 #if !defined(_WIN32)
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -194,7 +196,7 @@ void host_mkl(void** handle_out, SetInterfaceLayer* set_interface_out, DpotrfWor
   static const char* const kMklRtSonames[] = {"libmkl_rt.so.4", "libmkl_rt.so.3", "libmkl_rt.so.2",
                                               "libmkl_rt.so", nullptr};
   for (const char* name : kMklRtSonames) {
-    void* handle = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+    void* handle = dlopen(name, RTLD_NOW | RTLD_GLOBAL);
     if (handle != nullptr) {
       dlerror();
       void* symbol = dlsym(handle, "MKL_Set_Interface_Layer");
@@ -218,47 +220,24 @@ int run_correctness_with_backend() {
   std::string error;
   CpuLinearAlgebraBackend backend;
   const gpuxtb_status_t status = gpuxtb::detail::gfn2::make_mkl_rt_lp64_backend(backend, error);
-  if (status == GPUXTB_STATUS_SUCCESS && backend.ready() && !backend.production_mkl()) {
-    /* OpenBLAS providers are single LP64 libraries by construction; the MKL
-     * coexistence assertions below only apply to the MKL provider. */
-    return 0;
-  }
   CHECK(status == GPUXTB_STATUS_SUCCESS);
   CHECK(backend.ready());
-#if defined(GPUXTB_TEST_HAS_MKL_SHIM)
-  /* When the configure-time MKL shim exists, the MKL provider must be the
-   * host-isolated one, never the legacy libmkl_rt interface-layer path. */
+  /* This test is registered only when the configure-time MKL shim exists. */
   CHECK(backend.production_mkl_isolated());
-#else
-  if (backend.production_mkl() && !backend.production_mkl_isolated()) {
-    /* Legacy libmkl_rt fallback (no shim was buildable): the documented
-     * non-isolated path provides no isolation evidence and is skipped here. */
-    return 0;
-  }
-  CHECK(backend.production_mkl_isolated());
-#endif
   const int solve_status = run_literal_generalized_eigenproblem(backend, error);
   CHECK(solve_status == 0);
   return 0;
 }
 
-/* The host's own ILP64 state must be unchanged by gpuxtb backend creation: the
- * MKL_Set_Interface_Layer acceptance value stays identical and the host's
- * explicit 64-bit LAPACK entry still factorizes when called in a fresh child. */
-int host_state_unchanged(void* host_handle, SetInterfaceLayer host_set_interface,
-                         DpotrfWork64 host_dpotrf64, int ilp64_acceptance) {
+/* After the host accepts ILP64, its explicit 64-bit LAPACK entry must remain
+ * usable before and after gpuxtb creates its private provider namespace. */
+int host_ilp64_works(void* host_handle, DpotrfWork64 host_dpotrf64) {
   CHECK(host_handle != nullptr);
-  CHECK(host_set_interface != nullptr);
-  /* Calling with the same layer again must report the same acceptance that the
-   * host recorded before gpuxtb created its backend. A state-mutating provider
-   * would have flipped the process-global interface layer and changed this. */
-  CHECK(host_set_interface(1) == ilp64_acceptance);
-  if (host_dpotrf64 != nullptr) {
-    double matrix[4] = {4.0, 2.0, 2.0, 4.0};
-    const std::int64_t n = 2;
-    const std::int32_t rc = host_dpotrf64(102, 'L', n, matrix, n);
-    CHECK(rc == 0);
-  }
+  CHECK(host_dpotrf64 != nullptr);
+  double matrix[4] = {4.0, 2.0, 2.0, 4.0};
+  const std::int64_t n = 2;
+  const std::int32_t rc = host_dpotrf64(102, 'L', n, matrix, n);
+  CHECK(rc == 0);
   return 0;
 }
 
@@ -275,19 +254,18 @@ int run_coexistence_gpuxtb_after_host_ilp64() {
   SetInterfaceLayer host_set_interface = nullptr;
   DpotrfWork64 host_dpotrf64 = nullptr;
   host_mkl(&host_handle, &host_set_interface, &host_dpotrf64);
-  if (host_handle == nullptr) {
-    return 0; /* No host MKL present; nothing to coexist with. */
-  }
+  CHECK(host_handle != nullptr);
+  CHECK(dlsym(RTLD_DEFAULT, "MKL_Set_Interface_Layer") != nullptr);
 
   /* 1 = MKL_INTERFACE_LAYER_ILP64. The host owns this handle and its state. */
   const int ilp64_acceptance = host_set_interface(1);
+  CHECK(ilp64_acceptance == 1);
+  CHECK(host_ilp64_works(host_handle, host_dpotrf64) == 0);
 
   const int correct = run_correctness_with_backend();
   CHECK(correct == 0);
 
-  const int unchanged =
-      host_state_unchanged(host_handle, host_set_interface, host_dpotrf64, ilp64_acceptance);
-  CHECK(unchanged == 0);
+  CHECK(host_ilp64_works(host_handle, host_dpotrf64) == 0);
 
   static_cast<void>(dlclose(host_handle));
   return 0;
@@ -296,7 +274,7 @@ int run_coexistence_gpuxtb_after_host_ilp64() {
 
 /* gpuxtb created its backend first (LP64); the host later switches its own MKL
  * to ILP64. gpuxtb's already-verified LP64 provider must keep producing correct
- * results, because it is resolved inside its own RTLD_LOCAL scope. */
+ * results, because it is resolved inside its own link-map namespace. */
 int run_coexistence_host_ilp64_after_gpuxtb() {
 #if !defined(GPUXTB_TEST_HAS_MKL_SHIM)
   return 0; /* No isolated shim was built; skip (see gpuxtb.cpu.linalg_isolation). */
@@ -317,25 +295,24 @@ int run_coexistence_host_ilp64_after_gpuxtb() {
   SetInterfaceLayer host_set_interface = nullptr;
   DpotrfWork64 host_dpotrf64 = nullptr;
   host_mkl(&host_handle, &host_set_interface, &host_dpotrf64);
-  if (host_handle == nullptr) {
-    return 0;
-  }
+  CHECK(host_handle != nullptr);
+  CHECK(dlsym(RTLD_DEFAULT, "MKL_Set_Interface_Layer") != nullptr);
   const int ilp64_acceptance = host_set_interface(1); /* Host switches to ILP64 after gpuxtb. */
+  CHECK(ilp64_acceptance == 1);
+  CHECK(host_ilp64_works(host_handle, host_dpotrf64) == 0);
 
   solve_status = run_literal_generalized_eigenproblem(backend, error);
   CHECK(solve_status == 0);
 
-  const int unchanged =
-      host_state_unchanged(host_handle, host_set_interface, host_dpotrf64, ilp64_acceptance);
-  CHECK(unchanged == 0);
+  CHECK(host_ilp64_works(host_handle, host_dpotrf64) == 0);
   static_cast<void>(dlclose(host_handle));
   return 0;
 #endif
 }
 
 /* After gpuxtb creates its backend, MKL/LAPACK symbols must not appear in the
- * process-global namespace: providers are loaded RTLD_LOCAL, and when the shim
- * is used libmkl_rt is never loaded at all. */
+ * process-global namespace: the provider is loaded into a new link-map
+ * namespace, and the gpuxtb path never loads libmkl_rt at all. */
 int run_no_global_scope_exposure() {
 #if !defined(_WIN32)
   void* mkl_global = dlsym(RTLD_DEFAULT, "MKL_Set_Interface_Layer");
@@ -366,6 +343,53 @@ int wait_and_check(const pid_t child) {
   return 0;
 }
 
+int run_expect_missing_shim() {
+  std::string error;
+  CpuLinearAlgebraBackend backend;
+  const gpuxtb_status_t status = gpuxtb::detail::gfn2::make_mkl_rt_lp64_backend(backend, error);
+  CHECK(status == GPUXTB_STATUS_BACKEND_UNAVAILABLE);
+  CHECK(!backend.ready());
+  CHECK(error.find("host-isolated MKL provider shim") != std::string::npos);
+  return 0;
+}
+
+/* Execute a byte-for-byte copy of this standalone test without its adjacent
+ * shim. This proves the factory neither follows a baked build-tree path nor
+ * falls back to a process-global libmkl_rt when the private artifact is gone. */
+int run_missing_shim_failure() {
+  char temporary_template[] = "/tmp/gpuxtb-linalg-isolation-XXXXXX";
+  char* temporary_directory = mkdtemp(temporary_template);
+  CHECK(temporary_directory != nullptr);
+
+  char source_path[4096]{};
+  const ssize_t source_size = readlink("/proc/self/exe", source_path, sizeof(source_path) - 1u);
+  CHECK(source_size > 0);
+  source_path[static_cast<std::size_t>(source_size)] = '\0';
+  const std::string copied_path = std::string(temporary_directory) + "/isolation-test";
+
+  {
+    std::ifstream source(source_path, std::ios::binary);
+    std::ofstream destination(copied_path, std::ios::binary | std::ios::trunc);
+    CHECK(source.good());
+    CHECK(destination.good());
+    destination << source.rdbuf();
+    CHECK(destination.good());
+  }
+  CHECK(chmod(copied_path.c_str(), 0700) == 0);
+
+  const pid_t child = fork();
+  CHECK(child >= 0);
+  if (child == 0) {
+    execl(copied_path.c_str(), copied_path.c_str(), "--expect-missing-shim",
+          static_cast<char*>(nullptr));
+    _exit(121);
+  }
+  const int result = wait_and_check(child);
+  CHECK(unlink(copied_path.c_str()) == 0);
+  CHECK(rmdir(temporary_directory) == 0);
+  return result;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -382,12 +406,22 @@ int main(int argc, char** argv) {
   if (std::strcmp(mode, "--correctness") == 0) {
     return run_correctness_with_backend();
   }
+  if (std::strcmp(mode, "--expect-missing-shim") == 0) {
+    return run_expect_missing_shim();
+  }
 
   int result = 0;
+  char executable_path[4096]{};
+  const ssize_t executable_path_size =
+      readlink("/proc/self/exe", executable_path, sizeof(executable_path) - 1u);
+  CHECK(executable_path_size > 0);
+  executable_path[static_cast<std::size_t>(executable_path_size)] = '\0';
 
   const pid_t child_global = fork();
   if (child_global == 0) {
-    execl("/proc/self/exe", "gpuxtb_cpu_linalg_isolation_test", "--no-global-scope-exposure",
+    /* dladdr resolves the provider relative to this executable in the static
+     * test binary; use its real path rather than the /proc/self symlink. */
+    execl(executable_path, executable_path, "--no-global-scope-exposure",
           static_cast<char*>(nullptr));
     _exit(121);
   }
@@ -396,10 +430,15 @@ int main(int argc, char** argv) {
     return result;
   }
 
+  result = run_missing_shim_failure();
+  if (result != 0) {
+    return result;
+  }
+
   const pid_t child_gpuxtb_after = fork();
   if (child_gpuxtb_after == 0) {
-    execl("/proc/self/exe", "gpuxtb_cpu_linalg_isolation_test",
-          "--coexistence-gpuxtb-after-host-ilp64", static_cast<char*>(nullptr));
+    execl(executable_path, executable_path, "--coexistence-gpuxtb-after-host-ilp64",
+          static_cast<char*>(nullptr));
     _exit(121);
   }
   result = wait_and_check(child_gpuxtb_after);
@@ -409,8 +448,8 @@ int main(int argc, char** argv) {
 
   const pid_t child_host_after = fork();
   if (child_host_after == 0) {
-    execl("/proc/self/exe", "gpuxtb_cpu_linalg_isolation_test",
-          "--coexistence-host-ilp64-after-gpuxtb", static_cast<char*>(nullptr));
+    execl(executable_path, executable_path, "--coexistence-host-ilp64-after-gpuxtb",
+          static_cast<char*>(nullptr));
     _exit(121);
   }
   result = wait_and_check(child_host_after);

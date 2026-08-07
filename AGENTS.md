@@ -159,7 +159,9 @@ A C ABI change normally requires coordinated review of at least:
 - MKL providers must be host-isolated (issue #30). When CMake selects MKL, it
   builds a private shim with fixed `DT_NEEDED` dependencies on
   `libmkl_intel_lp64`, `libmkl_sequential`, and `libmkl_core`, and the runtime
-  factory dlopens that shim with `RTLD_LOCAL`. gpuxtb must never call
+  factory loads the adjacent shim with `RTLD_LOCAL` in a new glibc link-map
+  namespace. `RTLD_LOCAL` in the base namespace is not isolation because
+  pre-existing global symbols can still interpose. gpuxtb must never call
   `MKL_Set_Interface_Layer`, never read `MKL_INTERFACE_LAYER` for the isolated
   path, and never expose provider libraries with `RTLD_GLOBAL`. Do not regress
   host coexistence: LP64 gpuxtb calls must stay correct when the host uses

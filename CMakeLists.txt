@@ -9,6 +9,8 @@ project(
 
 include(CheckLanguage)
 include(CheckLibraryExists)
+include(CheckCXXSourceCompiles)
+include(CMakePushCheckState)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 find_package(Threads REQUIRED)
@@ -244,93 +246,72 @@ endif()
 
 # Host-isolated MKL provider shim.
 #
-# libmkl_rt is an interface-layer dispatcher: dlopening it and calling
+# libmkl_rt is an interface-layer dispatcher: loading it and calling
 # MKL_Set_Interface_Layer mutates process-global MKL state that an embedding
 # application may already own, and MKL_INTERFACE_LAYER can make gpuxtb depend on
 # the host's MKL lifecycle. When the selected runtime is MKL, build a tiny
 # private shim with fixed DT_NEEDED dependencies on libmkl_intel_lp64,
 # libmkl_sequential, and libmkl_core. Loading those components directly (never
-# libmkl_rt) yields an LP64 + sequential provider resolved inside the shim's own
-# RTLD_LOCAL scope, so the host namespace is not polluted and the host's MKL
-# interface/threading state is never changed. The shim is a lazy dlopen; it never
-# adds a hard DT_NEEDED dependency to libgpuxtb itself.
-set(GPUXTB_CPU_LINALG_SHIM "")
+# libmkl_rt) yields an LP64 + sequential provider. The factory loads the sibling
+# shim in a new glibc link-map namespace with RTLD_LOCAL: RTLD_LOCAL by itself
+# still permits a globally loaded host libmkl_rt to interpose on dependencies.
+# The shim is lazy and never adds a hard DT_NEEDED dependency to libgpuxtb.
+set(GPUXTB_CPU_LINALG_SHIM OFF)
+set(GPUXTB_CPU_LINALG_RUNTIME_IS_MKL OFF)
 if(GPUXTB_CPU_LINALG_RUNTIME)
   get_filename_component(gpuxtb_linalg_runtime_name
     "${GPUXTB_CPU_LINALG_RUNTIME}" NAME
   )
   if(gpuxtb_linalg_runtime_name MATCHES "mkl_rt")
-    set(GPUXTB_MKL_COMPONENT_CANDIDATE_DIRS "")
-    get_filename_component(gpuxtb_linalg_runtime_dir
-      "${GPUXTB_CPU_LINALG_RUNTIME}" DIRECTORY
+    set(GPUXTB_CPU_LINALG_RUNTIME_IS_MKL ON)
+
+    # Namespace isolation depends on GNU-compatible dlmopen/dlinfo support,
+    # not merely on the Linux platform name. Prove the complete compile/link
+    # interface before accepting an MKL provider.
+    cmake_push_check_state(RESET)
+    set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_DL_LIBS})
+    check_cxx_source_compiles([=[
+      #ifndef _GNU_SOURCE
+      #define _GNU_SOURCE 1
+      #endif
+      #include <dlfcn.h>
+      #include <link.h>
+      int main() {
+        void* handle = dlmopen(LM_ID_NEWLM, nullptr, RTLD_NOW | RTLD_LOCAL);
+        Lmid_t namespace_id = LM_ID_BASE;
+        return handle == nullptr ? 0 : dlinfo(handle, RTLD_DI_LMID, &namespace_id);
+      }
+    ]=] GPUXTB_HAS_DLMOPEN_NAMESPACE)
+    cmake_pop_check_state()
+
+    get_filename_component(gpuxtb_linalg_runtime_realpath
+      "${GPUXTB_CPU_LINALG_RUNTIME}" REALPATH
     )
-    list(APPEND GPUXTB_MKL_COMPONENT_CANDIDATE_DIRS "${gpuxtb_linalg_runtime_dir}")
-    if(DEFINED ENV{MKLROOT})
-      list(APPEND GPUXTB_MKL_COMPONENT_CANDIDATE_DIRS
-        "$ENV{MKLROOT}/lib" "$ENV{MKLROOT}/lib/intel64"
-      )
-    endif()
+    get_filename_component(gpuxtb_mkl_component_dir
+      "${gpuxtb_linalg_runtime_realpath}" DIRECTORY
+    )
+    get_filename_component(gpuxtb_linalg_runtime_realname
+      "${gpuxtb_linalg_runtime_realpath}" NAME
+    )
+    get_filename_component(gpuxtb_mkl_runtime_suffix
+      "${gpuxtb_linalg_runtime_realname}" EXT
+    )
 
-    # The three MKL component libraries must come from one coherent install so
-    # the shim resolves a fixed LP64 + sequential symbol set. Prefer the soname
-    # major that matches the selected libmkl_rt (for example .so.3), then fall
-    # back to any real component file in the candidate directories.
-    get_filename_component(runtime_major "${gpuxtb_linalg_runtime_name}" EXT)
-    unset(GPUXTB_MKL_intel_lp64_LIB CACHE)
-    unset(GPUXTB_MKL_sequential_LIB CACHE)
-    unset(GPUXTB_MKL_core_LIB CACHE)
-    foreach(candidate_dir IN LISTS GPUXTB_MKL_COMPONENT_CANDIDATE_DIRS)
-      if(NOT IS_DIRECTORY "${candidate_dir}")
-        continue()
-      endif()
-      foreach(component IN ITEMS intel_lp64 sequential core)
-        set(component_var "GPUXTB_MKL_${component}_LIB")
-        if(NOT "${${component_var}}" STREQUAL "")
-          continue()
-        endif()
-        file(GLOB component_files "${candidate_dir}/libmkl_${component}.so*")
-        list(FILTER component_files EXCLUDE REGEX "\\.a$")
-        list(LENGTH component_files component_count)
-        if(component_count EQUAL 0)
-          continue()
-        endif()
-        set(matching_file "")
-        foreach(component_file IN LISTS component_files)
-          get_filename_component(component_file_name "${component_file}" NAME)
-          if(component_file_name STREQUAL "libmkl_${component}${runtime_major}")
-            set(matching_file "${component_file}")
-            break()
-          endif()
-        endforeach()
-        if(NOT matching_file)
-          list(GET component_files 0 matching_file)
-        endif()
-        set("${component_var}" "${matching_file}")
-      endforeach()
-      set(component_count 0)
-      foreach(component IN ITEMS intel_lp64 sequential core)
-        set(component_var "GPUXTB_MKL_${component}_LIB")
-        if(NOT "${${component_var}}" STREQUAL "")
-          math(EXPR component_count "${component_count} + 1")
-        endif()
-      endforeach()
-      if(component_count EQUAL 3)
-        break()
-      endif()
-    endforeach()
-
+    # All three components must be the exact SONAME cohort adjacent to the
+    # selected runtime. Mixing files across MKLROOT or unrelated installations
+    # can bind an ABI-incoherent provider even when every filename exists.
     set(GPUXTB_HAS_MKL_COMPONENTS ON)
     foreach(component IN ITEMS intel_lp64 sequential core)
-      set(component_var "GPUXTB_MKL_${component}_LIB")
-      if("${${component_var}}" STREQUAL "")
+      set(component_path
+        "${gpuxtb_mkl_component_dir}/libmkl_${component}${gpuxtb_mkl_runtime_suffix}"
+      )
+      if(NOT EXISTS "${component_path}" OR IS_DIRECTORY "${component_path}")
         set(GPUXTB_HAS_MKL_COMPONENTS OFF)
       endif()
+      set("GPUXTB_MKL_${component}_LIB" "${component_path}")
     endforeach()
-    unset(GPUXTB_MKL_intel_lp64_LIB CACHE)
-    unset(GPUXTB_MKL_sequential_LIB CACHE)
-    unset(GPUXTB_MKL_core_LIB CACHE)
 
-    if(GPUXTB_HAS_MKL_COMPONENTS)
+    if(GPUXTB_HAS_MKL_COMPONENTS AND GPUXTB_HAS_DLMOPEN_NAMESPACE)
       add_library(gpuxtb_mkl_lp64_shim SHARED
         src/runtime/mkl_lp64_shim.cpp
       )
@@ -357,20 +338,30 @@ if(GPUXTB_CPU_LINALG_RUNTIME)
       set_target_properties(gpuxtb_mkl_lp64_shim PROPERTIES
         BUILD_RPATH "${gpuxtb_mkl_component_dir}"
         INSTALL_RPATH "${gpuxtb_mkl_component_dir}"
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/lib"
+        # The runtime resolves only a sibling shim. Keep build-tree tests and
+        # installed shared libraries on the same relocation-safe contract.
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
       )
       install(TARGETS gpuxtb_mkl_lp64_shim
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
       )
-      set(GPUXTB_CPU_LINALG_SHIM "$<TARGET_FILE:gpuxtb_mkl_lp64_shim>")
+      set(GPUXTB_CPU_LINALG_SHIM ON)
       message(STATUS
-        "gpuxtb host-isolated MKL LP64 provider shim: ${GPUXTB_CPU_LINALG_SHIM}"
+        "gpuxtb host-isolated MKL LP64 provider shim: enabled"
       )
     else()
-      message(STATUS
-        "gpuxtb MKL component libraries not found; falling back to the legacy "
-        "libmkl_rt interface-layer path (not host-isolated)"
+      set(mkl_isolation_error
+        "GPUXTB CPU MKL isolation requires dlmopen/dlinfo namespace support "
+        "and the exact adjacent libmkl_intel_lp64, libmkl_sequential, and "
+        "libmkl_core SONAME cohort"
       )
+      if(GPUXTB_CONFIGURED_CPU_LINALG_LIBRARY)
+        message(FATAL_ERROR "${mkl_isolation_error}")
+      endif()
+      message(STATUS "${mkl_isolation_error}; disabling the auto-discovered runtime")
+      set(GPUXTB_CPU_LINALG_RUNTIME "")
+      set(GPUXTB_CPU_LINALG_SYMBOL_PREFIX "")
+      set(GPUXTB_CPU_LINALG_RUNTIME_IS_MKL OFF)
     endif()
   endif()
 endif()
@@ -415,10 +406,16 @@ if(GPUXTB_CPU_LINALG_RUNTIME)
     "GPUXTB_CONFIGURED_CPU_LINALG_RUNTIME=\"${GPUXTB_CPU_LINALG_RUNTIME}\""
   )
 endif()
+if(GPUXTB_CPU_LINALG_RUNTIME_IS_MKL)
+  target_compile_definitions(gpuxtb_gfn2_cpu PRIVATE
+    GPUXTB_CONFIGURED_CPU_LINALG_MKL=1
+  )
+endif()
 if(GPUXTB_CPU_LINALG_SHIM)
   target_compile_definitions(gpuxtb_gfn2_cpu PRIVATE
-    "GPUXTB_CONFIGURED_CPU_LINALG_SHIM=\"${GPUXTB_CPU_LINALG_SHIM}\""
+    GPUXTB_CONFIGURED_CPU_LINALG_SHIM=1
   )
+  add_dependencies(gpuxtb_gfn2_cpu gpuxtb_mkl_lp64_shim)
 endif()
 
 add_library(gpuxtb
@@ -2430,31 +2427,35 @@ if(GPUXTB_BUILD_TESTS)
       gpuxtb_eigensolver_test gpuxtb.gfn2.eigensolver
     )
 
-    # Host-isolated LP64 provider evidence (issue #30). This binary links only
-    # gpuxtb_gfn2_cpu, never a BLAS/MKL runtime, so it can prove that provider
-    # libraries never enter RTLD_DEFAULT and that gpuxtb coexists with a host
-    # that owns an ILP64 MKL runtime before and after gpuxtb backend creation.
-    add_executable(gpuxtb_cpu_linalg_isolation_test tests/cpu_linalg_isolation_test.cpp)
-    target_link_libraries(gpuxtb_cpu_linalg_isolation_test PRIVATE
-      gpuxtb_gfn2_cpu
-      ${CMAKE_DL_LIBS}
-    )
-    target_compile_features(gpuxtb_cpu_linalg_isolation_test PRIVATE cxx_std_17)
     if(GPUXTB_CPU_LINALG_SHIM)
-      # The strict MKL isolation assertions apply only when the private shim was
-      # actually built at configure time; legacy libmkl_rt fallback builds are
-      # documented as not host-isolated and must not claim isolation evidence.
+      # Host-isolated LP64 provider evidence (issue #30). This binary links only
+      # gpuxtb_gfn2_cpu, never a BLAS/MKL runtime, so it can prove that provider
+      # libraries stay outside RTLD_DEFAULT and that gpuxtb coexists with a
+      # globally loaded ILP64 host before and after backend creation.
+      add_executable(gpuxtb_cpu_linalg_isolation_test
+        tests/cpu_linalg_isolation_test.cpp
+      )
+      target_link_libraries(gpuxtb_cpu_linalg_isolation_test PRIVATE
+        gpuxtb_gfn2_cpu
+        ${CMAKE_DL_LIBS}
+      )
+      target_compile_features(gpuxtb_cpu_linalg_isolation_test PRIVATE cxx_std_17)
       target_compile_definitions(
         gpuxtb_cpu_linalg_isolation_test PRIVATE GPUXTB_TEST_HAS_MKL_SHIM=1
       )
+      add_test(
+        NAME gpuxtb.cpu.linalg_isolation
+        COMMAND gpuxtb_cpu_linalg_isolation_test
+      )
+      gpuxtb_configure_linalg_runtime_test(
+        gpuxtb_cpu_linalg_isolation_test gpuxtb.cpu.linalg_isolation
+      )
+      # The test itself selects the host interface in fresh children. Do not
+      # preselect LP64 through the generic provider-test environment.
+      set_tests_properties(gpuxtb.cpu.linalg_isolation PROPERTIES
+        ENVIRONMENT "MKL_THREADING_LAYER=SEQUENTIAL"
+      )
     endif()
-    add_test(
-      NAME gpuxtb.cpu.linalg_isolation
-      COMMAND gpuxtb_cpu_linalg_isolation_test
-    )
-    gpuxtb_configure_linalg_runtime_test(
-      gpuxtb_cpu_linalg_isolation_test gpuxtb.cpu.linalg_isolation
-    )
   else()
     message(STATUS
       "gpuxtb eigensolver test: disabled (set GPUXTB_CPU_LINALG_LIBRARY or provide a system BLAS to enable)"

@@ -965,13 +965,21 @@ int run_mkl_ilp64_rejection_child() {
 }
 
 int test_mkl_ilp64_rejection_in_fresh_process() {
+  char executable_path[4096]{};
+  const ssize_t executable_path_size =
+      readlink("/proc/self/exe", executable_path, sizeof(executable_path) - 1u);
+  CHECK(executable_path_size > 0);
+  executable_path[static_cast<std::size_t>(executable_path_size)] = '\0';
+
   const pid_t child = fork();
   CHECK(child >= 0);
   if (child == 0) {
     if (setenv("MKL_INTERFACE_LAYER", "ILP64", 1) != 0) {
       _exit(120);
     }
-    execl("/proc/self/exe", "gpuxtb_eigensolver_test", "--mkl-ilp64-rejection-child",
+    /* The isolated provider is resolved beside the executable in this static
+     * unit-test binary, so preserve that real sibling directory across exec. */
+    execl(executable_path, executable_path, "--mkl-ilp64-rejection-child",
           static_cast<char*>(nullptr));
     _exit(121);
   }
