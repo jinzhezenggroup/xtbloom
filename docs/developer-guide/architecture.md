@@ -213,7 +213,21 @@ forbidden on the steady-state inference path; the context grows and reuses works
 libgpuxtb does not require a proprietary BLAS or CUDA host shared library merely to load. The CPU
 eigensolver dlopens an LP64 BLAS/LAPACK runtime (Intel MKL or OpenBLAS) by SONAME on first use
 (`src/model/gfn2/eigensolver.cpp`), so a machine without a compatible provider still loads the
-library. On Linux the CUDA build generates one ELF trampoline shim per wrapped host library
+library. The MKL path is host-isolated: CMake builds a private
+`libgpuxtb_mkl_lp64_shim` with fixed `DT_NEEDED` dependencies on `libmkl_intel_lp64`,
+`libmkl_sequential`, and `libmkl_core`. The factory loads the adjacent shim with `RTLD_LOCAL`
+in a new glibc link-map namespace; `RTLD_LOCAL` in the base namespace would still allow a
+globally loaded host runtime to interpose on the component dependencies. The shim deliberately
+uses `DT_RPATH` rather than `DT_RUNPATH`, so `LD_LIBRARY_PATH` cannot substitute same-SONAME
+components from a different MKL installation for the configure-time cohort.
+gpuxtb never loads `libmkl_rt`, never calls `MKL_Set_Interface_Layer`, and never reads
+`MKL_INTERFACE_LAYER`, so an embedding process's MKL interface/threading state is untouched and
+LP64 gpuxtb calls stay correct even when the host uses ILP64. A shared `libgpuxtb` locates the shim
+in its own directory. Because a static archive has no runtime module directory, a static MKL
+consumer must stage the installed shim beside its final executable; a missing sibling produces a
+deterministic backend-unavailable error rather than a base-namespace or `libmkl_rt` fallback. On
+Linux the CUDA build generates
+one ELF trampoline shim per wrapped host library
 (cudart, cuBLAS, cuSOLVER, and libcuda) from the byte-pinned
 `cmake/3rdparty/implib` source and compiles those shims into libgpuxtb itself
 (`src/runtime/cuda_dlopen.c`). An early ELF constructor opens the exact build-major SONAMEs and

@@ -144,6 +144,14 @@ point charges, ASE, and dpdata, or the concise
 
 Native consumers need CMake 3.24 or newer, a C++17 compiler to build gpuxtb,
 and one dlopen-able monolithic LP64 LAPACKE+CBLAS runtime for CPU inference.
+An explicitly selected MKL runtime also requires its matching LP64,
+sequential, and core component libraries in the same provider directory.
+Shared installs place gpuxtb's private MKL shim beside `libgpuxtb`. Static
+consumers that use MKL must stage that installed shim beside the final
+executable; CMake consumers can copy
+`$<TARGET_FILE:gpuxtb::mkl_lp64_shim>` when that optional imported target is
+present. Without the sibling artifact, CPU inference fails with
+`GPUXTB_STATUS_BACKEND_UNAVAILABLE` instead of using the host's `libmkl_rt`.
 The public consumer API itself is C11-compatible and is wrapped in `extern "C"`
 for C++.
 
