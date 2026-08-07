@@ -19,6 +19,62 @@ typedef enum consumer_mode {
   CONSUMER_MODE_CUDA
 } consumer_mode_t;
 
+/* Exercise the installed gpuxtb-owned result arena and DLPack export ABI on a
+ * host arena (works on every backend without a CUDA compiler in this
+ * consumer, and proves the additive #214 symbols are exported and usable). */
+static const int64_t result_shape[] = {4};
+static int run_installed_result_owner(void) {
+  gpuxtb_result_owner_options_t options;
+  if (gpuxtb_result_owner_options_init(&options, sizeof(options)) != GPUXTB_STATUS_SUCCESS) {
+    fprintf(stderr, "installed result-owner options init failed: %s\n", gpuxtb_get_last_error());
+    return 20;
+  }
+  options.memory_space = GPUXTB_MEMORY_HOST;
+  options.device_id = -1;
+  options.size_bytes = 128;
+
+  gpuxtb_result_owner_t* owner = NULL;
+  if (gpuxtb_result_owner_create(&options, &owner) != GPUXTB_STATUS_SUCCESS || owner == NULL) {
+    fprintf(stderr, "installed result-owner create failed: %s\n", gpuxtb_get_last_error());
+    return 21;
+  }
+
+  gpuxtb_buffer_t arena;
+  if (gpuxtb_result_owner_buffer(owner, &arena) != GPUXTB_STATUS_SUCCESS || arena.data == NULL ||
+      arena.size_bytes != 128u || arena.memory_space != GPUXTB_MEMORY_HOST) {
+    fprintf(stderr, "installed result-owner buffer view is inconsistent\n");
+    gpuxtb_result_owner_release(owner);
+    return 22;
+  }
+
+  gpuxtb_dlpack_view_t view;
+  memset(&view, 0, sizeof(view));
+  view.struct_size = sizeof(view);
+  view.api_version = GPUXTB_API_VERSION;
+  view.byte_offset = 0;
+  view.dtype_code = 2;
+  view.dtype_bits = 64;
+  view.dtype_lanes = 1;
+  view.ndim = 1;
+  view.shape = result_shape;
+  void* managed = NULL;
+  if (gpuxtb_result_owner_export_dltensor(owner, &view, 1, &managed) != GPUXTB_STATUS_SUCCESS ||
+      managed == NULL) {
+    fprintf(stderr, "installed result-owner DLPack export failed: %s\n", gpuxtb_get_last_error());
+    gpuxtb_result_owner_release(owner);
+    return 23;
+  }
+
+  /* The managed tensor's native deleter owns the export; release the producer
+   * reference, then let the exported management path free the rest. In this
+   * host consumer we only verify the export pointer is usable for the
+   * documented lifetime contract (its fields mirror DLPack 1.0). */
+  gpuxtb_result_owner_retain(owner);
+  gpuxtb_result_owner_release(owner);
+  gpuxtb_result_owner_release(owner);
+  return 0;
+}
+
 static gpuxtb_const_buffer_t input_buffer(const void* data, size_t size_bytes) {
   gpuxtb_const_buffer_t buffer = {data, size_bytes, GPUXTB_MEMORY_HOST, 0};
   return buffer;
@@ -184,5 +240,8 @@ int main(int argc, char** argv) {
         run_installed_inference(context, mode == CONSUMER_MODE_CUDA ? "CUDA" : "CPU");
   }
   gpuxtb_context_destroy(context);
-  return inference_status;
+  if (inference_status != 0) {
+    return inference_status;
+  }
+  return run_installed_result_owner();
 }

@@ -288,6 +288,7 @@ add_library(gpuxtb
   src/runtime/backend.cpp
   src/runtime/gfn2_cpu_execution.cpp
   src/runtime/gfn2_plan.cpp
+  src/runtime/result_owner.cpp
   src/runtime/validation.cpp
   $<TARGET_OBJECTS:gpuxtb_gfn2_cpu>
 )
@@ -580,6 +581,7 @@ if(GPUXTB_HAS_CUDA)
     src/runtime/cuda_descriptor_validation.cu
     src/runtime/gfn2_cuda_topology_staging.cu
     src/runtime/gfn2_cuda_execution.cu
+    src/runtime/result_owner_cuda.cu
     src/backends/cuda/gfn2_aes2.cu
     src/backends/cuda/gfn2_classical_force.cu
     src/backends/cuda/gfn2_d4.cu
@@ -735,6 +737,11 @@ if(GPUXTB_BUILD_TESTS)
   target_link_libraries(gpuxtb_c_api_test PRIVATE gpuxtb::gpuxtb)
   set_target_properties(gpuxtb_c_api_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
   add_test(NAME gpuxtb.c_api COMMAND gpuxtb_c_api_test)
+
+  add_executable(gpuxtb_result_owner_test tests/result_owner_test.cpp)
+  target_link_libraries(gpuxtb_result_owner_test PRIVATE gpuxtb::gpuxtb)
+  target_compile_features(gpuxtb_result_owner_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.result_owner COMMAND gpuxtb_result_owner_test)
 
   add_executable(gpuxtb_runtime_test tests/runtime_test.cpp)
   target_link_libraries(gpuxtb_runtime_test PRIVATE gpuxtb::gpuxtb)
@@ -947,6 +954,29 @@ if(GPUXTB_BUILD_TESTS)
     )
     add_test(NAME gpuxtb.cuda.public_unrestricted
       COMMAND gpuxtb_cuda_public_unrestricted_test
+    )
+
+    add_executable(gpuxtb_cuda_result_owner_test
+      tests/cuda_result_owner_test.cu
+    )
+    target_link_libraries(gpuxtb_cuda_result_owner_test PRIVATE
+      gpuxtb::gpuxtb
+      CUDA::cudart
+    )
+    target_include_directories(gpuxtb_cuda_result_owner_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(gpuxtb_cuda_result_owner_test PRIVATE GPUXTB_HAS_CUDA=1)
+    set_target_properties(gpuxtb_cuda_result_owner_test PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      BUILD_RPATH "$<TARGET_FILE_DIR:CUDA::cudart>"
+    )
+    add_test(NAME gpuxtb.cuda.result_owner
+      COMMAND gpuxtb_cuda_result_owner_test
     )
 
     add_executable(gpuxtb_cuda_atomics_test tests/cuda_atomics_test.cu)

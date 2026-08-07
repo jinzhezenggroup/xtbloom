@@ -42,6 +42,15 @@ typedef struct gpuxtb_context gpuxtb_context_t;
 typedef struct gpuxtb_plan gpuxtb_plan_t;
 
 /*
+ * Opaque owner of one gpuxtb-allocated result arena. See
+ * gpuxtb_result_owner_create. A result owner is a ref-counted host or CUDA
+ * device allocation that outlives the compute context used to fill it, so a
+ * DLPack producer can hand the finished bytes to an importing framework
+ * without a host round trip and without keeping the context alive.
+ */
+typedef struct gpuxtb_result_owner gpuxtb_result_owner_t;
+
+/*
  * ABI tags are explicitly int32_t rather than enum-typed fields. This keeps
  * their object representation and function calling convention identical in C
  * and C++, including C99 builds compiled with options such as -fshort-enums.
@@ -473,6 +482,106 @@ GPUXTB_API gpuxtb_status_t gpuxtb_plan_query_workspace(const gpuxtb_plan_t* plan
 GPUXTB_API gpuxtb_status_t gpuxtb_plan_compute(gpuxtb_plan_t* plan, const gpuxtb_batch_t* batch,
                                                const gpuxtb_compute_options_t* options,
                                                gpuxtb_batch_result_t* result);
+
+/*
+ * gpuxtb-owned result arenas and their DLPack export.
+ *
+ * A gpuxtb_result_owner_t is a ref-counted allocation (host memory or CUDA
+ * device memory) that gpuxtb itself allocates, fills through a normal compute
+ * call, and can hand to an importing framework through the DLPack producer
+ * protocol without copying data.
+ *
+ * Lifetime model:
+ * - gpuxtb_result_owner_create produces one arena with an initial reference.
+ *   gpuxtb_result_owner_buffer exposes that arena as a caller-owned
+ *   gpuxtb_buffer_t view so the caller can bind output slices and run compute.
+ * - gpuxtb_result_owner_retain / gpuxtb_result_owner_release manage the
+ *   reference count. The arena allocation is freed exactly once, when the
+ *   last reference is released. release(NULL) is a no-op; otherwise every
+ *   release must correspond to exactly one prior create or retain.
+ * - gpuxtb_result_owner_export_dltensor retains the arena for one exported
+ *   managed tensor. When the importing framework releases that tensor it
+ *   invokes a native deleter that frees the managed tensor (and its shape
+ *   storage) and releases the arena reference. The owner therefore remains
+ *   valid as long as any exported tensor or explicit reference is alive,
+ *   independent of the compute context that filled the arena.
+ *
+ * The producer object itself (the Python side) wraps the returned managed
+ * tensor in a PyCapsule named "dltensor" (legacy) or "dltensor_versioned"
+ * (DLPack 1.0) with "used_"-renaming applied by the consumer as usual. The
+ * native deleter is immune to the importing framework outliving the Python
+ * wrapper: it never calls back into Python.
+ *
+ * gpuxtb's public CUDA compute is synchronous: when gpuxtb_compute returns,
+ * the requested result bytes are fully committed on the context stream and a
+ * producer export needs no additional device-wide synchronization or hidden
+ * host polling.
+ */
+
+/* Options for allocating one result arena. */
+typedef struct gpuxtb_result_owner_options {
+  uint32_t struct_size;
+  uint32_t api_version;
+  /* GPUXTB_MEMORY_HOST or GPUXTB_MEMORY_CUDA_DEVICE. */
+  gpuxtb_memory_space_t memory_space;
+  /* CUDA device ordinal for CUDA arenas; -1 for host arenas. */
+  int32_t device_id;
+  /* Byte extent of the arena. Must be nonzero. */
+  uint64_t size_bytes;
+  uint32_t reserved;
+} gpuxtb_result_owner_options_t;
+
+#define GPUXTB_RESULT_OWNER_OPTIONS_V1_SIZE \
+  (offsetof(gpuxtb_result_owner_options_t, reserved) + sizeof(uint32_t))
+
+/*
+ * Describes one compact C-contiguous slice of a result arena to export as a
+ * DLPack managed tensor. dtype mirrors DLPack's DLDataType triple
+ * (code/bits/lanes); shape holds ndim int64 extents and is caller-owned only
+ * for the duration of the export call (gpuxtb copies it into the managed
+ * tensor's storage). strides are always implicit compact row-major (NULL by
+ * DLPack convention). Accepted dtypes: int8/int16/int32/int64, uint8,
+ * float32/float64 with lanes == 1. No DLPack headers are required from the
+ * caller: this structure is the constructor input, and the managed-tensor
+ * struct layout mirrors the pinned DLPack 1.0 specification (see
+ * src/runtime/dlpack_layout.hpp for the byte-exact mirrors and provenance).
+ */
+typedef struct gpuxtb_dlpack_view {
+  uint32_t struct_size;
+  uint32_t api_version;
+  /* Byte offset of the slice inside the arena. Must keep dtype alignment. */
+  uint64_t byte_offset;
+  int32_t dtype_code; /* DLDataTypeCode: 0 int, 1 uint, 2 float, 4 bfloat, 6 bool. */
+  int32_t dtype_bits;
+  int32_t dtype_lanes;
+  int32_t ndim; /* 0..8 */
+  uint32_t reserved;
+  const int64_t* shape; /* ndim int64 values; copied by gpuxtb */
+} gpuxtb_dlpack_view_t;
+
+#define GPUXTB_DLPACK_MAX_NDIM 8
+#define GPUXTB_DLPACK_VIEW_V1_SIZE (offsetof(gpuxtb_dlpack_view_t, shape) + sizeof(const int64_t*))
+
+GPUXTB_API gpuxtb_status_t gpuxtb_result_owner_options_init(gpuxtb_result_owner_options_t* options,
+                                                            size_t struct_size);
+GPUXTB_API gpuxtb_status_t gpuxtb_result_owner_create(const gpuxtb_result_owner_options_t* options,
+                                                      gpuxtb_result_owner_t** owner);
+/* Copies the whole arena into buffer as a caller-owned borrowed view. */
+GPUXTB_API gpuxtb_status_t gpuxtb_result_owner_buffer(const gpuxtb_result_owner_t* owner,
+                                                      gpuxtb_buffer_t* buffer);
+GPUXTB_API void gpuxtb_result_owner_retain(gpuxtb_result_owner_t* owner);
+GPUXTB_API void gpuxtb_result_owner_release(gpuxtb_result_owner_t* owner);
+/*
+ * Export one arena slice as a heap-allocated DLManagedTensorVersioned (when
+ * version != 0) or legacy DLManagedTensor (when version == 0). On success
+ * *out_managed receives the pointer and gpuxtb owns its lifetime: the import
+ * consumer (or capsule destructor) must call the stored deleter exactly once.
+ * On failure *out_managed is set to NULL, no arena reference is taken, and
+ * the arena reference counting is untouched.
+ */
+GPUXTB_API gpuxtb_status_t gpuxtb_result_owner_export_dltensor(const gpuxtb_result_owner_t* owner,
+                                                               const gpuxtb_dlpack_view_t* view,
+                                                               int version, void** out_managed);
 
 #ifdef __cplusplus
 } /* extern "C" */

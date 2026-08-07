@@ -1713,6 +1713,7 @@ class ArrayBatch:
         compute_charges: bool = True,
         compute_point_charge_forces: bool | None = None,
         out: object | None = None,
+        result_memory: str = "host",
     ) -> ArrayBatchResult:
         """Run one synchronous inference and return an :class:`ArrayBatchResult`.
 
@@ -1727,6 +1728,19 @@ class ArrayBatch:
         ``energies``, ``forces``, ``charges`` (alias ``atomic_charges``),
         ``point_charge_forces``, ``scc_iterations``, ``scc_converged``, and
         ``per_system_status``.
+
+        ``result_memory`` selects how outputs without an ``out=`` buffer are
+        allocated.  ``"host"`` (the default) keeps the historical behavior:
+        fresh host NumPy arrays.  ``"cuda"`` requires the resolved CUDA
+        backend and allocates a gpuxtb-owned device arena on the context
+        device; every gpuxtb-owned output is then returned as a
+        :class:`gpuxtb._dlpack.DLPackResultBuffer` producer that
+        ``torch.from_dlpack``/``cupy.from_dlpack``/``jax.dlpack.from_dlpack``
+        can import without a host copy.  Caller-supplied ``out=`` buffers
+        always take precedence, so mixed caller-owned and gpuxtb-owned outputs
+        are allowed.  Device-resident ``per_system_status``/``scc_converged``
+        make :meth:`ArrayBatchResult.failed_indices` unavailable with a
+        precise error (keep those diagnostics on the host when you need them).
         """
         self._context._create()
         return _compute_array_batch(
@@ -1740,6 +1754,7 @@ class ArrayBatch:
             compute_charges=compute_charges,
             compute_point_charge_forces=compute_point_charge_forces,
             out=out,
+            result_memory=result_memory,
         )
 
     def close(self) -> None:
@@ -1793,6 +1808,7 @@ def _compute_array_batch(
     compute_charges: bool,
     compute_point_charge_forces: bool | None,
     out: object | None,
+    result_memory: str = "host",
 ) -> ArrayBatchResult:
     """Consume all DLPack views and run one synchronous compute call.
 
@@ -1800,6 +1816,15 @@ def _compute_array_batch(
     committed DLPack view is released exactly once on both the success and the
     failure path.
     """
+    if result_memory not in ("host", "cuda"):
+        raise GPUxtbValueError(
+            f"result_memory must be 'host' or 'cuda', got {result_memory!r}"
+        )
+    if result_memory == "cuda" and int(batch.backend) != library.BACKEND_CUDA:
+        raise GPUxtbNotSupportedError(
+            "result_memory='cuda' requires the resolved CUDA backend; "
+            "run a CUDA ArrayBatch or use result_memory='host'"
+        )
     arrays = batch._arrays
     context = batch._context
     context._create()
@@ -1812,6 +1837,9 @@ def _compute_array_batch(
     views: list[_dlpack.DLPackView] = []
     keepalive: list[object] = []
     output_owners: dict[str, object] = {}
+    arenas: list[_dlpack._ResultArena] = []
+    gpuxtb_owned: list[_dlpack.DLPackResultBuffer] = []
+    committed_result: ArrayBatchResult | None = None
     try:
         batch_descriptor = library.Batch()
         library._check_init(
@@ -1896,14 +1924,29 @@ def _compute_array_batch(
             natoms,
             npoints,
             flags=options.flags,
+            result_memory=result_memory,
+            context=context,
+            arenas=arenas,
+            gpuxtb_owned=gpuxtb_owned,
         )
         # Output views are part of the same device contract as inputs. Check
         # them after binding, before native validation or any publication.
         _validate_device_consistency(views, context)
         library.compute_checked(context._handle, batch_descriptor, options, result)
-        return ArrayBatchResult(output_owners, result_flags=int(result.flags))
+        array_result = ArrayBatchResult(output_owners, result_flags=int(result.flags))
+        array_result._attach_producers(arenas, gpuxtb_owned)
+        committed_result = array_result
+        return array_result
     finally:
         _dlpack.release_all(views)
+        if committed_result is None:
+            # Uncommitted failure: no caller sees these handles, so every
+            # gpuxtb-owned arena/producer reference must be released now to
+            # keep failure paths leak-free and allocation-counted.
+            for producer in gpuxtb_owned:
+                producer.close()
+            for arena in arenas:
+                arena.close()
 
 
 def _derive_batch_counts(arrays: dict[str, object | None]) -> tuple[int, int, int, int]:
@@ -2109,69 +2152,156 @@ def _bind_outputs(
     npoints: int,
     *,
     flags: int,
+    result_memory: str = "host",
+    context: Context | None = None,
+    arenas: list[_dlpack._ResultArena] | None = None,
+    gpuxtb_owned: list[_dlpack.DLPackResultBuffer] | None = None,
 ) -> None:
-    """Bind every requested output buffer, honoring the ``out=`` policy."""
+    """Bind every requested output buffer, honoring the ``out=`` policy.
+
+    Omitted outputs follow ``result_memory``: ``"host"`` allocates a NumPy
+    array as before, while ``"cuda"`` packs all gpuxtb-owned slices into one
+    device arena on the context device and hands back native
+    :class:`DLPackResultBuffer` producers.  A supplied ``out=`` buffer always
+    wins over the arena.
+    """
     specs = (
-        ("energies", "energies", (nsystems,)),
-        ("forces", "forces", (natoms, 3)),
-        ("charges", "atomic_charges", (natoms,)),
+        ("energies", "energies", (nsystems,), np.float64),
+        ("forces", "forces", (natoms, 3), np.float64),
+        ("charges", "atomic_charges", (natoms,), np.float64),
+        ("point_charge_forces", "point_charge_forces", (npoints, 3), np.float64),
+        ("scc_iterations", "scc_iterations", (nsystems,), np.int32),
+        ("scc_converged", "scc_converged", (nsystems,), np.uint8),
+        ("per_system_status", "per_system_status", (nsystems,), np.int32),
     )
-    for public_name, field_name, shape in specs:
-        requested = bool(
-            flags
-            & {
-                "energies": library.COMPUTE_ENERGY,
-                "forces": library.COMPUTE_FORCES,
-                "charges": library.COMPUTE_ATOMIC_CHARGES,
-            }[public_name]
-        )
-        if not requested:
+    requested = _requested_output_mask(flags, npoints)
+    if result_memory == "cuda":
+        cuda_owned = [
+            (public_name, field_name, shape, dtype)
+            for public_name, field_name, shape, dtype in specs
+            if requested[public_name]
+            and public_name not in out_spec
+            and (shape and _dlpack._dlpack_bytes(shape, 1) != 0)
+        ]
+        arena, offsets = _allocate_result_arena(context, cuda_owned)
+        arenas is not None and arenas.append(arena)
+        base_pointer = arena.base_pointer()
+        for public_name, field_name, shape, dtype in cuda_owned:
+            dtype = np.dtype(dtype)
+            view = _dlpack.DLPackResultBuffer(
+                arena=arena,
+                byte_offset=offsets[public_name],
+                size_bytes=_dlpack._dlpack_bytes(shape, dtype.itemsize),
+                shape=shape,
+                dtype=dtype,
+                memory_space=library.MEMORY_CUDA_DEVICE,
+                device_id=context.device_id,
+                stream=stream,
+            )
+            gpuxtb_owned is not None and gpuxtb_owned.append(view)
+            setattr(
+                result,
+                field_name,
+                library.Buffer(
+                    ctypes.c_void_p(base_pointer + offsets[public_name]),
+                    view.size_bytes,
+                    library.MEMORY_CUDA_DEVICE,
+                    0,
+                ),
+            )
+            output_owners[public_name] = view
+    for public_name, field_name, shape, dtype in specs:
+        if not requested[public_name]:
             setattr(result, field_name, library.Buffer(None, 0, library.MEMORY_HOST, 0))
+            continue
+        if result_memory == "cuda" and public_name not in out_spec:
             continue
         owner = _bind_one_output(
             result,
             field_name,
             out_spec.get(public_name),
             shape,
-            _dlpack.EXPECTED_OUTPUT_DTYPES[public_name],
+            dtype,
             views,
             keepalive,
             stream,
         )
         if owner is not None:
             output_owners[public_name] = owner
-    if npoints and flags & library.COMPUTE_POINT_CHARGE_FORCES:
-        owner = _bind_one_output(
-            result,
-            "point_charge_forces",
-            out_spec.get("point_charge_forces"),
-            (npoints, 3),
-            _dlpack.EXPECTED_OUTPUT_DTYPES["point_charge_forces"],
-            views,
-            keepalive,
-            stream,
+
+
+def _requested_output_mask(flags: int, npoints: int) -> dict[str, bool]:
+    """Return the requested-output mask for one compute flag set."""
+    return {
+        "energies": bool(flags & library.COMPUTE_ENERGY),
+        "forces": bool(flags & library.COMPUTE_FORCES),
+        "charges": bool(flags & library.COMPUTE_ATOMIC_CHARGES),
+        "point_charge_forces": bool(
+            npoints and flags & library.COMPUTE_POINT_CHARGE_FORCES
+        ),
+        "scc_iterations": True,
+        "scc_converged": True,
+        "per_system_status": True,
+    }
+
+
+def _allocate_result_arena(
+    context: Context,
+    outputs: list[tuple[str, str, tuple[int, ...], object]],
+) -> tuple[_dlpack._ResultArena, dict[str, int]]:
+    """Allocate one packed, alignment-checked device arena for ``outputs``.
+
+    Slices are laid out at 64-byte granularity (the alignment DLPack
+    consumers such as JAX, CuPy, and PyTorch expect for imported memory;
+    ``cudaMalloc`` already returns 256-byte-aligned bases and the packed
+    arena adds no per-slice alignment loss).  Returns the native arena wrapper
+    and a mapping of public output name to byte offset.  All failures raise
+    before any arena reference is leaked.
+    """
+    alignment = 64
+    offset = 0
+    offsets: dict[str, int] = {}
+    for public_name, _, shape, dtype in outputs:
+        dtype = np.dtype(dtype)
+        byte_count = _dlpack._dlpack_bytes(shape, dtype.itemsize)
+        if byte_count == 0:
+            offsets[public_name] = 0
+            continue
+        if byte_count > _dlpack._POINTER_MAX:
+            raise GPUxtbRuntimeError(
+                f"output {public_name} requires {byte_count} bytes, which "
+                "exceeds the addressable arena extent"
+            )
+        offset = -(-offset // alignment) * alignment
+        offsets[public_name] = offset
+        offset += byte_count
+    if offset == 0 or offset > _dlpack._POINTER_MAX:
+        raise GPUxtbValueError(
+            "result_memory='cuda' requires at least one nonempty requested output "
+            "within the addressable arena extent"
         )
-        if owner is not None:
-            output_owners["point_charge_forces"] = owner
-    else:
-        result.point_charge_forces = library.Buffer(None, 0, library.MEMORY_HOST, 0)
-    for public_name, field_name in (
-        ("scc_iterations", "scc_iterations"),
-        ("scc_converged", "scc_converged"),
-        ("per_system_status", "per_system_status"),
-    ):
-        owner = _bind_one_output(
-            result,
-            field_name,
-            out_spec.get(public_name),
-            (nsystems,),
-            _dlpack.EXPECTED_OUTPUT_DTYPES[public_name],
-            views,
-            keepalive,
-            stream,
+    options = library.ResultOwnerOptions()
+    library._check_init(
+        "gpuxtb_result_owner_options_init",
+        library.load_library().gpuxtb_result_owner_options_init(
+            ctypes.byref(options), ctypes.sizeof(options)
+        ),
+    )
+    options.memory_space = library.MEMORY_CUDA_DEVICE
+    options.device_id = int(context.device_id)
+    options.size_bytes = offset
+    options.reserved = 0
+    handle = ctypes.c_void_p()
+    status = library.load_library().gpuxtb_result_owner_create(
+        ctypes.byref(options), ctypes.byref(handle)
+    )
+    if status != library.STATUS_SUCCESS:
+        raise GPUxtbRuntimeError(
+            "gpuxtb_result_owner_create failed with "
+            f"{library.status_string(status)}: {library.get_last_error()}",
+            status,
         )
-        if owner is not None:
-            output_owners[public_name] = owner
+    return _dlpack._ResultArena(handle), offsets
 
 
 def _bind_one_output(
@@ -2235,12 +2365,28 @@ class ArrayBatchResult:
 
     By default every array is a freshly allocated host numpy array.  When the
     associated ``out=`` buffers were supplied, the corresponding attributes
-    reference those caller-owned arrays instead.
+    reference those caller-owned arrays instead.  With
+    ``result_memory="cuda"``, gpuxtb-owned outputs are
+    :class:`gpuxtb._dlpack.DLPackResultBuffer` producers that importing
+    frameworks consume through ``from_dlpack`` without a host copy.
     """
 
     def __init__(self, data: dict[str, object], result_flags: int) -> None:
         self._data = dict(data)
         self.result_flags = int(result_flags)
+        self._arenas: list[object] = []
+        self._producers: list[object] = []
+
+    def _attach_producers(self, arenas: list[object], producers: list[object]) -> None:
+        """Keep gpuxtb-owned arenas and DLPack producers alive with this result.
+
+        Closing the result releases only the producer reference; each exported
+        capsule and each live :class:`DLPackResultBuffer` independently retain
+        the arena, so finished bytes survive this result and its compute
+        context.
+        """
+        self._arenas.extend(arenas)
+        self._producers.extend(producers)
 
     def _require(self, name: str) -> object:
         if name not in self._data:
@@ -2287,7 +2433,8 @@ class ArrayBatchResult:
         """Indices whose SCC/eigensolver status is not successful.
 
         Requires host numpy ``per_system_status``/``scc_converged`` (the
-        default output policy).
+        default output policy).  Device-resident diagnostic arrays produced by
+        ``result_memory="cuda"`` raise a precise error instead.
         """
         status = self._require("per_system_status")
         converged = self._require("scc_converged")
@@ -2312,6 +2459,33 @@ class ArrayBatchResult:
         }:
             raise GPUxtbValueError(f"attribute {name!r} is not available")
         return self._require(name)
+
+    def close(self) -> None:
+        """Release gpuxtb-owned arena producer references (idempotent).
+
+        Host numpy and caller-owned ``out=`` arrays are unaffected.  Live
+        :class:`DLPackResultBuffer` producers and their exported capsules keep
+        the native arena alive through their own retained references.
+        """
+        producers, self._producers = self._producers, []
+        for producer in producers:
+            producer.close()
+        arenas, self._arenas = self._arenas, []
+        for arena in arenas:
+            arena.close()
+
+    def __enter__(self) -> ArrayBatchResult:  # noqa: PYI034 - 3.10 lacks Self
+        """Use as a context manager so gpuxtb-owned storage is released."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Release gpuxtb-owned storage when leaving a ``with`` block."""
+        self.close()
 
 
 def compute_arrays(
@@ -2339,11 +2513,13 @@ def compute_arrays(
     energy_tolerance: float = 1.0e-8,
     electronic_temperature: float = 300.0,
     out: object | None = None,
+    result_memory: str = "host",
 ) -> ArrayBatchResult:
     """One-shot packed inference; a convenience alias of :class:`ArrayBatch`.
 
     Builds a temporary :class:`ArrayBatch` from the flat descriptor arrays,
     computes with the given options, and returns an :class:`ArrayBatchResult`.
+    ``out=`` and ``result_memory`` follow :meth:`ArrayBatch.compute`.
     """
     batch = ArrayBatch(
         atom_offsets,
@@ -2372,6 +2548,7 @@ def compute_arrays(
             energy_tolerance=energy_tolerance,
             electronic_temperature=electronic_temperature,
             out=out,
+            result_memory=result_memory,
         )
 
 

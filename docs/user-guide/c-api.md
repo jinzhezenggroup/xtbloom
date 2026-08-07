@@ -187,6 +187,33 @@ valid. Pointer ownership and the selected device are validated.
 stream is supplied. Active CUDA stream capture is rejected. gpuxtb attempts to
 restore the caller's current device on every exit.
 
+## gpuxtb-owned result arenas and DLPack export
+
+`gpuxtb_result_owner_t` is an additive, ref-counted result-allocation owner:
+one contiguous host or CUDA-device arena that gpuxtb itself allocates, fills
+through a normal compute call, and can hand to an importing framework with the
+DLPack producer protocol without copying data.
+
+- `gpuxtb_result_owner_create` allocates one arena with an initial reference
+  (options: memory space, device id, byte size). `gpuxtb_result_owner_buffer`
+  exposes the arena as a caller-owned `gpuxtb_buffer_t` so output slices can
+  be bound and computed into.
+- `gpuxtb_result_owner_retain` / `gpuxtb_result_owner_release` manage the
+  reference count; the allocation is freed exactly once when the last
+  reference drops. `release(NULL)` is a no-op and every release must
+  correspond to exactly one prior create or retain.
+- `gpuxtb_result_owner_export_dltensor` wraps one compact C-contiguous arena
+  slice as a heap-allocated `DLManagedTensor` (legacy, `version == 0`) or
+  `DLManagedTensorVersioned` (DLPack 1.0, `version != 0`). The managed tensor
+  carries a native exact-once deleter, so importing frameworks can release it
+  from their own code after the producing context and Python wrapper are gone;
+  no hidden host polling or extra device-wide synchronization is required
+  because public compute is synchronous. On any failure `*out_managed` is set
+  to NULL and no arena reference is taken.
+- The Python package mirrors these functions in `gpuxtb.library` and exposes
+  the producer through `ArrayBatch.compute(result_memory="cuda")`; see the
+  Python guide for the user-facing contract.
+
 ## Reuse and warm starts
 
 Keep a context alive across calls to retain worker pools, topology plans, and
