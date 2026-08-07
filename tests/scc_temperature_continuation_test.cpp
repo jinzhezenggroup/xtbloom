@@ -65,13 +65,12 @@
 #error "GPUXTB_TMACL_FIXTURE_PATH must name the committed tmacl.xyz fixture"
 #endif
 
-#define CHECK(condition)                                                     \
-  do {                                                                       \
-    if (!(condition)) {                                                      \
-      std::cerr << "CHECK failed at line " << __LINE__ << ": " << #condition \
-                << "\n";                                                     \
-      return __LINE__;                                                       \
-    }                                                                        \
+#define CHECK(condition)                                                              \
+  do {                                                                                \
+    if (!(condition)) {                                                               \
+      std::cerr << "CHECK failed at line " << __LINE__ << ": " << #condition << "\n"; \
+      return __LINE__;                                                                \
+    }                                                                                 \
   } while (false)
 
 namespace {
@@ -176,8 +175,8 @@ struct TraceRow {
 gpuxtb_status_t Geometry::build(std::string& err) {
   err.clear();
   const std::int64_t natoms = static_cast<std::int64_t>(atomic_numbers.size());
-  gpuxtb_status_t s = make_basis_plan(batch_size, natoms, atom_offsets.data(),
-                                      atomic_numbers.data(), basis, err);
+  gpuxtb_status_t s =
+      make_basis_plan(batch_size, natoms, atom_offsets.data(), atomic_numbers.data(), basis, err);
   if (s) return s;
   s = make_integral_plan(basis, integrals, err);
   if (s) return s;
@@ -225,8 +224,8 @@ gpuxtb_status_t Geometry::build(std::string& err) {
   if (e2s.size < e2n * sizeof(double)) return GPUXTB_STATUS_ALLOCATION_FAILED;
   es2_ws.matrix_scratch = static_cast<double*>(e2scratch.data);
   es2_ws.matrix_elements = es2_plan.total_matrix_elements();
-  s = update_es2_geometry_cache_cpu(es2_plan, positions.data(), 1u,
-                                    static_cast<double*>(e2s.data), e2n, es2_ws, es2_cache, err);
+  s = update_es2_geometry_cache_cpu(es2_plan, positions.data(), 1u, static_cast<double*>(e2s.data),
+                                    e2n, es2_ws, es2_cache, err);
   if (s) return s;
 
   const std::size_t a2n = static_cast<std::size_t>(aes2_plan.pair_data_elements());
@@ -264,7 +263,8 @@ gpuxtb_status_t Geometry::build(std::string& err) {
   if (d4scratch.size < d4_plan.workspace_size_bytes()) return GPUXTB_STATUS_ALLOCATION_FAILED;
   s = bind_d4_workspace(d4_plan, d4scratch.data, d4scratch.size, d4_ws, err);
   if (s) return s;
-  const std::size_t pair_elements = static_cast<std::size_t>(d4_plan.total_pairs()) * kD4PairDataElements;
+  const std::size_t pair_elements =
+      static_cast<std::size_t>(d4_plan.total_pairs()) * kD4PairDataElements;
   d4_pair_data.assign(std::max<std::size_t>(pair_elements, 1u), 0.0);
   d4_coordination.assign(static_cast<std::size_t>(natoms), 0.0);
   s = update_d4_geometry_cache_cpu(d4_plan, positions.data(), 1u, d4_pair_data.data(),
@@ -276,8 +276,7 @@ gpuxtb_status_t Geometry::build(std::string& err) {
 }
 
 gpuxtb_status_t Stage::build(Geometry& g, std::int64_t history, double damping, double rms_tol,
-                             double e_tol, std::uint64_t max_iter, double etemp,
-                             std::string& err) {
+                             double e_tol, std::uint64_t max_iter, double etemp, std::string& err) {
   err.clear();
   gpuxtb_status_t s =
       make_scc_mixer_plan(g.layout, history, damping, rms_tol, rms_tol, mixer_plan, err);
@@ -319,9 +318,9 @@ bool run_stage(Geometry& g, Stage& st, std::uint64_t max_iter, std::vector<Trace
                std::string& err) {
   trace.clear();
   for (std::uint64_t it = 0; it < max_iter; ++it) {
-    gpuxtb_status_t s = iterate_scc_driver_batch_cpu(
-        st.driver_plan, g.geom, g.backend, g.ocache, g.wfn, st.mixer_state, st.driver_state,
-        st.drv_ws, err);
+    gpuxtb_status_t s =
+        iterate_scc_driver_batch_cpu(st.driver_plan, g.geom, g.backend, g.ocache, g.wfn,
+                                     st.mixer_state, st.driver_state, st.drv_ws, err);
     (void)s;
     TraceRow row{};
     row.iter = st.driver_state.iterations[0];
@@ -428,12 +427,8 @@ int main() {
     std::uint64_t expect_ceiling;
   };
   const BaselineRow baseline[] = {
-      {300.0, false, 250u},
-      {350.0, false, 250u},
-      {400.0, false, 250u},
-      {450.0, true, 39u},
-      {500.0, true, 29u},
-      {1000.0, true, 25u},
+      {300.0, false, 250u}, {350.0, false, 250u}, {400.0, false, 250u},
+      {450.0, true, 39u},   {500.0, true, 29u},   {1000.0, true, 25u},
   };
   for (const BaselineRow& row : baseline) {
     // Each fresh baseline cell must start from the SAD multipole guess so a
@@ -455,9 +450,9 @@ int main() {
     } else {
       CHECK(trace.back().iter == 250u);
     }
-    CHECK(trace.back().status ==
-          (row.expect_converged ? static_cast<int>(GPUXTB_STATUS_SUCCESS)
-                                : static_cast<int>(GPUXTB_STATUS_SCC_NOT_CONVERGED)));
+    CHECK(trace.back().status == (row.expect_converged
+                                      ? static_cast<int>(GPUXTB_STATUS_SUCCESS)
+                                      : static_cast<int>(GPUXTB_STATUS_SCC_NOT_CONVERGED)));
     // Log the terminal row for the archived evidence.
     std::printf("baseline %.0f K: converged=%d iterations=%llu E=%.12f q(Me4N+)=%.5f q(Cl)=%.5f\n",
                 row.kelvin, converged ? 1 : 0, (unsigned long long)trace.back().iter,
