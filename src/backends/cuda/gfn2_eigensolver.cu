@@ -1024,6 +1024,9 @@ __global__ void prepare_spin_solve_bucket_kernel(
   __shared__ std::int64_t input_begin;
   __shared__ std::int64_t factor_begin;
   __shared__ int valid;
+  __shared__ int scan_enabled;
+  __shared__ int finite_ok;
+  __shared__ int symmetric_ok;
   if (threadIdx.x == 0) {
     system = -1;
     physical_local = -1;
@@ -1031,6 +1034,9 @@ __global__ void prepare_spin_solve_bucket_kernel(
     input_begin = 0;
     factor_begin = 0;
     valid = 0;
+    scan_enabled = 0;
+    finite_ok = 1;
+    symmetric_ok = 1;
     workspace.eligible[solve_slot] = 0u;
     workspace.factor_pointers[solve_slot] = workspace.matrix_scratch_a + scratch_begin;
     workspace.matrix_pointers[solve_slot] = workspace.matrix_scratch_b + scratch_begin;
@@ -1055,47 +1061,76 @@ __global__ void prepare_spin_solve_bucket_kernel(
           record_system_error(system_errors, system, device_error,
                               Gfn2EigensolverDeviceError::kStaleOverlapCache);
         } else {
-          bool finite = true;
-          const bool symmetric = symmetric_input_is_valid(
-              hamiltonians + input_begin, bucket.orbital_count, symmetry_tolerance, &finite);
-          bool factor_finite = true;
-          for (std::int64_t diagonal = 0; diagonal < bucket.orbital_count; ++diagonal) {
-            const double value =
-                cache.cholesky_factors[factor_begin + diagonal * bucket.orbital_count + diagonal];
-            factor_finite = factor_finite && isfinite(value) && value > 0.0;
-          }
-          if (!finite) {
-            record_system_error(system_errors, system, device_error,
-                                Gfn2EigensolverDeviceError::kNonfiniteHamiltonian);
-          } else if (!symmetric) {
-            record_system_error(system_errors, system, device_error,
-                                Gfn2EigensolverDeviceError::kNonsymmetricHamiltonian);
-          } else if (!factor_finite) {
-            record_system_error(system_errors, system, device_error,
-                                Gfn2EigensolverDeviceError::kStaleOverlapCache);
-          } else {
-            valid = 1;
-            workspace.eligible[solve_slot] = 1u;
+          scan_enabled = 1;
+        }
+      }
+    }
+  }
+  __syncthreads();
+  /* The symmetric-input validation scans every matrix element; it was
+   * previously one serial 15K-element chain on lane 0. The scan's conclusions
+   * (any non-finite element, any out-of-tolerance symmetric pair) are
+   * monotone, so lanes can clear shared flags concurrently and lane 0 keeps
+   * the original error precedence afterwards. */
+  if (scan_enabled != 0) {
+    for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
+      const std::int64_t row = index % bucket.orbital_count;
+      const std::int64_t column = index / bucket.orbital_count;
+      const double value = hamiltonians[input_begin + index];
+      if (!isfinite(value)) {
+        atomicExch(&finite_ok, 0);
+      }
+      if (column < row) {
+        const double transpose = hamiltonians[input_begin + column * bucket.orbital_count + row];
+        if (!isfinite(transpose)) {
+          atomicExch(&finite_ok, 0);
+        } else if (isfinite(value)) {
+          const double scale = fmax(1.0, fmax(fabs(value), fabs(transpose)));
+          if (fabs(value - transpose) > symmetry_tolerance * scale) {
+            atomicExch(&symmetric_ok, 0);
           }
         }
       }
     }
   }
   __syncthreads();
-
-  for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
-    const std::int64_t row = index % bucket.orbital_count;
-    const std::int64_t column = index / bucket.orbital_count;
-    double factor = row == column ? 1.0 : 0.0;
-    double hamiltonian = row == column ? 1.0 : 0.0;
-    if (valid != 0) {
-      factor = cache.cholesky_factors[factor_begin + index];
-      const double first = hamiltonians[input_begin + row * bucket.orbital_count + column];
-      const double second = hamiltonians[input_begin + column * bucket.orbital_count + row];
-      hamiltonian = row == column ? first : 0.5 * first + 0.5 * second;
+  if (threadIdx.x == 0 && scan_enabled != 0) {
+    bool factor_finite = true;
+    for (std::int64_t diagonal = 0; diagonal < bucket.orbital_count; ++diagonal) {
+      const double value =
+          cache.cholesky_factors[factor_begin + diagonal * bucket.orbital_count + diagonal];
+      factor_finite = factor_finite && isfinite(value) && value > 0.0;
     }
-    workspace.matrix_scratch_a[scratch_begin + index] = factor;
-    workspace.matrix_scratch_b[scratch_begin + index] = hamiltonian;
+    if (finite_ok == 0) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2EigensolverDeviceError::kNonfiniteHamiltonian);
+    } else if (symmetric_ok == 0) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2EigensolverDeviceError::kNonsymmetricHamiltonian);
+    } else if (!factor_finite) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2EigensolverDeviceError::kStaleOverlapCache);
+    } else {
+      valid = 1;
+      workspace.eligible[solve_slot] = 1u;
+    }
+  }
+  __syncthreads();
+
+  for (std::int64_t column = 0; column < bucket.orbital_count; ++column) {
+    for (std::int64_t row = threadIdx.x; row < bucket.orbital_count; row += blockDim.x) {
+      const std::int64_t index = row + column * bucket.orbital_count;
+      double factor = row == column ? 1.0 : 0.0;
+      double hamiltonian = row == column ? 1.0 : 0.0;
+      if (valid != 0) {
+        factor = cache.cholesky_factors[factor_begin + index];
+        const double first = hamiltonians[input_begin + row * bucket.orbital_count + column];
+        const double second = hamiltonians[input_begin + column * bucket.orbital_count + row];
+        hamiltonian = row == column ? first : 0.5 * first + 0.5 * second;
+      }
+      workspace.matrix_scratch_a[scratch_begin + index] = factor;
+      workspace.matrix_scratch_b[scratch_begin + index] = hamiltonian;
+    }
   }
 }
 
@@ -2974,11 +3009,11 @@ static Gfn2EigensolverLaunchResult solve_spin_eigensystems_impl(
     const Gfn2EigensolverBucket submission{
         bucket.orbital_count, bucket.solve_count, bucket.solve_index_offset,
         bucket.spin_matrix_scratch_offset, bucket.spin_orbital_scratch_offset};
-    prepare_spin_solve_bucket_kernel<<<static_cast<unsigned int>(bucket.solve_count),
-                                       kThreadsPerSystem, 0, stream>>>(
-        batch, layout, bucket, cache, scalar_generation,
-        dynamic_epoch ? geometry_epoch->value : nullptr, hamiltonians, options.symmetry_tolerance,
-        workspace, system_errors, device_error);
+    prepare_spin_solve_bucket_kernel<<<static_cast<unsigned int>(bucket.solve_count), 256, 0,
+                                       stream>>>(batch, layout, bucket, cache, scalar_generation,
+                                                 dynamic_epoch ? geometry_epoch->value : nullptr,
+                                                 hamiltonians, options.symmetry_tolerance,
+                                                 workspace, system_errors, device_error);
     result = check_kernel_launch();
     if (!result.success()) {
       return result;

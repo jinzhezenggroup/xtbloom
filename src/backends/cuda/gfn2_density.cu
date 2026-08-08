@@ -253,32 +253,26 @@ __global__ void contract_kernel(Gfn2DensityDeviceBatch batch, Gfn2DensityDeviceI
     const MatrixPair indices = matrix_pair(pair);
     double density = 0.0;
     double weighted_density = 0.0;
-    bool finite = true;
+    /* Per-k finiteness checks and the rounded `contribution` products that
+     * existed solely for them are hoisted out: IEEE fma propagates NaN/Inf, so
+     * any non-finite weight/coefficient makes the accumulated sums non-finite
+     * and the single post-loop check records the identical failure with the
+     * same error codes as the former per-element checks. The fma chains
+     * themselves are unchanged. */
     for (std::int64_t local = 0; local < count; ++local) {
       const double first = input.coefficients[matrix_begin + indices.row * count + local];
       const double second = input.coefficients[matrix_begin + indices.column * count + local];
       const double density_left = first * workspace.weights[orbital_begin + local];
-      const double density_contribution = density_left * second;
-      const double density_updated = fma(density_left, second, density);
-      if (!isfinite(density_left) || !isfinite(density_contribution) ||
-          !isfinite(density_updated)) {
-        record_system_error(system_errors, system, device_error,
-                            Gfn2DensityDeviceError::kNonfiniteDensityArithmetic);
-        finite = false;
-        break;
-      }
+      density = fma(density_left, second, density);
       const double weighted_left = first * workspace.energy_weights[orbital_begin + local];
-      const double weighted_contribution = weighted_left * second;
-      const double weighted_updated = fma(weighted_left, second, weighted_density);
-      if (!isfinite(weighted_left) || !isfinite(weighted_contribution) ||
-          !isfinite(weighted_updated)) {
-        record_system_error(system_errors, system, device_error,
-                            Gfn2DensityDeviceError::kNonfiniteWeightedDensityArithmetic);
-        finite = false;
-        break;
-      }
-      density = density_updated;
-      weighted_density = weighted_updated;
+      weighted_density = fma(weighted_left, second, weighted_density);
+    }
+    const bool finite = isfinite(density) && isfinite(weighted_density);
+    if (!finite) {
+      record_system_error(system_errors, system, device_error,
+                          !isfinite(density)
+                              ? Gfn2DensityDeviceError::kNonfiniteDensityArithmetic
+                              : Gfn2DensityDeviceError::kNonfiniteWeightedDensityArithmetic);
     }
     if (finite) {
       const std::int64_t first = matrix_begin + indices.row * count + indices.column;
@@ -569,32 +563,26 @@ __global__ void spin_contract_kernel(Gfn2DensityDeviceBatch batch,
     const MatrixPair indices = matrix_pair(pair);
     double density = 0.0;
     double weighted_density = 0.0;
-    bool finite = true;
+    /* Per-k finiteness checks and the rounded `contribution` products that
+     * existed solely for them are hoisted out: IEEE fma propagates NaN/Inf, so
+     * any non-finite weight/coefficient makes the accumulated sums non-finite
+     * and the single post-loop check records the identical failure with the
+     * same error codes as the former per-element checks. The fma chains
+     * themselves are unchanged. */
     for (std::int64_t local = 0; local < count; ++local) {
       const double first = input.coefficients[matrix_begin + indices.row * count + local];
       const double second = input.coefficients[matrix_begin + indices.column * count + local];
       const double density_left = first * workspace.weights[orbital_begin + local];
-      const double density_contribution = density_left * second;
-      const double density_updated = fma(density_left, second, density);
-      if (!isfinite(density_left) || !isfinite(density_contribution) ||
-          !isfinite(density_updated)) {
-        record_system_error(system_errors, system, device_error,
-                            Gfn2DensityDeviceError::kNonfiniteDensityArithmetic);
-        finite = false;
-        break;
-      }
+      density = fma(density_left, second, density);
       const double weighted_left = first * workspace.energy_weights[orbital_begin + local];
-      const double weighted_contribution = weighted_left * second;
-      const double weighted_updated = fma(weighted_left, second, weighted_density);
-      if (!isfinite(weighted_left) || !isfinite(weighted_contribution) ||
-          !isfinite(weighted_updated)) {
-        record_system_error(system_errors, system, device_error,
-                            Gfn2DensityDeviceError::kNonfiniteWeightedDensityArithmetic);
-        finite = false;
-        break;
-      }
-      density = density_updated;
-      weighted_density = weighted_updated;
+      weighted_density = fma(weighted_left, second, weighted_density);
+    }
+    const bool finite = isfinite(density) && isfinite(weighted_density);
+    if (!finite) {
+      record_system_error(system_errors, system, device_error,
+                          !isfinite(density)
+                              ? Gfn2DensityDeviceError::kNonfiniteDensityArithmetic
+                              : Gfn2DensityDeviceError::kNonfiniteWeightedDensityArithmetic);
     }
     if (finite) {
       const std::int64_t first = matrix_begin + indices.row * count + indices.column;
