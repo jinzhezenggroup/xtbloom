@@ -26,17 +26,25 @@ import contextlib
 import ctypes
 import math
 import operator
+import typing
 import weakref
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+from typing import (
+    TYPE_CHECKING,
+    ClassVar,
+    SupportsFloat,
+    SupportsIndex,
+)
 
 import numpy as np
+import numpy.typing as npt
 
 from . import _array as _array_adapter
 from . import _dlpack, library
 from .exceptions import GPUxtbNotSupportedError, GPUxtbRuntimeError, GPUxtbValueError
 
 if TYPE_CHECKING:
+    import builtins
     from collections.abc import Callable, Sequence
     from types import TracebackType
 
@@ -101,7 +109,9 @@ def _as_integer(name: str, value: object) -> int:
     if isinstance(value, bool | np.bool_):
         raise GPUxtbValueError(f"{name} must be an integer")
     try:
-        return int(operator.index(value))
+        # The runtime contract is validated below: only objects with a truthy
+        # ``__index__`` succeed, and anything else raises GPUxtbValueError.
+        return int(operator.index(typing.cast("SupportsIndex", value)))
     except TypeError:
         raise GPUxtbValueError(f"{name} must be an integer") from None
 
@@ -277,7 +287,10 @@ class Structure:
             isinstance(value, str) for value in raw_numbers
         )
         if raw_numbers.dtype.kind in "US" or object_symbols:
-            numbers = np.asarray(symbols_to_numbers(raw_numbers), dtype=np.int64)
+            numbers = np.asarray(
+                symbols_to_numbers([str(value) for value in raw_numbers]),
+                dtype=np.int64,
+            )
         else:
             if raw_numbers.dtype.kind in "bc" or (
                 any(isinstance(value, bool | np.bool_) for value in object_numbers.flat)
@@ -489,9 +502,9 @@ class Context:
         self._finalizer: weakref.finalize | None = None
         self._plans: weakref.WeakSet[library.Plan] = weakref.WeakSet()
 
-    def _create(self) -> None:
+    def _create(self) -> ctypes.c_void_p:
         if self._handle is not None:
-            return
+            return self._handle
         library_instance = library.load_library()
         options = library.ContextOptions()
         library._check_init(
@@ -526,18 +539,20 @@ class Context:
         self._finalizer = weakref.finalize(
             self, _destroy_native_context, library_instance, handle
         )
+        return self._handle
 
     @property
     def backend(self) -> int:
         """The resolved backend (CPU or CUDA)."""
         self._create()
-        return int(self._backend)
+        assert self._backend is not None  # _create() always resolves the backend
+        return self._backend
 
     @property
     def device_id(self) -> int:
         """The backend device id (``-1`` for CPU)."""
-        self._create()
-        return int(library.load_library().gpuxtb_context_get_device_id(self._handle))
+        handle = self._create()
+        return int(library.load_library().gpuxtb_context_get_device_id(handle))
 
     @property
     def stream(self) -> int | None:
@@ -570,8 +585,8 @@ class Context:
         ``plan.compute`` calls (geometry may change). The plan must be
         destroyed before the context.
         """
-        self._create()
-        plan = library.Plan(self._handle, batch, options, self)
+        handle = self._create()
+        plan = library.Plan(handle, batch, options, self)
         self._plans.add(plan)
         return plan
 
@@ -659,7 +674,7 @@ _AUTO_BATCH_FALLBACK_MAX_ATOMS = 4_096
 
 def _slice_by_total_atoms(
     structures: Sequence[Structure], max_total_atoms: int
-) -> list[Sequence[Structure]]:
+) -> list[list[Structure]]:
     """Split *structures* into contiguous chunks of at most ``max_total_atoms``.
 
     A single system larger than the limit forms its own oversized chunk because
@@ -859,7 +874,7 @@ def _compute_batch(
     def bind(
         descriptor_name: str,
         values: Sequence[int | float],
-        dtype: object,
+        dtype: npt.DTypeLike,
     ) -> None:
         if not values:
             setattr(
@@ -970,7 +985,7 @@ def _compute_batch(
     bind_output("scc_converged", scc_converged, True)
     bind_output("per_system_status", per_system_status, True)
 
-    library.compute_checked(context._handle, batch, options, result)
+    library.compute_checked(context._create(), batch, options, result)
 
     return _ComputedBatch(
         energies=energies,
@@ -1017,7 +1032,7 @@ def _raise_on_failure(computed: _ComputedBatch) -> None:
 class Result:
     """Single-system results container, similar to ``tblite.interface.Result``."""
 
-    _getter: ClassVar[dict[str, Callable[[Result], object]]] = {
+    _getter: ClassVar[builtins.dict[str, Callable[[Result], object]]] = {
         "energy": lambda self: self.energy,
         "energies": lambda self: np.asarray([self.energy]),
         "forces": lambda self: self.forces,
@@ -1075,7 +1090,7 @@ class Result:
         """Return a requested result quantity by key."""
         return self.get(key)
 
-    def dict(self) -> dict[str, object]:
+    def dict(self) -> builtins.dict[str, object]:
         """Return all available quantities in a new mapping."""
         return {key: self.get(key) for key in self._getter}
 
@@ -1187,12 +1202,12 @@ def _validated_compute_setting(attribute: str, value: object) -> int | float:
             raise GPUxtbValueError("max_scc_iterations must be positive")
         return candidate
     if attribute in ("charge_tolerance", "energy_tolerance"):
-        candidate = float(value)
+        candidate = float(typing.cast("SupportsFloat | SupportsIndex", value))
         if not math.isfinite(candidate) or candidate <= 0.0:
             raise GPUxtbValueError(f"{attribute} must be finite and positive")
         return candidate
     if attribute == "electronic_temperature":
-        candidate = float(value)
+        candidate = float(typing.cast("SupportsFloat | SupportsIndex", value))
         if not math.isfinite(candidate) or candidate < 0.0:
             raise GPUxtbValueError(
                 "electronic_temperature must be finite and nonnegative"
@@ -1209,6 +1224,12 @@ class _ComputeSettings:
         "max_scc_iterations",
         "model",
     )
+
+    model: int
+    max_scc_iterations: int
+    charge_tolerance: float
+    energy_tolerance: float
+    electronic_temperature: float
 
     def __init__(
         self,
@@ -1933,7 +1954,7 @@ def _compute_array_batch(
         # Output views are part of the same device contract as inputs. Check
         # them after binding, before native validation or any publication.
         _validate_device_consistency(views, context)
-        library.compute_checked(context._handle, batch_descriptor, options, result)
+        library.compute_checked(context._create(), batch_descriptor, options, result)
         array_result = ArrayBatchResult(output_owners, result_flags=int(result.flags))
         array_result._attach_producers(arenas, gpuxtb_owned)
         committed_result = array_result
@@ -2177,7 +2198,10 @@ def _bind_outputs(
     )
     requested = _requested_output_mask(flags, npoints)
     if result_memory == "cuda":
-        cuda_owned = [
+        # A device arena can only be allocated on a live context; the
+        # ``result_memory="cuda"`` callers always pass one.
+        assert context is not None
+        cuda_owned: list[tuple[str, str, tuple[int, ...], npt.DTypeLike]] = [
             (public_name, field_name, shape, dtype)
             for public_name, field_name, shape, dtype in specs
             if requested[public_name]
@@ -2249,7 +2273,7 @@ def _requested_output_mask(flags: int, npoints: int) -> dict[str, bool]:
 
 def _allocate_result_arena(
     context: Context,
-    outputs: list[tuple[str, str, tuple[int, ...], object]],
+    outputs: list[tuple[str, str, tuple[int, ...], npt.DTypeLike]],
 ) -> tuple[_dlpack._ResultArena, dict[str, int]]:
     """Allocate one packed, alignment-checked device arena for ``outputs``.
 
@@ -2311,7 +2335,7 @@ def _bind_one_output(
     field_name: str,
     array: object | None,
     shape: tuple[int, ...],
-    dtype: object,
+    dtype: npt.DTypeLike,
     views: list[_dlpack.DLPackView],
     keepalive: list[object],
     stream: int | None,
@@ -2322,6 +2346,7 @@ def _bind_one_output(
     numpy owner is allocated and returned.  Empty outputs bind the null
     buffer and return ``None``.
     """
+    resolved_dtype = np.dtype(dtype)
     if array is not None:
         actual = _array_shape(array)
         if actual != shape:
@@ -2330,7 +2355,7 @@ def _bind_one_output(
             )
         view = _dlpack.consume_from_dlpack(
             array,
-            expected_dtype=dtype,
+            expected_dtype=resolved_dtype,
             expected_shape=shape,
             stream=stream,
             # Outputs must always alias the caller's buffer. Allowing the
@@ -2347,7 +2372,7 @@ def _bind_one_output(
     if not shape:
         setattr(result, field_name, library.Buffer(None, 0, library.MEMORY_HOST, 0))
         return None
-    owner = np.empty(shape, dtype=dtype)
+    owner = np.empty(shape, dtype=resolved_dtype)
     keepalive.append(owner)
     setattr(
         result,
@@ -2376,10 +2401,14 @@ class ArrayBatchResult:
     def __init__(self, data: dict[str, object], result_flags: int) -> None:
         self._data = dict(data)
         self.result_flags = int(result_flags)
-        self._arenas: list[object] = []
+        self._arenas: list[_dlpack._ResultArena] = []
         self._producers: list[object] = []
 
-    def _attach_producers(self, arenas: list[object], producers: list[object]) -> None:
+    def _attach_producers(
+        self,
+        arenas: Sequence[_dlpack._ResultArena],
+        producers: Sequence[object],
+    ) -> None:
         """Keep gpuxtb-owned arenas and DLPack producers alive with this result.
 
         Closing the result releases only the producer reference; each exported

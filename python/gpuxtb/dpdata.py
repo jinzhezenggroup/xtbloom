@@ -20,7 +20,7 @@ Net charge and spin multiplicity are handled per frame:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 from dpdata.driver import Driver
@@ -95,7 +95,7 @@ class GPUxtbDriver(Driver):
         self.uhf = uhf
         self.multiplicity = multiplicity
         self.spin_channels = spin_channels
-        self.kwargs = kwargs
+        self.kwargs: dict[str, object] = kwargs
 
     def label(self, data: dict) -> dict:
         """Label a dpdata system dict and return it with energies and forces.
@@ -151,16 +151,26 @@ class GPUxtbDriver(Driver):
                 Structure(
                     numbers,
                     positions_bohr[frame],
-                    charge=_frame_value(
-                        data, "charge", self.charge, frame, nframes, default=0.0
+                    charge=cast(
+                        "float",
+                        _frame_value(
+                            data, "charge", self.charge, frame, nframes, default=0.0
+                        ),
                     ),
-                    uhf=uhf_value,
-                    multiplicity=multiplicity_value,
+                    uhf=cast("int | None", uhf_value),
+                    multiplicity=cast("int | None", multiplicity_value),
                     spin_channels=self.spin_channels,
                 )
             )
 
-        calculator = BatchCalculator(structures, self.method, **self.kwargs)
+        calculator = BatchCalculator(
+            structures,
+            self.method,
+            # The driver forwards arbitrary BatchCalculator options. Values are
+            # `object` at the boundary (no `Any` in the public signature); the
+            # cast narrows them for the typed keyword expansion only.
+            **cast("dict[str, Any]", self.kwargs),
+        )
         try:
             # dpdata has no peer-status channel. Returning the non-strict
             # batch result would silently publish NaN labels for failed SCC or
