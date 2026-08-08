@@ -585,6 +585,7 @@ if(GPUXTB_HAS_CUDA)
     cublasSetMathMode
     cublasSetPointerMode_v2
     cublasSetStream_v2
+    cublasSetWorkspace_v2
   )
   set(GPUXTB_CUSOLVER_SYMBOLS
     cusolverDnCreate
