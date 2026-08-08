@@ -1,0 +1,98 @@
+{
+  "cases": {
+    "h3_plus": {
+      "path": "h3_plus.json",
+      "sha256": "704f9411f4a74abadb252a665d8d905a4ce005607137e104d08f0a89a36e2f0f",
+      "spec_path": "specs/h3_plus.spec",
+      "spec_sha256": "f8163b56c9bd398b859e91019d4973feff91df96c04945a94947893f2561d952"
+    },
+    "ketene": {
+      "path": "ketene.json",
+      "sha256": "07ee6f4dd74888b1d6230a8dcbe9afea9ad7b859d4f9a1e878252e02de89283a",
+      "spec_path": "specs/ketene.spec",
+      "spec_sha256": "bde7774f7bbe3ae7d428f8c59d23d047cae710388d56980cb6e3f63cc38ff73a"
+    },
+    "nenacl": {
+      "path": "nenacl.json",
+      "sha256": "b1fcee09047455abf1c2c05412c7dd6c4cf079f3938078b062b77523f2b7b984",
+      "spec_path": "specs/nenacl.spec",
+      "spec_sha256": "26d00b17eda038a0f2969c5683154b4749ee44007dd26b0c8e53f46d4a62bcbb"
+    },
+    "water_dimer_6pc_hardness": {
+      "path": "water_dimer_6pc_hardness.json",
+      "sha256": "c6daffb02b8fdbd9fdcfc744a8f6d9b205b0b056afe4d091eaed9451f9141bf4",
+      "spec_path": "specs/water_dimer_6pc_hardness.spec",
+      "spec_sha256": "c24bb482f9113e097af0b204087299b5cd5980ef13746ce788d4935949294873"
+    },
+    "water_one_pc_gamma999": {
+      "path": "water_one_pc_gamma999.json",
+      "sha256": "4cd204a7a1b87a5db6c17576cac87ccfdd4d4269d166576668407a6b0fbf968d",
+      "spec_path": "specs/water_one_pc_gamma999.spec",
+      "spec_sha256": "b6ad134c318e62e73a36747649fafc5ca30ebf6aa32590a904d5470297723b9d"
+    }
+  },
+  "command": "generate_scc_corpus.py --source-root /home/jzzeng/codes/tblite --corpus-dir '<corpus-dir>' --lapack mkl-rt --wrap-mode nodownload",
+  "dependencies": {
+    "dftd4": "6e1f59c3f39d919a2dbef0601d2576727c8b30e8",
+    "jonquil": "4d43ffea512977602f654ab10067fcddb3e3c107",
+    "mctc-lib": "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d",
+    "mstore": "663245d739be0123da61c917e55116b0c3db4c74",
+    "multicharge": "6a5d63f9e9e29dcf13cc47cc27f33bf9015681bf",
+    "s-dftd3": "6f0b06fbfa8653a23ca55c453772ce3af4420706",
+    "test-drive": "d16852743043963f294a5d9a3d5218e32c20ea7f",
+    "toml-f": "51a26158c6d52bbc59cb482bdd13f00d7fd032a3"
+  },
+  "environment": {
+    "BLIS_NUM_THREADS": "1",
+    "LC_ALL": "C",
+    "MKL_DYNAMIC": "FALSE",
+    "MKL_NUM_THREADS": "1",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1"
+  },
+  "format": "gpuxtb-scc-trace-v1",
+  "generated_at": "2026-08-08T10:52:38.486228+00:00",
+  "host": "node3",
+  "oracle_patch_sha256": "d6a51afc4b3c56d6589a2b5b115ea8b4891600c1161c525939ca3cc16e2b4954",
+  "oracle_sources": {
+    "scc_trace_main.f90": "71bef1bbcaee4e8e944bd6620c6af99b5aa322f3596f7362edd8bd8736d9bfff",
+    "scc_trace_recorder.f90": "b377affdd8821d67050f80a0868aa6fb2b262d1610b74647238b159f75be9e84"
+  },
+  "revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb",
+  "schema": "gpuxtb-scc-trace-corpus-manifest-v1",
+  "toolchain": {
+    "blas_lapack": {
+      "libraries": [
+        {
+          "path": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so.2",
+          "sha256": "221e89c09644d546cdc6505fc1fdecdf6490a4c57f7da6ca3b48a1c96c4860bd",
+          "soname": "libmkl_rt.so.2"
+        }
+      ],
+      "requested": "mkl-rt",
+      "resolved_provider": "mkl-rt"
+    },
+    "compiler": {
+      "command": [
+        "/group/software/deepmd-kit-3.1.1/bin/x86_64-conda-linux-gnu-gfortran"
+      ],
+      "executables": [
+        {
+          "path": "/group/software/deepmd-kit-3.1.1/bin/x86_64-conda-linux-gnu-gfortran",
+          "sha256": "fef0d8ba42c44779a5d4bdadbb0442f27ba0fb85c7e6f244ed2061935c920b73"
+        }
+      ],
+      "id": "gcc",
+      "version": "13.4.0"
+    },
+    "meson": {
+      "command": [
+        "/home/jzzeng/miniconda3/bin/python",
+        "-m",
+        "mesonbuild.mesonmain"
+      ],
+      "version": "1.11.2"
+    }
+  }
+}
