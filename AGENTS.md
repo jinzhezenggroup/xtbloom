@@ -26,9 +26,11 @@ rely on chat context as the only record of plans, decisions, or remaining work.
 
 Before starting material work:
 
-1. Read Epic #1, including its latest comments:
-   `gh issue view 1 --comments`.
-2. Read the active leaf issue and every directly blocking issue.
+1. Read the active issue, its relevant parent/sub-issues, and every directly
+   blocking issue.
+2. Read Epic #1 only when the work changes or depends on its release gates,
+   priority queue, or issue hierarchy, or when no narrower issue identifies
+   the next work. Epic #1 is a release dashboard, not a per-task activity log.
 3. Inspect the current branch, HEAD, worktree status, open PRs, and relevant CI.
 4. Record the leaf issue's branch, scope, acceptance criteria, dependencies,
    and planned test matrix if they are not already current.
@@ -43,11 +45,33 @@ At every material checkpoint, update the active issue with:
 - blockers and remaining acceptance criteria;
 - the next concrete action.
 
-After every squash merge, update Epic #1 with the main commit SHA, completed
-work, remaining release gates, and the next queue. Use `Closes #N` only when
-every acceptance criterion is satisfied; otherwise use `Refs #N`. Landed code
-alone is not enough to close an issue whose profiling, sanitizer, packaging,
-legal, or conformance evidence is still missing.
+Record routine merge and validation evidence in the active issue. Update Epic
+#1 only when its dashboard materially changes, such as a release gate being
+added, completed, reopened, or re-scoped, or the priority queue changing. Do
+not duplicate leaf-issue checkpoints or a chronological merge log in the Epic.
+
+An issue may close when its primary scope is complete and only small residual
+work remains, provided every residual item is transferred to an open issue
+connected through GitHub's parent/sub-issue relationship. Before closing:
+
+- map each transferred acceptance item to its sub-issue in the parent ledger;
+- ensure each sub-issue has independently actionable scope, acceptance
+  criteria, dependencies, and required evidence; and
+- state in the closing comment that the delegated items remain incomplete and
+  that closing the parent does not claim their completion.
+
+An issue is closable when every acceptance item is either satisfied or validly
+delegated under this rule; otherwise leave it open. Delegation transfers
+tracking responsibility but never converts missing profiling, sanitizer,
+packaging, legal, conformance, or other evidence into a pass. Do not move the
+issue's core deliverable or broad unfinished scope into sub-issues merely to
+make the parent closable.
+
+When any acceptance item is delegated, use `Refs #N` in the PR rather than
+auto-closing the parent at merge time. After the merge, post the final ledger,
+main commit, child links, and explicit incomplete-items statement, then close
+the parent manually. `Closes #N` is reserved for issues whose acceptance items
+all pass without delegation.
 
 ## Repository map
 
@@ -441,12 +465,15 @@ attribution already present for work retained from another agent.
 
 Work is complete only when:
 
-- the implementation satisfies the active issue's acceptance criteria;
+- the implementation satisfies the active issue's acceptance criteria, or
+  small residual items are explicitly delegated under the issue-closure rule;
 - focused and full applicable validation passed with exact results recorded;
 - ABI, scientific, CUDA, packaging, and licensing invariants remain intact;
 - documentation and useful code comments describe new public or non-obvious
   behavior;
 - the PR has no unresolved review findings or conflicts and required CI is
   green;
-- the leaf issue and Epic #1 contain enough current information for a new agent
-  to continue without reconstructing the work from chat history.
+- the narrowest active issue or linked sub-issues contain enough current
+  information for a new agent to continue without reconstructing the work
+  from chat history; and
+- Epic #1 is current when, and only when, the release dashboard changed.
