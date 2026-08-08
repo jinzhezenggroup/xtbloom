@@ -146,9 +146,9 @@ export LD_LIBRARY_PATH=/group/software/deepmd-kit-3.1.1/lib
   --lapack mkl-rt
 ```
 
-Meson fallback dependencies may require network access on the first run. Issue
-#45 will turn this validation build into the fully pinned corpus-generation
-toolchain; #44 only freezes and validates the observer seam itself.
+The standalone probe still follows tblite's wrap files.  Corpus generation,
+described below, instead binds every fallback to a reviewed local commit and
+runs Meson with downloads disabled.
 
 ## Canonical SCC trace format (`gpuxtb-scc-trace-v1`)
 
@@ -295,3 +295,58 @@ The exit-code contract is `0` for a match, `1` for a scientific mismatch, and
 `2` for CLI, JSON, schema, profile, canonicalization, or hash errors. Golden
 files are opened only for reading. Golden generation and manifest/hash updates
 belong to the separate issue #48 workflow.
+
+## Pinned restricted corpus generation (issues #45/#46/#48)
+
+`scc_trace_recorder.f90` + `scc_trace_main.f90` build the oracle recorder
+executable that drives the patched pinned tblite GFN2 single point through the
+observer seam and streams every `gpuxtb-scc-trace-v1` field in a fixed raw
+layout.  `generate_scc_corpus.py` is the reproducible corpus pipeline:
+
+1. validates the immutable observer-patch bundle and the local tblite source
+   checkout (clean tree, pinned revision reachable);
+2. verifies that the local dependency object stores contain every reviewed
+   full 40-hex commit, then creates detached clones at exactly those commits;
+3. builds the recorder oracle in a disposable outer Meson project with
+   `--wrap-mode=nodownload`, forces every dependency to the local fallback,
+   and checks Meson's recursive subproject introspection (the build includes
+   the oracle-only shell-monopole PCEM container for QM/MM-like cases);
+4. runs the five restricted corpus cases and canonicalizes each raw stream
+   with `gpuxtb_scc_trace.py`, and
+5. writes canonical JSON goldens and specs plus a `manifest.json` with their
+   SHA-256 digests, every dependency revision, both Fortran source digests,
+   the observer patch digest, deterministic environment, exact compiler
+   executable and Meson identities, resolved BLAS/LAPACK provider and library
+   digests, and the redacted command line.
+
+Regenerating with the same toolchain produces byte-identical goldens (the
+manifest records the generation timestamp separately).  Verify committed
+goldens without rebuilding:
+
+```bash
+python tools/oracle/tblite_scc_trace/generate_scc_corpus.py \
+  --source-root /path/to/tblite \
+  --corpus-dir data/conformance/scc-traces --check
+```
+
+The offline check validates the complete manifest shape and fixed format and
+revision, repository-owned patch and source bytes, reviewed dependency pins,
+toolchain records, canonical generator-owned specs, canonical trace bytes and
+hashes, and agreement between trace and manifest provenance.  It intentionally
+does not require a tblite checkout or access the network.
+
+The corpus currently contains `h3_plus`, `ketene`, `nenacl`, and the two
+point-charge water cases `water_one_pc_gamma999` and
+`water_dimer_6pc_hardness`.  Point-charge cases additionally record the
+per-shell `point_charge_shell_potential` (V^PC) and `point_charge_energy`
+(q_s V^PC) in every completed iteration (issue #46); plain cases omit them.
+
+`gpuxtb_scc_cpu_trace.py` drives the production CPU GFN2 SCC driver through the
+same corpus and compares captured trace documents against the goldens with the
+comparator.  It is the executable evidence harness for issue #50: the initial
+measurement shows gpuxtb's SAD multipole seed differs from tblite's zero-charge
+first iteration, so strict closed-loop traces legitimately diverge and the
+`cpu_closed_loop_v1` profile is not yet an achievable gate.  The harness
+records the honest first-divergent field per case; it is built and its H3+
+iteration lifecycle, independent convergence flags, and terminal metadata are
+registered as a smoke gate without claiming a strict numerical comparison.

@@ -282,6 +282,15 @@ cudaError_t normalize_gfn2_scc_stage_cuda(const Gfn2SccStageDeviceReport& report
                                           const Gfn2SccIterationDeviceLedger& ledger,
                                           cudaStream_t stream = nullptr) noexcept;
 
+/*
+ * Open one stage's canonical sequence in isolation. The production exact-
+ * capacity chain opens the eigensolver stage between the pre-eigensolver and
+ * post-eigensolver segments and normalizes it after the provider bodies, so
+ * the stage report must be open/close-able without the monolithic launcher.
+ */
+cudaError_t open_gfn2_scc_stage_cuda(const Gfn2SccStageDeviceReport& report,
+                                     cudaStream_t stream = nullptr) noexcept;
+
 }  // namespace gpuxtb::detail::cuda
 
 #endif  // GPUXTB_BACKENDS_CUDA_GFN2_SCC_ITERATION_CONTROL_CUH

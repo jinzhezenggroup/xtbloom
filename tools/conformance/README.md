@@ -235,6 +235,13 @@ The gates cover:
   componentwise (QM plus point-charge forces for QM/MM cases).
 - **Charge conservation**: the summed atomic charges reproduce the declared
   molecular charge.
+- **Central finite differences**: every corpus case, QM atom axis, and external
+  point-charge axis is displaced by ``+-1e-3`` bohr in isolation, and the
+  numeric force ``-(E(+)-E(-)) / (2e-3)`` must match the analytic force
+  published for the undisplaced geometry (limit ``1e-5`` Ha/bohr for QM forces,
+  ``1e-7`` Ha/bohr for point-charge forces). This directly checks the force
+  definition (including point-charge force signs) across the whole corpus and
+  both backends.
 
 The invariance gates reuse the golden runner's strict single-shot options
 (fresh SCC, charge tolerance 1e-10, energy tolerance 1e-12) so the two paths can

@@ -28,6 +28,41 @@ _Static_assert(offsetof(gpuxtb_dlpack_view_t, byte_offset) == 8,
                "DLPack view byte-offset offset must remain stable");
 _Static_assert(offsetof(gpuxtb_dlpack_view_t, shape) == 40,
                "DLPack view shape offset must remain stable");
+_Static_assert(GPUXTB_BATCH_V1_SIZE == 328, "batch ABI-v1 prefix must remain 328 bytes");
+_Static_assert(GPUXTB_BATCH_V2_SIZE == 352, "batch ABI-v2 prefix must remain 352 bytes");
+_Static_assert(GPUXTB_BATCH_V3_SIZE == 408, "batch ABI-v3 image must remain 408 bytes");
+_Static_assert(offsetof(gpuxtb_batch_t, total_interactions) == 352,
+               "batch ABI-v3 interaction count must begin after the 352-byte prefix");
+_Static_assert(offsetof(gpuxtb_batch_t, interaction_descriptors) == 360,
+               "batch ABI-v3 descriptors must follow the interaction count");
+_Static_assert(offsetof(gpuxtb_batch_t, interaction_payload) == 384,
+               "batch ABI-v3 payload must begin after the descriptor buffers");
+_Static_assert(sizeof(gpuxtb_interaction_t) == GPUXTB_INTERACTION_V1_SIZE,
+               "interaction descriptor public layout must end at its ABI-v1 suffix");
+_Static_assert(offsetof(gpuxtb_interaction_t, type) == 0,
+               "interaction type offset must remain stable");
+_Static_assert(offsetof(gpuxtb_interaction_t, flags) == 4,
+               "interaction flags offset must remain stable");
+_Static_assert(offsetof(gpuxtb_interaction_t, system_index) == 8,
+               "interaction system-index offset must remain stable");
+_Static_assert(offsetof(gpuxtb_interaction_t, payload_offset) == 16,
+               "interaction payload-offset offset must remain stable");
+_Static_assert(offsetof(gpuxtb_interaction_t, payload_size) == 24,
+               "interaction payload-size offset must remain stable");
+_Static_assert(GPUXTB_BATCH_RESULT_V1_SIZE == 184,
+               "batch-result ABI-v1 prefix must remain 184 bytes");
+_Static_assert(GPUXTB_BATCH_RESULT_V2_SIZE == 280,
+               "batch-result ABI-v2 image must remain 280 bytes");
+_Static_assert(offsetof(gpuxtb_batch_result_t, dipole_moments) == 184,
+               "batch-result ABI-v2 suffix must begin after the 184-byte prefix");
+_Static_assert(offsetof(gpuxtb_batch_result_t, quadrupole_moments) == 208,
+               "batch-result quadrupole outlet offset must remain stable");
+_Static_assert(offsetof(gpuxtb_batch_result_t, wiberg_orders) == 232,
+               "batch-result Wiberg outlet offset must remain stable");
+_Static_assert(offsetof(gpuxtb_batch_result_t, spin_populations) == 256,
+               "batch-result spin outlet offset must remain stable");
+_Static_assert(GPUXTB_RESULT_DIPOLE_MOMENTS == (1 << 4),
+               "dipole publication result flag must remain at bit 4");
 
 static int check_short_compute_options_init(size_t caller_size) {
   enum { CANARY_BYTES = 16 };
@@ -63,6 +98,50 @@ static int check_short_compute_options_init(size_t caller_size) {
   return prefix_ok && short_suffix_ok && canary_ok;
 }
 
+static int check_short_batch_init(size_t caller_size) {
+  enum { CANARY_BYTES = 16 };
+  unsigned char* storage = (unsigned char*)malloc(caller_size + CANARY_BYTES);
+  if (storage == NULL) {
+    return 0;
+  }
+  memset(storage, 0xa5, caller_size + CANARY_BYTES);
+
+  gpuxtb_batch_t* batch = (gpuxtb_batch_t*)storage;
+  const gpuxtb_status_t status = gpuxtb_batch_init(batch, caller_size);
+  int ok = status == GPUXTB_STATUS_SUCCESS && batch->struct_size == caller_size &&
+           batch->api_version == GPUXTB_API_VERSION;
+  for (size_t index = GPUXTB_BATCH_V1_SIZE; ok && index < caller_size; ++index) {
+    ok = storage[index] == 0;
+  }
+  for (size_t index = caller_size; ok && index < caller_size + CANARY_BYTES; ++index) {
+    ok = storage[index] == 0xa5;
+  }
+  free(storage);
+  return ok;
+}
+
+static int check_short_batch_result_init(size_t caller_size) {
+  enum { CANARY_BYTES = 16 };
+  unsigned char* storage = (unsigned char*)malloc(caller_size + CANARY_BYTES);
+  if (storage == NULL) {
+    return 0;
+  }
+  memset(storage, 0xa5, caller_size + CANARY_BYTES);
+
+  gpuxtb_batch_result_t* result = (gpuxtb_batch_result_t*)storage;
+  const gpuxtb_status_t status = gpuxtb_batch_result_init(result, caller_size);
+  int ok = status == GPUXTB_STATUS_SUCCESS && result->struct_size == caller_size &&
+           result->api_version == GPUXTB_API_VERSION;
+  for (size_t index = GPUXTB_BATCH_RESULT_V1_SIZE; ok && index < caller_size; ++index) {
+    ok = storage[index] == 0;
+  }
+  for (size_t index = caller_size; ok && index < caller_size + CANARY_BYTES; ++index) {
+    ok = storage[index] == 0xa5;
+  }
+  free(storage);
+  return ok;
+}
+
 /* Exercise the reusable workspace-query descriptor on a CPU-backed plan without
  * requiring a real inference (the value contract is validated in the native
  * plan tests; here we only prove the descriptor initializes and rejects short
@@ -86,13 +165,51 @@ static int check_workspace_query_init(void) {
   return 1;
 }
 
+/* Exercise the ABI-v3 batch and ABI-v2 result initializers: full-size images
+ * must zero the interaction suffix and the new result outlets, while a short
+ * ABI-v1 prefix must still initialize without touching caller bytes it does
+ * not own. */
+static int check_batch_result_suffix_init(void) {
+  gpuxtb_batch_t batch;
+  if (gpuxtb_batch_init(&batch, sizeof(batch)) != GPUXTB_STATUS_SUCCESS) {
+    return 0;
+  }
+  if (batch.struct_size != GPUXTB_BATCH_V3_SIZE || batch.api_version != GPUXTB_API_VERSION ||
+      batch.total_interactions != 0 || batch.interaction_descriptors.data != NULL ||
+      batch.interaction_payload.data != NULL) {
+    return 0;
+  }
+  if (!check_short_batch_init(GPUXTB_BATCH_V1_SIZE) ||
+      !check_short_batch_init(GPUXTB_BATCH_V2_SIZE) ||
+      !check_short_batch_init(GPUXTB_BATCH_V3_SIZE - 1)) {
+    return 0;
+  }
+
+  gpuxtb_batch_result_t result;
+  if (gpuxtb_batch_result_init(&result, sizeof(result)) != GPUXTB_STATUS_SUCCESS) {
+    return 0;
+  }
+  if (result.struct_size != GPUXTB_BATCH_RESULT_V2_SIZE ||
+      result.api_version != GPUXTB_API_VERSION || result.dipole_moments.data != NULL ||
+      result.quadrupole_moments.data != NULL || result.wiberg_orders.data != NULL ||
+      result.spin_populations.data != NULL) {
+    return 0;
+  }
+  if (!check_short_batch_result_init(GPUXTB_BATCH_RESULT_V1_SIZE) ||
+      !check_short_batch_result_init(GPUXTB_BATCH_RESULT_V2_SIZE - 1)) {
+    return 0;
+  }
+  return 1;
+}
+
 int main(void) {
   if (sizeof(gpuxtb_status_t) != sizeof(int32_t) || sizeof(gpuxtb_backend_t) != sizeof(int32_t) ||
       sizeof(gpuxtb_memory_space_t) != sizeof(int32_t) ||
       sizeof(gpuxtb_model_t) != sizeof(int32_t) ||
       sizeof(gpuxtb_scc_start_mode_t) != sizeof(int32_t) ||
       sizeof(gpuxtb_compute_flag_t) != sizeof(int32_t) ||
-      sizeof(gpuxtb_result_flag_t) != sizeof(int32_t)) {
+      sizeof(gpuxtb_result_flag_t) != sizeof(int32_t) ||
+      sizeof(gpuxtb_interaction_type_t) != sizeof(int32_t)) {
     fprintf(stderr, "public ABI tags and flags must all be 32-bit\n");
     return 1;
   }
@@ -115,6 +232,10 @@ int main(void) {
   if (!check_workspace_query_init()) {
     fprintf(stderr, "workspace-query descriptor initialization is incorrect\n");
     return 4;
+  }
+  if (!check_batch_result_suffix_init()) {
+    fprintf(stderr, "batch/result suffix initialization is incorrect\n");
+    return 5;
   }
 
   gpuxtb_context_options_t options;

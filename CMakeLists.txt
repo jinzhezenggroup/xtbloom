@@ -585,6 +585,7 @@ if(GPUXTB_HAS_CUDA)
     cublasSetMathMode
     cublasSetPointerMode_v2
     cublasSetStream_v2
+    cublasSetWorkspace_v2
   )
   set(GPUXTB_CUSOLVER_SYMBOLS
     cusolverDnCreate
@@ -2547,6 +2548,41 @@ if(GPUXTB_BUILD_TESTS)
     gpuxtb_configure_linalg_runtime_test(
       gpuxtb_scc_temperature_continuation_test gpuxtb.gfn2.scc_temperature_continuation
     )
+
+    # Issue #50: harness that drives the production CPU SCC driver through the
+    # pinned restricted corpus and compares against the goldens.  This is the
+    # executable machine for proving/reporting CPU-vs-tblite per-iteration
+    # parity.  It is not yet a passing acceptance gate: current measurements
+    # show the gpuxtb SAD multipole seed differs from tblite's zero-charge
+    # first iteration, so strict closed-loop traces legitimately differ (see
+    # the #49/#50 ledger).  The harness records the honest divergence; it is
+    # built and metadata-tested here without registering a strict numerical
+    # comparison.  The metadata gate independently checks every convergence
+    # subflag, iteration count, and terminal state against the pinned H3+ trace.
+    add_executable(gpuxtb_scc_trace_capture
+      tests/scc_trace_capture.cpp
+    )
+    target_compile_definitions(gpuxtb_scc_trace_capture PRIVATE
+      GPUXTB_SCC_TRACE_SPEC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces/specs"
+    )
+    target_link_libraries(gpuxtb_scc_trace_capture PRIVATE
+      gpuxtb_gfn2_cpu
+      Threads::Threads
+    )
+    target_compile_features(gpuxtb_scc_trace_capture PRIVATE cxx_std_17)
+    add_test(
+      NAME gpuxtb.gfn2.scc_trace_capture_smoke
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/gpuxtb_scc_cpu_trace.py
+              --capture $<TARGET_FILE:gpuxtb_scc_trace_capture>
+              --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+              --work-dir ${CMAKE_CURRENT_BINARY_DIR}/scc-trace-capture-smoke
+              --cases h3_plus
+              --metadata-only
+    )
+    gpuxtb_configure_linalg_runtime_test(
+      gpuxtb_scc_trace_capture gpuxtb.gfn2.scc_trace_capture_smoke
+    )
   endif()
 
   add_executable(gpuxtb_parameters_header_test tests/parameters/gfn2_header_test.cpp)
@@ -2681,6 +2717,18 @@ if(GPUXTB_BUILD_TESTS)
     NAME gpuxtb.oracle.tblite_observer_patch
     COMMAND ${Python3_EXECUTABLE} -m unittest discover
             -s tests/oracle -p "test_*.py" -v
+  )
+  add_test(
+    NAME gpuxtb.oracle.scc_corpus
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/generate_scc_corpus.py
+            --source-root ${CMAKE_CURRENT_SOURCE_DIR}
+            --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+            --check
+  )
+  set_tests_properties(gpuxtb.oracle.scc_corpus PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    LABELS "conformance;oracle"
   )
   set_tests_properties(
     gpuxtb.parameters.generated

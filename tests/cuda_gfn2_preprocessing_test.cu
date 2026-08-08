@@ -298,6 +298,12 @@ struct DeviceFixture {
   DeviceBuffer<gpuxtb::detail::cuda::Gfn2PairListSystemMeta> pairlist_meta;
   DeviceBuffer<std::uint32_t> pairlist_sequence, sparse_system_errors, sparse_device_error;
   DeviceBuffer<double> sparse_coordination;
+  /* Committed output pair-list storage (step 4), allocated by enable_pairlist(). */
+  DeviceBuffer<gpuxtb::detail::Gfn2AtomPair> committed_pairs;
+  DeviceBuffer<std::int64_t> committed_pair_offsets, committed_pair_counts,
+      committed_neighbor_offsets, committed_neighbor_counts, committed_neighbors;
+  DeviceBuffer<std::uint64_t> committed_pair_generations;
+  DeviceBuffer<std::uint8_t> committed_eligible_mask;
 
   Gfn2PreprocessingDeviceBinding binding{};
 
@@ -622,7 +628,34 @@ struct DeviceFixture {
     PL_ALLOC(pairlist_neighbor_scratch, atoms * max_neighbors_per_atom);
     PL_ALLOC(pairlist_pair_cursor, batch);
     PL_ALLOC(pairlist_sequence, 1u);
+    PL_ALLOC(committed_pairs, batch * max_pairs_per_system);
+    PL_ALLOC(committed_pair_offsets, batch + 1);
+    PL_ALLOC(committed_pair_counts, batch);
+    PL_ALLOC(committed_neighbor_offsets, atoms + 1);
+    PL_ALLOC(committed_neighbor_counts, atoms);
+    PL_ALLOC(committed_neighbors, atoms * max_neighbors_per_atom);
+    PL_ALLOC(committed_pair_generations, batch);
+    PL_ALLOC(committed_eligible_mask, batch);
 #undef PL_ALLOC
+    if (status != cudaSuccess) return status;
+    /* Committed payload capacity is caller-owned and only live prefixes are
+     * published.  Seed the unused tails so full-capacity downloads can prove
+     * transactional byte preservation under initcheck as well as CTest. */
+    status = cudaMemsetAsync(committed_pairs.get(), 0xa5,
+                             committed_pairs.size() * sizeof(Gfn2AtomPair), stream);
+    if (status != cudaSuccess) return status;
+    status = cudaMemsetAsync(committed_neighbors.get(), 0xa5,
+                             committed_neighbors.size() * sizeof(std::int64_t), stream);
+    if (status != cudaSuccess) return status;
+    /* Setup initializes never-published metadata once. Repeated calls retain
+     * the last committed counts/generation for failed or inactive peers. */
+    status = committed_pair_counts.fill(0, stream);
+    if (status != cudaSuccess) return status;
+    status = committed_neighbor_counts.fill(0, stream);
+    if (status != cudaSuccess) return status;
+    status = committed_pair_generations.fill(0u, stream);
+    if (status != cudaSuccess) return status;
+    status = committed_eligible_mask.fill(0u, stream);
     if (status != cudaSuccess) return status;
     /* Host-set per-system dispatch decisions.  This fixture builds every system
      * dense (kDense) so the bucketed and all-pairs paths can be exercised and
@@ -688,7 +721,35 @@ struct DeviceFixture {
                                   pairlist_sequence.get(),
                                   1,
                                   kPlanToken};
-    binding.output.pairlist = {};
+    binding.output.pairlist = {gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice,
+                               gpuxtb::detail::Gfn2PairListState::kCommitted,
+                               gpuxtb::detail::Gfn2PairListRole::kCoordination,
+                               gpuxtb::detail::Gfn2PairMapKind::kExplicit,
+                               kPlanToken,
+                               gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
+                               gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
+                               batch,
+                               atoms,
+                               max_pairs_per_system,
+                               max_neighbors_per_atom,
+                               batch + 1,
+                               atoms + 1,
+                               batch * max_pairs_per_system,
+                               atoms * max_neighbors_per_atom,
+                               committed_pair_offsets.get(),
+                               committed_pairs.get(),
+                               batch,
+                               atoms,
+                               committed_pair_counts.get(),
+                               committed_neighbor_counts.get(),
+                               committed_neighbor_offsets.get(),
+                               committed_neighbors.get(),
+                               batch,
+                               batch,
+                               0,
+                               committed_pair_generations.get(),
+                               committed_eligible_mask.get(),
+                               nullptr};
     return cudaSuccess;
   }
 
@@ -724,8 +785,39 @@ struct Downloaded {
   std::vector<std::uint64_t> geometry_generations, operator_generations;
   std::vector<std::uint8_t> published;
   std::vector<std::uint32_t> geometry_errors, integral_errors, aes2_errors, stages;
+  std::vector<gpuxtb::detail::Gfn2AtomPair> committed_pairs;
+  std::vector<std::int64_t> committed_pair_offsets, committed_pair_counts,
+      committed_neighbor_offsets, committed_neighbor_counts, committed_neighbors;
+  std::vector<std::uint64_t> committed_generations;
+  std::vector<std::uint8_t> committed_eligible;
   std::uint32_t plan_error = 0u;
 };
+
+cudaError_t download_committed(const HostCase& host, const DeviceFixture& device,
+                               Downloaded& values, cudaStream_t stream) {
+  values.committed_pairs.resize(device.committed_pairs.size());
+  values.committed_pair_offsets.resize(device.committed_pair_offsets.size());
+  values.committed_pair_counts.resize(device.committed_pair_counts.size());
+  values.committed_neighbor_offsets.resize(device.committed_neighbor_offsets.size());
+  values.committed_neighbor_counts.resize(device.committed_neighbor_counts.size());
+  values.committed_neighbors.resize(device.committed_neighbors.size());
+  values.committed_generations.resize(device.committed_pair_generations.size());
+  values.committed_eligible.resize(device.committed_eligible_mask.size());
+  cudaError_t status = device.committed_pairs.download(values.committed_pairs.data(),
+                                                       values.committed_pairs.size(), stream);
+#define DOWNLOAD_C(field, target) \
+  if (status == cudaSuccess)      \
+  status = device.field.download(values.target.data(), values.target.size(), stream)
+  DOWNLOAD_C(committed_pair_offsets, committed_pair_offsets);
+  DOWNLOAD_C(committed_pair_counts, committed_pair_counts);
+  DOWNLOAD_C(committed_neighbor_offsets, committed_neighbor_offsets);
+  DOWNLOAD_C(committed_neighbor_counts, committed_neighbor_counts);
+  DOWNLOAD_C(committed_neighbors, committed_neighbors);
+  DOWNLOAD_C(committed_pair_generations, committed_generations);
+  DOWNLOAD_C(committed_eligible_mask, committed_eligible);
+#undef DOWNLOAD_C
+  return status;
+}
 
 cudaError_t download(const HostCase& host, const DeviceFixture& device, Downloaded& values,
                      cudaStream_t stream) {
@@ -766,6 +858,42 @@ cudaError_t download(const HostCase& host, const DeviceFixture& device, Download
 #undef DOWNLOAD
   if (status == cudaSuccess) status = device.plan_error.download(&values.plan_error, 1u, stream);
   return status;
+}
+
+bool published_state_equal(const Downloaded& first, const Downloaded& second) {
+  const auto same = [](const auto& left, const auto& right, const char* name) {
+    if (left == right) return true;
+    std::fprintf(stderr, "published state changed: %s\n", name);
+    return false;
+  };
+#define CHECK_SAME(field) \
+  if (!same(first.field, second.field, #field)) return false
+  CHECK_SAME(pair_data);
+  CHECK_SAME(coordination);
+  CHECK_SAME(overlap);
+  CHECK_SAME(dipole);
+  CHECK_SAME(quadrupole);
+  CHECK_SAME(h0);
+  CHECK_SAME(es2);
+  CHECK_SAME(aes2);
+  CHECK_SAME(geometry_generations);
+  CHECK_SAME(operator_generations);
+  CHECK_SAME(committed_pair_offsets);
+  CHECK_SAME(committed_pair_counts);
+  CHECK_SAME(committed_neighbor_offsets);
+  CHECK_SAME(committed_neighbor_counts);
+  CHECK_SAME(committed_neighbors);
+  CHECK_SAME(committed_generations);
+  CHECK_SAME(committed_eligible);
+#undef CHECK_SAME
+  if (first.committed_pairs.size() != second.committed_pairs.size()) return false;
+  for (std::size_t index = 0; index < first.committed_pairs.size(); ++index) {
+    if (first.committed_pairs[index].first != second.committed_pairs[index].first ||
+        first.committed_pairs[index].second != second.committed_pairs[index].second) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool matches_reference(const Downloaded& actual, const Reference& expected,
@@ -969,6 +1097,8 @@ int test_plan_failure_and_seal_fail_closed() {
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, stream));
+  CUDA_CHECK(device.enable_pairlist(host, stream));
+  CHECK(seal_gfn2_preprocessing_binding_cuda(device.binding).success());
 
   Gfn2PreprocessingDeviceBinding atom_overflow = device.binding;
   atom_overflow.plan.geometry.total_atoms = std::numeric_limits<std::int64_t>::max();
@@ -981,32 +1111,96 @@ int test_plan_failure_and_seal_fail_closed() {
 
   CHECK(compose_gfn2_preprocessing_cuda(device.binding, 31u, stream).success());
   CUDA_CHECK(cudaStreamSynchronize(stream));
-  Downloaded before;
-  CUDA_CHECK(download(host, device, before, stream));
+  Downloaded committed_31;
+  CUDA_CHECK(download_committed(host, device, committed_31, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  /* The committed sparse view must follow the complete operator gate, not a
+   * geometry-only health check. A finite maximal shell level passes parameter
+   * preflight but overflows the H0 arithmetic for its owning peer. This keeps
+   * the failure peer-local and proves pair-list eligibility mirrors the final
+   * publication decision. */
+  const std::int64_t failed_shell = host.basis.batch_shell_offsets[0];
+  const double overflowing_level = std::numeric_limits<double>::max();
+  CUDA_CHECK(cudaMemcpyAsync(device.shell_levels.get() + failed_shell, &overflowing_level,
+                             sizeof(overflowing_level), cudaMemcpyHostToDevice, stream));
+  constexpr std::int64_t kFailed = 0;
+  constexpr std::int64_t kInactive = 1;
+  std::vector<std::uint8_t> requested(static_cast<std::size_t>(host.batch), 1u);
+  requested[static_cast<std::size_t>(kInactive)] = 0u;
+  CUDA_CHECK(device.requested.upload(requested.data(), requested.size(), stream));
+  CHECK(compose_gfn2_preprocessing_cuda(device.binding, 32u, stream).success());
+  Downloaded operator_failed;
+  CUDA_CHECK(download(host, device, operator_failed, stream));
+  CUDA_CHECK(download_committed(host, device, operator_failed, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  for (std::int64_t system = 0; system < host.batch; ++system) {
+    const std::size_t index = static_cast<std::size_t>(system);
+    CHECK(operator_failed.committed_eligible[index] == operator_failed.published[index]);
+    if (system == kFailed || system == kInactive) {
+      CHECK(operator_failed.published[index] == 0u);
+      CHECK(operator_failed.committed_generations[index] == 31u);
+      CHECK(operator_failed.committed_pair_counts[index] ==
+            committed_31.committed_pair_counts[index]);
+      const std::int64_t atom_begin = host.atom_offsets[index];
+      const std::int64_t atom_end = host.atom_offsets[index + 1u];
+      for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+        CHECK(operator_failed.committed_neighbor_counts[static_cast<std::size_t>(atom)] ==
+              committed_31.committed_neighbor_counts[static_cast<std::size_t>(atom)]);
+      }
+    } else {
+      CHECK(operator_failed.published[index] == 1u);
+      CHECK(operator_failed.committed_generations[index] == 32u);
+    }
+  }
+  CHECK(operator_failed.committed_pairs.size() == committed_31.committed_pairs.size());
+  for (std::size_t pair = 0; pair < operator_failed.committed_pairs.size(); ++pair) {
+    CHECK(operator_failed.committed_pairs[pair].first == committed_31.committed_pairs[pair].first);
+    CHECK(operator_failed.committed_pairs[pair].second ==
+          committed_31.committed_pairs[pair].second);
+  }
+  CHECK(operator_failed.committed_neighbors == committed_31.committed_neighbors);
+  const double valid_level = host.h0_plan.shell_levels[static_cast<std::size_t>(failed_shell)];
+  CUDA_CHECK(cudaMemcpyAsync(device.shell_levels.get() + failed_shell, &valid_level,
+                             sizeof(valid_level), cudaMemcpyHostToDevice, stream));
+  std::fill(requested.begin(), requested.end(), 1u);
+  CUDA_CHECK(device.requested.upload(requested.data(), requested.size(), stream));
 
   const std::int64_t malformed = host.basis.total_atoms + 1;
   CUDA_CHECK(cudaMemcpyAsync(device.atom_offsets.get() + host.batch, &malformed, sizeof(malformed),
                              cudaMemcpyHostToDevice, stream));
-  CHECK(compose_gfn2_preprocessing_cuda(device.binding, 32u, stream).success());
-  CHECK(device.binding.output.es2.geometry_generation == 32u);
-  CHECK(device.binding.output.aes2.geometry_generation == 32u);
-  CHECK(device.binding.workspace.es2_candidate.geometry_generation == 32u);
-  CHECK(device.binding.workspace.aes2_candidate.geometry_generation == 32u);
+  CHECK(compose_gfn2_preprocessing_cuda(device.binding, 33u, stream).success());
+  CHECK(device.binding.output.es2.geometry_generation == 33u);
+  CHECK(device.binding.output.aes2.geometry_generation == 33u);
+  CHECK(device.binding.workspace.es2_candidate.geometry_generation == 33u);
+  CHECK(device.binding.workspace.aes2_candidate.geometry_generation == 33u);
   Downloaded after;
   CUDA_CHECK(download(host, device, after, stream));
+  CUDA_CHECK(download_committed(host, device, after, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   CHECK(after.plan_error != 0u);
-  CHECK(before.pair_data == after.pair_data);
-  CHECK(before.coordination == after.coordination);
-  CHECK(before.overlap == after.overlap);
-  CHECK(before.dipole == after.dipole);
-  CHECK(before.quadrupole == after.quadrupole);
-  CHECK(before.h0 == after.h0);
-  CHECK(before.es2 == after.es2);
-  CHECK(before.aes2 == after.aes2);
-  CHECK(before.geometry_generations == after.geometry_generations);
-  CHECK(before.operator_generations == after.operator_generations);
+  CHECK(operator_failed.pair_data == after.pair_data);
+  CHECK(operator_failed.coordination == after.coordination);
+  CHECK(operator_failed.overlap == after.overlap);
+  CHECK(operator_failed.dipole == after.dipole);
+  CHECK(operator_failed.quadrupole == after.quadrupole);
+  CHECK(operator_failed.h0 == after.h0);
+  CHECK(operator_failed.es2 == after.es2);
+  CHECK(operator_failed.aes2 == after.aes2);
+  CHECK(operator_failed.geometry_generations == after.geometry_generations);
+  CHECK(operator_failed.operator_generations == after.operator_generations);
+  CHECK(operator_failed.committed_pairs.size() == after.committed_pairs.size());
+  for (std::size_t pair = 0; pair < operator_failed.committed_pairs.size(); ++pair) {
+    CHECK(operator_failed.committed_pairs[pair].first == after.committed_pairs[pair].first);
+    CHECK(operator_failed.committed_pairs[pair].second == after.committed_pairs[pair].second);
+  }
+  CHECK(operator_failed.committed_pair_offsets == after.committed_pair_offsets);
+  CHECK(operator_failed.committed_pair_counts == after.committed_pair_counts);
+  CHECK(operator_failed.committed_neighbor_offsets == after.committed_neighbor_offsets);
+  CHECK(operator_failed.committed_neighbor_counts == after.committed_neighbor_counts);
+  CHECK(operator_failed.committed_neighbors == after.committed_neighbors);
+  CHECK(operator_failed.committed_generations == after.committed_generations);
+  CHECK(operator_failed.committed_eligible == after.committed_eligible);
 
   Gfn2PreprocessingDeviceBinding alias = device.binding;
   alias.output.overlap = const_cast<double*>(alias.input.positions);
@@ -1026,6 +1220,48 @@ int test_plan_failure_and_seal_fail_closed() {
   epoch_alias.geometry_epoch = {device.public_operator_generation.get(), 1, kPlanToken};
   CHECK(seal_gfn2_preprocessing_binding_cuda(epoch_alias).error ==
         Gfn2PreprocessingBindingError::kInvalidAlias);
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
+int test_sparse_plan_failure_preserves_publication() {
+  HostCase host;
+  std::string error;
+  CHECK(host.create(8, error));
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host, stream));
+  CUDA_CHECK(device.enable_pairlist(host, stream));
+  CHECK(seal_gfn2_preprocessing_binding_cuda(device.binding).success());
+
+  CHECK(compose_gfn2_preprocessing_cuda(device.binding, 71u, stream).success());
+  Downloaded before;
+  CUDA_CHECK(download(host, device, before, stream));
+  CUDA_CHECK(download_committed(host, device, before, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(before.plan_error == 0u);
+
+  /* system_modes is a shared dispatch descriptor validated by pair-list
+   * preflight.  A hostile device value must classify as one plan-wide failure
+   * before any public or committed metadata initializer can run. */
+  std::vector<std::int32_t> modes(device.pairlist_system_modes.size());
+  CUDA_CHECK(device.pairlist_system_modes.download(modes.data(), modes.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  modes[0] = std::numeric_limits<std::int32_t>::max();
+  CUDA_CHECK(device.pairlist_system_modes.upload(modes.data(), modes.size(), stream));
+  CHECK(compose_gfn2_preprocessing_cuda(device.binding, 72u, stream).success());
+
+  Downloaded after;
+  CUDA_CHECK(download(host, device, after, stream));
+  CUDA_CHECK(download_committed(host, device, after, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(after.plan_error ==
+        static_cast<std::uint32_t>(Gfn2PreprocessingDeviceError::kSparsePairlistFailure));
+  CHECK(published_state_equal(before, after));
+  CHECK(std::all_of(after.published.begin(), after.published.end(),
+                    [](std::uint8_t value) { return value == 0u; }));
+
   CUDA_CHECK(cudaStreamDestroy(stream));
   return 0;
 }
@@ -1142,6 +1378,22 @@ int test_sparse_pairlist_gate() {
     DeviceFixture device;
     CUDA_CHECK(device.initialize(host, stream));
     CHECK(seal_gfn2_preprocessing_binding_cuda(device.binding).success());
+    /* A disabled sparse leaf is the exact default state.  Any hidden pointer
+     * is stale after sealing and cannot be accepted by resealing either. */
+    Gfn2PreprocessingDeviceBinding stale_disabled_candidate = device.binding;
+    stale_disabled_candidate.workspace.pairlist_candidate.pair_offsets = device.atom_offsets.get();
+    CHECK(validate_gfn2_preprocessing_binding_cuda(stale_disabled_candidate).error ==
+          Gfn2PreprocessingBindingError::kStaleSeal);
+    stale_disabled_candidate.binding_seal = 0u;
+    CHECK(seal_gfn2_preprocessing_binding_cuda(stale_disabled_candidate).error ==
+          Gfn2PreprocessingBindingError::kCrossPlan);
+    Gfn2PreprocessingDeviceBinding stale_disabled_output = device.binding;
+    stale_disabled_output.output.pairlist.neighbor_counts = device.atom_offsets.get();
+    CHECK(validate_gfn2_preprocessing_binding_cuda(stale_disabled_output).error ==
+          Gfn2PreprocessingBindingError::kStaleSeal);
+    stale_disabled_output.binding_seal = 0u;
+    CHECK(seal_gfn2_preprocessing_binding_cuda(stale_disabled_output).error ==
+          Gfn2PreprocessingBindingError::kCrossPlan);
     const Gfn2PreprocessingLaunchDiagnostic disabled_gate_diagnostic =
         gate_gfn2_sparse_coordination_cuda(device.binding, stream);
     CHECK(!disabled_gate_diagnostic.success());
@@ -1177,6 +1429,52 @@ int test_sparse_pairlist_gate() {
       CHECK(first.published[static_cast<std::size_t>(system)] == 1u);
     }
 
+    /* Step 4 committed pair-list transaction: after the per-system gate, the
+     * sparse candidate list is published into the stable output consumer view
+     * with per-peer eligibility and the current generation.  All requested
+     * healthy peers are eligible.  Offsets are fixed-capacity slot starts and
+     * explicit counts delimit each copied candidate prefix. */
+    CHECK(seal_gfn2_preprocessing_binding_cuda(device.binding).success());
+    Downloaded committed_view;
+    CUDA_CHECK(download_committed(host, device, committed_view, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    for (std::int64_t system = 0; system < batch; ++system) {
+      CHECK(committed_view.committed_eligible[static_cast<std::size_t>(system)] == 1u);
+      CHECK(committed_view.committed_generations[static_cast<std::size_t>(system)] == 61u);
+    }
+    const std::int64_t pair_stride = device.binding.plan.pairlist.max_pairs_per_system;
+    const std::int64_t neighbor_stride = device.binding.plan.pairlist.max_neighbors_per_atom;
+    for (std::int64_t system = 0; system < batch; ++system) {
+      CHECK(committed_view.committed_pair_offsets[static_cast<std::size_t>(system)] ==
+            system * pair_stride);
+      const std::int64_t count =
+          committed_view.committed_pair_counts[static_cast<std::size_t>(system)];
+      CHECK(count >= 0);
+      const std::int64_t atom_begin = host.atom_offsets[static_cast<std::size_t>(system)];
+      const std::int64_t atom_end = host.atom_offsets[static_cast<std::size_t>(system + 1)];
+      for (std::int64_t index = 0; index < count; ++index) {
+        const auto pair =
+            committed_view.committed_pairs[static_cast<std::size_t>(system * pair_stride + index)];
+        CHECK(pair.first >= atom_begin && pair.first < pair.second && pair.second < atom_end);
+      }
+    }
+    CHECK(committed_view.committed_pair_offsets[static_cast<std::size_t>(batch)] ==
+          batch * pair_stride);
+    for (std::int64_t atom_index = 0; atom_index < host.basis.total_atoms; ++atom_index) {
+      CHECK(committed_view.committed_neighbor_offsets[static_cast<std::size_t>(atom_index)] ==
+            atom_index * neighbor_stride);
+      const std::int64_t count =
+          committed_view.committed_neighbor_counts[static_cast<std::size_t>(atom_index)];
+      for (std::int64_t index = 0; index < count; ++index) {
+        const std::int64_t peer = committed_view.committed_neighbors[static_cast<std::size_t>(
+            atom_index * neighbor_stride + index)];
+        CHECK(peer >= 0 && peer < host.basis.total_atoms);
+      }
+    }
+    CHECK(committed_view
+              .committed_neighbor_offsets[static_cast<std::size_t>(host.basis.total_atoms)] ==
+          host.basis.total_atoms * neighbor_stride);
+
     Gfn2PreprocessingDeviceBinding aliased = device.binding;
     aliased.binding_seal = 0u;
     aliased.workspace.pairlist_candidate.pairs = reinterpret_cast<gpuxtb::detail::Gfn2AtomPair*>(
@@ -1197,6 +1495,18 @@ int test_sparse_pairlist_gate() {
     CHECK(stale_gate_diagnostic.binding.error == Gfn2PreprocessingBindingError::kStaleSeal);
     CHECK(stale_gate_diagnostic.binding.field == Gfn2PreprocessingBindingField::kSeal);
     CHECK(stale_gate_diagnostic.cuda_status == cudaErrorInvalidValue);
+
+    Gfn2PreprocessingDeviceBinding invalid_builder_cutoff = device.binding;
+    invalid_builder_cutoff.binding_seal = 0u;
+    invalid_builder_cutoff.plan.pairlist.cutoff = std::nextafter(kDefaultPairlistCutoffBohr, 0.0);
+    CHECK(seal_gfn2_preprocessing_binding_cuda(invalid_builder_cutoff).error ==
+          Gfn2PreprocessingBindingError::kInvalidWorkspace);
+    Gfn2PreprocessingDeviceBinding mismatched_consumer_cutoff = device.binding;
+    mismatched_consumer_cutoff.binding_seal = 0u;
+    mismatched_consumer_cutoff.output.pairlist.list_builder_cutoff_bohr =
+        std::nextafter(kDefaultPairlistCutoffBohr, 0.0);
+    CHECK(seal_gfn2_preprocessing_binding_cuda(mismatched_consumer_cutoff).error ==
+          Gfn2PreprocessingBindingError::kInvalidExtent);
 
     /* Run the gate in isolation with a deliberately clobbered sparse output
      * to prove the fail-closed flag: the composed dense geometry candidate is
@@ -1238,8 +1548,8 @@ int main() {
   CUDA_CHECK(cudaSetDevice(0));
   for (const auto test :
        {test_cpu_parity_batches, test_peer_transaction_and_inactive_mask,
-        test_plan_failure_and_seal_fail_closed, test_graph_replay_changed_positions_stable_binding,
-        test_sparse_pairlist_gate}) {
+        test_plan_failure_and_seal_fail_closed, test_sparse_plan_failure_preserves_publication,
+        test_graph_replay_changed_positions_stable_binding, test_sparse_pairlist_gate}) {
     const int status = test();
     if (status != 0) return status;
   }

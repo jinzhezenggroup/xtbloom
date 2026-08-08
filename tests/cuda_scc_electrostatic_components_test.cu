@@ -345,6 +345,49 @@ int test_batches_and_graph() {
   return 0;
 }
 
+int test_es2_tree_overflow_is_not_published() {
+  constexpr std::int64_t kBatchSize = 2;
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreate(&stream));
+  Es2Fixture fixture;
+  CUDA_CHECK(fixture.initialize(kBatchSize, stream));
+
+  const double lane_kernel = 0.1875 * std::numeric_limits<double>::max();
+  std::fill_n(fixture.gamma.begin(), 4, lane_kernel);
+  const std::vector<double> raw{2.0, 2.0, 0.2, -0.15};
+  DeviceBuffer<double> d_raw;
+  DeviceBuffer<double> d_energy;
+  CUDA_CHECK(fixture.d_gamma.upload(fixture.gamma, stream));
+  CUDA_CHECK(d_raw.upload(raw, stream));
+  CUDA_CHECK(d_energy.upload(std::vector<double>(2u, kSentinel), stream));
+  CUDA_CHECK(reset_gfn2_es2_scc_errors_cuda(kBatchSize, fixture.d_system_errors.get(),
+                                            fixture.d_plan_error.get(), stream));
+  CUDA_CHECK(evaluate_gfn2_es2_scc_energy_cuda(
+      fixture.batch(), fixture.cache(), kGeometryGeneration, fixture.activity(), d_raw.get(),
+      d_energy.get(), fixture.workspace(), fixture.d_system_errors.get(),
+      fixture.d_plan_error.get(), stream));
+
+  std::vector<double> energy;
+  std::vector<std::uint32_t> errors;
+  std::vector<std::uint32_t> plan_error;
+  CUDA_CHECK(d_energy.download(energy, stream));
+  CUDA_CHECK(fixture.d_system_errors.download(errors, stream));
+  CUDA_CHECK(fixture.d_plan_error.download(plan_error, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  /* Both row energies are finite 0.75 * DBL_MAX values. Their tree sum alone
+   * overflows, so the failed system must retain its caller-visible sentinel. */
+  CHECK(energy[0] == kSentinel);
+  CHECK(errors[0] == static_cast<std::uint32_t>(Gfn2ES2DeviceError::kNonfiniteEnergyArithmetic));
+  CHECK(plan_error[0] == 0u);
+  double first = 0.0;
+  double second = 0.0;
+  double expected_energy = 0.0;
+  expected_system(fixture, 1, raw, &first, &second, &expected_energy);
+  CHECK(close(energy[1], expected_energy) && errors[1] == 0u);
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 int test_activity_peer_isolation_and_provenance() {
   constexpr std::int64_t kBatchSize = 8;
   cudaStream_t stream = nullptr;
@@ -1273,6 +1316,9 @@ int test_point_charge_batches_inactive_and_graph() {
 
 int main() {
   if (const int line = test_batches_and_graph(); line != 0) {
+    return line;
+  }
+  if (const int line = test_es2_tree_overflow_is_not_published(); line != 0) {
     return line;
   }
   if (const int line = test_activity_peer_isolation_and_provenance(); line != 0) {

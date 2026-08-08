@@ -646,6 +646,67 @@ int test_peer_isolated_input_arithmetic_trace_and_offset_failures() {
   return 0;
 }
 
+int test_rounded_weighted_contribution_overflow_is_transactional() {
+  HostCase host = make_case(8u);
+  constexpr std::size_t failed_system = 1u;
+  const double maximum = std::numeric_limits<double>::max();
+  const std::int64_t orbital_begin = host.orbital_offsets[failed_system];
+  const std::int64_t count = host.orbital_offsets[failed_system + 1u] - orbital_begin;
+  const std::int64_t matrix_begin = host.matrix_offsets[failed_system];
+  CHECK(count == 2);
+
+  std::fill(host.coefficients.begin() + matrix_begin,
+            host.coefficients.begin() + host.matrix_offsets[failed_system + 1u], 0.0);
+  /* The second standalone binary64 contribution overflows, but its exact FMA
+   * result cancels against the first term and remains finite. */
+  host.coefficients[static_cast<std::size_t>(matrix_begin)] = 1.0;
+  host.coefficients[static_cast<std::size_t>(matrix_begin + 1)] = 1.25;
+  for (std::int64_t local = 0; local < count; ++local) {
+    host.occupations[static_cast<std::size_t>(2 * orbital_begin + local)] = 1.0;
+    host.occupations[static_cast<std::size_t>(2 * orbital_begin + count + local)] = 0.0;
+  }
+  host.eigenvalues[static_cast<std::size_t>(orbital_begin)] = -0.75 * maximum;
+  host.eigenvalues[static_cast<std::size_t>(orbital_begin + 1)] = 0.75 * maximum;
+
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host, nullptr));
+  CHECK(run(device, host, nullptr) == 0);
+  Results actual;
+  CUDA_CHECK(copy_results(host, device, actual, nullptr));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(actual.system_errors[failed_system] ==
+        static_cast<std::uint32_t>(Gfn2DensityDeviceError::kNonfiniteWeightedDensityArithmetic));
+  CHECK(actual.device_error ==
+        static_cast<std::uint32_t>(Gfn2DensityDeviceError::kNonfiniteWeightedDensityArithmetic));
+  for (std::int64_t index = matrix_begin; index < host.matrix_offsets[failed_system + 1u];
+       ++index) {
+    CHECK(actual.density[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(actual.weighted_density[static_cast<std::size_t>(index)] == kSentinel);
+  }
+  CHECK(actual.band[failed_system] == kSentinel &&
+        actual.occupation_sum[failed_system] == kSentinel);
+  CHECK(actual.density_trace[failed_system] == kSentinel &&
+        actual.weighted_trace[failed_system] == kSentinel);
+  CHECK(actual.system_errors[0] == 0u && actual.band[0] != kSentinel);
+
+  /* Weighted arithmetic fails at local 0; a later density overflow must not
+   * replace that first diagnostic. */
+  std::fill(host.coefficients.begin() + matrix_begin,
+            host.coefficients.begin() + host.matrix_offsets[failed_system + 1u], 0.0);
+  host.coefficients[static_cast<std::size_t>(matrix_begin)] = 2.0;
+  host.coefficients[static_cast<std::size_t>(matrix_begin + 1)] = 2.0 * std::sqrt(maximum);
+  host.eigenvalues[static_cast<std::size_t>(orbital_begin)] = 0.75 * maximum;
+  host.eigenvalues[static_cast<std::size_t>(orbital_begin + 1)] = -0.75 * maximum;
+  DeviceFixture precedence_device;
+  CUDA_CHECK(precedence_device.initialize(host, nullptr));
+  CHECK(run(precedence_device, host, nullptr) == 0);
+  CUDA_CHECK(copy_results(host, precedence_device, actual, nullptr));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(actual.system_errors[failed_system] ==
+        static_cast<std::uint32_t>(Gfn2DensityDeviceError::kNonfiniteWeightedDensityArithmetic));
+  return 0;
+}
+
 int test_active_mask_sticky_error_and_graph_replay() {
   HostCase host = make_case(32u);
   host.active[4] = 0u;
@@ -1351,6 +1412,74 @@ int test_spin_beta_failure_is_transactional() {
   return 0;
 }
 
+int test_spin_rounded_weighted_contribution_overflow_is_transactional() {
+  SpinHostCase host = make_spin_case(8u);
+  constexpr std::size_t failed_system = 1u;
+  const double maximum = std::numeric_limits<double>::max();
+  const std::int64_t orbital_begin = host.orbital_offsets[failed_system];
+  const std::int64_t count = host.orbital_offsets[failed_system + 1u] - orbital_begin;
+  const std::int64_t spin_orbital_begin = host.spin_orbital_offsets[failed_system];
+  const std::int64_t spin_matrix_begin = host.spin_matrix_offsets[failed_system];
+  CHECK(count == 2 && host.spin_channels[failed_system] == 2);
+
+  std::fill(host.coefficients.begin() + spin_matrix_begin,
+            host.coefficients.begin() + host.spin_matrix_offsets[failed_system + 1u], 0.0);
+  const std::int64_t beta_matrix = spin_matrix_begin + count * count;
+  /* Exercise the same rounded-product contract specifically in beta. */
+  host.coefficients[static_cast<std::size_t>(beta_matrix)] = 1.0;
+  host.coefficients[static_cast<std::size_t>(beta_matrix + 1)] = 1.25;
+  for (std::int64_t local = 0; local < count; ++local) {
+    host.occupations[static_cast<std::size_t>(2 * orbital_begin + local)] = 0.0;
+    host.occupations[static_cast<std::size_t>(2 * orbital_begin + count + local)] = 1.0;
+    host.eigenvalues[static_cast<std::size_t>(spin_orbital_begin + local)] = 0.0;
+  }
+  host.eigenvalues[static_cast<std::size_t>(spin_orbital_begin + count)] = -0.75 * maximum;
+  host.eigenvalues[static_cast<std::size_t>(spin_orbital_begin + count + 1)] = 0.75 * maximum;
+
+  SpinDeviceFixture device;
+  CUDA_CHECK(device.initialize(host, nullptr));
+  CHECK(run_spin(device, host, nullptr) == 0);
+  SpinResults actual;
+  CUDA_CHECK(copy_spin_results(host, device, actual, nullptr));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(actual.system_errors[failed_system] ==
+        static_cast<std::uint32_t>(Gfn2DensityDeviceError::kNonfiniteWeightedDensityArithmetic));
+  CHECK(actual.device_error ==
+        static_cast<std::uint32_t>(Gfn2DensityDeviceError::kNonfiniteWeightedDensityArithmetic));
+  for (std::int64_t index = spin_matrix_begin; index < host.spin_matrix_offsets[failed_system + 1u];
+       ++index) {
+    CHECK(actual.density[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(actual.weighted_density[static_cast<std::size_t>(index)] == kSentinel);
+  }
+  for (std::int64_t channel = host.spin_channel_offsets[failed_system];
+       channel < host.spin_channel_offsets[failed_system + 1u]; ++channel) {
+    CHECK(actual.channel_band[static_cast<std::size_t>(channel)] == kSentinel);
+    CHECK(actual.channel_occupation_sum[static_cast<std::size_t>(channel)] == kSentinel);
+    CHECK(actual.channel_density_trace[static_cast<std::size_t>(channel)] == kSentinel);
+    CHECK(actual.channel_weighted_trace[static_cast<std::size_t>(channel)] == kSentinel);
+  }
+  CHECK(actual.band[failed_system] == kSentinel &&
+        actual.occupation_sum[failed_system] == kSentinel);
+  CHECK(actual.system_errors[0] == 0u && actual.band[0] != kSentinel);
+
+  /* Preserve the beta channel's weighted-first diagnostic when density
+   * arithmetic fails at a later orbital. */
+  std::fill(host.coefficients.begin() + spin_matrix_begin,
+            host.coefficients.begin() + host.spin_matrix_offsets[failed_system + 1u], 0.0);
+  host.coefficients[static_cast<std::size_t>(beta_matrix)] = 2.0;
+  host.coefficients[static_cast<std::size_t>(beta_matrix + 1)] = 2.0 * std::sqrt(maximum);
+  host.eigenvalues[static_cast<std::size_t>(spin_orbital_begin + count)] = 0.75 * maximum;
+  host.eigenvalues[static_cast<std::size_t>(spin_orbital_begin + count + 1)] = -0.75 * maximum;
+  SpinDeviceFixture precedence_device;
+  CUDA_CHECK(precedence_device.initialize(host, nullptr));
+  CHECK(run_spin(precedence_device, host, nullptr) == 0);
+  CUDA_CHECK(copy_spin_results(host, precedence_device, actual, nullptr));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(actual.system_errors[failed_system] ==
+        static_cast<std::uint32_t>(Gfn2DensityDeviceError::kNonfiniteWeightedDensityArithmetic));
+  return 0;
+}
+
 int test_spin_graph_replay_changed_beta_input() {
   SpinHostCase host = make_spin_case(32u);
   cudaStream_t stream = nullptr;
@@ -1473,12 +1602,17 @@ int main() {
   if (const int line = test_sequential_and_ragged_execution_are_identical(); line != 0) return line;
   if (const int line = test_peer_isolated_input_arithmetic_trace_and_offset_failures(); line != 0)
     return line;
+  if (const int line = test_rounded_weighted_contribution_overflow_is_transactional(); line != 0)
+    return line;
   if (const int line = test_active_mask_sticky_error_and_graph_replay(); line != 0) return line;
   if (const int line = test_spin_entry_preserves_restricted_outputs_exactly(); line != 0)
     return line;
   if (const int line = test_spin_mixed_ragged_custom_stream_and_inactive_poison(); line != 0)
     return line;
   if (const int line = test_spin_beta_failure_is_transactional(); line != 0) return line;
+  if (const int line = test_spin_rounded_weighted_contribution_overflow_is_transactional();
+      line != 0)
+    return line;
   if (const int line = test_spin_graph_replay_changed_beta_input(); line != 0) return line;
   if (const int line = test_spin_entry_requires_explicit_metadata(); line != 0) return line;
   if (const int line = test_host_argument_alias_token_and_alignment_validation(); line != 0)

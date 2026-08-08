@@ -537,10 +537,17 @@ def validate(trace: object) -> None:
         "energy_delta",
         "convergence",
     }
+    iteration_optional = {
+        # Point-charge (PCEM) primary fields recorded by the oracle (issue #46).
+        "point_charge_shell_potential",
+        "point_charge_energy",
+    }
     iterations = _as_list(root["iterations"], "iterations")
     for iteration_offset, iteration in enumerate(iterations):
         path = f"iterations[{iteration_offset}]"
-        entry = _object_fields(iteration, path, required=iteration_required)
+        entry = _object_fields(
+            iteration, path, required=iteration_required, optional=iteration_optional
+        )
         expected_index = iteration_offset + 1
         index = _as_int(entry["index"], path + ".index")
         _require(
@@ -557,6 +564,20 @@ def validate(trace: object) -> None:
         _spectrum(path + ".raw_qat", entry["raw_qat"], 1, n_atoms)
         _multipoles(path + ".raw_dipoles", entry["raw_dipoles"], n_atoms, 3)
         _multipoles(path + ".raw_quadrupoles", entry["raw_quadrupoles"], n_atoms, 6)
+        if "point_charge_shell_potential" in entry:
+            _spectrum(
+                path + ".point_charge_shell_potential",
+                entry["point_charge_shell_potential"],
+                1,
+                n_shells,
+            )
+        if "point_charge_energy" in entry:
+            _spectrum(
+                path + ".point_charge_energy",
+                entry["point_charge_energy"],
+                1,
+                n_shells,
+            )
         _validate_atomic_charges(entry, "raw", validated_shell_counts, path)
 
         residual = _as_list(entry["residual"], path + ".residual")

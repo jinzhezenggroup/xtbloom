@@ -53,6 +53,28 @@ _Static_assert(offsetof(gpuxtb_compute_options_t, scc_start_mode) == 48,
 _Static_assert(sizeof(gpuxtb_compute_options_t) == GPUXTB_COMPUTE_OPTIONS_V2_SIZE,
                "installed compute-options layout must include the ABI-v2 suffix");
 
+_Static_assert(GPUXTB_BATCH_V1_SIZE == 328, "installed ABI-v1 batch prefix must remain 328 bytes");
+_Static_assert(GPUXTB_BATCH_V2_SIZE == 352, "installed ABI-v2 batch prefix must remain 352 bytes");
+_Static_assert(GPUXTB_BATCH_V3_SIZE == 408, "installed ABI-v3 batch image must remain 408 bytes");
+_Static_assert(sizeof(gpuxtb_batch_t) == GPUXTB_BATCH_V3_SIZE,
+               "installed batch layout must include the ABI-v3 interaction suffix");
+_Static_assert(GPUXTB_BATCH_RESULT_V1_SIZE == 184,
+               "installed ABI-v1 batch-result prefix must remain 184 bytes");
+_Static_assert(GPUXTB_BATCH_RESULT_V2_SIZE == 280,
+               "installed ABI-v2 batch-result image must remain 280 bytes");
+_Static_assert(sizeof(gpuxtb_batch_result_t) == GPUXTB_BATCH_RESULT_V2_SIZE,
+               "installed batch-result layout must include the ABI-v2 suffix");
+_Static_assert(sizeof(gpuxtb_interaction_t) == GPUXTB_INTERACTION_V1_SIZE,
+               "installed interaction descriptor image must remain 32 bytes");
+_Static_assert(offsetof(gpuxtb_batch_t, interaction_descriptors) == 360,
+               "installed interaction descriptor outlet offset must remain stable");
+_Static_assert(offsetof(gpuxtb_interaction_t, payload_offset) == 16,
+               "installed interaction payload offset must remain stable");
+_Static_assert(offsetof(gpuxtb_batch_result_t, spin_populations) == 256,
+               "installed reserved result outlet offsets must remain stable");
+_Static_assert(GPUXTB_RESULT_DIPOLE_MOMENTS == (1 << 4),
+               "installed dipole publication result flag must remain at bit 4");
+
 typedef enum consumer_mode {
   CONSUMER_MODE_SMOKE,
   CONSUMER_MODE_CPU,

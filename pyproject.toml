@@ -67,6 +67,23 @@ test = [
   "dpdata",
 ]
 
+# Used by the ty-pre-commit hook so its ephemeral type-check environment can
+# resolve the optional third-party imports that ``python/gpuxtb`` actually
+# type checks (ase.py, dpdata.py). Kept separate from the `extras` so type
+# checking never installs the pytest test tooling.
+[dependency-groups]
+typechecking = ["ase", "dpdata"]
+# PyTorch is needed only to execute the public autograd integration tests in
+# required CI. Keep it out of project extras so wheels and normal test-extra
+# installations retain the package's optional, lazy-import contract.
+torch-testing = ["torch==2.13.0"]
+
+# Install the typechecking group by default so `uv check` (the ty-pre-commit
+# hook) and plain `uv sync` both resolve ase/dpdata without extra flags. The
+# repository has no `dev` group to preserve.
+[tool.uv]
+default-groups = ["typechecking"]
+
 [project.entry-points."dpdata.plugins"]
 gpuxtb = "gpuxtb.dpdata"
 
@@ -203,6 +220,12 @@ banned-module-level-imports = ["torch"]
 # benchmarks/run.py appends a tools path to sys.path before importing
 # gpuxtb_conformance/gpuxtb_public_api; those imports cannot move to the top.
 "benchmarks/run.py" = ["E402"]
+
+[tool.ty.src]
+# The ty-pre-commit hook checks the whole project with no positional paths, so
+# the default include determines what CI type checks. Scope it to the Python
+# package: gpuxtb's tools, tests, and benchmarks are not type checked.
+include = ["python/gpuxtb"]
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]

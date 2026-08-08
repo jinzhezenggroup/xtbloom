@@ -17,9 +17,58 @@ inline constexpr std::uint32_t kGfn2SccLoopAbiVersion = 3u;
 enum class Gfn2SccLoopExecutionMode : std::uint32_t {
   kBoundedFallback = 0u,
   kDeviceTailGraph = 1u,
+  /* Device-dispatched exact-capacity chain. Each bucket's eigensolver and
+   * backtransform runs at the exact compacted active count selected by a
+   * device-resident executable table, with no host decision per iteration. */
+  kDeviceDispatchChain = 2u,
   /* Compatibility name retained for runtime identity consumers. */
   kConditionalGraph = kDeviceTailGraph,
 };
+
+/*
+ * Device-resident dispatch state shared by every exact-capacity chain kernel.
+ * The executable table is filled once after all chain executables exist and is
+ * read only at replay, so no per-iteration host transfer, allocation, polling,
+ * or synchronization is introduced.
+ */
+struct Gfn2SccDispatchChainDevice {
+  const cudaGraphExec_t* table = nullptr;
+  std::int64_t table_slots = 0;
+  std::int64_t pre_slot = -1;
+  std::int64_t post_slot = -1;
+  std::int32_t bucket_count = 0;
+};
+
+static_assert(std::is_trivially_copyable_v<Gfn2SccDispatchChainDevice>);
+static_assert(std::is_standard_layout_v<Gfn2SccDispatchChainDevice>);
+
+/*
+ * Largest eigensolver bucket (AO count) for which the production kAuto graph
+ * choice may select the exact-capacity device dispatch chain. Every retained
+ * chain-benefit record is archive-backed: issue #131 measured exact-capacity
+ * compaction only up to n=40 single-bucket AO and issue #80 only small
+ * heterogeneous systems, and both document a capacity-dependent crossover
+ * where the compacted chain loses to the monolithic device-tail graph at high
+ * residual activity. A batch whose largest bucket exceeds this bound has no
+ * retained chain-benefit evidence (for example the 122-AO B=128 alkane stack
+ * runs 4.3x slower on the chain), so kAuto selects the monolithic graph there.
+ * Forced graph preferences remain exact and are unaffected by this regime.
+ */
+inline constexpr std::int64_t kGfn2SccDispatchChainMeasuredOrbitalBound = 40;
+
+[[nodiscard]] inline bool gfn2_scc_dispatch_chain_regime_applies(
+    const Gfn2SccIterationDevicePlan& plan) noexcept {
+  const auto& provider = plan.eigensolver_provider;
+  if (!(provider.bucket_count > 0) || provider.buckets == nullptr) {
+    return false;
+  }
+  for (std::int64_t bucket = 0; bucket < provider.bucket_count; ++bucket) {
+    if (provider.buckets[bucket].orbital_count > kGfn2SccDispatchChainMeasuredOrbitalBound) {
+      return false;
+    }
+  }
+  return true;
+}
 
 /*
  * Synchronous submission result for a bounded SCC loop. submitted_iterations
@@ -56,6 +105,11 @@ enum class Gfn2SccLoopGraphFallbackReason : std::uint32_t {
   kDeviceGraphNodeUnsupported = 8u,
   kDeviceGraphInstantiationFailed = 9u,
   kDeviceGraphUploadFailed = 10u,
+  /* Exact-capacity dispatch chain rejected this binding. */
+  kDispatchUnsupportedLayout = 11u,
+  kDispatchCapacityOverflow = 12u,
+  kDispatchBuildFailed = 13u,
+  kDispatchTableAllocationFailed = 14u,
 };
 
 enum class Gfn2SccLoopGraphBuildStatus : std::uint32_t {
@@ -64,6 +118,8 @@ enum class Gfn2SccLoopGraphBuildStatus : std::uint32_t {
   kConditionalGraphReady = kDeviceTailGraphReady,
   kBoundedFallbackReady = 1u,
   kInvalidBinding = 2u,
+  /* Device-dispatched exact-capacity chain is ready and used by launch(). */
+  kDeviceDispatchChainReady = 3u,
 };
 
 struct Gfn2SccLoopGraphBuildResult {
@@ -74,18 +130,38 @@ struct Gfn2SccLoopGraphBuildResult {
 
   [[nodiscard]] bool success() const noexcept {
     return status == Gfn2SccLoopGraphBuildStatus::kConditionalGraphReady ||
-           status == Gfn2SccLoopGraphBuildStatus::kBoundedFallbackReady;
+           status == Gfn2SccLoopGraphBuildStatus::kBoundedFallbackReady ||
+           status == Gfn2SccLoopGraphBuildStatus::kDeviceDispatchChainReady;
   }
 
   [[nodiscard]] bool device_tail_graph_ready() const noexcept {
     return status == Gfn2SccLoopGraphBuildStatus::kDeviceTailGraphReady;
   }
 
-  [[nodiscard]] bool conditional_graph_ready() const noexcept { return device_tail_graph_ready(); }
+  [[nodiscard]] bool device_dispatch_chain_ready() const noexcept {
+    return status == Gfn2SccLoopGraphBuildStatus::kDeviceDispatchChainReady;
+  }
+
+  [[nodiscard]] bool conditional_graph_ready() const noexcept {
+    return device_tail_graph_ready() || device_dispatch_chain_ready();
+  }
 };
 
 static_assert(std::is_trivially_copyable_v<Gfn2SccLoopGraphBuildResult>);
 static_assert(std::is_standard_layout_v<Gfn2SccLoopGraphBuildResult>);
+
+/*
+ * Which Graph family an owner should build. kAuto is the production default:
+ * the exact-capacity device-dispatch chain is preferred and the monolithic
+ * full-capacity device-tail graph remains the restricted fallback. The
+ * explicit choices exist so benchmarks and tests can measure or force one
+ * family deterministically from the same binary.
+ */
+enum class Gfn2SccLoopGraphPreference : std::uint32_t {
+  kAuto = 0u,
+  kDeviceTailGraph = 1u,
+  kDeviceDispatchChain = 2u,
+};
 
 /*
  * Fixed-context owner for one reusable device-resident SCC loop. build() is a
@@ -119,11 +195,19 @@ class Gfn2SccLoopCudaGraphOwner {
       const Gfn2SccIterationBinding& binding,
       const Gfn2GeometryEpochConsumerDevice& geometry) noexcept;
 
+  [[nodiscard]] Gfn2SccLoopGraphBuildResult build(const Gfn2SccIterationBinding& binding,
+                                                  Gfn2SccLoopGraphPreference preference) noexcept;
+
+  [[nodiscard]] Gfn2SccLoopGraphBuildResult build(const Gfn2SccIterationBinding& binding,
+                                                  const Gfn2GeometryEpochConsumerDevice& geometry,
+                                                  Gfn2SccLoopGraphPreference preference) noexcept;
+
   [[nodiscard]] Gfn2SccLoopLaunchResult launch(cudaStream_t stream = nullptr) const noexcept;
 
   void reset() noexcept;
   [[nodiscard]] bool ready() const noexcept;
   [[nodiscard]] bool device_tail_graph_ready() const noexcept;
+  [[nodiscard]] bool device_dispatch_chain_ready() const noexcept;
   [[nodiscard]] bool conditional_graph_ready() const noexcept;
   [[nodiscard]] Gfn2SccLoopGraphFallbackReason fallback_reason() const noexcept;
 
@@ -134,10 +218,15 @@ class Gfn2SccLoopCudaGraphOwner {
   /* Explicit device control storage retained by the graph owner. */
   [[nodiscard]] std::size_t retained_device_bytes() const noexcept;
 
+  /* Number of separate executable graphs in the device dispatch chain family:
+   * exact-capacity eigensolver/backtransform bodies plus the pre/post chain
+   * heads. Returns zero when the owner did not build a dispatch chain. */
+  [[nodiscard]] std::size_t dispatch_chain_executable_count() const noexcept;
+
  private:
   [[nodiscard]] Gfn2SccLoopGraphBuildResult build_impl(
-      const Gfn2SccIterationBinding& binding,
-      const Gfn2GeometryEpochConsumerDevice* geometry) noexcept;
+      const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice* geometry,
+      Gfn2SccLoopGraphPreference preference) noexcept;
 
   State* state_ = nullptr;
 };

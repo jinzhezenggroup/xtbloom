@@ -79,7 +79,7 @@ jobs:
           restore-keys: |
             cibw-${{ runner.os }}-${{ matrix.platform_id }}-
       - name: Build wheels
-        uses: pypa/cibuildwheel@v4.1
+        uses: pypa/cibuildwheel@v4.2
         env:
           CIBW_ARCHS: all
           CIBW_BUILD: ${{ matrix.build }}

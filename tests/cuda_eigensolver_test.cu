@@ -20,6 +20,10 @@
 namespace {
 
 using gpuxtb::detail::cuda::build_gfn2_compacted_eigensolver_graph_cuda;
+using gpuxtb::detail::cuda::capture_gfn2_backtransform_capacity_cuda;
+using gpuxtb::detail::cuda::capture_gfn2_eigensolver_capacity_cuda;
+using gpuxtb::detail::cuda::compact_gfn2_solve_bucket_counts_cuda;
+using gpuxtb::detail::cuda::compact_gfn2_successful_eigenpair_counts_cuda;
 using gpuxtb::detail::cuda::factor_gfn2_overlap_cuda;
 using gpuxtb::detail::cuda::Gfn2EigensolverBucket;
 using gpuxtb::detail::cuda::Gfn2EigensolverBucketActivity;
@@ -28,11 +32,14 @@ using gpuxtb::detail::cuda::Gfn2EigensolverDeviceBatch;
 using gpuxtb::detail::cuda::Gfn2EigensolverDeviceError;
 using gpuxtb::detail::cuda::Gfn2EigensolverDeviceResults;
 using gpuxtb::detail::cuda::Gfn2EigensolverDeviceWorkspace;
+using gpuxtb::detail::cuda::Gfn2EigensolverLaunchResult;
 using gpuxtb::detail::cuda::Gfn2EigensolverLaunchStatus;
 using gpuxtb::detail::cuda::Gfn2EigensolverOptions;
 using gpuxtb::detail::cuda::Gfn2EigensolverOverlapCache;
 using gpuxtb::detail::cuda::Gfn2EigensolverWorkspaceRequirements;
 using gpuxtb::detail::cuda::Gfn2GeometryEpochDevice;
+using gpuxtb::detail::cuda::prepare_and_compact_gfn2_solve_buckets_cuda;
+using gpuxtb::detail::cuda::prepare_gfn2_eigensolver_launch_sequence_cuda;
 using gpuxtb::detail::cuda::query_gfn2_eigensolver_bucket_workspace_cuda;
 using gpuxtb::detail::cuda::query_gfn2_spin_eigensolver_bucket_workspace_cuda;
 using gpuxtb::detail::cuda::reset_gfn2_eigensolver_device_errors_cuda;
@@ -777,35 +784,66 @@ bool test_spin_eigensolver_mixed_batches_and_transaction() {
 
     if (batch_size == 8) {
       constexpr std::int64_t failed_system = 1;
-      if (spin.spin_channels[failed_system] != 2 || !spin.fill_outputs(kSentinel)) {
+      if (spin.spin_channels[failed_system] != 2) {
         return false;
       }
-      std::vector<double> poisoned = spin.hamiltonian;
       const std::int64_t n = physical.host.orbital_offsets[failed_system + 1] -
                              physical.host.orbital_offsets[failed_system];
       const std::int64_t beta = spin.spin_matrix_offsets[failed_system] + n * n;
-      poisoned[static_cast<std::size_t>(beta)] = std::numeric_limits<double>::quiet_NaN();
-      if (!spin.device_hamiltonian.upload(poisoned) || !solve_spin(physical, spin, 53u) ||
-          !physical.system_errors.download(errors) || !spin.eigenvalues.download(eigenvalues) ||
-          !spin.coefficients.download(coefficients)) {
-        return false;
-      }
-      if (errors[failed_system] !=
-          static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kNonfiniteHamiltonian)) {
-        return false;
-      }
       const std::int64_t orbital_begin = spin.spin_orbital_offsets[failed_system];
       const std::int64_t orbital_end = spin.spin_orbital_offsets[failed_system + 1];
       const std::int64_t matrix_begin = spin.spin_matrix_offsets[failed_system];
       const std::int64_t matrix_end = spin.spin_matrix_offsets[failed_system + 1];
-      if (!std::all_of(eigenvalues.begin() + orbital_begin, eigenvalues.begin() + orbital_end,
-                       [](double value) { return value == kSentinel; }) ||
-          !std::all_of(coefficients.begin() + matrix_begin, coefficients.begin() + matrix_end,
-                       [](double value) { return value == kSentinel; })) {
+      const auto expect_failure = [&](const std::vector<double>& input,
+                                      Gfn2EigensolverDeviceError expected,
+                                      bool stale_cache) -> bool {
+        if (!factor(physical, 53u) || !spin.fill_outputs(kSentinel) ||
+            !spin.device_hamiltonian.upload(input)) {
+          return false;
+        }
+        if (stale_cache) {
+          std::vector<std::uint64_t> generations;
+          if (!physical.cache_generations.download(generations)) {
+            return false;
+          }
+          generations[failed_system] = 52u;
+          if (!physical.cache_generations.upload(generations)) {
+            return false;
+          }
+        }
+        if (!solve_spin(physical, spin, 53u) || !physical.system_errors.download(errors) ||
+            !spin.eigenvalues.download(eigenvalues) || !spin.coefficients.download(coefficients)) {
+          return false;
+        }
+        return errors[failed_system] == static_cast<std::uint32_t>(expected) &&
+               std::all_of(eigenvalues.begin() + orbital_begin, eigenvalues.begin() + orbital_end,
+                           [](double value) { return value == kSentinel; }) &&
+               std::all_of(coefficients.begin() + matrix_begin, coefficients.begin() + matrix_end,
+                           [](double value) { return value == kSentinel; }) &&
+               errors[2] == 0u &&
+               validate_spin_system(physical, spin, 2, 0, eigenvalues, coefficients);
+      };
+
+      std::vector<double> nonfinite = spin.hamiltonian;
+      nonfinite[static_cast<std::size_t>(beta + n + 1)] = std::numeric_limits<double>::quiet_NaN();
+      if (!expect_failure(nonfinite, Gfn2EigensolverDeviceError::kNonfiniteHamiltonian, false)) {
         return false;
       }
-      if (errors[2] != 0u ||
-          !validate_spin_system(physical, spin, 2, 0, eigenvalues, coefficients)) {
+
+      std::vector<double> asymmetric = spin.hamiltonian;
+      asymmetric[static_cast<std::size_t>(beta + 1)] += 1.0e-3;
+      if (!expect_failure(asymmetric, Gfn2EigensolverDeviceError::kNonsymmetricHamiltonian,
+                          false)) {
+        return false;
+      }
+
+      std::vector<double> combined = asymmetric;
+      combined[static_cast<std::size_t>(beta + n + 1)] = std::numeric_limits<double>::infinity();
+      if (!expect_failure(combined, Gfn2EigensolverDeviceError::kNonfiniteHamiltonian, false)) {
+        return false;
+      }
+
+      if (!expect_failure(nonfinite, Gfn2EigensolverDeviceError::kStaleOverlapCache, true)) {
         return false;
       }
     }
@@ -1005,6 +1043,211 @@ bool test_compacted_graph_batch(std::int64_t batch_size, bool mixed_buckets) {
   return fixture.active.upload(fixture.host.active) &&
          fixture.hamiltonian.upload(fixture.host.hamiltonian) && fixture.fill_outputs(kSentinel) &&
          launch_compacted(fixture, graph) && validate_compacted_launch(fixture);
+}
+
+/* Focused leaf coverage for the production exact-capacity dispatch primitives:
+ * the no-conditional compaction kernels and the exact-capacity eigensolver /
+ * backtransform capture entry points that the production SCC loop chain builds
+ * on. This proves the exact-capacity body and the no-conditional activity
+ * publication agree with the host golden at several capacities, including the
+ * zero-capacity no-op boundary, without depending on the full loop owner. */
+bool test_exact_capacity_leaf_primitives() {
+  constexpr std::int64_t batch_size = 8;
+  constexpr std::uint64_t generation = 31u;
+  DeviceFixture fixture;
+  if (!fixture.create(make_batch(batch_size, false)) || !factor(fixture, generation)) {
+    return false;
+  }
+  const std::int64_t bucket_count = static_cast<std::int64_t>(fixture.host.buckets.size());
+  if (bucket_count != 1) {
+    return false;
+  }
+  const Gfn2EigensolverBucket& bucket = fixture.host.buckets[0];
+  if (bucket.system_count != batch_size) {
+    return false;
+  }
+  const std::vector<double> clean_hamiltonian = fixture.host.hamiltonian;
+
+  /* Open sequence + no-conditional compaction for a partial active ladder, then
+   * capture and replay the exact-capacity eigensolver and backtransform bodies
+   * for the published active count. Only the active systems may produce output;
+   * every capacity from 0 through capacity is covered, with count==0 proving
+   * the enqueue path is a provider-free no-op. */
+  for (std::int64_t active_capacity = 0; active_capacity <= bucket.system_count;
+       ++active_capacity) {
+    std::vector<std::uint8_t> active(static_cast<std::size_t>(batch_size), 0u);
+    std::vector<double> hamiltonian = clean_hamiltonian;
+    for (std::int64_t system = 0; system < active_capacity; ++system) {
+      active[static_cast<std::size_t>(system)] = 1u;
+    }
+    if (!fixture.active.upload(active) || !fixture.hamiltonian.upload(hamiltonian) ||
+        !fixture.fill_outputs(kSentinel)) {
+      return false;
+    }
+    if (!cuda_ok(reset_gfn2_eigensolver_device_errors_cuda(
+                     fixture.host.batch_size, fixture.system_errors.get(),
+                     fixture.device_error.get(), fixture.providers.stream),
+                 "reset exact-capacity errors")) {
+      return false;
+    }
+
+    Gfn2EigensolverLaunchResult sequence = prepare_gfn2_eigensolver_launch_sequence_cuda(
+        fixture.batch, fixture.workspace, fixture.device_error.get(), fixture.providers.stream);
+    if (!sequence.success()) {
+      return false;
+    }
+    Gfn2EigensolverLaunchResult compact = prepare_and_compact_gfn2_solve_buckets_cuda(
+        fixture.batch, fixture.host.buckets.data(), bucket_count, fixture.cache, generation,
+        fixture.hamiltonian.get(), Gfn2EigensolverOptions{}, fixture.workspace,
+        fixture.system_errors.get(), fixture.device_error.get(), fixture.providers.stream);
+    if (!compact.success()) {
+      return false;
+    }
+
+    std::vector<Gfn2EigensolverBucketActivity> activity(static_cast<std::size_t>(bucket_count));
+    if (!cuda_ok(cudaStreamSynchronize(fixture.providers.stream),
+                 "exact-capacity compaction synchronize") ||
+        !fixture.bucket_activity.download(activity)) {
+      return false;
+    }
+    if (activity[0].active_count != static_cast<std::uint32_t>(active_capacity)) {
+      return false;
+    }
+
+    /* Zero-capacity enqueue is a provider-free no-op at the leaf level; the
+     * non-empty capacities replay a captured exact body. */
+    if (active_capacity > 0) {
+      cudaGraph_t eig_graph = nullptr;
+      if (!cuda_ok(cudaGraphCreate(&eig_graph, 0u), "exact-capacity eig graph create")) {
+        return false;
+      }
+      const Gfn2EigensolverLaunchResult eig = capture_gfn2_eigensolver_capacity_cuda(
+          eig_graph, fixture.providers.stream, static_cast<std::uint32_t>(active_capacity),
+          fixture.batch, bucket, 0, fixture.cache, fixture.hamiltonian.get(),
+          fixture.providers.solver, fixture.providers.parameters, fixture.providers.blas,
+          fixture.workspace, fixture.system_errors.get(), fixture.device_error.get(), false);
+      cudaGraphExec_t eig_exec = nullptr;
+      const bool eig_ok =
+          eig.success() &&
+          cuda_ok(cudaGraphInstantiate(&eig_exec, eig_graph, nullptr, nullptr, 0u),
+                  "exact-capacity eig instantiate") &&
+          cuda_ok(cudaGraphLaunch(eig_exec, fixture.providers.stream), "exact-capacity eig launch");
+      if (eig_exec != nullptr) {
+        (void)cudaGraphExecDestroy(eig_exec);
+      }
+      (void)cudaGraphDestroy(eig_graph);
+      if (!eig_ok) {
+        return false;
+      }
+      Gfn2EigensolverLaunchResult completed = compact_gfn2_successful_eigenpair_counts_cuda(
+          bucket, 0, fixture.workspace, fixture.system_errors.get(), fixture.device_error.get(),
+          fixture.providers.stream);
+      if (!completed.success()) {
+        return false;
+      }
+      cudaGraph_t back_graph = nullptr;
+      if (!cuda_ok(cudaGraphCreate(&back_graph, 0u), "exact-capacity back graph create")) {
+        return false;
+      }
+      const Gfn2EigensolverLaunchResult back = capture_gfn2_backtransform_capacity_cuda(
+          back_graph, fixture.providers.stream, static_cast<std::uint32_t>(active_capacity),
+          fixture.batch, bucket, 0, fixture.providers.blas, fixture.workspace, fixture.results,
+          fixture.system_errors.get(), fixture.device_error.get(), false);
+      cudaGraphExec_t back_exec = nullptr;
+      const bool back_ok =
+          back.success() &&
+          cuda_ok(cudaGraphInstantiate(&back_exec, back_graph, nullptr, nullptr, 0u),
+                  "exact-capacity backtransform instantiate") &&
+          cuda_ok(cudaGraphLaunch(back_exec, fixture.providers.stream),
+                  "exact-capacity backtransform launch");
+      if (back_exec != nullptr) {
+        (void)cudaGraphExecDestroy(back_exec);
+      }
+      (void)cudaGraphDestroy(back_graph);
+      if (!back_ok) {
+        return false;
+      }
+    }
+
+    std::vector<std::uint32_t> errors;
+    std::vector<std::uint32_t> device_error;
+    std::vector<double> eigenvalues;
+    std::vector<double> coefficients;
+    if (!cuda_ok(cudaStreamSynchronize(fixture.providers.stream),
+                 "exact-capacity final synchronize") ||
+        !fixture.system_errors.download(errors) || !fixture.device_error.download(device_error) ||
+        !fixture.eigenvalues.download(eigenvalues) ||
+        !fixture.coefficients.download(coefficients)) {
+      return false;
+    }
+    std::vector<Gfn2EigensolverBucketActivity> final_activity(
+        static_cast<std::size_t>(bucket_count));
+    if (!fixture.bucket_activity.download(final_activity)) {
+      return false;
+    }
+    if (device_error.size() != 1u || device_error[0] != 0u ||
+        errors.size() != static_cast<std::size_t>(batch_size) ||
+        final_activity[0].completed_count != static_cast<std::uint32_t>(active_capacity)) {
+      return false;
+    }
+    for (std::int64_t system = 0; system < batch_size; ++system) {
+      if (system < active_capacity) {
+        if (errors[static_cast<std::size_t>(system)] != 0u ||
+            !validate_system(fixture.host, system, eigenvalues, coefficients)) {
+          return false;
+        }
+      } else if (errors[static_cast<std::size_t>(system)] != 0u ||
+                 !system_outputs_equal(fixture.host, system, eigenvalues, coefficients,
+                                       kSentinel)) {
+        return false;
+      }
+    }
+  }
+
+  /* The single-bucket helper must also accept a bucket borrowed from a
+   * heterogeneous plan. Its bucket_index addresses telemetry, not a standalone
+   * one-bucket plan, and insufficient telemetry capacity must fail before a
+   * kernel can write out of bounds. */
+  DeviceFixture mixed;
+  if (!mixed.create(make_batch(batch_size, true)) || !factor(mixed, generation)) {
+    return false;
+  }
+  const std::int64_t mixed_bucket_count = static_cast<std::int64_t>(mixed.host.buckets.size());
+  if (mixed_bucket_count <= 1 ||
+      !cuda_ok(reset_gfn2_eigensolver_device_errors_cuda(
+                   mixed.host.batch_size, mixed.system_errors.get(), mixed.device_error.get(),
+                   mixed.providers.stream),
+               "reset mixed exact-capacity errors") ||
+      !prepare_gfn2_eigensolver_launch_sequence_cuda(
+           mixed.batch, mixed.workspace, mixed.device_error.get(), mixed.providers.stream)
+           .success() ||
+      !prepare_and_compact_gfn2_solve_buckets_cuda(
+           mixed.batch, mixed.host.buckets.data(), mixed_bucket_count, mixed.cache, generation,
+           mixed.hamiltonian.get(), Gfn2EigensolverOptions{}, mixed.workspace,
+           mixed.system_errors.get(), mixed.device_error.get(), mixed.providers.stream)
+           .success()) {
+    return false;
+  }
+  for (std::int64_t bucket_index = 0; bucket_index < mixed_bucket_count; ++bucket_index) {
+    if (!compact_gfn2_solve_bucket_counts_cuda(
+             mixed.batch, mixed.host.buckets[static_cast<std::size_t>(bucket_index)], bucket_index,
+             mixed.workspace, mixed.system_errors.get(), mixed.providers.stream)
+             .success()) {
+      return false;
+    }
+  }
+  Gfn2EigensolverDeviceWorkspace short_activity = mixed.workspace;
+  short_activity.bucket_activity_elements = 1;
+  if (compact_gfn2_solve_bucket_counts_cuda(mixed.batch, mixed.host.buckets[1], 1, short_activity,
+                                            mixed.system_errors.get(), mixed.providers.stream)
+          .status != Gfn2EigensolverLaunchStatus::kInvalidArgument) {
+    return false;
+  }
+  if (!cuda_ok(cudaStreamSynchronize(mixed.providers.stream),
+               "mixed exact-capacity compaction synchronize")) {
+    return false;
+  }
+  return true;
 }
 
 bool test_compacted_graph_filters_failed_peer() {
@@ -1660,6 +1903,65 @@ bool test_graph_capture() {
   return true;
 }
 
+/* Large-AO batched TRSM must use the setup-owned workspace. Without it,
+ * cuBLAS captures allocation/free nodes and the SCC device-tail graph cannot
+ * be instantiated for device launch, forcing every configured SCC iteration. */
+bool test_large_ao_device_launch_capture() {
+  constexpr std::int64_t kBatchSize = 128;
+  constexpr std::int32_t kOrbitalCount = 122;
+  constexpr std::uint64_t kGeneration = 67u;
+
+  DeviceFixture fixture;
+  if (!fixture.create(make_batch(kBatchSize, false, -1, kOrbitalCount)) ||
+      !fixture.fill_outputs(kSentinel) || !factor(fixture, kGeneration)) {
+    return false;
+  }
+  if (!cuda_ok(cudaStreamBeginCapture(fixture.providers.stream, cudaStreamCaptureModeThreadLocal),
+               "large-AO cudaStreamBeginCapture")) {
+    return false;
+  }
+  const cudaError_t reset_status = reset_gfn2_eigensolver_device_errors_cuda(
+      fixture.host.batch_size, fixture.system_errors.get(), fixture.device_error.get(),
+      fixture.providers.stream);
+  const auto solve_launch = solve_gfn2_eigensystems_cuda(
+      fixture.batch, fixture.host.buckets.data(),
+      static_cast<std::int64_t>(fixture.host.buckets.size()), fixture.cache, kGeneration,
+      fixture.hamiltonian.get(), Gfn2EigensolverOptions{}, fixture.providers.solver,
+      fixture.providers.parameters, fixture.providers.blas, fixture.workspace, fixture.results,
+      fixture.system_errors.get(), fixture.device_error.get(), fixture.providers.stream);
+  cudaGraph_t graph = nullptr;
+  const cudaError_t capture_status = cudaStreamEndCapture(fixture.providers.stream, &graph);
+  if (reset_status != cudaSuccess || !solve_launch.success() || capture_status != cudaSuccess ||
+      graph == nullptr) {
+    if (graph != nullptr) {
+      (void)cudaGraphDestroy(graph);
+    }
+    std::cerr << "large-AO provider capture failed: reset=" << cudaGetErrorString(reset_status)
+              << " solve=" << static_cast<unsigned int>(solve_launch.status)
+              << " capture=" << cudaGetErrorString(capture_status) << '\n';
+    return false;
+  }
+
+  cudaGraphExec_t executable = nullptr;
+  const cudaError_t instantiate_status =
+      cudaGraphInstantiate(&executable, graph, cudaGraphInstantiateFlagDeviceLaunch);
+  bool ok = instantiate_status == cudaSuccess;
+  if (!ok) {
+    std::cerr << "large-AO device-launch graph instantiate failed: "
+              << cudaGetErrorString(instantiate_status) << '\n';
+  } else {
+    ok = cuda_ok(cudaGraphUpload(executable, fixture.providers.stream),
+                 "large-AO cudaGraphUpload") &&
+         cuda_ok(cudaStreamSynchronize(fixture.providers.stream),
+                 "large-AO graph upload synchronize");
+  }
+  if (executable != nullptr) {
+    (void)cudaGraphExecDestroy(executable);
+  }
+  (void)cudaGraphDestroy(graph);
+  return ok;
+}
+
 /* Benchmark-facing variant of make_batch() with caller-selected AO
  * dimensions. Homogeneous benchmarks use one n=32 bucket; heterogeneous
  * benchmarks interleave n=16 and n=40 so the two buckets are separable in
@@ -2203,6 +2505,10 @@ int main(int argc, char** argv) {
     std::cerr << "spin eigensolver batch/transaction test failed\n";
     return 1;
   }
+  if (!test_exact_capacity_leaf_primitives()) {
+    std::cerr << "exact-capacity leaf primitives test failed\n";
+    return 1;
+  }
   if (!test_batch(8, true) || !test_batch(1, false, 8) || !test_batch(8, false, 16) ||
       !test_batch(4, false, 32) || !test_compacted_graph_batch(8, true) ||
       !test_compacted_graph_filters_failed_peer() ||
@@ -2212,7 +2518,8 @@ int main(int argc, char** argv) {
       !test_ill_conditioned_peer_isolation() || !test_cache_generation_staleness() ||
       !test_single_cache_member_peer_isolation() ||
       !test_sticky_error_and_invalid_bucket_map_fail_closed() ||
-      !test_host_validation_aliases_and_limits() || !test_graph_capture()) {
+      !test_host_validation_aliases_and_limits() || !test_graph_capture() ||
+      !test_large_ao_device_launch_capture()) {
     return 1;
   }
   std::cout << "CUDA eigensolver tests passed\n";

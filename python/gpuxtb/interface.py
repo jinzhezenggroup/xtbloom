@@ -26,17 +26,25 @@ import contextlib
 import ctypes
 import math
 import operator
+import typing
 import weakref
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+from typing import (
+    TYPE_CHECKING,
+    ClassVar,
+    SupportsFloat,
+    SupportsIndex,
+)
 
 import numpy as np
+import numpy.typing as npt
 
 from . import _array as _array_adapter
 from . import _dlpack, library
 from .exceptions import GPUxtbNotSupportedError, GPUxtbRuntimeError, GPUxtbValueError
 
 if TYPE_CHECKING:
+    import builtins
     from collections.abc import Callable, Sequence
     from types import TracebackType
 
@@ -101,7 +109,9 @@ def _as_integer(name: str, value: object) -> int:
     if isinstance(value, bool | np.bool_):
         raise GPUxtbValueError(f"{name} must be an integer")
     try:
-        return int(operator.index(value))
+        # The runtime contract is validated below: only objects with a truthy
+        # ``__index__`` succeed, and anything else raises GPUxtbValueError.
+        return int(operator.index(typing.cast("SupportsIndex", value)))
     except TypeError:
         raise GPUxtbValueError(f"{name} must be an integer") from None
 
@@ -277,7 +287,10 @@ class Structure:
             isinstance(value, str) for value in raw_numbers
         )
         if raw_numbers.dtype.kind in "US" or object_symbols:
-            numbers = np.asarray(symbols_to_numbers(raw_numbers), dtype=np.int64)
+            numbers = np.asarray(
+                symbols_to_numbers([str(value) for value in raw_numbers]),
+                dtype=np.int64,
+            )
         else:
             if raw_numbers.dtype.kind in "bc" or (
                 any(isinstance(value, bool | np.bool_) for value in object_numbers.flat)
@@ -488,10 +501,16 @@ class Context:
         self._backend: int | None = None
         self._finalizer: weakref.finalize | None = None
         self._plans: weakref.WeakSet[library.Plan] = weakref.WeakSet()
+        # Tracks whether the native context holds a whole-batch converged
+        # checkpoint that a later strict WARM request on the same context may
+        # consume. Mirrors the native readiness gate: set only when every
+        # system of the previous high-level call fully converged, cleared on
+        # close (the native checkpoint dies with the context).
+        self._warm_ready = False
 
-    def _create(self) -> None:
+    def _create(self) -> ctypes.c_void_p:
         if self._handle is not None:
-            return
+            return self._handle
         library_instance = library.load_library()
         options = library.ContextOptions()
         library._check_init(
@@ -526,18 +545,20 @@ class Context:
         self._finalizer = weakref.finalize(
             self, _destroy_native_context, library_instance, handle
         )
+        return self._handle
 
     @property
     def backend(self) -> int:
         """The resolved backend (CPU or CUDA)."""
         self._create()
-        return int(self._backend)
+        assert self._backend is not None  # _create() always resolves the backend
+        return self._backend
 
     @property
     def device_id(self) -> int:
         """The backend device id (``-1`` for CPU)."""
-        self._create()
-        return int(library.load_library().gpuxtb_context_get_device_id(self._handle))
+        handle = self._create()
+        return int(library.load_library().gpuxtb_context_get_device_id(handle))
 
     @property
     def stream(self) -> int | None:
@@ -559,6 +580,8 @@ class Context:
             self._handle = None
             self._backend = None
             self._finalizer = None
+            # A new native context created later starts without a checkpoint.
+            self._warm_ready = False
 
     def create_plan(
         self, batch: library.Batch, options: library.ComputeOptions
@@ -570,8 +593,8 @@ class Context:
         ``plan.compute`` calls (geometry may change). The plan must be
         destroyed before the context.
         """
-        self._create()
-        plan = library.Plan(self._handle, batch, options, self)
+        handle = self._create()
+        plan = library.Plan(handle, batch, options, self)
         self._plans.add(plan)
         return plan
 
@@ -659,7 +682,7 @@ _AUTO_BATCH_FALLBACK_MAX_ATOMS = 4_096
 
 def _slice_by_total_atoms(
     structures: Sequence[Structure], max_total_atoms: int
-) -> list[Sequence[Structure]]:
+) -> list[list[Structure]]:
     """Split *structures* into contiguous chunks of at most ``max_total_atoms``.
 
     A single system larger than the limit forms its own oversized chunk because
@@ -807,8 +830,16 @@ def _compute_batch(
     energy_tolerance: float,
     electronic_temperature: float,
     flags: int,
+    warm_start: bool = False,
 ) -> _ComputedBatch:
-    """Populate descriptors and run one synchronous ``gpuxtb_compute`` call."""
+    """Populate descriptors and run one synchronous ``gpuxtb_compute`` call.
+
+    ``warm_start`` seeds SCC from the previous fully converged compatible
+    electronic state retained on ``context`` (native ABI-v2 ``SCC_START_WARM``).
+    The first call on a context, or any call whose topology or compute policy
+    does not match the predecessor, falls back to an independent FRESH solve so
+    automatic warm start stays transparent to the caller.
+    """
     context._create()
 
     # --- assemble the ragged inputs -------------------------------------------
@@ -859,7 +890,7 @@ def _compute_batch(
     def bind(
         descriptor_name: str,
         values: Sequence[int | float],
-        dtype: object,
+        dtype: npt.DTypeLike,
     ) -> None:
         if not values:
             setattr(
@@ -906,9 +937,16 @@ def _compute_batch(
             ctypes.byref(options), ctypes.sizeof(options)
         ),
     )
-    # High-level calculators intentionally use reproducible independent SCC
-    # solves; persistent warm-start policy remains a low-level ABI feature.
-    options.scc_start_mode = library.SCC_START_FRESH
+    # High-level calculators default to reproducible independent SCC solves;
+    # automatic warm start is opt-in. When enabled and the native context holds
+    # a fully converged compatible checkpoint, request SCC_START_WARM so the
+    # previous converged electronic state seeds the new SCC run (geometry is
+    # not part of the native identity, which is why this is ideal for dynamics).
+    options.scc_start_mode = (
+        library.SCC_START_WARM
+        if warm_start and context._warm_ready
+        else library.SCC_START_FRESH
+    )
     options.model = model
     options.flags = flags
     options.max_scc_iterations = int(max_scc_iterations)
@@ -970,7 +1008,29 @@ def _compute_batch(
     bind_output("scc_converged", scc_converged, True)
     bind_output("per_system_status", per_system_status, True)
 
-    library.compute_checked(context._handle, batch, options, result)
+    try:
+        library.compute_checked(context._create(), batch, options, result)
+    except GPUxtbRuntimeError as error:
+        # A strict WARM request with no compatible fully converged predecessor
+        # is rejected by the native gate before any caller output is modified
+        # and without side effects, so one independent FRESH retry is safe.
+        # This keeps automatic warm start transparent when the identity changed
+        # (e.g. charge, spin, tolerances, topology) or the previous call did
+        # not fully converge.
+        if (
+            options.scc_start_mode != library.SCC_START_WARM
+            or error.status != library.STATUS_INVALID_ARGUMENT
+        ):
+            raise
+        options.scc_start_mode = library.SCC_START_FRESH
+        library.compute_checked(context._create(), batch, options, result)
+
+    # Mirror the native whole-batch readiness gate: only a call in which every
+    # system fully converged leaves a consumable warm checkpoint on the context.
+    context._warm_ready = all(
+        int(status) == library.STATUS_SUCCESS and int(converged) == 1
+        for status, converged in zip(per_system_status, scc_converged, strict=True)
+    )
 
     return _ComputedBatch(
         energies=energies,
@@ -1017,7 +1077,7 @@ def _raise_on_failure(computed: _ComputedBatch) -> None:
 class Result:
     """Single-system results container, similar to ``tblite.interface.Result``."""
 
-    _getter: ClassVar[dict[str, Callable[[Result], object]]] = {
+    _getter: ClassVar[builtins.dict[str, Callable[[Result], object]]] = {
         "energy": lambda self: self.energy,
         "energies": lambda self: np.asarray([self.energy]),
         "forces": lambda self: self.forces,
@@ -1075,7 +1135,7 @@ class Result:
         """Return a requested result quantity by key."""
         return self.get(key)
 
-    def dict(self) -> dict[str, object]:
+    def dict(self) -> builtins.dict[str, object]:
         """Return all available quantities in a new mapping."""
         return {key: self.get(key) for key in self._getter}
 
@@ -1187,12 +1247,12 @@ def _validated_compute_setting(attribute: str, value: object) -> int | float:
             raise GPUxtbValueError("max_scc_iterations must be positive")
         return candidate
     if attribute in ("charge_tolerance", "energy_tolerance"):
-        candidate = float(value)
+        candidate = float(typing.cast("SupportsFloat | SupportsIndex", value))
         if not math.isfinite(candidate) or candidate <= 0.0:
             raise GPUxtbValueError(f"{attribute} must be finite and positive")
         return candidate
     if attribute == "electronic_temperature":
-        candidate = float(value)
+        candidate = float(typing.cast("SupportsFloat | SupportsIndex", value))
         if not math.isfinite(candidate) or candidate < 0.0:
             raise GPUxtbValueError(
                 "electronic_temperature must be finite and nonnegative"
@@ -1209,6 +1269,12 @@ class _ComputeSettings:
         "max_scc_iterations",
         "model",
     )
+
+    model: int
+    max_scc_iterations: int
+    charge_tolerance: float
+    energy_tolerance: float
+    electronic_temperature: float
 
     def __init__(
         self,
@@ -1262,6 +1328,14 @@ class Calculator(Structure):
     ... )
     >>> res = calc.singlepoint()
     >>> res.get("energy")  # Hartree
+
+    ``warm_start=True`` seeds each SCC solve from the previous fully converged
+    compatible electronic state retained on the same context (native ABI-v2
+    ``SCC_START_WARM``). Geometry is not part of the native identity, so a
+    dynamics or optimization loop reusing one ``Calculator`` reconverges from
+    the previous step's state; the first call and any identity change fall back
+    to an independent FRESH solve. Results converge to the same electronic
+    state within SCC tolerance but may differ in the last converged digits.
     """
 
     def __init__(
@@ -1283,6 +1357,7 @@ class Calculator(Structure):
         charge_tolerance: float = 1.0e-6,
         energy_tolerance: float = 1.0e-8,
         electronic_temperature: float = 300.0,
+        warm_start: bool = False,
     ) -> None:
         Structure.__init__(
             self,
@@ -1305,6 +1380,7 @@ class Calculator(Structure):
         )
         self._context = Context(backend, device_id, cpu_threads)
         self._method = method
+        self._warm_start = bool(warm_start)
 
     @property
     def backend(self) -> int:
@@ -1360,6 +1436,7 @@ class Calculator(Structure):
             energy_tolerance=self._settings.energy_tolerance,
             electronic_temperature=self._settings.electronic_temperature,
             flags=flags,
+            warm_start=self._warm_start,
         )
         _raise_on_failure(computed)
         return Result(computed, index=0)
@@ -1387,6 +1464,10 @@ class BatchCalculator:
 
     The C API describes a ragged batch with flat arrays and offsets, so all
     systems are solved together while keeping per-system convergence state.
+    ``warm_start=True`` reuses the previous fully converged state only when
+    each logical batch remains one native call; it cannot be combined with
+    ``auto_batch_size`` because a context retains just its latest whole-batch
+    checkpoint rather than one checkpoint per chunk.
     """
 
     def __init__(
@@ -1401,6 +1482,7 @@ class BatchCalculator:
         charge_tolerance: float = 1.0e-6,
         energy_tolerance: float = 1.0e-8,
         electronic_temperature: float = 300.0,
+        warm_start: bool = False,
     ) -> None:
         if not structures:
             raise GPUxtbValueError("a batch needs at least one structure")
@@ -1413,6 +1495,7 @@ class BatchCalculator:
             electronic_temperature,
         )
         self._context = Context(backend, device_id, cpu_threads)
+        self._warm_start = bool(warm_start)
 
     def __len__(self) -> int:
         """Return the number of structures in this calculator."""
@@ -1453,7 +1536,18 @@ class BatchCalculator:
         bit-identical to an unsliced run. CUDA chunking can change eigensolver
         bucket composition, so CUDA results should be compared with the same
         tolerances used for ordinary backend conformance.
+
+        ``auto_batch_size`` cannot be combined with ``warm_start=True``. The
+        native context owns one whole-batch checkpoint, so sharing it across
+        chunks could seed a system from a different chunk rather than from the
+        corresponding system in the preceding logical batch.
         """
+        if self._warm_start and auto_batch_size not in (None, False):
+            raise GPUxtbValueError(
+                "warm_start=True cannot be combined with auto_batch_size; "
+                "use one native batch or disable warm start"
+            )
+
         base_flags = (
             library.COMPUTE_ENERGY
             | library.COMPUTE_FORCES
@@ -1477,6 +1571,7 @@ class BatchCalculator:
                 energy_tolerance=self._settings.energy_tolerance,
                 electronic_temperature=self._settings.electronic_temperature,
                 flags=flags,
+                warm_start=self._warm_start,
             )
 
         if auto_batch_size is None or auto_batch_size is False:
@@ -1593,8 +1688,10 @@ class ArrayBatch:
     Set ``copy=True`` to ask the producer for a contiguous copy.  CUDA-managed
     memory, ROCm, and other device kinds are rejected with a precise error.
     Lazy/tracer objects (``jit``/``grad``/``vmap`` inputs, ``torch.compile``
-    graphs) are rejected; framework autograd integration is not part of this
-    API.
+    graphs) are rejected with a precise error.  :mod:`gpuxtb.torch` is the
+    only autograd entry point: it consumes eager tensors through this same
+    DLPack path and deliberately supports only the positions gradient
+    (``dE/dR = -F``).
 
     The existing :class:`Structure`/:class:`Calculator` host-numpy path is
     unchanged and remains the compatibility default.
@@ -1933,7 +2030,7 @@ def _compute_array_batch(
         # Output views are part of the same device contract as inputs. Check
         # them after binding, before native validation or any publication.
         _validate_device_consistency(views, context)
-        library.compute_checked(context._handle, batch_descriptor, options, result)
+        library.compute_checked(context._create(), batch_descriptor, options, result)
         array_result = ArrayBatchResult(output_owners, result_flags=int(result.flags))
         array_result._attach_producers(arenas, gpuxtb_owned)
         committed_result = array_result
@@ -2177,7 +2274,10 @@ def _bind_outputs(
     )
     requested = _requested_output_mask(flags, npoints)
     if result_memory == "cuda":
-        cuda_owned = [
+        # A device arena can only be allocated on a live context; the
+        # ``result_memory="cuda"`` callers always pass one.
+        assert context is not None
+        cuda_owned: list[tuple[str, str, tuple[int, ...], npt.DTypeLike]] = [
             (public_name, field_name, shape, dtype)
             for public_name, field_name, shape, dtype in specs
             if requested[public_name]
@@ -2249,7 +2349,7 @@ def _requested_output_mask(flags: int, npoints: int) -> dict[str, bool]:
 
 def _allocate_result_arena(
     context: Context,
-    outputs: list[tuple[str, str, tuple[int, ...], object]],
+    outputs: list[tuple[str, str, tuple[int, ...], npt.DTypeLike]],
 ) -> tuple[_dlpack._ResultArena, dict[str, int]]:
     """Allocate one packed, alignment-checked device arena for ``outputs``.
 
@@ -2311,7 +2411,7 @@ def _bind_one_output(
     field_name: str,
     array: object | None,
     shape: tuple[int, ...],
-    dtype: object,
+    dtype: npt.DTypeLike,
     views: list[_dlpack.DLPackView],
     keepalive: list[object],
     stream: int | None,
@@ -2322,6 +2422,7 @@ def _bind_one_output(
     numpy owner is allocated and returned.  Empty outputs bind the null
     buffer and return ``None``.
     """
+    resolved_dtype = np.dtype(dtype)
     if array is not None:
         actual = _array_shape(array)
         if actual != shape:
@@ -2330,7 +2431,7 @@ def _bind_one_output(
             )
         view = _dlpack.consume_from_dlpack(
             array,
-            expected_dtype=dtype,
+            expected_dtype=resolved_dtype,
             expected_shape=shape,
             stream=stream,
             # Outputs must always alias the caller's buffer. Allowing the
@@ -2347,7 +2448,7 @@ def _bind_one_output(
     if not shape:
         setattr(result, field_name, library.Buffer(None, 0, library.MEMORY_HOST, 0))
         return None
-    owner = np.empty(shape, dtype=dtype)
+    owner = np.empty(shape, dtype=resolved_dtype)
     keepalive.append(owner)
     setattr(
         result,
@@ -2376,10 +2477,14 @@ class ArrayBatchResult:
     def __init__(self, data: dict[str, object], result_flags: int) -> None:
         self._data = dict(data)
         self.result_flags = int(result_flags)
-        self._arenas: list[object] = []
+        self._arenas: list[_dlpack._ResultArena] = []
         self._producers: list[object] = []
 
-    def _attach_producers(self, arenas: list[object], producers: list[object]) -> None:
+    def _attach_producers(
+        self,
+        arenas: Sequence[_dlpack._ResultArena],
+        producers: Sequence[object],
+    ) -> None:
         """Keep gpuxtb-owned arenas and DLPack producers alive with this result.
 
         Closing the result releases only the producer reference; each exported

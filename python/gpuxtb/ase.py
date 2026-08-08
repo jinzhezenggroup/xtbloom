@@ -20,12 +20,13 @@ try:
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError("This submodule requires ASE installed") from e
 
-from typing import Any, ClassVar
+import typing
+from typing import Any
 
 import numpy as np
 
 from .exceptions import GPUxtbRuntimeError, GPUxtbValueError
-from .interface import Calculator, _resolve_uhf, _validated_compute_setting
+from .interface import Calculator, Result, _resolve_uhf, _validated_compute_setting
 
 
 class GPUxtb(ase.calculators.calculator.Calculator):
@@ -48,20 +49,26 @@ class GPUxtb(ase.calculators.calculator.Calculator):
      device_id                None              CUDA device id
      cpu_threads              1                 CPU batch-parallelism ceiling
      cache_api                True              Reuse the underlying API calculator
+     warm_start               True              Seed SCC from the previous converged
+                                               state when compatible (auto)
     ======================== ================= =========================================
     """
 
     # Class-level defaults in the ASE calculator convention. ASE reads them
     # (and `set()` validates against them); instances receive their own copy
     # through ``Calculator.__init__``, so they must never be mutated here.
-    implemented_properties: ClassVar[list[str]] = [
+    # ASE's base class types these names as instance variables, so a ClassVar
+    # override is rejected by the type checker; they are still class-level
+    # defaults that ASE copies per-instance in ``Calculator.__init__``, so
+    # there is no shared-mutable-default hazard.
+    implemented_properties: list[str] = [  # noqa: RUF012
         "energy",
         "free_energy",
         "forces",
         "charges",
     ]
 
-    default_parameters: ClassVar[dict[str, Any]] = {
+    default_parameters: dict[str, Any] = {  # noqa: RUF012
         "method": "GFN2-xTB",
         "charge": None,
         "multiplicity": None,
@@ -73,10 +80,21 @@ class GPUxtb(ase.calculators.calculator.Calculator):
         "device_id": None,
         "cpu_threads": 1,
         "cache_api": True,
+        "warm_start": True,
     }
 
-    _res = None
-    _xtb = None
+    _res: Result | None = None
+    _xtb: Calculator | None = None
+
+    def _api_parameters(self) -> ase.calculators.calculator.Parameters:
+        """Return the validated ASE parameter mapping used by this calculator.
+
+        ASE's ``Parameters`` stores values in a dict but exposes attribute
+        access, so after :meth:`set` this is always an attribute-accessible
+        mapping. The cast only restores that runtime contract for the type
+        checker; no runtime conversion happens.
+        """
+        return typing.cast("ase.calculators.calculator.Parameters", self.parameters)
 
     def __init__(self, atoms: ase.Atoms | None = None, **kwargs: object) -> None:
         ase.calculators.calculator.Calculator.__init__(self, atoms=atoms, **kwargs)
@@ -102,7 +120,7 @@ class GPUxtb(ase.calculators.calculator.Calculator):
             if attribute in kwargs:
                 _validated_compute_setting(attribute, kwargs[attribute])
         if kwargs.get("multiplicity") is not None:
-            _resolve_uhf(None, kwargs["multiplicity"])
+            _resolve_uhf(None, typing.cast("int | None", kwargs["multiplicity"]))
 
         changed = ase.calculators.calculator.Calculator.set(self, **kwargs)
         if not changed:
@@ -113,18 +131,20 @@ class GPUxtb(ase.calculators.calculator.Calculator):
         # A structural parameter change requires rebuilding the API calculator;
         # numerical SCC settings are pushed onto an existing one in place.
         if self._xtb is not None and not any(
-            key in changed for key in ("method", "backend", "device_id", "cpu_threads")
+            key in changed
+            for key in ("method", "backend", "device_id", "cpu_threads", "warm_start")
         ):
+            parameters = self._api_parameters()
             if "electronic_temperature" in changed:
                 self._xtb.set(
-                    "electronic_temperature", self.parameters.electronic_temperature
+                    "electronic_temperature", parameters.electronic_temperature
                 )
             if "max_scc_iterations" in changed:
-                self._xtb.set("max_scc_iterations", self.parameters.max_scc_iterations)
+                self._xtb.set("max_scc_iterations", parameters.max_scc_iterations)
             if "charge_tolerance" in changed:
-                self._xtb.set("charge_tolerance", self.parameters.charge_tolerance)
+                self._xtb.set("charge_tolerance", parameters.charge_tolerance)
             if "energy_tolerance" in changed:
-                self._xtb.set("energy_tolerance", self.parameters.energy_tolerance)
+                self._xtb.set("energy_tolerance", parameters.energy_tolerance)
         else:
             self._close_api_calculator()
             self._res = None
@@ -133,7 +153,7 @@ class GPUxtb(ase.calculators.calculator.Calculator):
     def reset(self) -> None:
         """Clear calculated properties and optional native API state."""
         ase.calculators.calculator.Calculator.reset(self)
-        if not self.parameters.cache_api:
+        if not self._api_parameters().cache_api:
             self._close_api_calculator()
             self._res = None
 
@@ -161,32 +181,40 @@ class GPUxtb(ase.calculators.calculator.Calculator):
             self, atoms, properties, system_changes
         )
 
-        _validate_ase_atoms(self.atoms)
+        # ASE's ``Calculator.calculate`` assigns ``self.atoms`` (and validates
+        # it) before returning, so the cast below only restores that runtime
+        # contract for the type checker; the object is the real ``ase.Atoms``.
+        atoms = typing.cast("ase.Atoms", self.atoms)
+        parameters = self._api_parameters()
+
+        _validate_ase_atoms(atoms)
         # Atomic numbers are immutable in the native fixed-topology
         # calculator.  Reusing it after ASE changes the species would silently
         # evaluate the new coordinates with the old Hamiltonian parameters.
-        needs_rebuild = self._xtb is None or not np.array_equal(
-            self._xtb.numbers, self.atoms.numbers
-        )
-        if needs_rebuild:
+        xtb = self._xtb
+        if xtb is None or not np.array_equal(xtb.numbers, atoms.numbers):
             self._close_api_calculator()
-            self._xtb = _create_api_calculator(self.atoms, self.parameters)
+            self._xtb = _create_api_calculator(atoms, parameters)
+            xtb = self._xtb
         else:
-            self._xtb.update(
-                positions=self.atoms.positions / Bohr,
-                charge=_get_charge(self.atoms, self.parameters),
-                uhf=_get_uhf(self.atoms, self.parameters),
+            xtb.update(
+                positions=atoms.positions / Bohr,
+                charge=_get_charge(atoms, parameters),
+                uhf=_get_uhf(atoms, parameters),
             )
 
+        assert xtb is not None
         try:
-            self._res = self._xtb.singlepoint()
+            self._res = xtb.singlepoint()
         except GPUxtbRuntimeError as e:
             raise ase.calculators.calculator.CalculationFailed(str(e)) from e
 
-        self.results["energy"] = self._res["energy"] * Hartree
+        # Attribute access is behaviorally identical to ``Result["energy"]``:
+        # the string getter maps straight onto these attributes.
+        self.results["energy"] = self._res.energy * Hartree
         self.results["free_energy"] = self.results["energy"]
-        self.results["forces"] = self._res["forces"] * Hartree / Bohr
-        self.results["charges"] = self._res["charges"]
+        self.results["forces"] = self._res.forces * Hartree / Bohr
+        self.results["charges"] = self._res.charges
 
 
 def _validate_ase_atoms(atoms: ase.Atoms) -> None:
@@ -216,6 +244,7 @@ def _create_api_calculator(
             charge_tolerance=parameters.charge_tolerance,
             energy_tolerance=parameters.energy_tolerance,
             electronic_temperature=parameters.electronic_temperature,
+            warm_start=bool(parameters.warm_start),
         )
     except GPUxtbValueError as e:
         raise ase.calculators.calculator.InputError(str(e)) from e

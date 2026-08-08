@@ -166,8 +166,42 @@ CUDA additionally keys its checkpoint to a geometry epoch and keeps modifying-Br
 for a same-epoch reuse, while the CPU always restarts a fresh mixing window from the converged
 state. A missing checkpoint or any identity change is a call-level invalid argument and leaves
 caller outputs unchanged. CPU and CUDA use the same compute-options identity, including
-requested-property/output flags. High-level Python calculators intentionally select `FRESH`;
-persistent warm policy is exposed only by the low-level C/ctypes descriptor for now.
+requested-property/output flags. High-level Python calculators select `FRESH` by default;
+`Calculator` and `BatchCalculator` also expose opt-in transparent warm start, which retries one
+`FRESH` solve when the strict native gate rejects an incompatible checkpoint. The ASE calculator
+enables that policy by default for dynamics-like geometry sequences. Automatic batch slicing
+remains incompatible with warm start because one native context retains only its latest whole-batch
+checkpoint, not one checkpoint per logical chunk.
+
+## External interaction attachments
+
+The ABI-v3 batch suffix adds a generic attachment slot — `total_interactions`,
+`interaction_descriptors`, and `interaction_payload` — so external potentials
+and self-consistent models (uniform electric field, field gradient, multipole
+point charges, ALPB/GBSA/GB/GBE/ddX solvation, D3/D4 dispersion variants,
+halogen-bond corrections) do not each regrow the batch layout. One
+`gpuxtb_interaction_t` descriptor ties a versioned payload block to one batch
+item; block contents are versioned per tag through a leading `block_version`.
+
+Reserved attachments follow a strict validate-then-refuse policy: the common
+validator proves descriptor/payload extents, memory-space tags, and every
+semantic relationship available from host-resident storage, then the request
+is refused with `NOT_IMPLEMENTED` before any backend execution or caller-output
+commit. A caller can therefore never observe a result where a reserved
+interaction was silently ignored. Unknown or `NONE` tags and structurally
+malformed host-resident attachments are `INVALID_ARGUMENT`. Device-resident
+descriptor content is marked with `kInteractionDescriptorsNeedStaging`, while
+device payload content is marked independently with
+`kInteractionPayloadNeedsStaging`. P3 must stage and validate every marked
+interaction byte before enabling CUDA execution; P1's availability gate
+refuses the request first because no backend can consume it yet. Host-resident
+electric-field blocks are byte-loaded and checked for version 1, a zero
+reserved field, and finite values before that gate. The ABI-v2 result suffix
+reserves the dipole-moment outlet and
+`GPUXTB_RESULT_DIPOLE_MOMENTS` publication flag alongside `quadrupole_moments`,
+`wiberg_orders`, and `spin_populations`; the latter three have no released
+shape contract, must remain NULL until published, and return `NOT_SUPPORTED`
+when supplied.
 
 ## Fixed-topology plans and workspace sizing
 

@@ -22,11 +22,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
+import numpy.typing as npt
 
 from .exceptions import GPUxtbRuntimeError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from types import ModuleType
 
 # --- ABI constants (kept in sync with include/gpuxtb/gpuxtb.h) ----------------
 
@@ -61,6 +63,28 @@ COMPUTE_ENERGY = 1 << 0
 COMPUTE_FORCES = 1 << 1
 COMPUTE_ATOMIC_CHARGES = 1 << 2
 COMPUTE_POINT_CHARGE_FORCES = 1 << 3
+COMPUTE_DIPOLE_MOMENTS = 1 << 4
+
+RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES = 1 << 0
+RESULT_DIPOLE_MOMENTS = 1 << 4
+
+# Reserved interaction-type tags (mirror of gpuxtb_interaction_type_t).  No
+# backend executes any interaction yet: attaching one currently fails with
+# NOT_IMPLEMENTED at the C boundary.  Values are reserved so future
+# interactions never renumber an existing tag.
+INTERACTION_NONE = 0
+INTERACTION_ELECTRIC_FIELD = 0x0101
+INTERACTION_ELECTRIC_FIELD_GRADIENT = 0x0102
+INTERACTION_POINT_CHARGES_MULTIPOLE = 0x0103
+INTERACTION_ATOMIC_POTENTIAL_GRID = 0x0104
+INTERACTION_ALPB_SOLVATION = 0x0201
+INTERACTION_GBSA_SOLVATION = 0x0202
+INTERACTION_GB_SOLVATION = 0x0203
+INTERACTION_GBE_SOLVATION = 0x0204
+INTERACTION_DDX_SOLVATION = 0x0205
+INTERACTION_D3_DISPERSION = 0x0301
+INTERACTION_D4_VARIANT_DISPERSION = 0x0302
+INTERACTION_HALOGEN_BOND = 0x0401
 
 # DLPack device/dtype codes used by the gpuxtb-owned result producer
 # (mirrors DLPack 1.0; see gpuxtb._dlpack for the consumer-side constants).
@@ -116,7 +140,7 @@ class Buffer(ctypes.Structure):
 
 
 class Batch(ctypes.Structure):
-    """ctypes mirror of ``gpuxtb_batch_t`` including the ABI-v2 spin suffix."""
+    """ctypes mirror of ``gpuxtb_batch_t`` through the ABI-v3 interaction suffix."""
 
     _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
@@ -138,6 +162,21 @@ class Batch(ctypes.Structure):
         ("charge_response_offsets", ConstBuffer),
         ("charge_response_matrix", ConstBuffer),
         ("spin_channels", ConstBuffer),
+        ("total_interactions", ctypes.c_int64),
+        ("interaction_descriptors", ConstBuffer),
+        ("interaction_payload", ConstBuffer),
+    ]
+
+
+class Interaction(ctypes.Structure):
+    """ctypes mirror of ``gpuxtb_interaction_t`` (one attachment entry)."""
+
+    _fields_: ClassVar[list[tuple[str, object]]] = [
+        ("type", ctypes.c_int32),
+        ("flags", ctypes.c_uint32),
+        ("system_index", ctypes.c_int64),
+        ("payload_offset", ctypes.c_uint64),
+        ("payload_size", ctypes.c_uint64),
     ]
 
 
@@ -160,7 +199,7 @@ class ComputeOptions(ctypes.Structure):
 
 
 class BatchResult(ctypes.Structure):
-    """ctypes mirror of ``gpuxtb_batch_result_t`` ABI version 1."""
+    """ctypes mirror of ``gpuxtb_batch_result_t`` through the ABI-v2 suffix."""
 
     _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
@@ -174,6 +213,10 @@ class BatchResult(ctypes.Structure):
         ("scc_iterations", Buffer),
         ("scc_converged", Buffer),
         ("per_system_status", Buffer),
+        ("dipole_moments", Buffer),
+        ("quadrupole_moments", Buffer),
+        ("wiberg_orders", Buffer),
+        ("spin_populations", Buffer),
     ]
 
 
@@ -410,21 +453,27 @@ def _runtime_search_dirs() -> list[Path]:
     """
     dirs: list[Path] = []
 
+    site_module: ModuleType | None = None
     try:
         import site
+
+        site_module = site
     except Exception:  # noqa: BLE001 - defensive: probe environments where
         # `site` is unavailable without aborting library discovery
-        site = None  # pragma: no cover - defensive
+        site_module = None  # pragma: no cover - defensive
     site_packages = (
-        getattr(site, "getsitepackages", lambda: [])() if site is not None else []
+        getattr(site_module, "getsitepackages", lambda: [])()
+        if site_module is not None
+        else []
     )
     user_site = (
-        getattr(site, "getusersitepackages", lambda: None)()
-        if site is not None
+        getattr(site_module, "getusersitepackages", lambda: None)()
+        if site_module is not None
         else None
     )
     if user_site and (
-        bool(getattr(site, "ENABLE_USER_SITE", False)) or str(user_site) in sys.path
+        bool(getattr(site_module, "ENABLE_USER_SITE", False))
+        or str(user_site) in sys.path
     ):
         site_packages = [*site_packages, user_site]
 
@@ -505,11 +554,15 @@ def _preload_runtime_libraries() -> list[str]:
     """
     search_dirs = _runtime_search_dirs()
     if os.name == "nt":
+        # os.add_dll_directory exists only on Windows; this branch proves its
+        # presence at runtime, but a type checker resolving for a generic
+        # platform cannot see the member, hence the targeted suppression.
+        add_dll_directory = os.add_dll_directory  # type: ignore[unresolved-attribute]
         for directory in search_dirs:
             # The returned object removes the directory when it is closed;
             # keep it alive for as long as the native library may be used.
             with contextlib.suppress(OSError):
-                _dll_directory_handles.append(os.add_dll_directory(str(directory)))
+                _dll_directory_handles.append(add_dll_directory(str(directory)))
         return []
 
     loaded: list[str] = []
@@ -807,7 +860,7 @@ class Plan:
 def host_const(
     values: Sequence[int | float | bool] | None,
     ctype: type[ctypes._SimpleCData],
-    dtype: object,
+    dtype: npt.DTypeLike,
 ) -> tuple[ConstBuffer, np.ndarray]:
     """Build a host ``gpuxtb_const_buffer_t`` from a numpy-compatible sequence.
 
@@ -836,7 +889,7 @@ def host_const(
 def empty_result_shape(
     shape: int | tuple[int, ...],
     ctype: type[ctypes._SimpleCData],
-    dtype: object,
+    dtype: npt.DTypeLike,
 ) -> tuple[Buffer, np.ndarray]:
     """Allocate a host output buffer and return its descriptor plus owner."""
     owner = np.empty(shape, dtype=dtype)
@@ -858,6 +911,7 @@ __all__ = [
     "BACKEND_CUDA",
     "BACKEND_ROCM",
     "COMPUTE_ATOMIC_CHARGES",
+    "COMPUTE_DIPOLE_MOMENTS",
     "COMPUTE_ENERGY",
     "COMPUTE_FORCES",
     "COMPUTE_POINT_CHARGE_FORCES",
@@ -870,12 +924,27 @@ __all__ = [
     "DLPACK_DTYPE_INT",
     "DLPACK_DTYPE_UINT",
     "DLPACK_MAX_NDIM",
+    "INTERACTION_ALPB_SOLVATION",
+    "INTERACTION_ATOMIC_POTENTIAL_GRID",
+    "INTERACTION_D3_DISPERSION",
+    "INTERACTION_D4_VARIANT_DISPERSION",
+    "INTERACTION_DDX_SOLVATION",
+    "INTERACTION_ELECTRIC_FIELD",
+    "INTERACTION_ELECTRIC_FIELD_GRADIENT",
+    "INTERACTION_GBE_SOLVATION",
+    "INTERACTION_GBSA_SOLVATION",
+    "INTERACTION_GB_SOLVATION",
+    "INTERACTION_HALOGEN_BOND",
+    "INTERACTION_NONE",
+    "INTERACTION_POINT_CHARGES_MULTIPOLE",
     "KELVIN_TO_HARTREE",
     "MEMORY_CUDA_DEVICE",
     "MEMORY_HOST",
     "MEMORY_ROCM_DEVICE",
     "MODEL_GFN1_XTB",
     "MODEL_GFN2_XTB",
+    "RESULT_DIPOLE_MOMENTS",
+    "RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES",
     "SCC_START_FRESH",
     "SCC_START_WARM",
     "STATUS_ALLOCATION_FAILED",
@@ -894,6 +963,7 @@ __all__ = [
     "ConstBuffer",
     "ContextOptions",
     "DlpackView",
+    "Interaction",
     "Plan",
     "ResultOwnerOptions",
     "WorkspaceQuery",

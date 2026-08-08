@@ -33,10 +33,15 @@ with Calculator(
     second = calc.singlepoint()
 ```
 
-The high-level calculator deliberately performs fresh SCC initialization for
-each calculation. Strict electronic `WARM` checkpoints are an advanced C ABI
-feature because callers must preserve an exact topology and compute-policy
-identity.
+The high-level calculator defaults to fresh SCC initialization for each
+calculation (`warm_start=False`), keeping every call reproducible and
+independent. With `warm_start=True`, a call reuses the previous fully
+converged compatible electronic state retained on the same context as the SCC
+initial guess (the strict native `WARM` checkpoint); the first call on a
+context and any topology or compute-policy identity change transparently fall
+back to a fresh solve. Geometry is not part of the native identity, so a
+dynamics or optimization loop that reuses one `Calculator` reconverges from
+each previous step's state.
 
 `Calculator.set()` updates `max_scc_iterations`, `charge_tolerance`,
 `energy_tolerance`, or `electronic_temperature` in kelvin.
@@ -93,7 +98,9 @@ result.raise_for_status()
 memory and retries recoverable multi-system native allocation failures at a
 smaller chunk size. An integer sets a target maximum total atom count per
 chunk. Systems are indivisible, and chunking preserves input order and
-peer-local diagnostics.
+peer-local diagnostics. Automatic slicing cannot be combined with
+`warm_start=True`: a native context retains one whole-batch checkpoint, not an
+independent checkpoint for each chunk.
 
 ## Array API and DLPack input arrays
 
@@ -193,6 +200,44 @@ themselves. On the archived RTX 5090 small-molecule workload it passed the
 `benchmarks/evidence/issue-214/2026-08-07-rtx5090/` for the raw profiler and
 latency evidence.
 
+## PyTorch autograd op (positions gradient only)
+
+`gpuxtb.gpuxtb_torch` runs the packed DLPack inference on PyTorch tensors (host
+CPU or CUDA device) and returns `(energies, forces)` as float64 tensors. It is
+the only autograd entry point in the Python API, and its gradient contract is
+deliberately narrow: it supports exactly `dE/dR = -F` with respect to
+`positions`, which the native library evaluates analytically.
+
+```python
+import torch
+from gpuxtb import gpuxtb_torch
+
+positions = torch.tensor(system.positions, dtype=torch.float64, requires_grad=True)
+energies, forces = gpuxtb_torch(
+    positions,
+    atomic_numbers,   # (natoms,) int32 torch or numpy
+    atom_offsets,     # (nsystems + 1,) int64
+    molecular_charges,  # (nsystems,) float64
+    unpaired_electrons, # (nsystems,) int32
+    backend="cuda",
+)
+loss = energies.sum()
+loss.backward()      # positions.grad == -forces
+```
+
+- Backpropagation through `forces` (the force Hessian `dF/dR`) raises
+  `GPUxtbNotSupportedError`.
+- Higher-order differentiation requests such as `create_graph=True` or
+  `torch.autograd.functional.hessian` raise `GPUxtbNotSupportedError`; gpuxtb
+  never substitutes a partial or zero Hessian for the unavailable `dF/dR`.
+- Requesting autograd on any other input — `atomic_numbers`, `atom_offsets`,
+  `molecular_charges`, `unpaired_electrons`, `spin_channels` — raises
+  `GPUxtbNotSupportedError` eagerly at forward time.
+- PyTorch is imported lazily only when the op is called; `import gpuxtb` never
+  imports torch.
+- Non-contiguous or strided inputs are packed into a compact copy by the op;
+  scalar types must still match the C ABI exactly.
+
 ## Open-shell calculations
 
 `multiplicity` and `uhf` describe the same state, with
@@ -261,7 +306,31 @@ The caller owns coordinate derivatives of `b` and `A`. See the
 Install the corresponding extra and use `gpuxtb.ase.GPUxtb` as an ASE
 calculator or `driver="gpuxtb"` with dpdata. These integrations convert native
 atomic units to eV and Angstrom conventions. dpdata periodic systems are
-rejected because the native ABI has no lattice descriptor.
+rejected because the native ABI has no lattice descriptor. The ASE calculator
+enables warm start by default (`warm_start=True`), so an ASE dynamics run
+automatically seeds each step's SCC from the previous converged state and
+falls back to a fresh solve whenever the request's identity changes; pass
+`warm_start=False` for bit-reproducible independent steps.
+
+For geometry relaxation, `gpuxtb` also registers a batch minimizer under the
+`"gpuxtb"` key. It moves every frame of a dpdata system in lockstep and
+evaluates energies and forces for all active frames in a single ragged-batch
+`gpuxtb_compute` call per step, instead of the one-frame-at-a-time loop of the
+reference `ase` minimizer; converged frames are frozen and dropped from the
+batch as it shrinks:
+
+```python
+import dpdata
+from gpuxtb.dpdata import GPUxtbDriver
+
+system = dpdata.System("geometry.xyz", fmt="xyz")
+labeled = system.minimize(
+    minimizer="gpuxtb",
+    driver=GPUxtbDriver(backend="cuda"),
+    fmax=5e-3,  # eV/Angstrom
+    max_steps=1000,
+)
+```
 
 ## Native-library discovery
 

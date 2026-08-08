@@ -76,6 +76,13 @@ The high-level Python interface uses host NumPy arrays for both backends; direct
 CUDA-device and mixed descriptors are available only through the low-level C
 ABI.
 
+`Calculator` and `BatchCalculator` use independent fresh SCC initialization by
+default. Pass `warm_start=True` to seed each compatible call from the previous
+fully converged state on the same native context; an incompatible identity
+transparently retries once from fresh state. The ASE calculator enables this
+policy by default for dynamics and accepts `warm_start=False` for independent
+steps.
+
 ## Charge and spin
 
 Use either `multiplicity` or `uhf = multiplicity - 1`. Open-shell Python
@@ -135,7 +142,9 @@ batch.raise_for_status()
 For large workloads, `compute(auto_batch_size=True)` chooses conservative CUDA
 chunks from current free memory. An integer such as
 `compute(auto_batch_size=20_000)` instead limits the target total atom count per
-native call while preserving input order.
+native call while preserving input order. Automatic batching cannot be combined
+with `warm_start=True` because the native context retains one whole-batch SCC
+checkpoint rather than independent checkpoints for each chunk.
 
 ## Array API and DLPack input arrays
 
@@ -212,6 +221,18 @@ assert result.forces is out_forces
 `compute_arrays(...)` is a convenience alias that builds a temporary
 `ArrayBatch` and computes in one call.
 
+### PyTorch autograd op
+
+`gpuxtb_torch(positions, atomic_numbers, atom_offsets, molecular_charges,
+unpaired_electrons, ...)` runs the packed DLPack inference on PyTorch tensors
+(host or CUDA) and is the only autograd entry point in the Python API. It
+supports exactly the positions gradient `dE/dR = -F`; autograd on any other
+input, or a gradient flowing through the `forces` output (the Hessian), raises
+`GPUxtbNotSupportedError`. Higher-order differentiation is likewise rejected
+explicitly rather than returning a partial or zero Hessian. PyTorch is imported
+only when the op is called. See
+`docs/user-guide/python.md` for the full contract.
+
 ## Explicit point charges
 
 Point charges participate in every SCC iteration. Their positions are in bohr,
@@ -263,13 +284,30 @@ charges_e = atoms.get_charges()
 
 ```python
 import dpdata
+from gpuxtb.dpdata import GPUxtbDriver
 
 system = dpdata.System("geometry.xyz", fmt="xyz")
 labeled = system.predict(driver="gpuxtb", charge=0, multiplicity=1)
 ```
 
-dpdata receives energies in eV and forces in eV/Angstrom. Periodic systems are
-rejected because gpuxtb does not expose a lattice/PBC descriptor.
+Geometries can be minimized with the batch-native minimizer, which relaxes
+every frame in lockstep and evaluates energies and forces for all active
+frames in one gpuxtb ragged-batch call per step:
+
+```python
+labeled = system.minimize(
+    minimizer="gpuxtb",
+    driver=GPUxtbDriver(backend="cpu"),
+    fmax=5e-3,  # eV/Angstrom
+    max_steps=1000,
+)
+```
+
+Unlike the reference ``ase`` minimizer (one frame per optimizer step), a batch
+of molecules is relaxed with full gpuxtb batch throughput; converged frames are
+frozen and dropped from the batch as it shrinks. dpdata receives energies in eV
+and forces in eV/Angstrom. Periodic systems are rejected because gpuxtb does
+not expose a lattice/PBC descriptor.
 
 ## More documentation
 
