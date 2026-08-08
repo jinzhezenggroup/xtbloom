@@ -4226,7 +4226,18 @@ struct Gfn2CudaExecutionCache::Impl {
       error = cuda_error_message("CUDA stationary force projection smoke", cuda_status);
       return GPUXTB_STATUS_INVALID_ARGUMENT;
     }
-    cuda_status = execute_gfn2_energy_force_cuda(binding.plan, binding.input, binding.results,
+    /* The binding is constructed before the first device numerical refresh, so
+     * the committed sparse pair-list consumer is not yet eligible (its arrays
+     * are still zero-initialized) and cannot be exercised by this preflight.
+     * Run the validation smoke on a plan copy without the sparse pair-list CN
+     * consumer; the dense coordination VJP still exercises every other leaf and
+     * the full public publication chain.  The committed sparse consumer is then
+     * parity-gated on the first real execution, after the numerical refresh has
+     * advanced the epoch and published an eligible pair list. */
+    Gfn2EnergyForceExecutionDevicePlan validation_plan = binding.plan;
+    validation_plan.pairlist_committed.plan_token = 0u;
+    validation_plan.pairlist_batch.plan_token = 0u;
+    cuda_status = execute_gfn2_energy_force_cuda(validation_plan, binding.input, binding.results,
                                                  binding.intermediates, binding.workspace,
                                                  binding.diagnostics, stream);
     if (cuda_status != cudaSuccess) {
