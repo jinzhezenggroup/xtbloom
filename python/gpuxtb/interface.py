@@ -1464,6 +1464,10 @@ class BatchCalculator:
 
     The C API describes a ragged batch with flat arrays and offsets, so all
     systems are solved together while keeping per-system convergence state.
+    ``warm_start=True`` reuses the previous fully converged state only when
+    each logical batch remains one native call; it cannot be combined with
+    ``auto_batch_size`` because a context retains just its latest whole-batch
+    checkpoint rather than one checkpoint per chunk.
     """
 
     def __init__(
@@ -1532,7 +1536,18 @@ class BatchCalculator:
         bit-identical to an unsliced run. CUDA chunking can change eigensolver
         bucket composition, so CUDA results should be compared with the same
         tolerances used for ordinary backend conformance.
+
+        ``auto_batch_size`` cannot be combined with ``warm_start=True``. The
+        native context owns one whole-batch checkpoint, so sharing it across
+        chunks could seed a system from a different chunk rather than from the
+        corresponding system in the preceding logical batch.
         """
+        if self._warm_start and auto_batch_size not in (None, False):
+            raise GPUxtbValueError(
+                "warm_start=True cannot be combined with auto_batch_size; "
+                "use one native batch or disable warm start"
+            )
+
         base_flags = (
             library.COMPUTE_ENERGY
             | library.COMPUTE_FORCES
@@ -1592,15 +1607,6 @@ class BatchCalculator:
             if len(computed_batches) == 1
             else _merge_computed(computed_batches, self._structures)
         )
-        if len(computed_batches) > 1:
-            # _compute_batch tracked readiness per chunk; the native warm gate
-            # is whole-batch, so recompute the flag from the merged result to
-            # keep it in sync with the retained native checkpoint.
-            self._context._warm_ready = bool(
-                computed.per_system_status.size
-                and np.all(computed.per_system_status == library.STATUS_SUCCESS)
-                and np.all(computed.scc_converged == 1)
-            )
         batch_result = BatchResult(computed, self._structures)
         if raise_on_failure:
             batch_result.raise_for_status()

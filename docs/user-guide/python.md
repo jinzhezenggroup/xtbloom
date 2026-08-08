@@ -98,7 +98,9 @@ result.raise_for_status()
 memory and retries recoverable multi-system native allocation failures at a
 smaller chunk size. An integer sets a target maximum total atom count per
 chunk. Systems are indivisible, and chunking preserves input order and
-peer-local diagnostics.
+peer-local diagnostics. Automatic slicing cannot be combined with
+`warm_start=True`: a native context retains one whole-batch checkpoint, not an
+independent checkpoint for each chunk.
 
 ## Array API and DLPack input arrays
 

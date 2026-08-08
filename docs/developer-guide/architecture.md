@@ -166,8 +166,12 @@ CUDA additionally keys its checkpoint to a geometry epoch and keeps modifying-Br
 for a same-epoch reuse, while the CPU always restarts a fresh mixing window from the converged
 state. A missing checkpoint or any identity change is a call-level invalid argument and leaves
 caller outputs unchanged. CPU and CUDA use the same compute-options identity, including
-requested-property/output flags. High-level Python calculators intentionally select `FRESH`;
-persistent warm policy is exposed only by the low-level C/ctypes descriptor for now.
+requested-property/output flags. High-level Python calculators select `FRESH` by default;
+`Calculator` and `BatchCalculator` also expose opt-in transparent warm start, which retries one
+`FRESH` solve when the strict native gate rejects an incompatible checkpoint. The ASE calculator
+enables that policy by default for dynamics-like geometry sequences. Automatic batch slicing
+remains incompatible with warm start because one native context retains only its latest whole-batch
+checkpoint, not one checkpoint per logical chunk.
 
 ## External interaction attachments
 
