@@ -784,35 +784,66 @@ bool test_spin_eigensolver_mixed_batches_and_transaction() {
 
     if (batch_size == 8) {
       constexpr std::int64_t failed_system = 1;
-      if (spin.spin_channels[failed_system] != 2 || !spin.fill_outputs(kSentinel)) {
+      if (spin.spin_channels[failed_system] != 2) {
         return false;
       }
-      std::vector<double> poisoned = spin.hamiltonian;
       const std::int64_t n = physical.host.orbital_offsets[failed_system + 1] -
                              physical.host.orbital_offsets[failed_system];
       const std::int64_t beta = spin.spin_matrix_offsets[failed_system] + n * n;
-      poisoned[static_cast<std::size_t>(beta)] = std::numeric_limits<double>::quiet_NaN();
-      if (!spin.device_hamiltonian.upload(poisoned) || !solve_spin(physical, spin, 53u) ||
-          !physical.system_errors.download(errors) || !spin.eigenvalues.download(eigenvalues) ||
-          !spin.coefficients.download(coefficients)) {
-        return false;
-      }
-      if (errors[failed_system] !=
-          static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kNonfiniteHamiltonian)) {
-        return false;
-      }
       const std::int64_t orbital_begin = spin.spin_orbital_offsets[failed_system];
       const std::int64_t orbital_end = spin.spin_orbital_offsets[failed_system + 1];
       const std::int64_t matrix_begin = spin.spin_matrix_offsets[failed_system];
       const std::int64_t matrix_end = spin.spin_matrix_offsets[failed_system + 1];
-      if (!std::all_of(eigenvalues.begin() + orbital_begin, eigenvalues.begin() + orbital_end,
-                       [](double value) { return value == kSentinel; }) ||
-          !std::all_of(coefficients.begin() + matrix_begin, coefficients.begin() + matrix_end,
-                       [](double value) { return value == kSentinel; })) {
+      const auto expect_failure = [&](const std::vector<double>& input,
+                                      Gfn2EigensolverDeviceError expected,
+                                      bool stale_cache) -> bool {
+        if (!factor(physical, 53u) || !spin.fill_outputs(kSentinel) ||
+            !spin.device_hamiltonian.upload(input)) {
+          return false;
+        }
+        if (stale_cache) {
+          std::vector<std::uint64_t> generations;
+          if (!physical.cache_generations.download(generations)) {
+            return false;
+          }
+          generations[failed_system] = 52u;
+          if (!physical.cache_generations.upload(generations)) {
+            return false;
+          }
+        }
+        if (!solve_spin(physical, spin, 53u) || !physical.system_errors.download(errors) ||
+            !spin.eigenvalues.download(eigenvalues) || !spin.coefficients.download(coefficients)) {
+          return false;
+        }
+        return errors[failed_system] == static_cast<std::uint32_t>(expected) &&
+               std::all_of(eigenvalues.begin() + orbital_begin, eigenvalues.begin() + orbital_end,
+                           [](double value) { return value == kSentinel; }) &&
+               std::all_of(coefficients.begin() + matrix_begin, coefficients.begin() + matrix_end,
+                           [](double value) { return value == kSentinel; }) &&
+               errors[2] == 0u &&
+               validate_spin_system(physical, spin, 2, 0, eigenvalues, coefficients);
+      };
+
+      std::vector<double> nonfinite = spin.hamiltonian;
+      nonfinite[static_cast<std::size_t>(beta + n + 1)] = std::numeric_limits<double>::quiet_NaN();
+      if (!expect_failure(nonfinite, Gfn2EigensolverDeviceError::kNonfiniteHamiltonian, false)) {
         return false;
       }
-      if (errors[2] != 0u ||
-          !validate_spin_system(physical, spin, 2, 0, eigenvalues, coefficients)) {
+
+      std::vector<double> asymmetric = spin.hamiltonian;
+      asymmetric[static_cast<std::size_t>(beta + 1)] += 1.0e-3;
+      if (!expect_failure(asymmetric, Gfn2EigensolverDeviceError::kNonsymmetricHamiltonian,
+                          false)) {
+        return false;
+      }
+
+      std::vector<double> combined = asymmetric;
+      combined[static_cast<std::size_t>(beta + n + 1)] = std::numeric_limits<double>::infinity();
+      if (!expect_failure(combined, Gfn2EigensolverDeviceError::kNonfiniteHamiltonian, false)) {
+        return false;
+      }
+
+      if (!expect_failure(nonfinite, Gfn2EigensolverDeviceError::kStaleOverlapCache, true)) {
         return false;
       }
     }
