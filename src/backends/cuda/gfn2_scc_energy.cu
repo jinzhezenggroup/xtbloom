@@ -304,38 +304,63 @@ __global__ void reduce_spin_electronic_energy_kernel(
     std::uint32_t* system_errors, std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   /* The CPU oracle accumulates spin-major matrices with one continuous FMA
-   * chain. Preserve that order exactly; batch systems still execute in
-   * parallel, and this scalar reduction is not a provider bottleneck. */
-  if (threadIdx.x != 0 ||
-      requested_energy_member(activity, workspace, system_errors, system, device_error) == 0) {
+   * chain per system. A block-strided reduction changes the association order
+   * of that chain, but the resulting rounding differences are far below every
+   * retained CPU-parity gate (2e-8 relative in the production test, 5e-7/1e-6
+   * in public conformance), while replacing the former one-thread-per-system
+   * scalar loop with a 256-lane tree reduction. Batch systems still execute
+   * in parallel and the per-element finite checks and failure codes are kept
+   * unchanged. */
+  if (requested_energy_member(activity, workspace, system_errors, system, device_error) == 0) {
     return;
   }
   const std::int64_t physical_begin = batch.matrix_offsets[system];
   const std::int64_t matrix_elements = batch.matrix_offsets[system + 1] - physical_begin;
   const std::int64_t spin_begin = layout.spin_matrix_offsets[system];
   const std::int64_t spin_end = layout.spin_matrix_offsets[system + 1];
-  double core_energy = 0.0;
-  for (std::int64_t element = spin_begin; element < spin_end; ++element) {
+
+  __shared__ int failure_code;
+  __shared__ double partial[kThreadsPerBlock];
+  if (threadIdx.x == 0) {
+    failure_code = 0;
+  }
+  __syncthreads();
+
+  double local_sum = 0.0;
+  for (std::int64_t element = spin_begin + threadIdx.x; element < spin_end; element += blockDim.x) {
     const double density_value = density[element];
     const double h0_value = h0[physical_begin + (element - spin_begin) % matrix_elements];
     if (!isfinite(density_value)) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2SccEnergyDeviceError::kNonfiniteDensity);
-      return;
+      atomicCAS(&failure_code, 0, static_cast<int>(Gfn2SccEnergyDeviceError::kNonfiniteDensity));
+      continue;
     }
     if (!isfinite(h0_value)) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2SccEnergyDeviceError::kNonfiniteH0);
-      return;
+      atomicCAS(&failure_code, 0, static_cast<int>(Gfn2SccEnergyDeviceError::kNonfiniteH0));
+      continue;
     }
-    const double updated = fma(h0_value, density_value, core_energy);
-    if (!isfinite(updated)) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2SccEnergyDeviceError::kNonfiniteCoreArithmetic);
-      return;
-    }
-    core_energy = updated;
+    local_sum = fma(h0_value, density_value, local_sum);
   }
+  if (!isfinite(local_sum)) {
+    atomicCAS(&failure_code, 0,
+              static_cast<int>(Gfn2SccEnergyDeviceError::kNonfiniteCoreArithmetic));
+  }
+  partial[threadIdx.x] = local_sum;
+  __syncthreads();
+  for (int offset = kThreadsPerBlock / 2; offset > 0; offset /= 2) {
+    if (threadIdx.x < offset) {
+      partial[threadIdx.x] += partial[threadIdx.x + offset];
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x != 0) {
+    return;
+  }
+  if (failure_code != 0) {
+    record_system_error(system_errors, system, device_error,
+                        static_cast<Gfn2SccEnergyDeviceError>(failure_code));
+    return;
+  }
+  const double core_energy = partial[0];
   const double entropy = entropies[system];
   if (!isfinite(entropy)) {
     record_system_error(system_errors, system, device_error,
