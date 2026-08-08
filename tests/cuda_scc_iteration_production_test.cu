@@ -1908,6 +1908,10 @@ int test_conditional_graph_exact_body_count(std::int64_t batch_size,
   }
   CHECK(build.success());
   CHECK(build.conditional_graph_ready());
+  if (!mixed_spin_batch && batch_size == 1) {
+    CHECK(build.device_tail_graph_ready());
+    CHECK(!build.device_dispatch_chain_ready());
+  }
   CHECK(graph.ready());
   CHECK(graph.conditional_graph_ready());
   CHECK(graph.canonical_active_count_device() != nullptr);
@@ -2515,6 +2519,20 @@ int test_conditional_graph_mixed_warm_peer_parity() {
 int benchmark_dispatch_chain_vs_monolithic() {
   constexpr int kWarmup = 3;
   constexpr int kSamples = 50;
+  struct BenchmarkState {
+    std::vector<double> free_energies;
+    std::vector<double> eigenvalues;
+    std::vector<double> occupations;
+    std::vector<double> density;
+    std::vector<double> weighted_density;
+    std::vector<double> qsh;
+    std::vector<double> qat;
+    std::vector<double> dipoles;
+    std::vector<double> quadrupoles;
+    std::vector<std::uint64_t> iterations;
+    std::vector<gpuxtb_status_t> statuses;
+    std::vector<std::uint8_t> converged;
+  };
   std::printf(
       "{\"record_type\":\"protocol\",\"benchmark\":\"production-dispatch-chain-vs-monolithic\","
       "\"warmups\":%d,\"samples\":%d,\"timing\":\"cudaEvent elapsed full loop to global "
@@ -2541,6 +2559,75 @@ int benchmark_dispatch_chain_vs_monolithic() {
     cudaEvent_t stop = nullptr;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
+
+    const auto download_state = [&](BenchmarkState& snapshot) -> int {
+      const Gfn2SccIterationDeviceState& state = fixture.binding.state;
+      CHECK(download(state.scc.free_energies, state.scc.batch_elements, snapshot.free_energies,
+                     fixture.handles.stream()));
+      CHECK(download(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements,
+                     snapshot.eigenvalues, fixture.handles.stream()));
+      CHECK(download(state.occupations.occupations, state.occupations.occupation_elements,
+                     snapshot.occupations, fixture.handles.stream()));
+      CHECK(download(state.density.density, state.density.density_elements, snapshot.density,
+                     fixture.handles.stream()));
+      CHECK(download(state.density.energy_weighted_density, state.density.weighted_density_elements,
+                     snapshot.weighted_density, fixture.handles.stream()));
+      CHECK(download(state.raw_population.qsh, state.raw_population.qsh_elements, snapshot.qsh,
+                     fixture.handles.stream()));
+      CHECK(download(state.raw_population.qat, state.raw_population.qat_elements, snapshot.qat,
+                     fixture.handles.stream()));
+      CHECK(download(state.raw_population.dipole, state.raw_population.dipole_elements,
+                     snapshot.dipoles, fixture.handles.stream()));
+      CHECK(download(state.raw_population.quadrupole, state.raw_population.quadrupole_elements,
+                     snapshot.quadrupoles, fixture.handles.stream()));
+      CHECK(download(state.scc.iterations, state.scc.batch_elements, snapshot.iterations,
+                     fixture.handles.stream()));
+      CHECK(download(state.scc.system_statuses, state.scc.batch_elements, snapshot.statuses,
+                     fixture.handles.stream()));
+      CHECK(download(state.scc.converged, state.scc.batch_elements, snapshot.converged,
+                     fixture.handles.stream()));
+      CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+      return 0;
+    };
+    const auto compare_numeric = [](const char* field, const std::vector<double>& first,
+                                    const std::vector<double>& second) {
+      if (first.size() != second.size()) {
+        std::fprintf(stderr, "%s extent mismatch: %zu != %zu\n", field, first.size(),
+                     second.size());
+        return false;
+      }
+      for (std::size_t index = 0; index < first.size(); ++index) {
+        if ((std::isnan(first[index]) && std::isnan(second[index])) ||
+            near(first[index], second[index], 1.0e-10)) {
+          continue;
+        }
+        std::fprintf(stderr, "%s mismatch at %zu: chain=%.17g monolithic=%.17g\n", field, index,
+                     first[index], second[index]);
+        return false;
+      }
+      return true;
+    };
+    const auto compare_states = [&](const BenchmarkState& chain_state,
+                                    const BenchmarkState& monolithic_state) -> int {
+      CHECK(compare_numeric("benchmark free energies", chain_state.free_energies,
+                            monolithic_state.free_energies));
+      CHECK(compare_numeric("benchmark eigenvalues", chain_state.eigenvalues,
+                            monolithic_state.eigenvalues));
+      CHECK(compare_numeric("benchmark occupations", chain_state.occupations,
+                            monolithic_state.occupations));
+      CHECK(compare_numeric("benchmark density", chain_state.density, monolithic_state.density));
+      CHECK(compare_numeric("benchmark weighted density", chain_state.weighted_density,
+                            monolithic_state.weighted_density));
+      CHECK(compare_numeric("benchmark qsh", chain_state.qsh, monolithic_state.qsh));
+      CHECK(compare_numeric("benchmark qat", chain_state.qat, monolithic_state.qat));
+      CHECK(compare_numeric("benchmark dipoles", chain_state.dipoles, monolithic_state.dipoles));
+      CHECK(compare_numeric("benchmark quadrupoles", chain_state.quadrupoles,
+                            monolithic_state.quadrupoles));
+      CHECK(chain_state.iterations == monolithic_state.iterations);
+      CHECK(chain_state.statuses == monolithic_state.statuses);
+      CHECK(chain_state.converged == monolithic_state.converged);
+      return 0;
+    };
 
     for (const std::int64_t active_denominator : {1, 2, 4}) {
       const std::int64_t active_every = active_denominator;
@@ -2610,14 +2697,15 @@ int benchmark_dispatch_chain_vs_monolithic() {
         std::printf(
             "{\"record_type\":\"measurement\",\"batch\":%lld,\"active_fraction\":%g,"
             "\"mode\":\"%s\",\"mean_ms\":%.6f,\"min_ms\":%.6f,\"median_ms\":%.6f,"
-            "\"p95_ms\":%.6f,\"samples\":%d,\"numerical_body_count\":%llu}",
+            "\"p95_ms\":%.6f,\"samples\":%d,\"numerical_body_count\":%llu,"
+            "\"raw_samples_ms\":[",
             static_cast<long long>(batch_size), 1.0 / static_cast<double>(active_every), mode,
             total_ms / static_cast<double>(kSamples), static_cast<double>(minimum_ms), median_ms,
             samples[p95_index], kSamples, static_cast<unsigned long long>(bodies));
-        for (const double sample : samples) {
-          std::printf(",%.6f", sample);
+        for (std::size_t index = 0; index < samples.size(); ++index) {
+          std::printf(index == 0 ? "%.6f" : ",%.6f", samples[index]);
         }
-        std::printf("\n");
+        std::printf("]}\n");
         return 0;
       };
 
@@ -2626,31 +2714,14 @@ int benchmark_dispatch_chain_vs_monolithic() {
        * parity check below has a clean final state. */
       std::uint64_t chain_bodies = 0u;
       CHECK(measure("dispatch_chain", chain, chain_bodies) == 0);
+      BenchmarkState chain_state;
+      CHECK(download_state(chain_state) == 0);
       std::uint64_t monolithic_bodies = 0u;
       CHECK(measure("monolithic_tail", monolithic, monolithic_bodies) == 0);
+      BenchmarkState monolithic_state;
+      CHECK(download_state(monolithic_state) == 0);
       CHECK(chain_bodies == monolithic_bodies);
-      const auto download_state =
-          [&](const Gfn2SccIterationBinding& state_binding, std::vector<double>& free_energies,
-              std::vector<double>& eigenvalues, std::vector<double>& density,
-              std::vector<double>& qsh, std::vector<std::uint64_t>& iterations,
-              std::vector<gpuxtb_status_t>& statuses, std::vector<std::uint8_t>& converged) -> int {
-        const Gfn2SccIterationDeviceState& s = state_binding.state;
-        CHECK(download(s.scc.free_energies, s.scc.batch_elements, free_energies,
-                       fixture.handles.stream()));
-        CHECK(download(s.eigenpairs.eigenvalues, s.eigenpairs.eigenvalue_elements, eigenvalues,
-                       fixture.handles.stream()));
-        CHECK(download(s.density.density, s.density.density_elements, density,
-                       fixture.handles.stream()));
-        CHECK(download(s.raw_population.qsh, s.raw_population.qsh_elements, qsh,
-                       fixture.handles.stream()));
-        CHECK(
-            download(s.scc.iterations, s.scc.batch_elements, iterations, fixture.handles.stream()));
-        CHECK(download(s.scc.system_statuses, s.scc.batch_elements, statuses,
-                       fixture.handles.stream()));
-        CHECK(download(s.scc.converged, s.scc.batch_elements, converged, fixture.handles.stream()));
-        CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
-        return 0;
-      };
+      CHECK(compare_states(chain_state, monolithic_state) == 0);
       const auto verify_ledger = [&]() -> int {
         /* The chain and monolithic runs share one binding, so their public
          * state memory is identical after each terminal run. Verify the ledger
@@ -2658,29 +2729,22 @@ int benchmark_dispatch_chain_vs_monolithic() {
          * members keep their seeded iteration count (published untouched), and
          * active members advance by exactly the observed body count while only
          * their status/converged flags stay consistent. */
-        std::vector<double> free_energies;
-        std::vector<double> eigenvalues;
-        std::vector<double> density;
-        std::vector<double> qsh;
-        std::vector<std::uint64_t> iterations;
-        std::vector<gpuxtb_status_t> statuses;
-        std::vector<std::uint8_t> converged;
-        CHECK(download_state(fixture.binding, free_energies, eigenvalues, density, qsh, iterations,
-                             statuses, converged) == 0);
         for (std::int64_t system = 0; system < batch_size; ++system) {
           const bool terminal = terminal_iterations[static_cast<std::size_t>(system)] != 0u;
           if (terminal) {
-            CHECK(iterations[static_cast<std::size_t>(system)] == maximum);
+            CHECK(monolithic_state.iterations[static_cast<std::size_t>(system)] == maximum);
           } else {
             /* Active members may converge at different rates, but none may
              * exceed the observed body count and every active member must have
              * participated. */
-            CHECK(iterations[static_cast<std::size_t>(system)] >= 1u);
-            CHECK(iterations[static_cast<std::size_t>(system)] <= chain_bodies);
+            CHECK(monolithic_state.iterations[static_cast<std::size_t>(system)] >= 1u);
+            CHECK(monolithic_state.iterations[static_cast<std::size_t>(system)] <= chain_bodies);
           }
-          CHECK(statuses[static_cast<std::size_t>(system)] == GPUXTB_STATUS_SUCCESS ||
-                statuses[static_cast<std::size_t>(system)] == GPUXTB_STATUS_SCC_NOT_CONVERGED);
-          CHECK(converged[static_cast<std::size_t>(system)] <= 1u);
+          CHECK(monolithic_state.statuses[static_cast<std::size_t>(system)] ==
+                    GPUXTB_STATUS_SUCCESS ||
+                monolithic_state.statuses[static_cast<std::size_t>(system)] ==
+                    GPUXTB_STATUS_SCC_NOT_CONVERGED);
+          CHECK(monolithic_state.converged[static_cast<std::size_t>(system)] <= 1u);
         }
         return 0;
       };
@@ -3400,7 +3464,15 @@ int main(int argc, char** argv) {
     const std::int64_t batch_size = std::strtoll(argv[2], nullptr, 10);
     const std::int64_t active_every = std::strtoll(argv[3], nullptr, 10);
     const bool use_chain = std::strcmp(argv[4], "chain") == 0;
+    const bool use_monolithic = std::strcmp(argv[4], "monolithic") == 0;
     const int profiler_samples = static_cast<int>(std::strtoll(argv[5], nullptr, 10));
+    if (batch_size <= 0 || active_every <= 0 || (!use_chain && !use_monolithic) ||
+        profiler_samples <= 0) {
+      std::fprintf(stderr,
+                   "--benchmark-chain-one requires positive batch/activity/sample counts and "
+                   "mode chain|monolithic\n");
+      return 2;
+    }
     ProductionFixture fixture;
     if (!fixture.create(false, batch_size) ||
         fixture.binding.plan.eigensolver_provider.capture_mode !=

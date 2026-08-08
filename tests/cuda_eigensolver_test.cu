@@ -22,6 +22,7 @@ namespace {
 using gpuxtb::detail::cuda::build_gfn2_compacted_eigensolver_graph_cuda;
 using gpuxtb::detail::cuda::capture_gfn2_backtransform_capacity_cuda;
 using gpuxtb::detail::cuda::capture_gfn2_eigensolver_capacity_cuda;
+using gpuxtb::detail::cuda::compact_gfn2_solve_bucket_counts_cuda;
 using gpuxtb::detail::cuda::compact_gfn2_successful_eigenpair_counts_cuda;
 using gpuxtb::detail::cuda::factor_gfn2_overlap_cuda;
 using gpuxtb::detail::cuda::Gfn2EigensolverBucket;
@@ -1170,6 +1171,50 @@ bool test_exact_capacity_leaf_primitives() {
         return false;
       }
     }
+  }
+
+  /* The single-bucket helper must also accept a bucket borrowed from a
+   * heterogeneous plan. Its bucket_index addresses telemetry, not a standalone
+   * one-bucket plan, and insufficient telemetry capacity must fail before a
+   * kernel can write out of bounds. */
+  DeviceFixture mixed;
+  if (!mixed.create(make_batch(batch_size, true)) || !factor(mixed, generation)) {
+    return false;
+  }
+  const std::int64_t mixed_bucket_count = static_cast<std::int64_t>(mixed.host.buckets.size());
+  if (mixed_bucket_count <= 1 ||
+      !cuda_ok(reset_gfn2_eigensolver_device_errors_cuda(
+                   mixed.host.batch_size, mixed.system_errors.get(), mixed.device_error.get(),
+                   mixed.providers.stream),
+               "reset mixed exact-capacity errors") ||
+      !prepare_gfn2_eigensolver_launch_sequence_cuda(
+           mixed.batch, mixed.workspace, mixed.device_error.get(), mixed.providers.stream)
+           .success() ||
+      !prepare_and_compact_gfn2_solve_buckets_cuda(
+           mixed.batch, mixed.host.buckets.data(), mixed_bucket_count, mixed.cache, generation,
+           mixed.hamiltonian.get(), Gfn2EigensolverOptions{}, mixed.workspace,
+           mixed.system_errors.get(), mixed.device_error.get(), mixed.providers.stream)
+           .success()) {
+    return false;
+  }
+  for (std::int64_t bucket_index = 0; bucket_index < mixed_bucket_count; ++bucket_index) {
+    if (!compact_gfn2_solve_bucket_counts_cuda(
+             mixed.batch, mixed.host.buckets[static_cast<std::size_t>(bucket_index)], bucket_index,
+             mixed.workspace, mixed.system_errors.get(), mixed.providers.stream)
+             .success()) {
+      return false;
+    }
+  }
+  Gfn2EigensolverDeviceWorkspace short_activity = mixed.workspace;
+  short_activity.bucket_activity_elements = 1;
+  if (compact_gfn2_solve_bucket_counts_cuda(mixed.batch, mixed.host.buckets[1], 1, short_activity,
+                                            mixed.system_errors.get(), mixed.providers.stream)
+          .status != Gfn2EigensolverLaunchStatus::kInvalidArgument) {
+    return false;
+  }
+  if (!cuda_ok(cudaStreamSynchronize(mixed.providers.stream),
+               "mixed exact-capacity compaction synchronize")) {
+    return false;
   }
   return true;
 }

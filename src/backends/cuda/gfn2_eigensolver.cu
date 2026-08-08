@@ -238,6 +238,44 @@ bool valid_bucket_plan(const Gfn2EigensolverDeviceBatch& batch,
          counted_matrices == batch.total_matrix_elements;
 }
 
+/* Validate one bucket borrowed from an already assembled batch. Unlike
+ * valid_bucket_plan(), this deliberately does not require the bucket to cover
+ * every system because the exact-capacity chain compacts buckets separately. */
+bool valid_bucket_slice(const Gfn2EigensolverDeviceBatch& batch,
+                        const Gfn2EigensolverBucket& bucket) noexcept {
+  if (batch.batch_size <= 0 || batch.batch_size > std::numeric_limits<int>::max() ||
+      batch.total_orbitals <= 0 || batch.total_matrix_elements <= 0 || batch.plan_token == 0u ||
+      batch.orbital_offset_count != batch.batch_size + 1 ||
+      batch.matrix_offset_count != batch.batch_size + 1 ||
+      batch.bucket_system_count != batch.batch_size || batch.active_elements != batch.batch_size ||
+      !is_aligned(batch.orbital_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.matrix_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.bucket_systems, alignof(std::int32_t)) ||
+      !is_aligned(batch.active, alignof(std::uint8_t)) || bucket.orbital_count <= 0 ||
+      bucket.system_count <= 0 || bucket.system_index_offset < 0 ||
+      bucket.matrix_scratch_offset < 0 || bucket.orbital_scratch_offset < 0) {
+    return false;
+  }
+
+  std::int64_t matrix_stride = 0;
+  std::int64_t matrix_span = 0;
+  std::int64_t orbital_span = 0;
+  std::int64_t system_end = 0;
+  std::int64_t matrix_end = 0;
+  std::int64_t orbital_end = 0;
+  return checked_multiply(bucket.orbital_count, bucket.orbital_count, &matrix_stride) &&
+         checked_multiply(matrix_stride, bucket.system_count, &matrix_span) &&
+         checked_multiply(bucket.orbital_count, bucket.system_count, &orbital_span) &&
+         matrix_stride <= std::numeric_limits<int>::max() &&
+         matrix_span <= std::numeric_limits<int>::max() &&
+         orbital_span <= std::numeric_limits<int>::max() &&
+         checked_add(bucket.system_index_offset, bucket.system_count, &system_end) &&
+         checked_add(bucket.matrix_scratch_offset, matrix_span, &matrix_end) &&
+         checked_add(bucket.orbital_scratch_offset, orbital_span, &orbital_end) &&
+         system_end <= batch.bucket_system_count && matrix_end <= batch.total_matrix_elements &&
+         orbital_end <= batch.total_orbitals;
+}
+
 bool valid_spin_bucket_plan(const Gfn2EigensolverDeviceBatch& batch,
                             const Gfn2WavefunctionLayoutView& layout,
                             const Gfn2EigensolverBucket* buckets,
@@ -2491,9 +2529,9 @@ Gfn2EigensolverLaunchResult compact_gfn2_solve_bucket_counts_cuda(
     const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket& bucket,
     std::int64_t bucket_index, const Gfn2EigensolverDeviceWorkspace& workspace,
     const std::uint32_t* system_errors, cudaStream_t stream) noexcept {
-  if (!valid_bucket_plan(batch, &bucket, 1) || !valid_compaction_workspace(batch, 1, workspace) ||
-      bucket_index < 0 || system_errors == nullptr ||
-      !is_aligned(system_errors, alignof(std::uint32_t))) {
+  if (!valid_bucket_slice(batch, bucket) || !valid_compaction_workspace(batch, 1, workspace) ||
+      bucket_index < 0 || workspace.bucket_activity_elements <= bucket_index ||
+      system_errors == nullptr || !is_aligned(system_errors, alignof(std::uint32_t))) {
     return invalid_argument();
   }
 #if CUDART_VERSION >= 12080

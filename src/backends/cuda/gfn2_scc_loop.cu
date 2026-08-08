@@ -738,7 +738,8 @@ void destroy_dispatch_chain_resources(Gfn2SccLoopCudaGraphOwner::State& state) n
  * back_exec[b][completed]. The final back_exec of the last bucket dispatches
  * slot 1 (post_exec).
  */
-Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::State& state) noexcept {
+Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::State& state) noexcept
+    try {
   const Gfn2SccIterationBinding& binding = state.binding;
   const Gfn2SccIterationDevicePlan& plan = binding.plan;
   const auto& workspace = binding.workspace;
@@ -777,6 +778,9 @@ Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::Stat
   }
   /* pre(0) + post(1) + eig slots + back slots. */
   const std::int64_t table_slots = next_slot;
+  std::vector<cudaGraphExec_t> host_table(static_cast<std::size_t>(table_slots), cudaGraphExec_t{});
+  state.executables.reserve(static_cast<std::size_t>(table_slots));
+  state.graph_owns.reserve(static_cast<std::size_t>(table_slots));
 
   cudaError_t status =
       cudaMalloc(reinterpret_cast<void**>(&state.control), sizeof(Gfn2SccDeviceLoopControl));
@@ -792,8 +796,6 @@ Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::Stat
         state, Gfn2SccLoopGraphFallbackReason::kDispatchTableAllocationFailed, status);
   }
   state.table_slots = table_slots;
-  state.executables.reserve(static_cast<std::size_t>(table_slots));
-  state.graph_owns.reserve(static_cast<std::size_t>(table_slots));
 
   cudaStream_t capture_stream = nullptr;
   status = cudaStreamCreateWithFlags(&capture_stream, cudaStreamNonBlocking);
@@ -822,8 +824,6 @@ Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::Stat
   }
   std::uint32_t* const eigen_codes = mutable_stage_codes(*eigen_report);
   std::uint32_t* const eigen_device = mutable_stage_device_error(*eigen_report);
-
-  std::vector<cudaGraphExec_t> host_table(static_cast<std::size_t>(table_slots), cudaGraphExec_t{});
 
   /* ---- pre_exec ---- */
   cudaGraph_t pre_graph = nullptr;
@@ -1142,6 +1142,10 @@ Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::Stat
   Gfn2SccLoopGraphBuildResult result{};
   result.status = Gfn2SccLoopGraphBuildStatus::kDeviceDispatchChainReady;
   return result;
+} catch (const std::bad_alloc&) {
+  destroy_dispatch_chain_resources(state);
+  return fallback_graph_build(state, Gfn2SccLoopGraphFallbackReason::kDispatchBuildFailed,
+                              cudaErrorMemoryAllocation);
 }
 
 #endif  // CUDART_VERSION >= 12080
@@ -1209,7 +1213,13 @@ Gfn2SccLoopGraphBuildResult Gfn2SccLoopCudaGraphOwner::build_impl(
 
 #if CUDART_VERSION >= 12030
 #if CUDART_VERSION >= 12080
-  if (preference != Gfn2SccLoopGraphPreference::kDeviceTailGraph) {
+  /* A singleton batch can never expose a partial nonzero provider capacity, so
+   * the measured dispatch overhead has no compensating compaction benefit.
+   * Forced preferences remain exact; only kAuto applies this crossover. */
+  const bool dispatch_requested = preference == Gfn2SccLoopGraphPreference::kDeviceDispatchChain;
+  const bool dispatch_beneficial =
+      preference == Gfn2SccLoopGraphPreference::kAuto && binding.plan.topology.batch_size > 1;
+  if (dispatch_requested || dispatch_beneficial) {
     Gfn2SccLoopGraphBuildResult dispatch = build_dispatch_chain(*state);
     if (dispatch.status == Gfn2SccLoopGraphBuildStatus::kDeviceDispatchChainReady) {
       return dispatch;
@@ -1228,6 +1238,12 @@ Gfn2SccLoopGraphBuildResult Gfn2SccLoopCudaGraphOwner::build_impl(
     /* dispatch is a bounded-fallback build; retain its fallback reason and fall
      * through to the monolithic device-tail graph. destroy_graph_state later
      * frees any partially built dispatch-chain resources. */
+  }
+#else
+  if (preference == Gfn2SccLoopGraphPreference::kDeviceDispatchChain) {
+    return fallback_graph_build(*state,
+                                Gfn2SccLoopGraphFallbackReason::kDeviceGraphLaunchUnavailable,
+                                cudaErrorNotSupported);
   }
 #endif
   Gfn2SccLoopGraphBuildResult result = build_device_tail_graph(*state);
