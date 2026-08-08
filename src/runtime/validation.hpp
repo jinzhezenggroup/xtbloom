@@ -29,6 +29,10 @@ enum TopologyValidationRequirement : std::uint32_t {
   kChargeResponseOffsetsNeedStaging = 1u << 5,
   kChargeResponseShapeNeedsStaging = 1u << 6,
   kSpinChannelsNeedStaging = 1u << 7,
+  /* Interaction descriptors/payloads not readable on the host because they are
+   * CUDA-device-resident. Intentionally not part of the topology staging mask:
+   * interactions are external attachments, not topology metadata. */
+  kInteractionDescriptorsNeedStaging = 1u << 8,
   kTopologyMetadataStagingMask = kAtomOffsetsNeedStaging | kAtomicNumbersNeedStaging |
                                  kMolecularChargesNeedStaging | kUnpairedElectronsNeedStaging |
                                  kPointChargeOffsetsNeedStaging |

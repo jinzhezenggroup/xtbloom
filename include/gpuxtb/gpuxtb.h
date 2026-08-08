@@ -105,7 +105,10 @@ enum gpuxtb_compute_flag_value {
   GPUXTB_COMPUTE_ENERGY = 1 << 0,
   GPUXTB_COMPUTE_FORCES = 1 << 1,
   GPUXTB_COMPUTE_ATOMIC_CHARGES = 1 << 2,
-  GPUXTB_COMPUTE_POINT_CHARGE_FORCES = 1 << 3
+  GPUXTB_COMPUTE_POINT_CHARGE_FORCES = 1 << 3,
+  /* Reports per-system dipole moments through batch_result.dipole_moments. */
+  GPUXTB_COMPUTE_DIPOLE_MOMENTS = 1 << 4
+  /* Bits 16-31 are reserved for future outputs and must be zero on input. */
 };
 
 typedef int32_t gpuxtb_result_flag_t;
@@ -115,7 +118,60 @@ enum gpuxtb_result_flag_value {
    * Forces then exclude coordinate derivatives of those caller-owned fields.
    */
   GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES = 1 << 0
+  /* Bits 16-31 are reserved for future annotations and must be zero on input. */
 };
+
+/*
+ * Tag set for the generic interaction attachment slot (ABI-v3 batch suffix).
+ * Tag values are intentionally spread over family ranges so future additions
+ * never renumber an existing value. The GFN2 backends currently implement
+ * none of these interactions: validating any present interaction returns
+ * GPUXTB_STATUS_NOT_IMPLEMENTED until the matching backend term lands, and
+ * the enum values are reserved so later features do not churn the batch
+ * layout. GPUXTB_INTERACTION_NONE is not a valid attachment.
+ */
+typedef int32_t gpuxtb_interaction_type_t;
+enum gpuxtb_interaction_type_value {
+  GPUXTB_INTERACTION_NONE = 0,
+  /* External potentials (0x01xx). */
+  GPUXTB_INTERACTION_ELECTRIC_FIELD = 0x0101,
+  GPUXTB_INTERACTION_ELECTRIC_FIELD_GRADIENT = 0x0102,
+  GPUXTB_INTERACTION_POINT_CHARGES_MULTIPOLE = 0x0103,
+  GPUXTB_INTERACTION_ATOMIC_POTENTIAL_GRID = 0x0104,
+  /* Self-consistent solvation models (0x02xx). */
+  GPUXTB_INTERACTION_ALPB_SOLVATION = 0x0201,
+  GPUXTB_INTERACTION_GBSA_SOLVATION = 0x0202,
+  GPUXTB_INTERACTION_GB_SOLVATION = 0x0203,
+  GPUXTB_INTERACTION_GBE_SOLVATION = 0x0204,
+  GPUXTB_INTERACTION_DDX_SOLVATION = 0x0205,
+  /* Dispersion models (0x03xx). */
+  GPUXTB_INTERACTION_D3_DISPERSION = 0x0301,
+  GPUXTB_INTERACTION_D4_VARIANT_DISPERSION = 0x0302,
+  /* Structure-correction models (0x04xx). */
+  GPUXTB_INTERACTION_HALOGEN_BOND = 0x0401
+};
+
+/*
+ * One attachment of an external interaction to one batch item.
+ *
+ * type selects the interaction; flags is reserved and must be zero;
+ * system_index addresses one batch item in [0, batch_size); payload_offset
+ * and payload_size locate the caller-owned payload block inside
+ * interaction_payload. Every payload block starts with an int32_t
+ * block_version so the byte layout of one tag can evolve independently of
+ * this descriptor. The electric-field block (block_version 1) is
+ * 32 bytes: int32_t version, int32_t reserved, three doubles holding the
+ * field vector in Hartree per elementary charge per bohr.
+ */
+typedef struct gpuxtb_interaction {
+  gpuxtb_interaction_type_t type;
+  uint32_t flags;
+  int64_t system_index;
+  uint64_t payload_offset;
+  uint64_t payload_size;
+} gpuxtb_interaction_t;
+
+#define GPUXTB_INTERACTION_V1_SIZE (offsetof(gpuxtb_interaction_t, payload_size) + sizeof(uint64_t))
 
 /*
  * Keep all public ABI tag and flag aliases at their specified width.
@@ -132,6 +188,8 @@ static_assert(sizeof(gpuxtb_compute_flag_t) == sizeof(int32_t),
               "gpuxtb_compute_flag_t must be 32-bit");
 static_assert(sizeof(gpuxtb_result_flag_t) == sizeof(int32_t),
               "gpuxtb_result_flag_t must be 32-bit");
+static_assert(sizeof(gpuxtb_interaction_type_t) == sizeof(int32_t),
+              "gpuxtb_interaction_type_t must be 32-bit");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(sizeof(gpuxtb_status_t) == sizeof(int32_t), "gpuxtb_status_t must be 32-bit");
 _Static_assert(sizeof(gpuxtb_backend_t) == sizeof(int32_t), "gpuxtb_backend_t must be 32-bit");
@@ -144,6 +202,8 @@ _Static_assert(sizeof(gpuxtb_compute_flag_t) == sizeof(int32_t),
                "gpuxtb_compute_flag_t must be 32-bit");
 _Static_assert(sizeof(gpuxtb_result_flag_t) == sizeof(int32_t),
                "gpuxtb_result_flag_t must be 32-bit");
+_Static_assert(sizeof(gpuxtb_interaction_type_t) == sizeof(int32_t),
+               "gpuxtb_interaction_type_t must be 32-bit");
 #endif
 
 /*
@@ -231,12 +291,25 @@ typedef struct gpuxtb_batch {
   gpuxtb_const_buffer_t charge_response_matrix;
   /* ABI v2 optional suffix; NULL selects one restricted channel per system. */
   gpuxtb_const_buffer_t spin_channels;
+  /* ABI v3 optional suffix: generic external-interaction attachments.
+   *
+   * total_interactions counts gpuxtb_interaction_t entries in
+   * interaction_descriptors, each attaching one caller-owned payload block in
+   * interaction_payload to one batch item. The suffix may carry any mix of
+   * host and CUDA-device storage and may be present with zero interactions,
+   * preserving ABI-v1/v2 behavior for callers that never use it. See
+   * gpuxtb_interaction_type_t for the reserved tag set and payload contract. */
+  int64_t total_interactions;
+  gpuxtb_const_buffer_t interaction_descriptors;
+  gpuxtb_const_buffer_t interaction_payload;
 } gpuxtb_batch_t;
 
 #define GPUXTB_BATCH_V1_SIZE \
   (offsetof(gpuxtb_batch_t, charge_response_matrix) + sizeof(gpuxtb_const_buffer_t))
 #define GPUXTB_BATCH_V2_SIZE \
   (offsetof(gpuxtb_batch_t, spin_channels) + sizeof(gpuxtb_const_buffer_t))
+#define GPUXTB_BATCH_V3_SIZE \
+  (offsetof(gpuxtb_batch_t, interaction_payload) + sizeof(gpuxtb_const_buffer_t))
 
 /*
  * electronic_temperature is k_B*T in Hartree. Bindings that accept kelvin
@@ -299,6 +372,31 @@ _Static_assert(sizeof(gpuxtb_compute_options_t) == GPUXTB_COMPUTE_OPTIONS_V2_SIZ
                "gpuxtb_compute_options_t must not add trailing ABI padding");
 #endif
 
+#if defined(__cplusplus)
+static_assert(offsetof(gpuxtb_batch_t, total_interactions) == 352u,
+              "gpuxtb_batch_t ABI-v3 suffix must start at byte 352");
+static_assert(offsetof(gpuxtb_batch_t, interaction_payload) == 384u,
+              "gpuxtb_batch_t ABI-v3 payload must start at byte 384");
+static_assert(GPUXTB_BATCH_V3_SIZE == 408u, "gpuxtb_batch_t ABI-v3 image must remain 408 bytes");
+static_assert(sizeof(gpuxtb_batch_t) == GPUXTB_BATCH_V3_SIZE,
+              "gpuxtb_batch_t must not add trailing ABI padding");
+static_assert(GPUXTB_INTERACTION_V1_SIZE == 32u, "gpuxtb_interaction_t image must remain 32 bytes");
+static_assert(sizeof(gpuxtb_interaction_t) == GPUXTB_INTERACTION_V1_SIZE,
+              "gpuxtb_interaction_t must not add trailing ABI padding");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(offsetof(gpuxtb_batch_t, total_interactions) == 352u,
+               "gpuxtb_batch_t ABI-v3 suffix must start at byte 352");
+_Static_assert(offsetof(gpuxtb_batch_t, interaction_payload) == 384u,
+               "gpuxtb_batch_t ABI-v3 payload must start at byte 384");
+_Static_assert(GPUXTB_BATCH_V3_SIZE == 408u, "gpuxtb_batch_t ABI-v3 image must remain 408 bytes");
+_Static_assert(sizeof(gpuxtb_batch_t) == GPUXTB_BATCH_V3_SIZE,
+               "gpuxtb_batch_t must not add trailing ABI padding");
+_Static_assert(GPUXTB_INTERACTION_V1_SIZE == 32u,
+               "gpuxtb_interaction_t image must remain 32 bytes");
+_Static_assert(sizeof(gpuxtb_interaction_t) == GPUXTB_INTERACTION_V1_SIZE,
+               "gpuxtb_interaction_t must not add trailing ABI padding");
+#endif
+
 /*
  * Caller-allocated result buffers. At finite electronic temperature, energies
  * are the total electronic Helmholtz free energy E_internal - T*S_electronic
@@ -330,10 +428,39 @@ typedef struct gpuxtb_batch_result {
   gpuxtb_buffer_t scc_iterations;
   gpuxtb_buffer_t scc_converged;
   gpuxtb_buffer_t per_system_status;
+  /* ABI v2 optional suffix; absent suffix preserves ABI-v1 behavior.
+   *
+   * dipole_moments holds batch_size * 3 doubles (atomic units) and is filled
+   * when GPUXTB_COMPUTE_DIPOLE_MOMENTS is requested. The remaining outputs
+   * are ABI-reserved: their shape contract is unpublished, their buffers must
+   * be NULL until the matching output is released, and requesting them is
+   * rejected before execution. */
+  gpuxtb_buffer_t dipole_moments;
+  gpuxtb_buffer_t quadrupole_moments;
+  gpuxtb_buffer_t wiberg_orders;
+  gpuxtb_buffer_t spin_populations;
 } gpuxtb_batch_result_t;
 
 #define GPUXTB_BATCH_RESULT_V1_SIZE \
   (offsetof(gpuxtb_batch_result_t, per_system_status) + sizeof(gpuxtb_buffer_t))
+#define GPUXTB_BATCH_RESULT_V2_SIZE \
+  (offsetof(gpuxtb_batch_result_t, spin_populations) + sizeof(gpuxtb_buffer_t))
+
+#if defined(__cplusplus)
+static_assert(offsetof(gpuxtb_batch_result_t, dipole_moments) == 184u,
+              "gpuxtb_batch_result_t ABI-v2 suffix must start at byte 184");
+static_assert(GPUXTB_BATCH_RESULT_V2_SIZE == 280u,
+              "gpuxtb_batch_result_t ABI-v2 image must remain 280 bytes");
+static_assert(sizeof(gpuxtb_batch_result_t) == GPUXTB_BATCH_RESULT_V2_SIZE,
+              "gpuxtb_batch_result_t must not add trailing ABI padding");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(offsetof(gpuxtb_batch_result_t, dipole_moments) == 184u,
+               "gpuxtb_batch_result_t ABI-v2 suffix must start at byte 184");
+_Static_assert(GPUXTB_BATCH_RESULT_V2_SIZE == 280u,
+               "gpuxtb_batch_result_t ABI-v2 image must remain 280 bytes");
+_Static_assert(sizeof(gpuxtb_batch_result_t) == GPUXTB_BATCH_RESULT_V2_SIZE,
+               "gpuxtb_batch_result_t must not add trailing ABI padding");
+#endif
 
 /*
  * Caller-friendly workspace sizing for one fixed-topology plan.

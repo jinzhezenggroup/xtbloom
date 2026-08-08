@@ -70,11 +70,18 @@ def test_abi_struct_sizes() -> None:
     assert ctypes.sizeof(library.ContextOptions) == 32
     assert ctypes.sizeof(library.ConstBuffer) == 24
     assert ctypes.sizeof(library.Buffer) == 24
-    assert ctypes.sizeof(library.Batch) == 352
+    assert ctypes.sizeof(library.Batch) == 408
+    assert library.Batch.total_interactions.offset == 352
+    assert library.Batch.interaction_payload.offset == 384
     assert ctypes.sizeof(library.ComputeOptions) == 56
     assert library.ComputeOptions.scc_start_mode.offset == 48
     assert library.ComputeOptions.reserved_v2.offset == 52
-    assert ctypes.sizeof(library.BatchResult) == 184
+    assert ctypes.sizeof(library.BatchResult) == 280
+    assert library.BatchResult.dipole_moments.offset == 184
+    assert ctypes.sizeof(library.Interaction) == 32
+    assert library.Interaction.type.offset == 0
+    assert library.Interaction.system_index.offset == 8
+    assert library.Interaction.payload_size.offset == 24
     assert ctypes.sizeof(library.ResultOwnerOptions) == 32
     assert library.ResultOwnerOptions.memory_space.offset == 8
     assert library.ResultOwnerOptions.size_bytes.offset == 16
