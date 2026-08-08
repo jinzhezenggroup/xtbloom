@@ -263,6 +263,26 @@ calculator or `driver="gpuxtb"` with dpdata. These integrations convert native
 atomic units to eV and Angstrom conventions. dpdata periodic systems are
 rejected because the native ABI has no lattice descriptor.
 
+For geometry relaxation, `gpuxtb` also registers a batch minimizer under the
+`"gpuxtb"` key. It moves every frame of a dpdata system in lockstep and
+evaluates energies and forces for all active frames in a single ragged-batch
+`gpuxtb_compute` call per step, instead of the one-frame-at-a-time loop of the
+reference `ase` minimizer; converged frames are frozen and dropped from the
+batch as it shrinks:
+
+```python
+import dpdata
+from gpuxtb.dpdata import GPUxtbDriver
+
+system = dpdata.System("geometry.xyz", fmt="xyz")
+labeled = system.minimize(
+    minimizer="gpuxtb",
+    driver=GPUxtbDriver(backend="cuda"),
+    fmax=5e-3,  # eV/Angstrom
+    max_steps=1000,
+)
+```
+
 ## Native-library discovery
 
 Published wheels place `libgpuxtb` inside the Python package. On supported

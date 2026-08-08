@@ -263,13 +263,30 @@ charges_e = atoms.get_charges()
 
 ```python
 import dpdata
+from gpuxtb.dpdata import GPUxtbDriver
 
 system = dpdata.System("geometry.xyz", fmt="xyz")
 labeled = system.predict(driver="gpuxtb", charge=0, multiplicity=1)
 ```
 
-dpdata receives energies in eV and forces in eV/Angstrom. Periodic systems are
-rejected because gpuxtb does not expose a lattice/PBC descriptor.
+Geometries can be minimized with the batch-native minimizer, which relaxes
+every frame in lockstep and evaluates energies and forces for all active
+frames in one gpuxtb ragged-batch call per step:
+
+```python
+labeled = system.minimize(
+    minimizer="gpuxtb",
+    driver=GPUxtbDriver(backend="cpu"),
+    fmax=5e-3,  # eV/Angstrom
+    max_steps=1000,
+)
+```
+
+Unlike the reference ``ase`` minimizer (one frame per optimizer step), a batch
+of molecules is relaxed with full gpuxtb batch throughput; converged frames are
+frozen and dropped from the batch as it shrinks. dpdata receives energies in eV
+and forces in eV/Angstrom. Periodic systems are rejected because gpuxtb does
+not expose a lattice/PBC descriptor.
 
 ## More documentation
 
