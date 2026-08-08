@@ -968,6 +968,59 @@ bool test_interaction_abi_v3() {
          f.enable_interaction(entry, std::vector<std::uint8_t>(64, 0));
        },
        "undersized or misaligned"},
+      {"electric-field payload version unsupported",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 0;
+         entry.payload_size = 32;
+         std::vector<std::uint8_t> payload = efield_block(0.0, 0.0, 0.0);
+         const std::int32_t version = 2;
+         std::memcpy(payload.data(), &version, sizeof(version));
+         f.enable_interaction(entry, payload);
+       },
+       "unsupported block_version"},
+      {"electric-field payload reserved field nonzero",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 0;
+         entry.payload_size = 32;
+         std::vector<std::uint8_t> payload = efield_block(0.0, 0.0, 0.0);
+         const std::int32_t reserved = 1;
+         std::memcpy(payload.data() + sizeof(std::int32_t), &reserved, sizeof(reserved));
+         f.enable_interaction(entry, payload);
+       },
+       "reserved payload field must be zero"},
+      {"electric-field payload non-finite",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 0;
+         entry.payload_size = 32;
+         f.enable_interaction(entry,
+                              efield_block(std::numeric_limits<double>::infinity(), 0.0, 0.0));
+       },
+       "contains NaN or infinity"},
+      {"reserved interaction lacks block-version header",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ALPB_SOLVATION;
+         entry.system_index = 0;
+         entry.payload_size = 3;
+         f.enable_interaction(entry, std::vector<std::uint8_t>(3, 0));
+       },
+       "aligned block_version"},
+      {"reserved interaction block-version header misaligned",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ALPB_SOLVATION;
+         entry.system_index = 0;
+         entry.payload_offset = 2;
+         entry.payload_size = 4;
+         f.enable_interaction(entry, std::vector<std::uint8_t>(8, 0));
+       },
+       "aligned block_version"},
       {"duplicate interaction on one system",
        [](Fixture& f) {
          gpuxtb_interaction_t entries[2] = {};
@@ -979,7 +1032,9 @@ bool test_interaction_abi_v3() {
          entries[1].payload_offset = 32;
          f.interactions.assign(std::begin(entries), std::end(entries));
          f.interaction_payload = efield_block(0.0, 0.0, 0.0);
-         f.interaction_payload.resize(64, 0);
+         const std::vector<std::uint8_t> second_payload = efield_block(0.0, 0.0, 0.0);
+         f.interaction_payload.insert(f.interaction_payload.end(), second_payload.begin(),
+                                      second_payload.end());
          f.batch.struct_size = sizeof(f.batch);
          f.batch.total_interactions = 2;
          f.batch.interaction_descriptors = input_buffer(f.interactions);
@@ -1018,6 +1073,39 @@ bool test_interaction_abi_v3() {
     CHECK(checked.error.find("dipole-moment output") != std::string::npos);
   }
 
+  /* Validate the released outlet shape before reporting that publication is
+   * not implemented. This keeps malformed requests distinguishable. */
+  {
+    Fixture missing_dipole;
+    missing_dipole.options.flags |= GPUXTB_COMPUTE_DIPOLE_MOMENTS;
+    checked = validate_compute_descriptors(GPUXTB_BACKEND_CPU, &missing_dipole.batch,
+                                           &missing_dipole.options, &missing_dipole.result);
+    CHECK(checked.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(checked.error.find("dipole_moments is required") != std::string::npos);
+
+    Fixture short_dipole;
+    short_dipole.options.flags |= GPUXTB_COMPUTE_DIPOLE_MOMENTS;
+    alignas(gpuxtb_batch_result_t) std::array<unsigned char, GPUXTB_BATCH_RESULT_V1_SIZE>
+        short_result_storage{};
+    std::memcpy(short_result_storage.data(), &short_dipole.result, short_result_storage.size());
+    auto* short_result = reinterpret_cast<gpuxtb_batch_result_t*>(short_result_storage.data());
+    short_result->struct_size = GPUXTB_BATCH_RESULT_V1_SIZE;
+    checked = validate_compute_descriptors(GPUXTB_BACKEND_CPU, &short_dipole.batch,
+                                           &short_dipole.options, short_result);
+    CHECK(checked.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(checked.error.find("dipole_moments is required") != std::string::npos);
+
+    Fixture undersized_dipole;
+    undersized_dipole.options.flags |= GPUXTB_COMPUTE_DIPOLE_MOMENTS;
+    std::vector<double> output(5, 0.0);
+    undersized_dipole.result.struct_size = sizeof(undersized_dipole.result);
+    undersized_dipole.result.dipole_moments = output_buffer(output);
+    checked = validate_compute_descriptors(GPUXTB_BACKEND_CPU, &undersized_dipole.batch,
+                                           &undersized_dipole.options, &undersized_dipole.result);
+    CHECK(checked.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(checked.error.find("dipole_moments is smaller") != std::string::npos);
+  }
+
   /* A reserved result outlet with no released shape contract is refused. */
   {
     Fixture quadrupole;
@@ -1026,7 +1114,7 @@ bool test_interaction_abi_v3() {
     quadrupole.result.quadrupole_moments = output_buffer(quadrupole_output);
     checked = validate_compute_descriptors(GPUXTB_BACKEND_CPU, &quadrupole.batch,
                                            &quadrupole.options, &quadrupole.result);
-    CHECK(checked.status == GPUXTB_STATUS_NOT_IMPLEMENTED);
+    CHECK(checked.status == GPUXTB_STATUS_NOT_SUPPORTED);
     CHECK(checked.error.find("reserved batch-result outlet") != std::string::npos);
   }
 

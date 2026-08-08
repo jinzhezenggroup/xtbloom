@@ -66,6 +66,14 @@ _Static_assert(sizeof(gpuxtb_batch_result_t) == GPUXTB_BATCH_RESULT_V2_SIZE,
                "installed batch-result layout must include the ABI-v2 suffix");
 _Static_assert(sizeof(gpuxtb_interaction_t) == GPUXTB_INTERACTION_V1_SIZE,
                "installed interaction descriptor image must remain 32 bytes");
+_Static_assert(offsetof(gpuxtb_batch_t, interaction_descriptors) == 360,
+               "installed interaction descriptor outlet offset must remain stable");
+_Static_assert(offsetof(gpuxtb_interaction_t, payload_offset) == 16,
+               "installed interaction payload offset must remain stable");
+_Static_assert(offsetof(gpuxtb_batch_result_t, spin_populations) == 256,
+               "installed reserved result outlet offsets must remain stable");
+_Static_assert(GPUXTB_RESULT_DIPOLE_MOMENTS == (1 << 4),
+               "installed dipole publication result flag must remain at bit 4");
 
 typedef enum consumer_mode {
   CONSUMER_MODE_SMOKE,

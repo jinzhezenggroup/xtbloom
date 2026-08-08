@@ -172,10 +172,12 @@ layout for each new feature. When present:
   host or CUDA-device memory, like every other buffer.
 
 Every payload block starts with an `int32_t block_version` so the byte layout
-of one tag can evolve independently. The released electric-field block
+of one tag can evolve independently; the header must fit in the payload view
+and be aligned to an `int32_t`. The released electric-field block
 (`GPUXTB_INTERACTION_ELECTRIC_FIELD`, block version 1) is 32 bytes:
-`int32_t version`, `int32_t reserved`, and three binary64 field components in
-Hartree per elementary charge per bohr.
+`int32_t version`, a zero `int32_t reserved`, and three finite binary64 field
+components in Hartree per elementary charge per bohr. Its payload offset is
+8-byte aligned.
 
 The tag set is reserved for the xtb/tblite/dxtb interaction family: uniform
 electric field and field gradient, multipole point charges, atomic-potential
@@ -192,12 +194,14 @@ The ABI-v2 `gpuxtb_batch_result_t` suffix adds the dipole outlet:
 `dipole_moments` holds `batch_size * 3` binary64 values in atomic units. It is
 reported when `GPUXTB_COMPUTE_DIPOLE_MOMENTS` is set in `compute_options.flags`;
 requesting it currently fails with `GPUXTB_STATUS_NOT_IMPLEMENTED` until the
-backends publish it. `quadrupole_moments`, `wiberg_orders`, and
+backends publish it. A successful publication also sets
+`GPUXTB_RESULT_DIPOLE_MOMENTS`. `quadrupole_moments`, `wiberg_orders`, and
 `spin_populations` are ABI-reserved outlets whose shape contract is not
 published: supplying bytes there is refused with
-`GPUXTB_STATUS_NOT_IMPLEMENTED`.
+`GPUXTB_STATUS_NOT_SUPPORTED`.
 
-Compute- and result-flag bit 16-31 are reserved and must be zero on input.
+Compute-flag bits 16-31 are reserved and must be zero on input. Result flags
+are outputs; gpuxtb keeps their reserved bits 16-31 zero on successful return.
 
 ## Outputs and failures
 

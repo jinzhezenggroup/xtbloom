@@ -117,8 +117,10 @@ enum gpuxtb_result_flag_value {
    * Set when atomic_potential_shifts or charge_response_matrix was supplied.
    * Forces then exclude coordinate derivatives of those caller-owned fields.
    */
-  GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES = 1 << 0
-  /* Bits 16-31 are reserved for future annotations and must be zero on input. */
+  GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES = 1 << 0,
+  /* Set when the requested per-system dipole moments were published. */
+  GPUXTB_RESULT_DIPOLE_MOMENTS = 1 << 4
+  /* Bits 16-31 are reserved; gpuxtb-produced result flags are zero there. */
 };
 
 /*
@@ -160,8 +162,8 @@ enum gpuxtb_interaction_type_value {
  * interaction_payload. Every payload block starts with an int32_t
  * block_version so the byte layout of one tag can evolve independently of
  * this descriptor. The electric-field block (block_version 1) is
- * 32 bytes: int32_t version, int32_t reserved, three doubles holding the
- * field vector in Hartree per elementary charge per bohr.
+ * 32 bytes: int32_t version, int32_t reserved (zero), three finite doubles
+ * holding the field vector in Hartree per elementary charge per bohr.
  */
 typedef struct gpuxtb_interaction {
   gpuxtb_interaction_type_t type;
@@ -373,8 +375,12 @@ _Static_assert(sizeof(gpuxtb_compute_options_t) == GPUXTB_COMPUTE_OPTIONS_V2_SIZ
 #endif
 
 #if defined(__cplusplus)
+static_assert(GPUXTB_BATCH_V1_SIZE == 328u, "gpuxtb_batch_t ABI-v1 prefix must remain 328 bytes");
+static_assert(GPUXTB_BATCH_V2_SIZE == 352u, "gpuxtb_batch_t ABI-v2 image must remain 352 bytes");
 static_assert(offsetof(gpuxtb_batch_t, total_interactions) == 352u,
               "gpuxtb_batch_t ABI-v3 suffix must start at byte 352");
+static_assert(offsetof(gpuxtb_batch_t, interaction_descriptors) == 360u,
+              "gpuxtb_batch_t ABI-v3 descriptors must start at byte 360");
 static_assert(offsetof(gpuxtb_batch_t, interaction_payload) == 384u,
               "gpuxtb_batch_t ABI-v3 payload must start at byte 384");
 static_assert(GPUXTB_BATCH_V3_SIZE == 408u, "gpuxtb_batch_t ABI-v3 image must remain 408 bytes");
@@ -383,9 +389,21 @@ static_assert(sizeof(gpuxtb_batch_t) == GPUXTB_BATCH_V3_SIZE,
 static_assert(GPUXTB_INTERACTION_V1_SIZE == 32u, "gpuxtb_interaction_t image must remain 32 bytes");
 static_assert(sizeof(gpuxtb_interaction_t) == GPUXTB_INTERACTION_V1_SIZE,
               "gpuxtb_interaction_t must not add trailing ABI padding");
+static_assert(offsetof(gpuxtb_interaction_t, flags) == 4u,
+              "gpuxtb_interaction_t flags must start at byte 4");
+static_assert(offsetof(gpuxtb_interaction_t, system_index) == 8u,
+              "gpuxtb_interaction_t system index must start at byte 8");
+static_assert(offsetof(gpuxtb_interaction_t, payload_offset) == 16u,
+              "gpuxtb_interaction_t payload offset must start at byte 16");
+static_assert(offsetof(gpuxtb_interaction_t, payload_size) == 24u,
+              "gpuxtb_interaction_t payload size must start at byte 24");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(GPUXTB_BATCH_V1_SIZE == 328u, "gpuxtb_batch_t ABI-v1 prefix must remain 328 bytes");
+_Static_assert(GPUXTB_BATCH_V2_SIZE == 352u, "gpuxtb_batch_t ABI-v2 image must remain 352 bytes");
 _Static_assert(offsetof(gpuxtb_batch_t, total_interactions) == 352u,
                "gpuxtb_batch_t ABI-v3 suffix must start at byte 352");
+_Static_assert(offsetof(gpuxtb_batch_t, interaction_descriptors) == 360u,
+               "gpuxtb_batch_t ABI-v3 descriptors must start at byte 360");
 _Static_assert(offsetof(gpuxtb_batch_t, interaction_payload) == 384u,
                "gpuxtb_batch_t ABI-v3 payload must start at byte 384");
 _Static_assert(GPUXTB_BATCH_V3_SIZE == 408u, "gpuxtb_batch_t ABI-v3 image must remain 408 bytes");
@@ -395,6 +413,14 @@ _Static_assert(GPUXTB_INTERACTION_V1_SIZE == 32u,
                "gpuxtb_interaction_t image must remain 32 bytes");
 _Static_assert(sizeof(gpuxtb_interaction_t) == GPUXTB_INTERACTION_V1_SIZE,
                "gpuxtb_interaction_t must not add trailing ABI padding");
+_Static_assert(offsetof(gpuxtb_interaction_t, flags) == 4u,
+               "gpuxtb_interaction_t flags must start at byte 4");
+_Static_assert(offsetof(gpuxtb_interaction_t, system_index) == 8u,
+               "gpuxtb_interaction_t system index must start at byte 8");
+_Static_assert(offsetof(gpuxtb_interaction_t, payload_offset) == 16u,
+               "gpuxtb_interaction_t payload offset must start at byte 16");
+_Static_assert(offsetof(gpuxtb_interaction_t, payload_size) == 24u,
+               "gpuxtb_interaction_t payload size must start at byte 24");
 #endif
 
 /*
@@ -447,15 +473,31 @@ typedef struct gpuxtb_batch_result {
   (offsetof(gpuxtb_batch_result_t, spin_populations) + sizeof(gpuxtb_buffer_t))
 
 #if defined(__cplusplus)
+static_assert(GPUXTB_BATCH_RESULT_V1_SIZE == 184u,
+              "gpuxtb_batch_result_t ABI-v1 prefix must remain 184 bytes");
 static_assert(offsetof(gpuxtb_batch_result_t, dipole_moments) == 184u,
               "gpuxtb_batch_result_t ABI-v2 suffix must start at byte 184");
+static_assert(offsetof(gpuxtb_batch_result_t, quadrupole_moments) == 208u,
+              "gpuxtb_batch_result_t quadrupole outlet must start at byte 208");
+static_assert(offsetof(gpuxtb_batch_result_t, wiberg_orders) == 232u,
+              "gpuxtb_batch_result_t Wiberg outlet must start at byte 232");
+static_assert(offsetof(gpuxtb_batch_result_t, spin_populations) == 256u,
+              "gpuxtb_batch_result_t spin outlet must start at byte 256");
 static_assert(GPUXTB_BATCH_RESULT_V2_SIZE == 280u,
               "gpuxtb_batch_result_t ABI-v2 image must remain 280 bytes");
 static_assert(sizeof(gpuxtb_batch_result_t) == GPUXTB_BATCH_RESULT_V2_SIZE,
               "gpuxtb_batch_result_t must not add trailing ABI padding");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(GPUXTB_BATCH_RESULT_V1_SIZE == 184u,
+               "gpuxtb_batch_result_t ABI-v1 prefix must remain 184 bytes");
 _Static_assert(offsetof(gpuxtb_batch_result_t, dipole_moments) == 184u,
                "gpuxtb_batch_result_t ABI-v2 suffix must start at byte 184");
+_Static_assert(offsetof(gpuxtb_batch_result_t, quadrupole_moments) == 208u,
+               "gpuxtb_batch_result_t quadrupole outlet must start at byte 208");
+_Static_assert(offsetof(gpuxtb_batch_result_t, wiberg_orders) == 232u,
+               "gpuxtb_batch_result_t Wiberg outlet must start at byte 232");
+_Static_assert(offsetof(gpuxtb_batch_result_t, spin_populations) == 256u,
+               "gpuxtb_batch_result_t spin outlet must start at byte 256");
 _Static_assert(GPUXTB_BATCH_RESULT_V2_SIZE == 280u,
                "gpuxtb_batch_result_t ABI-v2 image must remain 280 bytes");
 _Static_assert(sizeof(gpuxtb_batch_result_t) == GPUXTB_BATCH_RESULT_V2_SIZE,

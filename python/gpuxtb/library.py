@@ -65,6 +65,9 @@ COMPUTE_ATOMIC_CHARGES = 1 << 2
 COMPUTE_POINT_CHARGE_FORCES = 1 << 3
 COMPUTE_DIPOLE_MOMENTS = 1 << 4
 
+RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES = 1 << 0
+RESULT_DIPOLE_MOMENTS = 1 << 4
+
 # Reserved interaction-type tags (mirror of gpuxtb_interaction_type_t).  No
 # backend executes any interaction yet: attaching one currently fails with
 # NOT_IMPLEMENTED at the C boundary.  Values are reserved so future
@@ -940,6 +943,8 @@ __all__ = [
     "MEMORY_ROCM_DEVICE",
     "MODEL_GFN1_XTB",
     "MODEL_GFN2_XTB",
+    "RESULT_DIPOLE_MOMENTS",
+    "RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES",
     "SCC_START_FRESH",
     "SCC_START_WARM",
     "STATUS_ALLOCATION_FAILED",

@@ -1,6 +1,7 @@
 #include "runtime/validation.hpp"
 // gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -384,13 +385,6 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
   if (options->flags == 0 || (options->flags & ~kKnownComputeFlags) != 0) {
     return invalid("compute flags must contain at least one known output flag and no unknown bits");
   }
-  if ((options->flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0) {
-    /* The ABI reserves the flag and the batch_result outlet, but no backend
-     * publishes dipole moments yet (see #237 P2/P3). Refuse the request
-     * instead of silently omitting the output. */
-    return {GPUXTB_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
-            "dipole-moment output is reserved by the ABI but is not implemented yet"};
-  }
   if (options->max_scc_iterations <= 0) {
     return invalid("max_scc_iterations must be positive");
   }
@@ -424,9 +418,15 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
     BufferView buffer;
   };
   const gpuxtb_buffer_t empty_buffer{};
-  const auto result_v2_output = [&](const gpuxtb_buffer_t& buffer) {
-    return (result != nullptr && has_result_v2_suffix(*result)) ? view(buffer) : view(empty_buffer);
-  };
+  const bool result_v2 = result != nullptr && has_result_v2_suffix(*result);
+  /* Keep the size condition outside each member expression. Passing a suffix
+   * field to a helper by reference would evaluate the out-of-prefix lvalue
+   * before the helper could check struct_size. */
+  const BufferView dipole_output = result_v2 ? view(result->dipole_moments) : view(empty_buffer);
+  const BufferView quadrupole_output =
+      result_v2 ? view(result->quadrupole_moments) : view(empty_buffer);
+  const BufferView wiberg_output = result_v2 ? view(result->wiberg_orders) : view(empty_buffer);
+  const BufferView spin_output = result_v2 ? view(result->spin_populations) : view(empty_buffer);
   const NamedBuffer all_buffers[] = {
       {"atom_offsets", view(batch->atom_offsets)},
       {"atomic_numbers", view(batch->atomic_numbers)},
@@ -451,13 +451,10 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
       {"scc_converged", result == nullptr ? view(empty_buffer) : view(result->scc_converged)},
       {"per_system_status",
        result == nullptr ? view(empty_buffer) : view(result->per_system_status)},
-      {"dipole_moments",
-       result_v2_output(result == nullptr ? empty_buffer : result->dipole_moments)},
-      {"quadrupole_moments",
-       result_v2_output(result == nullptr ? empty_buffer : result->quadrupole_moments)},
-      {"wiberg_orders", result_v2_output(result == nullptr ? empty_buffer : result->wiberg_orders)},
-      {"spin_populations",
-       result_v2_output(result == nullptr ? empty_buffer : result->spin_populations)},
+      {"dipole_moments", dipole_output},
+      {"quadrupole_moments", quadrupole_output},
+      {"wiberg_orders", wiberg_output},
+      {"spin_populations", spin_output},
   };
   for (const NamedBuffer& named : all_buffers) {
     DescriptorValidationResult checked =
@@ -484,9 +481,9 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
                                            view(result->spin_populations)};
     for (const BufferView& reserved : reserved_outputs) {
       if (active(reserved)) {
-        return {GPUXTB_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
-                "a reserved batch-result outlet is supplied but has no released "
-                "shape contract yet"};
+        return unsupported(
+            "a reserved batch-result outlet is supplied but has no released "
+            "shape contract yet");
       }
     }
   }
@@ -645,6 +642,8 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
         {"scc_iterations", view(result->scc_iterations), batch_i32_bytes, true},
         {"scc_converged", view(result->scc_converged), batch_u8_bytes, true},
         {"per_system_status", view(result->per_system_status), batch_i32_bytes, true},
+        {"dipole_moments", dipole_output, dipole_f64_bytes,
+         (options->flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0},
     };
     for (const RequiredOutput& output : outputs) {
       if (!output.requested) {
@@ -822,10 +821,9 @@ bool is_known_interaction_type(std::int32_t type) {
  * This pass dereferences only HOST-tagged interaction_descriptors bytes. A
  * CUDA-device-resident descriptor array is opaque here and reported through
  * kInteractionDescriptorsNeedStaging for the backend to validate after
- * staging. Per-tag payload contents (block_version, numeric values) are
- * intentionally not read here either: payload blocks may be device-resident
- * and are validated by the executing backend, which owns the memory-space
- * contract.
+ * staging. A device-resident payload is reported independently through
+ * kInteractionPayloadNeedsStaging; host payload headers and released numeric
+ * contracts are validated here with byte-exact loads.
  *
  * Every tag currently passes structural validation and is then refused by
  * validate_interaction_execution_availability because no backend executes
@@ -837,12 +835,15 @@ DescriptorValidationResult validate_host_interaction_semantics(const gpuxtb_batc
     return {};
   }
   const BufferView descriptors = interaction_descriptor_view(batch);
-  if (descriptors.memory_space != GPUXTB_MEMORY_HOST) {
-    DescriptorValidationResult result;
-    result.pending_offset_checks |= kInteractionDescriptorsNeedStaging;
-    return result;
-  }
   const BufferView payload = interaction_payload_view(batch);
+  DescriptorValidationResult validation;
+  if (payload.memory_space != GPUXTB_MEMORY_HOST) {
+    validation.pending_offset_checks |= kInteractionPayloadNeedsStaging;
+  }
+  if (descriptors.memory_space != GPUXTB_MEMORY_HOST) {
+    validation.pending_offset_checks |= kInteractionDescriptorsNeedStaging;
+    return validation;
+  }
   const std::size_t count = static_cast<std::size_t>(batch.total_interactions);
   for (std::size_t index = 0; index < count; ++index) {
     const InteractionView interaction = load_interaction(descriptors, index);
@@ -864,6 +865,11 @@ DescriptorValidationResult validate_host_interaction_semantics(const gpuxtb_batc
             static_cast<std::uint64_t>(payload.size_bytes) - interaction.payload_offset) {
       return invalid("an interaction payload block extends past interaction_payload");
     }
+    if (interaction.type != GPUXTB_INTERACTION_ELECTRIC_FIELD &&
+        (interaction.payload_size < sizeof(std::int32_t) ||
+         (interaction.payload_offset % alignof(std::int32_t)) != 0u)) {
+      return invalid("an interaction payload block must contain an aligned block_version");
+    }
     if (interaction.type == GPUXTB_INTERACTION_ELECTRIC_FIELD) {
       /* Released block contract for block_version 1: 32 bytes (one int32_t
        * version, one int32_t reserved, three doubles) with 8-byte alignment. */
@@ -875,6 +881,26 @@ DescriptorValidationResult validate_host_interaction_semantics(const gpuxtb_batc
          * block belongs to a later block_version that this library cannot
          * interpret yet. */
         return invalid("an electric-field interaction payload block exceeds the released contract");
+      }
+      if (payload.memory_space == GPUXTB_MEMORY_HOST) {
+        const unsigned char* block = static_cast<const unsigned char*>(payload.data) +
+                                     static_cast<std::size_t>(interaction.payload_offset);
+        std::int32_t block_version = 0;
+        std::int32_t reserved = 0;
+        std::array<double, 3> field{};
+        std::memcpy(&block_version, block, sizeof(block_version));
+        std::memcpy(&reserved, block + sizeof(block_version), sizeof(reserved));
+        std::memcpy(field.data(), block + 2u * sizeof(std::int32_t), sizeof(field));
+        if (block_version != 1) {
+          return invalid("an electric-field interaction uses an unsupported block_version");
+        }
+        if (reserved != 0) {
+          return invalid("an electric-field interaction reserved payload field must be zero");
+        }
+        if (!std::all_of(field.begin(), field.end(),
+                         [](double component) { return std::isfinite(component); })) {
+          return invalid("an electric-field interaction contains NaN or infinity");
+        }
       }
     }
   }
@@ -889,6 +915,18 @@ DescriptorValidationResult validate_host_interaction_semantics(const gpuxtb_batc
         return invalid("the same system has two attachments of the same interaction type");
       }
     }
+  }
+  return validation;
+}
+
+DescriptorValidationResult validate_output_execution_availability(
+    const gpuxtb_compute_options_t& options) {
+  if ((options.flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0u) {
+    /* The ABI reserves the flag and result outlet, but no backend publishes
+     * dipole moments yet (see #237 P2/P3). This runs after output shape and
+     * alias validation so malformed requests still receive precise errors. */
+    return {GPUXTB_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
+            "dipole-moment output is reserved by the ABI but is not implemented yet"};
   }
   return {};
 }
@@ -927,6 +965,10 @@ DescriptorValidationResult validate_compute_descriptor_structure(
   if (!aliases.ok()) {
     return aliases;
   }
+  DescriptorValidationResult output_availability = validate_output_execution_availability(*options);
+  if (!output_availability.ok()) {
+    return output_availability;
+  }
   return validate_interaction_execution_availability(*batch);
 }
 
@@ -959,6 +1001,10 @@ DescriptorValidationResult validate_plan_descriptor_structure(
       validate_compute_descriptor_aliases(*batch, *options, nullptr, extents);
   if (!aliases.ok()) {
     return aliases;
+  }
+  DescriptorValidationResult output_availability = validate_output_execution_availability(*options);
+  if (!output_availability.ok()) {
+    return output_availability;
   }
   return validate_interaction_execution_availability(*batch);
 }
@@ -1104,6 +1150,10 @@ DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend
       validate_compute_descriptor_aliases(*batch, *options, result, extents);
   if (!aliases.ok()) {
     return aliases;
+  }
+  DescriptorValidationResult output_availability = validate_output_execution_availability(*options);
+  if (!output_availability.ok()) {
+    return output_availability;
   }
   DescriptorValidationResult availability = validate_interaction_execution_availability(*batch);
   if (!availability.ok()) {

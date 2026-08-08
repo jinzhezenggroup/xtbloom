@@ -180,17 +180,24 @@ halogen-bond corrections) do not each regrow the batch layout. One
 item; block contents are versioned per tag through a leading `block_version`.
 
 Reserved attachments follow a strict validate-then-refuse policy: the common
-structural validator proves descriptor/payload extents, memory-space tags, tag
-membership, per-tag block contracts, and duplicate rejection, then the request
+validator proves descriptor/payload extents, memory-space tags, and every
+semantic relationship available from host-resident storage, then the request
 is refused with `NOT_IMPLEMENTED` before any backend execution or caller-output
 commit. A caller can therefore never observe a result where a reserved
 interaction was silently ignored. Unknown or `NONE` tags and structurally
-malformed attachments are `INVALID_ARGUMENT`. Device-resident descriptor
-content defers through the `kInteractionDescriptorsNeedStaging` pending mask
-and is validated by the backend after staging. The ABI-v2 result suffix
-reserves the dipole-moment outlet alongside `quadrupole_moments`,
+malformed host-resident attachments are `INVALID_ARGUMENT`. Device-resident
+descriptor content is marked with `kInteractionDescriptorsNeedStaging`, while
+device payload content is marked independently with
+`kInteractionPayloadNeedsStaging`. P3 must stage and validate every marked
+interaction byte before enabling CUDA execution; P1's availability gate
+refuses the request first because no backend can consume it yet. Host-resident
+electric-field blocks are byte-loaded and checked for version 1, a zero
+reserved field, and finite values before that gate. The ABI-v2 result suffix
+reserves the dipole-moment outlet and
+`GPUXTB_RESULT_DIPOLE_MOMENTS` publication flag alongside `quadrupole_moments`,
 `wiberg_orders`, and `spin_populations`; the latter three have no released
-shape contract and must remain NULL until published.
+shape contract, must remain NULL until published, and return `NOT_SUPPORTED`
+when supplied.
 
 ## Fixed-topology plans and workspace sizing
 
