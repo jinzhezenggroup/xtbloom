@@ -1081,7 +1081,10 @@ __global__ void prepare_spin_solve_bucket_kernel(
         atomicExch(&finite_ok, 0);
       }
       if (column < row) {
-        const double transpose = hamiltonians[input_begin + column * bucket.orbital_count + row];
+        /* The flat scan is decoded in column-major order, while Hamiltonians
+         * use row-major storage. `index` therefore names (column, row), and
+         * this address names its (row, column) transpose. */
+        const double transpose = hamiltonians[input_begin + row * bucket.orbital_count + column];
         if (!isfinite(transpose)) {
           atomicExch(&finite_ok, 0);
         } else if (isfinite(value)) {
