@@ -22,6 +22,27 @@ from gpuxtb.exceptions import GPUxtbNotSupportedError, GPUxtbValueError
 _TORCH = importlib.util.find_spec("torch")
 
 
+class _DLPackOnly:
+    """Expose a tensor through DLPack while forbidding NumPy conversion."""
+
+    def __init__(self, tensor: object) -> None:
+        self._tensor = tensor
+        self.shape = tensor.shape
+
+    def __dlpack__(self, *args: object, **kwargs: object) -> object:
+        """Delegate DLPack export to the wrapped tensor."""
+        return self._tensor.__dlpack__(*args, **kwargs)
+
+    def __dlpack_device__(self) -> tuple[int, int]:
+        """Delegate DLPack device discovery to the wrapped tensor."""
+        return self._tensor.__dlpack_device__()
+
+    def __array__(self, dtype: object = None, copy: object = None) -> np.ndarray:
+        """Reject the implicit host conversion used by the original bug."""
+        del dtype, copy
+        raise AssertionError("DLPack-only offsets must not be converted by NumPy")
+
+
 def _skip_reason() -> str | None:
     """Return a skip reason when the torch tests cannot run."""
     return None if _TORCH is not None else "torch is not installed"
@@ -156,6 +177,63 @@ def test_backward_grad_equals_neg_forces() -> None:
     assert torch.allclose(positions.grad, -forces, atol=0.0, rtol=0.0)
 
 
+def test_energy_backward_does_not_scan_unused_force_grad(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An energy-only loss must not materialize and scan a zero force grad."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+
+    positions = torch.tensor(
+        WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
+    )
+    arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
+    energies, _ = gpuxtb_torch(
+        positions,
+        arrays["atomic_numbers"],
+        arrays["atom_offsets"],
+        arrays["molecular_charges"],
+        arrays["unpaired_electrons"],
+        arrays["spin_channels"],
+        backend="cpu",
+    )
+
+    def reject_any(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("energy backward must not scan an unused force grad")
+
+    monkeypatch.setattr(torch.Tensor, "any", reject_any)
+    energies.sum().backward()
+    assert positions.grad is not None
+
+
+def test_dlpack_only_offsets_survive_backward() -> None:
+    """Non-Torch offsets remain DLPack-native through gradient construction."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+
+    positions = torch.tensor(
+        WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
+    )
+    arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
+    energies, forces = gpuxtb_torch(
+        positions,
+        arrays["atomic_numbers"],
+        _DLPackOnly(arrays["atom_offsets"]),
+        arrays["molecular_charges"],
+        arrays["unpaired_electrons"],
+        arrays["spin_channels"],
+        backend="cpu",
+    )
+    energies.sum().backward()
+    assert positions.grad is not None
+    assert torch.allclose(positions.grad, -forces, atol=0.0, rtol=0.0)
+
+
 def test_energy_gradient_finite_difference() -> None:
     """A central-difference dE/dR must match the op's analytic gradient."""
     reason = _skip_reason()
@@ -271,6 +349,61 @@ def test_grad_through_forces_raises() -> None:
     )
     with pytest.raises(GPUxtbNotSupportedError, match="forces"):
         (forces**2).sum().backward()
+
+
+def test_zero_grad_through_forces_raises() -> None:
+    """A real force-output gradient is rejected even when its value is zero."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+
+    positions = torch.tensor(
+        WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
+    )
+    arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
+    _, forces = gpuxtb_torch(
+        positions,
+        arrays["atomic_numbers"],
+        arrays["atom_offsets"],
+        arrays["molecular_charges"],
+        arrays["unpaired_electrons"],
+        arrays["spin_channels"],
+        backend="cpu",
+    )
+    with pytest.raises(GPUxtbNotSupportedError, match="forces"):
+        forces.backward(torch.zeros_like(forces))
+
+
+def test_higher_order_gradient_raises() -> None:
+    """Hessian requests fail instead of silently returning zero curvature."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+
+    positions = torch.tensor(WATER_POSITIONS.tolist(), dtype=torch.float64)
+    arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
+
+    def total_energy(values: torch.Tensor) -> torch.Tensor:
+        energies, _ = gpuxtb_torch(
+            values,
+            arrays["atomic_numbers"],
+            arrays["atom_offsets"],
+            arrays["molecular_charges"],
+            arrays["unpaired_electrons"],
+            arrays["spin_channels"],
+            backend="cpu",
+        )
+        return energies.sum()
+
+    direct_positions = positions.clone().requires_grad_(True)
+    with pytest.raises(GPUxtbNotSupportedError, match="higher-order"):
+        torch.autograd.grad(
+            total_energy(direct_positions), direct_positions, create_graph=True
+        )
+    with pytest.raises(GPUxtbNotSupportedError, match="higher-order"):
+        torch.autograd.functional.hessian(total_energy, positions)
 
 
 def test_noncontiguous_positions_copied() -> None:

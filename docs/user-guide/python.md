@@ -220,6 +220,9 @@ loss.backward()      # positions.grad == -forces
 
 - Backpropagation through `forces` (the force Hessian `dF/dR`) raises
   `GPUxtbNotSupportedError`.
+- Higher-order differentiation requests such as `create_graph=True` or
+  `torch.autograd.functional.hessian` raise `GPUxtbNotSupportedError`; gpuxtb
+  never substitutes a partial or zero Hessian for the unavailable `dF/dR`.
 - Requesting autograd on any other input — `atomic_numbers`, `atom_offsets`,
   `molecular_charges`, `unpaired_electrons`, `spin_channels` — raises
   `GPUxtbNotSupportedError` eagerly at forward time.

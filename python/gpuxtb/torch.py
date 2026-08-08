@@ -14,6 +14,8 @@ The autograd contract is intentionally narrow.
   does not compute those derivatives.
 * Gradient flow through the ``forces`` output (the force Hessian ``dF/dR``)
   raises :class:`GPUxtbNotSupportedError` during backward.
+* Higher-order differentiation is rejected explicitly instead of returning a
+  partial or zero Hessian, because the native force derivative is unavailable.
 * Every tensor input is detached before the native DLPack call, so calling
   :func:`gpuxtb_torch` never participates in or mutates an existing autograd
   graph beyond the one this op creates.
@@ -54,17 +56,11 @@ class _Tensor(Protocol):
 
     def is_floating_point(self) -> bool: ...
 
-    def any(self, dim: object = ...) -> _Tensor: ...
-
     def dim(self) -> int: ...
 
     def detach(self) -> _Tensor: ...
 
     def clone(self) -> _Tensor: ...
-
-    def cpu(self) -> _Tensor: ...
-
-    def numpy(self) -> np.ndarray: ...
 
     def contiguous(self) -> _Tensor: ...
 
@@ -78,6 +74,10 @@ class _Tensor(Protocol):
 
     def __mul__(self, other: object) -> _Tensor: ...
 
+    def __sub__(self, other: object) -> _Tensor: ...
+
+    def __getitem__(self, index: object) -> _Tensor: ...
+
 
 class _AutogradFunction(Protocol):
     """Structural type for the ``torch.autograd.Function.apply`` entry point."""
@@ -90,7 +90,9 @@ class _FunctionCtx(Protocol):
 
     _result: object | None
     _forces: _Tensor
-    _atom_offsets: np.ndarray
+    _atom_offsets: _Tensor
+
+    def set_materialize_grads(self, value: bool) -> None: ...
 
 
 def _torch() -> ModuleType:
@@ -143,7 +145,7 @@ def _function() -> _AutogradFunction:
 
     torch = _torch()
 
-    class _GPUxtbTorchFunction(torch.autograd.Function):  # type: ignore[misc,valid-type]
+    class _GPUxtbTorchFunction(torch.autograd.Function):
         """One gpuxtb forward/backward pair restricted to the dR gradient."""
 
         @staticmethod
@@ -195,8 +197,12 @@ def _function() -> _AutogradFunction:
             # Normalize layout and detach everything before the native call so
             # the op never participates in an outside autograd graph and the
             # strict zero-copy DLPack descriptors are always satisfied.
+            # Import offsets through DLPack once and pass the resulting Torch
+            # tensor to both native inference and backward.  In particular,
+            # CUDA producers such as CuPy intentionally reject np.asarray.
+            normalized_atom_offsets = _to_tensor(_normalize_layout(atom_offsets))
             result = compute_arrays(
-                atom_offsets=_normalize_layout(atom_offsets),
+                atom_offsets=normalized_atom_offsets,
                 atomic_numbers=_normalize_layout(atomic_numbers),
                 positions=_normalize_layout(positions),
                 molecular_charges=_normalize_layout(molecular_charges),
@@ -222,11 +228,12 @@ def _function() -> _AutogradFunction:
             # returned tensors cannot corrupt the gradient.
             ctx._result = result
             ctx._forces = forces.detach().clone()
-            if torch.is_tensor(atom_offsets):
-                offsets_cpu = cast("_Tensor", atom_offsets).detach().cpu().numpy()
-            else:
-                offsets_cpu = atom_offsets
-            ctx._atom_offsets = np.asarray(offsets_cpu, dtype=np.int64).copy()
+            ctx._atom_offsets = normalized_atom_offsets.detach().clone()
+            # An energy-only loss has no gradient for the forces output.  Keep
+            # that state as None so CUDA backward avoids materializing and
+            # scanning a full zero tensor solely to distinguish an unused
+            # output from a real force-gradient request.
+            ctx.set_materialize_grads(False)
             return energies, forces
 
         @staticmethod
@@ -235,10 +242,16 @@ def _function() -> _AutogradFunction:
             grad_energies: _Tensor | None,
             grad_forces: _Tensor | None,
         ) -> tuple[_Tensor | None, ...]:
-            # The autograd engine materializes the unused forces output as a
-            # zero grad, so only a genuinely nonzero grad through forces (a
-            # loss that depends on dF/dR) is rejected.
-            if grad_forces is not None and bool(grad_forces.any()):
+            # create_graph=True enables grad mode while custom backward runs.
+            # Reject it immediately: ctx._forces is a detached native result,
+            # so allowing this path would silently omit dF/dR and report a
+            # partial or all-zero Hessian.
+            if torch.is_grad_enabled():
+                raise GPUxtbNotSupportedError(
+                    "gpuxtb_torch does not support higher-order "
+                    "differentiation because dF/dR is not computed"
+                )
+            if grad_forces is not None:
                 raise GPUxtbNotSupportedError(
                     "gpuxtb_torch does not support gradients through the forces "
                     "output (the force Hessian dF/dR is not computed); only the "
@@ -248,9 +261,7 @@ def _function() -> _AutogradFunction:
                 return (None,) * 14
             # dE/dR = -F, block-diagonal over the ragged batch: atom a of
             # system i receives -grad_energy[i] * F_a.
-            offsets = torch.as_tensor(
-                ctx._atom_offsets, device=ctx._forces.device, dtype=torch.int64
-            )
+            offsets = ctx._atom_offsets.to(device=ctx._forces.device, dtype=torch.int64)
             counts = offsets[1:] - offsets[:-1]
             system_of_atom = torch.repeat_interleave(
                 torch.arange(offsets.shape[0] - 1, device=offsets.device), counts
@@ -342,7 +353,8 @@ def gpuxtb_torch(
     ------
     GPUxtbNotSupportedError
         If PyTorch is unavailable, if a non-``positions`` tensor requests
-        autograd, or if gradient flows through the ``forces`` output.
+        autograd, if gradient flows through the ``forces`` output, or if
+        higher-order differentiation is requested.
     GPUxtbValueError
         If ``positions`` is not a ``float64`` tensor of shape ``(natoms, 3)``.
     """

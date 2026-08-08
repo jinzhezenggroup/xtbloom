@@ -73,6 +73,10 @@ test = [
 # checking never installs the pytest test tooling.
 [dependency-groups]
 typechecking = ["ase", "dpdata"]
+# PyTorch is needed only to execute the public autograd integration tests in
+# required CI. Keep it out of project extras so wheels and normal test-extra
+# installations retain the package's optional, lazy-import contract.
+torch-testing = ["torch==2.13.0"]
 
 # Install the typechecking group by default so `uv check` (the ty-pre-commit
 # hook) and plain `uv sync` both resolve ase/dpdata without extra flags. The

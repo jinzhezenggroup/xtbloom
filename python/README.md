@@ -219,7 +219,9 @@ unpaired_electrons, ...)` runs the packed DLPack inference on PyTorch tensors
 (host or CUDA) and is the only autograd entry point in the Python API. It
 supports exactly the positions gradient `dE/dR = -F`; autograd on any other
 input, or a gradient flowing through the `forces` output (the Hessian), raises
-`GPUxtbNotSupportedError`. PyTorch is imported only when the op is called. See
+`GPUxtbNotSupportedError`. Higher-order differentiation is likewise rejected
+explicitly rather than returning a partial or zero Hessian. PyTorch is imported
+only when the op is called. See
 `docs/user-guide/python.md` for the full contract.
 
 ## Explicit point charges
