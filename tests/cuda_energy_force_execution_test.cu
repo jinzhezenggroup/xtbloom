@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "backends/cuda/gfn2_energy_force_execution.cuh"
+#include "backends/cuda/gfn2_energy_force_execution_test.cuh"
 #include "backends/cuda/gfn2_parameters.cuh"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/basis.hpp"
@@ -29,7 +30,15 @@
     }                    \
   } while (false)
 
-#define CUDA_CHECK(expression) CHECK((expression) == cudaSuccess)
+#define CUDA_CHECK(expression)                                                                  \
+  do {                                                                                          \
+    const cudaError_t cuda_check_status = (expression);                                         \
+    if (cuda_check_status != cudaSuccess) {                                                     \
+      std::fprintf(stderr, "CUDA failure at %s:%d: %s (%d)\n", __FILE__, __LINE__,              \
+                   cudaGetErrorString(cuda_check_status), static_cast<int>(cuda_check_status)); \
+      return __LINE__;                                                                          \
+    }                                                                                           \
+  } while (false)
 
 namespace {
 
@@ -642,6 +651,14 @@ struct DeviceFixture {
   DeviceBuffer<std::uint64_t> geometry_epoch;
   DeviceBuffer<std::uint64_t> geometry_generations;
   DeviceBuffer<std::uint8_t> geometry_eligible;
+  DeviceBuffer<gpuxtb::detail::Gfn2AtomPair> committed_pairs;
+  DeviceBuffer<std::int64_t> committed_pair_offsets;
+  DeviceBuffer<std::int64_t> committed_pair_counts;
+  DeviceBuffer<std::int64_t> committed_neighbor_offsets;
+  DeviceBuffer<std::int64_t> committed_neighbor_counts;
+  DeviceBuffer<std::int64_t> committed_neighbors;
+  DeviceBuffer<std::uint64_t> committed_pair_generations;
+  DeviceBuffer<std::uint8_t> committed_pair_eligible;
   DeviceBuffer<double> geometry_pair_scratch;
   DeviceBuffer<double> geometry_coordination_scratch;
   DeviceBuffer<double> geometry_update_gradient_scratch;
@@ -697,6 +714,7 @@ struct DeviceFixture {
   DeviceBuffer<double> hamiltonian_quadrupole_scratch;
   DeviceBuffer<double> integral_gradient_scratch;
   DeviceBuffer<double> coordination_gradient_scratch;
+  DeviceBuffer<double> sparse_gradient_scratch;
   DeviceBuffer<double> classical_gradient_scratch;
   DeviceBuffer<double> classical_force_scratch;
   DeviceBuffer<double> classical_coordination_adjoint;
@@ -730,6 +748,7 @@ struct DeviceFixture {
   DeviceBuffer<std::uint32_t> hamiltonian_sequence;
   DeviceBuffer<std::uint32_t> integral_sequence;
   DeviceBuffer<std::uint32_t> coordination_sequence;
+  DeviceBuffer<std::uint32_t> sparse_sequence;
   DeviceBuffer<std::uint32_t> classical_sequence;
   DeviceBuffer<std::uint32_t> classical_primitive_sequence;
   DeviceBuffer<std::uint32_t> external_sequence;
@@ -830,6 +849,48 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
   const std::size_t pairs = static_cast<std::size_t>(h.aes2_plan.total_pairs());
   const std::size_t coordinates = atoms * 3u;
   const std::size_t point_coordinates = h.point_positions.size();
+  std::int64_t maximum_atoms = 0;
+  for (std::size_t system = 0u; system < batch; ++system) {
+    maximum_atoms =
+        std::max(maximum_atoms, h.basis.atom_offsets[system + 1u] - h.basis.atom_offsets[system]);
+  }
+  const std::int64_t maximum_pairs =
+      std::max<std::int64_t>(1, maximum_atoms * (maximum_atoms - 1) / 2);
+  const std::int64_t maximum_neighbors = std::max<std::int64_t>(1, maximum_atoms);
+  std::vector<gpuxtb::detail::Gfn2AtomPair> committed_pairs(
+      batch * static_cast<std::size_t>(maximum_pairs));
+  std::vector<std::int64_t> committed_pair_offsets(batch + 1u);
+  std::vector<std::int64_t> committed_pair_counts(batch);
+  std::vector<std::int64_t> committed_neighbor_offsets(atoms + 1u);
+  std::vector<std::int64_t> committed_neighbor_counts(atoms);
+  std::vector<std::int64_t> committed_neighbors(atoms *
+                                                static_cast<std::size_t>(maximum_neighbors));
+  for (std::size_t system = 0u; system < batch; ++system) {
+    const std::int64_t atom_begin = h.basis.atom_offsets[system];
+    const std::int64_t atom_end = h.basis.atom_offsets[system + 1u];
+    const std::int64_t pair_begin = static_cast<std::int64_t>(system) * maximum_pairs;
+    committed_pair_offsets[system] = pair_begin;
+    std::int64_t pair_count = 0;
+    for (std::int64_t second = atom_begin + 1; second < atom_end; ++second) {
+      for (std::int64_t first = atom_begin; first < second; ++first) {
+        committed_pairs[static_cast<std::size_t>(pair_begin + pair_count++)] = {first, second};
+      }
+    }
+    committed_pair_counts[system] = pair_count;
+    for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+      const std::int64_t neighbor_begin = atom * maximum_neighbors;
+      committed_neighbor_offsets[static_cast<std::size_t>(atom)] = neighbor_begin;
+      std::int64_t neighbor_count = 0;
+      for (std::int64_t peer = atom_begin; peer < atom_end; ++peer) {
+        if (peer != atom) {
+          committed_neighbors[static_cast<std::size_t>(neighbor_begin + neighbor_count++)] = peer;
+        }
+      }
+      committed_neighbor_counts[static_cast<std::size_t>(atom)] = neighbor_count;
+    }
+  }
+  committed_pair_offsets.back() = static_cast<std::int64_t>(batch) * maximum_pairs;
+  committed_neighbor_offsets.back() = static_cast<std::int64_t>(atoms) * maximum_neighbors;
 #define ALLOCATE(field, count)          \
   if (status == cudaSuccess) {          \
     status = d.field.allocate((count)); \
@@ -856,6 +917,14 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
   ALLOCATE(geometry_epoch, 1u)
   ALLOCATE(geometry_generations, batch)
   ALLOCATE(geometry_eligible, batch)
+  ALLOCATE(committed_pairs, committed_pairs.size())
+  ALLOCATE(committed_pair_offsets, committed_pair_offsets.size())
+  ALLOCATE(committed_pair_counts, committed_pair_counts.size())
+  ALLOCATE(committed_neighbor_offsets, committed_neighbor_offsets.size())
+  ALLOCATE(committed_neighbor_counts, committed_neighbor_counts.size())
+  ALLOCATE(committed_neighbors, committed_neighbors.size())
+  ALLOCATE(committed_pair_generations, batch)
+  ALLOCATE(committed_pair_eligible, batch)
   ALLOCATE(geometry_pair_scratch, pairs * static_cast<std::size_t>(kGfn2GeometryPairDataElements))
   ALLOCATE(geometry_coordination_scratch, atoms)
   ALLOCATE(geometry_update_gradient_scratch, coordinates)
@@ -907,6 +976,7 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
   ALLOCATE(hamiltonian_quadrupole_scratch, 6u * matrices)
   ALLOCATE(integral_gradient_scratch, coordinates)
   ALLOCATE(coordination_gradient_scratch, coordinates)
+  ALLOCATE(sparse_gradient_scratch, coordinates)
   ALLOCATE(classical_gradient_scratch, coordinates)
   ALLOCATE(classical_force_scratch, coordinates)
   ALLOCATE(classical_coordination_adjoint, atoms)
@@ -938,6 +1008,7 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
   ALLOCATE(hamiltonian_sequence, 1u)
   ALLOCATE(integral_sequence, 1u)
   ALLOCATE(coordination_sequence, 1u)
+  ALLOCATE(sparse_sequence, 1u)
   ALLOCATE(classical_sequence, 1u)
   ALLOCATE(classical_primitive_sequence, 1u)
   ALLOCATE(external_sequence, 1u)
@@ -1021,6 +1092,14 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
   COPY(geometry_epoch, geometry_epoch)
   COPY(geometry_generations, generations)
   COPY(geometry_eligible, geometry_eligible)
+  COPY(committed_pairs, committed_pairs)
+  COPY(committed_pair_offsets, committed_pair_offsets)
+  COPY(committed_pair_counts, committed_pair_counts)
+  COPY(committed_neighbor_offsets, committed_neighbor_offsets)
+  COPY(committed_neighbor_counts, committed_neighbor_counts)
+  COPY(committed_neighbors, committed_neighbors)
+  COPY(committed_pair_generations, generations)
+  COPY(committed_pair_eligible, geometry_eligible)
 #undef COPY
   if (status != cudaSuccess) {
     return status;
@@ -1305,6 +1384,49 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
   d.plan.hamiltonian_batch = hamiltonian_batch;
   d.plan.coordination_batch = geometry_batch;
   d.plan.coordination_cache = geometry_cache;
+  d.plan.pairlist_batch = {static_cast<std::int64_t>(batch),
+                           static_cast<std::int64_t>(atoms),
+                           static_cast<std::int64_t>(batch + 1u),
+                           kDefaultPairlistCutoffBohr,
+                           1,
+                           maximum_neighbors,
+                           maximum_pairs,
+                           Gfn2PairListMode::kDense,
+                           kPlanToken,
+                           d.atom_offsets.get(),
+                           0u,
+                           nullptr,
+                           0};
+  auto& committed = d.plan.pairlist_committed;
+  committed.memory_space = gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice;
+  committed.state = gpuxtb::detail::Gfn2PairListState::kCommitted;
+  committed.role = gpuxtb::detail::Gfn2PairListRole::kCoordination;
+  committed.pair_map_kind = gpuxtb::detail::Gfn2PairMapKind::kExplicit;
+  committed.plan_token = kPlanToken;
+  committed.cutoff_bohr = kDefaultPairlistCutoffBohr;
+  committed.list_builder_cutoff_bohr = kDefaultPairlistCutoffBohr;
+  committed.batch_size = static_cast<std::int64_t>(batch);
+  committed.total_atoms = static_cast<std::int64_t>(atoms);
+  committed.max_pairs_per_system = maximum_pairs;
+  committed.max_neighbors_per_atom = maximum_neighbors;
+  committed.pair_offset_count = static_cast<std::int64_t>(batch + 1u);
+  committed.neighbor_offset_count = static_cast<std::int64_t>(atoms + 1u);
+  committed.pair_count = static_cast<std::int64_t>(committed_pairs.size());
+  committed.neighbor_count = static_cast<std::int64_t>(committed_neighbors.size());
+  committed.pair_offsets = d.committed_pair_offsets.get();
+  committed.pairs = d.committed_pairs.get();
+  committed.pair_count_elements = static_cast<std::int64_t>(batch);
+  committed.neighbor_count_elements = static_cast<std::int64_t>(atoms);
+  committed.pair_counts = d.committed_pair_counts.get();
+  committed.neighbor_counts = d.committed_neighbor_counts.get();
+  committed.neighbor_offsets = d.committed_neighbor_offsets.get();
+  committed.neighbors = d.committed_neighbors.get();
+  committed.committed_generation_count = static_cast<std::int64_t>(batch);
+  committed.eligible_mask_count = static_cast<std::int64_t>(batch);
+  committed.active_mask_count = 0;
+  committed.committed_generations = d.committed_pair_generations.get();
+  committed.eligible_mask = d.committed_pair_eligible.get();
+  committed.active_mask = nullptr;
   d.plan.geometry_generation = kGeometryGeneration;
   d.plan.classical_plan = classical_plan;
   d.plan.external_point_charge_batch = external_batch;
@@ -1524,6 +1646,10 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
                               d.coordination_sequence.get(),
                               1,
                               kPlanToken};
+  d.workspace.sparse_gradient_scratch = d.sparse_gradient_scratch.get();
+  d.workspace.sparse_gradient_elements = static_cast<std::int64_t>(coordinates);
+  d.workspace.sparse_sequence_active = d.sparse_sequence.get();
+  d.workspace.sparse_sequence_elements = 1;
   d.workspace.classical = {d.classical_gradient_scratch.get(),
                            static_cast<std::int64_t>(coordinates),
                            d.classical_force_scratch.get(),
@@ -1796,6 +1922,119 @@ int test_energy_only_ignores_force_bindings() {
   return 0;
 }
 
+int test_sparse_binding_aliases_fail_before_enqueue() {
+  HostCase host;
+  std::string error;
+  CHECK(make_case(8u, host, error));
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CUDA_CHECK(initialize_device(device, host, stream));
+  CUDA_CHECK(seed_public_results(device, host, stream));
+
+  constexpr std::uint32_t kControlSentinel = 0x5a17c3e9u;
+  CUDA_CHECK(device.execution_device_error.copy_from(&kControlSentinel, 1u, stream));
+  CUDA_CHECK(device.plan_failure.copy_from(&kControlSentinel, 1u, stream));
+
+  Gfn2EnergyForceExecutionDeviceWorkspace alias = device.workspace;
+  alias.sparse_gradient_scratch = device.results.forces.qm_forces;
+  CHECK(execute_gfn2_energy_force_cuda(device.plan, device.input, device.results,
+                                       device.intermediates, alias, device.diagnostics,
+                                       stream) == cudaErrorInvalidValue);
+
+  alias = device.workspace;
+  alias.sparse_gradient_scratch = device.intermediates.h0.gradients + 1;
+  CHECK(execute_gfn2_energy_force_cuda(device.plan, device.input, device.results,
+                                       device.intermediates, alias, device.diagnostics,
+                                       stream) == cudaErrorInvalidValue);
+
+  alias = device.workspace;
+  alias.sparse_sequence_active =
+      reinterpret_cast<std::uint32_t*>(const_cast<double*>(device.input.h0.positions));
+  CHECK(execute_gfn2_energy_force_cuda(device.plan, device.input, device.results,
+                                       device.intermediates, alias, device.diagnostics,
+                                       stream) == cudaErrorInvalidValue);
+
+  alias = device.workspace;
+  alias.sparse_sequence_active = reinterpret_cast<std::uint32_t*>(device.geometry_eligible.get());
+  CHECK(execute_gfn2_energy_force_cuda(device.plan, device.input, device.results,
+                                       device.intermediates, alias, device.diagnostics,
+                                       geometry_consumer(device, host.batch_size),
+                                       stream) == cudaErrorInvalidValue);
+
+  alias = device.workspace;
+  alias.sparse_gradient_scratch = const_cast<double*>(device.plan.coordination_cache.pair_data);
+  CHECK(execute_gfn2_energy_force_cuda(device.plan, device.input, device.results,
+                                       device.intermediates, alias, device.diagnostics,
+                                       stream) == cudaErrorInvalidValue);
+
+  alias = device.workspace;
+  alias.sparse_gradient_scratch =
+      const_cast<double*>(device.plan.classical_plan.aes2_cache.pair_data);
+  CHECK(execute_gfn2_energy_force_cuda(device.plan, device.input, device.results,
+                                       device.intermediates, alias, device.diagnostics,
+                                       stream) == cudaErrorInvalidValue);
+
+  alias = device.workspace;
+  alias.sparse_sequence_active = device.workspace.coordination.sequence_active;
+  CHECK(execute_gfn2_energy_force_cuda(device.plan, device.input, device.results,
+                                       device.intermediates, alias, device.diagnostics,
+                                       stream) == cudaErrorInvalidValue);
+
+  alias = device.workspace;
+  alias.sparse_sequence_active = reinterpret_cast<std::uint32_t*>(
+      const_cast<std::int64_t*>(device.plan.force_composition_batch.atom_offsets));
+  CHECK(execute_gfn2_energy_force_cuda(device.plan, device.input, device.results,
+                                       device.intermediates, alias, device.diagnostics,
+                                       stream) == cudaErrorInvalidValue);
+
+  std::vector<double> energy(host.batch_size);
+  std::vector<double> qm(host.expected_qm_force.size());
+  std::vector<double> point(host.expected_point_force.size());
+  std::uint32_t execution_device_error = 0u;
+  std::uint32_t plan_failure = 0u;
+  CUDA_CHECK(device.public_energy.copy_to(energy.data(), energy.size(), stream));
+  CUDA_CHECK(device.public_qm_force.copy_to(qm.data(), qm.size(), stream));
+  CUDA_CHECK(device.public_point_force.copy_to(point.data(), point.size(), stream));
+  CUDA_CHECK(device.execution_device_error.copy_to(&execution_device_error, 1u, stream));
+  CUDA_CHECK(device.plan_failure.copy_to(&plan_failure, 1u, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(std::all_of(energy.begin(), energy.end(), [](double value) { return value == kSentinel; }));
+  CHECK(std::all_of(qm.begin(), qm.end(), [](double value) { return value == kSentinel; }));
+  CHECK(std::all_of(point.begin(), point.end(), [](double value) { return value == kSentinel; }));
+  CHECK(execution_device_error == kControlSentinel);
+  CHECK(plan_failure == kControlSentinel);
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
+int test_inactive_d4_storage_may_reuse_sparse_scratch() {
+  HostCase host;
+  std::string error;
+  CHECK(make_case(8u, host, error));
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CUDA_CHECK(initialize_device(device, host, stream));
+  CUDA_CHECK(seed_public_results(device, host, stream));
+
+  CHECK((device.plan.classical_plan.enabled_components &
+         (static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4TwoBody) |
+          static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4ATM))) == 0u);
+  Gfn2EnergyForceExecutionDeviceWorkspace reused = device.workspace;
+  reused.classical.d4_workspace.weights = reused.sparse_gradient_scratch;
+  reused.classical.d4_workspace.weight_elements = reused.sparse_gradient_elements;
+  CUDA_CHECK(execute_gfn2_energy_force_cuda(device.plan, device.input, device.results,
+                                            device.intermediates, reused, device.diagnostics,
+                                            stream));
+  if (const int line = compare_success(device, host, stream); line != 0) {
+    return line;
+  }
+
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 int test_peer_failure_transaction() {
   HostCase host;
   std::string error;
@@ -1813,13 +2052,17 @@ int test_peer_failure_transaction() {
       std::numeric_limits<double>::quiet_NaN();
   raw_shell[static_cast<std::size_t>(host.basis.batch_shell_offsets[1])] =
       std::numeric_limits<double>::quiet_NaN();
+  const std::vector<double> sparse_sentinel(host.expected_qm_force.size(), 91.75);
   CUDA_CHECK(device.requested.copy_from(requested.data(), requested.size(), stream));
   CUDA_CHECK(device.shell_charges.copy_from(raw_shell.data(), raw_shell.size(), stream));
+  CUDA_CHECK(device.sparse_gradient_scratch.copy_from(sparse_sentinel.data(),
+                                                      sparse_sentinel.size(), stream));
   CUDA_CHECK(launch_execution(device, stream));
 
   std::vector<double> energy(host.batch_size);
   std::vector<double> qm(host.expected_qm_force.size());
   std::vector<double> point(host.expected_point_force.size());
+  std::vector<double> sparse_gradient(host.expected_qm_force.size());
   std::vector<std::uint32_t> execution_errors(host.batch_size);
   std::vector<std::uint32_t> post_errors(host.batch_size);
   std::uint32_t execution_device_error = 0u;
@@ -1827,6 +2070,8 @@ int test_peer_failure_transaction() {
   CUDA_CHECK(device.public_energy.copy_to(energy.data(), energy.size(), stream));
   CUDA_CHECK(device.public_qm_force.copy_to(qm.data(), qm.size(), stream));
   CUDA_CHECK(device.public_point_force.copy_to(point.data(), point.size(), stream));
+  CUDA_CHECK(device.sparse_gradient_scratch.copy_to(sparse_gradient.data(), sparse_gradient.size(),
+                                                    stream));
   CUDA_CHECK(device.execution_system_errors.copy_to(execution_errors.data(),
                                                     execution_errors.size(), stream));
   CUDA_CHECK(device.post_system_errors.copy_to(post_errors.data(), post_errors.size(), stream));
@@ -1857,6 +2102,7 @@ int test_peer_failure_transaction() {
       const std::size_t index = static_cast<std::size_t>(coordinate);
       if (system <= 1u) {
         CHECK(qm[index] == kSentinel);
+        CHECK(sparse_gradient[index] == sparse_sentinel[index]);
       } else {
         CHECK(near(qm[index], host.expected_qm_force[index], 2.0e-8, 2.0e-8));
       }
@@ -1913,6 +2159,93 @@ int test_plan_failure_suppresses_publication() {
   CHECK(std::all_of(energy.begin(), energy.end(), [](double value) { return value == kSentinel; }));
   CHECK(std::all_of(qm.begin(), qm.end(), [](double value) { return value == kSentinel; }));
   CHECK(std::all_of(point.begin(), point.end(), [](double value) { return value == kSentinel; }));
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
+int test_sequence_failure_precedes_hostile_sparse_parity_offset_read() {
+  HostCase host;
+  std::string error;
+  CHECK(make_case(8u, host, error));
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CUDA_CHECK(initialize_device(device, host, stream));
+  /* A closed sparse sequence must become a plan-wide coordination failure
+   * before the parity gate can interpret even the first hostile partition. */
+  std::vector<std::int64_t> hostile_offsets = host.basis.atom_offsets;
+  hostile_offsets[1] = std::numeric_limits<std::int64_t>::max() / 4;
+  CUDA_CHECK(device.atom_offsets.copy_from(hostile_offsets.data(), hostile_offsets.size(), stream));
+  const std::uint32_t zero = 0u;
+  const std::uint32_t one = 1u;
+  const std::vector<std::uint32_t> no_errors(host.batch_size, 0u);
+  const std::vector<std::uint8_t> all_success(host.batch_size, 1u);
+  CUDA_CHECK(device.sparse_sequence.copy_from(&zero, 1u, stream));
+  CUDA_CHECK(device.coordination_sequence.copy_from(&one, 1u, stream));
+  CUDA_CHECK(device.plan_failure.copy_from(&zero, 1u, stream));
+  CUDA_CHECK(device.execution_device_error.copy_from(&zero, 1u, stream));
+  CUDA_CHECK(
+      device.coordination_system_errors.copy_from(no_errors.data(), no_errors.size(), stream));
+  CUDA_CHECK(device.electronic_success.copy_from(all_success.data(), all_success.size(), stream));
+  std::vector<double> before(host.expected_qm_force.size(), kSentinel);
+  CUDA_CHECK(device.electronic_gradient.copy_from(before.data(), before.size(), stream));
+  CUDA_CHECK(test_gate_gfn2_cn_vjp_parity_cuda(
+      static_cast<std::int64_t>(host.batch_size), device.atom_offsets.get(),
+      device.electronic_success.get(), device.sparse_sequence.get(),
+      device.coordination_sequence.get(), device.plan_failure.get(),
+      device.electronic_gradient.get(), device.sparse_gradient_scratch.get(),
+      device.electronic_gradient.get(), device.coordination_system_errors.get(),
+      device.execution_device_error.get(), stream));
+
+  std::vector<double> after(before.size());
+  std::uint32_t execution_device_error = 0u;
+  std::uint32_t plan_failure = 0u;
+  CUDA_CHECK(device.electronic_gradient.copy_to(after.data(), after.size(), stream));
+  CUDA_CHECK(device.execution_device_error.copy_to(&execution_device_error, 1u, stream));
+  CUDA_CHECK(device.plan_failure.copy_to(&plan_failure, 1u, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  const auto expected =
+      static_cast<std::uint32_t>(Gfn2EnergyForceExecutionDeviceError::kCoordinationGradientFailure);
+  if (plan_failure != expected || execution_device_error != expected) {
+    std::fprintf(stderr, "hostile parity gate: plan_failure=%u execution_device_error=%u\n",
+                 plan_failure, execution_device_error);
+  }
+  CHECK(plan_failure == expected);
+  CHECK(execution_device_error == expected);
+  CHECK(after == before);
+
+  /* Peer-local coordination failure is distinct from plan failure.  The gate
+   * must skip that peer before reading either gradient slice; passing a null
+   * sparse pointer makes a regression an immediate device invalid read. */
+  CUDA_CHECK(device.atom_offsets.copy_from(host.basis.atom_offsets.data(),
+                                           host.basis.atom_offsets.size(), stream));
+  CUDA_CHECK(device.plan_failure.copy_from(&zero, 1u, stream));
+  CUDA_CHECK(device.execution_device_error.copy_from(&zero, 1u, stream));
+  CUDA_CHECK(
+      device.coordination_system_errors.copy_from(no_errors.data(), no_errors.size(), stream));
+  std::vector<std::uint32_t> peer_error(host.batch_size, 0u);
+  peer_error[0] = static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kInvalidCache);
+  std::vector<std::uint8_t> only_failed_peer(host.batch_size, 0u);
+  only_failed_peer[0] = 1u;
+  CUDA_CHECK(
+      device.coordination_system_errors.copy_from(peer_error.data(), peer_error.size(), stream));
+  CUDA_CHECK(device.electronic_success.copy_from(only_failed_peer.data(), only_failed_peer.size(),
+                                                 stream));
+  CUDA_CHECK(device.sparse_sequence.copy_from(&one, 1u, stream));
+  CUDA_CHECK(device.coordination_sequence.copy_from(&one, 1u, stream));
+  CUDA_CHECK(device.electronic_gradient.copy_from(before.data(), before.size(), stream));
+  CUDA_CHECK(test_gate_gfn2_cn_vjp_parity_cuda(
+      static_cast<std::int64_t>(host.batch_size), device.atom_offsets.get(),
+      device.electronic_success.get(), device.sparse_sequence.get(),
+      device.coordination_sequence.get(), device.plan_failure.get(),
+      device.electronic_gradient.get(), nullptr, device.electronic_gradient.get(),
+      device.coordination_system_errors.get(), device.execution_device_error.get(), stream));
+  CUDA_CHECK(device.electronic_gradient.copy_to(after.data(), after.size(), stream));
+  CUDA_CHECK(device.plan_failure.copy_to(&plan_failure, 1u, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(plan_failure == 0u);
+  CHECK(after == before);
   CUDA_CHECK(cudaStreamDestroy(stream));
   return 0;
 }
@@ -1998,7 +2331,10 @@ int test_device_epoch_graph_replay() {
   eligible[2] = 0u;
   CUDA_CHECK(device.geometry_epoch.copy_from(&next_epoch, 1u, stream));
   CUDA_CHECK(device.geometry_generations.copy_from(committed.data(), committed.size(), stream));
+  CUDA_CHECK(
+      device.committed_pair_generations.copy_from(committed.data(), committed.size(), stream));
   CUDA_CHECK(device.geometry_eligible.copy_from(eligible.data(), eligible.size(), stream));
+  CUDA_CHECK(device.committed_pair_eligible.copy_from(eligible.data(), eligible.size(), stream));
   CUDA_CHECK(seed_public_results(device, initial, stream));
   CUDA_CHECK(cudaGraphLaunch(executable, stream));
 
@@ -2065,7 +2401,10 @@ int test_device_epoch_graph_replay() {
   committed.assign(changed.batch_size, next_epoch);
   eligible.assign(changed.batch_size, 1u);
   CUDA_CHECK(device.geometry_generations.copy_from(committed.data(), committed.size(), stream));
+  CUDA_CHECK(
+      device.committed_pair_generations.copy_from(committed.data(), committed.size(), stream));
   CUDA_CHECK(device.geometry_eligible.copy_from(eligible.data(), eligible.size(), stream));
+  CUDA_CHECK(device.committed_pair_eligible.copy_from(eligible.data(), eligible.size(), stream));
   CUDA_CHECK(seed_public_results(device, changed, stream));
   CUDA_CHECK(upload_raw_state(device, changed, stream));
   CUDA_CHECK(cudaGraphLaunch(executable, stream));
@@ -2090,10 +2429,20 @@ int main() {
   if (const int line = test_energy_only_ignores_force_bindings(); line != 0) {
     return line;
   }
+  if (const int line = test_sparse_binding_aliases_fail_before_enqueue(); line != 0) {
+    return line;
+  }
+  if (const int line = test_inactive_d4_storage_may_reuse_sparse_scratch(); line != 0) {
+    return line;
+  }
   if (const int line = test_peer_failure_transaction(); line != 0) {
     return line;
   }
   if (const int line = test_plan_failure_suppresses_publication(); line != 0) {
+    return line;
+  }
+  if (const int line = test_sequence_failure_precedes_hostile_sparse_parity_offset_read();
+      line != 0) {
     return line;
   }
   if (const int line = test_graph_replay_uses_changed_raw_state(); line != 0) {

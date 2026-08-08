@@ -12,6 +12,14 @@ namespace {
 
 constexpr std::int64_t kInt64Maximum = 9223372036854775807LL;
 
+bool host_add_one(std::int64_t value, std::int64_t& result) noexcept {
+  if (value == kInt64Maximum) {
+    return false;
+  }
+  result = value + 1;
+  return true;
+}
+
 __host__ __device__ Gfn2PlanSchemaDiagnostic success() { return {}; }
 
 __host__ __device__ Gfn2PlanSchemaDiagnostic failure(Gfn2PlanSchemaError error,
@@ -652,6 +660,201 @@ cudaError_t bind_gfn2_geometry_provenance_cuda(
     binding = candidate;
   }
   return status;
+}
+
+namespace {
+
+/*
+ * The projection binders below derive each field with exact pointer identity
+ * from an already-bound CUDA master topology and re-run the common-schema
+ * binding validator (which never dereferences device arrays), so the master
+ * must already have passed its own CUDA binding.  No helper beyond the
+ * validated candidate is required.
+ */
+bool is_cuda_memory(const void* pointer) noexcept {
+  if (pointer == nullptr) {
+    return true;
+  }
+  cudaPointerAttributes attributes{};
+  const cudaError_t status = cudaPointerGetAttributes(&attributes, pointer);
+  if (status != cudaSuccess) {
+    (void)cudaGetLastError();
+    return false;
+  }
+  return attributes.type == cudaMemoryTypeDevice || attributes.type == cudaMemoryTypeManaged;
+}
+
+}  // namespace
+
+cudaError_t bind_gfn2_atom_projection_cuda(const Gfn2RaggedTopologyView& device_topology,
+                                           Gfn2AtomProjectionView& binding) noexcept {
+  binding = {};
+  Gfn2AtomProjectionView candidate{};
+  candidate.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  candidate.plan_token = device_topology.plan_token;
+  candidate.batch_size = device_topology.batch_size;
+  candidate.total_atoms = device_topology.total_atoms;
+  std::int64_t atom_offsets = 0;
+  if (host_add_one(device_topology.batch_size, atom_offsets) &&
+      device_topology.atom_offset_count == atom_offsets) {
+    candidate.atom_offset_count = atom_offsets;
+    candidate.atom_offsets = device_topology.atom_offsets;
+  }
+  const Gfn2PlanSchemaDiagnostic diagnostic = validate_gfn2_atom_projection_binding(
+      device_topology, candidate, Gfn2PlanMemorySpace::kCudaDevice);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return cudaSuccess;
+  }
+  binding = candidate;
+  return cudaSuccess;
+}
+
+cudaError_t bind_gfn2_shell_ownership_projection_cuda(
+    const Gfn2RaggedTopologyView& device_topology,
+    Gfn2ShellOwnershipProjectionView& binding) noexcept {
+  binding = {};
+  Gfn2ShellOwnershipProjectionView candidate{};
+  candidate.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  candidate.plan_token = device_topology.plan_token;
+  candidate.batch_size = device_topology.batch_size;
+  candidate.total_atoms = device_topology.total_atoms;
+  candidate.total_shells = device_topology.total_shells;
+  std::int64_t batch_offsets = 0;
+  std::int64_t atom_offsets = 0;
+  if (host_add_one(device_topology.batch_size, batch_offsets) &&
+      host_add_one(device_topology.total_atoms, atom_offsets) &&
+      device_topology.batch_shell_offset_count == batch_offsets &&
+      device_topology.atom_shell_offset_count == atom_offsets &&
+      device_topology.shell_to_atom_count == device_topology.total_shells) {
+    candidate.batch_shell_offset_count = batch_offsets;
+    candidate.atom_shell_offset_count = atom_offsets;
+    candidate.shell_to_atom_count = device_topology.total_shells;
+    candidate.batch_shell_offsets = device_topology.batch_shell_offsets;
+    candidate.atom_shell_offsets = device_topology.atom_shell_offsets;
+    candidate.shell_to_atom = device_topology.shell_to_atom;
+  }
+  const Gfn2PlanSchemaDiagnostic diagnostic = validate_gfn2_shell_ownership_projection_binding(
+      device_topology, candidate, Gfn2PlanMemorySpace::kCudaDevice);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return cudaSuccess;
+  }
+  binding = candidate;
+  return cudaSuccess;
+}
+
+cudaError_t bind_gfn2_ao_matrix_projection_cuda(const Gfn2RaggedTopologyView& device_topology,
+                                                Gfn2AOMatrixProjectionView& binding) noexcept {
+  binding = {};
+  Gfn2AOMatrixProjectionView candidate{};
+  candidate.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  candidate.plan_token = device_topology.plan_token;
+  candidate.batch_size = device_topology.batch_size;
+  candidate.total_shells = device_topology.total_shells;
+  candidate.total_orbitals = device_topology.total_orbitals;
+  candidate.total_matrix_elements = device_topology.total_matrix_elements;
+  std::int64_t batch_offsets = 0;
+  std::int64_t shell_offsets = 0;
+  if (host_add_one(device_topology.batch_size, batch_offsets) &&
+      host_add_one(device_topology.total_shells, shell_offsets) &&
+      device_topology.batch_orbital_offset_count == batch_offsets &&
+      device_topology.matrix_offset_count == batch_offsets &&
+      device_topology.shell_orbital_offset_count == shell_offsets &&
+      device_topology.orbital_to_shell_count == device_topology.total_orbitals &&
+      device_topology.orbital_to_atom_count == device_topology.total_orbitals) {
+    candidate.batch_orbital_offset_count = batch_offsets;
+    candidate.matrix_offset_count = batch_offsets;
+    candidate.shell_orbital_offset_count = shell_offsets;
+    candidate.orbital_to_shell_count = device_topology.total_orbitals;
+    candidate.orbital_to_atom_count = device_topology.total_orbitals;
+    candidate.batch_orbital_offsets = device_topology.batch_orbital_offsets;
+    candidate.matrix_offsets = device_topology.matrix_offsets;
+    candidate.shell_orbital_offsets = device_topology.shell_orbital_offsets;
+    candidate.orbital_to_shell = device_topology.orbital_to_shell;
+    candidate.orbital_to_atom = device_topology.orbital_to_atom;
+  }
+  const Gfn2PlanSchemaDiagnostic diagnostic = validate_gfn2_ao_matrix_projection_binding(
+      device_topology, candidate, Gfn2PlanMemorySpace::kCudaDevice);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return cudaSuccess;
+  }
+  binding = candidate;
+  return cudaSuccess;
+}
+
+cudaError_t bind_gfn2_packed_all_pair_projection_cuda(
+    const Gfn2RaggedTopologyView& device_topology,
+    Gfn2PackedAllPairProjectionView& binding) noexcept {
+  binding = {};
+  Gfn2PackedAllPairProjectionView candidate{};
+  candidate.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  candidate.plan_token = device_topology.plan_token;
+  candidate.batch_size = device_topology.batch_size;
+  candidate.total_pairs = device_topology.total_pairs;
+  candidate.pair_offset_count = device_topology.pair_offset_count;
+  candidate.pair_offsets = device_topology.pair_offsets;
+  const Gfn2PlanSchemaDiagnostic diagnostic = validate_gfn2_packed_all_pair_projection_binding(
+      device_topology, candidate, Gfn2PlanMemorySpace::kCudaDevice);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return cudaSuccess;
+  }
+  binding = candidate;
+  return cudaSuccess;
+}
+
+cudaError_t bind_gfn2_ao_bucket_projection_cuda(const Gfn2RaggedTopologyView& device_topology,
+                                                Gfn2AOBucketProjectionView& binding) noexcept {
+  binding = {};
+  Gfn2AOBucketProjectionView candidate{};
+  candidate.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  candidate.plan_token = device_topology.plan_token;
+  candidate.batch_size = device_topology.batch_size;
+  candidate.bucket_count = device_topology.bucket_count;
+  std::int64_t bucket_offsets = 0;
+  if (device_topology.bucket_count == 0 ||
+      host_add_one(device_topology.bucket_count, bucket_offsets)) {
+    candidate.bucket_offset_count = bucket_offsets;
+    candidate.bucket_system_count = device_topology.bucket_system_count;
+    candidate.bucket_orbital_count = device_topology.bucket_orbital_count;
+    candidate.bucket_offsets = device_topology.bucket_offsets;
+    candidate.bucket_systems = device_topology.bucket_systems;
+    candidate.bucket_orbital_counts = device_topology.bucket_orbital_counts;
+  }
+  const Gfn2PlanSchemaDiagnostic diagnostic = validate_gfn2_ao_bucket_projection_binding(
+      device_topology, candidate, Gfn2PlanMemorySpace::kCudaDevice);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return cudaSuccess;
+  }
+  binding = candidate;
+  return cudaSuccess;
+}
+
+cudaError_t bind_gfn2_element_identity_projection_cuda(
+    const Gfn2ElementIdentityProjectionView& host_projection,
+    const std::int32_t* device_atomic_numbers,
+    Gfn2ElementIdentityProjectionView& device_binding) noexcept {
+  device_binding = {};
+  /* The host projector already produced a nonzero order-sensitive seal over
+   * the exact atomic-number ordering.  A CUDA descriptor must carry the same
+   * token, the same counts, the same seal, and a pointer proven to be CUDA
+   * accessible (the setup upload owns it). */
+  if (host_projection.plan_token == 0u || host_projection.element_fingerprint == 0u ||
+      host_projection.total_atoms != host_projection.atomic_number_count ||
+      host_projection.total_atoms < 0) {
+    return cudaSuccess;
+  }
+  if (host_projection.atomic_number_count != 0 && !is_cuda_memory(device_atomic_numbers)) {
+    return cudaSuccess;
+  }
+  Gfn2ElementIdentityProjectionView candidate = host_projection;
+  candidate.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  candidate.atomic_numbers = device_atomic_numbers;
+  const Gfn2PlanSchemaDiagnostic diagnostic = validate_gfn2_element_identity_projection_binding(
+      candidate, Gfn2PlanMemorySpace::kCudaDevice);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return cudaSuccess;
+  }
+  device_binding = candidate;
+  return cudaSuccess;
 }
 
 }  // namespace gpuxtb::detail::cuda

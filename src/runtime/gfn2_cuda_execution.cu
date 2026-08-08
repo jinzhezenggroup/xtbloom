@@ -2286,6 +2286,18 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t pairlist_pair_cursor = 0u;
       std::size_t pairlist_sequence = 0u;
 
+      /* Committed public pair-list view (preprocessing step 4).  Distinct
+       * storage from the candidate so a failed peer can never expose a partial
+       * candidate slice and consumers read only eligible, current peers. */
+      std::size_t committed_pairs = 0u;
+      std::size_t committed_pair_offsets = 0u;
+      std::size_t committed_pair_counts = 0u;
+      std::size_t committed_neighbor_offsets = 0u;
+      std::size_t committed_neighbor_counts = 0u;
+      std::size_t committed_neighbors = 0u;
+      std::size_t committed_pair_generations = 0u;
+      std::size_t committed_eligible_mask = 0u;
+
       std::size_t d4_candidate_pairs = 0u;
       std::size_t d4_candidate_coordination = 0u;
       std::size_t d4_pair_scratch = 0u;
@@ -2422,6 +2434,17 @@ struct Gfn2CudaExecutionCache::Impl {
     offset.pairlist_neighbor_scratch = layout.append<std::int64_t>(sparse_neighbor_capacity);
     offset.pairlist_pair_cursor = layout.append<std::int64_t>(batch);
     offset.pairlist_sequence = layout.append<std::uint32_t>(1);
+
+    /* Committed output pair-list storage: distinct fixed-capacity slices so a
+     * failed peer's slice is never exposed and later peers never shift. */
+    offset.committed_pairs = layout.append<gpuxtb::detail::Gfn2AtomPair>(sparse_pair_capacity);
+    offset.committed_pair_offsets = layout.append<std::int64_t>(batch + 1);
+    offset.committed_pair_counts = layout.append<std::int64_t>(batch);
+    offset.committed_neighbor_offsets = layout.append<std::int64_t>(atoms + 1);
+    offset.committed_neighbor_counts = layout.append<std::int64_t>(atoms);
+    offset.committed_neighbors = layout.append<std::int64_t>(sparse_neighbor_capacity);
+    offset.committed_pair_generations = layout.append<std::uint64_t>(batch);
+    offset.committed_eligible_mask = layout.append<std::uint8_t>(batch);
 
     if (candidate.host.d4_enabled) {
       offset.d4_candidate_pairs = layout.append<double>(d4_pair_elements);
@@ -2774,10 +2797,52 @@ struct Gfn2CudaExecutionCache::Impl {
         pairlist_enabled ? arena_pointer<std::uint32_t>(arena, offset.pairlist_sequence) : nullptr,
         pairlist_enabled ? 1 : 0,
         pairlist_enabled ? token : 0u};
-    /* The optional pair-list is an internal candidate for the sparse/CN gate.
-     * Keep the output cache empty until a future fixed-stride publication
-     * design can preserve per-peer transactionality. */
-    binding.output.pairlist = {};
+    /* Committed pair-list consumer view published through the final per-system
+     * gate (preprocessing step 4).  Uses dedicated output storage so a failed
+     * peer never exposes a partial candidate slice; only eligible peers with a
+     * current committed generation are consumable.  A disabled leaf keeps the
+     * canonical empty viewed with a zero token. */
+    binding.output.pairlist =
+        pairlist_enabled
+            ? gpuxtb::detail::
+                  Gfn2PairListConsumerView{gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice,
+                                           gpuxtb::detail::Gfn2PairListState::kCommitted,
+                                           gpuxtb::detail::Gfn2PairListRole::kCoordination,
+                                           gpuxtb::detail::Gfn2PairMapKind::kExplicit,
+                                           token,
+                                           gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
+                                           gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
+                                           static_cast<std::int64_t>(batch),
+                                           static_cast<std::int64_t>(atoms),
+                                           sparse_pairs_per_system,
+                                           sparse_neighbors_per_atom,
+                                           batch + 1,
+                                           atoms + 1,
+                                           sparse_pair_capacity,
+                                           sparse_neighbor_capacity,
+                                           arena_pointer<std::int64_t>(
+                                               arena, offset.committed_pair_offsets),
+                                           arena_pointer<gpuxtb::detail::Gfn2AtomPair>(
+                                               arena, offset.committed_pairs),
+                                           static_cast<std::int64_t>(batch),
+                                           static_cast<std::int64_t>(atoms),
+                                           arena_pointer<std::int64_t>(
+                                               arena, offset.committed_pair_counts),
+                                           arena_pointer<std::int64_t>(
+                                               arena, offset.committed_neighbor_counts),
+                                           arena_pointer<std::int64_t>(
+                                               arena, offset.committed_neighbor_offsets),
+                                           arena_pointer<std::int64_t>(arena,
+                                                                       offset.committed_neighbors),
+                                           static_cast<std::int64_t>(batch),
+                                           static_cast<std::int64_t>(batch),
+                                           0,
+                                           arena_pointer<std::uint64_t>(
+                                               arena, offset.committed_pair_generations),
+                                           arena_pointer<std::uint8_t>(
+                                               arena, offset.committed_eligible_mask),
+                                           nullptr}
+            : gpuxtb::detail::Gfn2PairListConsumerView{};
     binding.workspace.overlap_candidate = arena_pointer<double>(arena, offset.overlap_candidate);
     binding.workspace.overlap_elements = matrices;
     binding.workspace.dipole_candidate = arena_pointer<double>(arena, offset.dipole_candidate);
@@ -3270,6 +3335,8 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t coordination_gradient_scratch = 0u;
       std::size_t classical_gradient_scratch = 0u;
       std::size_t classical_force_scratch = 0u;
+      std::size_t sparse_gradient_scratch = 0u;
+      std::size_t sparse_sequence = 0u;
       std::size_t classical_coordination_adjoint = 0u;
       std::size_t classical_aes2_gradient = 0u;
       std::size_t classical_aes2_coordination = 0u;
@@ -3376,6 +3443,8 @@ struct Gfn2CudaExecutionCache::Impl {
       execution.coordination_gradient_scratch = execution_layout.append<double>(coordinates);
       execution.classical_gradient_scratch = execution_layout.append<double>(coordinates);
       execution.classical_force_scratch = execution_layout.append<double>(coordinates);
+      execution.sparse_gradient_scratch = execution_layout.append<double>(coordinates);
+      execution.sparse_sequence = execution_layout.append<std::uint32_t>(1);
       execution.classical_coordination_adjoint = execution_layout.append<double>(atoms);
       execution.classical_aes2_gradient = execution_layout.append<double>(coordinates);
       execution.classical_aes2_coordination = execution_layout.append<double>(atoms);
@@ -3643,6 +3712,15 @@ struct Gfn2CudaExecutionCache::Impl {
                                               external_batch.point_charge_offsets,
                                               composition_components,
                                               token};
+
+      /* Step 5 sparse CN VJP leaf: borrow the committed pair-list consumer view
+       * and the pair-list dispatch batch from the preprocessing binding.  The
+       * final per-system gate already published committed generations and
+       * eligibility, so the H0 CN VJP can parity-gate a sparse result against
+       * the dense reference.  A disabled leaf keeps zero tokens and disables
+       * the differential path. */
+      binding.plan.pairlist_committed = candidate.numerical.preprocessing.output.pairlist;
+      binding.plan.pairlist_batch = candidate.numerical.preprocessing.plan.pairlist;
 
       /* Project the committed spin-major state into stable physical arrays.
        * Every terminal force descriptor below consumes these buffers, never
@@ -4035,6 +4113,13 @@ struct Gfn2CudaExecutionCache::Impl {
       binding.workspace.classical_success_mask = mask(kClassicalSuccessMask);
       binding.workspace.external_success_mask = mask(kExternalSuccessMask);
       binding.workspace.mask_elements = batch;
+      /* Step 5 sparse CN VJP differential scratch and sequence. */
+      binding.workspace.sparse_gradient_scratch =
+          arena_pointer<double>(execution_arena, execution.sparse_gradient_scratch);
+      binding.workspace.sparse_gradient_elements = coordinates;
+      binding.workspace.sparse_sequence_active =
+          arena_pointer<std::uint32_t>(execution_arena, execution.sparse_sequence);
+      binding.workspace.sparse_sequence_elements = 1;
 
       binding.diagnostics.post_scc_potential = {system_errors(kPostSystemError),
                                                 device_error(kPostDeviceError), batch, token};

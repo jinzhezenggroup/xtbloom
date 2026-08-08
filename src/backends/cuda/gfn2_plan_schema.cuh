@@ -61,6 +61,47 @@ cudaError_t bind_gfn2_geometry_provenance_cuda(
     Gfn2PlanSchemaDiagnostic* device_diagnostic, Gfn2PlanSchemaDiagnostic& diagnostic,
     cudaStream_t stream = nullptr) noexcept;
 
+/*
+ * Setup-time fail-closed CUDA binders for the common topology projections.
+ *
+ * The projection types are standard-layout trivially-copyable PODs that are
+ * copied byte-for-byte into device descriptors, so a CUDA consumer proves
+ * identity through the exact pointer/count/token equality already established
+ * by validate_gfn2_topology_cuda_async on the master view.  These binders are
+ * therefore host-side and synchronous: they re-run the structural binding
+ * validation of the CUDA master (which never dereferences), prove exact
+ * pointer identity of each projection field with the master arrays, and only
+ * then publish.  No kernel, allocation, transfer, or synchronization is
+ * performed, and every binder clears `projection` on failure.
+ */
+cudaError_t bind_gfn2_atom_projection_cuda(const Gfn2RaggedTopologyView& device_topology,
+                                           Gfn2AtomProjectionView& binding) noexcept;
+
+cudaError_t bind_gfn2_shell_ownership_projection_cuda(
+    const Gfn2RaggedTopologyView& device_topology,
+    Gfn2ShellOwnershipProjectionView& binding) noexcept;
+
+cudaError_t bind_gfn2_ao_matrix_projection_cuda(const Gfn2RaggedTopologyView& device_topology,
+                                                Gfn2AOMatrixProjectionView& binding) noexcept;
+
+cudaError_t bind_gfn2_packed_all_pair_projection_cuda(
+    const Gfn2RaggedTopologyView& device_topology,
+    Gfn2PackedAllPairProjectionView& binding) noexcept;
+
+cudaError_t bind_gfn2_ao_bucket_projection_cuda(const Gfn2RaggedTopologyView& device_topology,
+                                                Gfn2AOBucketProjectionView& binding) noexcept;
+
+/*
+ * Element identity is owned by setup, not the topology: bind a host-computed
+ * projector (with its nonzero order-sensitive fingerprint) into a CUDA-space
+ * descriptor that names the uploaded device atomic-number array, proving plan
+ * token, counts, fingerprint identity, and CUDA accessibility.
+ */
+cudaError_t bind_gfn2_element_identity_projection_cuda(
+    const Gfn2ElementIdentityProjectionView& host_projection,
+    const std::int32_t* device_atomic_numbers,
+    Gfn2ElementIdentityProjectionView& device_binding) noexcept;
+
 }  // namespace gpuxtb::detail::cuda
 
 #endif  // GPUXTB_BACKENDS_CUDA_GFN2_PLAN_SCHEMA_CUH

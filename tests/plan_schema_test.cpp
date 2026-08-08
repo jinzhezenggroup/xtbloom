@@ -23,9 +23,15 @@ namespace {
 
 using gpuxtb::detail::bind_gfn2_topology_host;
 using gpuxtb::detail::bind_gfn2_wavefunction_layout_host;
+using gpuxtb::detail::gfn2_element_identity_fingerprint_host;
+using gpuxtb::detail::Gfn2AOBucketProjectionView;
+using gpuxtb::detail::Gfn2AOMatrixProjectionView;
 using gpuxtb::detail::Gfn2AtomPair;
+using gpuxtb::detail::Gfn2AtomProjectionView;
+using gpuxtb::detail::Gfn2ElementIdentityProjectionView;
 using gpuxtb::detail::Gfn2GenerationScope;
 using gpuxtb::detail::Gfn2GeometryCacheProvenanceView;
+using gpuxtb::detail::Gfn2PackedAllPairProjectionView;
 using gpuxtb::detail::Gfn2PairListConsumerView;
 using gpuxtb::detail::Gfn2PairListRole;
 using gpuxtb::detail::Gfn2PairListState;
@@ -35,10 +41,23 @@ using gpuxtb::detail::Gfn2PlanSchemaDiagnostic;
 using gpuxtb::detail::Gfn2PlanSchemaError;
 using gpuxtb::detail::Gfn2PlanSchemaField;
 using gpuxtb::detail::Gfn2RaggedTopologyView;
+using gpuxtb::detail::Gfn2ShellOwnershipProjectionView;
 using gpuxtb::detail::Gfn2WavefunctionLayoutView;
+using gpuxtb::detail::project_gfn2_ao_bucket_projection_host;
+using gpuxtb::detail::project_gfn2_ao_matrix_projection_host;
+using gpuxtb::detail::project_gfn2_atom_projection_host;
+using gpuxtb::detail::project_gfn2_element_identity_projection_host;
+using gpuxtb::detail::project_gfn2_packed_all_pair_projection_host;
+using gpuxtb::detail::project_gfn2_shell_ownership_projection_host;
+using gpuxtb::detail::validate_gfn2_ao_bucket_projection_binding;
+using gpuxtb::detail::validate_gfn2_ao_matrix_projection_binding;
+using gpuxtb::detail::validate_gfn2_atom_projection_binding;
+using gpuxtb::detail::validate_gfn2_element_identity_projection_binding;
 using gpuxtb::detail::validate_gfn2_geometry_provenance_host;
+using gpuxtb::detail::validate_gfn2_packed_all_pair_projection_binding;
 using gpuxtb::detail::validate_gfn2_pair_list_consumer_binding;
 using gpuxtb::detail::validate_gfn2_pair_list_consumer_host;
+using gpuxtb::detail::validate_gfn2_shell_ownership_projection_binding;
 using gpuxtb::detail::validate_gfn2_topology_binding;
 using gpuxtb::detail::validate_gfn2_topology_host;
 using gpuxtb::detail::validate_gfn2_wavefunction_layout_binding;
@@ -542,6 +561,37 @@ HostPairListConsumer make_pair_list_consumer(const HostTopology& topology,
   return consumer;
 }
 
+HostPairListConsumer make_fixed_stride_pair_list_consumer(const HostTopology& topology,
+                                                          std::uint64_t generation) {
+  const HostPairListConsumer compact = make_pair_list_consumer(topology, generation);
+  HostPairListConsumer padded;
+  padded.pair_offsets.resize(static_cast<std::size_t>(topology.view.batch_size + 1));
+  padded.pair_counts = compact.pair_counts;
+  padded.pairs.resize(static_cast<std::size_t>(topology.view.batch_size * 10));
+  for (std::int64_t system = 0; system < topology.view.batch_size; ++system) {
+    const std::int64_t source = compact.pair_offsets[static_cast<std::size_t>(system)];
+    const std::int64_t count = compact.pair_counts[static_cast<std::size_t>(system)];
+    const std::int64_t destination = system * 10;
+    padded.pair_offsets[static_cast<std::size_t>(system)] = destination;
+    std::copy_n(compact.pairs.begin() + source, count, padded.pairs.begin() + destination);
+  }
+  padded.pair_offsets.back() = topology.view.batch_size * 10;
+
+  padded.neighbor_offsets.resize(static_cast<std::size_t>(topology.view.total_atoms + 1));
+  padded.neighbor_counts = compact.neighbor_counts;
+  padded.neighbors.resize(static_cast<std::size_t>(topology.view.total_atoms * 10));
+  for (std::int64_t atom = 0; atom < topology.view.total_atoms; ++atom) {
+    const std::int64_t source = compact.neighbor_offsets[static_cast<std::size_t>(atom)];
+    const std::int64_t count = compact.neighbor_counts[static_cast<std::size_t>(atom)];
+    const std::int64_t destination = atom * 10;
+    padded.neighbor_offsets[static_cast<std::size_t>(atom)] = destination;
+    std::copy_n(compact.neighbors.begin() + source, count, padded.neighbors.begin() + destination);
+  }
+  padded.neighbor_offsets.back() = topology.view.total_atoms * 10;
+  padded.refresh_view(topology, generation);
+  return padded;
+}
+
 int test_pair_list_consumer() {
   static_assert(std::is_trivially_copyable_v<Gfn2PairListConsumerView>);
   static_assert(std::is_standard_layout_v<Gfn2PairListConsumerView>);
@@ -553,6 +603,9 @@ int test_pair_list_consumer() {
               .error == Gfn2PlanSchemaError::kSuccess);
     CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).error ==
           Gfn2PlanSchemaError::kSuccess);
+    HostPairListConsumer fixed_stride = make_fixed_stride_pair_list_consumer(topology, kGeneration);
+    CHECK(validate_gfn2_pair_list_consumer_host(topology.view, fixed_stride.view, kGeneration)
+              .error == Gfn2PlanSchemaError::kSuccess);
 
     consumer.view.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
     CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, consumer.view,
@@ -686,7 +739,7 @@ int test_pair_list_consumer() {
     consumer = make_pair_list_consumer(topology, kGeneration);
   }
 
-  /* Counts are an independent commit record and must match compact offsets. */
+  /* Counts are an independent commit record and must fit within each slot. */
   consumer.pair_counts[3] += 1;
   CHECK(validate_gfn2_pair_list_consumer_host(topology.view, consumer.view, kGeneration).error ==
         Gfn2PlanSchemaError::kInvalidOffsets);
@@ -775,6 +828,223 @@ int test_pair_list_consumer() {
   return 0;
 }
 
+int test_projections() {
+  static_assert(std::is_trivially_copyable_v<Gfn2AtomProjectionView>);
+  static_assert(std::is_standard_layout_v<Gfn2AtomProjectionView>);
+  static_assert(std::is_trivially_copyable_v<Gfn2ShellOwnershipProjectionView>);
+  static_assert(std::is_standard_layout_v<Gfn2ShellOwnershipProjectionView>);
+  static_assert(std::is_trivially_copyable_v<Gfn2AOMatrixProjectionView>);
+  static_assert(std::is_standard_layout_v<Gfn2AOMatrixProjectionView>);
+  static_assert(std::is_trivially_copyable_v<Gfn2PackedAllPairProjectionView>);
+  static_assert(std::is_standard_layout_v<Gfn2PackedAllPairProjectionView>);
+  static_assert(std::is_trivially_copyable_v<Gfn2AOBucketProjectionView>);
+  static_assert(std::is_standard_layout_v<Gfn2AOBucketProjectionView>);
+  static_assert(std::is_trivially_copyable_v<Gfn2ElementIdentityProjectionView>);
+  static_assert(std::is_standard_layout_v<Gfn2ElementIdentityProjectionView>);
+
+  Gfn2AtomProjectionView atom{};
+  Gfn2ShellOwnershipProjectionView shell{};
+  Gfn2AOMatrixProjectionView ao{};
+  Gfn2PackedAllPairProjectionView pairs{};
+  Gfn2AOBucketProjectionView buckets{};
+
+  const HostTopology host = make_topology(8);
+  const std::int64_t batch_offsets = host.view.batch_size + 1;
+  CHECK(project_gfn2_atom_projection_host(host.view, atom).error == Gfn2PlanSchemaError::kSuccess);
+  CHECK(atom.batch_size == host.view.batch_size);
+  CHECK(atom.total_atoms == host.view.total_atoms);
+  CHECK(atom.atom_offset_count == batch_offsets);
+  CHECK(atom.atom_offsets == host.view.atom_offsets);
+  CHECK(validate_gfn2_atom_projection_binding(host.view, atom, Gfn2PlanMemorySpace::kHost).error ==
+        Gfn2PlanSchemaError::kSuccess);
+
+  CHECK(project_gfn2_shell_ownership_projection_host(host.view, shell).error ==
+        Gfn2PlanSchemaError::kSuccess);
+  CHECK(shell.batch_shell_offset_count == batch_offsets);
+  CHECK(shell.atom_shell_offset_count == host.view.total_atoms + 1);
+  CHECK(shell.batch_shell_offsets == host.view.batch_shell_offsets);
+  CHECK(shell.atom_shell_offsets == host.view.atom_shell_offsets);
+  CHECK(shell.shell_to_atom == host.view.shell_to_atom);
+  CHECK(
+      validate_gfn2_shell_ownership_projection_binding(host.view, shell, Gfn2PlanMemorySpace::kHost)
+          .error == Gfn2PlanSchemaError::kSuccess);
+
+  CHECK(project_gfn2_ao_matrix_projection_host(host.view, ao).error ==
+        Gfn2PlanSchemaError::kSuccess);
+  CHECK(ao.batch_orbital_offset_count == batch_offsets);
+  CHECK(ao.matrix_offset_count == batch_offsets);
+  CHECK(ao.shell_orbital_offset_count == host.view.total_shells + 1);
+  CHECK(ao.batch_orbital_offsets == host.view.batch_orbital_offsets);
+  CHECK(ao.matrix_offsets == host.view.matrix_offsets);
+  CHECK(ao.shell_orbital_offsets == host.view.shell_orbital_offsets);
+  CHECK(ao.orbital_to_shell == host.view.orbital_to_shell);
+  CHECK(ao.orbital_to_atom == host.view.orbital_to_atom);
+  CHECK(
+      validate_gfn2_ao_matrix_projection_binding(host.view, ao, Gfn2PlanMemorySpace::kHost).error ==
+      Gfn2PlanSchemaError::kSuccess);
+
+  CHECK(project_gfn2_packed_all_pair_projection_host(host.view, pairs).error ==
+        Gfn2PlanSchemaError::kSuccess);
+  CHECK(pairs.pair_offset_count == batch_offsets);
+  CHECK(pairs.pair_offsets == host.view.pair_offsets);
+  CHECK(
+      validate_gfn2_packed_all_pair_projection_binding(host.view, pairs, Gfn2PlanMemorySpace::kHost)
+          .error == Gfn2PlanSchemaError::kSuccess);
+
+  CHECK(project_gfn2_ao_bucket_projection_host(host.view, buckets).error ==
+        Gfn2PlanSchemaError::kSuccess);
+  CHECK(buckets.bucket_count == host.view.bucket_count);
+  CHECK(buckets.bucket_offsets == host.view.bucket_offsets);
+  CHECK(buckets.bucket_systems == host.view.bucket_systems);
+  CHECK(buckets.bucket_orbital_counts == host.view.bucket_orbital_counts);
+  CHECK(validate_gfn2_ao_bucket_projection_binding(host.view, buckets, Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kSuccess);
+
+  /* Element identity: order-sensitive fingerprint and count/token identity. */
+  const std::vector<std::int32_t> atomic_numbers = {1, 6, 7, 8, 1, 6, 7, 8};
+  Gfn2ElementIdentityProjectionView element{};
+  CHECK(project_gfn2_element_identity_projection_host(
+            atomic_numbers.data(), static_cast<std::int64_t>(atomic_numbers.size()), kPlanToken,
+            element)
+            .error == Gfn2PlanSchemaError::kSuccess);
+  CHECK(element.element_fingerprint != 0u);
+  CHECK(validate_gfn2_element_identity_projection_binding(element, Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kSuccess);
+  Gfn2ElementIdentityProjectionView reordered = element;
+  reordered.atomic_numbers = nullptr;
+  reordered.total_atoms = 0;
+  reordered.atomic_number_count = 0;
+  CHECK(project_gfn2_element_identity_projection_host(
+            atomic_numbers.data(), static_cast<std::int64_t>(atomic_numbers.size()), kPlanToken,
+            reordered)
+            .error == Gfn2PlanSchemaError::kSuccess);
+  CHECK(reordered.element_fingerprint == element.element_fingerprint);
+  CHECK(gfn2_element_identity_fingerprint_host(reordered) == element.element_fingerprint);
+
+  /* Fingerprint is order-sensitive: swapping two elements changes it. */
+  std::vector<std::int32_t> permuted = atomic_numbers;
+  std::swap(permuted[0], permuted[1]);
+  Gfn2ElementIdentityProjectionView permuted_element{};
+  CHECK(project_gfn2_element_identity_projection_host(permuted.data(),
+                                                      static_cast<std::int64_t>(permuted.size()),
+                                                      kPlanToken, permuted_element)
+            .error == Gfn2PlanSchemaError::kSuccess);
+  CHECK(permuted_element.element_fingerprint != element.element_fingerprint);
+
+  /* Cross-plan and memory-space rejection, and fail-closed clearing. */
+  Gfn2AtomProjectionView wrong_plan = atom;
+  wrong_plan.plan_token = kPlanToken + 1u;
+  CHECK(validate_gfn2_atom_projection_binding(host.view, wrong_plan, Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kCrossPlan);
+  Gfn2AtomProjectionView wrong_space = atom;
+  wrong_space.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  CHECK(validate_gfn2_atom_projection_binding(host.view, wrong_space, Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kInvalidMemorySpace);
+  wrong_space = atom;
+  CHECK(validate_gfn2_atom_projection_binding(host.view, wrong_space,
+                                              Gfn2PlanMemorySpace::kCudaDevice)
+            .error == Gfn2PlanSchemaError::kInvalidMemorySpace);
+  Gfn2AtomProjectionView wrong_count = atom;
+  CHECK(validate_gfn2_atom_projection_binding(host.view, wrong_count, Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kSuccess);
+  wrong_count.atom_offset_count = batch_offsets + 1;
+  CHECK(validate_gfn2_atom_projection_binding(host.view, wrong_count, Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kInvalidProjection);
+  wrong_count = atom;
+  CHECK(validate_gfn2_atom_projection_binding(host.view, wrong_count, Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kSuccess);
+  wrong_count.atom_offsets = host.view.atom_shell_offsets;
+  CHECK(validate_gfn2_atom_projection_binding(host.view, wrong_count, Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kInvalidProjection);
+
+  Gfn2AOMatrixProjectionView wrong_domain = ao;
+  CHECK(validate_gfn2_ao_matrix_projection_binding(host.view, wrong_domain,
+                                                   Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kSuccess);
+  wrong_domain.matrix_offsets = host.view.matrix_offsets;
+  wrong_domain.matrix_offset_count = host.view.matrix_offset_count - 1;
+  CHECK(validate_gfn2_ao_matrix_projection_binding(host.view, wrong_domain,
+                                                   Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kInvalidProjection);
+
+  Gfn2PackedAllPairProjectionView wrong_pairs = pairs;
+  wrong_pairs.pair_offsets = host.view.atom_offsets;
+  CHECK(validate_gfn2_packed_all_pair_projection_binding(host.view, wrong_pairs,
+                                                         Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kInvalidProjection);
+
+  Gfn2AOBucketProjectionView wrong_buckets = buckets;
+  wrong_buckets.bucket_systems = host.view.bucket_systems;
+  wrong_buckets.bucket_system_count = host.view.bucket_system_count + 1;
+  CHECK(validate_gfn2_ao_bucket_projection_binding(host.view, wrong_buckets,
+                                                   Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kInvalidProjection);
+
+  /* Element identity: token, count, and fingerprint failures.  The plan token
+   * is inside the order-sensitive seal, so a token change is provable as a
+   * fingerprint mismatch without a second master token. */
+  Gfn2ElementIdentityProjectionView bad_element = element;
+  bad_element.plan_token = 0u;
+  CHECK(validate_gfn2_element_identity_projection_binding(bad_element, Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kInvalidPlanToken);
+  bad_element = element;
+  bad_element.plan_token = kPlanToken + 1u;
+  CHECK(validate_gfn2_element_identity_projection_binding(bad_element, Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kInvalidElementFingerprint);
+  bad_element = element;
+  bad_element.total_atoms = element.total_atoms - 1;
+  CHECK(validate_gfn2_element_identity_projection_binding(bad_element, Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kElementCountMismatch);
+  bad_element = element;
+  bad_element.element_fingerprint = 0u;
+  CHECK(validate_gfn2_element_identity_projection_binding(bad_element, Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kInvalidElementFingerprint);
+  bad_element = element;
+  bad_element.element_fingerprint ^= 1u;
+  CHECK(validate_gfn2_element_identity_projection_binding(bad_element, Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kInvalidElementFingerprint);
+
+  /* Empty element identity still fingerprints and validates. */
+  Gfn2ElementIdentityProjectionView empty_element{};
+  CHECK(
+      project_gfn2_element_identity_projection_host(nullptr, 0, kPlanToken, empty_element).error ==
+      Gfn2PlanSchemaError::kSuccess);
+  CHECK(validate_gfn2_element_identity_projection_binding(empty_element, Gfn2PlanMemorySpace::kHost)
+            .error == Gfn2PlanSchemaError::kSuccess);
+
+  /* Projectors clear the output on a hostile master. */
+  HostTopology hostile = make_topology(1);
+  hostile.atom_offsets = {0, -1};
+  hostile.refresh_view();
+  Gfn2AtomProjectionView cleared{};
+  cleared.plan_token = kPlanToken;
+  CHECK(project_gfn2_atom_projection_host(hostile.view, cleared).error !=
+        Gfn2PlanSchemaError::kSuccess);
+  CHECK(cleared.plan_token == 0u && cleared.atom_offsets == nullptr);
+
+  /* CUDA-space projections of the same plan are revalidated at the memory
+   * space the binding expects; host projection of a device master fails. */
+  Gfn2RaggedTopologyView device_topology = host.view;
+  device_topology.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  Gfn2AtomProjectionView device_atom{};
+  CHECK(project_gfn2_atom_projection_host(device_topology, device_atom).error !=
+        Gfn2PlanSchemaError::kSuccess);
+  /* But structural binding accepts a hand-built device projection copy when
+   * the memory space matches; the element seal travels unchanged. */
+  Gfn2AtomProjectionView hand_device = atom;
+  hand_device.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  hand_device.plan_token = device_topology.plan_token;
+  CHECK(validate_gfn2_atom_projection_binding(device_topology, hand_device,
+                                              Gfn2PlanMemorySpace::kCudaDevice)
+            .error == Gfn2PlanSchemaError::kSuccess);
+  Gfn2ElementIdentityProjectionView device_element = element;
+  device_element.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  CHECK(validate_gfn2_element_identity_projection_binding(device_element,
+                                                          Gfn2PlanMemorySpace::kCudaDevice)
+            .error == Gfn2PlanSchemaError::kSuccess);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -790,6 +1060,9 @@ int main() {
   }
   if (status == 0) {
     status = test_pair_list_consumer();
+  }
+  if (status == 0) {
+    status = test_projections();
   }
   return status;
 }

@@ -172,6 +172,65 @@ def test_producer_imports_without_copy_via_numpy() -> None:
     arena.close()
 
 
+def test_producer_imports_via_torch_on_host() -> None:
+    """PyTorch consumes and aliases the host arena slice."""
+    import importlib.util
+
+    if importlib.util.find_spec("torch") is None:
+        pytest.skip("torch is not installed")
+    import torch
+
+    arena = _host_arena()
+    producer = _filled_buffer(arena)
+    expected = np.arange(8, 16, dtype=np.float64) * 2.0
+
+    t_import = torch.from_dlpack(producer)
+    assert t_import.dtype == torch.float64
+    np.testing.assert_array_equal(t_import.numpy(), expected)
+    # Zero-copy host import: the torch tensor aliases the arena bytes.
+    assert t_import.data_ptr() == int(
+        _producer_host_pointer(arena) + producer.byte_offset
+    )
+
+    producer.close()
+    arena.close()
+
+
+def test_producer_imports_via_jax_on_host() -> None:
+    """JAX consumes the host arena slice without copying it."""
+    import importlib.util
+
+    if importlib.util.find_spec("jax") is None:
+        pytest.skip("jax is not installed")
+    import jax
+    import jax.numpy as jnp
+
+    jax.config.update("jax_enable_x64", True)
+
+    arena = _host_arena()
+    producer = _filled_buffer(arena)
+    expected = np.arange(8, 16, dtype=np.float64) * 2.0
+
+    j_import = jax.dlpack.from_dlpack(producer, copy=False)
+    assert j_import.dtype == jnp.float64
+    np.testing.assert_array_equal(np.asarray(j_import), expected)
+    assert j_import.unsafe_buffer_pointer() == int(
+        _producer_host_pointer(arena) + producer.byte_offset
+    )
+
+    producer.close()
+    arena.close()
+
+
+def _producer_host_pointer(arena: dlpack._ResultArena) -> int:
+    """Return the arena base host pointer for zero-copy pointer checks."""
+    buffer = library.Buffer()
+    library.load_library().gpuxtb_result_owner_buffer(
+        arena.handle, ctypes.byref(buffer)
+    )
+    return int(buffer.data or 0)
+
+
 def test_producer_repeated_export_is_single_use_capsule() -> None:
     """Every __dlpack__ call builds a fresh managed tensor over the arena."""
     arena = _host_arena()

@@ -1683,8 +1683,16 @@ Gfn2EigensolverLaunchResult configure_solver(cusolverDnHandle_t solver,
 }
 
 Gfn2EigensolverLaunchResult configure_blas(cublasHandle_t blas, cudaStream_t stream,
+                                           const Gfn2EigensolverDeviceWorkspace& workspace,
                                            bool deterministic_debug) noexcept {
   cublasStatus_t status = cublasSetStream(blas, stream);
+  if (status == CUBLAS_STATUS_SUCCESS) {
+    /* Batched TRSM otherwise asks cuBLAS to manage an internal allocation for
+     * large matrices. Reuse the setup-owned solver arena: every provider stage
+     * is ordered on one stream, so cuBLAS and cuSOLVER never use it concurrently. */
+    status = cublasSetWorkspace(blas, workspace.solver_device_workspace,
+                                workspace.solver_device_workspace_bytes);
+  }
   if (status == CUBLAS_STATUS_SUCCESS) {
     status = cublasSetPointerMode(blas, CUBLAS_POINTER_MODE_HOST);
   }
@@ -1838,7 +1846,7 @@ Gfn2EigensolverLaunchResult enqueue_capacity_eigensolver_body(
       batch, bucket, bucket_index, capacity, cache, hamiltonians, workspace);
   Gfn2EigensolverLaunchResult result = check_kernel_launch();
   if (result.success()) {
-    result = configure_blas(blas, capture_stream, deterministic_debug);
+    result = configure_blas(blas, capture_stream, workspace, deterministic_debug);
   }
   if (result.success()) {
     result = triangular_solve(blas, CUBLAS_SIDE_LEFT, CUBLAS_OP_N, submission,
@@ -1908,7 +1916,7 @@ Gfn2EigensolverLaunchResult enqueue_capacity_backtransform_body(
                                                                     workspace);
   Gfn2EigensolverLaunchResult result = check_kernel_launch();
   if (result.success()) {
-    result = configure_blas(blas, capture_stream, deterministic_debug);
+    result = configure_blas(blas, capture_stream, workspace, deterministic_debug);
   }
   if (result.success()) {
     result = triangular_solve(blas, CUBLAS_SIDE_LEFT, CUBLAS_OP_T, submission,
@@ -2772,7 +2780,7 @@ static Gfn2EigensolverLaunchResult solve_eigensystems_impl(
   if (!result.success()) {
     return result;
   }
-  result = configure_blas(blas, stream, options.deterministic_debug);
+  result = configure_blas(blas, stream, workspace, options.deterministic_debug);
   if (!result.success()) {
     return result;
   }
@@ -2878,7 +2886,7 @@ static Gfn2EigensolverLaunchResult solve_spin_eigensystems_impl(
   if (clear_status != cudaSuccess) {
     return cuda_failure(clear_status);
   }
-  result = configure_blas(blas, stream, options.deterministic_debug);
+  result = configure_blas(blas, stream, workspace, options.deterministic_debug);
   if (!result.success()) {
     return result;
   }

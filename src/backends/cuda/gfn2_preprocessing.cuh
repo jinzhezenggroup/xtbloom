@@ -153,10 +153,17 @@ struct Gfn2PreprocessingDeviceOutput {
    * path must use operator_generations and published_mask as the commit record. */
   Gfn2ES2DeviceCache es2{};
   Gfn2AES2DeviceCache aes2{};
-  /* Reserved for a future independently transactional public pair-list cache.
-   * The current production gate keeps its list in workspace candidate storage;
-   * this field must remain empty so a peer failure cannot expose partial offsets. */
-  Gfn2PairListDeviceCache pairlist{};
+  /* Committed sparse pair-list consumer view (ABI step 4).  Storage is laid
+   * out with fixed per-system capacity (system s owns a slice starting at
+   * s*max_pairs_per_system; per-atom neighbors likewise) so a failed peer
+   * never shifts a later peer's slice.  The final per-system publication gate
+   * copies candidate pairs/neighbors, writes explicit counts, sets the
+   * committed generation, and flips eligibility so consumers accept only
+   * complete, current per-peer slices.  A peer-local failed or inactive
+   * refresh clears current eligibility but preserves the last committed
+   * payload; a plan-wide failure preserves every committed byte. Setup
+   * initializes never-published metadata to zero. */
+  Gfn2PairListConsumerView pairlist{};
   /* Per-system generation for the complete S/D/Q/H0/ES2/AES2 transaction. */
   std::uint64_t* operator_generations = nullptr;
   std::int64_t generation_elements = 0;

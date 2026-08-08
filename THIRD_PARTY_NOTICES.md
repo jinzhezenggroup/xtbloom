@@ -187,7 +187,10 @@ and remain under their vendor licenses. gpuxtb artifacts must not bundle their
 shared or static library files. CUDA providers may be installed separately
 through the `cuda12` Python extra or supplied by the system. MKL is not a
 Python dependency; native users may explicitly select a compatible
-`libmkl_rt` through `GPUXTB_CPU_LINALG_LIBRARY`.
+`libmkl_rt` through `GPUXTB_CPU_LINALG_LIBRARY`. That selection is used only to
+validate one coherent adjacent `libmkl_intel_lp64`, `libmkl_sequential`, and
+`libmkl_core` cohort. gpuxtb's private shim loads those unbundled components in
+a separate link-map namespace and does not load the selected `libmkl_rt`.
 
 Dynamic loading does not itself resolve GPL compatibility. Jinzhe Zeng grants
 the narrowly scoped GPLv3 Section 7 permission in

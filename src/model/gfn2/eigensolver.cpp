@@ -7,6 +7,10 @@
 #include <dlfcn.h>
 #endif
 
+#if defined(GPUXTB_CONFIGURED_CPU_LINALG_SHIM)
+#include <link.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -133,7 +137,6 @@ constexpr int kCblasLeft = 141;
 constexpr int kCblasRight = 142;
 constexpr char kLower = 'L';
 constexpr char kEigenvectors = 'V';
-constexpr int kMklInterfaceLp64 = 0;
 
 enum class NumericalResult { kSuccess, kDataFailure, kBackendFailure };
 
@@ -266,30 +269,6 @@ bool load_lapacke_cblas_symbols(void* handle, bool scipy_prefix, LapackDpotrfWor
          load_symbol(handle, "cblas_dtrsm", dtrsm) && load_symbol(handle, "cblas_dgemm", dgemm);
 }
 
-bool contains_ilp64(const char* value) {
-  if (value == nullptr) {
-    return false;
-  }
-  constexpr char needle[] = "ILP64";
-  for (const char* start = value; *start != '\0'; ++start) {
-    std::size_t index = 0u;
-    while (needle[index] != '\0' && start[index] != '\0') {
-      char character = start[index];
-      if (character >= 'a' && character <= 'z') {
-        character = static_cast<char>(character - 'a' + 'A');
-      }
-      if (character != needle[index]) {
-        break;
-      }
-      ++index;
-    }
-    if (needle[index] == '\0') {
-      return true;
-    }
-  }
-  return false;
-}
-
 bool backend_self_test(const CpuLinearAlgebraBackend& backend) {
   double factor[1]{1.0};
   double reciprocal_condition = 0.0;
@@ -318,6 +297,37 @@ bool backend_self_test(const CpuLinearAlgebraBackend& backend) {
                                          rhs, 1, rhs, 1, 0.0, product, 1);
   return rhs[0] == 2.0 && product[0] == 4.0;
 }
+
+#if defined(GPUXTB_CONFIGURED_CPU_LINALG_SHIM)
+void* open_host_isolated_sibling(const char* soname) {
+  /* A LOCAL handle still resolves relocations against already-global objects.
+   * A new link-map namespace is required to keep a host's libmkl_rt ILP64
+   * dispatcher from interposing on the LP64 component cohort. */
+  static const unsigned char kModuleAnchor = 0u;
+  Dl_info module{};
+  if (dladdr(&kModuleAnchor, &module) == 0 || module.dli_fname == nullptr) {
+    return nullptr;
+  }
+  std::string path(module.dli_fname);
+  const std::size_t separator = path.find_last_of('/');
+  if (separator == std::string::npos) {
+    return nullptr;
+  }
+  path.resize(separator + 1u);
+  path += soname;
+
+  void* handle = dlmopen(LM_ID_NEWLM, path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (handle == nullptr) {
+    return nullptr;
+  }
+  Lmid_t namespace_id = LM_ID_BASE;
+  if (dlinfo(handle, RTLD_DI_LMID, &namespace_id) != 0 || namespace_id == LM_ID_BASE) {
+    static_cast<void>(dlclose(handle));
+    return nullptr;
+  }
+  return handle;
+}
+#endif
 
 class ScopedSequentialBlas final {
  public:
@@ -1147,11 +1157,15 @@ bool CpuLinearAlgebraBackend::ready() const noexcept {
 }
 
 bool CpuLinearAlgebraBackend::production() const noexcept {
-  return origin_ == Origin::kMklRtLp64 || origin_ == Origin::kOpenBlasLp64;
+  return origin_ == Origin::kMklShimLp64 || origin_ == Origin::kOpenBlasLp64;
 }
 
 bool CpuLinearAlgebraBackend::production_mkl() const noexcept {
-  return origin_ == Origin::kMklRtLp64;
+  return origin_ == Origin::kMklShimLp64;
+}
+
+bool CpuLinearAlgebraBackend::production_mkl_isolated() const noexcept {
+  return origin_ == Origin::kMklShimLp64;
 }
 
 gpuxtb_status_t make_internal_test_lp64_backend(
@@ -1174,7 +1188,7 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
   struct LinalgRuntimeState {
     CpuLinearAlgebraBackend backend;
     gpuxtb_status_t status = GPUXTB_STATUS_BACKEND_UNAVAILABLE;
-    const char* message = nullptr;
+    std::string message;
   };
   static const LinalgRuntimeState runtime = [] {
     LinalgRuntimeState state;
@@ -1185,27 +1199,64 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
     state.message = "CPU linear-algebra runtime loading is not ported to Windows yet";
     return state;
 #else
+#ifdef GPUXTB_CONFIGURED_CPU_LINALG_SHIM
+    /* Preferred isolated MKL provider: a private shim built at CMake time with
+     * fixed DT_NEEDED dependencies on libmkl_intel_lp64, libmkl_sequential, and
+     * libmkl_core. RTLD_LOCAL alone does not prevent a global host libmkl_rt
+     * from interposing on those dependencies, so load the adjacent shim in a
+     * new glibc link-map namespace. We never load libmkl_rt, call
+     * MKL_Set_Interface_Layer, or read MKL interface-layer state. */
+    {
+      dlerror();
+      void* handle = open_host_isolated_sibling("libgpuxtb_mkl_lp64_shim.so");
+      if (handle != nullptr) {
+        LapackDpotrfWork dpotrf_work = nullptr;
+        LapackDpoconWork dpocon_work = nullptr;
+        LapackDsyevdWork dsyevd_work = nullptr;
+        CblasDtrsm dtrsm = nullptr;
+        CblasDgemm dgemm = nullptr;
+        BlasSetNumThreadsLocal set_threads = nullptr;
+        if (load_lapacke_cblas_symbols(handle, false, dpotrf_work, dpocon_work, dsyevd_work, dtrsm,
+                                       dgemm) &&
+            load_symbol(handle, "MKL_Set_Num_Threads_Local", set_threads)) {
+          CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
+              CpuLinearAlgebraBackend::Origin::kMklShimLp64, dpotrf_work, dpocon_work, dsyevd_work,
+              dtrsm, dgemm, set_threads);
+          if (backend_self_test(created)) {
+            /* Retain one process-lifetime loader reference so all dispatch
+             * pointers and the private namespace stay valid. */
+            state.backend = created;
+            state.status = GPUXTB_STATUS_SUCCESS;
+            return state;
+          }
+        }
+        static_cast<void>(dlclose(handle));
+      }
+      state.message =
+          "host-isolated MKL provider shim is configured but did not verify "
+          "(libgpuxtb_mkl_lp64_shim)";
+      return state;
+    }
+#endif
+
+#if !defined(GPUXTB_CONFIGURED_CPU_LINALG_MKL)
 #ifdef GPUXTB_CONFIGURED_CPU_LINALG_RUNTIME
     constexpr const char* kConfiguredRuntime = GPUXTB_CONFIGURED_CPU_LINALG_RUNTIME;
 #else
     constexpr const char* kConfiguredRuntime = nullptr;
 #endif
 
-    using SetInterfaceLayer = int (*)(int layer);
     using OpenBlasGetConfig = const char* (*)();
     /* dlopen candidates in preference order: the absolute path CMake baked in
      * (GPUXTB_CPU_LINALG_LIBRARY / find_package(BLAS) in CMakeLists.txt) first,
-     * then known MKL and OpenBLAS sonames that the Python layer may already
-     * have preloaded. Linux wheels use a prefixed LP64 libscipy_openblas.so
-     * runtime. Skipping a candidate never fails the factory, so a loaded
-     * library that is not a usable sequential LP64 BLAS yields the next one. */
+     * then known OpenBLAS sonames that the Python layer may already have
+     * preloaded. MKL is never accepted through this base-namespace fallback;
+     * its only production path is the isolated component shim above. */
     const char* const runtime_names[] = {
-        kConfiguredRuntime, "libmkl_rt.so.2",       "libmkl_rt.so.3",          "libmkl_rt.so.4",
-        "libmkl_rt.so",     "libscipy_openblas.so", "libscipy_openblas32_.so", "libopenblas.so.0",
-        "libopenblas.so",   "libopenblas.so.3",
+        kConfiguredRuntime, "libscipy_openblas.so", "libscipy_openblas32_.so",
+        "libopenblas.so.0", "libopenblas.so",       "libopenblas.so.3",
     };
 
-    bool saw_ilp64_mkl = false;
     for (const char* name : runtime_names) {
       if (name == nullptr || *name == '\0') {
         continue;
@@ -1214,17 +1265,12 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
       if (handle == nullptr) {
         continue;
       }
-      SetInterfaceLayer set_interface = nullptr;
       LapackDpotrfWork dpotrf_work = nullptr;
       LapackDpoconWork dpocon_work = nullptr;
       LapackDsyevdWork dsyevd_work = nullptr;
       CblasDtrsm dtrsm = nullptr;
       CblasDgemm dgemm = nullptr;
       BlasSetNumThreadsLocal set_threads = nullptr;
-      /* MKL exposes a runtime interface layer; OpenBLAS does not, so the
-       * MKL-specific symbols are optional and only MKL goes through that gate.
-       * Load one complete standard or scipy_-prefixed symbol set. */
-      const bool is_mkl = load_symbol(handle, "MKL_Set_Interface_Layer", set_interface);
       bool scipy_prefix = false;
       if (!load_lapacke_cblas_symbols(handle, false, dpotrf_work, dpocon_work, dsyevd_work, dtrsm,
                                       dgemm)) {
@@ -1235,31 +1281,21 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
           continue;
         }
       }
-      if (!is_mkl) {
-        /* INTERFACE64 OpenBLAS builds may retain unsuffixed function names, so
-         * symbol spelling alone cannot prove the 32-bit LapackInt ABI. Reject
-         * providers that cannot identify themselves or report USE64BITINT. */
-        OpenBlasGetConfig get_config = nullptr;
-        if (!load_symbol(handle, scipy_prefix ? "scipy_openblas_get_config" : "openblas_get_config",
-                         get_config)) {
-          static_cast<void>(dlclose(handle));
-          continue;
-        }
-        const char* config = get_config();
-        if (config == nullptr || std::strstr(config, "USE64BITINT") != nullptr) {
-          static_cast<void>(dlclose(handle));
-          continue;
-        }
-      }
-      if (is_mkl && (contains_ilp64(std::getenv("MKL_INTERFACE_LAYER")) ||
-                     set_interface(kMklInterfaceLp64) != kMklInterfaceLp64)) {
+      /* INTERFACE64 OpenBLAS builds may retain unsuffixed function names, so
+       * symbol spelling alone cannot prove the 32-bit LapackInt ABI. Reject
+       * providers that cannot identify themselves or report USE64BITINT. */
+      OpenBlasGetConfig get_config = nullptr;
+      if (!load_symbol(handle, scipy_prefix ? "scipy_openblas_get_config" : "openblas_get_config",
+                       get_config)) {
         static_cast<void>(dlclose(handle));
-        saw_ilp64_mkl = true; /* Never accept an ILP64 MKL; try other runtimes. */
         continue;
       }
-      if (is_mkl) {
-        static_cast<void>(load_symbol(handle, "MKL_Set_Num_Threads_Local", set_threads));
-      } else if (!load_symbol(handle, "openblas_set_num_threads_local", set_threads)) {
+      const char* config = get_config();
+      if (config == nullptr || std::strstr(config, "USE64BITINT") != nullptr) {
+        static_cast<void>(dlclose(handle));
+        continue;
+      }
+      if (!load_symbol(handle, "openblas_set_num_threads_local", set_threads)) {
         /* scipy-openblas32 currently retains the unprefixed local-control
          * symbol, while other prefixed builds may follow the public header. */
         static_cast<void>(load_symbol(handle, "scipy_openblas_set_num_threads_local", set_threads));
@@ -1268,10 +1304,9 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
         static_cast<void>(dlclose(handle));
         continue;
       }
-      CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
-          is_mkl ? CpuLinearAlgebraBackend::Origin::kMklRtLp64
-                 : CpuLinearAlgebraBackend::Origin::kOpenBlasLp64,
-          dpotrf_work, dpocon_work, dsyevd_work, dtrsm, dgemm, set_threads);
+      CpuLinearAlgebraBackend created =
+          CpuLinearAlgebraAccess::make(CpuLinearAlgebraBackend::Origin::kOpenBlasLp64, dpotrf_work,
+                                       dpocon_work, dsyevd_work, dtrsm, dgemm, set_threads);
       if (!backend_self_test(created)) {
         static_cast<void>(dlclose(handle));
         continue;
@@ -1281,20 +1316,22 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
       state.status = GPUXTB_STATUS_SUCCESS;
       return state;
     }
-    if (saw_ilp64_mkl) {
-      state.message = "MKL runtime is configured or already initialized for ILP64";
-    } else {
-      state.message =
-          "failed to load libmkl_rt or another LP64 BLAS runtime (libopenblas*.so, "
-          "libscipy_openblas.so, or the CMake-configured path)";
-    }
+    state.message =
+        "failed to load an LP64 OpenBLAS runtime (libopenblas*.so, "
+        "libscipy_openblas.so, or the CMake-configured path)";
     return state;
+#else
+    state.message =
+        "host-isolated MKL provider shim is unavailable; configure the adjacent MKL "
+        "LP64/sequential components or select an LP64 OpenBLAS runtime";
+    return state;
+#endif
 #endif
   }();
 
   if (runtime.status != GPUXTB_STATUS_SUCCESS) {
-    error = runtime.message == nullptr ? "LP64 CPU linear-algebra backend initialization failed"
-                                       : runtime.message;
+    error = runtime.message.empty() ? "LP64 CPU linear-algebra backend initialization failed"
+                                    : runtime.message;
     return runtime.status;
   }
   backend = runtime.backend;

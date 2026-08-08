@@ -950,6 +950,14 @@ int run_mkl_ilp64_rejection_child() {
      * there is nothing to reject; accept the vacuous success. */
     return 0;
   }
+  if (status == GPUXTB_STATUS_SUCCESS && production.ready() &&
+      production.production_mkl_isolated()) {
+    /* The host-isolated MKL shim never reads MKL_INTERFACE_LAYER and never
+     * switches the embedding process's MKL interface layer, so an explicit
+     * ILP64 environment is ignored and LP64 correctness is preserved. This is
+     * the required coexistence outcome for issue #30, not a rejection. */
+    return 0;
+  }
   return status == GPUXTB_STATUS_BACKEND_UNAVAILABLE && !production.ready() &&
                  error.find("ILP64") != std::string::npos
              ? 0
@@ -957,13 +965,21 @@ int run_mkl_ilp64_rejection_child() {
 }
 
 int test_mkl_ilp64_rejection_in_fresh_process() {
+  char executable_path[4096]{};
+  const ssize_t executable_path_size =
+      readlink("/proc/self/exe", executable_path, sizeof(executable_path) - 1u);
+  CHECK(executable_path_size > 0);
+  executable_path[static_cast<std::size_t>(executable_path_size)] = '\0';
+
   const pid_t child = fork();
   CHECK(child >= 0);
   if (child == 0) {
     if (setenv("MKL_INTERFACE_LAYER", "ILP64", 1) != 0) {
       _exit(120);
     }
-    execl("/proc/self/exe", "gpuxtb_eigensolver_test", "--mkl-ilp64-rejection-child",
+    /* The isolated provider is resolved beside the executable in this static
+     * unit-test binary, so preserve that real sibling directory across exec. */
+    execl(executable_path, executable_path, "--mkl-ilp64-rejection-child",
           static_cast<char*>(nullptr));
     _exit(121);
   }
