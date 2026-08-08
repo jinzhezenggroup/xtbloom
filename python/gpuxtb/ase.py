@@ -49,6 +49,8 @@ class GPUxtb(ase.calculators.calculator.Calculator):
      device_id                None              CUDA device id
      cpu_threads              1                 CPU batch-parallelism ceiling
      cache_api                True              Reuse the underlying API calculator
+     warm_start               True              Seed SCC from the previous converged
+                                               state when compatible (auto)
     ======================== ================= =========================================
     """
 
@@ -78,6 +80,7 @@ class GPUxtb(ase.calculators.calculator.Calculator):
         "device_id": None,
         "cpu_threads": 1,
         "cache_api": True,
+        "warm_start": True,
     }
 
     _res: Result | None = None
@@ -128,7 +131,8 @@ class GPUxtb(ase.calculators.calculator.Calculator):
         # A structural parameter change requires rebuilding the API calculator;
         # numerical SCC settings are pushed onto an existing one in place.
         if self._xtb is not None and not any(
-            key in changed for key in ("method", "backend", "device_id", "cpu_threads")
+            key in changed
+            for key in ("method", "backend", "device_id", "cpu_threads", "warm_start")
         ):
             parameters = self._api_parameters()
             if "electronic_temperature" in changed:
@@ -240,6 +244,7 @@ def _create_api_calculator(
             charge_tolerance=parameters.charge_tolerance,
             energy_tolerance=parameters.energy_tolerance,
             electronic_temperature=parameters.electronic_temperature,
+            warm_start=bool(parameters.warm_start),
         )
     except GPUxtbValueError as e:
         raise ase.calculators.calculator.InputError(str(e)) from e

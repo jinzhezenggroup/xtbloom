@@ -33,10 +33,15 @@ with Calculator(
     second = calc.singlepoint()
 ```
 
-The high-level calculator deliberately performs fresh SCC initialization for
-each calculation. Strict electronic `WARM` checkpoints are an advanced C ABI
-feature because callers must preserve an exact topology and compute-policy
-identity.
+The high-level calculator defaults to fresh SCC initialization for each
+calculation (`warm_start=False`), keeping every call reproducible and
+independent. With `warm_start=True`, a call reuses the previous fully
+converged compatible electronic state retained on the same context as the SCC
+initial guess (the strict native `WARM` checkpoint); the first call on a
+context and any topology or compute-policy identity change transparently fall
+back to a fresh solve. Geometry is not part of the native identity, so a
+dynamics or optimization loop that reuses one `Calculator` reconverges from
+each previous step's state.
 
 `Calculator.set()` updates `max_scc_iterations`, `charge_tolerance`,
 `energy_tolerance`, or `electronic_temperature` in kelvin.
@@ -261,7 +266,11 @@ The caller owns coordinate derivatives of `b` and `A`. See the
 Install the corresponding extra and use `gpuxtb.ase.GPUxtb` as an ASE
 calculator or `driver="gpuxtb"` with dpdata. These integrations convert native
 atomic units to eV and Angstrom conventions. dpdata periodic systems are
-rejected because the native ABI has no lattice descriptor.
+rejected because the native ABI has no lattice descriptor. The ASE calculator
+enables warm start by default (`warm_start=True`), so an ASE dynamics run
+automatically seeds each step's SCC from the previous converged state and
+falls back to a fresh solve whenever the request's identity changes; pass
+`warm_start=False` for bit-reproducible independent steps.
 
 For geometry relaxation, `gpuxtb` also registers a batch minimizer under the
 `"gpuxtb"` key. It moves every frame of a dpdata system in lockstep and

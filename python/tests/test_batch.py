@@ -307,3 +307,33 @@ def test_fixed_topology_plan_matches_compute_and_exposes_workspace() -> None:
     context.close()
     with pytest.raises(GPUxtbRuntimeError, match="plan is closed"):
         energy_plan.query_workspace(library.COMPUTE_ENERGY)
+
+
+def test_batch_warm_start_reuses_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``BatchCalculator(warm_start=True)`` reconverges from the previous batch."""
+    modes: list[int] = []
+    original = library.compute_checked
+
+    def recording(
+        context: object, batch: object, options: object, result: object
+    ) -> None:
+        modes.append(int(options.scc_start_mode))  # type: ignore[attr-defined]
+        return original(context, batch, options, result)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(library, "compute_checked", recording)
+
+    structures = _make_structures(["ketene"])
+    batch = BatchCalculator(structures, warm_start=True)
+    energies: list[float] = []
+    for step in range(3):
+        positions = np.asarray(structures[0].positions, dtype=np.float64)
+        positions[step % len(positions), 0] += 0.02
+        structures[0].update(positions=positions)
+        result = batch.compute()
+        result.raise_for_status()
+        energies.append(float(result.energies[0]))
+    assert all(np.isfinite(energies))
+    assert modes == [
+        library.SCC_START_FRESH,
+        *([library.SCC_START_WARM] * 2),
+    ]
