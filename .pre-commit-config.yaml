@@ -49,6 +49,20 @@ repos:
         # Only the two generated parameter headers are canonical exports;
         # future hand-written C/C++ files under data must still be formatted.
         exclude: ^data/parameters/(?:gfn2|d4)\.hpp$
+  - repo: local
+    hooks:
+      - id: forbid-raw-profiler-captures
+        name: Forbid raw profiler captures (nsys/ncu)
+        entry: >-
+          Raw profiler captures (nsys/ncu) embed the target process
+          environment and credentials. Remove the file and commit only
+          sanitized derived summaries (e.g. `nsys stats` / `ncu --csv`
+          CSV/text output).
+        language: fail
+        # Extensions must stay in sync with the *.nsys-rep / *.ncu-rep /
+        # *.sqlite / *.sqlite.dbb / *.csv.db / *.qdstrm / *.prof block in
+        # .gitignore.
+        files: '\.(nsys-rep|qdstrm|sqlite|ncu-rep|sqlite\.dbb|csv\.db|prof)$'
 
 # pre-commit.ci blocks network access for hooks, but ty-pre-commit needs to
 # resolve dependencies, so it must be skipped there. The repository's own
