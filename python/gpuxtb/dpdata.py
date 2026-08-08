@@ -186,7 +186,6 @@ class GPUxtbDriver(Driver):
             Copy of ``data`` with ``energies`` (eV) and ``forces`` (eV/Angstrom).
         """
         _reject_periodic(data)
-        nframes = int(np.asarray(data["coords"]).shape[0])
         structures = _structures_from_data(
             data,
             charge=self.charge,
@@ -194,6 +193,9 @@ class GPUxtbDriver(Driver):
             multiplicity=self.multiplicity,
             spin_channels=self.spin_channels,
         )
+        # Derive the frame count only after the shared shape validation above;
+        # malformed scalar coordinates must raise GPUxtbValueError, not IndexError.
+        nframes = len(structures)
 
         calculator = BatchCalculator(
             structures,
@@ -247,9 +249,10 @@ class GPUxtbMinimizer(Minimizer):
         Force convergence threshold in eV/Angstrom (dpdata units), matching the
         ASE convention.
     max_steps : int, optional
-        Maximum number of geometry evaluation steps across the whole batch;
-        ``None`` runs until every frame converges.  Frames still active when it
-        is reached are reported at their last evaluated geometry.
+        Maximum number of geometry moves across the whole batch, excluding the
+        initial force evaluation; ``None`` runs until every frame converges.
+        Frames still active when it is reached are reported at their last
+        energy-accepted geometry.
     memory : int, default 5
         Number of L-BFGS history pairs kept per frame.
 
@@ -297,7 +300,9 @@ class GPUxtbMinimizer(Minimizer):
         ------
         GPUxtbRuntimeError
             If any frame failed SCC or the eigensolver at its last evaluated
-            geometry, so the caller never receives silently bogus labels.
+            geometry, or if its line search cannot find an energy-lowering step
+            at the minimum step size. The caller never receives silently bogus
+            or rejected labels.
         """
         _reject_periodic(data)
         driver = self._driver
@@ -312,13 +317,12 @@ class GPUxtbMinimizer(Minimizer):
         if nframes == 0:
             raise GPUxtbValueError("cannot minimize a system without frames")
 
-        # Per-frame optimizer ledger, keyed by original frame index.  ``eval_*``
-        # always holds the geometry the current numbers were computed at, which
-        # also defines the reported final geometry for frames that hit
-        # ``max_steps`` or failed instead of converging.
-        eval_pos: dict[int, np.ndarray] = {}
-        eval_energy: dict[int, float] = {}
-        eval_force: dict[int, np.ndarray] = {}
+        # Per-frame optimizer ledger, keyed by original frame index.  Only an
+        # energy-accepted evaluation enters ``accepted_*``; this keeps a rejected
+        # final trial from becoming the published result when max_steps expires.
+        accepted_pos: dict[int, np.ndarray] = {}
+        accepted_energy: dict[int, float] = {}
+        accepted_force: dict[int, np.ndarray] = {}
         prev_pos: dict[int, np.ndarray] = {}
         prev_energy: dict[int, float] = {}
         prev_gradient: dict[int, np.ndarray] = {}
@@ -329,6 +333,7 @@ class GPUxtbMinimizer(Minimizer):
         initialized: set[int] = set()
         done: set[int] = set()
         failed: set[int] = set()
+        line_search_failed: set[int] = set()
         active = list(range(nframes))
 
         def make_calculator(frames: list[int]) -> BatchCalculator:
@@ -340,8 +345,13 @@ class GPUxtbMinimizer(Minimizer):
 
         calculator = make_calculator(active)
         try:
-            steps = 0
-            while active and (self._max_steps is None or steps < self._max_steps):
+            evaluations = 0
+            # The first pass establishes the input baselines. Each subsequent
+            # pass evaluates one geometry move and consumes one max_steps slot.
+            while active and (
+                self._max_steps is None or evaluations <= self._max_steps
+            ):
+                can_move = self._max_steps is None or evaluations < self._max_steps
                 result = calculator.compute()
                 # Snapshot the evaluated positions before any trial moves.
                 evaluated = [structures[i].positions.copy() for i in active]
@@ -349,9 +359,7 @@ class GPUxtbMinimizer(Minimizer):
                     single = result[position]
                     energy = single.energy
                     force = single.forces
-                    eval_pos[frame] = evaluated[position]
-                    eval_energy[frame] = energy
-                    eval_force[frame] = force
+                    evaluated_pos = evaluated[position]
 
                     if not np.isfinite(energy) or not np.isfinite(force).all():
                         # Per-frame SCC/eigensolver failure is data-level, not
@@ -363,17 +371,23 @@ class GPUxtbMinimizer(Minimizer):
                             structures[frame].update(positions=prev_pos[frame])
                         continue
 
-                    max_force = float(np.max(np.abs(force * _FORCE_TO_EV_ANG)))
-                    if max_force <= self._fmax:
-                        done.add(frame)
-                        continue
-
                     if frame not in initialized:
+                        # The input geometry is the first accepted baseline.
+                        accepted_pos[frame] = evaluated_pos
+                        accepted_energy[frame] = energy
+                        accepted_force[frame] = force
+                        max_force = float(np.max(np.abs(force * _FORCE_TO_EV_ANG)))
+                        if max_force <= self._fmax:
+                            done.add(frame)
+                            continue
+                        if not can_move:
+                            continue
+
                         # ``force`` is -dE/dR (library convention); the
                         # optimizer works with the energy gradient +dE/dR.
                         gradient = -force
                         alpha[frame] = initial_step_size(gradient)
-                        prev_pos[frame] = eval_pos[frame]
+                        prev_pos[frame] = evaluated_pos
                         prev_energy[frame] = energy
                         prev_gradient[frame] = gradient
                         s_history[frame] = []
@@ -382,45 +396,25 @@ class GPUxtbMinimizer(Minimizer):
                         initialized.add(frame)
                         direction = lbfgs_direction(gradient, [], [], [])
                         trial = prev_pos[frame] + alpha[frame] * direction
+                        structures[frame].update(positions=trial)
                     else:
                         baseline_pos = prev_pos[frame]
-                        if energy <= prev_energy[frame] + _ACCEPT_TOLERANCE * max(
+                        acceptance_limit = prev_energy[frame] + _ACCEPT_TOLERANCE * max(
                             1.0, abs(prev_energy[frame])
-                        ):
-                            gradient = -force
-                            s_step = eval_pos[frame] - baseline_pos
-                            y_step = gradient - prev_gradient[frame]
-                            rho = curvature(s_step, y_step)
-                            if rho > 0.0:
-                                # Positive curvature: keep the pair.  A
-                                # non-positive pair means the Hessian along the
-                                # step is not positive definite, so the history
-                                # is left untouched for robustness.
-                                s_history[frame].append(s_step)
-                                y_history[frame].append(y_step)
-                                rho_history[frame].append(1.0 / rho)
-                                if len(s_history[frame]) > self._memory:
-                                    s_history[frame].pop(0)
-                                    y_history[frame].pop(0)
-                                    rho_history[frame].pop(0)
-                            prev_pos[frame] = eval_pos[frame]
-                            prev_energy[frame] = energy
-                            prev_gradient[frame] = gradient
-                            # L-BFGS directions carry the inverse-Hessian
-                            # scale, so the natural accepted step is alpha = 1
-                            # (restored here after any rejection halving).
-                            alpha[frame] = 1.0
-                            direction = lbfgs_direction(
-                                gradient,
-                                s_history[frame],
-                                y_history[frame],
-                                rho_history[frame],
-                            )
-                            trial = prev_pos[frame] + alpha[frame] * direction
-                        else:
+                        )
+                        if energy > acceptance_limit:
                             # Trial did not improve: retry from the accepted
                             # baseline with a shorter step, reusing the same
-                            # history so no extra evaluation is wasted.
+                            # history. Once the minimum step has itself been
+                            # rejected, stop this frame instead of retrying the
+                            # identical geometry forever.
+                            if alpha[frame] <= _ALPHA_MIN:
+                                line_search_failed.add(frame)
+                                done.add(frame)
+                                structures[frame].update(positions=baseline_pos)
+                                continue
+                            if not can_move:
+                                continue
                             alpha[frame] = max(alpha[frame] * _ALPHA_DECAY, _ALPHA_MIN)
                             direction = lbfgs_direction(
                                 prev_gradient[frame],
@@ -429,9 +423,56 @@ class GPUxtbMinimizer(Minimizer):
                                 rho_history[frame],
                             )
                             trial = prev_pos[frame] + alpha[frame] * direction
+                            structures[frame].update(positions=trial)
+                            continue
+
+                        gradient = -force
+                        s_step = evaluated_pos - baseline_pos
+                        y_step = gradient - prev_gradient[frame]
+                        rho = curvature(s_step, y_step)
+                        if rho > 0.0:
+                            # Positive curvature: keep the pair.  A
+                            # non-positive pair means the Hessian along the
+                            # step is not positive definite, so the history
+                            # is left untouched for robustness.
+                            s_history[frame].append(s_step)
+                            y_history[frame].append(y_step)
+                            rho_history[frame].append(1.0 / rho)
+                            if len(s_history[frame]) > self._memory:
+                                s_history[frame].pop(0)
+                                y_history[frame].pop(0)
+                                rho_history[frame].pop(0)
+
+                        accepted_pos[frame] = evaluated_pos
+                        accepted_energy[frame] = energy
+                        accepted_force[frame] = force
+                        prev_pos[frame] = evaluated_pos
+                        prev_energy[frame] = energy
+                        prev_gradient[frame] = gradient
+
+                        # A rejected geometry cannot establish convergence; the
+                        # force criterion is checked only after energy acceptance.
+                        max_force = float(np.max(np.abs(force * _FORCE_TO_EV_ANG)))
+                        if max_force <= self._fmax:
+                            done.add(frame)
+                            continue
+                        if not can_move:
+                            continue
+
+                        # L-BFGS directions carry the inverse-Hessian scale, so
+                        # the natural accepted step is alpha = 1 (restored here
+                        # after any rejection halving).
+                        alpha[frame] = 1.0
+                        direction = lbfgs_direction(
+                            gradient,
+                            s_history[frame],
+                            y_history[frame],
+                            rho_history[frame],
+                        )
+                        trial = prev_pos[frame] + alpha[frame] * direction
                         structures[frame].update(positions=trial)
 
-                steps += 1
+                evaluations += 1
                 if done:
                     keep = [frame for frame in active if frame not in done]
                     if keep:
@@ -446,24 +487,39 @@ class GPUxtbMinimizer(Minimizer):
 
         if failed:
             indices = ", ".join(str(i) for i in sorted(failed))
+            line_search_detail = ""
+            if line_search_failed:
+                stalled = ", ".join(str(i) for i in sorted(line_search_failed))
+                line_search_detail = (
+                    "; line search stalled at the minimum step size for "
+                    f"frames {stalled}"
+                )
             raise GPUxtbRuntimeError(
                 "gpuxtb minimization produced failed systems: "
-                f"frames {indices} failed SCC or the eigensolver"
+                f"frames {indices} failed SCC or the eigensolver{line_search_detail}"
+            )
+        if line_search_failed:
+            indices = ", ".join(str(i) for i in sorted(line_search_failed))
+            raise GPUxtbRuntimeError(
+                "gpuxtb minimization line search stalled at the minimum step "
+                f"size for frames {indices}"
             )
 
         # Frames not finished (max_steps reached) are reported at their last
-        # evaluated geometry, mirroring the ASE minimizer which simply stops.
+        # energy-accepted geometry, never at an unevaluated or rejected trial.
         final_pos = (
-            np.stack([eval_pos[frame] for frame in range(nframes)]) * BOHR_TO_ANGSTROM
+            np.stack([accepted_pos[frame] for frame in range(nframes)])
+            * BOHR_TO_ANGSTROM
         )
         final_energies = (
             np.asarray(
-                [eval_energy[frame] for frame in range(nframes)], dtype=np.float64
+                [accepted_energy[frame] for frame in range(nframes)], dtype=np.float64
             )
             * HARTREE_TO_EV
         )
         final_forces = (
-            np.stack([eval_force[frame] for frame in range(nframes)]) * _FORCE_TO_EV_ANG
+            np.stack([accepted_force[frame] for frame in range(nframes)])
+            * _FORCE_TO_EV_ANG
         )
 
         labeled = dict(data)
