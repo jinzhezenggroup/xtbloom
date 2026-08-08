@@ -158,6 +158,51 @@ Required batch topology uses flat arrays:
 
 See the public header for every optional field and its exact element type.
 
+## External interaction attachments (ABI-v3)
+
+The ABI-v3 `gpuxtb_batch_t` suffix carries a generic, versioned attachment
+slot so future external interactions do not renumber or regrow the batch
+layout for each new feature. When present:
+
+- `total_interactions` counts `gpuxtb_interaction_t` entries in
+  `interaction_descriptors`;
+- each descriptor attaches one caller-owned payload block inside the
+  `interaction_payload` byte buffer to one batch item (`system_index`);
+- `interaction_descriptors` and `interaction_payload` may independently use
+  host or CUDA-device memory, like every other buffer.
+
+Every payload block starts with an `int32_t block_version` so the byte layout
+of one tag can evolve independently; the header must fit in the payload view
+and be aligned to an `int32_t`. The released electric-field block
+(`GPUXTB_INTERACTION_ELECTRIC_FIELD`, block version 1) is 32 bytes:
+`int32_t version`, a zero `int32_t reserved`, and three finite binary64 field
+components in Hartree per elementary charge per bohr. Its payload offset is
+8-byte aligned.
+
+The tag set is reserved for the xtb/tblite/dxtb interaction family: uniform
+electric field and field gradient, multipole point charges, atomic-potential
+grids, ALPB/GBSA/GB/GBE/ddX solvation, D3/D4 dispersion variants, and
+halogen-bond corrections. **No backend executes any interaction yet**:
+a well-formed attachment passes structural validation and is then refused with
+`GPUXTB_STATUS_NOT_IMPLEMENTED` before any caller output is touched, so a
+reserved interaction can never silently contribute to a result. Unknown or
+`GPUXTB_INTERACTION_NONE` tags, duplicate `(system_index, type)` attachments,
+descriptor flag bits, and payload blocks that are undersized, oversized,
+misaligned, or outside the payload view are `GPUXTB_STATUS_INVALID_ARGUMENT`.
+
+The ABI-v2 `gpuxtb_batch_result_t` suffix adds the dipole outlet:
+`dipole_moments` holds `batch_size * 3` binary64 values in atomic units. It is
+reported when `GPUXTB_COMPUTE_DIPOLE_MOMENTS` is set in `compute_options.flags`;
+requesting it currently fails with `GPUXTB_STATUS_NOT_IMPLEMENTED` until the
+backends publish it. A successful publication also sets
+`GPUXTB_RESULT_DIPOLE_MOMENTS`. `quadrupole_moments`, `wiberg_orders`, and
+`spin_populations` are ABI-reserved outlets whose shape contract is not
+published: supplying bytes there is refused with
+`GPUXTB_STATUS_NOT_SUPPORTED`.
+
+Compute-flag bits 16-31 are reserved and must be zero on input. Result flags
+are outputs; gpuxtb keeps their reserved bits 16-31 zero on successful return.
+
 ## Outputs and failures
 
 The three diagnostic arrays `scc_iterations`, `scc_converged`, and
