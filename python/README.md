@@ -212,6 +212,16 @@ assert result.forces is out_forces
 `compute_arrays(...)` is a convenience alias that builds a temporary
 `ArrayBatch` and computes in one call.
 
+### PyTorch autograd op
+
+`gpuxtb_torch(positions, atomic_numbers, atom_offsets, molecular_charges,
+unpaired_electrons, ...)` runs the packed DLPack inference on PyTorch tensors
+(host or CUDA) and is the only autograd entry point in the Python API. It
+supports exactly the positions gradient `dE/dR = -F`; autograd on any other
+input, or a gradient flowing through the `forces` output (the Hessian), raises
+`GPUxtbNotSupportedError`. PyTorch is imported only when the op is called. See
+`docs/user-guide/python.md` for the full contract.
+
 ## Explicit point charges
 
 Point charges participate in every SCC iteration. Their positions are in bohr,
