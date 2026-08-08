@@ -328,6 +328,8 @@
         "raw_dipoles": {"$ref": "#/definitions/restricted_dipoles"},
         "mixed_quadrupoles": {"$ref": "#/definitions/restricted_quadrupoles"},
         "raw_quadrupoles": {"$ref": "#/definitions/restricted_quadrupoles"},
+        "point_charge_shell_potential": {"$ref": "#/definitions/restricted_spectrum"},
+        "point_charge_energy": {"$ref": "#/definitions/restricted_spectrum"},
         "residual": {
           "type": "array",
           "minItems": 1,
