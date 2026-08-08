@@ -22,11 +22,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
+import numpy.typing as npt
 
 from .exceptions import GPUxtbRuntimeError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from types import ModuleType
 
 # --- ABI constants (kept in sync with include/gpuxtb/gpuxtb.h) ----------------
 
@@ -410,21 +412,27 @@ def _runtime_search_dirs() -> list[Path]:
     """
     dirs: list[Path] = []
 
+    site_module: ModuleType | None = None
     try:
         import site
+
+        site_module = site
     except Exception:  # noqa: BLE001 - defensive: probe environments where
         # `site` is unavailable without aborting library discovery
-        site = None  # pragma: no cover - defensive
+        site_module = None  # pragma: no cover - defensive
     site_packages = (
-        getattr(site, "getsitepackages", lambda: [])() if site is not None else []
+        getattr(site_module, "getsitepackages", lambda: [])()
+        if site_module is not None
+        else []
     )
     user_site = (
-        getattr(site, "getusersitepackages", lambda: None)()
-        if site is not None
+        getattr(site_module, "getusersitepackages", lambda: None)()
+        if site_module is not None
         else None
     )
     if user_site and (
-        bool(getattr(site, "ENABLE_USER_SITE", False)) or str(user_site) in sys.path
+        bool(getattr(site_module, "ENABLE_USER_SITE", False))
+        or str(user_site) in sys.path
     ):
         site_packages = [*site_packages, user_site]
 
@@ -505,11 +513,15 @@ def _preload_runtime_libraries() -> list[str]:
     """
     search_dirs = _runtime_search_dirs()
     if os.name == "nt":
+        # os.add_dll_directory exists only on Windows; this branch proves its
+        # presence at runtime, but a type checker resolving for a generic
+        # platform cannot see the member, hence the targeted suppression.
+        add_dll_directory = os.add_dll_directory  # type: ignore[unresolved-attribute]
         for directory in search_dirs:
             # The returned object removes the directory when it is closed;
             # keep it alive for as long as the native library may be used.
             with contextlib.suppress(OSError):
-                _dll_directory_handles.append(os.add_dll_directory(str(directory)))
+                _dll_directory_handles.append(add_dll_directory(str(directory)))
         return []
 
     loaded: list[str] = []
@@ -807,7 +819,7 @@ class Plan:
 def host_const(
     values: Sequence[int | float | bool] | None,
     ctype: type[ctypes._SimpleCData],
-    dtype: object,
+    dtype: npt.DTypeLike,
 ) -> tuple[ConstBuffer, np.ndarray]:
     """Build a host ``gpuxtb_const_buffer_t`` from a numpy-compatible sequence.
 
@@ -836,7 +848,7 @@ def host_const(
 def empty_result_shape(
     shape: int | tuple[int, ...],
     ctype: type[ctypes._SimpleCData],
-    dtype: object,
+    dtype: npt.DTypeLike,
 ) -> tuple[Buffer, np.ndarray]:
     """Allocate a host output buffer and return its descriptor plus owner."""
     owner = np.empty(shape, dtype=dtype)

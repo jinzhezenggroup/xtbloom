@@ -31,9 +31,10 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import math
+import typing
 import weakref
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 import numpy as np
 
@@ -58,6 +59,20 @@ _DLPACK_CODE_FLOAT = 2
 _DLPACK_CODE_BFLOAT = 4
 _DLPACK_CODE_COMPLEX = 5
 _DLPACK_CODE_BOOL = 6
+
+
+class _SupportsDLPack(Protocol):
+    """Structural type for a DLPack producer (an eager array of any backend).
+
+    The protocol captures only the two attributes the bridge consumes.  It is
+    used for type-checking only: callers detect capability with ``hasattr`` or
+    duck typing at runtime, never with ``isinstance`` against this class.
+    """
+
+    def __dlpack__(self, **kwargs: object) -> object: ...
+
+    def __dlpack_device__(self) -> tuple[int, int]: ...
+
 
 # Flags carried by the versioned managed tensor (DLManagedTensorVersioned).
 _DLPACK_FLAG_READ_ONLY = 1 << 0
@@ -302,7 +317,7 @@ def dlpack_device(producer: object) -> tuple[int, int]:
             f"got {type(producer).__name__}"
         )
     try:
-        device = producer.__dlpack_device__()
+        device = typing.cast("_SupportsDLPack", producer).__dlpack_device__()
     except Exception as exc:
         raise GPUxtbValueError(
             f"__dlpack_device__() failed for {type(producer).__name__}: {exc}"
@@ -547,8 +562,11 @@ def _produce_capsule(producer: object, stream_value: int | None, copy: bool) -> 
     }
     if stream_value is not None:
         full_kwargs["stream"] = stream_value
+    # ``producer`` was already validated as DLPack-capable; this cast only
+    # names the protocol for static analysis.
+    producer_dlpack = typing.cast("_SupportsDLPack", producer).__dlpack__
     try:
-        return producer.__dlpack__(**full_kwargs)
+        return producer_dlpack(**full_kwargs)
     except TypeError:
         # A legacy producer may reject max_version, but CUDA synchronization is
         # still mandatory. Retry without only that keyword so the consumer
@@ -556,7 +574,7 @@ def _produce_capsule(producer: object, stream_value: int | None, copy: bool) -> 
         legacy_kwargs = dict(full_kwargs)
         legacy_kwargs.pop("max_version")
         try:
-            return producer.__dlpack__(**legacy_kwargs)
+            return producer_dlpack(**legacy_kwargs)
         except TypeError:
             if copy:
                 raise GPUxtbNotSupportedError(
@@ -570,7 +588,7 @@ def _produce_capsule(producer: object, stream_value: int | None, copy: bool) -> 
             no_copy_kwargs = dict(legacy_kwargs)
             no_copy_kwargs.pop("copy")
             try:
-                return producer.__dlpack__(**no_copy_kwargs)
+                return producer_dlpack(**no_copy_kwargs)
             except TypeError as no_copy_exc:
                 exc = no_copy_exc
             if stream_value is not None:
@@ -845,7 +863,7 @@ class _ResultArena:
             self.close()
 
 
-def _release_result_owner(library_instance: object, handle: object) -> None:
+def _release_result_owner(library_instance: ctypes.CDLL, handle: object) -> None:
     """Release the arena producer reference (the finalizer target)."""
     library_instance.gpuxtb_result_owner_release(handle)
 
@@ -1081,7 +1099,9 @@ def _dlpack_versioned_requested(max_version: object) -> bool:
     if max_version is None:
         return False
     try:
-        values = tuple(max_version)
+        # The caller may pass any iterable of two integers; each element is
+        # validated below.
+        values = tuple(typing.cast("typing.Iterable[object]", max_version))
     except TypeError:
         raise BufferError("max_version must contain two nonnegative integers") from None
     if len(values) != 2 or any(
@@ -1091,7 +1111,11 @@ def _dlpack_versioned_requested(max_version: object) -> bool:
         for value in values
     ):
         raise BufferError("max_version must contain two nonnegative integers")
-    return tuple(int(value) for value in values) >= (1, 0)
+    # After the loop above, every element is a validated nonnegative integer.
+    return tuple(int(typing.cast("int | np.integer", value)) for value in values) >= (
+        1,
+        0,
+    )
 
 
 def _producer_dtype_fields(dtype: np.dtype) -> tuple[int, int]:
@@ -1167,7 +1191,7 @@ class _ProducerCapsuleDestructor:
             _pyapi_void_deleter(deleter)(pointer)
 
     def _build(self) -> object:
-        @ctypes.CFUNCTYPE(None, ctypes.c_void_p)  # type: ignore[arg-type]
+        @ctypes.CFUNCTYPE(None, ctypes.c_void_p)
         def destructor(capsule_pointer: int) -> None:
             self(capsule_pointer)
 
@@ -1203,6 +1227,11 @@ class _RawPyApi:
         get_pointer_address = ctypes.cast(
             api.PyCapsule_GetPointer, ctypes.c_void_p
         ).value
+        # pythonapi always resolves the requested symbols, so the raw addresses
+        # are non-None; the assertions both document the invariant and narrow
+        # the ``int | None`` address type for the CFUNCTYPE constructors.
+        assert get_name_address is not None
+        assert get_pointer_address is not None
         # Build dedicated function-pointer prototypes from the raw C addresses
         # so the consumer-side py_object signatures on pythonapi are never
         # consulted (and never mutated) for these destructive accesses.
