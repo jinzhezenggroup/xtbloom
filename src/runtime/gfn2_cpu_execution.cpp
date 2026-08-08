@@ -169,6 +169,11 @@ class CpuWorkerPool final {
     task_count_ = 0u;
   }
 
+  /* Actual worker count including the calling thread. This can be smaller
+   * than the requested thread count when OS resource limits truncated worker
+   * creation in the constructor, and it is what chunk sizing must honor. */
+  [[nodiscard]] std::size_t concurrency() const noexcept { return concurrency_; }
+
   [[nodiscard]] std::size_t resident_bytes() const noexcept {
     return workers_.capacity() * sizeof(std::thread);
   }
@@ -1394,13 +1399,15 @@ struct Gfn2CpuExecutionCache::Impl {
      * in this batch: the outer parallel_for then short-circuits to the calling
      * thread and the pool is idle, so dispatching per-iteration chunks to it is
      * not reentrant. For larger batches the pool is already executing the outer
-     * per-system tasks and must not be re-entered from inside them. */
-    const bool intra_system_parallel = requested.size() == 1u;
+     * per-system tasks and must not be re-entered from inside them. A pool that
+     * ended up with a single worker (including cpu_threads=1 and truncated
+     * thread creation) gets no executor, preserving the exact serial path. */
+    const bool intra_system_parallel = requested.size() == 1u && workers.concurrency() > 1u;
     for (const SystemKey& key : requested) {
       auto system = std::make_unique<SystemExecution>(key);
       if (intra_system_parallel) {
         system->parallel_executor.pool_context = &workers;
-        system->parallel_executor.worker_count = cpu_threads;
+        system->parallel_executor.worker_count = workers.concurrency();
         system->parallel_executor.dispatch_chunks = &dispatch_scc_chunks;
       }
       const gpuxtb_status_t status = system->build(error);

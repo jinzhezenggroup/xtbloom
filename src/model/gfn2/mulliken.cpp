@@ -274,8 +274,11 @@ const std::vector<double> kEmptyDoubleVector;
 /* One-shot chunked contraction state shared with the SCC driver's optional
  * batch==1 parallel executor. Chunks own disjoint output elements, so every
  * computed value is bit-identical to the serial path regardless of how the
- * executor assigns chunks. failure_code records the first data-level failure
- * so peer chunks stop early and the caller reproduces the serial error text. */
+ * executor assigns chunks. failure packs a serial-traversal position in the
+ * high bits and the matching failure code in the low bits; peer chunks record
+ * the memory-order-independent minimum so the caller reproduces the first
+ * serially-encountered data-level failure text exactly as the serial path
+ * would. */
 struct MullikenPopulationTask {
   const MullikenPlanData* data = nullptr;
   const MullikenIntegralView* integrals = nullptr;
@@ -296,17 +299,29 @@ struct MullikenPopulationTask {
   std::int64_t quadrupole_base = 0;
   std::int64_t chunk_count = 1;
   std::int32_t nspin = 1;
-  std::atomic<int> failure_code{0};
+  std::atomic<std::uint64_t> failure{0};
 };
 
-void mulliken_population_fail(MullikenPopulationTask& task, int code) noexcept {
-  int expected = 0;
-  task.failure_code.compare_exchange_strong(expected, code, std::memory_order_relaxed);
+/* Installs `candidate` (serial position, code) as the failure only when it is
+ * the earliest in serial traversal seen so far; the CAS loop converges to the
+ * global minimum across chunks and threads. */
+void mulliken_population_record_failure(MullikenPopulationTask& task,
+                                        std::uint64_t candidate) noexcept {
+  std::uint64_t current = task.failure.load(std::memory_order_relaxed);
+  while ((current == 0u || candidate < current) &&
+         !task.failure.compare_exchange_weak(current, candidate, std::memory_order_relaxed,
+                                             std::memory_order_relaxed)) {
+  }
+}
+
+void mulliken_population_fail(MullikenPopulationTask& task, int code,
+                              std::uint64_t position) noexcept {
+  mulliken_population_record_failure(task, (position << 16u) | static_cast<std::uint32_t>(code));
 }
 
 void mulliken_population_chunk(void* opaque, std::size_t chunk) noexcept {
   MullikenPopulationTask& task = *static_cast<MullikenPopulationTask*>(opaque);
-  if (task.failure_code.load(std::memory_order_relaxed) != 0) {
+  if (task.failure.load(std::memory_order_relaxed) != 0u) {
     return;
   }
   const std::int64_t per_chunk = (task.atoms + task.chunk_count - 1) / task.chunk_count;
@@ -340,15 +355,21 @@ void mulliken_population_chunk(void* opaque, std::size_t chunk) noexcept {
       for (std::int64_t local_bra = 0; local_bra < task.orbitals; ++local_bra) {
         const std::int64_t matrix_index = task.matrix_base + local_bra * task.orbitals + local_ket;
         const std::int64_t density_index = spin_matrix_base + local_bra * task.orbitals + local_ket;
+        /* Serial traversal index: spin outer, ket middle, bra inner; the per
+         * element site sub-order follows the serial check sequence below. */
+        const std::uint64_t element_position =
+            static_cast<std::uint64_t>(
+                ((spin * task.orbitals + local_ket) * task.orbitals + local_bra)) *
+            11u;
         const double density_value = task.density[static_cast<std::size_t>(density_index)];
         const double overlap_value =
             task.integrals->overlap[static_cast<std::size_t>(matrix_index)];
         if (!std::isfinite(density_value) || !std::isfinite(overlap_value)) {
-          mulliken_population_fail(task, 1);
+          mulliken_population_fail(task, 1, element_position);
           return;
         }
         if (!add_product(-density_value, overlap_value, shell_charge)) {
-          mulliken_population_fail(task, 4);
+          mulliken_population_fail(task, 4, element_position + 1u);
           return;
         }
         for (std::int64_t component = 0; component < 3; ++component) {
@@ -358,11 +379,13 @@ void mulliken_population_chunk(void* opaque, std::size_t chunk) noexcept {
               task.integrals
                   ->dipole[static_cast<std::size_t>(component * matrix_elements + matrix_index)];
           if (!std::isfinite(integral)) {
-            mulliken_population_fail(task, 2);
+            mulliken_population_fail(task, 2,
+                                     element_position + 2u + static_cast<std::uint64_t>(component));
             return;
           }
           if (!add_product(-density_value, integral, value)) {
-            mulliken_population_fail(task, 5);
+            mulliken_population_fail(task, 5,
+                                     element_position + 2u + static_cast<std::uint64_t>(component));
             return;
           }
         }
@@ -372,11 +395,13 @@ void mulliken_population_chunk(void* opaque, std::size_t chunk) noexcept {
           const double integral = task.integrals->quadrupole[static_cast<std::size_t>(
               component * matrix_elements + matrix_index)];
           if (!std::isfinite(integral)) {
-            mulliken_population_fail(task, 3);
+            mulliken_population_fail(task, 3,
+                                     element_position + 5u + static_cast<std::uint64_t>(component));
             return;
           }
           if (!add_product(-density_value, integral, value)) {
-            mulliken_population_fail(task, 6);
+            mulliken_population_fail(task, 6,
+                                     element_position + 5u + static_cast<std::uint64_t>(component));
             return;
           }
         }
@@ -408,8 +433,9 @@ const char* mulliken_population_failure_message(int code) noexcept {
  * batch==1 parallel executor. Rows are split per chunk, and every matrix
  * element pair is written only by the row with the smaller index, so chunks
  * own disjoint output elements and results are bit-identical to serial.
- * failure_code records the first data-level failure (value encodes the
- * (status, message) pair) so peer chunks stop early. */
+ * failure packs a serial-traversal position and the matching failure code;
+ * peer chunks record the memory-order-independent minimum so the caller
+ * reproduces the serially-first data-level failure exactly. */
 struct MullikenHamiltonianTask {
   const MullikenPlanData* data = nullptr;
   const MullikenIntegralView* integrals = nullptr;
@@ -432,17 +458,26 @@ struct MullikenHamiltonianTask {
   std::int64_t quadrupole_base = 0;
   std::int64_t chunk_count = 1;
   std::int32_t nspin = 1;
-  std::atomic<int> failure_code{0};
+  std::atomic<std::uint64_t> failure{0};
 };
 
-void mulliken_hamiltonian_fail(MullikenHamiltonianTask& task, int code) noexcept {
-  int expected = 0;
-  task.failure_code.compare_exchange_strong(expected, code, std::memory_order_relaxed);
+void mulliken_hamiltonian_record_failure(MullikenHamiltonianTask& task,
+                                         std::uint64_t candidate) noexcept {
+  std::uint64_t current = task.failure.load(std::memory_order_relaxed);
+  while ((current == 0u || candidate < current) &&
+         !task.failure.compare_exchange_weak(current, candidate, std::memory_order_relaxed,
+                                             std::memory_order_relaxed)) {
+  }
+}
+
+void mulliken_hamiltonian_fail(MullikenHamiltonianTask& task, int code,
+                               std::uint64_t position) noexcept {
+  mulliken_hamiltonian_record_failure(task, (position << 16u) | static_cast<std::uint32_t>(code));
 }
 
 void mulliken_hamiltonian_chunk(void* opaque, std::size_t chunk) noexcept {
   MullikenHamiltonianTask& task = *static_cast<MullikenHamiltonianTask*>(opaque);
-  if (task.failure_code.load(std::memory_order_relaxed) != 0) {
+  if (task.failure.load(std::memory_order_relaxed) != 0u) {
     return;
   }
   const std::int64_t per_chunk = (task.orbitals + task.chunk_count - 1) / task.chunk_count;
@@ -491,15 +526,21 @@ void mulliken_hamiltonian_chunk(void* opaque, std::size_t chunk) noexcept {
         const double reverse_overlap =
             task.integrals->overlap[static_cast<std::size_t>(reverse_matrix)];
         const double half_overlap = -0.5 * overlap;
+        /* Serial traversal index: spin outer, row middle, column inner; the
+         * per element site sub-order follows the serial check sequence below. */
+        const std::uint64_t element_position =
+            static_cast<std::uint64_t>(
+                ((spin * task.orbitals + local_row) * task.orbitals + local_column)) *
+            12u;
         if (!std::isfinite(overlap) || !std::isfinite(reverse_overlap)) {
-          mulliken_hamiltonian_fail(task, 1);
+          mulliken_hamiltonian_fail(task, 1, element_position);
           return;
         }
         if (!std::isfinite(half_overlap) || !add_product(half_overlap, row_vat, shift) ||
             !add_product(half_overlap, row_vsh, shift) ||
             !add_product(half_overlap, column_vat, shift) ||
             !add_product(half_overlap, column_vsh, shift)) {
-          mulliken_hamiltonian_fail(task, 4);
+          mulliken_hamiltonian_fail(task, 4, element_position + 1u);
           return;
         }
 
@@ -517,13 +558,15 @@ void mulliken_hamiltonian_chunk(void* opaque, std::size_t chunk) noexcept {
               task.integrals
                   ->dipole[static_cast<std::size_t>(component * matrix_elements + reverse_matrix)];
           if (!std::isfinite(forward_integral) || !std::isfinite(reverse_integral)) {
-            mulliken_hamiltonian_fail(task, 2);
+            mulliken_hamiltonian_fail(
+                task, 2, element_position + 2u + static_cast<std::uint64_t>(component));
             return;
           }
           if (!std::isfinite(row_potential) || !std::isfinite(column_potential) ||
               !add_product(forward_integral, column_potential, shift) ||
               !add_product(reverse_integral, row_potential, shift)) {
-            mulliken_hamiltonian_fail(task, 5);
+            mulliken_hamiltonian_fail(
+                task, 5, element_position + 2u + static_cast<std::uint64_t>(component));
             return;
           }
         }
@@ -540,20 +583,22 @@ void mulliken_hamiltonian_chunk(void* opaque, std::size_t chunk) noexcept {
               -0.5 * task.integrals->quadrupole[static_cast<std::size_t>(
                          component * matrix_elements + reverse_matrix)];
           if (!std::isfinite(forward_integral) || !std::isfinite(reverse_integral)) {
-            mulliken_hamiltonian_fail(task, 3);
+            mulliken_hamiltonian_fail(
+                task, 3, element_position + 5u + static_cast<std::uint64_t>(component));
             return;
           }
           if (!std::isfinite(row_potential) || !std::isfinite(column_potential) ||
               !add_product(forward_integral, column_potential, shift) ||
               !add_product(reverse_integral, row_potential, shift)) {
-            mulliken_hamiltonian_fail(task, 6);
+            mulliken_hamiltonian_fail(
+                task, 6, element_position + 5u + static_cast<std::uint64_t>(component));
             return;
           }
         }
         const double forward_value =
             task.hamiltonian_scratch[static_cast<std::size_t>(forward_hamiltonian)] + shift;
         if (!std::isfinite(forward_value)) {
-          mulliken_hamiltonian_fail(task, 7);
+          mulliken_hamiltonian_fail(task, 7, element_position + 11u);
           return;
         }
         task.hamiltonian_scratch[static_cast<std::size_t>(forward_hamiltonian)] = forward_value;
@@ -561,7 +606,7 @@ void mulliken_hamiltonian_chunk(void* opaque, std::size_t chunk) noexcept {
           const double reverse_value =
               task.hamiltonian_scratch[static_cast<std::size_t>(reverse_hamiltonian)] + shift;
           if (!std::isfinite(reverse_value)) {
-            mulliken_hamiltonian_fail(task, 7);
+            mulliken_hamiltonian_fail(task, 7, element_position + 11u);
             return;
           }
           task.hamiltonian_scratch[static_cast<std::size_t>(reverse_hamiltonian)] = reverse_value;
@@ -1165,9 +1210,9 @@ gpuxtb_status_t evaluate_mulliken_population_system_cpu(
     population_task.chunk_count = 1;
     mulliken_population_chunk(&population_task, 0u);
   }
-  const int population_failure = population_task.failure_code.load(std::memory_order_relaxed);
-  if (population_failure != 0) {
-    error = mulliken_population_failure_message(population_failure);
+  const std::uint64_t population_failure = population_task.failure.load(std::memory_order_relaxed);
+  if (population_failure != 0u) {
+    error = mulliken_population_failure_message(static_cast<int>(population_failure & 0xFFFFu));
     return GPUXTB_STATUS_INTERNAL_ERROR;
   }
 
@@ -2108,10 +2153,11 @@ gpuxtb_status_t add_mulliken_hamiltonian_system_cpu(
     assembly_task.chunk_count = 1;
     mulliken_hamiltonian_chunk(&assembly_task, 0u);
   }
-  const int assembly_failure = assembly_task.failure_code.load(std::memory_order_relaxed);
-  if (assembly_failure != 0) {
-    error = mulliken_hamiltonian_failure_message(assembly_failure);
-    return mulliken_hamiltonian_failure_status(assembly_failure);
+  const std::uint64_t assembly_failure = assembly_task.failure.load(std::memory_order_relaxed);
+  if (assembly_failure != 0u) {
+    const int assembly_code = static_cast<int>(assembly_failure & 0xFFFFu);
+    error = mulliken_hamiltonian_failure_message(assembly_code);
+    return mulliken_hamiltonian_failure_status(assembly_code);
   }
 
   std::copy_n(hamiltonian_scratch + hamiltonian_base, target_hamiltonian_elements,
