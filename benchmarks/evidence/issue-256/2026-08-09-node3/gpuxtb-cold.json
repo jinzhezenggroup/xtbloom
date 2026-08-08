@@ -1,0 +1,428 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "schema_version": 1,
+    "generated_at_utc": "2026-08-08T19:22:22.090877+00:00",
+    "command": [
+      "benchmarks/natoms_cross_engine.py",
+      "--library",
+      "/home/jzzeng/codes/gpuxtb/build/batch1-cpu/libgpuxtb.so.0.1.0",
+      "--engines",
+      "gpuxtb-cpu",
+      "--natoms",
+      "62,122,242,362",
+      "--natoms-large-batch",
+      "62",
+      "--batch-sizes",
+      "1",
+      "--warmups",
+      "1",
+      "--repetitions",
+      "3",
+      "--cpu-threads",
+      "16",
+      "--output-json",
+      "/tmp/opencode/gpuxtb-cold.json",
+      "--output-csv",
+      "/tmp/opencode/gpuxtb-cold.csv"
+    ],
+    "commit": {
+      "head": "c723a0747f6d32961e5c873bf293445d0952968d",
+      "dirty": true
+    },
+    "runner": {
+      "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0]",
+      "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.35",
+      "gpuxtb_library": "/home/jzzeng/codes/gpuxtb/build/batch1-cpu/libgpuxtb.so.0.1.0",
+      "gpuxtb_library_sha256": "2280d83662f93c3e603a94b2ca16f39161238f3b027559bc11ede5f0d7d1fb2f",
+      "xtb_library": null,
+      "xtb_library_sha256": null,
+      "tblite_library": null,
+      "tblite_library_sha256": null,
+      "dxtb_source": null
+    },
+    "hardware": {
+      "hostname": "node3",
+      "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+      "logical_cpu_count": 48,
+      "process_rss_bytes": 198905856,
+      "nvidia_smi": "GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8)",
+      "gpu_memory_mib": "NVIDIA GeForce RTX 5090, 32607 MiB"
+    },
+    "threads": {
+      "cpu_threads": 16,
+      "dxtb_cpu_threads": 1,
+      "reference_threads": 16,
+      "OMP_NUM_THREADS": null,
+      "OPENBLAS_NUM_THREADS": null,
+      "MKL_NUM_THREADS": null
+    },
+    "environment": {
+      "CUDA_VISIBLE_DEVICES": "",
+      "LD_LIBRARY_PATH": null,
+      "MKL_INTERFACE_LAYER": null,
+      "MKL_THREADING_LAYER": null
+    },
+    "protocol": {
+      "warmups": 1,
+      "repetitions": 3,
+      "cold_samples": false,
+      "cross_engine_energy_atol_hartree": 0.002,
+      "perturb_sigma_bohr": 0.02,
+      "trajectory_step_sigma_bohr": 0.01,
+      "scc_max_iterations": 500,
+      "scc_charge_tolerance": 1e-10,
+      "scc_energy_tolerance": 1e-12
+    }
+  },
+  "rows": [
+    {
+      "engine": "gpuxtb-cpu",
+      "natoms": 62,
+      "batch_size": 1,
+      "total_atoms_in_batch": 62,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 75.61671299999999,
+          "energies_hartree": [
+            -64.27950675607325
+          ],
+          "scc_iterations": [
+            18
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 75.588398,
+          "energies_hartree": [
+            -64.27950675607325
+          ],
+          "scc_iterations": [
+            18
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 75.540928,
+          "energies_hartree": [
+            -64.27950675607325
+          ],
+          "scc_iterations": [
+            18
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          75.61671299999999,
+          75.588398,
+          75.540928
+        ],
+        "count": 3,
+        "min_ms": 75.540928,
+        "median_ms": 75.588398,
+        "mean_ms": 75.582013,
+        "p95_ms": 75.61671299999999,
+        "systems_per_second_at_median": 13.229543507457322
+      },
+      "energies_hartree": [
+        -64.27950675607325
+      ],
+      "iteration_summary": {
+        "min": 18,
+        "max": 18
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "scc_converged_ok": true,
+        "scc_status_ok": true,
+        "self_energy_atol_hartree": 0.002
+      },
+      "availability": "available"
+    },
+    {
+      "engine": "gpuxtb-cpu",
+      "natoms": 122,
+      "batch_size": 1,
+      "total_atoms_in_batch": 122,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 339.01699199999996,
+          "energies_hartree": [
+            -127.56031921826143
+          ],
+          "scc_iterations": [
+            19
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 336.287601,
+          "energies_hartree": [
+            -127.56031921826143
+          ],
+          "scc_iterations": [
+            19
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 334.952797,
+          "energies_hartree": [
+            -127.56031921826143
+          ],
+          "scc_iterations": [
+            19
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          339.01699199999996,
+          336.287601,
+          334.952797
+        ],
+        "count": 3,
+        "min_ms": 334.952797,
+        "median_ms": 336.287601,
+        "mean_ms": 336.7524633333333,
+        "p95_ms": 339.01699199999996,
+        "systems_per_second_at_median": 2.9736451686781042
+      },
+      "energies_hartree": [
+        -127.56031921826143
+      ],
+      "iteration_summary": {
+        "min": 19,
+        "max": 19
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "scc_converged_ok": true,
+        "scc_status_ok": true,
+        "self_energy_atol_hartree": 0.002
+      },
+      "availability": "available"
+    },
+    {
+      "engine": "gpuxtb-cpu",
+      "natoms": 242,
+      "batch_size": 1,
+      "total_atoms_in_batch": 242,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 1687.4998039999998,
+          "energies_hartree": [
+            -254.12194514715932
+          ],
+          "scc_iterations": [
+            17
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 1688.9960079999998,
+          "energies_hartree": [
+            -254.12194514715932
+          ],
+          "scc_iterations": [
+            17
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 1689.4964069999999,
+          "energies_hartree": [
+            -254.12194514715932
+          ],
+          "scc_iterations": [
+            17
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          1687.4998039999998,
+          1688.9960079999998,
+          1689.4964069999999
+        ],
+        "count": 3,
+        "min_ms": 1687.4998039999998,
+        "median_ms": 1688.9960079999998,
+        "mean_ms": 1688.664073,
+        "p95_ms": 1689.4964069999999,
+        "systems_per_second_at_median": 0.5920677107959157
+      },
+      "energies_hartree": [
+        -254.12194514715932
+      ],
+      "iteration_summary": {
+        "min": 17,
+        "max": 17
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "scc_converged_ok": true,
+        "scc_status_ok": true,
+        "self_energy_atol_hartree": 0.002
+      },
+      "availability": "available"
+    },
+    {
+      "engine": "gpuxtb-cpu",
+      "natoms": 362,
+      "batch_size": 1,
+      "total_atoms_in_batch": 362,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 4678.855194,
+          "energies_hartree": [
+            -380.68357136729344
+          ],
+          "scc_iterations": [
+            18
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 4673.113555,
+          "energies_hartree": [
+            -380.68357136729344
+          ],
+          "scc_iterations": [
+            18
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 4671.132541,
+          "energies_hartree": [
+            -380.68357136729344
+          ],
+          "scc_iterations": [
+            18
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          4678.855194,
+          4673.113555,
+          4671.132541
+        ],
+        "count": 3,
+        "min_ms": 4671.132541,
+        "median_ms": 4673.113555,
+        "mean_ms": 4674.367096666666,
+        "p95_ms": 4678.855194,
+        "systems_per_second_at_median": 0.2139900920939637
+      },
+      "energies_hartree": [
+        -380.68357136729344
+      ],
+      "iteration_summary": {
+        "min": 18,
+        "max": 18
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "scc_converged_ok": true,
+        "scc_status_ok": true,
+        "self_energy_atol_hartree": 0.002
+      },
+      "availability": "available"
+    }
+  ]
+}

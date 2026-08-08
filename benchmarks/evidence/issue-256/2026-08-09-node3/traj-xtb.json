@@ -1,0 +1,609 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "schema_version": 1,
+    "generated_at_utc": "2026-08-08T19:23:29.537678+00:00",
+    "command": [
+      "benchmarks/natoms_cross_engine.py",
+      "--library",
+      "/home/jzzeng/codes/gpuxtb/build/batch1-cpu/libgpuxtb.so.0.1.0",
+      "--engines",
+      "gpuxtb-cpu,xtb",
+      "--xtb-library",
+      "/tmp/gpuxtb-reference-env.E0KcEA/lib/libxtb.so.6.7.1",
+      "--natoms",
+      "62",
+      "--natoms-large-batch",
+      "62",
+      "--batch-sizes",
+      "1",
+      "--warmups",
+      "1",
+      "--repetitions",
+      "3",
+      "--cpu-threads",
+      "16",
+      "--trajectory",
+      "--trajectory-natoms",
+      "62,122,242",
+      "--trajectory-frames",
+      "6",
+      "--output-json",
+      "/tmp/opencode/traj-xtb.json",
+      "--output-csv",
+      "/tmp/opencode/traj-xtb.csv"
+    ],
+    "commit": {
+      "head": "c723a0747f6d32961e5c873bf293445d0952968d",
+      "dirty": true
+    },
+    "runner": {
+      "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0]",
+      "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.35",
+      "gpuxtb_library": "/home/jzzeng/codes/gpuxtb/build/batch1-cpu/libgpuxtb.so.0.1.0",
+      "gpuxtb_library_sha256": "2280d83662f93c3e603a94b2ca16f39161238f3b027559bc11ede5f0d7d1fb2f",
+      "xtb_library": "/tmp/gpuxtb-reference-env.E0KcEA/lib/libxtb.so.6.7.1",
+      "xtb_library_sha256": "c405797f34ed96470f23158406e6d8a8e102681d3c3cbbaea16692f514f22853",
+      "tblite_library": null,
+      "tblite_library_sha256": null,
+      "dxtb_source": null
+    },
+    "hardware": {
+      "hostname": "node3",
+      "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+      "logical_cpu_count": 48,
+      "process_rss_bytes": 136998912,
+      "nvidia_smi": "GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8)",
+      "gpu_memory_mib": "NVIDIA GeForce RTX 5090, 32607 MiB"
+    },
+    "threads": {
+      "cpu_threads": 16,
+      "dxtb_cpu_threads": 1,
+      "reference_threads": 16,
+      "OMP_NUM_THREADS": "16",
+      "OPENBLAS_NUM_THREADS": "16",
+      "MKL_NUM_THREADS": "16"
+    },
+    "environment": {
+      "CUDA_VISIBLE_DEVICES": "",
+      "LD_LIBRARY_PATH": "/tmp/gpuxtb-reference-env.E0KcEA/lib",
+      "MKL_INTERFACE_LAYER": null,
+      "MKL_THREADING_LAYER": null
+    },
+    "protocol": {
+      "warmups": 1,
+      "repetitions": 3,
+      "cold_samples": false,
+      "cross_engine_energy_atol_hartree": 0.002,
+      "perturb_sigma_bohr": 0.02,
+      "trajectory_step_sigma_bohr": 0.01,
+      "scc_max_iterations": 500,
+      "scc_charge_tolerance": 1e-10,
+      "scc_energy_tolerance": 1e-12
+    }
+  },
+  "rows": [
+    {
+      "engine": "gpuxtb-cpu",
+      "natoms": 62,
+      "batch_size": 1,
+      "total_atoms_in_batch": 62,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 75.85551199999999,
+          "energies_hartree": [
+            -64.27950675607325
+          ],
+          "scc_iterations": [
+            18
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 75.899045,
+          "energies_hartree": [
+            -64.27950675607325
+          ],
+          "scc_iterations": [
+            18
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 75.691007,
+          "energies_hartree": [
+            -64.27950675607325
+          ],
+          "scc_iterations": [
+            18
+          ],
+          "scc_converged": [
+            1
+          ],
+          "per_system_status": [
+            0
+          ]
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          75.85551199999999,
+          75.899045,
+          75.691007
+        ],
+        "count": 3,
+        "min_ms": 75.691007,
+        "median_ms": 75.85551199999999,
+        "mean_ms": 75.81518799999999,
+        "p95_ms": 75.899045,
+        "systems_per_second_at_median": 13.18295762079887
+      },
+      "energies_hartree": [
+        -64.27950675607325
+      ],
+      "iteration_summary": {
+        "min": 18,
+        "max": 18
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "scc_converged_ok": true,
+        "scc_status_ok": true,
+        "self_energy_atol_hartree": 0.002
+      },
+      "availability": "available"
+    },
+    {
+      "engine": "xtb",
+      "natoms": 62,
+      "batch_size": 1,
+      "total_atoms_in_batch": 62,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 18.471196,
+          "energies_hartree": [
+            -64.27951766707011
+          ],
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 18.465435,
+          "energies_hartree": [
+            -64.2795176670702
+          ],
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 18.349242,
+          "energies_hartree": [
+            -64.27951766707012
+          ],
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          18.471196,
+          18.465435,
+          18.349242
+        ],
+        "count": 3,
+        "min_ms": 18.349242,
+        "median_ms": 18.465435,
+        "mean_ms": 18.42862433333333,
+        "p95_ms": 18.471196,
+        "systems_per_second_at_median": 54.15523652705718
+      },
+      "energies_hartree": [
+        -64.27951766707012
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "scc_converged_ok": true,
+        "scc_status_ok": true,
+        "self_energy_atol_hartree": 0.002
+      },
+      "availability": "available"
+    },
+    {
+      "engine": "gpuxtb-cpu",
+      "natoms": 62,
+      "batch_size": 1,
+      "total_atoms_in_batch": 62,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "job": "trajectory",
+      "frames": 6,
+      "availability": "available",
+      "timing": {
+        "samples_ms": [
+          21.475552999999998,
+          71.113891,
+          71.297332,
+          70.67645399999999,
+          70.327417,
+          70.275077,
+          73.744794,
+          70.20371999999999,
+          70.234439,
+          70.36607099999999,
+          70.41413299999999,
+          70.960979,
+          74.195917,
+          70.910292,
+          70.814098,
+          70.55506199999999,
+          70.49141,
+          70.622822
+        ],
+        "count": 18,
+        "min_ms": 21.475552999999998,
+        "median_ms": 70.588942,
+        "mean_ms": 68.25997005555556,
+        "p95_ms": 73.744794,
+        "systems_per_second_at_median": 14.166524836142182
+      },
+      "per_frame_samples_ms": [
+        21.475552999999998,
+        71.113891,
+        71.297332,
+        70.67645399999999,
+        70.327417,
+        70.275077,
+        73.744794,
+        70.20371999999999,
+        70.234439,
+        70.36607099999999,
+        70.41413299999999,
+        70.960979,
+        74.195917,
+        70.910292,
+        70.814098,
+        70.55506199999999,
+        70.49141,
+        70.622822
+      ],
+      "energies_hartree_min": -64.27667570069224,
+      "energies_hartree_max": -64.2686853730655
+    },
+    {
+      "engine": "gpuxtb-cpu",
+      "natoms": 122,
+      "batch_size": 1,
+      "total_atoms_in_batch": 122,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "job": "trajectory",
+      "frames": 6,
+      "availability": "available",
+      "timing": {
+        "samples_ms": [
+          74.283565,
+          296.89687499999997,
+          296.28347199999996,
+          296.239668,
+          295.783796,
+          296.05272099999996,
+          312.657124,
+          296.770513,
+          296.107986,
+          296.38095799999996,
+          296.421156,
+          296.607682,
+          312.424711,
+          296.509174,
+          296.467495,
+          296.45212499999997,
+          297.077962,
+          296.72524699999997
+        ],
+        "count": 18,
+        "min_ms": 74.283565,
+        "median_ms": 296.45980999999995,
+        "mean_ms": 285.8967905555555,
+        "p95_ms": 312.424711,
+        "systems_per_second_at_median": 3.3731385040016053
+      },
+      "per_frame_samples_ms": [
+        74.283565,
+        296.89687499999997,
+        296.28347199999996,
+        296.239668,
+        295.783796,
+        296.05272099999996,
+        312.657124,
+        296.770513,
+        296.107986,
+        296.38095799999996,
+        296.421156,
+        296.607682,
+        312.424711,
+        296.509174,
+        296.467495,
+        296.45212499999997,
+        297.077962,
+        296.72524699999997
+      ],
+      "energies_hartree_min": -127.55479002558808,
+      "energies_hartree_max": -127.53147439895281
+    },
+    {
+      "engine": "gpuxtb-cpu",
+      "natoms": 242,
+      "batch_size": 1,
+      "total_atoms_in_batch": 242,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "job": "trajectory",
+      "frames": 6,
+      "availability": "available",
+      "timing": {
+        "samples_ms": [
+          320.01329799999996,
+          1697.322387,
+          1788.426221,
+          1604.205597,
+          1879.252647,
+          1792.2271779999999,
+          1791.540096,
+          1697.3307539999998,
+          1607.416648,
+          1607.196679,
+          1879.7327579999999,
+          1792.5463209999998,
+          1789.3046419999998,
+          1697.8623619999998,
+          1789.287733,
+          1604.209736,
+          1883.708436,
+          1791.268337
+        ],
+        "count": 18,
+        "min_ms": 320.01329799999996,
+        "median_ms": 1788.856977,
+        "mean_ms": 1667.3806572222222,
+        "p95_ms": 1879.7327579999999,
+        "systems_per_second_at_median": 0.5590161834385713
+      },
+      "per_frame_samples_ms": [
+        320.01329799999996,
+        1697.322387,
+        1788.426221,
+        1604.205597,
+        1879.252647,
+        1792.2271779999999,
+        1791.540096,
+        1697.3307539999998,
+        1607.416648,
+        1607.196679,
+        1879.7327579999999,
+        1792.5463209999998,
+        1789.3046419999998,
+        1697.8623619999998,
+        1789.287733,
+        1604.209736,
+        1883.708436,
+        1791.268337
+      ],
+      "energies_hartree_min": -254.11186751879941,
+      "energies_hartree_max": -254.06343097668076
+    },
+    {
+      "engine": "xtb",
+      "natoms": 62,
+      "batch_size": 1,
+      "total_atoms_in_batch": 62,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "job": "trajectory",
+      "frames": 6,
+      "availability": "available",
+      "timing": {
+        "samples_ms": [
+          46.343976999999995,
+          46.100912,
+          43.341203,
+          46.151899,
+          46.169514,
+          46.093519,
+          48.985912,
+          46.257191999999996,
+          43.591331,
+          46.36626,
+          46.330982999999996,
+          46.321965999999996,
+          49.038962999999995,
+          46.140788,
+          43.734215,
+          46.259896999999995,
+          46.309301,
+          46.380176
+        ],
+        "count": 18,
+        "min_ms": 43.341203,
+        "median_ms": 46.2585445,
+        "mean_ms": 46.106556,
+        "p95_ms": 48.985912,
+        "systems_per_second_at_median": 21.6176278525149
+      },
+      "per_frame_samples_ms": [
+        46.343976999999995,
+        46.100912,
+        43.341203,
+        46.151899,
+        46.169514,
+        46.093519,
+        48.985912,
+        46.257191999999996,
+        43.591331,
+        46.36626,
+        46.330982999999996,
+        46.321965999999996,
+        49.038962999999995,
+        46.140788,
+        43.734215,
+        46.259896999999995,
+        46.309301,
+        46.380176
+      ],
+      "energies_hartree_min": -64.27668655323184,
+      "energies_hartree_max": -64.26869630731386
+    },
+    {
+      "engine": "xtb",
+      "natoms": 122,
+      "batch_size": 1,
+      "total_atoms_in_batch": 122,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "job": "trajectory",
+      "frames": 6,
+      "availability": "available",
+      "timing": {
+        "samples_ms": [
+          156.08695899999998,
+          156.86307299999999,
+          155.649913,
+          162.534945,
+          171.96398299999998,
+          155.971749,
+          165.793488,
+          155.331514,
+          157.018832,
+          156.877431,
+          157.800998,
+          157.462491,
+          164.53577199999998,
+          155.210452,
+          155.686293,
+          155.70551899999998,
+          156.540888,
+          158.677505
+        ],
+        "count": 18,
+        "min_ms": 155.210452,
+        "median_ms": 156.870252,
+        "mean_ms": 158.65065583333333,
+        "p95_ms": 165.793488,
+        "systems_per_second_at_median": 6.374694929412111
+      },
+      "per_frame_samples_ms": [
+        156.08695899999998,
+        156.86307299999999,
+        155.649913,
+        162.534945,
+        171.96398299999998,
+        155.971749,
+        165.793488,
+        155.331514,
+        157.018832,
+        156.877431,
+        157.800998,
+        157.462491,
+        164.53577199999998,
+        155.210452,
+        155.686293,
+        155.70551899999998,
+        156.540888,
+        158.677505
+      ],
+      "energies_hartree_min": -127.55482620702497,
+      "energies_hartree_max": -127.53151076477052
+    },
+    {
+      "engine": "xtb",
+      "natoms": 242,
+      "batch_size": 1,
+      "total_atoms_in_batch": 242,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "job": "trajectory",
+      "frames": 6,
+      "availability": "available",
+      "timing": {
+        "samples_ms": [
+          607.5131319999999,
+          610.8631819999999,
+          609.86955,
+          610.032232,
+          610.5292529999999,
+          606.4101929999999,
+          653.2115759999999,
+          609.376058,
+          607.0625719999999,
+          604.610561,
+          608.188216,
+          605.823462,
+          640.1099429999999,
+          607.988264,
+          609.723243,
+          607.665526,
+          611.481888,
+          608.31522
+        ],
+        "count": 18,
+        "min_ms": 604.610561,
+        "median_ms": 608.8456389999999,
+        "mean_ms": 612.709670611111,
+        "p95_ms": 640.1099429999999,
+        "systems_per_second_at_median": 1.642452431198247
+      },
+      "per_frame_samples_ms": [
+        607.5131319999999,
+        610.8631819999999,
+        609.86955,
+        610.032232,
+        610.5292529999999,
+        606.4101929999999,
+        653.2115759999999,
+        609.376058,
+        607.0625719999999,
+        604.610561,
+        608.188216,
+        605.823462,
+        640.1099429999999,
+        607.988264,
+        609.723243,
+        607.665526,
+        611.481888,
+        608.31522
+      ],
+      "energies_hartree_min": -254.11195433545876,
+      "energies_hartree_max": -254.06351705045464
+    }
+  ]
+}
