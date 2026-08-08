@@ -1,14 +1,19 @@
-"""dpdata :class:`~dpdata.driver.Driver` plugin for gpuxtb.
+"""dpdata Driver and Minimizer plugins for gpuxtb.
 
 The driver labels a whole :class:`dpdata.System` (all frames at once) through a
 single gpuxtb ragged-batch ``gpuxtb_compute`` call, which is the native
-execution model of the C API. Energies are returned in eV and forces in
-eV/Angstrom, matching dpdata conventions.
+execution model of the C API. The minimizer optimizes the geometry of every
+frame in lockstep and evaluates energies and forces for all *active* frames in
+one ragged-batch call per step, so a whole batch of molecules is relaxed with
+CUDA/CPU throughput instead of one frame per step as the reference ``ase``
+minimizer does. Energies are returned in eV and forces in eV/Angstrom, matching
+dpdata conventions.
 
-The driver is registered under the key ``"gpuxtb"``:
-``dpdata.Driver.get_driver("gpuxtb")(...)``. Because the gpuxtb Python build
-declares the ``dpdata.plugins`` entry point pointing at this module, importing
-``dpdata`` loads it automatically and registers the driver.
+The driver and minimizer are registered under the key ``"gpuxtb"``:
+``dpdata.Driver.get_driver("gpuxtb")(...)`` and
+``dpdata.Minimizer.get_minimizer("gpuxtb")(...)``. Because the gpuxtb Python
+build declares the ``dpdata.plugins`` entry point pointing at this module,
+importing ``dpdata`` loads it automatically and registers both plugins.
 
 Net charge and spin multiplicity are handled per frame:
 
@@ -23,9 +28,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
-from dpdata.driver import Driver
+from dpdata.driver import Driver, Minimizer
 
-from .exceptions import GPUxtbNotSupportedError, GPUxtbValueError
+from ._optimizer import curvature, initial_step_size, lbfgs_direction
+from .exceptions import GPUxtbNotSupportedError, GPUxtbRuntimeError, GPUxtbValueError
 from .interface import BatchCalculator, Structure, symbols_to_numbers
 
 if TYPE_CHECKING:
@@ -35,6 +41,16 @@ if TYPE_CHECKING:
 # API reports Hartree and Hartree/bohr.
 HARTREE_TO_EV = 27.211386245988
 BOHR_TO_ANGSTROM = 0.529177210903
+_FORCE_TO_EV_ANG = HARTREE_TO_EV / BOHR_TO_ANGSTROM
+
+#: Fraction of the current energy accepted as numerical noise when deciding
+#: whether a trial geometry improves the previous one.
+_ACCEPT_TOLERANCE = 1.0e-8
+#: Per-frame step length evolution.  After the first accepted step the L-BFGS
+#: direction already carries the inverse-Hessian scale, so the natural step is
+#: ``alpha = 1``; a rejected trial halves alpha and the next accept restores it.
+_ALPHA_DECAY = 0.5
+_ALPHA_MIN = 1.0e-4
 
 
 class _SymbolMap:
@@ -54,6 +70,64 @@ class _SymbolMap:
             return self._numbers[symbol]
         except KeyError:
             raise GPUxtbValueError(f"unknown dpdata atom name {symbol!r}") from None
+
+
+def _structures_from_data(
+    data: dict,
+    *,
+    charge: float | None,
+    uhf: int | None,
+    multiplicity: int | None,
+    spin_channels: int | None,
+) -> list[Structure]:
+    """Build one :class:`~gpuxtb.interface.Structure` per frame (bohr).
+
+    Shared by the driver and the minimizer so both label and minimize honor the
+    same per-frame charge/spin conventions.  Positions are converted from
+    dpdata's Angstrom convention to bohr.
+    """
+    atom_names = list(data["atom_names"])
+    atom_types = np.asarray(data["atom_types"], dtype=np.int64)
+    coords = np.asarray(data["coords"], dtype=np.float64)
+    if coords.ndim != 3 or coords.shape[1:] != (atom_types.size, 3):
+        raise GPUxtbValueError("coords must have shape (nframes, natoms, 3)")
+    nframes = coords.shape[0]
+
+    symbol_map = _SymbolMap(atom_names)
+    numbers = np.array(
+        [symbol_map[atom_names[index]] for index in atom_types], dtype=np.int64
+    )
+    positions_bohr = coords / BOHR_TO_ANGSTROM
+
+    structures = []
+    for frame in range(nframes):
+        if uhf is not None:
+            uhf_value = uhf
+            multiplicity_value = None
+        elif multiplicity is not None:
+            uhf_value = None
+            multiplicity_value = multiplicity
+        else:
+            uhf_value = _frame_value(data, "uhf", None, frame, nframes, default=None)
+            multiplicity_value = _frame_value(
+                data, "multiplicity", None, frame, nframes, default=None
+            )
+            if uhf_value is None and multiplicity_value is None:
+                uhf_value = 0
+        structures.append(
+            Structure(
+                numbers,
+                positions_bohr[frame],
+                charge=cast(
+                    "float",
+                    _frame_value(data, "charge", charge, frame, nframes, default=0.0),
+                ),
+                uhf=cast("int | None", uhf_value),
+                multiplicity=cast("int | None", multiplicity_value),
+                spin_channels=spin_channels,
+            )
+        )
+    return structures
 
 
 @Driver.register("gpuxtb")
@@ -111,57 +185,15 @@ class GPUxtbDriver(Driver):
         dict
             Copy of ``data`` with ``energies`` (eV) and ``forces`` (eV/Angstrom).
         """
-        if not bool(np.asarray(data.get("nopbc", True)).all()):
-            raise GPUxtbNotSupportedError(
-                "the gpuxtb Python driver does not support periodic systems "
-                "(the public C ABI has no lattice input)"
-            )
-
-        atom_names = list(data["atom_names"])
-        atom_types = np.asarray(data["atom_types"], dtype=np.int64)
-        coords = np.asarray(data["coords"], dtype=np.float64)
-        if coords.ndim != 3 or coords.shape[1:] != (atom_types.size, 3):
-            raise GPUxtbValueError("coords must have shape (nframes, natoms, 3)")
-        nframes = coords.shape[0]
-
-        symbol_map = _SymbolMap(atom_names)
-        numbers = np.array(
-            [symbol_map[atom_names[index]] for index in atom_types], dtype=np.int64
+        _reject_periodic(data)
+        nframes = int(np.asarray(data["coords"]).shape[0])
+        structures = _structures_from_data(
+            data,
+            charge=self.charge,
+            uhf=self.uhf,
+            multiplicity=self.multiplicity,
+            spin_channels=self.spin_channels,
         )
-        positions_bohr = coords / BOHR_TO_ANGSTROM
-
-        structures = []
-        for frame in range(nframes):
-            if self.uhf is not None:
-                uhf_value = self.uhf
-                multiplicity_value = None
-            elif self.multiplicity is not None:
-                uhf_value = None
-                multiplicity_value = self.multiplicity
-            else:
-                uhf_value = _frame_value(
-                    data, "uhf", None, frame, nframes, default=None
-                )
-                multiplicity_value = _frame_value(
-                    data, "multiplicity", None, frame, nframes, default=None
-                )
-                if uhf_value is None and multiplicity_value is None:
-                    uhf_value = 0
-            structures.append(
-                Structure(
-                    numbers,
-                    positions_bohr[frame],
-                    charge=cast(
-                        "float",
-                        _frame_value(
-                            data, "charge", self.charge, frame, nframes, default=0.0
-                        ),
-                    ),
-                    uhf=cast("int | None", uhf_value),
-                    multiplicity=cast("int | None", multiplicity_value),
-                    spin_channels=self.spin_channels,
-                )
-            )
 
         calculator = BatchCalculator(
             structures,
@@ -183,10 +215,271 @@ class GPUxtbDriver(Driver):
         labeled["energies"] = (
             np.asarray(result.energies, dtype=np.float64) * HARTREE_TO_EV
         )
-        labeled["forces"] = np.asarray(result.forces, dtype=np.float64).reshape(
-            nframes, -1, 3
-        ) * (HARTREE_TO_EV / BOHR_TO_ANGSTROM)
+        labeled["forces"] = (
+            np.asarray(result.forces, dtype=np.float64).reshape(nframes, -1, 3)
+            * _FORCE_TO_EV_ANG
+        )
         return labeled
+
+
+@Minimizer.register("gpuxtb")
+class GPUxtbMinimizer(Minimizer):
+    """Minimize the geometry of every frame in one ragged-batch pipeline.
+
+    The reference dpdata ``ase`` minimizer optimizes one frame per ASE
+    ``dyn.run`` call, so a batch of molecules is relaxed at batch size one.
+    This minimizer instead moves all frames in lockstep and evaluates
+    energies and forces for every *active* frame in a single gpuxtb
+    ragged-batch ``gpuxtb_compute`` call per step.  Frames that reach the force
+    threshold are frozen and removed from the batch, so the ragged batch
+    shrinks as the optimization proceeds and only the still-active frames are
+    recomputed.  The stepping mathematics is implemented on the Array API (see
+    :mod:`gpuxtb._optimizer`), so it can later be reused with any array backend
+    that produces Array API gradients.
+
+    Parameters
+    ----------
+    driver : GPUxtbDriver, optional
+        Configured driver that fixes the method, charge, spin, backend, and
+        execution settings for every frame.  Defaults to a fresh
+        ``GPUxtbDriver()`` (CPU backend).
+    fmax : float, default 5e-3
+        Force convergence threshold in eV/Angstrom (dpdata units), matching the
+        ASE convention.
+    max_steps : int, optional
+        Maximum number of geometry evaluation steps across the whole batch;
+        ``None`` runs until every frame converges.  Frames still active when it
+        is reached are reported at their last evaluated geometry.
+    memory : int, default 5
+        Number of L-BFGS history pairs kept per frame.
+
+    Examples
+    --------
+    >>> system.minimize("gpuxtb", driver=GPUxtbDriver(backend="cuda"), fmax=1e-2)
+    """
+
+    def __init__(
+        self,
+        driver: GPUxtbDriver | None = None,
+        *,
+        fmax: float = 5e-3,
+        max_steps: int | None = None,
+        memory: int = 5,
+    ) -> None:
+        if not np.isfinite(fmax) or fmax <= 0.0:
+            raise GPUxtbValueError("fmax must be finite and positive")
+        if max_steps is not None and int(max_steps) < 1:
+            raise GPUxtbValueError("max_steps must be a positive integer or None")
+        if int(memory) < 1:
+            raise GPUxtbValueError("memory must be a positive integer")
+        self._driver = driver if driver is not None else GPUxtbDriver()
+        self._fmax = float(fmax)
+        self._max_steps = None if max_steps is None else int(max_steps)
+        self._memory = int(memory)
+
+    def minimize(self, data: dict) -> dict:
+        """Minimize the system and label it with the relaxed geometries.
+
+        Parameters
+        ----------
+        data : dict
+            dpdata system data with ``atom_names``, ``atom_types``, and
+            ``coords`` (Angstrom).
+
+        Returns
+        -------
+        dict
+            Copy of ``data`` with ``coords`` replaced by the minimized
+            geometries (Angstrom), and ``energies`` (eV) and ``forces``
+            (eV/Angstrom) evaluated at those geometries.
+
+        Raises
+        ------
+        GPUxtbRuntimeError
+            If any frame failed SCC or the eigensolver at its last evaluated
+            geometry, so the caller never receives silently bogus labels.
+        """
+        _reject_periodic(data)
+        driver = self._driver
+        structures = _structures_from_data(
+            data,
+            charge=driver.charge,
+            uhf=driver.uhf,
+            multiplicity=driver.multiplicity,
+            spin_channels=driver.spin_channels,
+        )
+        nframes = len(structures)
+        if nframes == 0:
+            raise GPUxtbValueError("cannot minimize a system without frames")
+
+        # Per-frame optimizer ledger, keyed by original frame index.  ``eval_*``
+        # always holds the geometry the current numbers were computed at, which
+        # also defines the reported final geometry for frames that hit
+        # ``max_steps`` or failed instead of converging.
+        eval_pos: dict[int, np.ndarray] = {}
+        eval_energy: dict[int, float] = {}
+        eval_force: dict[int, np.ndarray] = {}
+        prev_pos: dict[int, np.ndarray] = {}
+        prev_energy: dict[int, float] = {}
+        prev_gradient: dict[int, np.ndarray] = {}
+        alpha: dict[int, float] = {}
+        s_history: dict[int, list[np.ndarray]] = {}
+        y_history: dict[int, list[np.ndarray]] = {}
+        rho_history: dict[int, list[float]] = {}
+        initialized: set[int] = set()
+        done: set[int] = set()
+        failed: set[int] = set()
+        active = list(range(nframes))
+
+        def make_calculator(frames: list[int]) -> BatchCalculator:
+            return BatchCalculator(
+                [structures[i] for i in frames],
+                driver.method,
+                **cast("dict[str, Any]", driver.kwargs),
+            )
+
+        calculator = make_calculator(active)
+        try:
+            steps = 0
+            while active and (self._max_steps is None or steps < self._max_steps):
+                result = calculator.compute()
+                # Snapshot the evaluated positions before any trial moves.
+                evaluated = [structures[i].positions.copy() for i in active]
+                for position, frame in enumerate(active):
+                    single = result[position]
+                    energy = single.energy
+                    force = single.forces
+                    eval_pos[frame] = evaluated[position]
+                    eval_energy[frame] = energy
+                    eval_force[frame] = force
+
+                    if not np.isfinite(energy) or not np.isfinite(force).all():
+                        # Per-frame SCC/eigensolver failure is data-level, not
+                        # call-level: poison only this frame and revert it to
+                        # its last successfully evaluated geometry.
+                        failed.add(frame)
+                        done.add(frame)
+                        if frame in initialized:
+                            structures[frame].update(positions=prev_pos[frame])
+                        continue
+
+                    max_force = float(np.max(np.abs(force * _FORCE_TO_EV_ANG)))
+                    if max_force <= self._fmax:
+                        done.add(frame)
+                        continue
+
+                    if frame not in initialized:
+                        # ``force`` is -dE/dR (library convention); the
+                        # optimizer works with the energy gradient +dE/dR.
+                        gradient = -force
+                        alpha[frame] = initial_step_size(gradient)
+                        prev_pos[frame] = eval_pos[frame]
+                        prev_energy[frame] = energy
+                        prev_gradient[frame] = gradient
+                        s_history[frame] = []
+                        y_history[frame] = []
+                        rho_history[frame] = []
+                        initialized.add(frame)
+                        direction = lbfgs_direction(gradient, [], [], [])
+                        trial = prev_pos[frame] + alpha[frame] * direction
+                    else:
+                        baseline_pos = prev_pos[frame]
+                        if energy <= prev_energy[frame] + _ACCEPT_TOLERANCE * max(
+                            1.0, abs(prev_energy[frame])
+                        ):
+                            gradient = -force
+                            s_step = eval_pos[frame] - baseline_pos
+                            y_step = gradient - prev_gradient[frame]
+                            rho = curvature(s_step, y_step)
+                            if rho > 0.0:
+                                # Positive curvature: keep the pair.  A
+                                # non-positive pair means the Hessian along the
+                                # step is not positive definite, so the history
+                                # is left untouched for robustness.
+                                s_history[frame].append(s_step)
+                                y_history[frame].append(y_step)
+                                rho_history[frame].append(1.0 / rho)
+                                if len(s_history[frame]) > self._memory:
+                                    s_history[frame].pop(0)
+                                    y_history[frame].pop(0)
+                                    rho_history[frame].pop(0)
+                            prev_pos[frame] = eval_pos[frame]
+                            prev_energy[frame] = energy
+                            prev_gradient[frame] = gradient
+                            # L-BFGS directions carry the inverse-Hessian
+                            # scale, so the natural accepted step is alpha = 1
+                            # (restored here after any rejection halving).
+                            alpha[frame] = 1.0
+                            direction = lbfgs_direction(
+                                gradient,
+                                s_history[frame],
+                                y_history[frame],
+                                rho_history[frame],
+                            )
+                            trial = prev_pos[frame] + alpha[frame] * direction
+                        else:
+                            # Trial did not improve: retry from the accepted
+                            # baseline with a shorter step, reusing the same
+                            # history so no extra evaluation is wasted.
+                            alpha[frame] = max(alpha[frame] * _ALPHA_DECAY, _ALPHA_MIN)
+                            direction = lbfgs_direction(
+                                prev_gradient[frame],
+                                s_history[frame],
+                                y_history[frame],
+                                rho_history[frame],
+                            )
+                            trial = prev_pos[frame] + alpha[frame] * direction
+                        structures[frame].update(positions=trial)
+
+                steps += 1
+                if done:
+                    keep = [frame for frame in active if frame not in done]
+                    if keep:
+                        if len(keep) < len(active):
+                            calculator.close()
+                            calculator = make_calculator(keep)
+                        active = keep
+                    else:
+                        active = []
+        finally:
+            calculator.close()
+
+        if failed:
+            indices = ", ".join(str(i) for i in sorted(failed))
+            raise GPUxtbRuntimeError(
+                "gpuxtb minimization produced failed systems: "
+                f"frames {indices} failed SCC or the eigensolver"
+            )
+
+        # Frames not finished (max_steps reached) are reported at their last
+        # evaluated geometry, mirroring the ASE minimizer which simply stops.
+        final_pos = (
+            np.stack([eval_pos[frame] for frame in range(nframes)]) * BOHR_TO_ANGSTROM
+        )
+        final_energies = (
+            np.asarray(
+                [eval_energy[frame] for frame in range(nframes)], dtype=np.float64
+            )
+            * HARTREE_TO_EV
+        )
+        final_forces = (
+            np.stack([eval_force[frame] for frame in range(nframes)]) * _FORCE_TO_EV_ANG
+        )
+
+        labeled = dict(data)
+        labeled["coords"] = final_pos
+        labeled["energies"] = final_energies
+        labeled["forces"] = final_forces
+        return labeled
+
+
+def _reject_periodic(data: dict) -> None:
+    """Raise for periodic systems the molecular ABI cannot represent."""
+    if not bool(np.asarray(data.get("nopbc", True)).all()):
+        raise GPUxtbNotSupportedError(
+            "the gpuxtb Python driver does not support periodic systems "
+            "(the public C ABI has no lattice input)"
+        )
 
 
 def _frame_value(
@@ -209,4 +502,4 @@ def _frame_value(
     return default
 
 
-__all__ = ["GPUxtbDriver"]
+__all__ = ["GPUxtbDriver", "GPUxtbMinimizer"]

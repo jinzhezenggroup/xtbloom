@@ -149,3 +149,103 @@ def test_driver_rejects_periodic() -> None:
     system = dpdata.System(data=data)
     with pytest.raises(GPUxtbNotSupportedError):
         system.predict(driver="gpuxtb")
+
+
+def _ensure_minimizer_registered() -> type:
+    """Load and return the registered gpuxtb dpdata minimizer class."""
+    import gpuxtb.dpdata as _  # noqa: F401
+    from dpdata.driver import Minimizer
+
+    assert "gpuxtb" in Minimizer.get_minimizers()
+    return Minimizer.get_minimizer("gpuxtb")
+
+
+def _distorted_data(case_id: str, nframes: int = 1, displacement: float = 0.3) -> dict:
+    """Return a system whose frames are displaced along the first atom x axis."""
+    data = _case_data_dict(case_id, nframes=nframes)
+    coords = np.asarray(data["coords"]).copy()
+    for frame in range(nframes):
+        coords[frame, 0, 0] += displacement * (frame + 1)
+    data["coords"] = coords
+    return data
+
+
+def test_minimizer_registered() -> None:
+    """Expose the minimizer through dpdata's minimizer registry."""
+    minimizer_class = _ensure_minimizer_registered()
+    assert minimizer_class.__module__ == "gpuxtb.dpdata"
+
+
+def test_system_minimize_converges_and_lowers_energy() -> None:
+    """Relax a distorted frame below fmax while lowering the energy."""
+    from gpuxtb.dpdata import GPUxtbDriver
+
+    _ensure_minimizer_registered()
+    system = dpdata.System(data=_distorted_data("ketene"))
+    initial = system.predict(driver="gpuxtb", backend="cpu")
+    labeled = system.minimize(
+        minimizer="gpuxtb",
+        driver=GPUxtbDriver(backend="cpu"),
+        fmax=5e-3,
+        max_steps=200,
+    )
+    forces = np.asarray(labeled.data["forces"])
+    energies = np.asarray(labeled.data["energies"])
+    coords = np.asarray(labeled.data["coords"])
+    assert labeled.get_nframes() == 1
+    assert forces.shape == (1, 5, 3)
+    assert float(np.max(np.abs(forces))) <= 5e-3
+    assert energies[0] <= initial.data["energies"][0]
+    assert not np.allclose(coords[0], initial.data["coords"][0], atol=1e-3)
+
+
+def test_minimize_relaxes_every_frame_in_one_batch() -> None:
+    """All frames of a multi-frame system reach fmax in one batch run."""
+    from gpuxtb.dpdata import GPUxtbDriver
+
+    _ensure_minimizer_registered()
+    system = dpdata.System(data=_distorted_data("ketene", nframes=3))
+    labeled = system.minimize(
+        minimizer="gpuxtb",
+        driver=GPUxtbDriver(backend="cpu"),
+        fmax=5e-3,
+        max_steps=300,
+    )
+    forces = np.asarray(labeled.data["forces"])
+    energies = np.asarray(labeled.data["energies"])
+    coords = np.asarray(labeled.data["coords"])
+    assert labeled.get_nframes() == 3
+    assert forces.shape == (3, 5, 3)
+    assert energies.shape == (3,)
+    assert float(np.max(np.abs(forces))) <= 5e-3
+    # Each frame converged to a different (energy-lowered) geometry.
+    assert len({float(e) for e in energies}) == 3
+    assert not np.allclose(coords[0], coords[1])
+
+
+def test_minimizer_raises_for_failed_frames() -> None:
+    """A frame that fails SCC raises instead of publishing bogus labels."""
+    from gpuxtb.dpdata import GPUxtbDriver
+    from gpuxtb.exceptions import GPUxtbRuntimeError
+
+    _ensure_minimizer_registered()
+    system = dpdata.System(data=_case_data_dict("sif5_minus"))
+    with pytest.raises(GPUxtbRuntimeError, match="failed systems"):
+        system.minimize(
+            minimizer="gpuxtb",
+            driver=GPUxtbDriver(backend="cpu", charge=-1, max_scc_iterations=1),
+            max_steps=1,
+        )
+
+
+def test_minimizer_rejects_periodic() -> None:
+    """Reject periodic dpdata systems unsupported by the molecular ABI."""
+    from gpuxtb.dpdata import GPUxtbDriver
+    from gpuxtb.exceptions import GPUxtbNotSupportedError
+
+    _ensure_minimizer_registered()
+    data = _distorted_data("ketene")
+    data["nopbc"] = False
+    system = dpdata.System(data=data)
+    with pytest.raises(GPUxtbNotSupportedError):
+        system.minimize(minimizer="gpuxtb", driver=GPUxtbDriver(backend="cpu"))
