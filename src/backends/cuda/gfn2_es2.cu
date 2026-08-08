@@ -706,7 +706,13 @@ __global__ void es2_scc_energy_preflight_kernel(Gfn2ES2DeviceBatch batch, Gfn2ES
   __syncthreads();
   for (int offset = kThreadsPerBlock / 2; offset > 0; offset /= 2) {
     if (threadIdx.x < offset) {
-      partial[threadIdx.x] += partial[threadIdx.x + offset];
+      const double updated = partial[threadIdx.x] + partial[threadIdx.x + offset];
+      if (!isfinite(updated)) {
+        atomicCAS(&failure_code, 0,
+                  static_cast<int>(Gfn2ES2DeviceError::kNonfiniteEnergyArithmetic));
+      } else {
+        partial[threadIdx.x] = updated;
+      }
     }
     __syncthreads();
   }

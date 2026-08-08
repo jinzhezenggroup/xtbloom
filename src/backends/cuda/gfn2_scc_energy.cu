@@ -348,7 +348,13 @@ __global__ void reduce_spin_electronic_energy_kernel(
   __syncthreads();
   for (int offset = kThreadsPerBlock / 2; offset > 0; offset /= 2) {
     if (threadIdx.x < offset) {
-      partial[threadIdx.x] += partial[threadIdx.x + offset];
+      const double updated = partial[threadIdx.x] + partial[threadIdx.x + offset];
+      if (!isfinite(updated)) {
+        atomicCAS(&failure_code, 0,
+                  static_cast<int>(Gfn2SccEnergyDeviceError::kNonfiniteCoreArithmetic));
+      } else {
+        partial[threadIdx.x] = updated;
+      }
     }
     __syncthreads();
   }

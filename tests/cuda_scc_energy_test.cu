@@ -14,7 +14,10 @@
 
 namespace {
 
+using gpuxtb::detail::Gfn2PlanMemorySpace;
+using gpuxtb::detail::Gfn2WavefunctionLayoutView;
 using gpuxtb::detail::cuda::evaluate_gfn2_scc_electronic_energy_cuda;
+using gpuxtb::detail::cuda::evaluate_gfn2_scc_electronic_energy_spin_cuda;
 using gpuxtb::detail::cuda::Gfn2SccEnergyDeviceBatch;
 using gpuxtb::detail::cuda::Gfn2SccEnergyDeviceError;
 using gpuxtb::detail::cuda::Gfn2SccEnergyDeviceWorkspace;
@@ -357,6 +360,87 @@ int test_reduction_and_addition_overflow() {
   return 0;
 }
 
+int test_spin_tree_overflow_is_core_arithmetic() {
+  constexpr std::uint64_t kPlanToken = 0x5350494e454e4552ULL;
+  constexpr double kSentinel = 88.0;
+  const std::vector<std::int64_t> matrix_offsets{0, 128, 129};
+  const std::vector<std::int64_t> spin_matrix_offsets{0, 256, 257};
+  const std::vector<std::int32_t> spin_channels{2, 1};
+  std::vector<double> density(257u, 0.0);
+  std::vector<double> h0(129u, 0.0);
+  density[0] = 1.0;
+  density[128] = 1.0;
+  density[256] = 0.5;
+  h0[0] = 0.75 * std::numeric_limits<double>::max();
+  h0[128] = 0.25;
+
+  DeviceBuffer<std::int64_t> d_matrix_offsets(matrix_offsets.size());
+  DeviceBuffer<std::int64_t> d_spin_matrix_offsets(spin_matrix_offsets.size());
+  DeviceBuffer<std::int32_t> d_spin_channels(spin_channels.size());
+  DeviceBuffer<double> d_density(density.size());
+  DeviceBuffer<double> d_h0(h0.size());
+  DeviceBuffer<double> d_entropies(2u);
+  DeviceBuffer<std::uint8_t> d_active(2u);
+  DeviceBuffer<std::uint32_t> d_sequence(1u);
+  DeviceBuffer<double> d_core(2u);
+  DeviceBuffer<double> d_free(2u);
+  DeviceBuffer<double> d_core_scratch(2u);
+  DeviceBuffer<double> d_free_scratch(2u);
+  DeviceBuffer<std::uint32_t> d_workspace_sequence(1u);
+  DeviceBuffer<std::uint32_t> d_system_errors(2u);
+  DeviceBuffer<std::uint32_t> d_device_error(1u);
+  CHECK(d_matrix_offsets.upload(matrix_offsets) == cudaSuccess);
+  CHECK(d_spin_matrix_offsets.upload(spin_matrix_offsets) == cudaSuccess);
+  CHECK(d_spin_channels.upload(spin_channels) == cudaSuccess);
+  CHECK(d_density.upload(density) == cudaSuccess);
+  CHECK(d_h0.upload(h0) == cudaSuccess);
+  CHECK(d_entropies.upload({0.0, 0.0}) == cudaSuccess);
+  CHECK(d_active.upload({1u, 1u}) == cudaSuccess);
+  CHECK(d_sequence.upload({1u}) == cudaSuccess);
+  CHECK(d_core.upload({kSentinel, kSentinel}) == cudaSuccess);
+  CHECK(d_free.upload({kSentinel, kSentinel}) == cudaSuccess);
+
+  const Gfn2SccEnergyDeviceBatch batch{2, 129, 3, kPlanToken, d_matrix_offsets.get()};
+  Gfn2WavefunctionLayoutView layout{};
+  layout.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+  layout.plan_token = kPlanToken;
+  layout.batch_size = 2;
+  layout.total_spin_matrix_elements = 257;
+  layout.spin_channel_count = 2;
+  layout.spin_matrix_offset_count = 3;
+  layout.spin_channels = d_spin_channels.get();
+  layout.spin_matrix_offsets = d_spin_matrix_offsets.get();
+  const Gfn2SccIterationDeviceActivity activity{d_active.get(), d_sequence.get(), 2, 1, kPlanToken};
+  const Gfn2SccEnergyDeviceWorkspace workspace{
+      d_core_scratch.get(), d_free_scratch.get(), d_workspace_sequence.get(), 2, 1, kPlanToken};
+
+  CHECK(reset_gfn2_scc_energy_device_errors_cuda(batch.batch_size, d_system_errors.get(),
+                                                 d_device_error.get()) == cudaSuccess);
+  CHECK(evaluate_gfn2_scc_electronic_energy_spin_cuda(
+            batch, layout, d_density.get(), static_cast<std::int64_t>(density.size()), d_h0.get(),
+            d_entropies.get(), 0.0, activity, d_core.get(), d_free.get(), workspace,
+            d_system_errors.get(), d_device_error.get()) == cudaSuccess);
+  CHECK(cudaDeviceSynchronize() == cudaSuccess);
+
+  std::vector<double> core;
+  std::vector<double> free;
+  std::vector<std::uint32_t> errors;
+  std::vector<std::uint32_t> device_error;
+  CHECK(d_core.download(core) == cudaSuccess);
+  CHECK(d_free.download(free) == cudaSuccess);
+  CHECK(d_system_errors.download(errors) == cudaSuccess);
+  CHECK(d_device_error.download(device_error) == cudaSuccess);
+  /* Each spin lane contributes a finite 0.75 * DBL_MAX; only their tree sum
+   * overflows, and that must not be misclassified by the later free-energy step. */
+  CHECK(core[0] == kSentinel && free[0] == kSentinel);
+  CHECK(errors[0] ==
+        static_cast<std::uint32_t>(Gfn2SccEnergyDeviceError::kNonfiniteCoreArithmetic));
+  CHECK(device_error[0] == errors[0]);
+  CHECK(near(core[1], 0.125) && near(free[1], 0.125));
+  CHECK(errors[1] == static_cast<std::uint32_t>(Gfn2SccEnergyDeviceError::kSuccess));
+  return 0;
+}
+
 int test_first_error_diagnostics_are_consistent() {
   HostCase host;
   host.matrix_offsets = {0, 256};
@@ -640,12 +724,12 @@ int test_canonical_activity_and_poisoned_inactive_topology() {
 }  // namespace
 
 int main() {
-  const std::array<int (*)(), 9> tests{
+  const std::array<int (*)(), 10> tests{
       {test_batch_parity_and_custom_stream, test_all_empty_batch,
        test_peer_isolation_and_inactive_skip, test_reduction_and_addition_overflow,
-       test_first_error_diagnostics_are_consistent, test_offset_active_and_sticky_fail_closed,
-       test_host_validation_and_aliases, test_cuda_graph_replay,
-       test_canonical_activity_and_poisoned_inactive_topology}};
+       test_spin_tree_overflow_is_core_arithmetic, test_first_error_diagnostics_are_consistent,
+       test_offset_active_and_sticky_fail_closed, test_host_validation_and_aliases,
+       test_cuda_graph_replay, test_canonical_activity_and_poisoned_inactive_topology}};
   for (const auto test : tests) {
     const int line = test();
     if (line != 0) {
