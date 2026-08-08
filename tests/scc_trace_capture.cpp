@@ -171,8 +171,8 @@ struct Geometry {
     if (e2s.size < e2n * sizeof(double)) return GPUXTB_STATUS_ALLOCATION_FAILED;
     es2_ws.matrix_scratch = static_cast<double*>(e2scratch.data);
     es2_ws.matrix_elements = es2_plan.total_matrix_elements();
-    s = update_es2_geometry_cache_cpu(es2_plan, positions.data(), 1u, static_cast<double*>(e2s.data),
-                                      e2n, es2_ws, es2_cache, err);
+    s = update_es2_geometry_cache_cpu(es2_plan, positions.data(), 1u,
+                                      static_cast<double*>(e2s.data), e2n, es2_ws, es2_cache, err);
     if (s) return s;
 
     const std::size_t a2n = static_cast<std::size_t>(aes2_plan.pair_data_elements());
@@ -191,10 +191,9 @@ struct Geometry {
                                           pc_offsets.data(), pc_plan, err);
       if (s) return s;
       pc_shell_potential.assign(static_cast<std::size_t>(basis.total_shells), 0.0);
-      s = evaluate_external_point_charge_potential_cpu(pc_plan, positions.data(),
-                                                       pc_positions.data(), pc_charges.data(),
-                                                       pc_hardnesses.data(),
-                                                       pc_shell_potential.data(), err);
+      s = evaluate_external_point_charge_potential_cpu(
+          pc_plan, positions.data(), pc_positions.data(), pc_charges.data(), pc_hardnesses.data(),
+          pc_shell_potential.data(), err);
       if (s) return s;
     }
 
@@ -218,8 +217,7 @@ struct Geometry {
     if (s) return s;
     s = initialize_sad_multipole_state(layout, wfn, err);
     if (s) return s;
-    if (oc_s.size < eig_plan.overlap_cache_size_bytes())
-      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    if (oc_s.size < eig_plan.overlap_cache_size_bytes()) return GPUXTB_STATUS_ALLOCATION_FAILED;
     s = bind_eigensolver_overlap_cache(eig_plan, oc_s.data, oc_s.size, ocache, err);
     if (s) return s;
     if (eig_s.size < eig_plan.workspace_size_bytes()) return GPUXTB_STATUS_ALLOCATION_FAILED;
@@ -387,10 +385,10 @@ int capture_case(const std::string& spec_path) {
   }
 
   Stage stage;
-  if (gpuxtb_status_t s = stage.build(
-          geometry, spec.mixer_memory, spec.mixer_damping, kTbliteRmsTolerance,
-          kTbliteEnergyTolerance, static_cast<std::uint64_t>(spec.maximum_iterations),
-          spec.temperature_kelvin * kKelvinToHartree, err);
+  if (gpuxtb_status_t s =
+          stage.build(geometry, spec.mixer_memory, spec.mixer_damping, kTbliteRmsTolerance,
+                      kTbliteEnergyTolerance, static_cast<std::uint64_t>(spec.maximum_iterations),
+                      spec.temperature_kelvin * kKelvinToHartree, err);
       s != GPUXTB_STATUS_SUCCESS) {
     std::cerr << "stage build failed: " << err << "\n";
     return static_cast<int>(s);
@@ -400,9 +398,9 @@ int capture_case(const std::string& spec_path) {
   const std::int64_t nsh = geometry.basis.total_shells;
   const std::int64_t nao = geometry.layout.total_orbitals;
   const std::int64_t system = 0;
-  const std::int64_t matrix_elements = static_cast<std::int64_t>(
-      geometry.layout.density.system_offsets[system + 1] -
-      geometry.layout.density.system_offsets[system]);
+  const std::int64_t matrix_elements =
+      static_cast<std::int64_t>(geometry.layout.density.system_offsets[system + 1] -
+                                geometry.layout.density.system_offsets[system]);
 
   std::vector<CapturedIteration> iterations;
 
@@ -426,22 +424,19 @@ int capture_case(const std::string& spec_path) {
     row.mixed_quadrupoles.assign(geometry.wfn.quadrupole + quad_begin,
                                  geometry.wfn.quadrupole + quad_end);
 
-    const gpuxtb_status_t s =
-        iterate_scc_driver_batch_cpu(stage.driver_plan, geometry.geom, geometry.backend,
-                                     geometry.ocache, geometry.wfn, stage.mixer_state,
-                                     stage.driver_state, stage.drv_ws, err);
+    const gpuxtb_status_t s = iterate_scc_driver_batch_cpu(
+        stage.driver_plan, geometry.geom, geometry.backend, geometry.ocache, geometry.wfn,
+        stage.mixer_state, stage.driver_state, stage.drv_ws, err);
     if (s != GPUXTB_STATUS_SUCCESS && s != GPUXTB_STATUS_SCC_NOT_CONVERGED) {
       std::cerr << "driver iteration failed: " << err << "\n";
       return static_cast<int>(s);
     }
 
     const std::int64_t density_base = geometry.layout.density.system_offsets[system];
-    row.hamiltonian.assign(
-        stage.drv_ws.hamiltonian + density_base, stage.drv_ws.hamiltonian + density_base
-            + matrix_elements);
-    row.density.assign(
-        stage.drv_ws.staged_wavefunction.density + density_base,
-        stage.drv_ws.staged_wavefunction.density + density_base + matrix_elements);
+    row.hamiltonian.assign(stage.drv_ws.hamiltonian + density_base,
+                           stage.drv_ws.hamiltonian + density_base + matrix_elements);
+    row.density.assign(stage.drv_ws.staged_wavefunction.density + density_base,
+                       stage.drv_ws.staged_wavefunction.density + density_base + matrix_elements);
     const std::int64_t eig_begin = geometry.layout.eigenvalues.system_offsets[system];
     row.eigenvalues.assign(stage.drv_ws.staged_wavefunction.eigenvalues + eig_begin,
                            stage.drv_ws.staged_wavefunction.eigenvalues + eig_begin + nao);
@@ -486,14 +481,12 @@ int capture_case(const std::string& spec_path) {
   }
 
   const std::int64_t niterations = static_cast<std::int64_t>(iterations.size());
-  const std::int64_t terminal =
-      (niterations > 0 && iterations.back().conv) ? 1 : 2;
+  const std::int64_t terminal = (niterations > 0 && iterations.back().conv) ? 1 : 2;
 
-  std::cout << "nat " << nat << " nsh " << nsh << " nao " << nao << " niterations "
-            << niterations << " terminal " << terminal << "\n";
+  std::cout << "nat " << nat << " nsh " << nsh << " nao " << nao << " niterations " << niterations
+            << " terminal " << terminal << "\n";
   std::cout << "atomic_numbers\n";
-  for (std::int64_t i = 0; i < nat; ++i)
-    emit_int(spec.atomic_numbers[static_cast<std::size_t>(i)]);
+  for (std::int64_t i = 0; i < nat; ++i) emit_int(spec.atomic_numbers[static_cast<std::size_t>(i)]);
   std::cout << "positions\n";
   for (double v : geometry.positions) emit_value(v);
   std::cout << "molecular_charge\n";

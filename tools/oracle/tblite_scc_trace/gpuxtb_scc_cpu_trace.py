@@ -29,8 +29,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import gpuxtb_scc_trace as writer  # noqa: E402
-import generate_scc_corpus as generator  # noqa: E402
+import generate_scc_corpus as generator
+import gpuxtb_scc_trace as writer
 
 TOOL_DIR = Path(__file__).resolve().parent
 REPOSITORY_ROOT = TOOL_DIR.parents[2]
@@ -39,11 +39,15 @@ COMPARE = TOOL_DIR / "gpuxtb_scc_compare.py"
 
 
 def canonicalize_capture(raw: str, case_id: str) -> dict:
+    """Convert one captured CPU raw stream into a canonical trace document."""
     spec = generator.CASES[case_id]
     return generator.canonicalize(raw, spec, "gpuxtb_scc_cpu_trace.py (capture)")
 
 
-def compare_with_comparator(actual: Path, golden: Path, profile: str) -> tuple[int, str]:
+def compare_with_comparator(
+    actual: Path, golden: Path, profile: str
+) -> tuple[int, str]:
+    """Compare one captured trace with the golden via the comparator CLI."""
     result = subprocess.run(
         [
             sys.executable,
@@ -64,6 +68,7 @@ def compare_with_comparator(actual: Path, golden: Path, profile: str) -> tuple[i
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser for the CPU trace comparison tool."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--capture",
@@ -99,15 +104,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run every requested corpus case through the CPU driver and compare."""
     arguments = build_parser().parse_args(argv)
 
     corpus_dir = arguments.corpus_dir
     work_dir = arguments.work_dir
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    goldens = json.loads(
-        (corpus_dir / "manifest.json").read_text(encoding="utf-8")
-    )["cases"]
+    goldens = json.loads((corpus_dir / "manifest.json").read_text(encoding="utf-8"))[
+        "cases"
+    ]
 
     failures = 0
     for case_id in arguments.cases:
@@ -125,7 +131,10 @@ def main(argv: list[str] | None = None) -> int:
                 check=False,
             )
         if result.returncode != 0:
-            print(f"{case_id}: FAIL capture died with {result.returncode}: {result.stderr}")
+            print(  # noqa: T201 - CLI diagnostics
+                f"{case_id}: FAIL capture died with "
+                f"{result.returncode}: {result.stderr}"
+            )
             failures += 1
             continue
 
@@ -133,8 +142,15 @@ def main(argv: list[str] | None = None) -> int:
         try:
             trace = canonicalize_capture(raw, case_id)
             canonical = writer.dumps(trace)
-        except (writer.TraceError, generator.CorpusError, ValueError, AssertionError) as error:
-            print(f"{case_id}: FAIL cannot canonicalize capture: {error}")
+        except (
+            writer.TraceError,
+            generator.CorpusError,
+            ValueError,
+            AssertionError,
+        ) as error:
+            print(  # noqa: T201 - CLI diagnostics
+                f"{case_id}: FAIL cannot canonicalize capture: {error}"
+            )
             failures += 1
             continue
         actual_path.write_text(canonical, encoding="utf-8")
@@ -143,18 +159,18 @@ def main(argv: list[str] | None = None) -> int:
             actual_path, golden_path, arguments.profile
         )
         if return_code == 0:
-            print(f"{case_id}: PASS ({arguments.profile})")
+            print(f"{case_id}: PASS ({arguments.profile})")  # noqa: T201
         else:
             failures += 1
             summary = report.strip().splitlines()
-            print(f"{case_id}: FAIL ({arguments.profile})")
+            print(f"{case_id}: FAIL ({arguments.profile})")  # noqa: T201
             for line in summary[:6]:
-                print(f"  {line}")
+                print(f"  {line}")  # noqa: T201
 
     if failures:
-        print(f"{failures}/{len(arguments.cases)} CPU trace comparisons failed")
+        print(f"{failures}/{len(arguments.cases)} CPU trace comparisons failed")  # noqa: T201
     else:
-        print(f"all {len(arguments.cases)} CPU trace comparisons passed")
+        print(f"all {len(arguments.cases)} CPU trace comparisons passed")  # noqa: T201
     return 1 if failures else 0
 
 

@@ -41,6 +41,7 @@ CASES = sorted(GENERATOR.CASES)
 
 
 def sha256_file(path: Path) -> str:
+    """Return the lowercase SHA-256 digest of one file's bytes."""
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
@@ -49,7 +50,10 @@ def sha256_file(path: Path) -> str:
 
 
 class RestrictedCorpusTest(unittest.TestCase):
+    """Offline validation of the committed restricted SCC trace corpus."""
+
     def test_corpus_files_and_manifest_are_present(self) -> None:
+        """Every case must have a manifest entry and an existing golden file."""
         manifest_path = CORPUS_DIR / "manifest.json"
         self.assertTrue(manifest_path.is_file(), "corpus manifest is missing")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -60,6 +64,7 @@ class RestrictedCorpusTest(unittest.TestCase):
             self.assertTrue(golden.is_file(), f"golden {entry['path']} is missing")
 
     def test_every_golden_validates_against_the_v1_schema(self) -> None:
+        """Each golden document must satisfy the runtime v1 schema validator."""
         for case_id in CASES:
             golden = CORPUS_DIR / f"{case_id}.json"
             with self.subTest(case=case_id):
@@ -67,6 +72,7 @@ class RestrictedCorpusTest(unittest.TestCase):
                 TRACE.validate(document)
 
     def test_every_golden_hash_matches_the_manifest(self) -> None:
+        """Each golden's SHA-256 must match the pinned manifest entry."""
         manifest = json.loads(
             (CORPUS_DIR / "manifest.json").read_text(encoding="utf-8")
         )
@@ -77,6 +83,7 @@ class RestrictedCorpusTest(unittest.TestCase):
                 self.assertEqual(digest, entry["sha256"])
 
     def test_canonical_rewrite_is_byte_identical(self) -> None:
+        """Canonical dumps of each golden must reproduce its exact bytes."""
         for case_id in CASES:
             golden = CORPUS_DIR / f"{case_id}.json"
             with self.subTest(case=case_id):
@@ -86,6 +93,7 @@ class RestrictedCorpusTest(unittest.TestCase):
                 self.assertEqual(canonical.encode("utf-8"), original)
 
     def test_manifest_is_fully_pinned(self) -> None:
+        """Provenance, revision, digests, and dependency pins must be complete."""
         manifest = json.loads(
             (CORPUS_DIR / "manifest.json").read_text(encoding="utf-8")
         )
@@ -103,14 +111,14 @@ class RestrictedCorpusTest(unittest.TestCase):
             )
 
     def test_point_charge_cases_record_pcem_primary_fields(self) -> None:
+        """QM/MM-like goldens must record the per-iteration PCEM primary fields."""
         for case_id in ("water_one_pc_gamma999", "water_dimer_6pc_hardness"):
             document = json.loads(
                 (CORPUS_DIR / f"{case_id}.json").read_text(encoding="utf-8")
             )
             self.assertIn("point_charges", document["input"])
             self.assertEqual(
-                len(document["input"]["point_charges"]["positions"])
-                % 3,
+                len(document["input"]["point_charges"]["positions"]) % 3,
                 0,
                 "point-charge positions must be per-point-major",
             )
@@ -118,12 +126,16 @@ class RestrictedCorpusTest(unittest.TestCase):
             for entry in document["iterations"]:
                 self.assertIn("point_charge_shell_potential", entry)
                 self.assertIn("point_charge_energy", entry)
-                self.assertEqual(len(entry["point_charge_shell_potential"][0]),
-                                 document["basis"]["n_shells"])
-                self.assertEqual(len(entry["point_charge_energy"][0]),
-                                 document["basis"]["n_shells"])
+                self.assertEqual(
+                    len(entry["point_charge_shell_potential"][0]),
+                    document["basis"]["n_shells"],
+                )
+                self.assertEqual(
+                    len(entry["point_charge_energy"][0]), document["basis"]["n_shells"]
+                )
 
     def test_plain_cases_do_not_record_pcem_fields(self) -> None:
+        """Non-point-charge goldens must omit the optional PCEM fields."""
         for case_id in ("h3_plus", "ketene", "nenacl"):
             document = json.loads(
                 (CORPUS_DIR / f"{case_id}.json").read_text(encoding="utf-8")
@@ -134,6 +146,7 @@ class RestrictedCorpusTest(unittest.TestCase):
                 self.assertNotIn("point_charge_energy", entry)
 
     def test_corpus_check_command_passes(self) -> None:
+        """The generator --check path must verify the committed corpus offline."""
         result = subprocess.run(
             [
                 sys.executable,
@@ -152,7 +165,10 @@ class RestrictedCorpusTest(unittest.TestCase):
         # must not require a source checkout or network.
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
 
-    def test_comparator_self_compare_passes_and_scalar_mismatch_is_localized(self) -> None:
+    def test_comparator_self_compare_passes_and_scalar_mismatch_is_localized(
+        self,
+    ) -> None:
+        """Self-comparison passes and a scalar perturbation is localized."""
         compare = TOOL_DIR / "gpuxtb_scc_compare.py"
         golden = CORPUS_DIR / "h3_plus.json"
         self_compare = subprocess.run(

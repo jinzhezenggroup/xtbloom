@@ -38,8 +38,8 @@ from pathlib import Path
 # Import the reusable pinned provenance/build machinery from the observer
 # patch validator so the two tools cannot drift.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import validate_observer_patch as validator  # noqa: E402
-import gpuxtb_scc_trace as writer  # noqa: E402
+import gpuxtb_scc_trace as writer
+import validate_observer_patch as validator
 
 TOOL_DIR = Path(__file__).resolve().parent
 REPOSITORY_ROOT = TOOL_DIR.parents[2]
@@ -166,9 +166,7 @@ def column_major_to_rows(values: list[float], n: int) -> list[list[float]]:
     The recorder streams Fortran memory order (column outer, row inner), while
     the v1 format documents matrices in logical [row][column] order.
     """
-    rows = []
-    for row in range(n):
-        rows.append([values[column * n + row] for column in range(n)])
+    rows = [[values[column * n + row] for column in range(n)] for row in range(n)]
     return rows
 
 
@@ -203,9 +201,8 @@ def dependency_revisions(source_root: Path) -> dict[str, str]:
         if result.returncode != 0:
             raise CorpusError(f"cannot resolve dependency HEAD: {directory}")
         commit = result.stdout.strip()
-        if (
-            len(commit) != 40
-            or any(character not in "0123456789abcdef" for character in commit)
+        if len(commit) != 40 or any(
+            character not in "0123456789abcdef" for character in commit
         ):
             raise CorpusError(f"dependency is not a pinned commit: {directory}")
         revisions[directory.name] = commit
@@ -252,8 +249,7 @@ def build_oracle(
     lapack: str,
     wrap_mode: str,
 ) -> Path:
-    """Build the recorder oracle in a disposable outer project and return the
-    executable path.
+    """Build the recorder oracle and return the executable path.
 
     Every tblite fallback dependency is consumed from the source checkout's
     already-pinned subproject directories (symlinked read-only), so the build
@@ -321,6 +317,7 @@ _binary_cache: tuple[Path, Path] | None = None
 
 
 def checker_cache(path: Path) -> Path:
+    """Copy the built recorder into a stable cache location and return its path."""
     global _binary_cache
     cache_dir = Path(tempfile.gettempdir()) / "gpuxtb-scc-trace-oracle-bin"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -334,9 +331,7 @@ def write_spec(spec: dict[str, object], path: Path) -> None:
     """Write a fixed-layout case spec consumed by the Fortran recorder."""
     atomic_numbers = spec["atomic_numbers"]
     positions = spec["positions"]
-    lines = [str(len(atomic_numbers))]
-    for number in atomic_numbers:
-        lines.append(str(number))
+    lines = [str(len(atomic_numbers)), *(str(number) for number in atomic_numbers)]
     for position in positions:
         lines.extend(repr(float(value)) for value in position)
     lines.append(repr(float(spec["molecular_charge"])))
@@ -352,8 +347,11 @@ def write_spec(spec: dict[str, object], path: Path) -> None:
         positions_pc = point_charges["positions"]
         lines.append(str(len(positions_pc)))
         for index in range(len(positions_pc)):
-            values = [*positions_pc[index], point_charges["charges"][index],
-                      point_charges["gammas"][index]]
+            values = [
+                *positions_pc[index],
+                point_charges["charges"][index],
+                point_charges["gammas"][index],
+            ]
             lines.extend(repr(float(value)) for value in values)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -389,7 +387,7 @@ def canonicalize(raw: str, spec: dict[str, object], command_line: str) -> dict:
         try:
             return next(iterator)
         except StopIteration:
-            raise CorpusError("raw stream ended prematurely")
+            raise CorpusError("raw stream ended prematurely") from None
 
     header = take().split()
     while len(header) < 10:
@@ -447,10 +445,11 @@ def canonicalize(raw: str, spec: dict[str, object], command_line: str) -> dict:
         return column_major_to_rows(values, nao)
 
     iterations = []
-    for _ in range(niterations):
+    for iteration_offset in range(niterations):
         label = take()
         assert label == "iteration", label
         iteration_index = int(take())
+        assert iteration_index == iteration_offset + 1, iteration_index
         label = take()
         assert label == "hamiltonian", label
         hamiltonian = matrix(floats(nao * nao))
@@ -541,7 +540,9 @@ def canonicalize(raw: str, spec: dict[str, object], command_line: str) -> dict:
         reconstructed_rms = math.sqrt(
             sum(value * value / len(residual) for value in residual)
         )
-        if not math.isclose(reconstructed_rms, residual_rms, rel_tol=1e-9, abs_tol=1e-9):
+        if not math.isclose(
+            reconstructed_rms, residual_rms, rel_tol=1e-9, abs_tol=1e-9
+        ):
             raise CorpusError(
                 "raw residual RMS does not reconstruct from raw-minus-mixed"
             )
@@ -590,7 +591,9 @@ def canonicalize(raw: str, spec: dict[str, object], command_line: str) -> dict:
         "format": FORMAT,
         "provenance": {
             "tblite_revision": REVISION,
-            "oracle_patch_sha256": validator.sha256_file(TOOL_DIR / "tblite-e9abc395-scc-observer.patch"),
+            "oracle_patch_sha256": validator.sha256_file(
+                TOOL_DIR / "tblite-e9abc395-scc-observer.patch"
+            ),
             "oracle_command": command_line,
         },
         "input": {
@@ -633,12 +636,15 @@ def canonicalize(raw: str, spec: dict[str, object], command_line: str) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser for the corpus generator."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--source-root",
         type=Path,
         required=True,
-        help="local tblite Git checkout used read-only (must be at the pinned revision)",
+        help=(
+            "local tblite Git checkout used read-only (must be at the pinned revision)"
+        ),
     )
     parser.add_argument(
         "--corpus-dir",
@@ -675,6 +681,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Generate or verify the pinned restricted corpus with full provenance."""
     arguments = build_parser()
     if isinstance(argv, list):
         import argparse as _argparse
@@ -689,27 +696,39 @@ def main(argv: list[str] | None = None) -> int:
     validator.validate_bundle(metadata)
     revision = str(metadata["upstream"]["revision"])
     if revision != REVISION:
-        print(f"ERROR: oracle revision {revision} != expected {REVISION}", file=sys.stderr)
+        print(  # noqa: T201 - CLI diagnostics
+            f"ERROR: oracle revision {revision} != expected {REVISION}", file=sys.stderr
+        )
         return 2
 
-    source_head, source_status = validator.source_state(arguments.source_root)
+    _, source_status = validator.source_state(arguments.source_root)
     # The source checkout may sit on any branch; what matters is that the
     # pinned revision is reachable and the tree is clean so the clone is a
     # byte-faithful basis for the oracle.
     probe = subprocess.run(
-        ["git", "-C", str(arguments.source_root), "cat-file", "-e", f"{REVISION}^{{commit}}"],
+        [
+            "git",
+            "-C",
+            str(arguments.source_root),
+            "cat-file",
+            "-e",
+            f"{REVISION}^{{commit}}",
+        ],
         capture_output=True,
         check=False,
     )
     if probe.returncode != 0:
-        print(
-            f"ERROR: pinned revision {REVISION} is not reachable from the source checkout",
+        print(  # noqa: T201 - CLI diagnostics
+            "ERROR: pinned revision "
+            f"{REVISION} is not reachable from the source checkout",
             file=sys.stderr,
         )
         return 2
     if source_status.strip():
-        print("ERROR: source checkout is dirty; provenance cannot be established",
-              file=sys.stderr)
+        print(  # noqa: T201 - CLI diagnostics
+            "ERROR: source checkout is dirty; provenance cannot be established",
+            file=sys.stderr,
+        )
         return 2
 
     deps = dependency_revisions(arguments.source_root)
@@ -753,7 +772,9 @@ def main(argv: list[str] | None = None) -> int:
 
         entries = {}
         for case_id, spec in CASES.items():
-            print(f"[corpus] running {case_id}", file=sys.stderr)
+            print(  # noqa: T201 - CLI progress
+                f"[corpus] running {case_id}", file=sys.stderr
+            )
             spec_path = work / f"{case_id}.spec"
             write_spec(spec, spec_path)
             raw = run_recorder(binary, spec_path, work)
@@ -763,7 +784,9 @@ def main(argv: list[str] | None = None) -> int:
                 trace = canonicalize(raw, spec, command_line)
                 canonical = writer.dumps(trace)
             except (writer.TraceError, CorpusError) as error:
-                print(f"ERROR: {case_id}: {error}", file=sys.stderr)
+                print(  # noqa: T201 - CLI diagnostics
+                    f"ERROR: {case_id}: {error}", file=sys.stderr
+                )
                 return 2
             document = {**trace, "case_id": case_id}
             # Rebuild without case_id, then include in output document.
@@ -793,7 +816,9 @@ def main(argv: list[str] | None = None) -> int:
     (case_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    print(f"generated {len(entries)} restricted goldens under {case_dir}")
+    print(  # noqa: T201 - CLI report
+        f"generated {len(entries)} restricted goldens under {case_dir}"
+    )
     return 0
 
 
@@ -801,21 +826,25 @@ def verify_manifest(case_dir: Path) -> int:
     """Check existing goldens against their pinned manifest hashes."""
     manifest_path = case_dir / "manifest.json"
     if not manifest_path.is_file():
-        print("ERROR: no corpus directory manifest", file=sys.stderr)
+        print("ERROR: no corpus directory manifest", file=sys.stderr)  # noqa: T201
         return 2
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     for case_id in sorted(CASES):
         entry = manifest["cases"].get(case_id)
         if entry is None:
-            print(f"ERROR: manifest misses {case_id}", file=sys.stderr)
+            print(  # noqa: T201 - CLI diagnostics
+                f"ERROR: manifest misses {case_id}", file=sys.stderr
+            )
             return 2
         path = case_dir / entry["path"]
         if not path.is_file():
-            print(f"ERROR: missing golden {entry['path']}", file=sys.stderr)
+            print(  # noqa: T201 - CLI diagnostics
+                f"ERROR: missing golden {entry['path']}", file=sys.stderr
+            )
             return 2
         digest = sha256_file(path)
         if digest != entry["sha256"]:
-            print(
+            print(  # noqa: T201 - CLI diagnostics
                 f"ERROR: {case_id} sha256 {digest} != {entry['sha256']}",
                 file=sys.stderr,
             )
@@ -823,14 +852,20 @@ def verify_manifest(case_dir: Path) -> int:
         try:
             trace = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as error:
-            print(f"ERROR: {case_id} is not valid JSON: {error}", file=sys.stderr)
+            print(  # noqa: T201 - CLI diagnostics
+                f"ERROR: {case_id} is not valid JSON: {error}", file=sys.stderr
+            )
             return 2
         try:
             writer.validate(trace)
         except writer.TraceError as error:
-            print(f"ERROR: {case_id} fails schema validation: {error}", file=sys.stderr)
+            print(  # noqa: T201 - CLI diagnostics
+                f"ERROR: {case_id} fails schema validation: {error}", file=sys.stderr
+            )
             return 2
-    print(f"verified {len(CASES)} goldens against the corpus manifest")
+    print(  # noqa: T201 - CLI report
+        f"verified {len(CASES)} goldens against the corpus manifest"
+    )
     return 0
 
 
