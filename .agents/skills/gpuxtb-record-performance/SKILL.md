@@ -80,8 +80,9 @@ captures can embed the target process environment and credentials. They are
 prohibited from the repository: `.gitignore` ignores them and the
 `forbid-raw-profiler-captures` pre-commit hook rejects them at commit time
 (including `git add -f`). Only sanitized derived CSV/text/JSON summaries from
-`nsys stats` / `ncu --export`, with the profiler version and export command
-recorded, may be archived under `benchmarks/evidence/`.
+`nsys stats` or `ncu --csv` console output, with the profiler version and
+extraction command recorded, may be archived under `benchmarks/evidence/`.
+Do not use `ncu --export` for this purpose: it writes a native `.ncu-rep`.
 
 ## State the Narrow Conclusion
 

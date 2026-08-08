@@ -366,7 +366,9 @@ cgroup/session state. They must never be committed to this repository.
   raw capture, including `git add -f` force-adds, so a capture cannot slip
   into a commit.
 - Only sanitized derived summaries may be archived under
-  `benchmarks/evidence/`: `nsys stats` / `ncu --export` CSV/text/JSON reports
-  and logs, with the profiler version and exact export command recorded in the
-  bundle's `README.md`. Never archive the raw `.nsys-rep` / `.ncu-rep` /
-  SQLite databases the exporter also produced.
+  `benchmarks/evidence/`: `nsys stats` reports, `ncu --csv` console output,
+  and reviewed text/JSON logs, with the profiler version and exact extraction
+  command recorded in the bundle's `README.md`. Never archive the raw
+  `.nsys-rep` / `.ncu-rep` / SQLite databases used to produce them. In
+  particular, `ncu --export` writes a native `.ncu-rep`; it does not produce a
+  sanitized summary.

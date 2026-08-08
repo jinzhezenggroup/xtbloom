@@ -23,7 +23,7 @@ __pycache__/
 /htmlcov/
 
 # Raw profiler captures embed the target process environment and credentials.
-# Keep only sanitized derived summaries (nsys stats / ncu --export) in the repo.
+# Keep only sanitized derived summaries (nsys stats / ncu --csv) in the repo.
 *.nsys-rep
 *.qdstrm
 *.sqlite

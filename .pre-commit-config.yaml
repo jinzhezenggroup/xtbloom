@@ -56,7 +56,7 @@ repos:
         entry: >-
           Raw profiler captures (nsys/ncu) embed the target process
           environment and credentials. Remove the file and commit only
-          sanitized derived summaries (e.g. `nsys stats` / `ncu --export`
+          sanitized derived summaries (e.g. `nsys stats` / `ncu --csv`
           CSV/text output).
         language: fail
         # Extensions must stay in sync with the *.nsys-rep / *.ncu-rep /
