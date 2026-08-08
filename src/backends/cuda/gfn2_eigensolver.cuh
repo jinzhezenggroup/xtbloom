@@ -305,11 +305,114 @@ Gfn2EigensolverLaunchResult query_gfn2_spin_eigensolver_bucket_workspace_cuda(
     const double* device_matrix, const double* device_eigenvalues,
     Gfn2EigensolverWorkspaceRequirements& requirements) noexcept;
 
+/*
+ * Production exact-capacity dispatch primitives. The production device-tail
+ * loop cannot nest the #131 conditional (SWITCH) compaction graph, because a
+ * graph containing conditional nodes cannot be launched from device code. It
+ * instead builds one device-launchable executable per (bucket, capacity) and a
+ * device-resident table of executable handles that a device dispatcher selects
+ * from without any host decision. These entry points expose the per-capacity
+ * body captures and the no-conditional compaction kernels the loop needs.
+ *
+ * All helpers are capture-safe: they launch ordinary kernels (and, for the
+ * eigensolver/backtransform bodies, cuBLAS/cuSOLVER calls) that record into an
+ * active stream capture. No allocation, transfer, polling, or synchronization
+ * is performed.
+ */
+
+/* Compact the eligible systems of one bucket into compact_systems and publish
+ * bucket_activity.active_count, with no conditional handle. */
+Gfn2EigensolverLaunchResult compact_gfn2_solve_bucket_counts_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket& bucket,
+    std::int64_t bucket_index, const Gfn2EigensolverDeviceWorkspace& workspace,
+    const std::uint32_t* system_errors, cudaStream_t stream = nullptr) noexcept;
+
+/* Run prepare_solve_bucket + compact_solve_bucket_counts for every bucket. */
+Gfn2EigensolverLaunchResult prepare_and_compact_gfn2_solve_buckets_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
+    std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
+    std::uint64_t geometry_generation, const double* hamiltonians,
+    const Gfn2EigensolverOptions& options, const Gfn2EigensolverDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
+
+/* Replay-safe epoch variant consumed by the production dispatch chain. */
+Gfn2EigensolverLaunchResult prepare_and_compact_gfn2_solve_buckets_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
+    std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
+    const Gfn2GeometryEpochDevice& geometry_epoch, const double* hamiltonians,
+    const Gfn2EigensolverOptions& options, const Gfn2EigensolverDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
+
+/* Compact successful eigenpairs after the eigensolver body; no conditional. */
+Gfn2EigensolverLaunchResult compact_gfn2_successful_eigenpair_counts_cuda(
+    const Gfn2EigensolverBucket& bucket, std::int64_t bucket_index,
+    const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Capture the exact-capacity eigensolver body (gather, TRSM x2, sym, syevd)
+ * into `body` for exactly `capacity` compacted systems of one bucket. The
+ * caller owns `body` and must instantiate it. Provider handle streams are set
+ * to capture_stream for the capture and left to the caller afterward.
+ */
+Gfn2EigensolverLaunchResult capture_gfn2_eigensolver_capacity_cuda(
+    cudaGraph_t body, cudaStream_t capture_stream, std::uint32_t capacity,
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket& bucket,
+    std::int64_t bucket_index, const Gfn2EigensolverOverlapCache& cache, const double* hamiltonians,
+    cusolverDnHandle_t solver, cusolverDnParams_t parameters, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, bool deterministic_debug) noexcept;
+
+/*
+ * Enqueue the exact-capacity eigensolver body kernels into an active capture
+ * on `stream`. The caller owns the surrounding capture so it can append the
+ * chain dispatch kernel after the provider body in one graph. capacity==0
+ * enqueues no provider work and reports success.
+ */
+Gfn2EigensolverLaunchResult enqueue_gfn2_eigensolver_capacity_cuda(
+    cudaStream_t capture_stream, std::uint32_t capacity, const Gfn2EigensolverDeviceBatch& batch,
+    const Gfn2EigensolverBucket& bucket, std::int64_t bucket_index,
+    const Gfn2EigensolverOverlapCache& cache, const double* hamiltonians, cusolverDnHandle_t solver,
+    cusolverDnParams_t parameters, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, bool deterministic_debug) noexcept;
+
+/*
+ * Capture the exact-capacity backtransform body (mark, TRSM-T, scatter) into
+ * `body` for exactly `capacity` compacted systems of one bucket.
+ */
+Gfn2EigensolverLaunchResult capture_gfn2_backtransform_capacity_cuda(
+    cudaGraph_t body, cudaStream_t capture_stream, std::uint32_t capacity,
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket& bucket,
+    std::int64_t bucket_index, cublasHandle_t blas, const Gfn2EigensolverDeviceWorkspace& workspace,
+    const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
+    std::uint32_t* device_error, bool deterministic_debug) noexcept;
+
+/* Enqueue the backtransform body kernels into an active capture on `stream`. */
+Gfn2EigensolverLaunchResult enqueue_gfn2_backtransform_capacity_cuda(
+    cudaStream_t capture_stream, std::uint32_t capacity, const Gfn2EigensolverDeviceBatch& batch,
+    const Gfn2EigensolverBucket& bucket, std::int64_t bucket_index, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, const Gfn2EigensolverDeviceResults& results,
+    std::uint32_t* system_errors, std::uint32_t* device_error, bool deterministic_debug) noexcept;
+
 /* Clear per-system and sticky diagnostics asynchronously. */
 cudaError_t reset_gfn2_eigensolver_device_errors_cuda(std::int64_t batch_size,
                                                       std::uint32_t* system_errors,
                                                       std::uint32_t* device_error,
                                                       cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Public open of one eigensolver launch sequence: capture the sticky device
+ * state into workspace.sequence_active, clear info_a, and validate the device
+ * bucket permutation. The monolithic solver calls this at the head of every
+ * solve; the production dispatch chain must reproduce it before compaction so
+ * prepare_solve_bucket sees an open sequence.
+ */
+Gfn2EigensolverLaunchResult prepare_gfn2_eigensolver_launch_sequence_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverDeviceWorkspace& workspace,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
 /*
  * Update reusable overlap factors for geometry_generation. The overlap is

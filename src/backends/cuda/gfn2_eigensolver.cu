@@ -238,6 +238,44 @@ bool valid_bucket_plan(const Gfn2EigensolverDeviceBatch& batch,
          counted_matrices == batch.total_matrix_elements;
 }
 
+/* Validate one bucket borrowed from an already assembled batch. Unlike
+ * valid_bucket_plan(), this deliberately does not require the bucket to cover
+ * every system because the exact-capacity chain compacts buckets separately. */
+bool valid_bucket_slice(const Gfn2EigensolverDeviceBatch& batch,
+                        const Gfn2EigensolverBucket& bucket) noexcept {
+  if (batch.batch_size <= 0 || batch.batch_size > std::numeric_limits<int>::max() ||
+      batch.total_orbitals <= 0 || batch.total_matrix_elements <= 0 || batch.plan_token == 0u ||
+      batch.orbital_offset_count != batch.batch_size + 1 ||
+      batch.matrix_offset_count != batch.batch_size + 1 ||
+      batch.bucket_system_count != batch.batch_size || batch.active_elements != batch.batch_size ||
+      !is_aligned(batch.orbital_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.matrix_offsets, alignof(std::int64_t)) ||
+      !is_aligned(batch.bucket_systems, alignof(std::int32_t)) ||
+      !is_aligned(batch.active, alignof(std::uint8_t)) || bucket.orbital_count <= 0 ||
+      bucket.system_count <= 0 || bucket.system_index_offset < 0 ||
+      bucket.matrix_scratch_offset < 0 || bucket.orbital_scratch_offset < 0) {
+    return false;
+  }
+
+  std::int64_t matrix_stride = 0;
+  std::int64_t matrix_span = 0;
+  std::int64_t orbital_span = 0;
+  std::int64_t system_end = 0;
+  std::int64_t matrix_end = 0;
+  std::int64_t orbital_end = 0;
+  return checked_multiply(bucket.orbital_count, bucket.orbital_count, &matrix_stride) &&
+         checked_multiply(matrix_stride, bucket.system_count, &matrix_span) &&
+         checked_multiply(bucket.orbital_count, bucket.system_count, &orbital_span) &&
+         matrix_stride <= std::numeric_limits<int>::max() &&
+         matrix_span <= std::numeric_limits<int>::max() &&
+         orbital_span <= std::numeric_limits<int>::max() &&
+         checked_add(bucket.system_index_offset, bucket.system_count, &system_end) &&
+         checked_add(bucket.matrix_scratch_offset, matrix_span, &matrix_end) &&
+         checked_add(bucket.orbital_scratch_offset, orbital_span, &orbital_end) &&
+         system_end <= batch.bucket_system_count && matrix_end <= batch.total_matrix_elements &&
+         orbital_end <= batch.total_orbitals;
+}
+
 bool valid_spin_bucket_plan(const Gfn2EigensolverDeviceBatch& batch,
                             const Gfn2WavefunctionLayoutView& layout,
                             const Gfn2EigensolverBucket* buckets,
@@ -1234,6 +1272,44 @@ __global__ void compact_solve_bucket_kernel(Gfn2EigensolverDeviceBatch batch,
   cudaGraphSetConditional(handle, activity.active_count);
 }
 
+/*
+ * No-conditional compaction sibling used by the production device-dispatched
+ * exact-capacity chain. It publishes bucket_activity.active_count and the
+ * compacted system lists exactly like the conditional variant, but performs no
+ * cudaGraphSetConditional, so the kernel can live inside a device-launchable
+ * executable without any conditional node.
+ */
+__global__ void compact_solve_bucket_counts_kernel(Gfn2EigensolverDeviceBatch batch,
+                                                   Gfn2EigensolverBucket bucket,
+                                                   std::int64_t bucket_index,
+                                                   Gfn2EigensolverDeviceWorkspace workspace,
+                                                   const std::uint32_t* system_errors) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) {
+    return;
+  }
+  Gfn2EigensolverBucketActivity activity{};
+  for (std::int32_t local = 0; local < bucket.system_count; ++local) {
+    const std::int64_t slot = bucket.system_index_offset + local;
+    workspace.compact_systems[slot] = -1;
+    workspace.compact_source_slots[slot] = -1;
+  }
+  if (atomicAdd(workspace.sequence_active, 0u) != 0u) {
+    for (std::int32_t local = 0; local < bucket.system_count; ++local) {
+      const std::int64_t canonical_slot = bucket.system_index_offset + local;
+      const std::int32_t system = batch.bucket_systems[canonical_slot];
+      if (system >= 0 && system < batch.batch_size && workspace.eligible[canonical_slot] == 1u &&
+          system_is_clear(system_errors, system)) {
+        const std::int64_t compact_slot =
+            bucket.system_index_offset + static_cast<std::int64_t>(activity.active_count);
+        workspace.compact_systems[compact_slot] = system;
+        workspace.compact_source_slots[compact_slot] = local;
+        ++activity.active_count;
+      }
+    }
+  }
+  workspace.bucket_activity[bucket_index] = activity;
+}
+
 __global__ void gather_compacted_solve_bucket_kernel(
     Gfn2EigensolverDeviceBatch batch, Gfn2EigensolverBucket bucket, std::int64_t bucket_index,
     std::uint32_t submission_count, Gfn2EigensolverOverlapCache cache, const double* hamiltonians,
@@ -1381,6 +1457,60 @@ __global__ void compact_successful_eigenpairs_kernel(Gfn2EigensolverBucket bucke
   }
   activity.completed_count = completed;
   cudaGraphSetConditional(handle, completed);
+}
+
+/*
+ * No-conditional sibling of compact_successful_eigenpairs_kernel. Publishes
+ * bucket_activity.completed_count and the re-compacted success lists without
+ * touching a conditional handle, so the backtransform capacity can be selected
+ * by a device dispatcher inside a device-launchable executable.
+ */
+__global__ void compact_successful_eigenpair_counts_kernel(Gfn2EigensolverBucket bucket,
+                                                           std::int64_t bucket_index,
+                                                           Gfn2EigensolverDeviceWorkspace workspace,
+                                                           std::uint32_t* system_errors,
+                                                           std::uint32_t* device_error) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) {
+    return;
+  }
+  Gfn2EigensolverBucketActivity& activity = workspace.bucket_activity[bucket_index];
+  std::uint32_t completed = 0u;
+  const std::int64_t matrix_stride = static_cast<std::int64_t>(bucket.orbital_count) *
+                                     static_cast<std::int64_t>(bucket.orbital_count);
+  for (std::uint32_t source = 0u; source < activity.active_count; ++source) {
+    const std::int64_t source_slot = bucket.system_index_offset + source;
+    const std::int32_t system = workspace.compact_systems[source_slot];
+    bool healthy = system_is_clear(system_errors, system);
+    if (healthy && workspace.info_a[source_slot] != 0) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2EigensolverDeviceError::kEigensolverFailed);
+      healthy = false;
+    }
+    const std::int64_t matrix_begin =
+        bucket.matrix_scratch_offset + static_cast<std::int64_t>(source) * matrix_stride;
+    const std::int64_t orbital_begin =
+        bucket.orbital_scratch_offset + static_cast<std::int64_t>(source) * bucket.orbital_count;
+    for (std::int32_t orbital = 0; healthy && orbital < bucket.orbital_count; ++orbital) {
+      healthy = isfinite(workspace.eigenvalue_scratch[orbital_begin + orbital]);
+    }
+    for (std::int64_t index = 0; healthy && index < matrix_stride; ++index) {
+      healthy = isfinite(workspace.matrix_scratch_b[matrix_begin + index]);
+    }
+    if (!healthy) {
+      if (system_is_clear(system_errors, system)) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2EigensolverDeviceError::kNonfiniteEigenpair);
+      }
+      continue;
+    }
+    const std::int64_t destination_slot = bucket.system_index_offset + completed;
+    workspace.compact_systems[destination_slot] = system;
+    workspace.compact_source_slots[destination_slot] = static_cast<std::int32_t>(source);
+    workspace.factor_pointers[destination_slot] = workspace.factor_pointers[source_slot];
+    workspace.matrix_pointers[destination_slot] = workspace.matrix_pointers[source_slot];
+    ++completed;
+  }
+  activity.completed_count = completed;
 }
 
 __global__ void mark_backtransform_submission_kernel(std::int64_t bucket_index,
@@ -1699,6 +1829,20 @@ Gfn2EigensolverLaunchResult end_body_capture(cudaStream_t stream, cudaGraph_t ex
   return ended == expected ? launch_success() : cuda_failure(cudaErrorStreamCaptureInvalidated);
 }
 
+Gfn2EigensolverLaunchResult enqueue_capacity_eigensolver_body(
+    cudaStream_t capture_stream, std::uint32_t capacity, const Gfn2EigensolverDeviceBatch& batch,
+    const Gfn2EigensolverBucket& bucket, std::int64_t bucket_index,
+    const Gfn2EigensolverOverlapCache& cache, const double* hamiltonians, cusolverDnHandle_t solver,
+    cusolverDnParams_t parameters, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, bool deterministic_debug) noexcept;
+
+Gfn2EigensolverLaunchResult enqueue_capacity_backtransform_body(
+    cudaStream_t capture_stream, std::uint32_t capacity, const Gfn2EigensolverDeviceBatch& batch,
+    const Gfn2EigensolverBucket& bucket, std::int64_t bucket_index, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, const Gfn2EigensolverDeviceResults& results,
+    std::uint32_t* system_errors, std::uint32_t* device_error, bool deterministic_debug) noexcept;
+
 Gfn2EigensolverLaunchResult capture_eigensolver_capacity_body(
     cudaGraph_t body, cudaStream_t capture_stream, std::uint32_t capacity,
     const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket& bucket,
@@ -1713,12 +1857,32 @@ Gfn2EigensolverLaunchResult capture_eigensolver_capacity_body(
   if (!result.success()) {
     return result;
   }
+  result = enqueue_capacity_eigensolver_body(
+      capture_stream, capacity, batch, bucket, bucket_index, cache, hamiltonians, solver,
+      parameters, blas, workspace, system_errors, device_error, deterministic_debug);
+  if (!result.success()) {
+    finish_or_abort_capture(capture_stream);
+    return result;
+  }
+  return end_body_capture(capture_stream, body);
+}
+
+/* Shared enqueue body: launches the provider kernels for an exact capacity into
+ * an active capture. Separate from begin/end so the production dispatch chain
+ * can interleave its dispatcher kernels with the provider body in one graph. */
+Gfn2EigensolverLaunchResult enqueue_capacity_eigensolver_body(
+    cudaStream_t capture_stream, std::uint32_t capacity, const Gfn2EigensolverDeviceBatch& batch,
+    const Gfn2EigensolverBucket& bucket, std::int64_t bucket_index,
+    const Gfn2EigensolverOverlapCache& cache, const double* hamiltonians, cusolverDnHandle_t solver,
+    cusolverDnParams_t parameters, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, bool deterministic_debug) noexcept {
   const Gfn2EigensolverBucket submission{bucket.orbital_count, static_cast<std::int32_t>(capacity),
                                          bucket.system_index_offset, bucket.matrix_scratch_offset,
                                          bucket.orbital_scratch_offset};
   gather_compacted_solve_bucket_kernel<<<capacity, kThreadsPerSystem, 0, capture_stream>>>(
       batch, bucket, bucket_index, capacity, cache, hamiltonians, workspace);
-  result = check_kernel_launch();
+  Gfn2EigensolverLaunchResult result = check_kernel_launch();
   if (result.success()) {
     result = configure_blas(blas, capture_stream, workspace, deterministic_debug);
   }
@@ -1751,11 +1915,7 @@ Gfn2EigensolverLaunchResult capture_eigensolver_capacity_body(
                                   workspace.eigenvalue_scratch + bucket.orbital_scratch_offset,
                                   workspace, workspace.info_a + bucket.system_index_offset);
   }
-  if (!result.success()) {
-    finish_or_abort_capture(capture_stream);
-    return result;
-  }
-  return end_body_capture(capture_stream, body);
+  return result;
 }
 
 Gfn2EigensolverLaunchResult capture_backtransform_capacity_body(
@@ -1771,12 +1931,28 @@ Gfn2EigensolverLaunchResult capture_backtransform_capacity_body(
   if (!result.success()) {
     return result;
   }
+  result = enqueue_capacity_backtransform_body(capture_stream, capacity, batch, bucket,
+                                               bucket_index, blas, workspace, results,
+                                               system_errors, device_error, deterministic_debug);
+  if (!result.success()) {
+    finish_or_abort_capture(capture_stream);
+    return result;
+  }
+  return end_body_capture(capture_stream, body);
+}
+
+/* Shared enqueue body for the exact-capacity backtransform provider work. */
+Gfn2EigensolverLaunchResult enqueue_capacity_backtransform_body(
+    cudaStream_t capture_stream, std::uint32_t capacity, const Gfn2EigensolverDeviceBatch& batch,
+    const Gfn2EigensolverBucket& bucket, std::int64_t bucket_index, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, const Gfn2EigensolverDeviceResults& results,
+    std::uint32_t* system_errors, std::uint32_t* device_error, bool deterministic_debug) noexcept {
   const Gfn2EigensolverBucket submission{bucket.orbital_count, static_cast<std::int32_t>(capacity),
                                          bucket.system_index_offset, bucket.matrix_scratch_offset,
                                          bucket.orbital_scratch_offset};
   mark_backtransform_submission_kernel<<<1, 1, 0, capture_stream>>>(bucket_index, capacity,
                                                                     workspace);
-  result = check_kernel_launch();
+  Gfn2EigensolverLaunchResult result = check_kernel_launch();
   if (result.success()) {
     result = configure_blas(blas, capture_stream, workspace, deterministic_debug);
   }
@@ -1790,11 +1966,7 @@ Gfn2EigensolverLaunchResult capture_backtransform_capacity_body(
         batch, bucket, capacity, workspace, results, system_errors, device_error);
     result = check_kernel_launch();
   }
-  if (!result.success()) {
-    finish_or_abort_capture(capture_stream);
-    return result;
-  }
-  return end_body_capture(capture_stream, body);
+  return result;
 }
 
 #endif  // CUDART_VERSION >= 12080
@@ -1815,6 +1987,142 @@ struct Gfn2EigensolverCompactedSolveGraph::Impl {
     }
   }
 };
+
+Gfn2EigensolverLaunchResult capture_gfn2_eigensolver_capacity_cuda(
+    cudaGraph_t body, cudaStream_t capture_stream, std::uint32_t capacity,
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket& bucket,
+    std::int64_t bucket_index, const Gfn2EigensolverOverlapCache& cache, const double* hamiltonians,
+    cusolverDnHandle_t solver, cusolverDnParams_t parameters, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, bool deterministic_debug) noexcept {
+#if CUDART_VERSION >= 12080
+  if (body == nullptr || capture_stream == nullptr || capacity == 0u ||
+      capacity > static_cast<std::uint32_t>(bucket.system_count) || solver == nullptr ||
+      parameters == nullptr || blas == nullptr) {
+    return invalid_argument();
+  }
+  return capture_eigensolver_capacity_body(
+      body, capture_stream, capacity, batch, bucket, bucket_index, cache, hamiltonians, solver,
+      parameters, blas, workspace, system_errors, device_error, deterministic_debug);
+#else
+  (void)body;
+  (void)capture_stream;
+  (void)capacity;
+  (void)batch;
+  (void)bucket;
+  (void)bucket_index;
+  (void)cache;
+  (void)hamiltonians;
+  (void)solver;
+  (void)parameters;
+  (void)blas;
+  (void)workspace;
+  (void)system_errors;
+  (void)device_error;
+  (void)deterministic_debug;
+  return cuda_failure(cudaErrorNotSupported);
+#endif
+}
+
+Gfn2EigensolverLaunchResult capture_gfn2_backtransform_capacity_cuda(
+    cudaGraph_t body, cudaStream_t capture_stream, std::uint32_t capacity,
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket& bucket,
+    std::int64_t bucket_index, cublasHandle_t blas, const Gfn2EigensolverDeviceWorkspace& workspace,
+    const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
+    std::uint32_t* device_error, bool deterministic_debug) noexcept {
+#if CUDART_VERSION >= 12080
+  if (body == nullptr || capture_stream == nullptr || capacity == 0u ||
+      capacity > static_cast<std::uint32_t>(bucket.system_count) || blas == nullptr) {
+    return invalid_argument();
+  }
+  return capture_backtransform_capacity_body(body, capture_stream, capacity, batch, bucket,
+                                             bucket_index, blas, workspace, results, system_errors,
+                                             device_error, deterministic_debug);
+#else
+  (void)body;
+  (void)capture_stream;
+  (void)capacity;
+  (void)batch;
+  (void)bucket;
+  (void)bucket_index;
+  (void)blas;
+  (void)workspace;
+  (void)results;
+  (void)system_errors;
+  (void)device_error;
+  (void)deterministic_debug;
+  return cuda_failure(cudaErrorNotSupported);
+#endif
+}
+
+Gfn2EigensolverLaunchResult enqueue_gfn2_eigensolver_capacity_cuda(
+    cudaStream_t capture_stream, std::uint32_t capacity, const Gfn2EigensolverDeviceBatch& batch,
+    const Gfn2EigensolverBucket& bucket, std::int64_t bucket_index,
+    const Gfn2EigensolverOverlapCache& cache, const double* hamiltonians, cusolverDnHandle_t solver,
+    cusolverDnParams_t parameters, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, bool deterministic_debug) noexcept {
+#if CUDART_VERSION >= 12080
+  if (capture_stream == nullptr || capacity > static_cast<std::uint32_t>(bucket.system_count) ||
+      solver == nullptr || parameters == nullptr || blas == nullptr) {
+    return invalid_argument();
+  }
+  if (capacity == 0u) {
+    return launch_success();
+  }
+  return enqueue_capacity_eigensolver_body(capture_stream, capacity, batch, bucket, bucket_index,
+                                           cache, hamiltonians, solver, parameters, blas, workspace,
+                                           system_errors, device_error, deterministic_debug);
+#else
+  (void)capture_stream;
+  (void)capacity;
+  (void)batch;
+  (void)bucket;
+  (void)bucket_index;
+  (void)cache;
+  (void)hamiltonians;
+  (void)solver;
+  (void)parameters;
+  (void)blas;
+  (void)workspace;
+  (void)system_errors;
+  (void)device_error;
+  (void)deterministic_debug;
+  return cuda_failure(cudaErrorNotSupported);
+#endif
+}
+
+Gfn2EigensolverLaunchResult enqueue_gfn2_backtransform_capacity_cuda(
+    cudaStream_t capture_stream, std::uint32_t capacity, const Gfn2EigensolverDeviceBatch& batch,
+    const Gfn2EigensolverBucket& bucket, std::int64_t bucket_index, cublasHandle_t blas,
+    const Gfn2EigensolverDeviceWorkspace& workspace, const Gfn2EigensolverDeviceResults& results,
+    std::uint32_t* system_errors, std::uint32_t* device_error, bool deterministic_debug) noexcept {
+#if CUDART_VERSION >= 12080
+  if (capture_stream == nullptr || capacity > static_cast<std::uint32_t>(bucket.system_count) ||
+      blas == nullptr) {
+    return invalid_argument();
+  }
+  if (capacity == 0u) {
+    return launch_success();
+  }
+  return enqueue_capacity_backtransform_body(capture_stream, capacity, batch, bucket, bucket_index,
+                                             blas, workspace, results, system_errors, device_error,
+                                             deterministic_debug);
+#else
+  (void)capture_stream;
+  (void)capacity;
+  (void)batch;
+  (void)bucket;
+  (void)bucket_index;
+  (void)blas;
+  (void)workspace;
+  (void)results;
+  (void)system_errors;
+  (void)device_error;
+  (void)deterministic_debug;
+  return cuda_failure(cudaErrorNotSupported);
+#endif
+}
 
 Gfn2EigensolverCompactedSolveGraph::Gfn2EigensolverCompactedSolveGraph() noexcept = default;
 Gfn2EigensolverCompactedSolveGraph::~Gfn2EigensolverCompactedSolveGraph() = default;
@@ -2217,6 +2525,133 @@ Gfn2EigensolverLaunchResult query_gfn2_spin_eigensolver_bucket_workspace_cuda(
                                                       device_eigenvalues, requirements);
 }
 
+Gfn2EigensolverLaunchResult compact_gfn2_solve_bucket_counts_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket& bucket,
+    std::int64_t bucket_index, const Gfn2EigensolverDeviceWorkspace& workspace,
+    const std::uint32_t* system_errors, cudaStream_t stream) noexcept {
+  if (!valid_bucket_slice(batch, bucket) || !valid_compaction_workspace(batch, 1, workspace) ||
+      bucket_index < 0 || workspace.bucket_activity_elements <= bucket_index ||
+      system_errors == nullptr || !is_aligned(system_errors, alignof(std::uint32_t))) {
+    return invalid_argument();
+  }
+#if CUDART_VERSION >= 12080
+  compact_solve_bucket_counts_kernel<<<1, 1, 0, stream>>>(batch, bucket, bucket_index, workspace,
+                                                          system_errors);
+  return check_kernel_launch();
+#else
+  (void)stream;
+  return cuda_failure(cudaErrorNotSupported);
+#endif
+}
+
+Gfn2EigensolverLaunchResult prepare_and_compact_gfn2_solve_buckets_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
+    std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
+    std::uint64_t geometry_generation, const double* hamiltonians,
+    const Gfn2EigensolverOptions& options, const Gfn2EigensolverDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  if (!valid_bucket_plan(batch, buckets, bucket_count) || !valid_options(options) ||
+      !valid_workspace(batch, workspace) ||
+      !valid_compaction_workspace(batch, bucket_count, workspace) || geometry_generation == 0u ||
+      !is_aligned(hamiltonians, alignof(double)) || system_errors == nullptr ||
+      device_error == nullptr || !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(device_error, alignof(std::uint32_t))) {
+    return invalid_argument();
+  }
+#if CUDART_VERSION >= 12080
+  for (std::int64_t bucket_index = 0; bucket_index < bucket_count; ++bucket_index) {
+    const Gfn2EigensolverBucket bucket = buckets[bucket_index];
+    prepare_solve_bucket_kernel<<<static_cast<unsigned int>(bucket.system_count), kThreadsPerSystem,
+                                  0, stream>>>(batch, bucket, cache, geometry_generation, nullptr,
+                                               hamiltonians, options.symmetry_tolerance, workspace,
+                                               system_errors, device_error);
+    Gfn2EigensolverLaunchResult result = check_kernel_launch();
+    if (!result.success()) {
+      return result;
+    }
+    compact_solve_bucket_counts_kernel<<<1, 1, 0, stream>>>(batch, bucket, bucket_index, workspace,
+                                                            system_errors);
+    result = check_kernel_launch();
+    if (!result.success()) {
+      return result;
+    }
+  }
+  return launch_success();
+#else
+  (void)stream;
+  return cuda_failure(cudaErrorNotSupported);
+#endif
+}
+
+Gfn2EigensolverLaunchResult prepare_and_compact_gfn2_solve_buckets_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket* buckets,
+    std::int64_t bucket_count, const Gfn2EigensolverOverlapCache& cache,
+    const Gfn2GeometryEpochDevice& geometry_epoch, const double* hamiltonians,
+    const Gfn2EigensolverOptions& options, const Gfn2EigensolverDeviceWorkspace& workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  if (geometry_epoch.value_elements != 1 || geometry_epoch.plan_token != batch.plan_token ||
+      geometry_epoch.value == nullptr ||
+      !is_aligned(geometry_epoch.value, alignof(std::uint64_t))) {
+    return invalid_argument();
+  }
+  if (!valid_bucket_plan(batch, buckets, bucket_count) || !valid_options(options) ||
+      !valid_workspace(batch, workspace) ||
+      !valid_compaction_workspace(batch, bucket_count, workspace) ||
+      !is_aligned(hamiltonians, alignof(double)) || system_errors == nullptr ||
+      device_error == nullptr || !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(device_error, alignof(std::uint32_t))) {
+    return invalid_argument();
+  }
+#if CUDART_VERSION >= 12080
+  for (std::int64_t bucket_index = 0; bucket_index < bucket_count; ++bucket_index) {
+    const Gfn2EigensolverBucket bucket = buckets[bucket_index];
+    prepare_solve_bucket_kernel<<<static_cast<unsigned int>(bucket.system_count), kThreadsPerSystem,
+                                  0, stream>>>(batch, bucket, cache, 0u, geometry_epoch.value,
+                                               hamiltonians, options.symmetry_tolerance, workspace,
+                                               system_errors, device_error);
+    Gfn2EigensolverLaunchResult result = check_kernel_launch();
+    if (!result.success()) {
+      return result;
+    }
+    compact_solve_bucket_counts_kernel<<<1, 1, 0, stream>>>(batch, bucket, bucket_index, workspace,
+                                                            system_errors);
+    result = check_kernel_launch();
+    if (!result.success()) {
+      return result;
+    }
+  }
+  return launch_success();
+#else
+  (void)stream;
+  return cuda_failure(cudaErrorNotSupported);
+#endif
+}
+
+Gfn2EigensolverLaunchResult compact_gfn2_successful_eigenpair_counts_cuda(
+    const Gfn2EigensolverBucket& bucket, std::int64_t bucket_index,
+    const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  if (bucket.system_count <= 0 || bucket_index < 0 || workspace.compact_system_elements <= 0 ||
+      workspace.compact_source_slot_elements <= 0 ||
+      workspace.bucket_activity_elements <= bucket_index ||
+      !is_aligned(workspace.compact_systems, alignof(std::int32_t)) ||
+      !is_aligned(workspace.compact_source_slots, alignof(std::int32_t)) ||
+      !is_aligned(workspace.bucket_activity, alignof(Gfn2EigensolverBucketActivity)) ||
+      system_errors == nullptr || device_error == nullptr ||
+      !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(device_error, alignof(std::uint32_t))) {
+    return invalid_argument();
+  }
+#if CUDART_VERSION >= 12080
+  compact_successful_eigenpair_counts_kernel<<<1, 1, 0, stream>>>(bucket, bucket_index, workspace,
+                                                                  system_errors, device_error);
+  return check_kernel_launch();
+#else
+  (void)stream;
+  return cuda_failure(cudaErrorNotSupported);
+#endif
+}
+
 cudaError_t reset_gfn2_eigensolver_device_errors_cuda(std::int64_t batch_size,
                                                       std::uint32_t* system_errors,
                                                       std::uint32_t* device_error,
@@ -2237,6 +2672,16 @@ cudaError_t reset_gfn2_eigensolver_device_errors_cuda(std::int64_t batch_size,
   cudaError_t status = cudaMemsetAsync(system_errors, 0, bytes, stream);
   return status == cudaSuccess ? cudaMemsetAsync(device_error, 0, sizeof(*device_error), stream)
                                : status;
+}
+
+Gfn2EigensolverLaunchResult prepare_gfn2_eigensolver_launch_sequence_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverDeviceWorkspace& workspace,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  if (!valid_workspace(batch, workspace) || device_error == nullptr ||
+      !is_aligned(device_error, alignof(std::uint32_t))) {
+    return invalid_argument();
+  }
+  return prepare_launch_sequence(batch, workspace, device_error, stream);
 }
 
 Gfn2EigensolverLaunchResult factor_overlap_impl(

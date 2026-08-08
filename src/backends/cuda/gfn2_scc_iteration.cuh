@@ -44,6 +44,19 @@ namespace gpuxtb::detail::cuda {
  * borrowing authority for every plan leaf; leaf identity is proven against
  * these projections in one place instead of re-deriving the master topology. */
 inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 3u;
+
+/*
+ * Which numerical-body stages one launch runs. The production device-tail loop
+ * builds its exact-capacity eigensolver dispatch between the pre-eigensolver
+ * segment (potentials through Hamiltonian) and the post-eigensolver segment
+ * (occupations through publication), so each segment must be capturable on its
+ * own without re-deriving activity or re-running the provider.
+ */
+enum class Gfn2SccIterationBodySegment : std::uint32_t {
+  kFull = 0u,
+  kPreEigensolver = 1u,
+  kPostEigensolver = 2u,
+};
 inline constexpr std::int64_t kGfn2SccIterationBaseStageReportCount = 21;
 inline constexpr std::int64_t kGfn2SccIterationMaximumStageReportCount = 26;
 inline constexpr std::int64_t kGfn2SccIterationStageReportCapacity = 40;
@@ -513,10 +526,48 @@ static_assert(std::is_standard_layout_v<Gfn2SccIterationBinding>);
     const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream = nullptr) noexcept;
 
+/*
+ * Pre-eigensolver and post-eigensolver numerical-body segments for the
+ * production exact-capacity dispatch chain. The pre segment runs the scalar
+ * bridge, Hamiltonian assembly, and every SCC potential stage but stops before
+ * the eigensolver stage; the post segment starts at occupations and consumes
+ * the staged eigenpairs already published by the provider chain. Each segment
+ * is capture-safe under the same provider capture-mode policy as the full
+ * body, derives no activity, and allocates/transfers/polls nothing.
+ */
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_scc_pre_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
+
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_scc_pre_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream = nullptr) noexcept;
+
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_scc_post_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
+
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_scc_post_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream = nullptr) noexcept;
+
 [[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_numerical_body_cuda(
     const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
 
 [[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_numerical_body_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream = nullptr) noexcept;
+
+/* Backward-compatible restricted aliases for the segment launchers. */
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_pre_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
+
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_pre_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream = nullptr) noexcept;
+
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_post_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream = nullptr) noexcept;
+
+[[nodiscard]] Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_post_eigensolver_cuda(
     const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream = nullptr) noexcept;
 
