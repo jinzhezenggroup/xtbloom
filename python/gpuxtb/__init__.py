@@ -34,6 +34,7 @@ from .interface import (
     numbers_to_symbols,
     symbols_to_numbers,
 )
+from .torch import gpuxtb_torch
 
 __all__ = [
     "ArrayBatch",
@@ -53,6 +54,7 @@ __all__ = [
     "Structure",
     "__version__",
     "compute_arrays",
+    "gpuxtb_torch",
     "numbers_to_symbols",
     "symbols_to_numbers",
 ]

@@ -200,6 +200,44 @@ themselves. On the archived RTX 5090 small-molecule workload it passed the
 `benchmarks/evidence/issue-214/2026-08-07-rtx5090/` for the raw profiler and
 latency evidence.
 
+## PyTorch autograd op (positions gradient only)
+
+`gpuxtb.gpuxtb_torch` runs the packed DLPack inference on PyTorch tensors (host
+CPU or CUDA device) and returns `(energies, forces)` as float64 tensors. It is
+the only autograd entry point in the Python API, and its gradient contract is
+deliberately narrow: it supports exactly `dE/dR = -F` with respect to
+`positions`, which the native library evaluates analytically.
+
+```python
+import torch
+from gpuxtb import gpuxtb_torch
+
+positions = torch.tensor(system.positions, dtype=torch.float64, requires_grad=True)
+energies, forces = gpuxtb_torch(
+    positions,
+    atomic_numbers,   # (natoms,) int32 torch or numpy
+    atom_offsets,     # (nsystems + 1,) int64
+    molecular_charges,  # (nsystems,) float64
+    unpaired_electrons, # (nsystems,) int32
+    backend="cuda",
+)
+loss = energies.sum()
+loss.backward()      # positions.grad == -forces
+```
+
+- Backpropagation through `forces` (the force Hessian `dF/dR`) raises
+  `GPUxtbNotSupportedError`.
+- Higher-order differentiation requests such as `create_graph=True` or
+  `torch.autograd.functional.hessian` raise `GPUxtbNotSupportedError`; gpuxtb
+  never substitutes a partial or zero Hessian for the unavailable `dF/dR`.
+- Requesting autograd on any other input — `atomic_numbers`, `atom_offsets`,
+  `molecular_charges`, `unpaired_electrons`, `spin_channels` — raises
+  `GPUxtbNotSupportedError` eagerly at forward time.
+- PyTorch is imported lazily only when the op is called; `import gpuxtb` never
+  imports torch.
+- Non-contiguous or strided inputs are packed into a compact copy by the op;
+  scalar types must still match the C ABI exactly.
+
 ## Open-shell calculations
 
 `multiplicity` and `uhf` describe the same state, with

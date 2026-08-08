@@ -168,6 +168,22 @@ archives, installs, or wheels, and does not alter the licensing of build
 outputs (the project is itself `GPL-3.0-or-later`, so building with ccache
 introduces no incompatibility).
 
+## PyTorch CI test dependency
+
+Repository: <https://github.com/pytorch/pytorch>
+
+License: `BSD-3-Clause` (retained by the separately installed distribution).
+
+The required Python CI job installs PyTorch 2.13.0 from PyPI solely to execute
+the public `gpuxtb_torch` CPU/autograd tests. The canonical resolution and
+artifact hashes, including PyTorch's separately installed transitive
+dependencies, are recorded in `uv.lock`. PyTorch is imported lazily by the
+optional integration and is not a gpuxtb runtime dependency, project extra,
+source-distribution payload, native install artifact, or bundled wheel file.
+The locked Linux resolution also installs NVIDIA CUDA provider packages under
+their vendor terms; those test-environment packages are likewise not
+redistributed in gpuxtb artifacts.
+
 ## OpenBLAS runtime dependency
 
 Repository: <https://github.com/MacPython/openblas-libs>

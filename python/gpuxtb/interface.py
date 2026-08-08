@@ -1688,8 +1688,10 @@ class ArrayBatch:
     Set ``copy=True`` to ask the producer for a contiguous copy.  CUDA-managed
     memory, ROCm, and other device kinds are rejected with a precise error.
     Lazy/tracer objects (``jit``/``grad``/``vmap`` inputs, ``torch.compile``
-    graphs) are rejected; framework autograd integration is not part of this
-    API.
+    graphs) are rejected with a precise error.  :mod:`gpuxtb.torch` is the
+    only autograd entry point: it consumes eager tensors through this same
+    DLPack path and deliberately supports only the positions gradient
+    (``dE/dR = -F``).
 
     The existing :class:`Structure`/:class:`Calculator` host-numpy path is
     unchanged and remains the compatibility default.

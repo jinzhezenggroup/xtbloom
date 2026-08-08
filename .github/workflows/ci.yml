@@ -123,7 +123,9 @@ jobs:
           GPUXTB_ENABLE_CUDA: "OFF"
           GPUXTB_C_COMPILER_LAUNCHER: ccache
           GPUXTB_CXX_COMPILER_LAUNCHER: ccache
-        run: uv sync --locked --no-editable --extra test
+        run: >-
+          uv sync --locked --no-editable --extra test
+          --group torch-testing
       - name: Show ccache statistics
         run: ccache -s
       - name: Run Python tests with coverage
