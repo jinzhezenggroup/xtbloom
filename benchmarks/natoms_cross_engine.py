@@ -32,11 +32,10 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import ctypes
 import csv
+import ctypes
 import hashlib
 import importlib
-import io
 import json
 import math
 import os
@@ -49,10 +48,10 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Sequence
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CONFORMANCE_TOOLS = REPOSITORY_ROOT / "tools" / "conformance"
@@ -83,7 +82,14 @@ except ImportError:
 SCHEMA_VERSION = 1
 DEFAULT_NATOMS = (5, 32, 122, 362, 602, 962)
 DEFAULT_BATCH_SIZES = (1, 128)
-SUPPORTED_ENGINES = ("gpuxtb-cpu", "gpuxtb-cuda", "xtb", "tblite", "dxtb-cpu", "dxtb-cuda")
+SUPPORTED_ENGINES = (
+    "gpuxtb-cpu",
+    "gpuxtb-cuda",
+    "xtb",
+    "tblite",
+    "dxtb-cpu",
+    "dxtb-cuda",
+)
 DEFAULT_ENGINES = ("gpuxtb-cpu", "gpuxtb-cuda", "xtb", "tblite", "dxtb-cpu")
 CROSS_ENGINE_ENERGY_ATOL_HARTREE = 2.0e-3
 PERTURB_SIGMA_BOHR = 0.02
@@ -126,6 +132,7 @@ def sha256_file(path: Path | None) -> str | None:
 
 def git_state(path: Path) -> dict[str, Any]:
     """Return clean/dirty and HEAD revision of a git checkout."""
+
     def run(command: Sequence[str]) -> str | None:
         try:
             completed = subprocess.run(
@@ -194,7 +201,9 @@ def timing_summary(samples_ms: Sequence[float], batch_size: int) -> dict[str, An
         "median_ms": statistics.median(samples_ms),
         "mean_ms": statistics.fmean(samples_ms),
         "p95_ms": percentile(samples_ms, 0.95),
-        "systems_per_second_at_median": 1000.0 * batch_size / statistics.median(samples_ms),
+        "systems_per_second_at_median": 1000.0
+        * batch_size
+        / statistics.median(samples_ms),
     }
 
 
@@ -233,10 +242,7 @@ def _perturbed_positions(
     sigma_bohr: float,
 ) -> tuple[float, ...]:
     """Apply an independent Gaussian displacement to every coordinate."""
-    return tuple(
-        float(value) + rng.gauss(0.0, sigma_bohr)
-        for value in base
-    )
+    return tuple(float(value) + rng.gauss(0.0, sigma_bohr) for value in base)
 
 
 def build_batch(
@@ -519,7 +525,7 @@ class ReferenceRunner:
         if self._dxtb_adapter is not None:
             # dxtb holds one torch tensor on the selected device; write each
             # system's atom range into the persistent tensor in place.
-            import torch  # noqa: PLC0415 - dxtb dependency kept lazy
+            import torch
 
             flat = torch.tensor(
                 list(positions),
@@ -598,7 +604,10 @@ def measure_cell(
     energies = [raw_samples[-1]["energies_hartree"]]
     status_ok = all(
         sample.get("per_system_status") is None
-        or all(status == public_api.GPUXTB_STATUS_SUCCESS for status in sample["per_system_status"])
+        or all(
+            status == public_api.GPUXTB_STATUS_SUCCESS
+            for status in sample["per_system_status"]
+        )
         for sample in raw_samples
     )
     converged_ok = all(
@@ -613,10 +622,7 @@ def measure_cell(
     )
     finite_forces_ok = all(
         sample.get("forces_hartree_per_bohr") is None
-        or all(
-            math.isfinite(value)
-            for value in sample["forces_hartree_per_bohr"]
-        )
+        or all(math.isfinite(value) for value in sample["forces_hartree_per_bohr"])
         for sample in raw_samples
     )
     latencies = [sample["latency_ms"] for sample in raw_samples]
@@ -637,7 +643,9 @@ def measure_cell(
         "iteration_summary": {"min": iteration_min, "max": iteration_max},
         "correctness": {
             "status": (
-                "pass" if (status_ok and converged_ok and finite_ok and finite_forces_ok) else "fail"
+                "pass"
+                if (status_ok and converged_ok and finite_ok and finite_forces_ok)
+                else "fail"
             ),
             "finite_energies": finite_ok,
             "finite_forces": finite_forces_ok,
@@ -693,7 +701,9 @@ def run_cell(
         row = error_row(cell, f"molecule builder failed: {exc}")
         row.update(base)
         return row
-    storage = build_batch(molecule, cell.batch_size, seed=cell.natoms * 1000 + cell.batch_size)
+    storage = build_batch(
+        molecule, cell.batch_size, seed=cell.natoms * 1000 + cell.batch_size
+    )
     runner: Any = None
     try:
         if cell.engine in ("gpuxtb-cpu", "gpuxtb-cuda"):
@@ -706,16 +716,39 @@ def run_cell(
                 row = unavailable_row(cell, "no --xtb-library supplied")
                 row.update(base)
                 return row
-            runner = ReferenceRunner(cell.engine, xtb_library, storage, cell.cpu_threads, cell.device_id, dxtb_source)
+            runner = ReferenceRunner(
+                cell.engine,
+                xtb_library,
+                storage,
+                cell.cpu_threads,
+                cell.device_id,
+                dxtb_source,
+            )
         elif cell.engine == "tblite":
             if tblite_library is None:
                 row = unavailable_row(cell, "no --tblite-library supplied")
                 row.update(base)
                 return row
-            runner = ReferenceRunner(cell.engine, tblite_library, storage, cell.cpu_threads, cell.device_id, dxtb_source)
+            runner = ReferenceRunner(
+                cell.engine,
+                tblite_library,
+                storage,
+                cell.cpu_threads,
+                cell.device_id,
+                dxtb_source,
+            )
         else:
-            runner = ReferenceRunner(cell.engine, library, storage, cell.cpu_threads, cell.device_id, dxtb_source)
-        fragment = measure_cell(runner, (warmups, repetitions), cell, energy_atol_hartree)
+            runner = ReferenceRunner(
+                cell.engine,
+                library,
+                storage,
+                cell.cpu_threads,
+                cell.device_id,
+                dxtb_source,
+            )
+        fragment = measure_cell(
+            runner, (warmups, repetitions), cell, energy_atol_hartree
+        )
         row = base_row(cell)
         row.update(fragment)
         row["availability"] = "available"
@@ -772,17 +805,33 @@ def run_trajectory(
             elif engine == "xtb":
                 if xtb_library is None:
                     row = dict(base)
-                    row.update({"availability": "unavailable", "reason": "no --xtb-library supplied"})
+                    row.update(
+                        {
+                            "availability": "unavailable",
+                            "reason": "no --xtb-library supplied",
+                        }
+                    )
                     return row
-                runner = ReferenceRunner(engine, xtb_library, storage, cpu_threads, device_id, dxtb_source)
+                runner = ReferenceRunner(
+                    engine, xtb_library, storage, cpu_threads, device_id, dxtb_source
+                )
             elif engine == "tblite":
                 if tblite_library is None:
                     row = dict(base)
-                    row.update({"availability": "unavailable", "reason": "no --tblite-library supplied"})
+                    row.update(
+                        {
+                            "availability": "unavailable",
+                            "reason": "no --tblite-library supplied",
+                        }
+                    )
                     return row
-                runner = ReferenceRunner(engine, tblite_library, storage, cpu_threads, device_id, dxtb_source)
+                runner = ReferenceRunner(
+                    engine, tblite_library, storage, cpu_threads, device_id, dxtb_source
+                )
             else:
-                runner = ReferenceRunner(engine, library, storage, cpu_threads, device_id, dxtb_source)
+                runner = ReferenceRunner(
+                    engine, library, storage, cpu_threads, device_id, dxtb_source
+                )
             is_gpuxtb = engine in ("gpuxtb-cpu", "gpuxtb-cuda")
             if is_gpuxtb:
                 # MD-style workflow: seed SCC once on frame zero, then continue
@@ -847,9 +896,13 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
             "platform": platform.platform(),
             "gpuxtb_library": str(args.library.resolve()),
             "gpuxtb_library_sha256": sha256_file(args.library),
-            "xtb_library": str(args.xtb_library.resolve()) if args.xtb_library else None,
+            "xtb_library": str(args.xtb_library.resolve())
+            if args.xtb_library
+            else None,
             "xtb_library_sha256": sha256_file(args.xtb_library),
-            "tblite_library": str(args.tblite_library.resolve()) if args.tblite_library else None,
+            "tblite_library": str(args.tblite_library.resolve())
+            if args.tblite_library
+            else None,
             "tblite_library_sha256": sha256_file(args.tblite_library),
             "dxtb_source": git_state(args.dxtb_source) if args.dxtb_source else None,
         },
@@ -954,9 +1007,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dxtb-source", type=Path)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-csv", type=Path, required=True)
-    parser.add_argument(
-        "--engines", type=parse_csv_values, default=DEFAULT_ENGINES
-    )
+    parser.add_argument("--engines", type=parse_csv_values, default=DEFAULT_ENGINES)
     parser.add_argument("--natoms", type=parse_csv_ints, default=DEFAULT_NATOMS)
     parser.add_argument(
         "--natoms-large-batch",
@@ -967,7 +1018,9 @@ def build_parser() -> argparse.ArgumentParser:
             "remain practical."
         ),
     )
-    parser.add_argument("--batch-sizes", type=parse_csv_ints, default=DEFAULT_BATCH_SIZES)
+    parser.add_argument(
+        "--batch-sizes", type=parse_csv_ints, default=DEFAULT_BATCH_SIZES
+    )
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--trajectory", action="store_true")
@@ -982,7 +1035,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--trajectory-frames", type=int, default=20)
-    parser.add_argument("--energy-atol", type=float, default=CROSS_ENGINE_ENERGY_ATOL_HARTREE)
+    parser.add_argument(
+        "--energy-atol", type=float, default=CROSS_ENGINE_ENERGY_ATOL_HARTREE
+    )
     parser.add_argument("--cpu-threads", type=int, default=1)
     parser.add_argument("--dxtb-cpu-threads", type=int, default=1)
     parser.add_argument("--device-id", type=int, default=0)
@@ -1005,7 +1060,7 @@ def validate_arguments(args: argparse.Namespace) -> None:
     for natoms in args.trajectory_natoms:
         try:
             make_alkane(natoms)
-        except Exception as exc:  # noqa: BLE001 - input validation
+        except Exception as exc:
             raise BenchmarkError(
                 f"unsupported trajectory natoms {natoms}: {exc}"
             ) from exc
@@ -1014,7 +1069,7 @@ def validate_arguments(args: argparse.Namespace) -> None:
     for natoms in args.natoms:
         try:
             make_alkane(natoms)
-        except Exception as exc:  # noqa: BLE001 - input validation
+        except Exception as exc:
             raise BenchmarkError(f"unsupported natoms {natoms}: {exc}") from exc
 
 
@@ -1032,14 +1087,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             Cell(engine, natoms, batch_size, args.cpu_threads, args.device_id)
             for engine in args.engines
             for batch_size in args.batch_sizes
-            for natoms in (
-                args.natoms if batch_size == 1 else natoms_large_batch
-            )
+            for natoms in (args.natoms if batch_size == 1 else natoms_large_batch)
         ]
         total_cells = len(cells)
-        log(f"matrix: {total_cells} cells from engines={args.engines} "
+        log(
+            f"matrix: {total_cells} cells from engines={args.engines} "
             f"batch={args.batch_sizes} natoms={args.natoms} "
-            f"natoms_large_batch={natoms_large_batch}")
+            f"natoms_large_batch={natoms_large_batch}"
+        )
         for cell_index, cell in enumerate(cells, start=1):
             log_start = time.perf_counter()
             row = run_cell(

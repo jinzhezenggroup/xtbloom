@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import platform
 import sys
 from pathlib import Path
 from typing import Any
@@ -51,7 +50,9 @@ def _engine_color(engine: str) -> str:
     return colors.get(engine, "#555555")
 
 
-def load_rows(artifact_paths: list[Path]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def load_rows(
+    artifact_paths: list[Path],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Merge all artifact rows and the first complete metadata block."""
     rows: list[dict[str, Any]] = []
     metadata: dict[str, Any] = {}
@@ -74,7 +75,7 @@ def _is_eligible(row: dict[str, Any]) -> bool:
     if row.get("availability") != "available":
         return False
     median = _median_ms(row)
-    if median is None or median <= 0.0 or not (median == median):  # noqa: PLR2004
+    if median is None or median <= 0.0 or not (median == median):
         return False
     correctness = row.get("correctness")
     if correctness and correctness.get("status") != "pass":
@@ -93,7 +94,7 @@ def _annotate_hardware(axes: Any, metadata: dict[str, Any], commit: str) -> None
         lines.append(f"{cpu_model}")
         lines.append(f"CPU threads: {threads.get('cpu_threads', '?')}")
     if gpu:
-        lines.append(gpu.replace('\n', ' '))
+        lines.append(gpu.replace("\n", " "))
     lines.append("gpuxtb SCC 1e-10/1e-12; refs acc 1e-4")
     props = dict(
         boxstyle="round,pad=0.4",
@@ -162,9 +163,7 @@ def _scaling_panel(
     axes.set_xlabel("molecule size (atoms)")
     axes.set_ylabel("energy + force latency (ms)")
     if batch_size == 128:
-        axes.set_title(
-            f"batch size = {batch_size} (128 distinct systems per call)"
-        )
+        axes.set_title(f"batch size = {batch_size} (128 distinct systems per call)")
     else:
         axes.set_title(f"batch size = {batch_size}")
     axes.grid(True, which="both", ls=":", alpha=0.5)
@@ -216,7 +215,9 @@ def _trajectory_panel(
             )
     axes.set_xlabel("molecule size (atoms)")
     axes.set_ylabel("per-frame latency (ms)")
-    axes.set_title("MD-style trajectory (nearly identical frames), gpuxtb = WARM SCC continuation")
+    axes.set_title(
+        "MD-style trajectory (nearly identical frames), gpuxtb = WARM SCC continuation"
+    )
     axes.grid(True, which="both", ls=":", alpha=0.5)
     axes.set_xscale("log")
     axes.set_yscale("log")
@@ -256,9 +257,10 @@ def main(argv: list[str] | None = None) -> int:
         without_dot_git = metadata.get("commit", {}) or {}
         commit = without_dot_git.get("head") or "unknown"
     try:
-        import matplotlib  # noqa: PLC0415 - optional plotting dependency
+        import matplotlib
+
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt  # noqa: PLC0415
+        import matplotlib.pyplot as plt
     except ImportError as exc:  # pragma: no cover - environment dependent
         print(f"ERROR: matplotlib is required for plotting: {exc}", file=sys.stderr)
         return 2

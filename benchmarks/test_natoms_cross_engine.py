@@ -7,8 +7,6 @@ import math
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
 from benchmarks import natoms_cross_engine as nce
 from benchmarks import plot_natoms_cross_engine as plotters
@@ -65,15 +63,13 @@ class NatomsCrossEngineTest(unittest.TestCase):
             self.assertGreater(drift, 0.0)
 
     def test_regular_batch_size_one_keeps_ideal_geometry(self) -> None:
-        """batch size one must reproduce the exact input molecule."""
+        """Batch size one must reproduce the exact input molecule."""
         from benchmarks.natoms_scaling import make_alkane
 
         molecule = make_alkane(14)
         storage = nce.build_batch(molecule, 1, seed=7)
         self.assertEqual(len(storage.slices), 1)
-        self.assertEqual(
-            tuple(storage.positions), tuple(molecule.positions_bohr)
-        )
+        self.assertEqual(tuple(storage.positions), tuple(molecule.positions_bohr))
 
     def test_eligibility_rejects_nonpass_and_nonfinite_rows(self) -> None:
         """Plot selection keeps only successful finite median rows."""
@@ -119,9 +115,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
             selected[engine] = [
                 (row["natoms"], plotters._median_ms(row)) for row in qualified
             ]
-        self.assertEqual(
-            selected["gpuxtb-cpu"], [(32, 0.5), (62, 0.5), (122, 0.5)]
-        )
+        self.assertEqual(selected["gpuxtb-cpu"], [(32, 0.5), (62, 0.5), (122, 0.5)])
         self.assertEqual(selected["xtb"], [(62, 0.5)])
 
     def test_plot_merges_artifacts_and_draws_without_gpu(self) -> None:
@@ -184,7 +178,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 encoding="utf-8",
             )
             output = Path(directory) / "figure.png"
-            import subprocess  # noqa: PLC0415
+            import subprocess
 
             completed = subprocess.run(
                 [
