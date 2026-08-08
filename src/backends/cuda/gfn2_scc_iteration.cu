@@ -3044,6 +3044,7 @@ template <bool EnableTestFault>
 static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
     const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice* geometry,
     cudaStream_t stream, bool derive_activity, bool launch_numerical_body,
+    Gfn2SccIterationBodySegment segment = Gfn2SccIterationBodySegment::kFull,
     const Gfn2SccIterationTestFault* test_fault = nullptr) noexcept {
   const auto& plan = binding.plan;
   const auto& input = binding.input;
@@ -3152,238 +3153,248 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
     return {};
   }
 
-  const Gfn2SccStageDeviceReport* stage_report = report(Gfn2SccStageId::kMixedGather);
-  if (!begin_stage(stage_report) ||
-      !check_cuda(stage_report->stage,
-                  reset_gfn2_scc_potential_device_errors_cuda(
-                      plan.topology.batch_size, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream)) ||
-      !check_cuda(stage_report->stage,
-                  reduce_gfn2_scc_spin_atomic_charges_cuda(
-                      plan.potential_batch, plan.wavefunction_layout, input.mixed_fields,
-                      workspace.activity, workspace.mixed_topology, workspace.physical_topology,
-                      workspace.potential_workspace, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream)) ||
-      !finish_stage(*stage_report)) {
-    return failure;
-  }
-
-  stage_report = report(Gfn2SccStageId::kSpinPotential);
-  if (!begin_stage(stage_report) ||
-      !check_cuda(stage_report->stage,
-                  reset_gfn2_spin_device_errors_cuda(
-                      plan.topology.batch_size, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream)) ||
-      !check_cuda(stage_report->stage,
-                  evaluate_gfn2_spin_polarization_cuda(
-                      plan.spin_batch, input.mixed_spin, workspace.activity, workspace.spin_output,
-                      workspace.spin_workspace, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream)) ||
-      !finish_stage(*stage_report)) {
-    return failure;
-  }
-
-  stage_report = report(Gfn2SccStageId::kES2Potential);
-  if (!begin_stage(stage_report) ||
-      !check_cuda(stage_report->stage,
-                  reset_gfn2_es2_scc_errors_cuda(plan.topology.batch_size,
-                                                 mutable_system_codes(*stage_report),
-                                                 mutable_device_error(*stage_report), stream)) ||
-      !check_cuda(
-          stage_report->stage,
-          evaluate_gfn2_es2_scc_potential_cuda(
-              plan.es2_batch, plan.es2_cache, plan.geometry_generation, workspace.activity,
-              workspace.physical_topology.shell_charges, workspace.components.es2_shell_potential,
-              workspace.es2_workspace, mutable_system_codes(*stage_report),
-              mutable_device_error(*stage_report), stream)) ||
-      !finish_stage(*stage_report)) {
-    return failure;
-  }
-
-  stage_report = report(Gfn2SccStageId::kES3Potential);
-  if (!begin_stage(stage_report) ||
-      !check_cuda(stage_report->stage,
-                  reset_gfn2_es3_scc_errors_cuda(plan.topology.batch_size,
-                                                 mutable_system_codes(*stage_report),
-                                                 mutable_device_error(*stage_report), stream)) ||
-      !check_cuda(stage_report->stage,
-                  evaluate_gfn2_es3_scc_potential_cuda(
-                      plan.es3_batch, workspace.activity, workspace.physical_topology.shell_charges,
-                      workspace.components.es3_shell_potential, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream)) ||
-      !finish_stage(*stage_report)) {
-    return failure;
-  }
-
-  stage_report = report(Gfn2SccStageId::kAES2Potential);
-  if (!begin_stage(stage_report) ||
-      !check_cuda(stage_report->stage,
-                  reset_gfn2_aes2_device_errors_cuda(
-                      plan.topology.batch_size, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream)) ||
-      !check_cuda(
-          stage_report->stage,
-          evaluate_gfn2_aes2_scc_potential_cuda(
-              plan.aes2_batch, plan.aes2_cache, plan.geometry_generation, workspace.activity,
-              workspace.physical_topology.atomic_charges,
-              workspace.physical_topology.atomic_dipoles,
-              workspace.physical_topology.atomic_quadrupoles,
-              workspace.components.aes2_atomic_potential,
-              workspace.components.aes2_dipole_potential,
-              workspace.components.aes2_quadrupole_potential, workspace.aes2_workspace,
-              mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream)) ||
-      !finish_stage(*stage_report)) {
-    return failure;
-  }
-
-  if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
-    stage_report = report(Gfn2SccStageId::kD4Potential);
+  const Gfn2SccStageDeviceReport* stage_report = nullptr;
+  if (segment != Gfn2SccIterationBodySegment::kPostEigensolver) {
+    stage_report = report(Gfn2SccStageId::kMixedGather);
     if (!begin_stage(stage_report) ||
         !check_cuda(stage_report->stage,
-                    reset_gfn2_d4_device_errors_cuda(
-                        plan.topology.batch_size, workspace.d4_workspace.system_errors,
-                        mutable_device_error(*stage_report), stream)) ||
-        !check_cuda(stage_report->stage,
-                    evaluate_gfn2_d4_scc_potential_cuda(
-                        plan.d4_batch, plan.d4_parameters, plan.d4_cache, plan.geometry_generation,
-                        workspace.physical_topology.atomic_charges, workspace.activity,
-                        workspace.components.d4_atomic_potential, workspace.d4_workspace,
-                        mutable_device_error(*stage_report), stream)) ||
-        !finish_stage(*stage_report)) {
-      return failure;
-    }
-  }
-
-  if (component_enabled(plan, Gfn2SccPotentialComponent::kPeriodicEmbedding)) {
-    stage_report = report(Gfn2SccStageId::kPeriodicPotential);
-    if (!begin_stage(stage_report) ||
-        !check_cuda(stage_report->stage,
-                    reset_gfn2_periodic_embedding_scc_device_errors_cuda(
+                    reset_gfn2_scc_potential_device_errors_cuda(
                         plan.topology.batch_size, mutable_system_codes(*stage_report),
                         mutable_device_error(*stage_report), stream)) ||
         !check_cuda(stage_report->stage,
-                    evaluate_gfn2_periodic_embedding_scc_potential_cuda(
-                        plan.periodic_batch, plan.geometry_generation,
-                        workspace.physical_topology.atomic_charges, workspace.activity,
-                        workspace.components.periodic_atomic_potential,
-                        workspace.periodic_workspace, mutable_system_codes(*stage_report),
+                    reduce_gfn2_scc_spin_atomic_charges_cuda(
+                        plan.potential_batch, plan.wavefunction_layout, input.mixed_fields,
+                        workspace.activity, workspace.mixed_topology, workspace.physical_topology,
+                        workspace.potential_workspace, mutable_system_codes(*stage_report),
                         mutable_device_error(*stage_report), stream)) ||
         !finish_stage(*stage_report)) {
       return failure;
     }
+
+    stage_report = report(Gfn2SccStageId::kSpinPotential);
+    if (!begin_stage(stage_report) ||
+        !check_cuda(stage_report->stage,
+                    reset_gfn2_spin_device_errors_cuda(
+                        plan.topology.batch_size, mutable_system_codes(*stage_report),
+                        mutable_device_error(*stage_report), stream)) ||
+        !check_cuda(stage_report->stage, evaluate_gfn2_spin_polarization_cuda(
+                                             plan.spin_batch, input.mixed_spin, workspace.activity,
+                                             workspace.spin_output, workspace.spin_workspace,
+                                             mutable_system_codes(*stage_report),
+                                             mutable_device_error(*stage_report), stream)) ||
+        !finish_stage(*stage_report)) {
+      return failure;
+    }
+
+    stage_report = report(Gfn2SccStageId::kES2Potential);
+    if (!begin_stage(stage_report) ||
+        !check_cuda(stage_report->stage,
+                    reset_gfn2_es2_scc_errors_cuda(plan.topology.batch_size,
+                                                   mutable_system_codes(*stage_report),
+                                                   mutable_device_error(*stage_report), stream)) ||
+        !check_cuda(
+            stage_report->stage,
+            evaluate_gfn2_es2_scc_potential_cuda(
+                plan.es2_batch, plan.es2_cache, plan.geometry_generation, workspace.activity,
+                workspace.physical_topology.shell_charges, workspace.components.es2_shell_potential,
+                workspace.es2_workspace, mutable_system_codes(*stage_report),
+                mutable_device_error(*stage_report), stream)) ||
+        !finish_stage(*stage_report)) {
+      return failure;
+    }
+
+    stage_report = report(Gfn2SccStageId::kES3Potential);
+    if (!begin_stage(stage_report) ||
+        !check_cuda(stage_report->stage,
+                    reset_gfn2_es3_scc_errors_cuda(plan.topology.batch_size,
+                                                   mutable_system_codes(*stage_report),
+                                                   mutable_device_error(*stage_report), stream)) ||
+        !check_cuda(
+            stage_report->stage,
+            evaluate_gfn2_es3_scc_potential_cuda(
+                plan.es3_batch, workspace.activity, workspace.physical_topology.shell_charges,
+                workspace.components.es3_shell_potential, mutable_system_codes(*stage_report),
+                mutable_device_error(*stage_report), stream)) ||
+        !finish_stage(*stage_report)) {
+      return failure;
+    }
+
+    stage_report = report(Gfn2SccStageId::kAES2Potential);
+    if (!begin_stage(stage_report) ||
+        !check_cuda(stage_report->stage,
+                    reset_gfn2_aes2_device_errors_cuda(
+                        plan.topology.batch_size, mutable_system_codes(*stage_report),
+                        mutable_device_error(*stage_report), stream)) ||
+        !check_cuda(stage_report->stage,
+                    evaluate_gfn2_aes2_scc_potential_cuda(
+                        plan.aes2_batch, plan.aes2_cache, plan.geometry_generation,
+                        workspace.activity, workspace.physical_topology.atomic_charges,
+                        workspace.physical_topology.atomic_dipoles,
+                        workspace.physical_topology.atomic_quadrupoles,
+                        workspace.components.aes2_atomic_potential,
+                        workspace.components.aes2_dipole_potential,
+                        workspace.components.aes2_quadrupole_potential, workspace.aes2_workspace,
+                        mutable_system_codes(*stage_report), mutable_device_error(*stage_report),
+                        stream)) ||
+        !finish_stage(*stage_report)) {
+      return failure;
+    }
+
+    if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
+      stage_report = report(Gfn2SccStageId::kD4Potential);
+      if (!begin_stage(stage_report) ||
+          !check_cuda(stage_report->stage,
+                      reset_gfn2_d4_device_errors_cuda(
+                          plan.topology.batch_size, workspace.d4_workspace.system_errors,
+                          mutable_device_error(*stage_report), stream)) ||
+          !check_cuda(stage_report->stage,
+                      evaluate_gfn2_d4_scc_potential_cuda(
+                          plan.d4_batch, plan.d4_parameters, plan.d4_cache,
+                          plan.geometry_generation, workspace.physical_topology.atomic_charges,
+                          workspace.activity, workspace.components.d4_atomic_potential,
+                          workspace.d4_workspace, mutable_device_error(*stage_report), stream)) ||
+          !finish_stage(*stage_report)) {
+        return failure;
+      }
+    }
+
+    if (component_enabled(plan, Gfn2SccPotentialComponent::kPeriodicEmbedding)) {
+      stage_report = report(Gfn2SccStageId::kPeriodicPotential);
+      if (!begin_stage(stage_report) ||
+          !check_cuda(stage_report->stage,
+                      reset_gfn2_periodic_embedding_scc_device_errors_cuda(
+                          plan.topology.batch_size, mutable_system_codes(*stage_report),
+                          mutable_device_error(*stage_report), stream)) ||
+          !check_cuda(stage_report->stage,
+                      evaluate_gfn2_periodic_embedding_scc_potential_cuda(
+                          plan.periodic_batch, plan.geometry_generation,
+                          workspace.physical_topology.atomic_charges, workspace.activity,
+                          workspace.components.periodic_atomic_potential,
+                          workspace.periodic_workspace, mutable_system_codes(*stage_report),
+                          mutable_device_error(*stage_report), stream)) ||
+          !finish_stage(*stage_report)) {
+        return failure;
+      }
+    }
+
+    stage_report = report(Gfn2SccStageId::kPotentialCompose);
+    if (!begin_stage(stage_report) ||
+        !check_cuda(stage_report->stage,
+                    reset_gfn2_scc_potential_device_errors_cuda(
+                        plan.topology.batch_size, mutable_system_codes(*stage_report),
+                        mutable_device_error(*stage_report), stream))) {
+      return failure;
+    }
+    const cudaError_t compose_status =
+        mixed_spin
+            ? compose_gfn2_scc_spin_potentials_cuda(
+                  plan.potential_batch, plan.wavefunction_layout, workspace.potential_components,
+                  {workspace.spin_output.shell_potentials,
+                   workspace.spin_output.shell_potential_elements, plan.plan_token},
+                  workspace.potential_activity, workspace.complete_potentials,
+                  workspace.potential_workspace, mutable_system_codes(*stage_report),
+                  mutable_device_error(*stage_report), stream)
+            : compose_gfn2_scc_potentials_cuda(
+                  plan.potential_batch, workspace.potential_components, workspace.activity,
+                  workspace.complete_potentials, workspace.potential_workspace,
+                  mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream);
+    if (!check_cuda(stage_report->stage, compose_status) || !finish_stage(*stage_report)) {
+      return failure;
+    }
+
+    stage_report = report(Gfn2SccStageId::kScalarBridge);
+    if (!begin_stage(stage_report) ||
+        !check_cuda(stage_report->stage,
+                    reset_gfn2_scc_bridge_device_errors_cuda(
+                        plan.topology.batch_size, mutable_system_codes(*stage_report),
+                        mutable_device_error(*stage_report),
+                        workspace.scalar_bridge.workspace.sequence_active, stream))) {
+      return failure;
+    }
+    if (!mixed_spin &&
+        !check_cuda(
+            stage_report->stage,
+            collect_gfn2_scc_shell_scalar_potential_cuda(
+                plan.scalar_bridge_batch, workspace.scalar_bridge.fields, workspace.activity,
+                workspace.scalar_bridge.shell_scalar, workspace.scalar_bridge.shell_elements,
+                workspace.scalar_bridge.workspace, mutable_system_codes(*stage_report),
+                mutable_device_error(*stage_report), stream))) {
+      return failure;
+    }
+    /* The mixed composer already applied the scalar bridge. Preserve the
+     * canonical sequence latch for report normalization without collecting a
+     * second time (which would double-add the atomic scalar potential). */
+    if (mixed_spin &&
+        !check_cuda(stage_report->stage,
+                    cudaMemcpyAsync(workspace.scalar_bridge.workspace.sequence_active,
+                                    workspace.ledger.sequence_active, sizeof(std::uint32_t),
+                                    cudaMemcpyDeviceToDevice, stream))) {
+      return failure;
+    }
+    if (!finish_stage(*stage_report)) {
+      return failure;
+    }
+
+    stage_report = report(Gfn2SccStageId::kHamiltonian);
+    if (!begin_stage(stage_report) ||
+        !check_cuda(stage_report->stage,
+                    reset_gfn2_hamiltonian_device_errors_cuda(
+                        plan.topology.batch_size, mutable_system_codes(*stage_report),
+                        mutable_device_error(*stage_report), stream))) {
+      return failure;
+    }
+    const cudaError_t hamiltonian_status =
+        mixed_spin
+            ? assemble_gfn2_spin_hamiltonian_cuda(
+                  plan.hamiltonian_batch, plan.wavefunction_layout, input.hamiltonian,
+                  workspace.hamiltonian_activity, workspace.hamiltonian,
+                  workspace.hamiltonian_workspace, mutable_system_codes(*stage_report),
+                  mutable_device_error(*stage_report), stream)
+            : assemble_gfn2_hamiltonian_cuda(
+                  plan.hamiltonian_batch, input.hamiltonian, workspace.hamiltonian_activity,
+                  workspace.hamiltonian, workspace.hamiltonian_workspace,
+                  mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream);
+    if (!check_cuda(stage_report->stage, hamiltonian_status) || !finish_stage(*stage_report)) {
+      return failure;
+    }
+    if (segment == Gfn2SccIterationBodySegment::kPreEigensolver) {
+      return {};
+    }
   }
 
-  stage_report = report(Gfn2SccStageId::kPotentialCompose);
-  if (!begin_stage(stage_report) ||
-      !check_cuda(stage_report->stage,
-                  reset_gfn2_scc_potential_device_errors_cuda(
-                      plan.topology.batch_size, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream))) {
-    return failure;
-  }
-  const cudaError_t compose_status =
-      mixed_spin
-          ? compose_gfn2_scc_spin_potentials_cuda(
-                plan.potential_batch, plan.wavefunction_layout, workspace.potential_components,
-                {workspace.spin_output.shell_potentials,
-                 workspace.spin_output.shell_potential_elements, plan.plan_token},
-                workspace.potential_activity, workspace.complete_potentials,
-                workspace.potential_workspace, mutable_system_codes(*stage_report),
-                mutable_device_error(*stage_report), stream)
-          : compose_gfn2_scc_potentials_cuda(
-                plan.potential_batch, workspace.potential_components, workspace.activity,
-                workspace.complete_potentials, workspace.potential_workspace,
-                mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream);
-  if (!check_cuda(stage_report->stage, compose_status) || !finish_stage(*stage_report)) {
-    return failure;
-  }
-
-  stage_report = report(Gfn2SccStageId::kScalarBridge);
-  if (!begin_stage(stage_report) ||
-      !check_cuda(stage_report->stage,
-                  reset_gfn2_scc_bridge_device_errors_cuda(
-                      plan.topology.batch_size, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report),
-                      workspace.scalar_bridge.workspace.sequence_active, stream))) {
-    return failure;
-  }
-  if (!mixed_spin &&
-      !check_cuda(stage_report->stage,
-                  collect_gfn2_scc_shell_scalar_potential_cuda(
-                      plan.scalar_bridge_batch, workspace.scalar_bridge.fields, workspace.activity,
-                      workspace.scalar_bridge.shell_scalar, workspace.scalar_bridge.shell_elements,
-                      workspace.scalar_bridge.workspace, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream))) {
-    return failure;
-  }
-  /* The mixed composer already applied the scalar bridge. Preserve the
-   * canonical sequence latch for report normalization without collecting a
-   * second time (which would double-add the atomic scalar potential). */
-  if (mixed_spin &&
-      !check_cuda(stage_report->stage,
-                  cudaMemcpyAsync(workspace.scalar_bridge.workspace.sequence_active,
-                                  workspace.ledger.sequence_active, sizeof(std::uint32_t),
-                                  cudaMemcpyDeviceToDevice, stream))) {
-    return failure;
-  }
-  if (!finish_stage(*stage_report)) {
-    return failure;
-  }
-
-  stage_report = report(Gfn2SccStageId::kHamiltonian);
-  if (!begin_stage(stage_report) ||
-      !check_cuda(stage_report->stage,
-                  reset_gfn2_hamiltonian_device_errors_cuda(
-                      plan.topology.batch_size, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream))) {
-    return failure;
-  }
-  const cudaError_t hamiltonian_status =
-      mixed_spin
-          ? assemble_gfn2_spin_hamiltonian_cuda(
-                plan.hamiltonian_batch, plan.wavefunction_layout, input.hamiltonian,
-                workspace.hamiltonian_activity, workspace.hamiltonian,
-                workspace.hamiltonian_workspace, mutable_system_codes(*stage_report),
-                mutable_device_error(*stage_report), stream)
-          : assemble_gfn2_hamiltonian_cuda(
-                plan.hamiltonian_batch, input.hamiltonian, workspace.hamiltonian_activity,
-                workspace.hamiltonian, workspace.hamiltonian_workspace,
-                mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream);
-  if (!check_cuda(stage_report->stage, hamiltonian_status) || !finish_stage(*stage_report)) {
-    return failure;
-  }
-
-  stage_report = report(Gfn2SccStageId::kEigensolver);
-  if (!begin_stage(stage_report) ||
-      !check_cuda(stage_report->stage,
-                  reset_gfn2_eigensolver_device_errors_cuda(
-                      plan.topology.batch_size, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream))) {
-    return failure;
-  }
-  const Gfn2EigensolverLaunchResult eigensolver =
-      geometry == nullptr
-          ? solve_gfn2_spin_eigensystems_cuda(
-                plan.eigensolver_batch, plan.wavefunction_layout, plan.eigensolver_provider.buckets,
-                plan.eigensolver_provider.bucket_count, plan.overlap_cache,
-                plan.geometry_generation, input.eigensolver_hamiltonians, plan.eigensolver_options,
-                plan.eigensolver_provider.solver, plan.eigensolver_provider.parameters,
-                plan.eigensolver_provider.blas, workspace.eigensolver_workspace,
-                workspace.staged_eigenpairs, mutable_system_codes(*stage_report),
-                mutable_device_error(*stage_report), stream)
-          : solve_gfn2_spin_eigensystems_cuda(
-                plan.eigensolver_batch, plan.wavefunction_layout, plan.eigensolver_provider.buckets,
-                plan.eigensolver_provider.bucket_count, plan.overlap_cache, geometry->epoch,
-                input.eigensolver_hamiltonians, plan.eigensolver_options,
-                plan.eigensolver_provider.solver, plan.eigensolver_provider.parameters,
-                plan.eigensolver_provider.blas, workspace.eigensolver_workspace,
-                workspace.staged_eigenpairs, mutable_system_codes(*stage_report),
-                mutable_device_error(*stage_report), stream);
-  if (!eigensolver.success()) {
-    return provider_launch_failure(stage_report->stage, eigensolver);
-  }
-  if (!finish_stage(*stage_report)) {
-    return failure;
+  if (segment == Gfn2SccIterationBodySegment::kFull) {
+    stage_report = report(Gfn2SccStageId::kEigensolver);
+    if (!begin_stage(stage_report) ||
+        !check_cuda(stage_report->stage,
+                    reset_gfn2_eigensolver_device_errors_cuda(
+                        plan.topology.batch_size, mutable_system_codes(*stage_report),
+                        mutable_device_error(*stage_report), stream))) {
+      return failure;
+    }
+    const Gfn2EigensolverLaunchResult eigensolver =
+        geometry == nullptr
+            ? solve_gfn2_spin_eigensystems_cuda(
+                  plan.eigensolver_batch, plan.wavefunction_layout,
+                  plan.eigensolver_provider.buckets, plan.eigensolver_provider.bucket_count,
+                  plan.overlap_cache, plan.geometry_generation, input.eigensolver_hamiltonians,
+                  plan.eigensolver_options, plan.eigensolver_provider.solver,
+                  plan.eigensolver_provider.parameters, plan.eigensolver_provider.blas,
+                  workspace.eigensolver_workspace, workspace.staged_eigenpairs,
+                  mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream)
+            : solve_gfn2_spin_eigensystems_cuda(
+                  plan.eigensolver_batch, plan.wavefunction_layout,
+                  plan.eigensolver_provider.buckets, plan.eigensolver_provider.bucket_count,
+                  plan.overlap_cache, geometry->epoch, input.eigensolver_hamiltonians,
+                  plan.eigensolver_options, plan.eigensolver_provider.solver,
+                  plan.eigensolver_provider.parameters, plan.eigensolver_provider.blas,
+                  workspace.eigensolver_workspace, workspace.staged_eigenpairs,
+                  mutable_system_codes(*stage_report), mutable_device_error(*stage_report), stream);
+    if (!eigensolver.success()) {
+      return provider_launch_failure(stage_report->stage, eigensolver);
+    }
+    if (!finish_stage(*stage_report)) {
+      return failure;
+    }
   }
 
   stage_report = report(Gfn2SccStageId::kOccupations);
@@ -3698,7 +3709,8 @@ Gfn2SccIterationLaunchResult launch_gfn2_scc_iteration_cuda(
 Gfn2SccIterationLaunchResult launch_gfn2_scc_iteration_test_fault_cuda(
     const Gfn2SccIterationBinding& binding, const Gfn2SccIterationTestFault& fault,
     cudaStream_t stream) noexcept {
-  return launch_scc_iteration_impl<true>(binding, nullptr, stream, true, true, &fault);
+  return launch_scc_iteration_impl<true>(binding, nullptr, stream, true, true,
+                                         Gfn2SccIterationBodySegment::kFull, &fault);
 }
 #endif
 
@@ -3722,6 +3734,32 @@ Gfn2SccIterationLaunchResult launch_gfn2_scc_numerical_body_cuda(
     const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream) noexcept {
   return launch_scc_iteration_impl<false>(binding, &geometry, stream, false, true);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_scc_pre_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
+  return launch_scc_iteration_impl<false>(binding, nullptr, stream, false, true,
+                                          Gfn2SccIterationBodySegment::kPreEigensolver);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_scc_pre_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream) noexcept {
+  return launch_scc_iteration_impl<false>(binding, &geometry, stream, false, true,
+                                          Gfn2SccIterationBodySegment::kPreEigensolver);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_scc_post_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
+  return launch_scc_iteration_impl<false>(binding, nullptr, stream, false, true,
+                                          Gfn2SccIterationBodySegment::kPostEigensolver);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_scc_post_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream) noexcept {
+  return launch_scc_iteration_impl<false>(binding, &geometry, stream, false, true,
+                                          Gfn2SccIterationBodySegment::kPostEigensolver);
 }
 
 Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_iteration_cuda(
@@ -3755,6 +3793,28 @@ Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_numerical_body_cuda(
     const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream) noexcept {
   return launch_gfn2_scc_numerical_body_cuda(binding, geometry, stream);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_pre_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
+  return launch_gfn2_scc_pre_eigensolver_cuda(binding, stream);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_pre_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream) noexcept {
+  return launch_gfn2_scc_pre_eigensolver_cuda(binding, geometry, stream);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_post_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, cudaStream_t stream) noexcept {
+  return launch_gfn2_scc_post_eigensolver_cuda(binding, stream);
+}
+
+Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_post_eigensolver_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    cudaStream_t stream) noexcept {
+  return launch_gfn2_scc_post_eigensolver_cuda(binding, geometry, stream);
 }
 
 }  // namespace gpuxtb::detail::cuda

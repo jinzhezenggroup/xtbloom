@@ -6,6 +6,7 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <string>
@@ -66,6 +67,8 @@ struct Fixture {
   std::vector<double> potential_shifts;
   std::vector<std::int64_t> response_offsets;
   std::vector<double> response_matrix;
+  std::vector<gpuxtb_interaction_t> interactions;
+  std::vector<std::uint8_t> interaction_payload;
 
   std::vector<double> energies{0.0, 0.0};
   std::vector<double> forces = std::vector<double>(9);
@@ -137,6 +140,16 @@ struct Fixture {
     batch.total_charge_response_elements = 5;
     batch.charge_response_offsets = input_buffer(response_offsets);
     batch.charge_response_matrix = input_buffer(response_matrix);
+  }
+
+  void enable_interaction(const gpuxtb_interaction_t& interaction,
+                          const std::vector<std::uint8_t>& payload) {
+    batch.struct_size = sizeof(batch);
+    interactions.assign(1, interaction);
+    interaction_payload = payload;
+    batch.total_interactions = 1;
+    batch.interaction_descriptors = input_buffer(interactions);
+    batch.interaction_payload = input_buffer(interaction_payload);
   }
 };
 
@@ -807,6 +820,317 @@ bool test_aliasing_and_address_ranges() {
   return true;
 }
 
+/* Build the released electric-field payload block (block_version 1): one
+ * int32_t version, one int32_t reserved, three doubles. */
+std::vector<std::uint8_t> efield_block(double ex, double ey, double ez) {
+  std::vector<std::uint8_t> block(32, 0);
+  const std::int32_t version = 1;
+  std::memcpy(block.data(), &version, sizeof(version));
+  std::memcpy(block.data() + 8, &ex, sizeof(ex));
+  std::memcpy(block.data() + 16, &ey, sizeof(ey));
+  std::memcpy(block.data() + 24, &ez, sizeof(ez));
+  return block;
+}
+
+bool test_interaction_abi_v3() {
+  /* A v3-struct batch with zero interactions is a plain v1/v2 request. */
+  Fixture fixture;
+  fixture.batch.struct_size = sizeof(fixture.batch);
+  fixture.batch.total_interactions = 0;
+  DescriptorValidationResult checked = validate_compute_descriptors(
+      GPUXTB_BACKEND_CPU, &fixture.batch, &fixture.options, &fixture.result);
+  CHECK(checked.ok());
+  CHECK(!checked.requires_backend_staging_validation());
+
+  gpuxtb_interaction_t interaction{};
+  interaction.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+  interaction.system_index = 0;
+  interaction.payload_offset = 0;
+  interaction.payload_size = 32;
+
+  /* A well-formed attachment passes structural validation, then is refused
+   * because no backend executes interactions yet (P1 of #237). */
+  {
+    Fixture field;
+    field.enable_interaction(interaction, efield_block(0.0, 0.0, 0.1));
+    checked = validate_compute_descriptors(GPUXTB_BACKEND_CPU, &field.batch, &field.options,
+                                           &field.result);
+    CHECK(checked.status == GPUXTB_STATUS_NOT_IMPLEMENTED);
+    CHECK(checked.error.find("reserved by the ABI") != std::string::npos);
+  }
+
+  /* The same contract holds through the structure-only CUDA entry point. */
+  {
+    Fixture field;
+    field.enable_interaction(interaction, efield_block(0.0, 0.0, 0.1));
+    checked = validate_compute_descriptor_structure(GPUXTB_BACKEND_CUDA, &field.batch,
+                                                    &field.options, &field.result);
+    CHECK(checked.status == GPUXTB_STATUS_NOT_IMPLEMENTED);
+  }
+
+  const InvalidCase invalid_interactions[] = {
+      {"interactions with no descriptor array",
+       [](Fixture& f) {
+         f.batch.total_interactions = 1;
+         f.batch.struct_size = sizeof(f.batch);
+       },
+       "interaction_descriptors is required"},
+      {"interactions with no payload store",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 0;
+         entry.payload_size = 32;
+         f.interactions = {entry};
+         f.batch.struct_size = sizeof(f.batch);
+         f.batch.total_interactions = 1;
+         f.batch.interaction_descriptors = input_buffer(f.interactions);
+       },
+       "interaction_payload is required"},
+      {"negative interaction count",
+       [](Fixture& f) {
+         f.batch.struct_size = sizeof(f.batch);
+         f.batch.total_interactions = -1;
+       },
+       "total_interactions must be nonnegative"},
+      {"unknown interaction tag",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = 0x7fffff;
+         entry.system_index = 0;
+         entry.payload_size = 32;
+         f.enable_interaction(entry, efield_block(0.0, 0.0, 0.0));
+       },
+       "unknown or NONE type tag"},
+      {"NONE interaction tag",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_NONE;
+         entry.system_index = 0;
+         entry.payload_size = 32;
+         f.enable_interaction(entry, efield_block(0.0, 0.0, 0.0));
+       },
+       "unknown or NONE type tag"},
+      {"flags must be zero",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+         entry.flags = 1u;
+         entry.system_index = 0;
+         entry.payload_size = 32;
+         f.enable_interaction(entry, efield_block(0.0, 0.0, 0.0));
+       },
+       "flags must be zero"},
+      {"system index out of range",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 7;
+         entry.payload_size = 32;
+         f.enable_interaction(entry, efield_block(0.0, 0.0, 0.0));
+       },
+       "system_index lies outside"},
+      {"payload block past the payload view",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 0;
+         entry.payload_offset = std::numeric_limits<std::uint64_t>::max() - 16;
+         entry.payload_size = 32;
+         f.enable_interaction(entry, efield_block(0.0, 0.0, 0.0));
+       },
+       "extends past interaction_payload"},
+      {"electric-field payload undersized",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 0;
+         entry.payload_size = 16;
+         f.enable_interaction(entry, efield_block(0.0, 0.0, 0.0));
+       },
+       "undersized or misaligned"},
+      {"electric-field payload oversized",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 0;
+         entry.payload_size = 40;
+         f.enable_interaction(entry, std::vector<std::uint8_t>(64, 0));
+       },
+       "exceeds the released contract"},
+      {"electric-field payload misaligned",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 0;
+         entry.payload_offset = 1;
+         entry.payload_size = 32;
+         f.enable_interaction(entry, std::vector<std::uint8_t>(64, 0));
+       },
+       "undersized or misaligned"},
+      {"electric-field payload version unsupported",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 0;
+         entry.payload_size = 32;
+         std::vector<std::uint8_t> payload = efield_block(0.0, 0.0, 0.0);
+         const std::int32_t version = 2;
+         std::memcpy(payload.data(), &version, sizeof(version));
+         f.enable_interaction(entry, payload);
+       },
+       "unsupported block_version"},
+      {"electric-field payload reserved field nonzero",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 0;
+         entry.payload_size = 32;
+         std::vector<std::uint8_t> payload = efield_block(0.0, 0.0, 0.0);
+         const std::int32_t reserved = 1;
+         std::memcpy(payload.data() + sizeof(std::int32_t), &reserved, sizeof(reserved));
+         f.enable_interaction(entry, payload);
+       },
+       "reserved payload field must be zero"},
+      {"electric-field payload non-finite",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 0;
+         entry.payload_size = 32;
+         f.enable_interaction(entry,
+                              efield_block(std::numeric_limits<double>::infinity(), 0.0, 0.0));
+       },
+       "contains NaN or infinity"},
+      {"reserved interaction lacks block-version header",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ALPB_SOLVATION;
+         entry.system_index = 0;
+         entry.payload_size = 3;
+         f.enable_interaction(entry, std::vector<std::uint8_t>(3, 0));
+       },
+       "aligned block_version"},
+      {"reserved interaction block-version header misaligned",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entry{};
+         entry.type = GPUXTB_INTERACTION_ALPB_SOLVATION;
+         entry.system_index = 0;
+         entry.payload_offset = 2;
+         entry.payload_size = 4;
+         f.enable_interaction(entry, std::vector<std::uint8_t>(8, 0));
+       },
+       "aligned block_version"},
+      {"duplicate interaction on one system",
+       [](Fixture& f) {
+         gpuxtb_interaction_t entries[2] = {};
+         for (gpuxtb_interaction_t& entry : entries) {
+           entry.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+           entry.system_index = 0;
+           entry.payload_size = 32;
+         }
+         entries[1].payload_offset = 32;
+         f.interactions.assign(std::begin(entries), std::end(entries));
+         f.interaction_payload = efield_block(0.0, 0.0, 0.0);
+         const std::vector<std::uint8_t> second_payload = efield_block(0.0, 0.0, 0.0);
+         f.interaction_payload.insert(f.interaction_payload.end(), second_payload.begin(),
+                                      second_payload.end());
+         f.batch.struct_size = sizeof(f.batch);
+         f.batch.total_interactions = 2;
+         f.batch.interaction_descriptors = input_buffer(f.interactions);
+         f.batch.interaction_payload = input_buffer(f.interaction_payload);
+       },
+       "two attachments of the same interaction type"},
+  };
+  for (const InvalidCase& test : invalid_interactions) {
+    CHECK(expect_invalid(test));
+  }
+
+  /* A reserved-but-unimplemented tag with valid structure is refused as
+   * NOT_IMPLEMENTED after structural validation instead of INVALID_ARGUMENT. */
+  {
+    Fixture reserved;
+    gpuxtb_interaction_t entry{};
+    entry.type = GPUXTB_INTERACTION_ALPB_SOLVATION;
+    entry.system_index = 0;
+    entry.payload_size = 32;
+    reserved.enable_interaction(entry, efield_block(0.0, 0.0, 0.0));
+    checked = validate_compute_descriptors(GPUXTB_BACKEND_CPU, &reserved.batch, &reserved.options,
+                                           &reserved.result);
+    CHECK(checked.status == GPUXTB_STATUS_NOT_IMPLEMENTED);
+  }
+
+  /* The reserved dipole-moment output is refused, not silently omitted. */
+  {
+    Fixture dipole;
+    dipole.options.flags |= GPUXTB_COMPUTE_DIPOLE_MOMENTS;
+    std::vector<double> dipole_output(6, 0.0);
+    dipole.result.struct_size = sizeof(dipole.result);
+    dipole.result.dipole_moments = output_buffer(dipole_output);
+    checked = validate_compute_descriptors(GPUXTB_BACKEND_CPU, &dipole.batch, &dipole.options,
+                                           &dipole.result);
+    CHECK(checked.status == GPUXTB_STATUS_NOT_IMPLEMENTED);
+    CHECK(checked.error.find("dipole-moment output") != std::string::npos);
+  }
+
+  /* Validate the released outlet shape before reporting that publication is
+   * not implemented. This keeps malformed requests distinguishable. */
+  {
+    Fixture missing_dipole;
+    missing_dipole.options.flags |= GPUXTB_COMPUTE_DIPOLE_MOMENTS;
+    checked = validate_compute_descriptors(GPUXTB_BACKEND_CPU, &missing_dipole.batch,
+                                           &missing_dipole.options, &missing_dipole.result);
+    CHECK(checked.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(checked.error.find("dipole_moments is required") != std::string::npos);
+
+    Fixture short_dipole;
+    short_dipole.options.flags |= GPUXTB_COMPUTE_DIPOLE_MOMENTS;
+    alignas(gpuxtb_batch_result_t) std::array<unsigned char, GPUXTB_BATCH_RESULT_V1_SIZE>
+        short_result_storage{};
+    std::memcpy(short_result_storage.data(), &short_dipole.result, short_result_storage.size());
+    auto* short_result = reinterpret_cast<gpuxtb_batch_result_t*>(short_result_storage.data());
+    short_result->struct_size = GPUXTB_BATCH_RESULT_V1_SIZE;
+    checked = validate_compute_descriptors(GPUXTB_BACKEND_CPU, &short_dipole.batch,
+                                           &short_dipole.options, short_result);
+    CHECK(checked.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(checked.error.find("dipole_moments is required") != std::string::npos);
+
+    Fixture undersized_dipole;
+    undersized_dipole.options.flags |= GPUXTB_COMPUTE_DIPOLE_MOMENTS;
+    std::vector<double> output(5, 0.0);
+    undersized_dipole.result.struct_size = sizeof(undersized_dipole.result);
+    undersized_dipole.result.dipole_moments = output_buffer(output);
+    checked = validate_compute_descriptors(GPUXTB_BACKEND_CPU, &undersized_dipole.batch,
+                                           &undersized_dipole.options, &undersized_dipole.result);
+    CHECK(checked.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(checked.error.find("dipole_moments is smaller") != std::string::npos);
+  }
+
+  /* A reserved result outlet with no released shape contract is refused. */
+  {
+    Fixture quadrupole;
+    std::vector<double> quadrupole_output(12, 0.0);
+    quadrupole.result.struct_size = sizeof(quadrupole.result);
+    quadrupole.result.quadrupole_moments = output_buffer(quadrupole_output);
+    checked = validate_compute_descriptors(GPUXTB_BACKEND_CPU, &quadrupole.batch,
+                                           &quadrupole.options, &quadrupole.result);
+    CHECK(checked.status == GPUXTB_STATUS_NOT_SUPPORTED);
+    CHECK(checked.error.find("reserved batch-result outlet") != std::string::npos);
+  }
+
+  /* Device-resident descriptors defer content checks through the staging
+   * mask and are then refused by the availability gate. */
+  {
+    Fixture device_field;
+    device_field.enable_interaction(interaction, efield_block(0.0, 0.0, 0.1));
+    device_field.batch.interaction_descriptors.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
+    checked = validate_compute_descriptors(GPUXTB_BACKEND_CUDA, &device_field.batch,
+                                           &device_field.options, &device_field.result);
+    CHECK(checked.status == GPUXTB_STATUS_NOT_IMPLEMENTED);
+  }
+  return true;
+}
+
 }  // namespace
 
 int main() {
@@ -828,6 +1152,7 @@ int main() {
       {"point-charge shapes", test_point_charge_shapes},
       {"host offsets and response packing", test_host_offsets_and_response_packing},
       {"aliasing and address ranges", test_aliasing_and_address_ranges},
+      {"ABI-v3 interactions", test_interaction_abi_v3},
   };
   for (const Test& test : tests) {
     if (!test.run()) {

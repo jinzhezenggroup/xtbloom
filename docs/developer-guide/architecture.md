@@ -169,6 +169,36 @@ caller outputs unchanged. CPU and CUDA use the same compute-options identity, in
 requested-property/output flags. High-level Python calculators intentionally select `FRESH`;
 persistent warm policy is exposed only by the low-level C/ctypes descriptor for now.
 
+## External interaction attachments
+
+The ABI-v3 batch suffix adds a generic attachment slot — `total_interactions`,
+`interaction_descriptors`, and `interaction_payload` — so external potentials
+and self-consistent models (uniform electric field, field gradient, multipole
+point charges, ALPB/GBSA/GB/GBE/ddX solvation, D3/D4 dispersion variants,
+halogen-bond corrections) do not each regrow the batch layout. One
+`gpuxtb_interaction_t` descriptor ties a versioned payload block to one batch
+item; block contents are versioned per tag through a leading `block_version`.
+
+Reserved attachments follow a strict validate-then-refuse policy: the common
+validator proves descriptor/payload extents, memory-space tags, and every
+semantic relationship available from host-resident storage, then the request
+is refused with `NOT_IMPLEMENTED` before any backend execution or caller-output
+commit. A caller can therefore never observe a result where a reserved
+interaction was silently ignored. Unknown or `NONE` tags and structurally
+malformed host-resident attachments are `INVALID_ARGUMENT`. Device-resident
+descriptor content is marked with `kInteractionDescriptorsNeedStaging`, while
+device payload content is marked independently with
+`kInteractionPayloadNeedsStaging`. P3 must stage and validate every marked
+interaction byte before enabling CUDA execution; P1's availability gate
+refuses the request first because no backend can consume it yet. Host-resident
+electric-field blocks are byte-loaded and checked for version 1, a zero
+reserved field, and finite values before that gate. The ABI-v2 result suffix
+reserves the dipole-moment outlet and
+`GPUXTB_RESULT_DIPOLE_MOMENTS` publication flag alongside `quadrupole_moments`,
+`wiberg_orders`, and `spin_populations`; the latter three have no released
+shape contract, must remain NULL until published, and return `NOT_SUPPORTED`
+when supplied.
+
 ## Fixed-topology plans and workspace sizing
 
 `gpuxtb_compute` remains the convenience path: it validates the descriptor set, prepares the
