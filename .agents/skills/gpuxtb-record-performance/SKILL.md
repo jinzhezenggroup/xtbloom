@@ -75,7 +75,13 @@ Treat JSON with raw samples and identities as authoritative; keep CSV as a compa
 
 If an old runner or external source produced the data, retain or hash-pin that exact source and command. Never claim the current runner can reproduce a historical workload unless it actually can.
 
-Raw `.nsys-rep` captures can embed the target process environment and credentials. Keep them outside the repository unless they have been explicitly audited and are required. Prefer sanitized derived SQLite/CSV/text summaries with the profiler version and export command recorded.
+Raw `.nsys-rep`/`.ncu-rep`/`.qdstrm`/`.sqlite`/`.sqlite.dbb`/`.csv.db`/`.prof`
+captures can embed the target process environment and credentials. They are
+prohibited from the repository: `.gitignore` ignores them and the
+`forbid-raw-profiler-captures` pre-commit hook rejects them at commit time
+(including `git add -f`). Only sanitized derived CSV/text/JSON summaries from
+`nsys stats` / `ncu --export`, with the profiler version and export command
+recorded, may be archived under `benchmarks/evidence/`.
 
 ## State the Narrow Conclusion
 

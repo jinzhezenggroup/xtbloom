@@ -352,3 +352,21 @@ Hardware-free protocol tests (no CUDA device or provider import needed):
 ```bash
 python3 -m unittest -v benchmarks.test_dlpack_result_memory
 ```
+
+## Archiving profiler evidence: raw captures are prohibited
+
+Raw profiler capture files (`*.nsys-rep`, `*.ncu-rep`, `*.qdstrm`,
+`*.sqlite`, `*.sqlite.dbb`, `*.csv.db`, `*.prof`) embed the target process
+environment and can expose credentials, API keys, tokens, paths, and
+cgroup/session state. They must never be committed to this repository.
+
+- `.gitignore` prevents staging raw captures by default (the extension list is
+  mirrored in `.pre-commit-config.yaml`'s `forbid-raw-profiler-captures` hook).
+- The local pre-commit hook `forbid-raw-profiler-captures` rejects any staged
+  raw capture, including `git add -f` force-adds, so a capture cannot slip
+  into a commit.
+- Only sanitized derived summaries may be archived under
+  `benchmarks/evidence/`: `nsys stats` / `ncu --export` CSV/text/JSON reports
+  and logs, with the profiler version and exact export command recorded in the
+  bundle's `README.md`. Never archive the raw `.nsys-rep` / `.ncu-rep` /
+  SQLite databases the exporter also produced.
