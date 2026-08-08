@@ -1,0 +1,8 @@
+source_revision=085c4c249c0f86455ee26b05d19b46f74dfa4724
+source_status=clean-worktree-plus-benchmark-artifacts
+benchmark=production-dispatch-chain-vs-monolithic
+toolchain_cuda=12.9.86
+gpu=NVIDIA GeForce RTX 5090, 580.95.05
+warmups=3
+samples=50
+timing=cudaEvent full loop to global terminal

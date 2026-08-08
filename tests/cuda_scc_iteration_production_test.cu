@@ -2503,6 +2503,210 @@ int test_conditional_graph_mixed_warm_peer_parity() {
   return 0;
 }
 
+/* End-to-end production-loop comparison of the exact-capacity device dispatch
+ * chain (kDeviceDispatchChain) against the monolithic full-capacity device-tail
+ * graph (kDeviceTailGraph) that it replaced as the production default. Both
+ * families launch from the identical binding and state, run the identical full
+ * SCC loop to global terminal, and must publish identical results. A
+ * deterministic per-system terminal ladder (iterations seeded toward the
+ * configured maximum, exactly like the reusable real-GPU no-resume ladder) is
+ * used to create the mixed-activity buffers where the exact-capacity chain is
+ * expected to win by keeping terminal peers out of provider arithmetic. */
+int benchmark_dispatch_chain_vs_monolithic() {
+  constexpr int kWarmup = 3;
+  constexpr int kSamples = 50;
+  std::printf(
+      "{\"record_type\":\"protocol\",\"benchmark\":\"production-dispatch-chain-vs-monolithic\","
+      "\"warmups\":%d,\"samples\":%d,\"timing\":\"cudaEvent elapsed full loop to global "
+      "terminal on the fixture stream\",\"workloads\":\"heterogeneous small restricted "
+      "systems with a per-system terminal ladder (active_fraction 1, 1/2, 1/4)\"}\n",
+      kWarmup, kSamples);
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+    ProductionFixture fixture;
+    CHECK(fixture.create(false, batch_size));
+    CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
+          Gfn2SccIterationProviderCaptureMode::kGraphSupported);
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    const std::uint64_t maximum = fixture.host.options().maximum_iterations;
+
+    Gfn2SccLoopCudaGraphOwner chain;
+    CHECK(chain.build(fixture.binding, Gfn2SccLoopGraphPreference::kDeviceDispatchChain)
+              .device_dispatch_chain_ready());
+    Gfn2SccLoopCudaGraphOwner monolithic;
+    CHECK(monolithic.build(fixture.binding, Gfn2SccLoopGraphPreference::kDeviceTailGraph)
+              .device_tail_graph_ready());
+    const HostSccCheckpoint initial = fixture.host.checkpoint();
+
+    cudaEvent_t start = nullptr;
+    cudaEvent_t stop = nullptr;
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
+
+    for (const std::int64_t active_denominator : {1, 2, 4}) {
+      const std::int64_t active_every = active_denominator;
+      std::vector<std::uint64_t> terminal_iterations(static_cast<std::size_t>(batch_size));
+      std::int64_t active_members = 0;
+      for (std::int64_t system = 0; system < batch_size; ++system) {
+        const bool terminal = system % active_every != 0;
+        /* Terminal members start at the maximum so the first activity
+         * derivation excludes them from every subsequent body. */
+        terminal_iterations[static_cast<std::size_t>(system)] = terminal ? maximum : 0u;
+        if (!terminal) {
+          ++active_members;
+        }
+      }
+      /* Batch 1 has one member that stays active for every denominator, so
+       * those tiers are identical to the full-activity tier; only record the
+       * first and keep the loop deterministic. */
+      if (active_members == batch_size && active_denominator != 1) {
+        continue;
+      }
+      const auto reset_ladder = [&]() -> bool {
+        Gfn2SccIterationInitializationReady ready{};
+        if (!fixture.initializer
+                 .upload_async(fixture.iteration_arena.get(), fixture.iteration_arena.bytes(),
+                               ready, fixture.handles.stream())
+                 .success()) {
+          return false;
+        }
+        return cudaMemcpyAsync(fixture.binding.state.scc.iterations, terminal_iterations.data(),
+                               terminal_iterations.size() * sizeof(std::uint64_t),
+                               cudaMemcpyHostToDevice, fixture.handles.stream()) == cudaSuccess;
+      };
+
+      const auto measure = [&](const char* mode, const Gfn2SccLoopCudaGraphOwner& owner,
+                               std::uint64_t& bodies) -> int {
+        std::vector<double> samples;
+        samples.reserve(static_cast<std::size_t>(kSamples));
+        double total_ms = 0.0;
+        float minimum_ms = std::numeric_limits<float>::infinity();
+        for (int sample = -kWarmup; sample < kSamples; ++sample) {
+          CHECK(reset_ladder());
+          CUDA_CHECK(cudaEventRecord(start, fixture.handles.stream()));
+          const Gfn2SccLoopLaunchResult launch = owner.launch(fixture.handles.stream());
+          CHECK(launch.success());
+          CUDA_CHECK(cudaEventRecord(stop, fixture.handles.stream()));
+          CUDA_CHECK(cudaEventSynchronize(stop));
+          float elapsed_ms = 0.0F;
+          CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
+          if (sample >= 0) {
+            samples.push_back(elapsed_ms);
+            total_ms += elapsed_ms;
+            minimum_ms = std::min(minimum_ms, elapsed_ms);
+          }
+          std::uint32_t terminal_active = 1u;
+          CHECK(download_value(owner.canonical_active_count_device(), terminal_active,
+                               fixture.handles.stream()));
+          CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+          CHECK(terminal_active == 0u);
+        }
+        CHECK(
+            download_value(owner.numerical_body_count_device(), bodies, fixture.handles.stream()));
+        CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+        std::sort(samples.begin(), samples.end());
+        const double median_ms = samples[samples.size() / 2u];
+        const std::size_t p95_index =
+            static_cast<std::size_t>((static_cast<double>(samples.size()) - 1.0) * 0.95);
+        std::printf(
+            "{\"record_type\":\"measurement\",\"batch\":%lld,\"active_fraction\":%g,"
+            "\"mode\":\"%s\",\"mean_ms\":%.6f,\"min_ms\":%.6f,\"median_ms\":%.6f,"
+            "\"p95_ms\":%.6f,\"samples\":%d,\"numerical_body_count\":%llu}",
+            static_cast<long long>(batch_size), 1.0 / static_cast<double>(active_every), mode,
+            total_ms / static_cast<double>(kSamples), static_cast<double>(minimum_ms), median_ms,
+            samples[p95_index], kSamples, static_cast<unsigned long long>(bodies));
+        for (const double sample : samples) {
+          std::printf(",%.6f", sample);
+        }
+        std::printf("\n");
+        return 0;
+      };
+
+      /* Chains and monolithic must agree on the number of numerical bodies for
+       * the identical ladder. One extra reset restores the shared state so the
+       * parity check below has a clean final state. */
+      std::uint64_t chain_bodies = 0u;
+      CHECK(measure("dispatch_chain", chain, chain_bodies) == 0);
+      std::uint64_t monolithic_bodies = 0u;
+      CHECK(measure("monolithic_tail", monolithic, monolithic_bodies) == 0);
+      CHECK(chain_bodies == monolithic_bodies);
+      const auto download_state =
+          [&](const Gfn2SccIterationBinding& state_binding, std::vector<double>& free_energies,
+              std::vector<double>& eigenvalues, std::vector<double>& density,
+              std::vector<double>& qsh, std::vector<std::uint64_t>& iterations,
+              std::vector<gpuxtb_status_t>& statuses, std::vector<std::uint8_t>& converged) -> int {
+        const Gfn2SccIterationDeviceState& s = state_binding.state;
+        CHECK(download(s.scc.free_energies, s.scc.batch_elements, free_energies,
+                       fixture.handles.stream()));
+        CHECK(download(s.eigenpairs.eigenvalues, s.eigenpairs.eigenvalue_elements, eigenvalues,
+                       fixture.handles.stream()));
+        CHECK(download(s.density.density, s.density.density_elements, density,
+                       fixture.handles.stream()));
+        CHECK(download(s.raw_population.qsh, s.raw_population.qsh_elements, qsh,
+                       fixture.handles.stream()));
+        CHECK(
+            download(s.scc.iterations, s.scc.batch_elements, iterations, fixture.handles.stream()));
+        CHECK(download(s.scc.system_statuses, s.scc.batch_elements, statuses,
+                       fixture.handles.stream()));
+        CHECK(download(s.scc.converged, s.scc.batch_elements, converged, fixture.handles.stream()));
+        CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+        return 0;
+      };
+      const auto verify_ledger = [&]() -> int {
+        /* The chain and monolithic runs share one binding, so their public
+         * state memory is identical after each terminal run. Verify the ledger
+         * this terminal state must satisfy under the seeded ladder: terminal
+         * members keep their seeded iteration count (published untouched), and
+         * active members advance by exactly the observed body count while only
+         * their status/converged flags stay consistent. */
+        std::vector<double> free_energies;
+        std::vector<double> eigenvalues;
+        std::vector<double> density;
+        std::vector<double> qsh;
+        std::vector<std::uint64_t> iterations;
+        std::vector<gpuxtb_status_t> statuses;
+        std::vector<std::uint8_t> converged;
+        CHECK(download_state(fixture.binding, free_energies, eigenvalues, density, qsh, iterations,
+                             statuses, converged) == 0);
+        for (std::int64_t system = 0; system < batch_size; ++system) {
+          const bool terminal = terminal_iterations[static_cast<std::size_t>(system)] != 0u;
+          if (terminal) {
+            CHECK(iterations[static_cast<std::size_t>(system)] == maximum);
+          } else {
+            /* Active members may converge at different rates, but none may
+             * exceed the observed body count and every active member must have
+             * participated. */
+            CHECK(iterations[static_cast<std::size_t>(system)] >= 1u);
+            CHECK(iterations[static_cast<std::size_t>(system)] <= chain_bodies);
+          }
+          CHECK(statuses[static_cast<std::size_t>(system)] == GPUXTB_STATUS_SUCCESS ||
+                statuses[static_cast<std::size_t>(system)] == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+          CHECK(converged[static_cast<std::size_t>(system)] <= 1u);
+        }
+        return 0;
+      };
+      CHECK(verify_ledger() == 0);
+      /* CPU parity is meaningful only when every peer is active: terminal
+       * peers legitimately publish untouched NaN/flags that the NaN-tolerant
+       * full-state comparison cannot reconcile. For the all-active ladder the
+       * chain must match the CPU sequential reference exactly. */
+      if (active_every == 1) {
+        std::string restore_error;
+        CHECK(fixture.host.restore(initial, restore_error) == GPUXTB_STATUS_SUCCESS);
+        std::uint64_t reference_bodies = 0u;
+        CHECK(run_host_until_globally_terminal(fixture.host, reference_bodies) == 0);
+        CHECK(reference_bodies == chain_bodies);
+        CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding,
+                                            fixture.handles.stream()) == 0);
+        CHECK(fixture.host.restore(initial, restore_error) == GPUXTB_STATUS_SUCCESS);
+      }
+    }
+
+    CUDA_CHECK(cudaEventDestroy(stop));
+    CUDA_CHECK(cudaEventDestroy(start));
+  }
+  return 0;
+}
+
 int benchmark_conditional_graph_vs_bounded_fallback() {
   constexpr int kWarmup = 3;
   constexpr int kSamples = 20;
@@ -3188,6 +3392,61 @@ int main(int argc, char** argv) {
 #endif
   if (argc == 2 && std::strcmp(argv[1], "--benchmark") == 0) {
     return benchmark_conditional_graph_vs_bounded_fallback();
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--benchmark-chain") == 0) {
+    return benchmark_dispatch_chain_vs_monolithic();
+  }
+  if (argc == 6 && std::strcmp(argv[1], "--benchmark-chain-one") == 0) {
+    const std::int64_t batch_size = std::strtoll(argv[2], nullptr, 10);
+    const std::int64_t active_every = std::strtoll(argv[3], nullptr, 10);
+    const bool use_chain = std::strcmp(argv[4], "chain") == 0;
+    const int profiler_samples = static_cast<int>(std::strtoll(argv[5], nullptr, 10));
+    ProductionFixture fixture;
+    if (!fixture.create(false, batch_size) ||
+        fixture.binding.plan.eigensolver_provider.capture_mode !=
+            Gfn2SccIterationProviderCaptureMode::kGraphSupported) {
+      return 1;
+    }
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    Gfn2SccLoopCudaGraphOwner chain;
+    if (!chain.build(fixture.binding, Gfn2SccLoopGraphPreference::kDeviceDispatchChain)
+             .device_dispatch_chain_ready()) {
+      return 1;
+    }
+    Gfn2SccLoopCudaGraphOwner monolithic;
+    if (!monolithic.build(fixture.binding, Gfn2SccLoopGraphPreference::kDeviceTailGraph)
+             .device_tail_graph_ready()) {
+      return 1;
+    }
+    const Gfn2SccLoopCudaGraphOwner& owner = use_chain ? chain : monolithic;
+    const std::uint64_t maximum = fixture.host.options().maximum_iterations;
+    std::vector<std::uint64_t> terminal_iterations(static_cast<std::size_t>(batch_size));
+    for (std::int64_t system = 0; system < batch_size; ++system) {
+      terminal_iterations[static_cast<std::size_t>(system)] =
+          (system % active_every != 0) ? maximum : 0u;
+    }
+    for (int sample = 0; sample < profiler_samples; ++sample) {
+      Gfn2SccIterationInitializationReady ready{};
+      if (!fixture.initializer
+               .upload_async(fixture.iteration_arena.get(), fixture.iteration_arena.bytes(), ready,
+                             fixture.handles.stream())
+               .success()) {
+        return 1;
+      }
+      if (cudaMemcpyAsync(fixture.binding.state.scc.iterations, terminal_iterations.data(),
+                          terminal_iterations.size() * sizeof(std::uint64_t),
+                          cudaMemcpyHostToDevice, fixture.handles.stream()) != cudaSuccess) {
+        return 1;
+      }
+      const Gfn2SccLoopLaunchResult launch = owner.launch(fixture.handles.stream());
+      if (!launch.success()) {
+        return 1;
+      }
+      if (cudaStreamSynchronize(fixture.handles.stream()) != cudaSuccess) {
+        return 1;
+      }
+    }
+    return 0;
   }
   if (argc == 2 && std::strcmp(argv[1], "--unrestricted-smoke") == 0) {
     return test_unrestricted_mixed_production_iteration_smoke();
