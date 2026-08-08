@@ -545,6 +545,13 @@ struct SystemExecution {
   PeriodicEmbeddingPlan periodic;
   SccDriverPlan driver;
 
+  /* Optional intra-system parallel dispatch for a single-system batch. Set by
+   * the execution cache only when batch_size == 1, so the calling thread is
+   * the sole pool user and the idle background workers can safely execute the
+   * per-iteration chunked phases without reentrant pool use. A null executor
+   * keeps the serial path exactly. */
+  SccParallelExecutor parallel_executor;
+
   std::vector<double> positions;
   std::vector<double> point_positions;
   std::vector<double> point_charges;
@@ -1109,9 +1116,10 @@ gpuxtb_status_t SystemExecution::run_scc(const CpuLinearAlgebraBackend& backend,
                                          std::string& error) {
   while (driver_state.converged[0] == 0u &&
          driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS) {
-    const gpuxtb_status_t status =
-        iterate_scc_driver_batch_cpu(driver, geometry, backend, overlap_cache, wavefunction,
-                                     mixer_state, driver_state, driver_workspace, error);
+    const gpuxtb_status_t status = iterate_scc_driver_batch_cpu(
+        driver, geometry, backend, overlap_cache, wavefunction, mixer_state, driver_state,
+        driver_workspace, error,
+        scc_parallel_enabled(parallel_executor) ? &parallel_executor : nullptr);
     if (status != GPUXTB_STATUS_SUCCESS) {
       return status;
     }
@@ -1357,6 +1365,14 @@ struct Gfn2CpuExecutionCache::Impl {
   const std::size_t cpu_threads;
   CpuWorkerPool workers;
 
+  /* Adapter from the SCC driver's chunked executor to this context's fixed
+   * worker pool. Used only for batch==1, when the pool is idle. */
+  static void dispatch_scc_chunks(void* pool_context, std::size_t chunk_count,
+                                  void (*body)(void*, std::size_t) noexcept,
+                                  void* body_context) noexcept {
+    static_cast<CpuWorkerPool*>(pool_context)->parallel_for(chunk_count, body_context, body);
+  }
+
   gpuxtb_status_t ensure_backend(std::string& error) {
     if (backend_initialized) {
       return GPUXTB_STATUS_SUCCESS;
@@ -1374,8 +1390,19 @@ struct Gfn2CpuExecutionCache::Impl {
     }
     std::vector<std::unique_ptr<SystemExecution>> candidate;
     candidate.reserve(requested.size());
+    /* Intra-system phase parallelism is valid only when a single system runs
+     * in this batch: the outer parallel_for then short-circuits to the calling
+     * thread and the pool is idle, so dispatching per-iteration chunks to it is
+     * not reentrant. For larger batches the pool is already executing the outer
+     * per-system tasks and must not be re-entered from inside them. */
+    const bool intra_system_parallel = requested.size() == 1u;
     for (const SystemKey& key : requested) {
       auto system = std::make_unique<SystemExecution>(key);
+      if (intra_system_parallel) {
+        system->parallel_executor.pool_context = &workers;
+        system->parallel_executor.worker_count = cpu_threads;
+        system->parallel_executor.dispatch_chunks = &dispatch_scc_chunks;
+      }
       const gpuxtb_status_t status = system->build(error);
       if (status != GPUXTB_STATUS_SUCCESS) {
         return status;

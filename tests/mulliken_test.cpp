@@ -12,6 +12,7 @@
 #include <limits>
 #include <new>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <vector>
 
@@ -69,6 +70,7 @@ using gpuxtb::detail::gfn2::MullikenPlan;
 using gpuxtb::detail::gfn2::MullikenPopulationView;
 using gpuxtb::detail::gfn2::MullikenPotentialView;
 using gpuxtb::detail::gfn2::MullikenWorkspace;
+using gpuxtb::detail::gfn2::SccParallelExecutor;
 using gpuxtb::detail::gfn2::WavefunctionLayout;
 
 static_assert(std::is_trivially_copyable_v<MullikenIntegralView>);
@@ -1671,7 +1673,161 @@ int test_malformed_layout_alignment_and_partial_alias() {
 
 }  // namespace
 
+/* Test-only chunked executor that mirrors the runtime worker pool's dispatch
+ * contract for the SCC driver's optional batch==1 parallel path: every chunk
+ * index in [0, chunk_count) runs exactly once on one of a few std::threads, in
+ * arbitrary order. The numerical contract under test is that the chunked path
+ * produces byte-identical results to the serial path. */
+SccParallelExecutor test_parallel_executor() {
+  struct Dispatcher {
+    static void run(void*, std::size_t chunk_count, void (*body)(void*, std::size_t) noexcept,
+                    void* body_context) {
+      const std::size_t worker_count =
+          std::min<std::size_t>(4u, std::max<std::size_t>(1u, chunk_count));
+      std::atomic<std::size_t> next{0u};
+      std::vector<std::thread> threads;
+      threads.reserve(worker_count > 0u ? worker_count - 1u : 0u);
+      for (std::size_t worker = 0u; worker + 1u < worker_count; ++worker) {
+        threads.emplace_back([&]() {
+          for (std::size_t index = next.fetch_add(1u); index < chunk_count;
+               index = next.fetch_add(1u)) {
+            body(body_context, index);
+          }
+        });
+      }
+      for (std::size_t index = next.fetch_add(1u); index < chunk_count;
+           index = next.fetch_add(1u)) {
+        body(body_context, index);
+      }
+      for (std::thread& thread : threads) {
+        thread.join();
+      }
+    }
+  };
+  return {nullptr, 4u, &Dispatcher::run};
+}
+
+int test_parallel_path_is_bit_identical() {
+  const auto fill_fixture = [](Fixture& fixture) {
+    for (std::size_t index = 0; index < fixture.overlap.size(); ++index) {
+      fixture.overlap[index] = 0.41 - 0.0011 * static_cast<double>(index);
+    }
+    for (std::size_t index = 0; index < fixture.dipole_integrals.size(); ++index) {
+      fixture.dipole_integrals[index] = -0.23 + 0.0008 * static_cast<double>(index);
+    }
+    for (std::size_t index = 0; index < fixture.quadrupole_integrals.size(); ++index) {
+      fixture.quadrupole_integrals[index] = 0.13 - 0.00023 * static_cast<double>(index);
+    }
+    for (std::size_t index = 0; index < fixture.density.size(); ++index) {
+      fixture.density[index] = 0.16 + 0.0031 * static_cast<double>(index);
+    }
+    for (std::size_t index = 0; index < fixture.vat.size(); ++index) {
+      fixture.vat[index] = -0.19 + 0.043 * static_cast<double>(index);
+      fixture.vsh[index] = 0.12 - 0.027 * static_cast<double>(index);
+    }
+    for (std::size_t index = 0; index < fixture.dipole_potential.size(); ++index) {
+      fixture.dipole_potential[index] = -0.06 + 0.009 * static_cast<double>(index);
+    }
+    for (std::size_t index = 0; index < fixture.quadrupole_potential.size(); ++index) {
+      fixture.quadrupole_potential[index] = 0.04 - 0.0015 * static_cast<double>(index);
+    }
+    for (std::size_t index = 0; index < fixture.hamiltonian.size(); ++index) {
+      fixture.hamiltonian[index] = 0.07 + 0.0013 * static_cast<double>(index);
+    }
+  };
+
+  for (const std::int32_t spin_channels : {1, 2}) {
+    Fixture serial_fixture;
+    Fixture parallel_fixture;
+    std::string error;
+    /* Six atoms of mixed size (three C + three H) so the atom-contiguous chunk
+     * split across a few threads owns heterogeneous helper orbital counts. */
+    /* Two carbons and four hydrogens: 16 electrons so both closed and
+     * open-shell unpaired counts are representable. */
+    const std::vector<std::int32_t> atomic_numbers{6, 6, 1, 1, 1, 1};
+    const std::int32_t unpaired = spin_channels == 2 ? 2 : 0;
+    CHECK(make_fixture({0, 6}, atomic_numbers, {0.0}, {unpaired}, {spin_channels}, serial_fixture,
+                       error));
+    CHECK(make_fixture({0, 6}, atomic_numbers, {0.0}, {unpaired}, {spin_channels}, parallel_fixture,
+                       error));
+    fill_fixture(serial_fixture);
+    fill_fixture(parallel_fixture);
+
+    /* Serial population reference. */
+    CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
+              serial_fixture.plan, integral_view(serial_fixture), density_view(serial_fixture),
+              population_view(serial_fixture), 0, workspace_view(serial_fixture),
+              error) == GPUXTB_STATUS_SUCCESS);
+    const std::vector<double> ref_qsh = serial_fixture.qsh;
+    const std::vector<double> ref_qat = serial_fixture.qat;
+    const std::vector<double> ref_dipole = serial_fixture.dipole;
+    const std::vector<double> ref_quadrupole = serial_fixture.quadrupole;
+
+    /* Parallel population must equal the serial reference bit-for-bit. */
+    SccParallelExecutor parallel = test_parallel_executor();
+    CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
+              parallel_fixture.plan, integral_view(parallel_fixture),
+              density_view(parallel_fixture), population_view(parallel_fixture), 0,
+              workspace_view(parallel_fixture), error, &parallel) == GPUXTB_STATUS_SUCCESS);
+    CHECK(std::equal(ref_qsh.begin(), ref_qsh.end(), parallel_fixture.qsh.begin()));
+    CHECK(std::equal(ref_qat.begin(), ref_qat.end(), parallel_fixture.qat.begin()));
+    CHECK(std::equal(ref_dipole.begin(), ref_dipole.end(), parallel_fixture.dipole.begin()));
+    CHECK(std::equal(ref_quadrupole.begin(), ref_quadrupole.end(),
+                     parallel_fixture.quadrupole.begin()));
+
+    /* Serial Hamiltonian reference. */
+    CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+              serial_fixture.plan, integral_view(serial_fixture), potential_view(serial_fixture),
+              hamiltonian_view(serial_fixture), 0, workspace_view(serial_fixture),
+              error) == GPUXTB_STATUS_SUCCESS);
+    const std::vector<double> ref_hamiltonian = serial_fixture.hamiltonian;
+
+    /* Parallel Hamiltonian must equal the serial reference bit-for-bit. */
+    CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+              parallel_fixture.plan, integral_view(parallel_fixture),
+              potential_view(parallel_fixture), hamiltonian_view(parallel_fixture), 0,
+              workspace_view(parallel_fixture), error, &parallel) == GPUXTB_STATUS_SUCCESS);
+    CHECK(std::equal(ref_hamiltonian.begin(), ref_hamiltonian.end(),
+                     parallel_fixture.hamiltonian.begin()));
+  }
+
+  /* The parallel path preserves the data-level failure contract: a poisoned
+   * target fails deterministically and leaves the outputs untouched. */
+  Fixture poisoned;
+  std::string error;
+  CHECK(make_fixture({0, 6}, {6, 6, 1, 1, 1, 1}, {0.0}, {0}, {1}, poisoned, error));
+  fill_fixture(poisoned);
+  poisoned.density[0] = std::numeric_limits<double>::quiet_NaN();
+  SccParallelExecutor parallel = test_parallel_executor();
+  std::fill(poisoned.qsh.begin(), poisoned.qsh.end(), 3.0);
+  std::fill(poisoned.qat.begin(), poisoned.qat.end(), 4.0);
+  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
+            poisoned.plan, integral_view(poisoned), density_view(poisoned),
+            population_view(poisoned), 0, workspace_view(poisoned), error,
+            &parallel) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(std::all_of(poisoned.qsh.begin(), poisoned.qsh.end(),
+                    [](double value) { return value == 3.0; }));
+  CHECK(std::all_of(poisoned.qat.begin(), poisoned.qat.end(),
+                    [](double value) { return value == 4.0; }));
+
+  Fixture poisoned_hamiltonian;
+  CHECK(make_fixture({0, 6}, {6, 6, 1, 1, 1, 1}, {0.0}, {0}, {1}, poisoned_hamiltonian, error));
+  fill_fixture(poisoned_hamiltonian);
+  poisoned_hamiltonian.overlap[0] = std::numeric_limits<double>::quiet_NaN();
+  const std::vector<double> before_failure = poisoned_hamiltonian.hamiltonian;
+  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+            poisoned_hamiltonian.plan, integral_view(poisoned_hamiltonian),
+            potential_view(poisoned_hamiltonian), hamiltonian_view(poisoned_hamiltonian), 0,
+            workspace_view(poisoned_hamiltonian), error,
+            &parallel) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(poisoned_hamiltonian.hamiltonian == before_failure);
+  return 0;
+}
+
 int main() {
+  if (const int line = test_parallel_path_is_bit_identical(); line != 0) {
+    return line;
+  }
   if (const int line = test_two_ao_population_fixture(); line != 0) {
     return line;
   }
