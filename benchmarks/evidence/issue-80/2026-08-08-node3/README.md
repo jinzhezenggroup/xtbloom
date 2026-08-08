@@ -23,14 +23,17 @@ PR #227 makes a runtime choice.
 - Compiler: GCC 11.4.0; CMake 4.2.1; Release build; Ninja generator.
 - Nsight Systems: 2025.1.3.140.
 - Compute Sanitizer: 2025.2.1.0.
-- Measured source revision: `085c4c249c0f86455ee26b05d19b46f74dfa4724` (the
-  #227 feature branch merged against current main; working tree clean apart
-  from this evidence bundle and the benchmark-mode additions to
-  `tests/cuda_scc_iteration_production_test.cu`).
-- Benchmark binary: `build/cuda-sm120/gpuxtb_cuda_scc_loop_benchmark`.
+- Measured source revision: `847dc1db90db072aab255c6deef76f4b3e7ef7de`
+  (clean #227 source commit; evidence files were replaced only after the run).
+- Benchmark binary: `build/fix227-cuda/gpuxtb_cuda_scc_loop_benchmark`, SHA-256
+  `5ccf7186058017134e80a6763a7dfc851b5ee176fca0932cbcbc550a7f5e8156`.
+- Shared library: `build/fix227-cuda/libgpuxtb.so.0.1.0`, SHA-256
+  `9cfbf77194204cd39bc8681329b4a2f9b1145484872f958a2fe43ad3df707be4`.
 - Effective CMake cache: `GPUXTB_ENABLE_CUDA=ON`,
   `CMAKE_CUDA_COMPILER=/group/software/cuda-12.9.1/bin/nvcc`,
-  `CMAKE_CUDA_ARCHITECTURES=120`, `CMAKE_BUILD_TYPE=Release`.
+  `CMAKE_CUDA_ARCHITECTURES=120`, `CMAKE_BUILD_TYPE=Release`,
+  `BUILD_SHARED_LIBS=ON`, and the LP64 SciPy OpenBLAS runtime listed in
+  `build-metadata.txt`.
 
 The CUDA runtime loaded for every run is the 12.9 toolkit
 (`/group/software/cuda-12.9.1/lib64`), matching the compiler used to build the
@@ -63,7 +66,11 @@ Per tier the runner:
 4. keeps 50 measured samples after 3 warmups, and always validates launch
    success before accepting a sample,
 5. requires both families to execute the same number of numerical bodies,
-6. verifies the terminal ledger (terminal members untouched at their seeded
+6. snapshots and compares both families' free energies, eigenvalues,
+   occupations, density matrices, weighted density matrices, shell/atomic
+   charges, dipoles, quadrupoles, iteration counts, statuses, and convergence
+   flags after every coordinate,
+7. verifies the terminal ledger (terminal members untouched at their seeded
    count; active members advanced) and, for the all-active tier, verifies the
    chain's full published state equals the sequential CPU reference
    (`run_host_until_globally_terminal` + `compare_graph_loop_cpu_parity`).
@@ -77,7 +84,8 @@ downloads happen after the timed interval.
 - `production-chain-vs-monolithic.jsonl`: one protocol object followed by one
   measurement object per (batch, activity tier, family). Each measurement
   carries mean/min/median/p95 over the 50 samples, the numerical body count,
-  and all 50 raw sample latencies as trailing CSV values.
+  and all 50 raw sample latencies in a valid `raw_samples_ms` JSON array. The
+  file has 21 valid JSON objects, 20 measurements, and 1,000 raw samples.
 - `production-crossover-summary.csv`: derived compact view (mean, speedup,
   body counts) per row.
 
@@ -92,23 +100,22 @@ ledger consistent for the seeded ladder
 ```
 
 and for the all-active tier the chain's final state matches the CPU sequential
-reference exactly (the existing `gpuxtb.cuda.scc_iteration_production` CPU
-parity gates also pass on this build: 99/99 CUDA CTest).
+reference exactly.
 
 Mean full-loop latency (50 samples, RTX 5090):
 
 | Batch | Active | chain ms | monolithic ms | speedup |
 | --- | --- | ---: | ---: | ---: |
-| 1 | 1.000 | 1.417 | 1.357 | 0.96x |
-| 8 | 1.000 | 5.461 | 5.548 | 1.02x |
-| 8 | 0.500 | 4.152 | 5.208 | 1.25x |
-| 8 | 0.250 | 1.689 | 2.471 | 1.46x |
-| 32 | 1.000 | 6.672 | 6.739 | 1.01x |
-| 32 | 0.500 | 5.006 | 6.446 | 1.29x |
-| 32 | 0.250 | 2.028 | 3.112 | 1.53x |
-| 128 | 1.000 | 10.810 | 10.311 | 0.95x |
-| 128 | 0.500 | 8.239 | 9.711 | 1.18x |
-| 128 | 0.250 | 3.337 | 4.599 | 1.38x |
+| 1 | 1.000 | 1.416 | 1.357 | 0.96x |
+| 8 | 1.000 | 5.462 | 5.548 | 1.02x |
+| 8 | 0.500 | 4.153 | 5.073 | 1.22x |
+| 8 | 0.250 | 1.589 | 2.346 | 1.48x |
+| 32 | 1.000 | 6.673 | 6.741 | 1.01x |
+| 32 | 0.500 | 5.006 | 6.447 | 1.29x |
+| 32 | 0.250 | 2.029 | 3.112 | 1.53x |
+| 128 | 1.000 | 10.809 | 10.310 | 0.95x |
+| 128 | 0.500 | 8.245 | 9.769 | 1.18x |
+| 128 | 0.250 | 3.439 | 4.735 | 1.38x |
 
 Conclusions, stated narrowly and only for the recorded stack/workloads:
 
@@ -123,13 +130,16 @@ Conclusions, stated narrowly and only for the recorded stack/workloads:
   launch. The #131 component evidence recorded the same effect (compacted
   slower than uncompacted at capacity tier).
 - Batch-1 always keeps its single member active; its three recorded tiers are
-  the same workload and are deduplicated in the JSONL by design.
+  the same workload and are deduplicated in the JSONL by design. The forced
+  chain row documents the crossover; production `kAuto` now selects the faster
+  monolithic graph for singleton batches.
 
 Correctness evidence: the all-active tier runs the CPU sequential reference and
 passes `compare_graph_loop_cpu_parity`; the full production test binary passes
-99/99 CUDA CTest rows on this stack, including the forced dispatch-chain CPU
-parity for batch 1/8/32/128, mixed-spin bounded fallback, dynamic-geometry
-epoch parity, and chain-owner whole-pipeline capture.
+as part of the 110/110 full CUDA CTest run on this stack, including forced
+dispatch-chain CPU parity for batch 1/8/32/128, mixed-spin bounded fallback,
+dynamic-geometry epoch parity, and chain-owner whole-pipeline capture. The
+same run includes public host/device/mixed conformance and invariants.
 
 ## Profiler capture
 
@@ -141,11 +151,19 @@ environment and credentials, so they are intentionally not committed; only the
 derived CSV summaries are retained. Export commands:
 
 ```bash
-nsys profile -o chain32-aquarter -t cuda gpuxtb_cuda_scc_loop_benchmark \
+/group/software/cuda-12.9.1/bin/nsys profile --force-overwrite=true \
+  --output=chain32-aquarter-847dc1d --trace=cuda --show-output=false \
+  build/fix227-cuda/gpuxtb_cuda_scc_loop_benchmark \
   --benchmark-chain-one 32 4 chain 40
-nsys stats --force-export=true --report cuda_gpu_kern_sum --format csv \
-  --output nsys-chain32-aquarter-kern_sum chain32-aquarter.nsys-rep
+/group/software/cuda-12.9.1/bin/nsys stats --force-export=true \
+  --report cuda_gpu_kern_sum --format csv \
+  --output nsys-chain32-aquarter-847dc1d \
+  chain32-aquarter-847dc1d.nsys-rep
 ```
+
+The monolithic capture used the same command with `monolithic` and matching
+output names. Raw reports and exported SQLite files were deleted after the two
+kernel-summary CSVs were checked for environment or credential content.
 
 On this NVIDIA stack, device-launched Graph kernels are not individually
 attributable by `nsys stats`, so these summaries document the steady-state
@@ -160,9 +178,12 @@ the authoritative timing.
 - `sanitizer-memcheck-monolithic.log`, `sanitizer-initcheck-monolithic.log`,
   `sanitizer-racecheck-monolithic.log`: 0 errors for the monolithic loop.
 - `sanitizer-synccheck-chain.log`, `sanitizer-synccheck-monolithic.log`:
-  identical nvidia-tool artifact in both families at
+  the same NVIDIA-tool report signature in both families at
   `gpuxtb::detail::cuda::reduce_spin_atomic_charges_kernel` when a device-
   launched CUDA Graph is replayed under Compute Sanitizer's synccheck tool.
+  The chain run exits 99 with 7,136 errors and the monolithic run exits 99 with
+  7,456 errors; both retained logs use the tool's default 100-report print
+  limit. These rows are failures, not a four-tool pass.
   This is the same class of device-launch Graph/tool boundary documented for
   #130/#131/#140/#141 (there reported against NVIDIA `batch_trsm_left_kernel`);
   it is not specific to the dispatch chain, appears identically in the
@@ -172,6 +193,18 @@ the authoritative timing.
   path under synccheck reports 0 errors (`sanitizer-synccheck-direct.log`),
   matching the archived issue-131/issue-232 direct memcheck/initcheck/racecheck/
   synccheck controls.
+
+The Graph-family sanitizer command was, for each tool and mode:
+
+```bash
+/group/software/cuda-12.9.1/bin/compute-sanitizer --tool <tool> \
+  --error-exitcode=99 --log-file <log> \
+  build/fix227-cuda/gpuxtb_cuda_scc_loop_benchmark \
+  --benchmark-chain-one 32 4 <chain|monolithic> 1
+```
+
+The direct control used synccheck on
+`gpuxtb_cuda_scc_iteration_production_test --unrestricted-parity`.
 
 ## Limitations
 
@@ -183,5 +216,7 @@ the authoritative timing.
   production runtime matrix is covered by the existing sanitizer-tested
   production tests).
 - The synccheck Graph-replay tool artifact is recorded, not waived here; it is
-  identical and pre-existing in the monolithic production path, so it is not a
-  regression attributable to the exact-capacity integration.
+  the same pre-existing signature in the monolithic production path, so it is
+  not a regression attributable to the exact-capacity integration. Issue #80
+  stays open pending a separate disposition for this signature and its
+  unresolved dependency on #69.
