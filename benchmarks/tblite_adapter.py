@@ -335,9 +335,7 @@ class TbliteAdapter:
         self, context: ctypes.c_void_p, calculator: ctypes.c_void_p
     ) -> None:
         """Apply the benchmark's SCC settings to one calculator."""
-        self.library.tblite_set_calculator_accuracy(
-            context, calculator, self.accuracy
-        )
+        self.library.tblite_set_calculator_accuracy(context, calculator, self.accuracy)
         self.library.tblite_set_calculator_max_iter(
             context, calculator, self.max_iterations
         )

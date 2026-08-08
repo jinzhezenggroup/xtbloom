@@ -414,9 +414,7 @@ class XtbAdapter:
                 state.environment, state.molecule, calculator, None
             )
             self._check(state.environment, "xtb_loadGFN2xTB")
-            self.library.xtb_setAccuracy(
-                state.environment, calculator, self.accuracy
-            )
+            self.library.xtb_setAccuracy(state.environment, calculator, self.accuracy)
             self.library.xtb_setMaxIter(
                 state.environment, calculator, self.max_iterations
             )
