@@ -146,13 +146,26 @@ def _configure_library(path: Path) -> ctypes.CDLL:
 
 def _enforce_single_thread(library_directory: Path) -> dict[str, Any]:
     """Pin OpenMP/OpenBLAS before libxtb performs any numerical work."""
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["OPENBLAS_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
+    return _configure_runtime_threads(library_directory, 1)
+
+
+def _configure_runtime_threads(library_directory: Path, threads: int) -> dict[str, Any]:
+    """Expose the requested OpenMP/OpenBLAS thread count to the reference engine.
+
+    The cross-engine benchmark runs every engine with the same worker budget so
+    the three figures compare equal resources. ``threads=1`` reproduces the
+    original single-thread-pinned rows; ``threads>1`` lets OpenMP-enabled
+    reference builds use their worker threads exactly like gpuxtb's worker
+    pool and dxtb's Torch intra-op threads.
+    """
+    thread_text = str(int(threads))
+    os.environ["OMP_NUM_THREADS"] = thread_text
+    os.environ["OPENBLAS_NUM_THREADS"] = thread_text
+    os.environ["MKL_NUM_THREADS"] = thread_text
     controls: dict[str, Any] = {
-        "OMP_NUM_THREADS": "1",
-        "OPENBLAS_NUM_THREADS": "1",
-        "MKL_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": thread_text,
+        "OPENBLAS_NUM_THREADS": thread_text,
+        "MKL_NUM_THREADS": thread_text,
         "omp_set_num_threads": False,
         "openblas_set_num_threads": False,
     }
@@ -163,7 +176,7 @@ def _enforce_single_thread(library_directory: Path) -> dict[str, Any]:
         openmp.omp_set_num_threads.argtypes = [ctypes.c_int]
         openmp.omp_set_num_threads.restype = None
         openmp.omp_set_dynamic(0)
-        openmp.omp_set_num_threads(1)
+        openmp.omp_set_num_threads(threads)
         _THREAD_RUNTIME_KEEPALIVE.append(openmp)
         controls["omp_set_num_threads"] = True
     except (OSError, AttributeError):
@@ -172,7 +185,7 @@ def _enforce_single_thread(library_directory: Path) -> dict[str, Any]:
         blas = ctypes.CDLL(str(library_directory / "libopenblas.so.0"))
         blas.openblas_set_num_threads.argtypes = [ctypes.c_int]
         blas.openblas_set_num_threads.restype = None
-        blas.openblas_set_num_threads(1)
+        blas.openblas_set_num_threads(threads)
         _THREAD_RUNTIME_KEEPALIVE.append(blas)
         controls["openblas_set_num_threads"] = True
     except (OSError, AttributeError):
@@ -221,9 +234,15 @@ class XtbAdapter:
         accuracy: float = 1.0e-4,
         max_iterations: int = 500,
         electronic_temperature_kelvin: float = 300.0,
+        threads: int = 1,
     ) -> None:
+        if type(threads) is not int or threads <= 0:
+            raise XtbError("xTB threads must be a positive integer")
         self.library_path = library_path
-        self.thread_control = _enforce_single_thread(library_path.resolve().parent)
+        self.threads = threads
+        self.thread_control = _configure_runtime_threads(
+            library_path.resolve().parent, threads
+        )
         self.library = _configure_library(library_path)
         self.api_version = int(self.library.xtb_getAPIVersion())
         if self.api_version < XTB_API_VERSION_1_0_0:
@@ -375,6 +394,48 @@ class XtbAdapter:
             _delete(self.library, "xtb_delMolecule", molecule)
             _delete(self.library, "xtb_delEnvironment", environment)
             raise
+
+    def restart_scc(self) -> None:
+        """Drop the converged density and restart every system from SAD.
+
+        xTB's public API keeps the SCC restart state inside the calculator, so
+        a genuinely cold measured sample rebuilds the calculator and result
+        while retaining the persistent molecule and caller-owned buffers. This
+        makes a ``--cold-samples`` panel-1 row the real cold-start comparison.
+        """
+        for state in self.states:
+            _delete(self.library, "xtb_delResults", state.result)
+            _delete(self.library, "xtb_delCalculator", state.calculator)
+            calculator = ctypes.c_void_p(self.library.xtb_newCalculator())
+            result = ctypes.c_void_p(self.library.xtb_newResults())
+            if not calculator or not result:
+                raise XtbError("xTB calculator or result allocation returned NULL")
+            self.library.xtb_loadGFN2xTB(
+                state.environment, state.molecule, calculator, None
+            )
+            self._check(state.environment, "xtb_loadGFN2xTB")
+            self.library.xtb_setAccuracy(
+                state.environment, calculator, self.accuracy
+            )
+            self.library.xtb_setMaxIter(
+                state.environment, calculator, self.max_iterations
+            )
+            self.library.xtb_setElectronicTemp(
+                state.environment, calculator, self.electronic_temperature_kelvin
+            )
+            self._check(state.environment, "configure xTB calculator")
+            if state.has_external_charges:
+                self.library.xtb_setExternalCharges(
+                    state.environment,
+                    calculator,
+                    ctypes.byref(state.point_count),
+                    state.point_numbers,
+                    state.point_charges,
+                    state.point_positions,
+                )
+                self._check(state.environment, "xtb_setExternalCharges")
+            state.calculator = calculator
+            state.result = result
 
     def invoke(self) -> None:
         """Run a serial logical batch, including geometry update and result getters."""

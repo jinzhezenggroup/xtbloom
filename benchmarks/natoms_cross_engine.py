@@ -483,6 +483,7 @@ class ReferenceRunner:
                 None,
                 accuracy=1.0e-4,
                 max_iterations=500,
+                threads=cpu_threads,
             )
             self.engine = "xtb"
         elif engine == "tblite":
@@ -493,6 +494,7 @@ class ReferenceRunner:
                 accuracy=1.0e-4,
                 max_iterations=500,
                 collect_atomic_charges=False,
+                threads=cpu_threads,
             )
             self.engine = "tblite"
         elif engine in ("dxtb-cpu", "dxtb-cuda"):
@@ -555,6 +557,17 @@ class ReferenceRunner:
         if getattr(self.adapter, "backend", None) == "cuda":
             self.adapter.synchronize()
 
+    def restart_scc(self) -> None:
+        """Drop convergence state so the next sample is a genuine cold solve.
+
+        Only engines whose persistent adapter can rebuild the SCC state support
+        this; the runner no-ops otherwise (gpuxtb FRESH and dxtb reset already
+        cold-start every measured call).
+        """
+        restart = getattr(self.adapter, "restart_scc", None)
+        if restart is not None:
+            restart()
+
     def snapshot(self) -> dict[str, Any]:
         """Normalize persistent reference results."""
         output = self.adapter.results()
@@ -580,13 +593,20 @@ def measure_cell(
     protocol: tuple[int, int],
     cell: Cell,
     energy_atol_hartree: float,
+    cold_samples: bool = False,
 ) -> dict[str, Any]:
     """Run warmups and measured samples and return a normalized row fragment."""
     warmups, repetitions = protocol
     for _ in range(warmups):
+        if cold_samples and warmups > 0:
+            # Warmups are only meaningful under a restart policy; for a cold
+            # matrix every call (warmup and measured) is a fresh solve.
+            runner.restart_scc()
         runner.invoke()
     raw_samples: list[dict[str, Any]] = []
     for sample_index in range(repetitions):
+        if cold_samples:
+            runner.restart_scc()
         start = time.perf_counter_ns()
         runner.invoke()
         elapsed_ms = (time.perf_counter_ns() - start) * 1.0e-6
@@ -692,6 +712,7 @@ def run_cell(
     warmups: int,
     repetitions: int,
     energy_atol_hartree: float,
+    cold_samples: bool = False,
 ) -> dict[str, Any]:
     """Measure one cell and return a complete row."""
     base = base_row(cell)
@@ -747,7 +768,7 @@ def run_cell(
                 dxtb_source,
             )
         fragment = measure_cell(
-            runner, (warmups, repetitions), cell, energy_atol_hartree
+            runner, (warmups, repetitions), cell, energy_atol_hartree, cold_samples
         )
         row = base_row(cell)
         row.update(fragment)
@@ -923,6 +944,7 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "threads": {
             "cpu_threads": args.cpu_threads,
             "dxtb_cpu_threads": args.dxtb_cpu_threads,
+            "reference_threads": args.cpu_threads,
             "OMP_NUM_THREADS": os.environ.get("OMP_NUM_THREADS"),
             "OPENBLAS_NUM_THREADS": os.environ.get("OPENBLAS_NUM_THREADS"),
             "MKL_NUM_THREADS": os.environ.get("MKL_NUM_THREADS"),
@@ -939,6 +961,7 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "protocol": {
             "warmups": args.warmups,
             "repetitions": args.repetitions,
+            "cold_samples": args.cold_samples,
             "cross_engine_energy_atol_hartree": args.energy_atol,
             "perturb_sigma_bohr": PERTURB_SIGMA_BOHR,
             "trajectory_step_sigma_bohr": TRAJECTORY_STEP_SIGMA_BOHR,
@@ -1025,6 +1048,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--trajectory", action="store_true")
     parser.add_argument(
+        "--cold-samples",
+        action="store_true",
+        help=(
+            "restart every measured sample from a fresh SCC state for every "
+            "engine (xTB/tblite rebuild their calculator; gpuxtb FRESH and "
+            "dxtb reset already cold-start). Without it, reference engines "
+            "warm-continue from the previous sample's converged density."
+        ),
+    )
+    parser.add_argument(
         "--trajectory-natoms",
         type=parse_csv_ints,
         default=(32, 62, 122, 242),
@@ -1106,6 +1139,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.warmups,
                 args.repetitions,
                 args.energy_atol,
+                cold_samples=args.cold_samples,
             )
             elapsed_s = time.perf_counter() - log_start
             rows.append(row)
