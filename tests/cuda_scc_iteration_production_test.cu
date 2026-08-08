@@ -2142,6 +2142,54 @@ int test_dispatch_chain_mixed_spin_falls_back() {
   return 0;
 }
 
+/* The production kAuto preference must choose the monolithic device-tail
+ * graph whenever the batch's largest eigensolver bucket exceeds the measured
+ * dispatch-chain regime, and must keep preferring the exact-capacity chain for
+ * the small-AO batches that issue #80/#131 validated. Forced preferences are
+ * unaffected by the regime predicate. */
+int test_kauto_dispatch_chain_regime_selection() {
+  ProductionFixture fixture;
+  CHECK(fixture.create(false, 8, false, /*mixed_spin_batch=*/false));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(fixture.binding.plan.eigensolver_provider.capture_mode ==
+        Gfn2SccIterationProviderCaptureMode::kGraphSupported);
+
+  Gfn2SccIterationDevicePlan plan = fixture.binding.plan;
+  Gfn2EigensolverBucket synthetic_buckets[4]{};
+  plan.eigensolver_provider.buckets = synthetic_buckets;
+
+  plan.eigensolver_provider.bucket_count = 0;
+  CHECK(!gfn2_scc_dispatch_chain_regime_applies(plan));
+
+  synthetic_buckets[0].orbital_count = 122;
+  plan.eigensolver_provider.bucket_count = 1;
+  CHECK(!gfn2_scc_dispatch_chain_regime_applies(plan));
+
+  synthetic_buckets[0].orbital_count = 40;
+  CHECK(gfn2_scc_dispatch_chain_regime_applies(plan));
+
+  synthetic_buckets[0].orbital_count = 41;
+  CHECK(!gfn2_scc_dispatch_chain_regime_applies(plan));
+
+  synthetic_buckets[0].orbital_count = 40;
+  synthetic_buckets[1].orbital_count = 20;
+  plan.eigensolver_provider.bucket_count = 2;
+  CHECK(gfn2_scc_dispatch_chain_regime_applies(plan));
+
+  synthetic_buckets[1].orbital_count = 122;
+  CHECK(!gfn2_scc_dispatch_chain_regime_applies(plan));
+  plan = fixture.binding.plan;
+
+  /* The real small-AO fixture must still prefer the chain under kAuto. */
+  CHECK(gfn2_scc_dispatch_chain_regime_applies(fixture.binding.plan));
+  Gfn2SccLoopCudaGraphOwner auto_graph;
+  const Gfn2SccLoopGraphBuildResult auto_build =
+      auto_graph.build(fixture.binding, Gfn2SccLoopGraphPreference::kAuto);
+  CHECK(auto_build.device_dispatch_chain_ready());
+  CHECK(!auto_build.device_tail_graph_ready());
+  return 0;
+}
+
 /* The production runtime builds the SCC loop through the geometry-epoch
  * overload (Gfn2GeometryEpochConsumerDevice), which selects the epoch
  * prepare/compact variant and the dynamic-geometry pre/post segment launchers.
@@ -3552,6 +3600,10 @@ int main(int argc, char** argv) {
     if (status != 0) {
       return status;
     }
+    status = test_kauto_dispatch_chain_regime_selection();
+    if (status != 0) {
+      return status;
+    }
     status = test_dispatch_chain_dynamic_geometry_epoch_parity();
     if (status != 0) {
       return status;
@@ -3638,6 +3690,10 @@ int main(int argc, char** argv) {
     return status;
   }
   status = test_dispatch_chain_mixed_spin_falls_back();
+  if (status != 0) {
+    return status;
+  }
+  status = test_kauto_dispatch_chain_regime_selection();
   if (status != 0) {
     return status;
   }

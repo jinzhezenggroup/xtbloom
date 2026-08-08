@@ -1217,8 +1217,9 @@ Gfn2SccLoopGraphBuildResult Gfn2SccLoopCudaGraphOwner::build_impl(
    * the measured dispatch overhead has no compensating compaction benefit.
    * Forced preferences remain exact; only kAuto applies this crossover. */
   const bool dispatch_requested = preference == Gfn2SccLoopGraphPreference::kDeviceDispatchChain;
-  const bool dispatch_beneficial =
-      preference == Gfn2SccLoopGraphPreference::kAuto && binding.plan.topology.batch_size > 1;
+  const bool dispatch_beneficial = preference == Gfn2SccLoopGraphPreference::kAuto &&
+                                   binding.plan.topology.batch_size > 1 &&
+                                   gfn2_scc_dispatch_chain_regime_applies(binding.plan);
   if (dispatch_requested || dispatch_beneficial) {
     Gfn2SccLoopGraphBuildResult dispatch = build_dispatch_chain(*state);
     if (dispatch.status == Gfn2SccLoopGraphBuildStatus::kDeviceDispatchChainReady) {
