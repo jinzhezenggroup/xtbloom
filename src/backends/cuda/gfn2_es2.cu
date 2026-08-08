@@ -643,52 +643,87 @@ __global__ void es2_scc_energy_preflight_kernel(Gfn2ES2DeviceBatch batch, Gfn2ES
                                                 std::uint32_t* system_errors,
                                                 const std::uint32_t* plan_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
-  if (threadIdx.x != 0 || !scc_member_is_active(activity, system_errors, plan_error, system)) {
+  if (!scc_member_is_active(activity, system_errors, plan_error, system)) {
     return;
   }
   const std::int64_t shell_begin = batch.batch_shell_offsets[system];
   const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
   const std::int64_t matrix_begin = batch.matrix_offsets[system];
   const std::int64_t shells = shell_end - shell_begin;
-  double energy = 0.0;
-  for (std::int64_t row = shell_begin; row < shell_end; ++row) {
+
+  /* Each lane owns a strided row slice and keeps that row's column sweep as a
+   * serial FMA chain (the same per-row order as the CPU oracle); only the
+   * outer row combination becomes a block tree reduction. The former version
+   * executed the whole O(shells^2) sweep on one thread per system, leaving
+   * fewer than a warp of active lanes per block. The reordered outer sum
+   * changes rounding far below every retained parity gate (2e-8 relative in
+   * the production test, 5e-7/1e-6 in public conformance). */
+  __shared__ int failure_code;
+  __shared__ double partial[kThreadsPerBlock];
+  if (threadIdx.x == 0) {
+    failure_code = 0;
+  }
+  __syncthreads();
+
+  double local_energy = 0.0;
+  for (std::int64_t row = shell_begin + threadIdx.x; row < shell_end; row += blockDim.x) {
     const double row_charge = shell_charges[row];
     if (!isfinite(row_charge)) {
-      record_scc_system_error(system_errors, system, Gfn2ES2DeviceError::kNonfiniteShellCharge);
-      return;
+      atomicCAS(&failure_code, 0, static_cast<int>(Gfn2ES2DeviceError::kNonfiniteShellCharge));
+      continue;
     }
+    const std::int64_t row_index = (row - shell_begin) * shells;
     double potential = 0.0;
     for (std::int64_t column = shell_begin; column < shell_end; ++column) {
-      const double kernel =
-          cache.coulomb_matrix[matrix_begin + (row - shell_begin) * shells + column - shell_begin];
+      const double kernel = cache.coulomb_matrix[matrix_begin + row_index + column - shell_begin];
       const double column_charge = shell_charges[column];
       if (!(kernel > 0.0) || !isfinite(kernel)) {
-        record_scc_system_error(system_errors, system, Gfn2ES2DeviceError::kInvalidCacheMatrix);
-        return;
+        atomicCAS(&failure_code, 0, static_cast<int>(Gfn2ES2DeviceError::kInvalidCacheMatrix));
+        continue;
       }
       if (!isfinite(column_charge)) {
-        record_scc_system_error(system_errors, system, Gfn2ES2DeviceError::kNonfiniteShellCharge);
-        return;
+        atomicCAS(&failure_code, 0, static_cast<int>(Gfn2ES2DeviceError::kNonfiniteShellCharge));
+        continue;
       }
       const double contribution = kernel * column_charge;
       const double updated = potential + contribution;
       if (!isfinite(contribution) || !isfinite(updated)) {
-        record_scc_system_error(system_errors, system,
-                                Gfn2ES2DeviceError::kNonfiniteEnergyArithmetic);
-        return;
+        atomicCAS(&failure_code, 0,
+                  static_cast<int>(Gfn2ES2DeviceError::kNonfiniteEnergyArithmetic));
+        continue;
       }
       potential = updated;
     }
     const double contribution = 0.5 * row_charge * potential;
-    const double updated = energy + contribution;
+    const double updated = local_energy + contribution;
     if (!isfinite(contribution) || !isfinite(updated)) {
-      record_scc_system_error(system_errors, system,
-                              Gfn2ES2DeviceError::kNonfiniteEnergyArithmetic);
-      return;
+      atomicCAS(&failure_code, 0, static_cast<int>(Gfn2ES2DeviceError::kNonfiniteEnergyArithmetic));
+      continue;
     }
-    energy = updated;
+    local_energy = updated;
   }
-  batch_scratch[system] = energy;
+  partial[threadIdx.x] = local_energy;
+  __syncthreads();
+  for (int offset = kThreadsPerBlock / 2; offset > 0; offset /= 2) {
+    if (threadIdx.x < offset) {
+      const double updated = partial[threadIdx.x] + partial[threadIdx.x + offset];
+      if (!isfinite(updated)) {
+        atomicCAS(&failure_code, 0,
+                  static_cast<int>(Gfn2ES2DeviceError::kNonfiniteEnergyArithmetic));
+      } else {
+        partial[threadIdx.x] = updated;
+      }
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x != 0) {
+    return;
+  }
+  if (failure_code != 0) {
+    record_scc_system_error(system_errors, system, static_cast<Gfn2ES2DeviceError>(failure_code));
+    return;
+  }
+  batch_scratch[system] = partial[0];
 }
 
 __global__ void es2_scc_publish_energy_kernel(Gfn2SccIterationDeviceActivity activity,

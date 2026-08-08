@@ -1118,15 +1118,29 @@ __global__ void symmetrize_spin_transformed_bucket_kernel(Gfn2EigensolverDeviceB
                                      static_cast<std::int64_t>(bucket.orbital_count);
   const std::int64_t matrix_begin = bucket.spin_matrix_scratch_offset + work_local * matrix_stride;
   __shared__ int valid;
+  __shared__ int scan_ok;
   if (threadIdx.x == 0) {
     valid = workspace.eligible[solve_slot] == 1u && system_is_clear(system_errors, system) ? 1 : 0;
-    for (std::int64_t index = 0; valid != 0 && index < matrix_stride; ++index) {
+    scan_ok = 1;
+  }
+  __syncthreads();
+  /* Formerly one thread serially scanned every matrix element for finiteness;
+   * each lane now owns a strided slice so the 122-AO scan costs one pass
+   * instead of a 15K-element serial chain. The error is still recorded exactly
+   * once by lane 0 after the scan. */
+  if (valid != 0) {
+    for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
       if (!isfinite(workspace.matrix_scratch_b[matrix_begin + index])) {
-        record_system_error(system_errors, system, device_error,
-                            Gfn2EigensolverDeviceError::kNonfiniteEigenpair);
-        valid = 0;
+        atomicExch(&scan_ok, 0);
+        break;
       }
     }
+  }
+  __syncthreads();
+  if (threadIdx.x == 0 && valid != 0 && scan_ok == 0) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2EigensolverDeviceError::kNonfiniteEigenpair);
+    valid = 0;
   }
   __syncthreads();
   for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
@@ -1158,21 +1172,32 @@ __global__ void validate_spin_eigenpairs_bucket_kernel(Gfn2EigensolverDeviceBatc
                                                        std::uint32_t* system_errors,
                                                        std::uint32_t* device_error) {
   const std::int64_t work_local = static_cast<std::int64_t>(blockIdx.x);
-  if (threadIdx.x != 0) {
-    return;
-  }
   const std::int64_t solve_slot = bucket.solve_index_offset + work_local;
-  std::int32_t system = -1;
-  std::int32_t physical_local = -1;
-  std::uint8_t spin = 0u;
-  if (!resolve_spin_solve_work(batch, layout, bucket, work_local, &system, &physical_local,
-                               &spin) ||
-      workspace.eligible[solve_slot] != 1u || !system_is_clear(system_errors, system)) {
+  __shared__ std::int32_t system;
+  __shared__ int valid;
+  __shared__ int failure;
+  if (threadIdx.x == 0) {
+    std::int32_t physical_local = -1;
+    std::uint8_t spin = 0u;
+    system = -1;
+    valid = resolve_spin_solve_work(batch, layout, bucket, work_local, &system, &physical_local,
+                                    &spin) &&
+                    workspace.eligible[solve_slot] == 1u && system_is_clear(system_errors, system)
+                ? 1
+                : 0;
+    failure = 0;
+  }
+  __syncthreads();
+  if (valid == 0) {
     return;
   }
-  if (workspace.info_a[solve_slot] != 0) {
+  if (threadIdx.x == 0 && workspace.info_a[solve_slot] != 0) {
     record_system_error(system_errors, system, device_error,
                         Gfn2EigensolverDeviceError::kEigensolverFailed);
+    valid = 0;
+  }
+  __syncthreads();
+  if (valid == 0) {
     return;
   }
   const std::int64_t matrix_stride = static_cast<std::int64_t>(bucket.orbital_count) *
@@ -1180,19 +1205,23 @@ __global__ void validate_spin_eigenpairs_bucket_kernel(Gfn2EigensolverDeviceBatc
   const std::int64_t matrix_begin = bucket.spin_matrix_scratch_offset + work_local * matrix_stride;
   const std::int64_t orbital_begin =
       bucket.spin_orbital_scratch_offset + work_local * bucket.orbital_count;
-  for (std::int64_t orbital = 0; orbital < bucket.orbital_count; ++orbital) {
+  /* Formerly lane 0 alone scanned the eigenvalues and then every matrix
+   * element serially; the strided lanes below replace that with one parallel
+   * pass each. The failure is still recorded once by lane 0 afterwards. */
+  for (std::int64_t orbital = threadIdx.x; orbital < bucket.orbital_count; orbital += blockDim.x) {
     if (!isfinite(workspace.eigenvalue_scratch[orbital_begin + orbital])) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2EigensolverDeviceError::kNonfiniteEigenpair);
-      return;
+      atomicExch(&failure, 1);
     }
   }
-  for (std::int64_t index = 0; index < matrix_stride; ++index) {
+  for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
     if (!isfinite(workspace.matrix_scratch_b[matrix_begin + index])) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2EigensolverDeviceError::kNonfiniteEigenpair);
-      return;
+      atomicExch(&failure, 1);
     }
+  }
+  __syncthreads();
+  if (threadIdx.x == 0 && failure != 0) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2EigensolverDeviceError::kNonfiniteEigenpair);
   }
 }
 
@@ -2986,9 +3015,9 @@ static Gfn2EigensolverLaunchResult solve_spin_eigensystems_impl(
     if (!result.success()) {
       return result;
     }
-    validate_spin_eigenpairs_bucket_kernel<<<static_cast<unsigned int>(bucket.solve_count), 1, 0,
-                                             stream>>>(batch, layout, bucket, workspace,
-                                                       system_errors, device_error);
+    validate_spin_eigenpairs_bucket_kernel<<<static_cast<unsigned int>(bucket.solve_count),
+                                             kThreadsPerSystem, 0, stream>>>(
+        batch, layout, bucket, workspace, system_errors, device_error);
     result = check_kernel_launch();
     if (!result.success()) {
       return result;
