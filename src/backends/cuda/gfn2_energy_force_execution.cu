@@ -760,6 +760,15 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
          diagnostics.external_device_error == nullptr)))) {
     return cudaErrorInvalidValue;
   }
+  /* The committed sparse pair-list CN VJP candidate is parity-gated
+   * (issue #84 steps 1-5) so the Graph-replay path reproduces the dense
+   * coordination gradient bit-for-bit.  The sparse leaf recomputes pair
+   * values from live positions while the dense reference reads the geometry
+   * cache; those two paths only match exactly when their pair evaluation is
+   * compiled with the same FMA contraction.  gfn2_pairlist.cu and
+   * gfn2_geometry.cu are therefore compiled with -fmad=false (see
+   * CMakeLists.txt), which makes the candidate bitwise-identical and lets
+   * the strict gate pass for every molecule size. */
   const bool sparse_vjp_enabled =
       plan.pairlist_committed.plan_token != 0u && plan.pairlist_batch.plan_token != 0u;
   if (sparse_vjp_enabled) {

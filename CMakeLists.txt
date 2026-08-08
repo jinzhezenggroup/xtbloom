@@ -810,6 +810,18 @@ if(GPUXTB_HAS_CUDA)
     POSITION_INDEPENDENT_CODE ON
     VISIBILITY_INLINES_HIDDEN YES
   )
+  # The committed sparse pair-list CN consumer (gfn2_pairlist.cu) recomputes
+  # coordination pair values from live positions while the dense reference
+  # (gfn2_geometry.cu) reads the geometry cache.  The sparse candidate is
+  # parity-gated bit-for-bit against dense, which only holds when both files
+  # compile the pair evaluation with the same FMA contraction; otherwise every
+  # >40-atom CUDA force call is rejected by the gate with 1-ulp differences.
+  # Pin both translation units to -fmad=false so the two paths agree exactly.
+  set_source_files_properties(
+    src/backends/cuda/gfn2_pairlist.cu
+    src/backends/cuda/gfn2_geometry.cu
+    PROPERTIES COMPILE_OPTIONS "-fmad=false"
+  )
 
   target_sources(gpuxtb PRIVATE
     $<TARGET_OBJECTS:gpuxtb_cuda_backend>
