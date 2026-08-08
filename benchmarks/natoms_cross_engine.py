@@ -971,7 +971,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--trajectory", action="store_true")
-    parser.add_argument("--trajectory-natoms", type=int, default=122)
+    parser.add_argument(
+        "--trajectory-natoms",
+        type=parse_csv_ints,
+        default=(32, 62, 122, 242),
+        help=(
+            "molecule sizes measured in MD-trajectory mode; each size yields "
+            "one per-frame latency row per engine so the figure can sweep "
+            "atom count on its x-axis."
+        ),
+    )
     parser.add_argument("--trajectory-frames", type=int, default=20)
     parser.add_argument("--energy-atol", type=float, default=CROSS_ENGINE_ENERGY_ATOL_HARTREE)
     parser.add_argument("--cpu-threads", type=int, default=1)
@@ -993,6 +1002,13 @@ def validate_arguments(args: argparse.Namespace) -> None:
         raise BenchmarkError("device id must be nonnegative")
     if args.trajectory_frames <= 0:
         raise BenchmarkError("trajectory frames must be positive")
+    for natoms in args.trajectory_natoms:
+        try:
+            make_alkane(natoms)
+        except Exception as exc:  # noqa: BLE001 - input validation
+            raise BenchmarkError(
+                f"unsupported trajectory natoms {natoms}: {exc}"
+            ) from exc
     if args.output_json == args.output_csv:
         raise BenchmarkError("JSON and CSV output paths must be distinct")
     for natoms in args.natoms:
@@ -1054,37 +1070,38 @@ def main(argv: Sequence[str] | None = None) -> int:
                 failed = True
         if args.trajectory:
             for engine in args.engines:
-                log(
-                    f"trajectory engine={engine} natoms={args.trajectory_natoms} "
-                    f"frames={args.trajectory_frames}"
-                )
-                row = run_trajectory(
-                    engine,
-                    args.trajectory_natoms,
-                    args.trajectory_frames,
-                    seed=args.trajectory_natoms * 7 + 42,
-                    library=library,
-                    xtb_library=args.xtb_library,
-                    tblite_library=args.tblite_library,
-                    dxtb_source=args.dxtb_source,
-                    cpu_threads=args.cpu_threads,
-                    device_id=args.device_id,
-                    warmups=args.warmups,
-                    repetitions=args.repetitions,
-                    energy_atol_hartree=args.energy_atol,
-                )
-                rows.append(row)
-                if row["availability"] == "available":
+                for trajectory_natoms in args.trajectory_natoms:
                     log(
-                        f"trajectory {row['engine']} natoms={row['natoms']} "
-                        f"median={row['timing']['median_ms']:.6f} ms/frame"
+                        f"trajectory engine={engine} natoms={trajectory_natoms} "
+                        f"frames={args.trajectory_frames}"
                     )
-                else:
-                    log(
-                        f"trajectory {row['engine']} UNAVAILABLE: "
-                        f"{row.get('reason', row.get('error', 'unknown'))}"
+                    row = run_trajectory(
+                        engine,
+                        trajectory_natoms,
+                        args.trajectory_frames,
+                        seed=trajectory_natoms * 7 + 42,
+                        library=library,
+                        xtb_library=args.xtb_library,
+                        tblite_library=args.tblite_library,
+                        dxtb_source=args.dxtb_source,
+                        cpu_threads=args.cpu_threads,
+                        device_id=args.device_id,
+                        warmups=args.warmups,
+                        repetitions=args.repetitions,
+                        energy_atol_hartree=args.energy_atol,
                     )
-                    failed = True
+                    rows.append(row)
+                    if row["availability"] == "available":
+                        log(
+                            f"trajectory {row['engine']} natoms={row['natoms']} "
+                            f"median={row['timing']['median_ms']:.6f} ms/frame"
+                        )
+                    else:
+                        log(
+                            f"trajectory {row['engine']} UNAVAILABLE: "
+                            f"{row.get('reason', row.get('error', 'unknown'))}"
+                        )
+                        failed = True
         document = {
             "schema_version": SCHEMA_VERSION,
             "metadata": environment_metadata(args),

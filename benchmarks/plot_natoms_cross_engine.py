@@ -9,8 +9,8 @@ keeps only correctness-qualified ``available`` rows, and draws:
    (all engines that succeeded; gpuxtb lines highlighted);
 2. ``batch=128``: same latency axis for ragged batches of 128 *distinct*
    systems (gpuxtb highlighted);
-3. MD-trajectory: per-frame latency for a fixed-size nearly identical
-   coordinate sequence (gpuxtb WARM highlighted).
+3. MD-trajectory: per-frame latency vs molecule size for nearly identical
+   coordinate sequences (gpuxtb WARM highlighted).
 
 Every panel records the exact hardware (CPU model + worker count, GPU model)
 and the repository commit.  Reference engines without a matching point are
@@ -176,10 +176,7 @@ def _trajectory_panel(
     rows: list[dict[str, Any]],
     engines: list[str],
 ) -> None:
-    """Draw per-frame MD-trajectory latency with gpuxtb highlighted."""
-    import matplotlib.pyplot as plt  # noqa: PLC0415 - plotting only here
-
-    entries: list[tuple[str, float]] = []
+    """Draw per-frame MD-trajectory latency vs molecule size, gpuxtb WARM."""
     for engine in engines:
         qualified = [
             row
@@ -187,30 +184,42 @@ def _trajectory_panel(
             if _is_eligible(row)
             and row.get("engine") == engine
             and row.get("job") == "trajectory"
+            and row.get("batch_size") == 1
         ]
+        qualified.sort(key=lambda row: row["natoms"])
         if not qualified:
             continue
-        median = _median_ms(qualified[0])
-        if median is not None:
-            entries.append((engine, median))
-    if not entries:
-        return
-    engines_order = [engine for engine in engines if engine in dict(entries)]
-    values = [dict(entries)[engine] for engine in engines_order]
-    colors = [_engine_color(engine) for engine in engines_order]
-    highlighted_widths = [0.7 if engine.startswith("gpuxtb") else 0.45 for engine in engines_order]
-    bars = axes.bar(range(len(engines_order)), values, color=colors)
-    for bar, engine, width in zip(bars, engines_order, highlighted_widths, strict=True):
-        bar.set_width(width)
-        if engine.startswith("gpuxtb"):
-            bar.set_edgecolor("black")
-            bar.set_linewidth(1.6)
-    axes.set_xticks(range(len(engines_order)))
-    axes.set_xticklabels([_engine_label(e) for e in engines_order], rotation=20, ha="right")
-    axes.set_ylabel("per-frame latency (ms, log)")
-    axes.set_yscale("log")
+        x_values = [float(row["natoms"]) for row in qualified]
+        y_values = [_median_ms(row) for row in qualified if _median_ms(row) is not None]
+        if len(x_values) != len(y_values) or len(x_values) < 1:
+            continue
+        highlight = engine.startswith("gpuxtb")
+        axes.loglog(
+            x_values,
+            y_values,
+            marker="o",
+            markersize=(9 if highlight else 5),
+            linewidth=(3.2 if highlight else 1.6),
+            linestyle="-",
+            color=_engine_color(engine),
+            zorder=(5 if highlight else 2),
+            label=_engine_label(engine),
+        )
+        if not highlight:
+            axes.scatter(
+                x_values,
+                y_values,
+                marker="x",
+                s=14,
+                color=_engine_color(engine),
+                zorder=3,
+            )
+    axes.set_xlabel("molecule size (atoms)")
+    axes.set_ylabel("per-frame latency (ms)")
     axes.set_title("MD-style trajectory (nearly identical frames), gpuxtb = WARM SCC continuation")
-    axes.grid(True, which="both", axis="y", ls=":", alpha=0.5)
+    axes.grid(True, which="both", ls=":", alpha=0.5)
+    axes.set_xscale("log")
+    axes.set_yscale("log")
 
 
 def build_parser() -> argparse.ArgumentParser:

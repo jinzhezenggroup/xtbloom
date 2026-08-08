@@ -93,6 +93,37 @@ class NatomsCrossEngineTest(unittest.TestCase):
         missing.pop("timing")
         self.assertFalse(plotters._is_eligible(missing))
 
+    def test_trajectory_row_sweeps_natoms_per_engine(self) -> None:
+        """The runner emits one trajectory row per (engine, natoms)."""
+        base = {
+            "engine": "gpuxtb-cpu",
+            "batch_size": 1,
+            "frames": 12,
+            "job": "trajectory",
+            "availability": "available",
+            "timing": {"median_ms": 0.5},
+        }
+        rows = [dict(base, natoms=natoms) for natoms in (32, 62, 122)]
+        rows.append(dict(base, engine="xtb", natoms=62))
+        selected: dict[str, list[tuple[int, float]]] = {}
+        for engine in ("gpuxtb-cpu", "xtb"):
+            qualified = [
+                row
+                for row in rows
+                if plotters._is_eligible(row)
+                and row.get("engine") == engine
+                and row.get("job") == "trajectory"
+                and row.get("batch_size") == 1
+            ]
+            qualified.sort(key=lambda row: row["natoms"])
+            selected[engine] = [
+                (row["natoms"], plotters._median_ms(row)) for row in qualified
+            ]
+        self.assertEqual(
+            selected["gpuxtb-cpu"], [(32, 0.5), (62, 0.5), (122, 0.5)]
+        )
+        self.assertEqual(selected["xtb"], [(62, 0.5)])
+
     def test_plot_merges_artifacts_and_draws_without_gpu(self) -> None:
         """Full plot path runs in Agg mode from synthetic artifacts."""
         rows = [
@@ -116,6 +147,26 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 "job": "trajectory",
                 "availability": "available",
                 "timing": {"median_ms": 0.5},
+            }
+        )
+        rows.append(
+            {
+                "engine": "gpuxtb-cpu",
+                "natoms": 62,
+                "batch_size": 1,
+                "job": "trajectory",
+                "availability": "available",
+                "timing": {"median_ms": 1.0},
+            }
+        )
+        rows.append(
+            {
+                "engine": "xtb",
+                "natoms": 62,
+                "batch_size": 1,
+                "job": "trajectory",
+                "availability": "available",
+                "timing": {"median_ms": 0.8},
             }
         )
         metadata = {
