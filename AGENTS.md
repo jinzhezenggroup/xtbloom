@@ -467,7 +467,9 @@ Work is complete only when:
 
 - the implementation satisfies the active issue's acceptance criteria, or
   small residual items are explicitly delegated under the issue-closure rule;
-- focused and full applicable validation passed with exact results recorded;
+- focused and full validation applicable to the completed parent scope passed
+  with exact results recorded, while delegated evidence remains required by
+  its linked sub-issues;
 - ABI, scientific, CUDA, packaging, and licensing invariants remain intact;
 - documentation and useful code comments describe new public or non-obvious
   behavior;
