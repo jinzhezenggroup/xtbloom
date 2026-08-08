@@ -599,18 +599,16 @@ bool compare_doubles(const char* field, const std::vector<double>& actual, const
   return true;
 }
 
-bool compare_exact_values(const char* field, const std::vector<std::uint64_t>& actual,
-                          const std::uint64_t* expected, std::int64_t elements) {
+template <typename T>
+bool compare_exact_values(const char* field, const std::vector<T>& actual, const T* expected,
+                          std::int64_t elements) {
   if (expected == nullptr || elements < 0 || actual.size() != static_cast<std::size_t>(elements)) {
     std::fprintf(stderr, "%s has an invalid parity extent\n", field);
     return false;
   }
   for (std::int64_t index = 0; index < elements; ++index) {
     if (actual[static_cast<std::size_t>(index)] != expected[index]) {
-      std::fprintf(stderr, "%s mismatch at %lld: CUDA=%llu CPU=%llu\n", field,
-                   static_cast<long long>(index),
-                   static_cast<unsigned long long>(actual[static_cast<std::size_t>(index)]),
-                   static_cast<unsigned long long>(expected[index]));
+      std::fprintf(stderr, "%s mismatch at %lld\n", field, static_cast<long long>(index));
       return false;
     }
   }
@@ -633,6 +631,32 @@ bool system_slice_is_byte_stable(const std::vector<double>& before,
                      static_cast<std::size_t>(end - begin) * sizeof(double)) == 0;
 }
 
+bool compare_system_slice(const char* field, const std::vector<double>& actual,
+                          const double* expected, const std::vector<std::int64_t>& offsets,
+                          std::int64_t system, double tolerance) {
+  if (expected == nullptr || system < 0 ||
+      system + 1 >= static_cast<std::int64_t>(offsets.size())) {
+    return false;
+  }
+  const std::int64_t begin = offsets[static_cast<std::size_t>(system)];
+  const std::int64_t end = offsets[static_cast<std::size_t>(system + 1)];
+  if (begin < 0 || begin > end || end > static_cast<std::int64_t>(actual.size())) {
+    return false;
+  }
+  for (std::int64_t index = begin; index < end; ++index) {
+    if (!near(actual[static_cast<std::size_t>(index)], expected[index], tolerance)) {
+      std::fprintf(stderr,
+                   "%s system=%lld index=%lld mismatch: CUDA=%.17g CPU=%.17g delta=%.3e "
+                   "tolerance=%.3e\n",
+                   field, static_cast<long long>(system), static_cast<long long>(index),
+                   actual[static_cast<std::size_t>(index)], expected[index],
+                   actual[static_cast<std::size_t>(index)] - expected[index], tolerance);
+      return false;
+    }
+  }
+  return true;
+}
+
 bool system_slice_is_finite(const std::vector<double>& values,
                             const std::vector<std::int64_t>& offsets, std::int64_t system) {
   if (system < 0 || system + 1 >= static_cast<std::int64_t>(offsets.size())) {
@@ -645,6 +669,210 @@ bool system_slice_is_finite(const std::vector<double>& values,
   }
   return std::all_of(values.begin() + begin, values.begin() + end,
                      [](double value) { return std::isfinite(value); });
+}
+
+/* Compare the persistent iteration state and unpublished Mulliken result with
+ * the independent CPU transition. This is intentionally shared by repeated
+ * launches and Graph replays so neither path can pass by publishing stale but
+ * finite data. */
+int compare_cuda_cpu_checkpoint(const char* checkpoint, const ComposerFixture& fixture,
+                                double tolerance, bool compare_private_history) {
+  const auto& layout = fixture.host.wavefunction_layout();
+  const auto& state = fixture.binding.state;
+  const auto& workspace = fixture.binding.workspace;
+  const std::int64_t batch = fixture.host.batch_size();
+  const std::int64_t mixer_vector = fixture.host.mixer_plan().total_vector_elements();
+  const std::int64_t mixer_history = mixer_vector * fixture.host.mixer_plan().history_size();
+  const std::int64_t mixer_omega = batch * fixture.host.mixer_plan().history_size();
+  std::vector<double> eigenvalues;
+  std::vector<double> occupations;
+  std::vector<double> density;
+  std::vector<double> weighted_density;
+  std::vector<double> public_qsh;
+  std::vector<double> public_qat;
+  std::vector<double> public_dipoles;
+  std::vector<double> public_quadrupoles;
+  std::vector<double> raw_qsh;
+  std::vector<double> raw_qat;
+  std::vector<double> raw_dipoles;
+  std::vector<double> raw_quadrupoles;
+  std::vector<double> free_energies;
+  std::vector<double> mixer_inputs;
+  std::vector<double> mixer_previous_inputs;
+  std::vector<double> mixer_previous_residuals;
+  std::vector<double> mixer_df_history;
+  std::vector<double> mixer_u_history;
+  std::vector<double> mixer_omega_values;
+  std::vector<double> mixer_residual_rms;
+  std::vector<double> mixer_residual_maximum;
+  std::vector<std::uint64_t> mixer_iterations;
+  std::vector<std::uint64_t> mixer_restart_counts;
+  std::vector<gpuxtb_status_t> mixer_statuses;
+  std::vector<std::uint8_t> mixer_initialized;
+  std::vector<std::uint8_t> mixer_residual_converged;
+  std::vector<double> previous_free_energies;
+  std::vector<double> free_energy_changes;
+  std::vector<double> scc_residual_rms;
+  std::vector<std::uint64_t> iterations;
+  std::vector<gpuxtb_status_t> statuses;
+  std::vector<std::uint8_t> converged;
+
+  CHECK(download(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements, eigenvalues,
+                 fixture.handles.stream()));
+  CHECK(download(state.occupations.occupations, state.occupations.occupation_elements, occupations,
+                 fixture.handles.stream()));
+  CHECK(download(state.density.density, state.density.density_elements, density,
+                 fixture.handles.stream()));
+  CHECK(download(state.density.energy_weighted_density, state.density.weighted_density_elements,
+                 weighted_density, fixture.handles.stream()));
+  CHECK(download(state.raw_population.qsh, state.raw_population.qsh_elements, public_qsh,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.qat, state.raw_population.qat_elements, public_qat,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.dipole, state.raw_population.dipole_elements, public_dipoles,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.quadrupole, state.raw_population.quadrupole_elements,
+                 public_quadrupoles, fixture.handles.stream()));
+  CHECK(download(workspace.staged_raw_population.qsh, workspace.staged_raw_population.qsh_elements,
+                 raw_qsh, fixture.handles.stream()));
+  CHECK(download(workspace.staged_raw_population.qat, workspace.staged_raw_population.qat_elements,
+                 raw_qat, fixture.handles.stream()));
+  CHECK(download(workspace.staged_raw_population.dipole,
+                 workspace.staged_raw_population.dipole_elements, raw_dipoles,
+                 fixture.handles.stream()));
+  CHECK(download(workspace.staged_raw_population.quadrupole,
+                 workspace.staged_raw_population.quadrupole_elements, raw_quadrupoles,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.free_energies, state.scc.batch_elements, free_energies,
+                 fixture.handles.stream()));
+  CHECK(download(state.mixer.current_inputs, state.mixer.total_vector_elements, mixer_inputs,
+                 fixture.handles.stream()));
+  CHECK(download(state.mixer.previous_inputs, mixer_vector, mixer_previous_inputs,
+                 fixture.handles.stream()));
+  CHECK(download(state.mixer.previous_residuals, mixer_vector, mixer_previous_residuals,
+                 fixture.handles.stream()));
+  if (compare_private_history) {
+    CHECK(download(state.mixer.df_history, mixer_history, mixer_df_history,
+                   fixture.handles.stream()));
+    CHECK(
+        download(state.mixer.u_history, mixer_history, mixer_u_history, fixture.handles.stream()));
+    CHECK(download(state.mixer.omega, mixer_omega, mixer_omega_values, fixture.handles.stream()));
+  }
+  CHECK(download(state.mixer.residual_rms, batch, mixer_residual_rms, fixture.handles.stream()));
+  CHECK(download(state.mixer.residual_maximum, batch, mixer_residual_maximum,
+                 fixture.handles.stream()));
+  CHECK(download(state.mixer.iterations, batch, mixer_iterations, fixture.handles.stream()));
+  CHECK(
+      download(state.mixer.restart_counts, batch, mixer_restart_counts, fixture.handles.stream()));
+  CHECK(download(state.mixer.system_statuses, batch, mixer_statuses, fixture.handles.stream()));
+  CHECK(download(state.mixer.initialized, batch, mixer_initialized, fixture.handles.stream()));
+  CHECK(download(state.mixer.residual_converged, batch, mixer_residual_converged,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.previous_free_energies, batch, previous_free_energies,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.free_energy_changes, batch, free_energy_changes,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.residual_rms, batch, scc_residual_rms, fixture.handles.stream()));
+  CHECK(download(state.scc.iterations, state.scc.batch_elements, iterations,
+                 fixture.handles.stream()));
+  CHECK(download(state.scc.system_statuses, state.scc.batch_elements, statuses,
+                 fixture.handles.stream()));
+  CHECK(
+      download(state.scc.converged, state.scc.batch_elements, converged, fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  const auto field = [checkpoint](const char* name) {
+    return std::string(checkpoint) + " " + name;
+  };
+  /* Individual eigenvector columns are intentionally excluded: a valid
+   * eigensolver may rotate or sign-flip an exactly degenerate subspace. */
+  CHECK(compare_doubles(field("eigenvalues").c_str(), eigenvalues,
+                        fixture.host.wavefunction().eigenvalues, layout.eigenvalues.element_count,
+                        tolerance));
+  CHECK(compare_doubles(field("occupations").c_str(), occupations,
+                        fixture.host.wavefunction().occupations, layout.occupations.element_count,
+                        tolerance));
+  CHECK(compare_doubles(field("density").c_str(), density, fixture.host.wavefunction().density,
+                        layout.density.element_count, tolerance));
+  CHECK(compare_doubles(field("weighted density").c_str(), weighted_density,
+                        fixture.host.wavefunction().energy_weighted_density,
+                        layout.energy_weighted_density.element_count, tolerance));
+  CHECK(compare_doubles(field("public qsh").c_str(), public_qsh, fixture.host.wavefunction().qsh,
+                        layout.qsh.element_count, tolerance));
+  CHECK(compare_doubles(field("public qat").c_str(), public_qat, fixture.host.wavefunction().qat,
+                        layout.qat.element_count, tolerance));
+  CHECK(compare_doubles(field("public dipoles").c_str(), public_dipoles,
+                        fixture.host.wavefunction().dipole, layout.dipole.element_count,
+                        tolerance));
+  CHECK(compare_doubles(field("public quadrupoles").c_str(), public_quadrupoles,
+                        fixture.host.wavefunction().quadrupole, layout.quadrupole.element_count,
+                        tolerance));
+  CHECK(compare_doubles(field("raw qsh").c_str(), raw_qsh, fixture.host.driver_workspace().raw_qsh,
+                        layout.qsh.element_count, tolerance));
+  CHECK(compare_doubles(field("raw qat").c_str(), raw_qat, fixture.host.driver_workspace().raw_qat,
+                        layout.qat.element_count, tolerance));
+  CHECK(compare_doubles(field("raw dipoles").c_str(), raw_dipoles,
+                        fixture.host.driver_workspace().raw_dipoles, layout.dipole.element_count,
+                        tolerance));
+  CHECK(compare_doubles(field("raw quadrupoles").c_str(), raw_quadrupoles,
+                        fixture.host.driver_workspace().raw_quadrupoles,
+                        layout.quadrupole.element_count, tolerance));
+  CHECK(compare_doubles(field("free energies").c_str(), free_energies,
+                        fixture.host.driver_state().free_energies, fixture.host.batch_size(),
+                        tolerance));
+  CHECK(compare_doubles(field("mixer current inputs").c_str(), mixer_inputs,
+                        fixture.host.mixer_state().current_inputs,
+                        fixture.host.mixer_plan().total_vector_elements(), tolerance));
+  CHECK(compare_doubles(field("mixer previous inputs").c_str(), mixer_previous_inputs,
+                        fixture.host.mixer_state().previous_inputs, mixer_vector, tolerance));
+  CHECK(compare_doubles(field("mixer previous residuals").c_str(), mixer_previous_residuals,
+                        fixture.host.mixer_state().previous_residuals, mixer_vector, tolerance));
+  if (compare_private_history) {
+    CHECK(compare_doubles(field("mixer df history").c_str(), mixer_df_history,
+                          fixture.host.mixer_state().df_history, mixer_history, tolerance));
+    CHECK(compare_doubles(field("mixer u history").c_str(), mixer_u_history,
+                          fixture.host.mixer_state().u_history, mixer_history, tolerance));
+    CHECK(compare_doubles(field("mixer omega").c_str(), mixer_omega_values,
+                          fixture.host.mixer_state().omega, mixer_omega, tolerance));
+  }
+  CHECK(compare_doubles(field("mixer residual RMS").c_str(), mixer_residual_rms,
+                        fixture.host.mixer_state().residual_rms, batch, tolerance));
+  CHECK(compare_doubles(field("mixer residual maximum").c_str(), mixer_residual_maximum,
+                        fixture.host.mixer_state().residual_maximum, batch, tolerance));
+  CHECK(compare_exact_values(field("mixer iterations").c_str(), mixer_iterations,
+                             fixture.host.mixer_state().iterations, batch));
+  CHECK(compare_exact_values(field("mixer restart counts").c_str(), mixer_restart_counts,
+                             fixture.host.mixer_state().restart_counts, batch));
+  CHECK(compare_exact_values(field("mixer statuses").c_str(), mixer_statuses,
+                             fixture.host.mixer_state().system_statuses, batch));
+  CHECK(compare_exact_values(field("mixer initialized").c_str(), mixer_initialized,
+                             fixture.host.mixer_state().initialized, batch));
+  std::vector<std::uint8_t> expected_residual_converged(static_cast<std::size_t>(batch));
+  for (std::int64_t system = 0; system < batch; ++system) {
+    expected_residual_converged[static_cast<std::size_t>(system)] =
+        fixture.host.mixer_state().residual_rms[system] <
+                    fixture.host.mixer_plan().rms_tolerance() &&
+                fixture.host.mixer_state().residual_maximum[system] <
+                    fixture.host.mixer_plan().maximum_tolerance()
+            ? 1u
+            : 0u;
+  }
+  CHECK(compare_exact_values(field("mixer residual-converged").c_str(), mixer_residual_converged,
+                             expected_residual_converged.data(), batch));
+  CHECK(compare_doubles(field("SCC previous free energies").c_str(), previous_free_energies,
+                        fixture.host.driver_state().previous_free_energies, batch, tolerance));
+  CHECK(compare_doubles(field("SCC free-energy changes").c_str(), free_energy_changes,
+                        fixture.host.driver_state().free_energy_changes, batch, tolerance));
+  CHECK(compare_doubles(field("SCC residual RMS").c_str(), scc_residual_rms,
+                        fixture.host.mixer_state().residual_rms, batch, tolerance));
+  CHECK(compare_exact_values(field("iterations").c_str(), iterations,
+                             fixture.host.driver_state().iterations, fixture.host.batch_size()));
+  CHECK(compare_exact_values(field("statuses").c_str(), statuses,
+                             fixture.host.driver_state().system_statuses,
+                             fixture.host.batch_size()));
+  CHECK(compare_exact_values(field("converged").c_str(), converged,
+                             fixture.host.driver_state().converged, fixture.host.batch_size()));
+  return 0;
 }
 
 std::uint64_t failure_record(Gfn2SccStageId stage, std::uint32_t code) {
@@ -768,24 +996,39 @@ int test_composer_binding_and_repeat_launch() {
                  static_cast<unsigned>(first.binding.error), static_cast<int>(first.cuda_status));
   }
   CHECK(first.success());
-  std::vector<double> first_free_energies;
-  CHECK(download(fixture.binding.state.scc.free_energies, fixture.host.batch_size(),
-                 first_free_energies, fixture.handles.stream()));
-  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  std::string error;
+  CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(compare_cuda_cpu_checkpoint("repeat launch 1", fixture, 3.0e-9, true) == 0);
+  std::vector<std::uint64_t> first_cpu_iterations(
+      fixture.host.driver_state().iterations,
+      fixture.host.driver_state().iterations + fixture.host.batch_size());
+  bool second_transition_expected = false;
+  for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
+    second_transition_expected =
+        second_transition_expected ||
+        (fixture.host.driver_state().system_statuses[system] == GPUXTB_STATUS_SUCCESS &&
+         fixture.host.driver_state().converged[system] == 0u &&
+         fixture.host.driver_state().iterations[system] <
+             fixture.host.options().maximum_iterations);
+  }
+  CHECK(second_transition_expected);
 
   /* Repeated launch reuses the exact same binding and arenas: steady-state
-   * contract consumed by Graph replay, no descriptor rebuild in the hot path. */
+   * contract consumed by Graph replay, no descriptor rebuild in the hot path.
+   * The second CPU transition is compared in full so a no-op or stale
+   * publication cannot satisfy this reuse check. */
   const Gfn2SccIterationLaunchResult second =
       launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
   CHECK(second.success());
-  std::vector<double> second_free_energies;
-  CHECK(download(fixture.binding.state.scc.free_energies, fixture.host.batch_size(),
-                 second_free_energies, fixture.handles.stream()));
-  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(compare_cuda_cpu_checkpoint("repeat launch 2", fixture, 3.0e-9, true) == 0);
+  bool second_transition_advanced = false;
   for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
-    CHECK(std::isfinite(first_free_energies[static_cast<std::size_t>(system)]));
-    CHECK(std::isfinite(second_free_energies[static_cast<std::size_t>(system)]));
+    second_transition_advanced =
+        second_transition_advanced || fixture.host.driver_state().iterations[system] >
+                                          first_cpu_iterations[static_cast<std::size_t>(system)];
   }
+  CHECK(second_transition_advanced);
   return 0;
 }
 
@@ -1062,13 +1305,11 @@ int test_composer_changed_input_graph_replay(std::int64_t batch_size, bool optio
   CUDA_CHECK(cudaGraphLaunch(graph.executable(), fixture.handles.stream()));
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
   CHECK(run_host_fixed_scc_loop(fixture.host) == 0);
+  CHECK(compare_cuda_cpu_checkpoint("Graph replay 1", fixture, 1.0e-8, false) == 0);
 
   std::vector<double> first_free_energies;
-  std::vector<std::uint64_t> first_iterations;
   CHECK(download(fixture.binding.state.scc.free_energies, fixture.host.batch_size(),
                  first_free_energies, fixture.handles.stream()));
-  CHECK(download(fixture.binding.state.scc.iterations, fixture.host.batch_size(), first_iterations,
-                 fixture.handles.stream()));
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
 
   /* Replay the identical graph with changed numerical H0 inputs: restore the
@@ -1089,13 +1330,11 @@ int test_composer_changed_input_graph_replay(std::int64_t batch_size, bool optio
   CUDA_CHECK(cudaGraphLaunch(graph.executable(), fixture.handles.stream()));
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
   CHECK(run_host_fixed_scc_loop(fixture.host) == 0);
+  CHECK(compare_cuda_cpu_checkpoint("Graph replay 2 changed H0", fixture, 1.0e-8, false) == 0);
 
   std::vector<double> changed_free_energies;
-  std::vector<std::uint64_t> changed_iterations;
   CHECK(download(fixture.binding.state.scc.free_energies, fixture.host.batch_size(),
                  changed_free_energies, fixture.handles.stream()));
-  CHECK(download(fixture.binding.state.scc.iterations, fixture.host.batch_size(),
-                 changed_iterations, fixture.handles.stream()));
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
 
   CHECK(first_free_energies.size() == changed_free_energies.size());
@@ -1258,12 +1497,12 @@ int test_composer_plan_provenance_failure_dag() {
 }
 
 /*
- * Poison every requested inactive/dormant slice of one inactive peer —
- * geometry offsets/coordination, multipoles, mixer histories, energies, and
- * publication buffers — and prove the composer neither reads nor writes them
- * while healthy peers complete the DAG. The inactive peer is selected by
- * publishing a terminal state (converged/iteration count) exactly as a failed
- * or converged predecessor would.
+ * Poison one inactive peer's geometry coordination/generation, complete SCC
+ * multipoles, mixer vectors/history, aggregate SCC energies, and multipole
+ * publication buffers. Every poisoned slice must remain stable while active
+ * peers match an unpoisoned CPU transition. The inactive peer is selected by a
+ * terminal state (converged/iteration count), as a converged predecessor would
+ * be in the production loop.
  */
 int test_composer_inactive_dormant_poisoning() {
   constexpr std::int64_t kInactive = 1;
@@ -1274,6 +1513,7 @@ int test_composer_inactive_dormant_poisoning() {
 
   const auto& layout = fixture.host.wavefunction_layout();
   const auto& state = fixture.binding.state;
+  const auto& workspace = fixture.binding.workspace;
 
   std::vector<std::uint64_t> iterations(static_cast<std::size_t>(fixture.host.batch_size()), 0u);
   std::vector<gpuxtb_status_t> statuses(static_cast<std::size_t>(fixture.host.batch_size()),
@@ -1281,6 +1521,9 @@ int test_composer_inactive_dormant_poisoning() {
   std::vector<std::uint8_t> converged(static_cast<std::size_t>(fixture.host.batch_size()), 0u);
   converged[static_cast<std::size_t>(kInactive)] = 1u;
   iterations[static_cast<std::size_t>(kInactive)] = fixture.host.options().maximum_iterations;
+  fixture.host.driver_state().converged[kInactive] = 1u;
+  fixture.host.driver_state().iterations[kInactive] = fixture.host.options().maximum_iterations;
+  fixture.host.driver_state().system_statuses[kInactive] = GPUXTB_STATUS_SUCCESS;
   CHECK(upload(iterations.data(), state.scc.iterations, fixture.host.batch_size(),
                fixture.handles.stream()));
   CHECK(upload(statuses.data(), state.scc.system_statuses, fixture.host.batch_size(),
@@ -1294,6 +1537,12 @@ int test_composer_inactive_dormant_poisoning() {
    * vector [vector_begin, vector_end) in each history column. */
   const std::int64_t shell_begin = layout.qsh.system_offsets[kInactive];
   const std::int64_t shell_end = layout.qsh.system_offsets[kInactive + 1];
+  const std::int64_t qat_begin = layout.qat.system_offsets[kInactive];
+  const std::int64_t qat_end = layout.qat.system_offsets[kInactive + 1];
+  const std::int64_t dipole_begin = layout.dipole.system_offsets[kInactive];
+  const std::int64_t dipole_end = layout.dipole.system_offsets[kInactive + 1];
+  const std::int64_t quadrupole_begin = layout.quadrupole.system_offsets[kInactive];
+  const std::int64_t quadrupole_end = layout.quadrupole.system_offsets[kInactive + 1];
   const std::int64_t atom_begin = fixture.host.atom_offsets()[static_cast<std::size_t>(kInactive)];
   const std::int64_t atom_end =
       fixture.host.atom_offsets()[static_cast<std::size_t>(kInactive + 1)];
@@ -1311,10 +1560,22 @@ int test_composer_inactive_dormant_poisoning() {
   CHECK(upload(&sentinel_generation[0],
                fixture.binding.plan.geometry_cache.geometry_generations + kInactive, 1,
                fixture.handles.stream()));
-  /* Multipoles: mixed shell charges. */
+  /* Complete mixed q/d/Q state. Atomic charges are derived from qsh and are
+   * present only in the public and staged Mulliken populations below. */
   CHECK(upload_fill(const_cast<double*>(state.scc.current_inputs.shell_charges) + shell_begin,
                     shell_end - shell_begin, kSentinel, fixture.handles.stream()));
+  CHECK(upload_fill(const_cast<double*>(state.scc.current_inputs.atomic_dipoles) + dipole_begin,
+                    dipole_end - dipole_begin, kSentinel, fixture.handles.stream()));
+  CHECK(upload_fill(
+      const_cast<double*>(state.scc.current_inputs.atomic_quadrupoles) + quadrupole_begin,
+      quadrupole_end - quadrupole_begin, kSentinel, fixture.handles.stream()));
   /* Mixer histories: df, u, and omega slices. */
+  CHECK(upload_fill(state.mixer.current_inputs + vector_begin, mixer_vector, kSentinel,
+                    fixture.handles.stream()));
+  CHECK(upload_fill(state.mixer.previous_inputs + vector_begin, mixer_vector, kSentinel,
+                    fixture.handles.stream()));
+  CHECK(upload_fill(state.mixer.previous_residuals + vector_begin, mixer_vector, kSentinel,
+                    fixture.handles.stream()));
   CHECK(upload_fill(state.mixer.df_history + vector_begin * history_size,
                     mixer_vector * history_size, kSentinel, fixture.handles.stream()));
   CHECK(upload_fill(state.mixer.u_history + vector_begin * history_size,
@@ -1328,21 +1589,46 @@ int test_composer_inactive_dormant_poisoning() {
                     fixture.handles.stream()));
   CHECK(upload_fill(state.free_energy.entropy + kInactive, 1, kSentinel, fixture.handles.stream()));
   CHECK(upload_fill(state.scc.free_energies + kInactive, 1, kSentinel, fixture.handles.stream()));
-  /* Publication buffers. */
+  /* Complete multipole publication and unpublished raw Mulliken scratch.
+   * Poisoning every qsh/qat/dipole/quadrupole slice makes omissions in either
+   * read or write gating observable. */
   CHECK(upload_fill(state.raw_population.qsh + shell_begin, shell_end - shell_begin, kSentinel,
                     fixture.handles.stream()));
-  CHECK(upload_fill(state.raw_population.qat + atom_begin, atom_end - atom_begin, kSentinel,
+  CHECK(upload_fill(state.raw_population.qat + qat_begin, qat_end - qat_begin, kSentinel,
                     fixture.handles.stream()));
+  CHECK(upload_fill(state.raw_population.dipole + dipole_begin, dipole_end - dipole_begin,
+                    kSentinel, fixture.handles.stream()));
+  CHECK(upload_fill(state.raw_population.quadrupole + quadrupole_begin,
+                    quadrupole_end - quadrupole_begin, kSentinel, fixture.handles.stream()));
   CHECK(upload_fill(state.published.shell_charges + shell_begin, shell_end - shell_begin, kSentinel,
                     fixture.handles.stream()));
+  CHECK(upload_fill(state.published.atomic_dipoles + dipole_begin, dipole_end - dipole_begin,
+                    kSentinel, fixture.handles.stream()));
+  CHECK(upload_fill(state.published.atomic_quadrupoles + quadrupole_begin,
+                    quadrupole_end - quadrupole_begin, kSentinel, fixture.handles.stream()));
+  CHECK(upload_fill(workspace.staged_raw_population.qsh + shell_begin, shell_end - shell_begin,
+                    kSentinel, fixture.handles.stream()));
+  CHECK(upload_fill(workspace.staged_raw_population.qat + qat_begin, qat_end - qat_begin, kSentinel,
+                    fixture.handles.stream()));
+  CHECK(upload_fill(workspace.staged_raw_population.dipole + dipole_begin,
+                    dipole_end - dipole_begin, kSentinel, fixture.handles.stream()));
+  CHECK(upload_fill(workspace.staged_raw_population.quadrupole + quadrupole_begin,
+                    quadrupole_end - quadrupole_begin, kSentinel, fixture.handles.stream()));
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
 
   const Gfn2SccIterationLaunchResult launch =
       launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
   CHECK(launch.success());
+  std::string error;
+  CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
 
   std::vector<double> coordination_numbers;
-  std::vector<double> shell_charges;
+  std::vector<double> current_shell_charges;
+  std::vector<double> current_dipoles;
+  std::vector<double> current_quadrupoles;
+  std::vector<double> mixer_current_inputs;
+  std::vector<double> mixer_previous_inputs;
+  std::vector<double> mixer_previous_residuals;
   std::vector<double> df_history;
   std::vector<double> u_history;
   std::vector<double> omega;
@@ -1350,18 +1636,37 @@ int test_composer_inactive_dormant_poisoning() {
   std::vector<double> free_energy;
   std::vector<double> entropy;
   std::vector<double> scc_free_energies;
-  std::vector<double> raw_qsh;
-  std::vector<double> raw_qat;
-  std::vector<double> published_shell_charges;
+  std::vector<double> published_qsh;
+  std::vector<double> published_qat;
+  std::vector<double> published_dipoles;
+  std::vector<double> published_quadrupoles;
+  std::vector<double> published_mixed_qsh;
+  std::vector<double> published_mixed_dipoles;
+  std::vector<double> published_mixed_quadrupoles;
+  std::vector<double> staged_qsh;
+  std::vector<double> staged_qat;
+  std::vector<double> staged_dipoles;
+  std::vector<double> staged_quadrupoles;
   std::vector<std::uint64_t> geometry_generations;
   std::vector<std::uint64_t> after_iterations;
   std::vector<gpuxtb_status_t> after_statuses;
+  std::vector<std::uint8_t> after_converged;
   CHECK(download(fixture.binding.plan.geometry_cache.coordination_numbers,
                  fixture.host.total_atoms(), coordination_numbers, fixture.handles.stream()));
   CHECK(download(fixture.binding.plan.geometry_cache.geometry_generations,
                  fixture.host.batch_size(), geometry_generations, fixture.handles.stream()));
-  CHECK(download(state.scc.current_inputs.shell_charges, layout.qsh.element_count, shell_charges,
-                 fixture.handles.stream()));
+  CHECK(download(state.scc.current_inputs.shell_charges, layout.qsh.element_count,
+                 current_shell_charges, fixture.handles.stream()));
+  CHECK(download(state.scc.current_inputs.atomic_dipoles, layout.dipole.element_count,
+                 current_dipoles, fixture.handles.stream()));
+  CHECK(download(state.scc.current_inputs.atomic_quadrupoles, layout.quadrupole.element_count,
+                 current_quadrupoles, fixture.handles.stream()));
+  CHECK(download(state.mixer.current_inputs, state.mixer.total_vector_elements,
+                 mixer_current_inputs, fixture.handles.stream()));
+  CHECK(download(state.mixer.previous_inputs, state.mixer.total_vector_elements,
+                 mixer_previous_inputs, fixture.handles.stream()));
+  CHECK(download(state.mixer.previous_residuals, state.mixer.total_vector_elements,
+                 mixer_previous_residuals, fixture.handles.stream()));
   CHECK(download(state.mixer.df_history, state.mixer.history_elements, df_history,
                  fixture.handles.stream()));
   CHECK(download(state.mixer.u_history, state.mixer.history_elements, u_history,
@@ -1375,11 +1680,29 @@ int test_composer_inactive_dormant_poisoning() {
                  fixture.handles.stream()));
   CHECK(download(state.scc.free_energies, fixture.host.batch_size(), scc_free_energies,
                  fixture.handles.stream()));
-  CHECK(download(state.raw_population.qsh, layout.qsh.element_count, raw_qsh,
+  CHECK(download(state.raw_population.qsh, layout.qsh.element_count, published_qsh,
                  fixture.handles.stream()));
-  CHECK(download(state.raw_population.qat, layout.qat.element_count, raw_qat,
+  CHECK(download(state.raw_population.qat, layout.qat.element_count, published_qat,
                  fixture.handles.stream()));
-  CHECK(download(state.published.shell_charges, layout.qsh.element_count, published_shell_charges,
+  CHECK(download(state.raw_population.dipole, layout.dipole.element_count, published_dipoles,
+                 fixture.handles.stream()));
+  CHECK(download(state.raw_population.quadrupole, layout.quadrupole.element_count,
+                 published_quadrupoles, fixture.handles.stream()));
+  CHECK(download(state.published.shell_charges, layout.qsh.element_count, published_mixed_qsh,
+                 fixture.handles.stream()));
+  CHECK(download(state.published.atomic_dipoles, layout.dipole.element_count,
+                 published_mixed_dipoles, fixture.handles.stream()));
+  CHECK(download(state.published.atomic_quadrupoles, layout.quadrupole.element_count,
+                 published_mixed_quadrupoles, fixture.handles.stream()));
+  CHECK(download(workspace.staged_raw_population.qsh, layout.qsh.element_count, staged_qsh,
+                 fixture.handles.stream()));
+  CHECK(download(workspace.staged_raw_population.qat, layout.qat.element_count, staged_qat,
+                 fixture.handles.stream()));
+  CHECK(download(workspace.staged_raw_population.dipole, layout.dipole.element_count,
+                 staged_dipoles, fixture.handles.stream()));
+  CHECK(download(workspace.staged_raw_population.quadrupole, layout.quadrupole.element_count,
+                 staged_quadrupoles, fixture.handles.stream()));
+  CHECK(download(state.scc.converged, fixture.host.batch_size(), after_converged,
                  fixture.handles.stream()));
   CHECK(download(state.scc.iterations, fixture.host.batch_size(), after_iterations,
                  fixture.handles.stream()));
@@ -1387,16 +1710,38 @@ int test_composer_inactive_dormant_poisoning() {
                  fixture.handles.stream()));
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
 
-  /* The whole inactive peer remains byte-stable: nothing read or wrote it. */
+  /* Every poisoned inactive slice remains byte-stable. */
   for (std::int64_t index = atom_begin; index < atom_end; ++index) {
     CHECK(coordination_numbers[static_cast<std::size_t>(index)] == kSentinel);
   }
   CHECK(geometry_generations[static_cast<std::size_t>(kInactive)] ==
         std::numeric_limits<std::uint64_t>::max());
   for (std::int64_t index = shell_begin; index < shell_end; ++index) {
-    CHECK(shell_charges[static_cast<std::size_t>(index)] == kSentinel);
-    CHECK(raw_qsh[static_cast<std::size_t>(index)] == kSentinel);
-    CHECK(published_shell_charges[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(current_shell_charges[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(published_qsh[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(published_mixed_qsh[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(staged_qsh[static_cast<std::size_t>(index)] == kSentinel);
+  }
+  for (std::int64_t index = qat_begin; index < qat_end; ++index) {
+    CHECK(published_qat[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(staged_qat[static_cast<std::size_t>(index)] == kSentinel);
+  }
+  for (std::int64_t index = dipole_begin; index < dipole_end; ++index) {
+    CHECK(current_dipoles[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(published_dipoles[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(published_mixed_dipoles[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(staged_dipoles[static_cast<std::size_t>(index)] == kSentinel);
+  }
+  for (std::int64_t index = quadrupole_begin; index < quadrupole_end; ++index) {
+    CHECK(current_quadrupoles[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(published_quadrupoles[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(published_mixed_quadrupoles[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(staged_quadrupoles[static_cast<std::size_t>(index)] == kSentinel);
+  }
+  for (std::int64_t index = vector_begin; index < vector_end; ++index) {
+    CHECK(mixer_current_inputs[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(mixer_previous_inputs[static_cast<std::size_t>(index)] == kSentinel);
+    CHECK(mixer_previous_residuals[static_cast<std::size_t>(index)] == kSentinel);
   }
   for (std::int64_t index = vector_begin * history_size; index < vector_end * history_size;
        ++index) {
@@ -1414,17 +1759,48 @@ int test_composer_inactive_dormant_poisoning() {
   CHECK(after_iterations[static_cast<std::size_t>(kInactive)] ==
         fixture.host.options().maximum_iterations);
   CHECK(after_statuses[static_cast<std::size_t>(kInactive)] == GPUXTB_STATUS_SUCCESS);
+  CHECK(after_converged[static_cast<std::size_t>(kInactive)] == 1u);
 
-  /* Active peers advanced exactly one iteration and published fresh finite
-   * population from the poisoned free state. */
+  /* The unpoisoned CPU transition is the control for every active peer. This
+   * proves inactive sentinel values were not cross-read into otherwise finite
+   * active output. */
   for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
     if (system == kInactive) {
       continue;
     }
-    CHECK(after_iterations[static_cast<std::size_t>(system)] == 1u);
-    CHECK(after_statuses[static_cast<std::size_t>(system)] == GPUXTB_STATUS_SUCCESS);
-    CHECK(system_slice_is_finite(raw_qsh, layout.qsh.system_offsets, system));
-    CHECK(system_slice_is_finite(raw_qat, layout.qat.system_offsets, system));
+    CHECK(after_iterations[static_cast<std::size_t>(system)] ==
+          fixture.host.driver_state().iterations[system]);
+    CHECK(after_statuses[static_cast<std::size_t>(system)] ==
+          fixture.host.driver_state().system_statuses[system]);
+    CHECK(after_converged[static_cast<std::size_t>(system)] ==
+          fixture.host.driver_state().converged[system]);
+    CHECK(compare_system_slice("active public qsh", published_qsh, fixture.host.wavefunction().qsh,
+                               layout.qsh.system_offsets, system, 3.0e-9));
+    CHECK(compare_system_slice("active public qat", published_qat, fixture.host.wavefunction().qat,
+                               layout.qat.system_offsets, system, 3.0e-9));
+    CHECK(compare_system_slice("active public dipoles", published_dipoles,
+                               fixture.host.wavefunction().dipole, layout.dipole.system_offsets,
+                               system, 3.0e-9));
+    CHECK(compare_system_slice("active public quadrupoles", published_quadrupoles,
+                               fixture.host.wavefunction().quadrupole,
+                               layout.quadrupole.system_offsets, system, 3.0e-9));
+    CHECK(compare_system_slice("active raw qsh", staged_qsh,
+                               fixture.host.driver_workspace().raw_qsh, layout.qsh.system_offsets,
+                               system, 3.0e-9));
+    CHECK(compare_system_slice("active raw qat", staged_qat,
+                               fixture.host.driver_workspace().raw_qat, layout.qat.system_offsets,
+                               system, 3.0e-9));
+    CHECK(compare_system_slice("active raw dipoles", staged_dipoles,
+                               fixture.host.driver_workspace().raw_dipoles,
+                               layout.dipole.system_offsets, system, 3.0e-9));
+    CHECK(compare_system_slice("active raw quadrupoles", staged_quadrupoles,
+                               fixture.host.driver_workspace().raw_quadrupoles,
+                               layout.quadrupole.system_offsets, system, 3.0e-9));
+    CHECK(compare_system_slice("active mixer inputs", mixer_current_inputs,
+                               fixture.host.mixer_state().current_inputs, vector_offsets, system,
+                               3.0e-9));
+    CHECK(near(scc_free_energies[static_cast<std::size_t>(system)],
+               fixture.host.driver_state().free_energies[system], 3.0e-9));
   }
   return 0;
 }
