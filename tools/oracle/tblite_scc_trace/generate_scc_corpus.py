@@ -28,6 +28,7 @@ import json
 import math
 import os
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -48,6 +49,29 @@ MAIN_PATH = TOOL_DIR / "scc_trace_main.f90"
 
 FORMAT = "gpuxtb-scc-trace-v1"
 REVISION = "e9abc395b122018ed688aecb1c3a65cecaf97beb"
+MANIFEST_SCHEMA = "gpuxtb-scc-trace-corpus-manifest-v1"
+PATCH_PATH = TOOL_DIR / "tblite-e9abc395-scc-observer.patch"
+PINNED_DEPENDENCIES = {
+    "dftd4": "6e1f59c3f39d919a2dbef0601d2576727c8b30e8",
+    "jonquil": "4d43ffea512977602f654ab10067fcddb3e3c107",
+    "mctc-lib": "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d",
+    "mstore": "663245d739be0123da61c917e55116b0c3db4c74",
+    "multicharge": "6a5d63f9e9e29dcf13cc47cc27f33bf9015681bf",
+    "s-dftd3": "6f0b06fbfa8653a23ca55c453772ce3af4420706",
+    "test-drive": "d16852743043963f294a5d9a3d5218e32c20ea7f",
+    "toml-f": "51a26158c6d52bbc59cb482bdd13f00d7fd032a3",
+}
+DETERMINISTIC_ENVIRONMENT = {
+    "BLIS_NUM_THREADS": "1",
+    "LC_ALL": "C",
+    "MKL_DYNAMIC": "FALSE",
+    "MKL_NUM_THREADS": "1",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+}
+LOWER_HEX_40 = re.compile(r"[0-9a-f]{40}\Z")
+LOWER_HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
 ML = 1.0e-30  # not used; retained for clarity
 
 
@@ -127,9 +151,9 @@ CASES: dict[str, dict[str, object]] = {
             [-2.75237178376284, 2.43247309226225, -0.01392519847964],
             [-0.93157260886974, 2.79621404458590, -0.01863384029005],
             [-3.43820531288547, 3.30583608421060, 1.42134539425148],
-            [2.43247309226225, 2.75237178376284, 0.01392519847964],
-            [2.79621404458590, 0.93157260886974, 0.01863384029005],
-            [3.30583608421060, 3.43820531288547, -1.42134539425148],
+            [-2.43247309226225, -2.75237178376284, 0.01392519847964],
+            [-2.79621404458590, -0.93157260886974, 0.01863384029005],
+            [-3.30583608421060, -3.43820531288547, -1.42134539425148],
         ],
         "molecular_charge": 0.0,
         "unpaired_electrons": 0,
@@ -180,37 +204,35 @@ def sha256_file(path: Path) -> str:
 
 
 def dependency_revisions(source_root: Path) -> dict[str, str]:
-    """Resolve the pinned tblite fallback dependencies to full commit SHAs.
+    """Require local Git object sources for every reviewed dependency pin.
 
-    tblite's Meson wrap files may name tags; this generator resolves the
-    actual checked-out HEAD of every fallback subproject and refuses to accept
-    a golden when a dependency is not a pinned full 40-hex commit.  The source
-    checkout's subprojects must already be populated at the pinned commits.
+    The checked-out dependency HEAD is deliberately irrelevant: the build
+    clones the exact commits below into its disposable outer Meson project.
+    This prevents a populated developer checkout from silently changing the
+    oracle while still allowing one object store to serve several pinned
+    revisions.
     """
-    revisions: dict[str, str] = {}
-    subprojects = source_root / "subprojects"
-    for directory in sorted(subprojects.iterdir()):
-        if not directory.is_dir() or (directory / ".git").exists() is False:
-            continue
+    for name, commit in PINNED_DEPENDENCIES.items():
+        directory = source_root / "subprojects" / name
+        if not directory.is_dir() or not (directory / ".git").exists():
+            raise CorpusError(f"missing local Git source for dependency {name}")
         result = subprocess.run(
-            ["git", "-C", str(directory), "rev-parse", "HEAD"],
+            ["git", "-C", str(directory), "cat-file", "-e", f"{commit}^{{commit}}"],
             capture_output=True,
-            text=True,
             check=False,
         )
         if result.returncode != 0:
-            raise CorpusError(f"cannot resolve dependency HEAD: {directory}")
-        commit = result.stdout.strip()
-        if len(commit) != 40 or any(
-            character not in "0123456789abcdef" for character in commit
-        ):
-            raise CorpusError(f"dependency is not a pinned commit: {directory}")
-        revisions[directory.name] = commit
-    return revisions
+            raise CorpusError(
+                f"dependency {name} does not contain pinned commit {commit}"
+            )
+    return dict(PINNED_DEPENDENCIES)
 
 
-def probe_meson_project(lapack: str) -> str:
+def probe_meson_project(lapack: str, custom_libraries: list[str]) -> str:
     """Return the disposable outer Meson project building the trace recorder."""
+    custom_option = ""
+    if custom_libraries:
+        custom_option = "    'custom_libraries=" + ",".join(custom_libraries) + "',\n"
     return f"""project(
   'gpuxtb-scc-trace-oracle',
   'fortran',
@@ -223,7 +245,7 @@ tblite_project = subproject(
     'default_library=static',
     'openmp=false',
     'lapack={lapack}',
-    'ddx=false',
+{custom_option}    'ddx=false',
     'hdf5=disabled',
     'trexio=disabled',
     'api=false',
@@ -241,63 +263,245 @@ scc_trace = executable(
 """
 
 
+def clone_pinned_dependencies(
+    outer: Path, source_root: Path, revisions: dict[str, str]
+) -> None:
+    """Populate the outer Meson project with detached local dependency clones."""
+    for name, commit in revisions.items():
+        source = source_root / "subprojects" / name
+        target = outer / "subprojects" / name
+        validator.run(
+            [
+                "git",
+                "clone",
+                "--quiet",
+                "--no-checkout",
+                "--no-hardlinks",
+                str(source),
+                str(target),
+            ],
+            cwd=outer,
+        )
+        validator.run(["git", "checkout", "--quiet", "--detach", commit], cwd=target)
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=target,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if head.returncode != 0 or head.stdout.strip() != commit:
+            raise CorpusError(f"failed to bind dependency {name} at {commit}")
+
+
+def configured_subprojects(build: Path) -> set[str]:
+    """Return every recursively configured Meson subproject name."""
+    path = build / "meson-info" / "intro-projectinfo.json"
+    try:
+        project = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CorpusError(
+            f"cannot read Meson project introspection: {error}"
+        ) from error
+
+    names: set[str] = set()
+
+    def collect(node: object) -> None:
+        if not isinstance(node, dict):
+            raise CorpusError(
+                "Meson project introspection has an invalid subproject entry"
+            )
+        name = node.get("name")
+        if not isinstance(name, str) or not name:
+            raise CorpusError("Meson project introspection misses a subproject name")
+        names.add(name)
+        children = node.get("subprojects", [])
+        if not isinstance(children, list):
+            raise CorpusError(
+                "Meson project introspection has invalid nested subprojects"
+            )
+        for child in children:
+            collect(child)
+
+    children = project.get("subprojects", [])
+    if not isinstance(children, list):
+        raise CorpusError("Meson project introspection has invalid subprojects")
+    for child in children:
+        collect(child)
+    return names
+
+
+def compiler_provenance(build: Path) -> dict[str, object]:
+    """Record the compiler command and exact executable bytes selected by Meson."""
+    path = build / "meson-info" / "intro-compilers.json"
+    try:
+        compilers = json.loads(path.read_text(encoding="utf-8"))
+        compiler = compilers["host"]["fortran"]
+        command = compiler["exelist"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise CorpusError(
+            f"cannot read Meson Fortran compiler provenance: {error}"
+        ) from error
+    if (
+        not isinstance(command, list)
+        or not command
+        or not all(isinstance(item, str) and item for item in command)
+    ):
+        raise CorpusError("Meson reported an invalid Fortran compiler command")
+
+    executables = []
+    for item in command:
+        candidate = shutil.which(item)
+        if candidate is None and Path(item).is_file():
+            candidate = str(Path(item).resolve())
+        if candidate is None:
+            continue
+        resolved = Path(candidate).resolve()
+        record = {
+            "path": str(resolved),
+            "sha256": sha256_file(resolved),
+        }
+        if record not in executables:
+            executables.append(record)
+    if not executables:
+        raise CorpusError(
+            "cannot resolve any executable in the Fortran compiler command"
+        )
+    identifier = compiler.get("id")
+    version = compiler.get("version")
+    if not isinstance(identifier, str) or not identifier:
+        raise CorpusError("Meson did not report the Fortran compiler identifier")
+    if not isinstance(version, str) or not version:
+        raise CorpusError("Meson did not report the Fortran compiler version")
+    return {
+        "command": command,
+        "executables": executables,
+        "id": identifier,
+        "version": version,
+    }
+
+
+def blas_lapack_provenance(
+    binary: Path, requested: str, custom_libraries: list[str]
+) -> dict[str, object]:
+    """Record the resolved BLAS/LAPACK provider and linked library bytes."""
+    result = subprocess.run(
+        ["ldd", str(binary)], capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0:
+        raise CorpusError(
+            f"ldd failed for the oracle executable: {result.stderr.strip()}"
+        )
+    if "not found" in result.stdout:
+        raise CorpusError("the oracle executable has an unresolved dynamic library")
+
+    linked: dict[str, Path] = {}
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("linux-vdso"):
+            continue
+        if "=>" in line:
+            soname, remainder = (part.strip() for part in line.split("=>", 1))
+            token = remainder.split()[0]
+        else:
+            token = line.split()[0]
+            soname = Path(token).name
+        candidate = Path(token)
+        if not candidate.is_absolute() or not candidate.exists():
+            continue
+        linked[soname] = candidate.resolve()
+
+    custom_tokens = [name.lower().removeprefix("lib") for name in custom_libraries]
+
+    def is_provider(soname: str) -> bool:
+        lowered = soname.lower()
+        return any(token in lowered for token in ("blas", "lapack", "mkl")) or any(
+            token and token in lowered for token in custom_tokens
+        )
+
+    libraries = [
+        {
+            "path": str(path),
+            "sha256": sha256_file(path),
+            "soname": soname,
+        }
+        for soname, path in sorted(linked.items())
+        if is_provider(soname)
+    ]
+    if not libraries:
+        raise CorpusError("cannot identify the resolved BLAS/LAPACK provider library")
+
+    sonames = [str(entry["soname"]).lower() for entry in libraries]
+    if any("mkl_rt" in name for name in sonames):
+        resolved_provider = "mkl-rt"
+    elif any("mkl" in name for name in sonames):
+        resolved_provider = "mkl"
+    elif any("openblas" in name for name in sonames):
+        resolved_provider = "openblas"
+    elif any("lapack" in name for name in sonames) and any(
+        "blas" in name for name in sonames
+    ):
+        resolved_provider = "netlib"
+    elif requested == "custom":
+        resolved_provider = "custom"
+    else:
+        raise CorpusError("cannot classify the resolved BLAS/LAPACK provider")
+    return {
+        "libraries": libraries,
+        "requested": requested,
+        "resolved_provider": resolved_provider,
+    }
+
+
 def build_oracle(
     checkout: Path,
     source_root: Path,
     *,
+    dependency_pins: dict[str, str],
     meson_command: list[str],
     lapack: str,
     wrap_mode: str,
-) -> Path:
-    """Build the recorder oracle and return the executable path.
+    custom_libraries: list[str],
+) -> tuple[Path, dict[str, object]]:
+    """Build the recorder oracle and return its executable and toolchain.
 
-    Every tblite fallback dependency is consumed from the source checkout's
-    already-pinned subproject directories (symlinked read-only), so the build
-    is offline, deterministic, and matches the commit SHAs recorded in the
-    manifest.  Unpinned fallbacks that are not present are rejected here rather
-    than silently resolved from a movable tag.
+    Every fallback is a detached local clone at the manifest's exact commit.
+    Meson is forbidden to download and introspection proves that those
+    subprojects, rather than system packages or wrap revisions, were configured.
     """
+    if wrap_mode != "nodownload":
+        raise CorpusError("oracle generation requires --wrap-mode=nodownload")
     with tempfile.TemporaryDirectory(prefix="gpuxtb-scc-trace-oracle-") as directory:
         outer = Path(directory) / "outer"
         subprojects = outer / "subprojects"
         subprojects.mkdir(parents=True)
         os.symlink(checkout, subprojects / "tblite", target_is_directory=True)
         (outer / "meson.build").write_text(
-            probe_meson_project(lapack), encoding="utf-8"
+            probe_meson_project(lapack, custom_libraries), encoding="utf-8"
         )
         shutil.copy2(RECORDER_PATH, outer / "scc_trace_recorder.f90")
         shutil.copy2(MAIN_PATH, outer / "scc_trace_main.f90")
-
-        # Bind every available dependency to the pinned local checkout so the
-        # fallback resolution cannot move with a tag or need the network.
-        def bind_dependencies(root: Path) -> None:
-            subprojects_dir = root / "subprojects"
-            if not subprojects_dir.is_dir():
-                return
-            for dependency in sorted(subprojects_dir.iterdir()):
-                if not dependency.is_dir() or dependency.name == "ddx":
-                    continue
-                target = subprojects_dir / dependency.name
-                if target.is_symlink() or target.exists():
-                    continue
-                local = source_root / "subprojects" / dependency.name
-                if not local.is_dir():
-                    # The wrap may carry its own subproject fallbacks; bind the
-                    # registered nested dependency when available.
-                    continue
-                os.symlink(local, target, target_is_directory=True)
-                bind_dependencies(local)
-
-        bind_dependencies(checkout)
+        clone_pinned_dependencies(outer, source_root, dependency_pins)
 
         environment = os.environ.copy()
-        environment["LC_ALL"] = "C"
-        environment["OMP_NUM_THREADS"] = "1"
-        environment["MKL_NUM_THREADS"] = "1"
-        environment["MKL_DYNAMIC"] = "FALSE"
+        environment.update(DETERMINISTIC_ENVIRONMENT)
         build = outer / "build"
-        command = [*meson_command, "setup", str(build), f"--wrap-mode={wrap_mode}"]
+        forced = ",".join(["tblite", *dependency_pins])
+        command = [
+            *meson_command,
+            "setup",
+            str(build),
+            f"--wrap-mode={wrap_mode}",
+            f"--force-fallback-for={forced}",
+        ]
         validator.run(command, cwd=outer, env=environment)
+        expected_subprojects = {"tblite", *dependency_pins}
+        actual_subprojects = configured_subprojects(build)
+        if actual_subprojects != expected_subprojects:
+            raise CorpusError(
+                "Meson configured subprojects "
+                f"{sorted(actual_subprojects)}, expected {sorted(expected_subprojects)}"
+            )
         validator.run(
             [*meson_command, "compile", "-C", str(build), "gpuxtb-tblite-scc-trace"],
             cwd=outer,
@@ -306,9 +510,28 @@ def build_oracle(
         binary_path = build / "gpuxtb-tblite-scc-trace"
         if not binary_path.is_file():
             raise CorpusError("recorder oracle executable was not produced")
+        meson_version = subprocess.run(
+            [*meson_command, "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=environment,
+        )
+        if meson_version.returncode != 0 or not meson_version.stdout.strip():
+            raise CorpusError("cannot record the Meson version")
+        toolchain = {
+            "blas_lapack": blas_lapack_provenance(
+                binary_path, lapack, custom_libraries
+            ),
+            "compiler": compiler_provenance(build),
+            "meson": {
+                "command": meson_command,
+                "version": meson_version.stdout.strip(),
+            },
+        }
         # Copy out so the temp dir teardown cannot invalidate the binary.
         out = checker_cache(binary_path)
-        return out
+        return out, toolchain
 
 
 # A tiny flyweight cache: only the last binary is kept; callers must consume it
@@ -327,8 +550,8 @@ def checker_cache(path: Path) -> Path:
     return target
 
 
-def write_spec(spec: dict[str, object], path: Path) -> None:
-    """Write a fixed-layout case spec consumed by the Fortran recorder."""
+def serialize_spec(spec: dict[str, object]) -> str:
+    """Return the canonical fixed-layout case spec consumed by the recorder."""
     atomic_numbers = spec["atomic_numbers"]
     positions = spec["positions"]
     lines = [str(len(atomic_numbers)), *(str(number) for number in atomic_numbers)]
@@ -353,7 +576,12 @@ def write_spec(spec: dict[str, object], path: Path) -> None:
                 point_charges["gammas"][index],
             ]
             lines.extend(repr(float(value)) for value in values)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return "\n".join(lines) + "\n"
+
+
+def write_spec(spec: dict[str, object], path: Path) -> None:
+    """Write a canonical fixed-layout case spec consumed by the recorder."""
+    path.write_text(serialize_spec(spec), encoding="utf-8")
 
 
 def run_recorder(binary: Path, spec: Path, workdir: Path) -> str:
@@ -361,7 +589,7 @@ def run_recorder(binary: Path, spec: Path, workdir: Path) -> str:
     result = subprocess.run(
         [str(binary), str(spec)],
         cwd=workdir,
-        env={**os.environ, "LC_ALL": "C", "OMP_NUM_THREADS": "1"},
+        env={**os.environ, **DETERMINISTIC_ENVIRONMENT},
         capture_output=True,
         text=True,
         check=False,
@@ -591,9 +819,7 @@ def canonicalize(raw: str, spec: dict[str, object], command_line: str) -> dict:
         "format": FORMAT,
         "provenance": {
             "tblite_revision": REVISION,
-            "oracle_patch_sha256": validator.sha256_file(
-                TOOL_DIR / "tblite-e9abc395-scc-observer.patch"
-            ),
+            "oracle_patch_sha256": validator.sha256_file(PATCH_PATH),
             "oracle_command": command_line,
         },
         "input": {
@@ -671,26 +897,48 @@ def build_parser() -> argparse.ArgumentParser:
         help="tblite LAPACK backend used by the oracle",
     )
     parser.add_argument(
+        "--custom-library",
+        action="append",
+        default=[],
+        help="library name passed to tblite when --lapack=custom (repeatable)",
+    )
+    parser.add_argument(
         "--wrap-mode",
         type=str,
-        default="forcefallback",
-        choices=("default", "nofallback", "nodownload", "forcefallback", "nopromote"),
-        help="Meson dependency wrap mode used by the oracle",
+        default="nodownload",
+        choices=("nodownload",),
+        help="offline Meson dependency wrap mode (only nodownload is reproducible)",
     )
-    return parser.parse_args()
+    return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     """Generate or verify the pinned restricted corpus with full provenance."""
-    arguments = build_parser()
-    if isinstance(argv, list):
-        import argparse as _argparse
-
-        arguments = _argparse.Namespace(**dict(vars(arguments)))
+    raw_arguments = list(sys.argv[1:] if argv is None else argv)
+    arguments = build_parser().parse_args(raw_arguments)
 
     case_dir = arguments.corpus_dir
     if arguments.check:
         return verify_manifest(case_dir)
+
+    if arguments.lapack == "custom" and not arguments.custom_library:
+        print(  # noqa: T201 - CLI diagnostics
+            "ERROR: --lapack=custom requires at least one --custom-library",
+            file=sys.stderr,
+        )
+        return 2
+    if arguments.lapack != "custom" and arguments.custom_library:
+        print(  # noqa: T201 - CLI diagnostics
+            "ERROR: --custom-library is valid only with --lapack=custom",
+            file=sys.stderr,
+        )
+        return 2
+    if any(
+        re.fullmatch(r"[A-Za-z0-9_.+-]+", name) is None
+        for name in arguments.custom_library
+    ):
+        print("ERROR: invalid custom library name", file=sys.stderr)  # noqa: T201
+        return 2
 
     metadata = validator.load_metadata()
     validator.validate_bundle(metadata)
@@ -732,15 +980,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     deps = dependency_revisions(arguments.source_root)
-    compiler = validate_compiler()
 
     # The recorded command must be independent of the output directory so that
     # regenerating into a different corpus path is byte-identical.  The
     # corpus-dir argument is redacted to a fixed token.
-    raw_command = sys.argv[1:] if argv is None else argv
     redacted_command: list[str] = []
     skip_next = False
-    for argument in raw_command:
+    for argument in raw_arguments:
         if skip_next:
             redacted_command.append("<corpus-dir>")
             skip_next = False
@@ -749,28 +995,32 @@ def main(argv: list[str] | None = None) -> int:
             redacted_command.append(argument)
             skip_next = True
             continue
+        if argument.startswith("--corpus-dir="):
+            redacted_command.append("--corpus-dir=<corpus-dir>")
+            continue
         redacted_command.append(argument)
     command_line = shlex.join(["generate_scc_corpus.py", *redacted_command])
     case_dir = arguments.corpus_dir
     case_dir.mkdir(parents=True, exist_ok=True)
-
-    if arguments.check:
-        return verify_manifest(case_dir)
 
     # Build the oracle once and run every case.
     with tempfile.TemporaryDirectory(prefix="gpuxtb-scc-corpus-work-") as directory:
         work = Path(directory)
         checkout = work / "checkout"
         validator.clone_and_apply(arguments.source_root, checkout, metadata)
-        binary = build_oracle(
+        binary, toolchain = build_oracle(
             checkout,
             arguments.source_root,
+            dependency_pins=deps,
             meson_command=shlex.split(arguments.meson_command),
             lapack=arguments.lapack,
             wrap_mode=arguments.wrap_mode,
+            custom_libraries=arguments.custom_library,
         )
 
         entries = {}
+        specs_dir = case_dir / "specs"
+        specs_dir.mkdir(parents=True, exist_ok=True)
         for case_id, spec in CASES.items():
             print(  # noqa: T201 - CLI progress
                 f"[corpus] running {case_id}", file=sys.stderr
@@ -778,8 +1028,6 @@ def main(argv: list[str] | None = None) -> int:
             spec_path = work / f"{case_id}.spec"
             write_spec(spec, spec_path)
             raw = run_recorder(binary, spec_path, work)
-            debug_raw = Path("/tmp") / f"{case_id}.raw"
-            debug_raw.write_text(raw, encoding="utf-8")
             try:
                 trace = canonicalize(raw, spec, command_line)
                 canonical = writer.dumps(trace)
@@ -793,21 +1041,27 @@ def main(argv: list[str] | None = None) -> int:
             del document["case_id"]
             output_path = case_dir / f"{case_id}.json"
             output_path.write_text(canonical, encoding="utf-8")
+            committed_spec_path = specs_dir / f"{case_id}.spec"
+            shutil.copy2(spec_path, committed_spec_path)
             entries[case_id] = {
                 "path": f"{case_id}.json",
                 "sha256": sha256_file(output_path),
+                "spec_path": f"specs/{case_id}.spec",
+                "spec_sha256": sha256_file(committed_spec_path),
             }
 
     manifest = {
-        "schema": "gpuxtb-scc-trace-corpus-manifest-v1",
+        "schema": MANIFEST_SCHEMA,
         "format": FORMAT,
         "revision": REVISION,
-        "oracle_patch_sha256": validator.sha256_file(
-            TOOL_DIR / "tblite-e9abc395-scc-observer.patch"
-        ),
-        "recorder_sha256": sha256_file(RECORDER_PATH),
-        "compiler": compiler,
+        "oracle_patch_sha256": validator.sha256_file(PATCH_PATH),
+        "oracle_sources": {
+            RECORDER_PATH.name: sha256_file(RECORDER_PATH),
+            MAIN_PATH.name: sha256_file(MAIN_PATH),
+        },
+        "toolchain": toolchain,
         "dependencies": deps,
+        "environment": DETERMINISTIC_ENVIRONMENT,
         "command": command_line,
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "host": platform.node(),
@@ -822,64 +1076,273 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def require_manifest(condition: bool, message: str) -> None:
+    """Raise a corpus error when a manifest invariant is not satisfied."""
+    if not condition:
+        raise CorpusError(message)
+
+
+def require_sha256(value: object, field: str) -> str:
+    """Return a validated lowercase SHA-256 manifest value."""
+    require_manifest(
+        isinstance(value, str) and LOWER_HEX_64.fullmatch(value) is not None,
+        f"{field} must be a lowercase SHA-256 digest",
+    )
+    return value
+
+
+def validate_manifest_document(manifest: object, case_dir: Path) -> None:
+    """Validate the complete offline corpus and its repository-owned provenance."""
+    require_manifest(isinstance(manifest, dict), "manifest root must be an object")
+    expected_fields = {
+        "cases",
+        "command",
+        "dependencies",
+        "environment",
+        "format",
+        "generated_at",
+        "host",
+        "oracle_patch_sha256",
+        "oracle_sources",
+        "revision",
+        "schema",
+        "toolchain",
+    }
+    require_manifest(
+        set(manifest) == expected_fields,
+        f"manifest fields {sorted(manifest)} do not match {sorted(expected_fields)}",
+    )
+    require_manifest(manifest["schema"] == MANIFEST_SCHEMA, "manifest schema mismatch")
+    require_manifest(manifest["format"] == FORMAT, "manifest format mismatch")
+    require_manifest(manifest["revision"] == REVISION, "manifest revision mismatch")
+
+    patch_digest = require_sha256(
+        manifest["oracle_patch_sha256"], "oracle_patch_sha256"
+    )
+    require_manifest(
+        patch_digest == validator.sha256_file(PATCH_PATH),
+        "oracle patch digest does not match the current patch bytes",
+    )
+    sources = manifest["oracle_sources"]
+    expected_sources = {
+        RECORDER_PATH.name: sha256_file(RECORDER_PATH),
+        MAIN_PATH.name: sha256_file(MAIN_PATH),
+    }
+    require_manifest(isinstance(sources, dict), "oracle_sources must be an object")
+    for name, digest in sources.items():
+        require_sha256(digest, f"oracle_sources.{name}")
+    require_manifest(
+        sources == expected_sources,
+        "oracle source digests do not match the compiled repository bytes",
+    )
+
+    dependencies = manifest["dependencies"]
+    require_manifest(isinstance(dependencies, dict), "dependencies must be an object")
+    for name, revision in dependencies.items():
+        require_manifest(
+            isinstance(name, str)
+            and isinstance(revision, str)
+            and LOWER_HEX_40.fullmatch(revision) is not None,
+            f"dependency {name!r} is not pinned to a lowercase commit",
+        )
+    require_manifest(
+        dependencies == PINNED_DEPENDENCIES,
+        "dependency pins do not match the reviewed oracle inputs",
+    )
+    require_manifest(
+        manifest["environment"] == DETERMINISTIC_ENVIRONMENT,
+        "deterministic oracle environment mismatch",
+    )
+    command = manifest["command"]
+    require_manifest(isinstance(command, str) and command, "command must be nonempty")
+    host = manifest["host"]
+    require_manifest(isinstance(host, str) and host, "host must be nonempty")
+    generated_at = manifest["generated_at"]
+    require_manifest(isinstance(generated_at, str), "generated_at must be a string")
+    try:
+        timestamp = datetime.datetime.fromisoformat(generated_at)
+    except ValueError as error:
+        raise CorpusError(f"generated_at is not ISO-8601: {error}") from error
+    require_manifest(
+        timestamp.tzinfo is not None, "generated_at must include a timezone"
+    )
+
+    toolchain = manifest["toolchain"]
+    require_manifest(
+        isinstance(toolchain, dict)
+        and set(toolchain) == {"blas_lapack", "compiler", "meson"},
+        "toolchain fields are incomplete",
+    )
+    compiler = toolchain["compiler"]
+    require_manifest(isinstance(compiler, dict), "compiler must be an object")
+    require_manifest(
+        set(compiler) == {"command", "executables", "id", "version"},
+        "compiler fields are incomplete",
+    )
+    require_manifest(
+        isinstance(compiler["command"], list)
+        and compiler["command"]
+        and all(isinstance(item, str) and item for item in compiler["command"]),
+        "compiler command is invalid",
+    )
+    require_manifest(
+        isinstance(compiler["id"], str)
+        and bool(compiler["id"])
+        and isinstance(compiler["version"], str)
+        and bool(compiler["version"]),
+        "compiler identity is incomplete",
+    )
+    executables = compiler["executables"]
+    require_manifest(
+        isinstance(executables, list) and executables,
+        "compiler executable records are missing",
+    )
+    for index, executable in enumerate(executables):
+        require_manifest(
+            isinstance(executable, dict) and set(executable) == {"path", "sha256"},
+            f"compiler executable {index} fields are invalid",
+        )
+        require_manifest(
+            isinstance(executable["path"], str)
+            and Path(executable["path"]).is_absolute(),
+            f"compiler executable {index} path must be absolute",
+        )
+        require_sha256(executable["sha256"], f"compiler.executables[{index}].sha256")
+
+    meson = toolchain["meson"]
+    require_manifest(
+        isinstance(meson, dict) and set(meson) == {"command", "version"},
+        "Meson provenance fields are incomplete",
+    )
+    require_manifest(
+        isinstance(meson["command"], list)
+        and meson["command"]
+        and all(isinstance(item, str) and item for item in meson["command"])
+        and isinstance(meson["version"], str)
+        and bool(meson["version"]),
+        "Meson identity is incomplete",
+    )
+
+    blas_lapack = toolchain["blas_lapack"]
+    require_manifest(isinstance(blas_lapack, dict), "blas_lapack must be an object")
+    require_manifest(
+        set(blas_lapack) == {"libraries", "requested", "resolved_provider"},
+        "BLAS/LAPACK provenance fields are incomplete",
+    )
+    require_manifest(
+        isinstance(blas_lapack["requested"], str)
+        and blas_lapack["requested"]
+        in {"auto", "mkl", "mkl-rt", "openblas", "netlib", "custom"},
+        "requested BLAS/LAPACK provider is invalid",
+    )
+    require_manifest(
+        isinstance(blas_lapack["resolved_provider"], str)
+        and blas_lapack["resolved_provider"]
+        in {"mkl", "mkl-rt", "openblas", "netlib", "custom"},
+        "resolved BLAS/LAPACK provider is invalid",
+    )
+    libraries = blas_lapack["libraries"]
+    require_manifest(
+        isinstance(libraries, list) and libraries,
+        "resolved BLAS/LAPACK libraries are missing",
+    )
+    seen_sonames: set[str] = set()
+    for index, library in enumerate(libraries):
+        require_manifest(
+            isinstance(library, dict) and set(library) == {"path", "sha256", "soname"},
+            f"BLAS/LAPACK library {index} fields are invalid",
+        )
+        require_manifest(
+            isinstance(library["path"], str) and Path(library["path"]).is_absolute(),
+            f"BLAS/LAPACK library {index} path must be absolute",
+        )
+        soname = library["soname"]
+        require_manifest(
+            isinstance(soname, str) and soname and soname not in seen_sonames,
+            f"BLAS/LAPACK library {index} SONAME is invalid or duplicated",
+        )
+        seen_sonames.add(soname)
+        require_sha256(library["sha256"], f"blas_lapack.libraries[{index}].sha256")
+
+    cases = manifest["cases"]
+    require_manifest(isinstance(cases, dict), "cases must be an object")
+    require_manifest(set(cases) == set(CASES), "manifest case set mismatch")
+    for case_id, spec in CASES.items():
+        entry = cases[case_id]
+        require_manifest(
+            isinstance(entry, dict)
+            and set(entry) == {"path", "sha256", "spec_path", "spec_sha256"},
+            f"manifest entry for {case_id} is malformed",
+        )
+        expected_path = f"{case_id}.json"
+        expected_spec_path = f"specs/{case_id}.spec"
+        require_manifest(entry["path"] == expected_path, f"invalid path for {case_id}")
+        require_manifest(
+            entry["spec_path"] == expected_spec_path,
+            f"invalid spec path for {case_id}",
+        )
+        expected_digest = require_sha256(entry["sha256"], f"cases.{case_id}.sha256")
+        expected_spec_digest = require_sha256(
+            entry["spec_sha256"], f"cases.{case_id}.spec_sha256"
+        )
+        trace_path = case_dir / expected_path
+        spec_path = case_dir / expected_spec_path
+        require_manifest(trace_path.is_file(), f"missing golden {expected_path}")
+        require_manifest(spec_path.is_file(), f"missing spec {expected_spec_path}")
+        trace_bytes = trace_path.read_bytes()
+        require_manifest(
+            hashlib.sha256(trace_bytes).hexdigest() == expected_digest,
+            f"{case_id} trace hash mismatch",
+        )
+        spec_bytes = spec_path.read_bytes()
+        require_manifest(
+            hashlib.sha256(spec_bytes).hexdigest() == expected_spec_digest,
+            f"{case_id} spec hash mismatch",
+        )
+        require_manifest(
+            spec_bytes == serialize_spec(spec).encode("utf-8"),
+            f"{case_id} spec is not the canonical generator input",
+        )
+        try:
+            trace = json.loads(trace_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise CorpusError(f"{case_id} is not canonical JSON: {error}") from error
+        try:
+            writer.validate(trace)
+            canonical = writer.dumps(trace).encode("utf-8")
+        except writer.TraceError as error:
+            raise CorpusError(f"{case_id} fails trace validation: {error}") from error
+        require_manifest(canonical == trace_bytes, f"{case_id} is not canonical JSON")
+        provenance = trace["provenance"]
+        require_manifest(
+            provenance["tblite_revision"] == REVISION
+            and provenance["oracle_patch_sha256"] == patch_digest
+            and provenance.get("oracle_command") == command,
+            f"{case_id} trace provenance does not match the corpus manifest",
+        )
+
+
 def verify_manifest(case_dir: Path) -> int:
-    """Check existing goldens against their pinned manifest hashes."""
+    """Check existing goldens and all repository-owned provenance offline."""
     manifest_path = case_dir / "manifest.json"
     if not manifest_path.is_file():
         print("ERROR: no corpus directory manifest", file=sys.stderr)  # noqa: T201
         return 2
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    for case_id in sorted(CASES):
-        entry = manifest["cases"].get(case_id)
-        if entry is None:
-            print(  # noqa: T201 - CLI diagnostics
-                f"ERROR: manifest misses {case_id}", file=sys.stderr
-            )
-            return 2
-        path = case_dir / entry["path"]
-        if not path.is_file():
-            print(  # noqa: T201 - CLI diagnostics
-                f"ERROR: missing golden {entry['path']}", file=sys.stderr
-            )
-            return 2
-        digest = sha256_file(path)
-        if digest != entry["sha256"]:
-            print(  # noqa: T201 - CLI diagnostics
-                f"ERROR: {case_id} sha256 {digest} != {entry['sha256']}",
-                file=sys.stderr,
-            )
-            return 1
-        try:
-            trace = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as error:
-            print(  # noqa: T201 - CLI diagnostics
-                f"ERROR: {case_id} is not valid JSON: {error}", file=sys.stderr
-            )
-            return 2
-        try:
-            writer.validate(trace)
-        except writer.TraceError as error:
-            print(  # noqa: T201 - CLI diagnostics
-                f"ERROR: {case_id} fails schema validation: {error}", file=sys.stderr
-            )
-            return 2
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        validate_manifest_document(manifest, case_dir)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, CorpusError) as error:
+        print(f"ERROR: invalid corpus manifest: {error}", file=sys.stderr)  # noqa: T201
+        return 2
     print(  # noqa: T201 - CLI report
-        f"verified {len(CASES)} goldens against the corpus manifest"
+        f"verified {len(CASES)} goldens and complete oracle provenance"
     )
     return 0
 
 
-def validate_compiler() -> dict[str, str]:
-    """Record the Fortran compiler identity consumed by the oracle build."""
-    candidate = os.environ.get("FC")
-    identity: dict[str, str] = {"FC": candidate or ""}
-    if candidate:
-        result = subprocess.run(
-            [candidate, "--version"], capture_output=True, text=True, check=False
-        )
-        identity["version"] = (result.stdout or result.stderr).strip().splitlines()[0]
-    return identity
-
-
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (CorpusError, validator.ObserverPatchError, OSError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)  # noqa: T201
+        sys.exit(2)

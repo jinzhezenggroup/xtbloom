@@ -466,9 +466,10 @@ int capture_case(const std::string& spec_path) {
     row.energy = stage.driver_state.internal_energies[system];
     row.energy_delta = stage.driver_state.free_energy_changes[system];
     row.residual_rms = stage.drv_ws.staged_mixer_state.residual_rms[system];
+    row.econv = std::abs(row.energy_delta) < stage.driver_plan.energy_tolerance() ? 1 : 0;
+    row.pconv = row.residual_rms < stage.mixer_plan.rms_tolerance() ? 1 : 0;
     row.conv = stage.driver_state.converged[system] ? 1 : 0;
-    row.econv = row.conv;
-    row.pconv = row.conv;
+    CHECK(row.conv == (row.econv && row.pconv && row.tconv));
     iterations.push_back(std::move(row));
 
     if (stage.driver_state.converged[system] != 0) {

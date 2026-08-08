@@ -704,7 +704,7 @@
     }
   ],
   "provenance": {
-    "oracle_command": "generate_scc_corpus.py --source-root /home/jzzeng/codes/tblite --corpus-dir '<corpus-dir>'",
+    "oracle_command": "generate_scc_corpus.py --source-root /home/jzzeng/codes/tblite --corpus-dir '<corpus-dir>' --lapack mkl-rt --wrap-mode nodownload",
     "oracle_patch_sha256": "d6a51afc4b3c56d6589a2b5b115ea8b4891600c1161c525939ca3cc16e2b4954",
     "tblite_revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb"
   },

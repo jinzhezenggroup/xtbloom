@@ -288,7 +288,7 @@ type(recording_observer) :: observer
       end do
       allocate(pcem%xyz(3, nat), source=positions)
       allocate(pcem%gamma_shell(nsh))
-      call collect_shell_hardness(calc, atomic_numbers, pcem%gamma_shell)
+      call collect_shell_hardness(calc, mol, pcem%gamma_shell)
       allocate(pcem%pc_xyz(3, pcem%npun), source=pc_positions)
       allocate(pcem%pc_charge(pcem%npun), source=pc_charges)
       allocate(pcem%pc_gamma(pcem%npun), source=pc_gammas)
@@ -451,29 +451,26 @@ type(recording_observer) :: observer
    end do
 end subroutine play
 
-subroutine collect_shell_hardness(calc, atomic_numbers, hardness)
+subroutine collect_shell_hardness(calc, mol, hardness)
    use tblite_xtb_gfn2, only : export_gfn2_param
    use tblite_param, only : param_record
    type(xtb_calculator), intent(in) :: calc
-   integer, intent(in) :: atomic_numbers(:)
+   type(structure_type), intent(in) :: mol
    real(wp), intent(out) :: hardness(:)
    type(param_record) :: param
-   integer :: ish, at, izp, il, lsh, isp, iat
-   integer :: species_of_atom(size(atomic_numbers))
+   integer :: ish, at, izp, il, lsh, isp
    ! GFN2 shell hardness = element gam * shell Hubbard scale.  The per-shell
    ! product is exactly what gpuxtb's generated parameter table exposes as
-   ! shell_hardness for the external point-charge plan.
+   ! shell_hardness for the external point-charge plan.  mol%id is the same
+   ! species map used to construct calc%bas%cgto; atomic numbers are not valid
+   ! indices into that species-major array.
    call export_gfn2_param(param)
-   isp = 0
-   do iat = 1, size(atomic_numbers)
-      if (all(species_of_atom(1:max(iat - 1, 1)) /= atomic_numbers(iat))) isp = isp + 1
-      species_of_atom(iat) = isp
-   end do
    do ish = 1, size(hardness)
       at = calc%bas%sh2at(ish)
-      izp = atomic_numbers(at)
+      isp = mol%id(at)
+      izp = mol%num(isp)
       lsh = ish - calc%bas%ish_at(at)
-      il = calc%bas%cgto(lsh, species_of_atom(at))%ang
+      il = calc%bas%cgto(lsh, isp)%ang
       hardness(ish) = param%record(izp)%gam * param%record(izp)%lgam(il + 1)
    end do
 end subroutine collect_shell_hardness

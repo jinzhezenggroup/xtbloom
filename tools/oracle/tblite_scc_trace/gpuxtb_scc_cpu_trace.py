@@ -45,21 +45,31 @@ def canonicalize_capture(raw: str, case_id: str) -> dict:
 
 
 def compare_with_comparator(
-    actual: Path, golden: Path, profile: str
+    actual: Path,
+    golden: Path,
+    profile: str,
+    golden_sha256: str,
+    *,
+    metadata_only: bool = False,
 ) -> tuple[int, str]:
     """Compare one captured trace with the golden via the comparator CLI."""
+    command = [
+        sys.executable,
+        str(COMPARE),
+        "trace",
+        str(actual),
+        str(golden),
+        "--profile",
+        profile,
+        "--golden-sha256",
+        golden_sha256,
+        "--max-reported",
+        "3",
+    ]
+    if metadata_only:
+        command.append("--metadata-only")
     result = subprocess.run(
-        [
-            sys.executable,
-            str(COMPARE),
-            "trace",
-            str(actual),
-            str(golden),
-            "--profile",
-            profile,
-            "--max-reported",
-            "3",
-        ],
+        command,
         capture_output=True,
         text=True,
         check=False,
@@ -95,6 +105,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="scratch directory for captured traces",
     )
     parser.add_argument(
+        "--metadata-only",
+        action="store_true",
+        help="compare exact dimensions, lifecycle, and convergence flags only",
+    )
+    parser.add_argument(
         "--cases",
         default=sorted(generator.CASES),
         nargs="*",
@@ -117,8 +132,9 @@ def main(argv: list[str] | None = None) -> int:
 
     failures = 0
     for case_id in arguments.cases:
+        golden_entry = goldens[case_id]
         spec_path = corpus_dir / "specs" / f"{case_id}.spec"
-        golden_path = corpus_dir / goldens[case_id]["path"]
+        golden_path = corpus_dir / golden_entry["path"]
         actual_path = work_dir / f"{case_id}_cpu.json"
         raw_path = work_dir / f"{case_id}_cpu.raw"
 
@@ -156,7 +172,11 @@ def main(argv: list[str] | None = None) -> int:
         actual_path.write_text(canonical, encoding="utf-8")
 
         return_code, report = compare_with_comparator(
-            actual_path, golden_path, arguments.profile
+            actual_path,
+            golden_path,
+            arguments.profile,
+            golden_entry["sha256"],
+            metadata_only=arguments.metadata_only,
         )
         if return_code == 0:
             print(f"{case_id}: PASS ({arguments.profile})")  # noqa: T201
