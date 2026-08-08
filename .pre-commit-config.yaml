@@ -33,7 +33,7 @@ repos:
         types_or: [python, pyi, jupyter]
         exclude: ^cmake/3rdparty/implib/implib-gen\.py$
   - repo: https://github.com/astral-sh/ty-pre-commit
-    rev: v0.0.69 # ty version
+    rev: a4405bd34b6505ed51226ba2a5b5428625177d6a # v0.0.69
     hooks:
       - id: ty
         # --isolated stops uv from rewriting the pinned uv.lock or the local
