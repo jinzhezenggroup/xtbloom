@@ -675,6 +675,61 @@ def _zero_invariant_result(
     )
 
 
+def force_for(case_id: str, atom: int, axis: int) -> float:
+    """Deterministic per-(case, atom, axis) force for the finite-difference tests."""
+    return 0.01 * ((ord(case_id[0]) + 3 * atom + 5 * axis) % 9 - 4)
+
+
+def linear_energy_solver() -> Callable[
+    [list[INVARIANTS.Geometry]], list[INVARIANTS.InvariantResult]
+]:
+    """Return a solver whose energy is the linear form of consistent forces.
+
+    The energy equals ``-sum(force * coordinate)`` (so ``-dE/dx`` reproduces
+    ``force``), and the published analytic force equals the same ``force``
+    vector, so every central finite difference matches the analytic force.
+    """
+
+    def solver(
+        items: list[INVARIANTS.Geometry],
+    ) -> list[INVARIANTS.InvariantResult]:
+        results: list[INVARIANTS.InvariantResult] = []
+        for item in items:
+            atom_count = len(item.atomic_numbers)
+            forces = [
+                force_for(item.case_id, atom, axis)
+                for atom in range(atom_count)
+                for axis in range(3)
+            ]
+            energy = -sum(
+                force * coordinate
+                for force, coordinate in zip(forces, item.positions, strict=True)
+            )
+            results.append(
+                INVARIANTS.InvariantResult(
+                    case_id=item.case_id,
+                    molecular_charge=item.molecular_charge,
+                    energy=energy,
+                    forces=forces,
+                    charges=[0.0] * atom_count,
+                    point_forces=[0.0] * (3 * len(item.point_values)),
+                )
+            )
+        return results
+
+    return solver
+
+
+def wrong_first_component_baseline(
+    solver: Callable[[list[INVARIANTS.Geometry]], list[INVARIANTS.InvariantResult]],
+    geometries: list[INVARIANTS.Geometry],
+) -> list[INVARIANTS.InvariantResult]:
+    """Return consistent baselines except for one deliberately wrong force."""
+    baseline = solver(geometries)
+    baseline[0].forces[0] += 1.0  # analytic force no longer matches dE/dx
+    return baseline
+
+
 def _invariant_geometries() -> list[INVARIANTS.Geometry]:
     """Two small geometries: a neutral gas pair and one QM atom plus a point."""
     return [
@@ -892,6 +947,62 @@ class InvarianceToolTest(unittest.TestCase):
         self.assertEqual(
             INVARIANTS.select_homogeneous_case_ids([qm_point]), ("qm_point",)
         )
+
+    def test_displacement_helpers_shift_one_coordinate(self) -> None:
+        """A displaced copy changes exactly one coordinate by the requested delta."""
+        geometry = _invariant_geometries()[0]
+        shifted_atom = INVARIANTS.displaced_atom(geometry, 0, 2, 0.1)
+        expected = list(geometry.positions)
+        expected[2] = (
+            expected[2] + 0.1
+        )  # atom 0 axis 2 flat index into the 2-atom/6-float array
+        self.assertEqual(shifted_atom.positions, expected)
+        self.assertEqual(shifted_atom.point_positions, geometry.point_positions)
+        shifted_point = INVARIANTS.displaced_point(
+            _invariant_geometries()[1], 0, 1, 0.25
+        )
+        self.assertEqual(
+            shifted_point.point_positions[1],
+            _invariant_geometries()[1].point_positions[1] + 0.25,
+        )
+        self.assertEqual(shifted_point.positions, _invariant_geometries()[1].positions)
+
+    def test_finite_difference_gate_passes_exact_forces(self) -> None:
+        """A solver whose energy gradient matches its analytic force passes."""
+        geometries = _invariant_geometries()
+        solver = linear_energy_solver()
+        with redirect_stdout(io.StringIO()):
+            baseline = solver(geometries)
+            failures: list[str] = []
+            INVARIANTS.gate_central_finite_difference(
+                solver,
+                baseline,
+                geometries,
+                INVARIANTS.FINITE_DIFFERENCE_STEP,
+                INVARIANTS.FINITE_DIFFERENCE_FORCE_ATOL,
+                INVARIANTS.FINITE_DIFFERENCE_POINT_FORCE_ATOL,
+                failures,
+            )
+        self.assertEqual(failures, [])
+
+    def test_finite_difference_gate_detects_wrong_force(self) -> None:
+        """An analytic force that does not match dE/dx fails the gate."""
+        geometries = _invariant_geometries()
+        solver = linear_energy_solver()
+        baseline = wrong_first_component_baseline(solver, geometries)
+        with redirect_stdout(io.StringIO()):
+            failures: list[str] = []
+            INVARIANTS.gate_central_finite_difference(
+                solver,
+                baseline,
+                geometries,
+                INVARIANTS.FINITE_DIFFERENCE_STEP,
+                INVARIANTS.FINITE_DIFFERENCE_FORCE_ATOL,
+                INVARIANTS.FINITE_DIFFERENCE_POINT_FORCE_ATOL,
+                failures,
+            )
+        self.assertTrue(failures)
+        self.assertTrue(any("atom0_axis0" in failure for failure in failures))
 
     def test_cli_rejects_cuda_memory_for_cpu_backend(self) -> None:
         """The invariance CLI enforces the same placement rule as the golden runner."""
