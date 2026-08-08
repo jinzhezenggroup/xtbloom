@@ -76,6 +76,13 @@ The high-level Python interface uses host NumPy arrays for both backends; direct
 CUDA-device and mixed descriptors are available only through the low-level C
 ABI.
 
+`Calculator` and `BatchCalculator` use independent fresh SCC initialization by
+default. Pass `warm_start=True` to seed each compatible call from the previous
+fully converged state on the same native context; an incompatible identity
+transparently retries once from fresh state. The ASE calculator enables this
+policy by default for dynamics and accepts `warm_start=False` for independent
+steps.
+
 ## Charge and spin
 
 Use either `multiplicity` or `uhf = multiplicity - 1`. Open-shell Python
@@ -135,7 +142,9 @@ batch.raise_for_status()
 For large workloads, `compute(auto_batch_size=True)` chooses conservative CUDA
 chunks from current free memory. An integer such as
 `compute(auto_batch_size=20_000)` instead limits the target total atom count per
-native call while preserving input order.
+native call while preserving input order. Automatic batching cannot be combined
+with `warm_start=True` because the native context retains one whole-batch SCC
+checkpoint rather than independent checkpoints for each chunk.
 
 ## Array API and DLPack input arrays
 

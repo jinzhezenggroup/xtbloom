@@ -8,6 +8,7 @@ ground truth for the Python bindings.
 from __future__ import annotations
 
 import _cases
+import gpuxtb.library as _library
 import numpy as np
 import pytest
 from gpuxtb import Calculator, PointCharge, Result, Structure
@@ -194,3 +195,88 @@ def test_scc_failure_raises() -> None:
     )
     with pytest.raises(GPUxtbRuntimeError):
         calc.singlepoint()
+
+
+def test_calculator_warm_start_reuses_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``Calculator(warm_start=True)`` reconverges from the previous state."""
+    modes: list[int] = []
+    original = _library.compute_checked
+
+    def recording(
+        context: object, batch: object, options: object, result: object
+    ) -> None:
+        modes.append(int(options.scc_start_mode))  # type: ignore[attr-defined]
+        return original(context, batch, options, result)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(_library, "compute_checked", recording)
+
+    case = _cases.case_by_id("ketene")
+    numbers, positions, charge, uhf, spin = _cases.structure_inputs(case)
+    positions = np.asarray(positions, dtype=np.float64)
+    warm = Calculator(
+        "GFN2-xTB",
+        numbers,
+        positions,
+        charge=charge,
+        uhf=uhf,
+        spin_channels=spin,
+        warm_start=True,
+    )
+    warm_energies: list[float] = []
+    for step in range(3):
+        displacement = np.zeros((len(numbers), 3))
+        displacement[step % len(numbers), 0] = 0.02
+        warm.update(positions=positions + displacement)
+        warm_energies.append(warm.singlepoint().energy)
+    assert modes == [
+        _library.SCC_START_FRESH,
+        *([_library.SCC_START_WARM] * 2),
+    ]
+
+    modes.clear()
+    fresh = Calculator(
+        "GFN2-xTB", numbers, positions, charge=charge, uhf=uhf, spin_channels=spin
+    )
+    fresh_energies: list[float] = []
+    for step in range(3):
+        displacement = np.zeros((len(numbers), 3))
+        displacement[step % len(numbers), 0] = 0.02
+        fresh.update(positions=positions + displacement)
+        fresh_energies.append(fresh.singlepoint().energy)
+    assert modes == [_library.SCC_START_FRESH] * 3
+    assert warm_energies == pytest.approx(fresh_energies, abs=1e-8)
+
+
+def test_calculator_warm_start_default_stays_fresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``warm_start`` defaults off, preserving reproducible fresh solves."""
+    modes: list[int] = []
+    original = _library.compute_checked
+
+    def recording(
+        context: object, batch: object, options: object, result: object
+    ) -> None:
+        modes.append(int(options.scc_start_mode))  # type: ignore[attr-defined]
+        return original(context, batch, options, result)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(_library, "compute_checked", recording)
+
+    case = _cases.case_by_id("ketene")
+    numbers, positions, charge, uhf, spin = _cases.structure_inputs(case)
+    calc = Calculator(
+        "GFN2-xTB",
+        numbers,
+        positions,
+        charge=charge,
+        uhf=uhf,
+        spin_channels=spin,
+    )
+    for step in range(2):
+        displacement = np.zeros((len(numbers), 3))
+        displacement[step % len(numbers), 0] = 0.02
+        calc.update(positions=np.asarray(positions) + displacement)
+        calc.singlepoint()
+    assert modes == [_library.SCC_START_FRESH] * 2

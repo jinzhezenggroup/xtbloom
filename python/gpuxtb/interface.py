@@ -501,6 +501,12 @@ class Context:
         self._backend: int | None = None
         self._finalizer: weakref.finalize | None = None
         self._plans: weakref.WeakSet[library.Plan] = weakref.WeakSet()
+        # Tracks whether the native context holds a whole-batch converged
+        # checkpoint that a later strict WARM request on the same context may
+        # consume. Mirrors the native readiness gate: set only when every
+        # system of the previous high-level call fully converged, cleared on
+        # close (the native checkpoint dies with the context).
+        self._warm_ready = False
 
     def _create(self) -> ctypes.c_void_p:
         if self._handle is not None:
@@ -574,6 +580,8 @@ class Context:
             self._handle = None
             self._backend = None
             self._finalizer = None
+            # A new native context created later starts without a checkpoint.
+            self._warm_ready = False
 
     def create_plan(
         self, batch: library.Batch, options: library.ComputeOptions
@@ -822,8 +830,16 @@ def _compute_batch(
     energy_tolerance: float,
     electronic_temperature: float,
     flags: int,
+    warm_start: bool = False,
 ) -> _ComputedBatch:
-    """Populate descriptors and run one synchronous ``gpuxtb_compute`` call."""
+    """Populate descriptors and run one synchronous ``gpuxtb_compute`` call.
+
+    ``warm_start`` seeds SCC from the previous fully converged compatible
+    electronic state retained on ``context`` (native ABI-v2 ``SCC_START_WARM``).
+    The first call on a context, or any call whose topology or compute policy
+    does not match the predecessor, falls back to an independent FRESH solve so
+    automatic warm start stays transparent to the caller.
+    """
     context._create()
 
     # --- assemble the ragged inputs -------------------------------------------
@@ -921,9 +937,16 @@ def _compute_batch(
             ctypes.byref(options), ctypes.sizeof(options)
         ),
     )
-    # High-level calculators intentionally use reproducible independent SCC
-    # solves; persistent warm-start policy remains a low-level ABI feature.
-    options.scc_start_mode = library.SCC_START_FRESH
+    # High-level calculators default to reproducible independent SCC solves;
+    # automatic warm start is opt-in. When enabled and the native context holds
+    # a fully converged compatible checkpoint, request SCC_START_WARM so the
+    # previous converged electronic state seeds the new SCC run (geometry is
+    # not part of the native identity, which is why this is ideal for dynamics).
+    options.scc_start_mode = (
+        library.SCC_START_WARM
+        if warm_start and context._warm_ready
+        else library.SCC_START_FRESH
+    )
     options.model = model
     options.flags = flags
     options.max_scc_iterations = int(max_scc_iterations)
@@ -985,7 +1008,29 @@ def _compute_batch(
     bind_output("scc_converged", scc_converged, True)
     bind_output("per_system_status", per_system_status, True)
 
-    library.compute_checked(context._create(), batch, options, result)
+    try:
+        library.compute_checked(context._create(), batch, options, result)
+    except GPUxtbRuntimeError as error:
+        # A strict WARM request with no compatible fully converged predecessor
+        # is rejected by the native gate before any caller output is modified
+        # and without side effects, so one independent FRESH retry is safe.
+        # This keeps automatic warm start transparent when the identity changed
+        # (e.g. charge, spin, tolerances, topology) or the previous call did
+        # not fully converge.
+        if (
+            options.scc_start_mode != library.SCC_START_WARM
+            or error.status != library.STATUS_INVALID_ARGUMENT
+        ):
+            raise
+        options.scc_start_mode = library.SCC_START_FRESH
+        library.compute_checked(context._create(), batch, options, result)
+
+    # Mirror the native whole-batch readiness gate: only a call in which every
+    # system fully converged leaves a consumable warm checkpoint on the context.
+    context._warm_ready = all(
+        int(status) == library.STATUS_SUCCESS and int(converged) == 1
+        for status, converged in zip(per_system_status, scc_converged, strict=True)
+    )
 
     return _ComputedBatch(
         energies=energies,
@@ -1283,6 +1328,14 @@ class Calculator(Structure):
     ... )
     >>> res = calc.singlepoint()
     >>> res.get("energy")  # Hartree
+
+    ``warm_start=True`` seeds each SCC solve from the previous fully converged
+    compatible electronic state retained on the same context (native ABI-v2
+    ``SCC_START_WARM``). Geometry is not part of the native identity, so a
+    dynamics or optimization loop reusing one ``Calculator`` reconverges from
+    the previous step's state; the first call and any identity change fall back
+    to an independent FRESH solve. Results converge to the same electronic
+    state within SCC tolerance but may differ in the last converged digits.
     """
 
     def __init__(
@@ -1304,6 +1357,7 @@ class Calculator(Structure):
         charge_tolerance: float = 1.0e-6,
         energy_tolerance: float = 1.0e-8,
         electronic_temperature: float = 300.0,
+        warm_start: bool = False,
     ) -> None:
         Structure.__init__(
             self,
@@ -1326,6 +1380,7 @@ class Calculator(Structure):
         )
         self._context = Context(backend, device_id, cpu_threads)
         self._method = method
+        self._warm_start = bool(warm_start)
 
     @property
     def backend(self) -> int:
@@ -1381,6 +1436,7 @@ class Calculator(Structure):
             energy_tolerance=self._settings.energy_tolerance,
             electronic_temperature=self._settings.electronic_temperature,
             flags=flags,
+            warm_start=self._warm_start,
         )
         _raise_on_failure(computed)
         return Result(computed, index=0)
@@ -1408,6 +1464,10 @@ class BatchCalculator:
 
     The C API describes a ragged batch with flat arrays and offsets, so all
     systems are solved together while keeping per-system convergence state.
+    ``warm_start=True`` reuses the previous fully converged state only when
+    each logical batch remains one native call; it cannot be combined with
+    ``auto_batch_size`` because a context retains just its latest whole-batch
+    checkpoint rather than one checkpoint per chunk.
     """
 
     def __init__(
@@ -1422,6 +1482,7 @@ class BatchCalculator:
         charge_tolerance: float = 1.0e-6,
         energy_tolerance: float = 1.0e-8,
         electronic_temperature: float = 300.0,
+        warm_start: bool = False,
     ) -> None:
         if not structures:
             raise GPUxtbValueError("a batch needs at least one structure")
@@ -1434,6 +1495,7 @@ class BatchCalculator:
             electronic_temperature,
         )
         self._context = Context(backend, device_id, cpu_threads)
+        self._warm_start = bool(warm_start)
 
     def __len__(self) -> int:
         """Return the number of structures in this calculator."""
@@ -1474,7 +1536,18 @@ class BatchCalculator:
         bit-identical to an unsliced run. CUDA chunking can change eigensolver
         bucket composition, so CUDA results should be compared with the same
         tolerances used for ordinary backend conformance.
+
+        ``auto_batch_size`` cannot be combined with ``warm_start=True``. The
+        native context owns one whole-batch checkpoint, so sharing it across
+        chunks could seed a system from a different chunk rather than from the
+        corresponding system in the preceding logical batch.
         """
+        if self._warm_start and auto_batch_size not in (None, False):
+            raise GPUxtbValueError(
+                "warm_start=True cannot be combined with auto_batch_size; "
+                "use one native batch or disable warm start"
+            )
+
         base_flags = (
             library.COMPUTE_ENERGY
             | library.COMPUTE_FORCES
@@ -1498,6 +1571,7 @@ class BatchCalculator:
                 energy_tolerance=self._settings.energy_tolerance,
                 electronic_temperature=self._settings.electronic_temperature,
                 flags=flags,
+                warm_start=self._warm_start,
             )
 
         if auto_batch_size is None or auto_batch_size is False:

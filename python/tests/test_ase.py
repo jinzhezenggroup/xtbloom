@@ -7,6 +7,7 @@ import pytest
 
 ase = pytest.importorskip("ase")
 import _cases  # noqa: E402
+import gpuxtb.library as _library  # noqa: E402
 from ase import Atoms  # noqa: E402
 from ase.calculators.calculator import InputError  # noqa: E402
 from gpuxtb.ase import GPUxtb  # noqa: E402
@@ -14,6 +15,29 @@ from gpuxtb.exceptions import GPUxtbValueError  # noqa: E402
 
 _BOHR = 0.529177210903
 _HARTREE_TO_EV = 27.211386245988
+
+
+def _record_scc_start_modes(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Wrap ``gpuxtb_compute`` to record the per-call ``scc_start_mode``."""
+    modes: list[int] = []
+    original = _library.compute_checked
+
+    def recording(
+        context: object, batch: object, options: object, result: object
+    ) -> None:
+        modes.append(int(options.scc_start_mode))  # type: ignore[attr-defined]
+        return original(context, batch, options, result)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(_library, "compute_checked", recording)
+    return modes
+
+
+_MD_DISPLACEMENTS = [
+    [0.02, 0.0, 0.0],
+    [-0.01, 0.015, 0.0],
+    [0.0, -0.01, 0.02],
+    [0.01, 0.0, -0.015],
+]
 
 
 @pytest.fixture(scope="module")
@@ -137,3 +161,72 @@ def test_ase_registered_class() -> None:
     from ase.calculators.calculator import external_calculators
 
     assert "gpuxtb" in external_calculators
+
+
+def test_ase_warm_start_reuses_state_across_md_steps(
+    ketene_atoms: Atoms, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default warm start issues FRESH then WARM on a steady MD-like trajectory."""
+    modes = _record_scc_start_modes(monkeypatch)
+    atoms = ketene_atoms.copy()
+    atoms.calc = GPUxtb(method="GFN2-xTB")
+    atoms.get_potential_energy()
+    assert modes == [_library.SCC_START_FRESH]
+    for step in range(len(_MD_DISPLACEMENTS)):
+        atoms.positions[step % len(atoms)] += _MD_DISPLACEMENTS[step]
+        atoms.get_potential_energy()
+    assert modes == [
+        _library.SCC_START_FRESH,
+        *([_library.SCC_START_WARM] * len(_MD_DISPLACEMENTS)),
+    ]
+
+
+def test_ase_warm_start_matches_fresh_trajectory(ketene_atoms: Atoms) -> None:
+    """Warm-started energies equal independent FRESH solves along the same path."""
+    warm_atoms = ketene_atoms.copy()
+    warm_atoms.calc = GPUxtb(method="GFN2-xTB", warm_start=True)
+    fresh_atoms = ketene_atoms.copy()
+    fresh_atoms.calc = GPUxtb(method="GFN2-xTB", warm_start=False)
+    warm_energies: list[float] = []
+    fresh_energies: list[float] = []
+    for step, displacement in enumerate(_MD_DISPLACEMENTS):
+        warm_atoms.positions[step % len(warm_atoms)] += displacement
+        fresh_atoms.positions[step % len(fresh_atoms)] += displacement
+        warm_energies.append(warm_atoms.get_potential_energy())
+        fresh_energies.append(fresh_atoms.get_potential_energy())
+    assert warm_energies == pytest.approx(fresh_energies, abs=1e-6)
+
+
+def test_ase_warm_start_falls_back_on_identity_change(
+    ketene_atoms: Atoms, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A compute-policy change invalidates the checkpoint and falls back."""
+    modes = _record_scc_start_modes(monkeypatch)
+    atoms = ketene_atoms.copy()
+    atoms.calc = GPUxtb(method="GFN2-xTB")
+    atoms.get_potential_energy()
+    atoms.calc.set(electronic_temperature=5000.0)
+    energy = atoms.get_potential_energy()
+    assert modes == [
+        _library.SCC_START_FRESH,
+        _library.SCC_START_WARM,
+        _library.SCC_START_FRESH,
+    ]
+    reference = ketene_atoms.copy()
+    reference.calc = GPUxtb(
+        method="GFN2-xTB", electronic_temperature=5000.0, warm_start=False
+    )
+    assert energy == pytest.approx(reference.get_potential_energy(), abs=1e-9)
+
+
+def test_ase_warm_start_disabled_stays_fresh(
+    ketene_atoms: Atoms, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``warm_start=False`` keeps independent reproducible FRESH solves."""
+    modes = _record_scc_start_modes(monkeypatch)
+    atoms = ketene_atoms.copy()
+    atoms.calc = GPUxtb(method="GFN2-xTB", warm_start=False)
+    for step in range(len(_MD_DISPLACEMENTS)):
+        atoms.positions[step % len(atoms)] += _MD_DISPLACEMENTS[step]
+        atoms.get_potential_energy()
+    assert modes == [_library.SCC_START_FRESH] * len(_MD_DISPLACEMENTS)
