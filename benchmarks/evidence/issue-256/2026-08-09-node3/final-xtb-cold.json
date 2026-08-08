@@ -2,19 +2,19 @@
   "schema_version": 1,
   "metadata": {
     "schema_version": 1,
-    "generated_at_utc": "2026-08-08T19:21:46.827740+00:00",
+    "generated_at_utc": "2026-08-08T19:31:52.926677+00:00",
     "command": [
       "benchmarks/natoms_cross_engine.py",
       "--library",
       "/tmp/opencode/libgpuxtb_dummy.so",
       "--engines",
       "xtb",
+      "--natoms",
+      "14,32,62,122,242,362",
+      "--natoms-large-batch",
+      "14,32,62,122",
       "--xtb-library",
       "/tmp/gpuxtb-reference-env.E0KcEA/lib/libxtb.so.6.7.1",
-      "--natoms",
-      "62,122,242,362",
-      "--natoms-large-batch",
-      "62",
       "--batch-sizes",
       "1",
       "--warmups",
@@ -23,14 +23,15 @@
       "3",
       "--cpu-threads",
       "16",
-      "--cold-samples",
+      "--start-policy",
+      "cold",
       "--output-json",
-      "/tmp/opencode/xtb-cold.json",
+      "/tmp/opencode/final-xtb-cold.json",
       "--output-csv",
-      "/tmp/opencode/xtb-cold.csv"
+      "/tmp/opencode/final-xtb-cold.csv"
     ],
     "commit": {
-      "head": "c723a0747f6d32961e5c873bf293445d0952968d",
+      "head": "2c91df2f3175a6534e2366e450ad853a5b28e31d",
       "dirty": true
     },
     "runner": {
@@ -48,7 +49,7 @@
       "hostname": "node3",
       "cpu_model": "AMD EPYC 7K62 48-Core Processor",
       "logical_cpu_count": 48,
-      "process_rss_bytes": 162557952,
+      "process_rss_bytes": 159797248,
       "nvidia_smi": "GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8)",
       "gpu_memory_mib": "NVIDIA GeForce RTX 5090, 32607 MiB"
     },
@@ -69,7 +70,7 @@
     "protocol": {
       "warmups": 1,
       "repetitions": 3,
-      "cold_samples": true,
+      "start_policy": "cold",
       "cross_engine_energy_atol_hartree": 0.002,
       "perturb_sigma_bohr": 0.02,
       "trajectory_step_sigma_bohr": 0.01,
@@ -81,6 +82,144 @@
   "rows": [
     {
       "engine": "xtb",
+      "natoms": 14,
+      "batch_size": 1,
+      "total_atoms_in_batch": 14,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 4.614325,
+          "energies_hartree": [
+            -13.654978466993228
+          ],
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 3.985566,
+          "energies_hartree": [
+            -13.654978466993247
+          ],
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 3.9433249999999997,
+          "energies_hartree": [
+            -13.654978466993239
+          ],
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          4.614325,
+          3.985566,
+          3.9433249999999997
+        ],
+        "count": 3,
+        "min_ms": 3.9433249999999997,
+        "median_ms": 3.985566,
+        "mean_ms": 4.1810719999999995,
+        "p95_ms": 4.614325,
+        "systems_per_second_at_median": 250.90539210741963
+      },
+      "energies_hartree": [
+        -13.654978466993239
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "scc_converged_ok": true,
+        "scc_status_ok": true,
+        "self_energy_atol_hartree": 0.002
+      },
+      "availability": "available"
+    },
+    {
+      "engine": "xtb",
+      "natoms": 32,
+      "batch_size": 1,
+      "total_atoms_in_batch": 32,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 15.606990999999999,
+          "energies_hartree": [
+            -32.63910140479139
+          ],
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 15.750445,
+          "energies_hartree": [
+            -32.63910140479139
+          ],
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 15.588906999999999,
+          "energies_hartree": [
+            -32.639101404791404
+          ],
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          15.606990999999999,
+          15.750445,
+          15.588906999999999
+        ],
+        "count": 3,
+        "min_ms": 15.588906999999999,
+        "median_ms": 15.606990999999999,
+        "mean_ms": 15.648781,
+        "p95_ms": 15.750445,
+        "systems_per_second_at_median": 64.07384998171653
+      },
+      "energies_hartree": [
+        -32.639101404791404
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "scc_converged_ok": true,
+        "scc_status_ok": true,
+        "self_energy_atol_hartree": 0.002
+      },
+      "availability": "available"
+    },
+    {
+      "engine": "xtb",
       "natoms": 62,
       "batch_size": 1,
       "total_atoms_in_batch": 62,
@@ -89,9 +228,9 @@
       "raw_samples": [
         {
           "sample_index": 0,
-          "latency_ms": 53.144534,
+          "latency_ms": 52.175720999999996,
           "energies_hartree": [
-            -64.27951766706997
+            -64.27951766706995
           ],
           "scc_iterations": null,
           "scc_converged": null,
@@ -99,7 +238,7 @@
         },
         {
           "sample_index": 1,
-          "latency_ms": 52.339734,
+          "latency_ms": 52.176342,
           "energies_hartree": [
             -64.27951766706994
           ],
@@ -109,9 +248,9 @@
         },
         {
           "sample_index": 2,
-          "latency_ms": 52.188755,
+          "latency_ms": 52.157216999999996,
           "energies_hartree": [
-            -64.27951766706998
+            -64.27951766706994
           ],
           "scc_iterations": null,
           "scc_converged": null,
@@ -120,19 +259,19 @@
       ],
       "timing": {
         "samples_ms": [
-          53.144534,
-          52.339734,
-          52.188755
+          52.175720999999996,
+          52.176342,
+          52.157216999999996
         ],
         "count": 3,
-        "min_ms": 52.188755,
-        "median_ms": 52.339734,
-        "mean_ms": 52.55767433333333,
-        "p95_ms": 53.144534,
-        "systems_per_second_at_median": 19.105943488363927
+        "min_ms": 52.157216999999996,
+        "median_ms": 52.175720999999996,
+        "mean_ms": 52.16976,
+        "p95_ms": 52.176342,
+        "systems_per_second_at_median": 19.166002516764458
       },
       "energies_hartree": [
-        -64.27951766706998
+        -64.27951766706994
       ],
       "iteration_summary": {
         "min": null,
@@ -158,9 +297,9 @@
       "raw_samples": [
         {
           "sample_index": 0,
-          "latency_ms": 179.718726,
+          "latency_ms": 178.359287,
           "energies_hartree": [
-            -127.56035533181151
+            -127.56035533181154
           ],
           "scc_iterations": null,
           "scc_converged": null,
@@ -168,9 +307,9 @@
         },
         {
           "sample_index": 1,
-          "latency_ms": 180.492986,
+          "latency_ms": 178.675269,
           "energies_hartree": [
-            -127.5603553318114
+            -127.56035533181148
           ],
           "scc_iterations": null,
           "scc_converged": null,
@@ -178,9 +317,9 @@
         },
         {
           "sample_index": 2,
-          "latency_ms": 177.911298,
+          "latency_ms": 181.534426,
           "energies_hartree": [
-            -127.56035533181148
+            -127.56035533181145
           ],
           "scc_iterations": null,
           "scc_converged": null,
@@ -189,19 +328,19 @@
       ],
       "timing": {
         "samples_ms": [
-          179.718726,
-          180.492986,
-          177.911298
+          178.359287,
+          178.675269,
+          181.534426
         ],
         "count": 3,
-        "min_ms": 177.911298,
-        "median_ms": 179.718726,
-        "mean_ms": 179.37433666666666,
-        "p95_ms": 180.492986,
-        "systems_per_second_at_median": 5.564250438766186
+        "min_ms": 178.359287,
+        "median_ms": 178.675269,
+        "mean_ms": 179.522994,
+        "p95_ms": 181.534426,
+        "systems_per_second_at_median": 5.59674545669776
       },
       "energies_hartree": [
-        -127.56035533181148
+        -127.56035533181145
       ],
       "iteration_summary": {
         "min": null,
@@ -227,9 +366,9 @@
       "raw_samples": [
         {
           "sample_index": 0,
-          "latency_ms": 644.468606,
+          "latency_ms": 651.4986289999999,
           "energies_hartree": [
-            -254.12203199594532
+            -254.12203199594492
           ],
           "scc_iterations": null,
           "scc_converged": null,
@@ -237,9 +376,9 @@
         },
         {
           "sample_index": 1,
-          "latency_ms": 650.80597,
+          "latency_ms": 650.355853,
           "energies_hartree": [
-            -254.12203199594487
+            -254.12203199594543
           ],
           "scc_iterations": null,
           "scc_converged": null,
@@ -247,9 +386,9 @@
         },
         {
           "sample_index": 2,
-          "latency_ms": 650.512569,
+          "latency_ms": 651.8132069999999,
           "energies_hartree": [
-            -254.1220319959452
+            -254.1220319959455
           ],
           "scc_iterations": null,
           "scc_converged": null,
@@ -258,19 +397,19 @@
       ],
       "timing": {
         "samples_ms": [
-          644.468606,
-          650.80597,
-          650.512569
+          651.4986289999999,
+          650.355853,
+          651.8132069999999
         ],
         "count": 3,
-        "min_ms": 644.468606,
-        "median_ms": 650.512569,
-        "mean_ms": 648.595715,
-        "p95_ms": 650.80597,
-        "systems_per_second_at_median": 1.5372493133180336
+        "min_ms": 650.355853,
+        "median_ms": 651.4986289999999,
+        "mean_ms": 651.2225629999999,
+        "p95_ms": 651.8132069999999,
+        "systems_per_second_at_median": 1.5349226467827304
       },
       "energies_hartree": [
-        -254.1220319959452
+        -254.1220319959455
       ],
       "iteration_summary": {
         "min": null,
@@ -296,9 +435,9 @@
       "raw_samples": [
         {
           "sample_index": 0,
-          "latency_ms": 1385.225413,
+          "latency_ms": 1403.040736,
           "energies_hartree": [
-            -380.68370945824154
+            -380.68370945824245
           ],
           "scc_iterations": null,
           "scc_converged": null,
@@ -306,9 +445,9 @@
         },
         {
           "sample_index": 1,
-          "latency_ms": 1383.69661,
+          "latency_ms": 1405.848691,
           "energies_hartree": [
-            -380.68370945824324
+            -380.6837094582432
           ],
           "scc_iterations": null,
           "scc_converged": null,
@@ -316,9 +455,9 @@
         },
         {
           "sample_index": 2,
-          "latency_ms": 1388.454463,
+          "latency_ms": 1405.90921,
           "energies_hartree": [
-            -380.68370945824324
+            -380.68370945824313
           ],
           "scc_iterations": null,
           "scc_converged": null,
@@ -327,19 +466,19 @@
       ],
       "timing": {
         "samples_ms": [
-          1385.225413,
-          1383.69661,
-          1388.454463
+          1403.040736,
+          1405.848691,
+          1405.90921
         ],
         "count": 3,
-        "min_ms": 1383.69661,
-        "median_ms": 1385.225413,
-        "mean_ms": 1385.792162,
-        "p95_ms": 1388.454463,
-        "systems_per_second_at_median": 0.7219041685311617
+        "min_ms": 1403.040736,
+        "median_ms": 1405.848691,
+        "mean_ms": 1404.932879,
+        "p95_ms": 1405.90921,
+        "systems_per_second_at_median": 0.7113141025786253
       },
       "energies_hartree": [
-        -380.68370945824324
+        -380.68370945824313
       ],
       "iteration_summary": {
         "min": null,

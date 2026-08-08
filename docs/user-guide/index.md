@@ -31,33 +31,37 @@ buffers, explicit failure semantics, and reproducible reusable state.
 
 ![Cross-engine GFN2-xTB scaling benchmark](../assets/natoms_cross_engine.png)
 
-The figure compares steady-state GFN2-xTB energy + analytic forces from public
-interfaces only: gpuxtb CPU (16 threads) and gpuxtb CUDA versus xTB, tblite,
-and dxtb. Every batch of 128 uses 128 *distinct* thermal-like conformers of an
-alkane (identical atomic numbers, different coordinates) so no engine can win
-by reusing one geometry. The trajectory panel streams nearly identical frames;
-gpuxtb uses strict `WARM` continuation there.
+The figure compares GFN2-xTB energy + analytic forces from public interfaces
+only: gpuxtb CPU, xTB, tblite, and dxtb CPU, every engine with the same
+16-thread budget. Every batch of 128 uses 128 *distinct* thermal-like
+conformers of an alkane (identical atomic numbers, different coordinates) so
+no engine can win by reusing one geometry. Start semantics are explicit:
+batch=1 rows are genuine cold start (xTB/tblite rebuild their calculator every
+sample), batch=128 rows cold-start on the first call and continue warm, and
+the trajectory panel streams nearly identical frames with gpuxtb using strict
+`WARM` continuation and the references continuing their persistent state.
 
-- **batch = 1**: gpuxtb CPU stays in the same range as xTB and tblite at small
-  sizes. Its strength is collecting systems into batches, not running them one
-  at a time. The sweep reaches 602-atom alkanes for gpuxtb; the references stop
-  at 362 atoms (xTB 6.7.1 segfaults on the 602-atom alkane).
-- **batch = 128**: gpuxtb CPU is about 11x faster than xTB, about 5.6x faster
-  than tblite, and about 25x faster than dxtb CPU at 62 atoms, and ~6.9x / ~3.3x
-  at 122 atoms. gpuxtb CPU reaches 302-atom x 128 systems; gpuxtb CUDA leads
-  the ragged batch from 62 atoms up (495 ms vs 627 ms per 128-system call at 62
-  atoms) and reaches 242 x 128 systems within the 32 GiB GPU.
-- **MD trajectory**: the trajectory panel sweeps molecule size (32-242 atoms)
-  on the x-axis. gpuxtb CPU matches xTB per-frame time at every size while
-  running conformance-tight SCC, and gpuxtb CUDA's strict `WARM` continuation
-  is substantially faster than starting each frame fresh.
+- **batch = 1 (cold start)**: gpuxtb CPU is competitive at small sizes
+  (14-32 atoms) and 1.3-3.0x slower at 62-362 atoms (242: gpuxtb 1680 ms vs
+  xTB 651 ms / tblite 708 ms). The gap is per-SCC-iteration cost plus gpuxtb's
+  strictly tighter SCC tolerance; gpuxtb's batch-parallel worker pool is idle
+  for a single system, tracked in issue 256. The reference sweeps stop at 362
+  atoms (xTB 6.7.1 segfaults on the 602-atom alkane).
+- **batch = 128 (first call cold, then WARM)**: gpuxtb CPU is about 9-13x
+  faster than xTB and tblite per call (62 atoms: 174 ms vs xTB 2113 ms /
+  tblite 1635 ms), because gpuxtb solves the whole ragged batch in one call
+  across its worker pool while the reference adapters loop systems serially.
+- **MD trajectory (WARM)**: per-frame latency at 32-242 atoms. gpuxtb CPU is
+  1.3-2.9x slower than xTB/tblite at the largest sizes (242: 1786 ms vs
+  xTB 620 / tblite 684 ms), from the same per-iteration cost and tighter
+  tolerance; dxtb CPU rows reset per call by design.
 
-Hardware: AMD EPYC 7K62 with gpuxtb CPU pinned to 16 workers, plus an NVIDIA
-GeForce RTX 5090 (sm_120). gpuxtb runs SCC to charge tolerance 1e-10 and energy
-tolerance 1e-12 while the reference engines use their default `--acc 1e-4`, so
-gpuxtb's timings include strictly more SCC work. Raw samples, revisions, and
-reproduction commands are archived under
-[`benchmarks/evidence/issue-13/2026-08-08-node3/`](../../benchmarks/evidence/issue-13/2026-08-08-node3/).
+Hardware: AMD EPYC 7K62 with every engine using 16 threads per call. gpuxtb
+runs SCC to charge tolerance 1e-10 and energy tolerance 1e-12 while the
+reference engines use their default `--acc 1e-4`, so gpuxtb's timings include
+strictly more SCC work. Raw samples, revisions, and reproduction commands are
+archived under
+[`benchmarks/evidence/issue-256/2026-08-09-node3/`](../../benchmarks/evidence/issue-256/2026-08-09-node3/).
 
 ## Installation paths
 

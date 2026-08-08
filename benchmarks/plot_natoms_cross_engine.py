@@ -92,10 +92,11 @@ def _annotate_hardware(axes: Any, metadata: dict[str, Any], commit: str) -> None
     cpu_model = hardware.get("cpu_model")
     if cpu_model:
         lines.append(f"{cpu_model}")
-        lines.append(f"CPU threads: {threads.get('cpu_threads', '?')}")
+        lines.append(f"CPU threads: {threads.get('cpu_threads', '?')} per engine")
     if gpu:
         lines.append(gpu.replace("\n", " "))
     lines.append("gpuxtb SCC 1e-10/1e-12; refs acc 1e-4")
+    lines.append("gpuxtb batch=1: 1 of 16 workers active (outer-batch pool idle)")
     props = dict(
         boxstyle="round,pad=0.4",
         facecolor="white",
@@ -163,9 +164,11 @@ def _scaling_panel(
     axes.set_xlabel("molecule size (atoms)")
     axes.set_ylabel("energy + force latency (ms)")
     if batch_size == 128:
-        axes.set_title(f"batch size = {batch_size} (128 distinct systems per call)")
+        axes.set_title(
+            f"batch size = {batch_size} (128 distinct systems; first call cold, then WARM)"
+        )
     else:
-        axes.set_title(f"batch size = {batch_size}")
+        axes.set_title(f"batch size = {batch_size} (cold-start)")
     axes.grid(True, which="both", ls=":", alpha=0.5)
     axes.set_xscale(x_scale)
 

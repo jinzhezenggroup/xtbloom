@@ -593,20 +593,47 @@ def measure_cell(
     protocol: tuple[int, int],
     cell: Cell,
     energy_atol_hartree: float,
-    cold_samples: bool = False,
+    start_policy: str = "auto-warm",
 ) -> dict[str, Any]:
-    """Run warmups and measured samples and return a normalized row fragment."""
+    """Run warmups and measured samples and return a normalized row fragment.
+
+    ``start_policy`` controls SCC restart semantics for every engine:
+
+    - ``auto-warm`` (default, steady-state): the first call in each cell is a
+      cold FRESH solve for gpuxtb (reference engines start cold by
+      construction), every later warmup and all measured samples continue from
+      the converged state (gpuxtb strict WARM; xTB/tblite persistent warm).
+      This is the honest throughput semantics for repeated identical calls:
+      gpuxtb's batch-1 and batch-128 rows and xTB/tblite's persistent rows all
+      measure the same warm steady state after one cold seed.
+    - ``cold``: every warmup and measured sample is a genuine cold start
+      (gpuxtb FRESH; xTB/tblite rebuild their calculator; dxtb resets). Used
+      for panel-1 single-molecule cold-start rows.
+    """
     warmups, repetitions = protocol
-    for _ in range(warmups):
-        if cold_samples and warmups > 0:
-            # Warmups are only meaningful under a restart policy; for a cold
-            # matrix every call (warmup and measured) is a fresh solve.
-            runner.restart_scc()
+    gpuxtb_runner = hasattr(runner, "set_start_mode")
+    restart = getattr(runner, "restart_scc", None)
+
+    def cold_start() -> None:
+        """Force a genuine cold start for whichever runner variant is active."""
+        if gpuxtb_runner:
+            runner.set_start_mode("fresh")
+        elif restart is not None:
+            restart()
+
+    for warmup_index in range(warmups):
+        if start_policy == "auto-warm" and gpuxtb_runner:
+            runner.set_start_mode("fresh" if warmup_index == 0 else "warm")
+        elif start_policy == "cold":
+            cold_start()
         runner.invoke()
     raw_samples: list[dict[str, Any]] = []
     for sample_index in range(repetitions):
-        if cold_samples:
-            runner.restart_scc()
+        if start_policy == "auto-warm":
+            if gpuxtb_runner:
+                runner.set_start_mode("warm")
+        else:
+            cold_start()
         start = time.perf_counter_ns()
         runner.invoke()
         elapsed_ms = (time.perf_counter_ns() - start) * 1.0e-6
@@ -712,7 +739,7 @@ def run_cell(
     warmups: int,
     repetitions: int,
     energy_atol_hartree: float,
-    cold_samples: bool = False,
+    start_policy: str = "auto-warm",
 ) -> dict[str, Any]:
     """Measure one cell and return a complete row."""
     base = base_row(cell)
@@ -768,7 +795,7 @@ def run_cell(
                 dxtb_source,
             )
         fragment = measure_cell(
-            runner, (warmups, repetitions), cell, energy_atol_hartree, cold_samples
+            runner, (warmups, repetitions), cell, energy_atol_hartree, start_policy
         )
         row = base_row(cell)
         row.update(fragment)
@@ -961,7 +988,7 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "protocol": {
             "warmups": args.warmups,
             "repetitions": args.repetitions,
-            "cold_samples": args.cold_samples,
+            "start_policy": args.start_policy,
             "cross_engine_energy_atol_hartree": args.energy_atol,
             "perturb_sigma_bohr": PERTURB_SIGMA_BOHR,
             "trajectory_step_sigma_bohr": TRAJECTORY_STEP_SIGMA_BOHR,
@@ -1048,14 +1075,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--trajectory", action="store_true")
     parser.add_argument(
-        "--cold-samples",
-        action="store_true",
+        "--start-policy",
+        choices=("auto-warm", "cold"),
+        default="auto-warm",
         help=(
-            "restart every measured sample from a fresh SCC state for every "
-            "engine (xTB/tblite rebuild their calculator; gpuxtb FRESH and "
-            "dxtb reset already cold-start). Without it, reference engines "
-            "warm-continue from the previous sample's converged density."
+            "SCC restart policy for the batch matrices. auto-warm (default): "
+            "first call cold, every later warmup and measured sample "
+            "continues warm for all engines (gpuxtb strict WARM; xTB/tblite "
+            "persistent). cold: every sample is a genuine cold start for "
+            "every engine. --cold-samples is kept as an alias for "
+            "--start-policy cold."
         ),
+    )
+    parser.add_argument(
+        "--cold-samples",
+        dest="start_policy",
+        action="store_const",
+        const="cold",
+        help="alias for --start-policy cold (every sample cold-start).",
     )
     parser.add_argument(
         "--trajectory-natoms",
@@ -1139,7 +1176,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.warmups,
                 args.repetitions,
                 args.energy_atol,
-                cold_samples=args.cold_samples,
+                start_policy=args.start_policy,
             )
             elapsed_s = time.perf_counter() - log_start
             rows.append(row)
