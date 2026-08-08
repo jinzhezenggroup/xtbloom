@@ -43,6 +43,34 @@ static_assert(std::is_trivially_copyable_v<Gfn2SccDispatchChainDevice>);
 static_assert(std::is_standard_layout_v<Gfn2SccDispatchChainDevice>);
 
 /*
+ * Largest eigensolver bucket (AO count) for which the production kAuto graph
+ * choice may select the exact-capacity device dispatch chain. Every retained
+ * chain-benefit record is archive-backed: issue #131 measured exact-capacity
+ * compaction only up to n=40 single-bucket AO and issue #80 only small
+ * heterogeneous systems, and both document a capacity-dependent crossover
+ * where the compacted chain loses to the monolithic device-tail graph at high
+ * residual activity. A batch whose largest bucket exceeds this bound has no
+ * retained chain-benefit evidence (for example the 122-AO B=128 alkane stack
+ * runs 4.3x slower on the chain), so kAuto selects the monolithic graph there.
+ * Forced graph preferences remain exact and are unaffected by this regime.
+ */
+inline constexpr std::int64_t kGfn2SccDispatchChainMeasuredOrbitalBound = 40;
+
+[[nodiscard]] inline bool gfn2_scc_dispatch_chain_regime_applies(
+    const Gfn2SccIterationDevicePlan& plan) noexcept {
+  const auto& provider = plan.eigensolver_provider;
+  if (!(provider.bucket_count > 0) || provider.buckets == nullptr) {
+    return false;
+  }
+  for (std::int64_t bucket = 0; bucket < provider.bucket_count; ++bucket) {
+    if (provider.buckets[bucket].orbital_count > kGfn2SccDispatchChainMeasuredOrbitalBound) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/*
  * Synchronous submission result for a bounded SCC loop. submitted_iterations
  * counts complete one-iteration DAGs enqueued before the first launch failure.
  * Numerical convergence and peer failures remain device-resident in the

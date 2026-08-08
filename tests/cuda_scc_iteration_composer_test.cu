@@ -1159,9 +1159,14 @@ int test_composer_raw_publication_policy(bool terminal) {
           Gfn2SccIterationProviderCaptureMode::kGraphSupported);
     /* Terminal: run the device-tail graph owner until no peer is active, so
      * converged peers' raw Mulliken population is committed to the public
-     * raw buffers by the state composer. */
+     * raw buffers by the state composer. Force the monolithic device-tail
+     * family explicitly: the small-batch kAuto default prefers the
+     * exact-capacity dispatch chain since #227, and this test measures the
+     * terminal-publication policy on the device-tail path, not the kAuto
+     * family choice itself. */
     Gfn2SccLoopCudaGraphOwner graph;
-    const Gfn2SccLoopGraphBuildResult build = graph.build(fixture.binding);
+    const Gfn2SccLoopGraphBuildResult build =
+        graph.build(fixture.binding, Gfn2SccLoopGraphPreference::kDeviceTailGraph);
     if (!build.success() || !build.device_tail_graph_ready() || !graph.ready()) {
       std::fprintf(stderr, "terminal composer graph build failed: status=%u fallback=%u\n",
                    static_cast<unsigned>(build.status),
