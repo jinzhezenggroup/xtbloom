@@ -100,7 +100,9 @@ dxtb. Unlike `natoms_scaling.py`, every batch above size one is built from
 numbers, slightly different coordinates), so no engine can win a batch row by
 reusing one geometry. An optional `--trajectory` mode streams nearly identical
 frames through persistent descriptors and runs gpuxtb with strict `WARM` SCC
-continuation.
+continuation; `--trajectory-natoms` accepts a comma-separated list so the
+trajectory panel can sweep molecule size (one per-frame-latency row per engine
+per size) instead of measuring a single fixed size.
 
 `plot_natoms_cross_engine.py` merges any number of `--artifact` JSON files and
 renders the three-panel scaling + trajectory figure used in the README and

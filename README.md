@@ -90,7 +90,7 @@ Hardware: AMD EPYC 7K62 (48 cores, gpuxtb CPU pinned to 16 workers) and an
 NVIDIA GeForce RTX 5090 (sm_120). gpuxtb runs the conformance-tight SCC
 (tolerance 1e-10 on charges / 1e-12 on energy, up to 500 iterations) while the
 reference engines use their default `--acc 1e-4`, so gpuxtb's timings include
-strictly *more* SCC work. Raw samples, hardware, and commit `3644cff` are
+strictly *more* SCC work. Raw samples, hardware, and the exact commits are
 archived under
 [`benchmarks/evidence/issue-13/2026-08-08-node3/`](benchmarks/evidence/issue-13/2026-08-08-node3/).
 
@@ -98,17 +98,22 @@ The measured pattern is exactly what ragged high-throughput inference is for:
 
 - **Single molecule (batch = 1):** gpuxtb CPU is in the same range as xTB and
   tblite at small sizes; its advantage appears once systems are collected into
-  batches rather than solved one at a time.
+  batches rather than solved one at a time. The sweep now extends to 602-atom
+  alkanes (references stop at 362 atoms, where xTB 6.7.1 crashes on the
+  602-atom alkane).
 - **128 systems per call (batch = 128):** is where gpuxtb separates. From
-  14-atom systems up to 62 atoms, gpuxtb CPU is roughly 11x faster than xTB,
-  roughly 5-8x faster than tblite, and roughly 24-45x faster than dxtb CPU.
-  Because gpuxtb solves the whole ragged batch in one call, the per-system cost
-  collapses to a fraction of what a serial per-system loop pays. This build's
-  CUDA single-point path carries a fixed per-call cost at these sizes, so the
-  CPU ragged batch is the fastest measured configuration.
-- **MD trajectory (WARM):** gpuxtb CPU keeps a small-molecule trajectory in
-  the same time as xTB while running the tight SCC settings, and is several
-  times faster than dxtb.
+  14-atom systems up to 122 atoms, gpuxtb CPU is roughly 11x faster than xTB,
+  roughly 5.6x faster than tblite, and roughly 25x faster than dxtb CPU at
+  62 atoms, and ~6.9x / ~3.3x at 122 atoms. Because gpuxtb solves the whole
+  ragged batch in one call, the per-system cost collapses to a fraction of
+  what a serial per-system loop pays. gpuxtb CPU reaches 302-atom x 128
+  systems per call, and gpuxtb CUDA (which now leads the CPU ragged batch
+  from 62 atoms up, reflecting the merged CUDA SCC/force perf work) reaches
+  242 x 128 systems on the 32 GiB GPU.
+- **MD trajectory (WARM):** the trajectory panel sweeps molecule size as the
+  x-axis. gpuxtb CPU keeps a trajectory at the same per-frame time as xTB at
+  every size while running conformance-tight SCC, and gpuxtb CUDA's WARM
+  continuation is ~1.4-3.5x faster than its fresh single-point path.
 
 Reproduce it with the committed runner, then regenerate the figure:
 
@@ -119,15 +124,17 @@ srun -n 1 -c 16 env OMP_NUM_THREADS=16 MKL_NUM_THREADS=16 \
     --library build/bench-cpu-shared/libgpuxtb.so.0.1.0 \
     --xtb-library /path/to/libxtb.so.6.7.1 \
     --tblite-library /path/to/libtblite.so.0.7.0 \
-    --engines gpuxtb-cpu,xtb,tblite --natoms 14,32,62,122,242 \
-    --natoms-large-batch 14,32,62 --batch-sizes 1,128 \
+    --engines gpuxtb-cpu,xtb,tblite --natoms 14,32,62,122,242,362 \
+    --natoms-large-batch 14,32,62,122 --batch-sizes 1,128 \
     --warmups 1 --repetitions 5 --cpu-threads 16 \
-    --trajectory --trajectory-natoms 62 --trajectory-frames 12 \
+    --trajectory --trajectory-natoms 32,62,122,242 --trajectory-frames 12 \
     --output-json build/benchmarks/final/cpu.json --output-csv build/benchmarks/final/cpu.csv
 
+# gpuxtb-only extended rows (batch = 1 at 602, batch = 128 at 152/242/302),
 # dxtb CPU, then CUDA runs with --gres=gpu:1 (dxtb needs its own env), then:
 python3 benchmarks/plot_natoms_cross_engine.py \
-  --artifact build/benchmarks/final/cpu.json ... --commit "$(git rev-parse HEAD)" \
+  --artifact build/benchmarks/final/cpu.json --artifact build/benchmarks/final/cpu-large.json \
+  ... --commit "$(git rev-parse HEAD)" \
   --output docs/assets/natoms_cross_engine.png
 ```
 
