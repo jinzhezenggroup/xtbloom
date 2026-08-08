@@ -169,6 +169,29 @@ caller outputs unchanged. CPU and CUDA use the same compute-options identity, in
 requested-property/output flags. High-level Python calculators intentionally select `FRESH`;
 persistent warm policy is exposed only by the low-level C/ctypes descriptor for now.
 
+## External interaction attachments
+
+The ABI-v3 batch suffix adds a generic attachment slot — `total_interactions`,
+`interaction_descriptors`, and `interaction_payload` — so external potentials
+and self-consistent models (uniform electric field, field gradient, multipole
+point charges, ALPB/GBSA/GB/GBE/ddX solvation, D3/D4 dispersion variants,
+halogen-bond corrections) do not each regrow the batch layout. One
+`gpuxtb_interaction_t` descriptor ties a versioned payload block to one batch
+item; block contents are versioned per tag through a leading `block_version`.
+
+Reserved attachments follow a strict validate-then-refuse policy: the common
+structural validator proves descriptor/payload extents, memory-space tags, tag
+membership, per-tag block contracts, and duplicate rejection, then the request
+is refused with `NOT_IMPLEMENTED` before any backend execution or caller-output
+commit. A caller can therefore never observe a result where a reserved
+interaction was silently ignored. Unknown or `NONE` tags and structurally
+malformed attachments are `INVALID_ARGUMENT`. Device-resident descriptor
+content defers through the `kInteractionDescriptorsNeedStaging` pending mask
+and is validated by the backend after staging. The ABI-v2 result suffix
+reserves the dipole-moment outlet alongside `quadrupole_moments`,
+`wiberg_orders`, and `spin_populations`; the latter three have no released
+shape contract and must remain NULL until published.
+
 ## Fixed-topology plans and workspace sizing
 
 `gpuxtb_compute` remains the convenience path: it validates the descriptor set, prepares the

@@ -31,7 +31,11 @@ once per molecule.
 
 GFN1-xTB and ROCm have reserved ABI values but are **not implemented**.
 gpuxtb also does not currently provide geometry optimization, molecular
-dynamics, solvation, Hessians, or a lattice/PBC descriptor.
+dynamics, solvation, Hessians, or a lattice/PBC descriptor. The ABI reserves a
+generic external-interaction attachment slot (uniform electric field, field
+gradient, multipole point charges, solvation, dispersion variants, halogen
+corrections); attachments are validated and refused with `NOT_IMPLEMENTED` —
+no backend executes them yet.
 
 ## Choosing an xTB implementation
 
