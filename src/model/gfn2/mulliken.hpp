@@ -12,6 +12,7 @@
 #include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/integrals.hpp"
+#include "model/gfn2/parallel_executor.hpp"
 #include "model/gfn2/wavefunction.hpp"
 
 namespace gpuxtb::detail::gfn2 {
@@ -184,7 +185,8 @@ gpuxtb_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& i
 gpuxtb_status_t evaluate_mulliken_population_system_cpu(
     const MullikenPlan& plan, const MullikenIntegralView& integrals,
     const MullikenDensityView& density, const MullikenPopulationView& population,
-    std::int64_t system, const MullikenWorkspace& workspace, std::string& error);
+    std::int64_t system, const MullikenWorkspace& workspace, std::string& error,
+    const SccParallelExecutor* parallel = nullptr);
 
 /*
  * Compute q = n0 - P:S and atomic d/Q = -P:D/Q. The ket AO determines the
@@ -222,7 +224,8 @@ gpuxtb_status_t evaluate_mulliken_population_cpu(const MullikenPlan& plan,
 gpuxtb_status_t add_mulliken_hamiltonian_system_cpu(
     const MullikenPlan& plan, const MullikenIntegralView& integrals,
     const MullikenPotentialView& potential, const MullikenHamiltonianView& hamiltonian,
-    std::int64_t system, const MullikenWorkspace& workspace, std::string& error);
+    std::int64_t system, const MullikenWorkspace& workspace, std::string& error,
+    const SccParallelExecutor* parallel = nullptr);
 
 /*
  * Accumulate scalar, dipole, and quadrupole SCC potential shifts into H:

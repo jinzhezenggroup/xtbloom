@@ -15,6 +15,7 @@
 #include "model/gfn2/es2.hpp"
 #include "model/gfn2/es3.hpp"
 #include "model/gfn2/mulliken.hpp"
+#include "model/gfn2/parallel_executor.hpp"
 #include "model/gfn2/periodic_embedding.hpp"
 #include "model/gfn2/scc_mixer.hpp"
 #include "model/gfn2/spin.hpp"
@@ -315,7 +316,8 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
     const SccDriverPlan& plan, const SccDriverGeometryView& geometry,
     const CpuLinearAlgebraBackend& backend, const EigensolverOverlapCache& overlap_cache,
     const WavefunctionView& wavefunction, const SccMixerState& mixer_state,
-    const SccDriverState& state, const SccDriverWorkspace& workspace, std::string& error);
+    const SccDriverState& state, const SccDriverWorkspace& workspace, std::string& error,
+    const SccParallelExecutor* parallel = nullptr);
 
 }  // namespace gpuxtb::detail::gfn2
 
