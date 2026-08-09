@@ -1,0 +1,1104 @@
+========= COMPUTE-SANITIZER
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (0,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (1,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (2,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (3,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (4,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (5,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (6,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (7,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (8,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (9,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (10,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (11,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (12,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (13,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (14,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (15,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (16,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (17,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (18,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (19,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (20,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (21,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (22,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (23,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (24,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (25,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (26,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (27,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (28,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (29,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (30,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (31,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (32,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (33,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (34,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (35,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (36,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (37,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (38,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (39,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (40,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (41,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (42,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (43,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (44,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (45,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (46,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (47,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (48,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (49,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (50,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (51,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (52,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (53,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (54,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (55,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (56,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (57,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (58,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (59,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (60,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (61,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (62,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (63,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (64,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (65,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (66,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (67,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (68,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (69,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (70,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (71,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (72,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (73,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (74,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (75,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (76,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (77,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (78,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (79,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (80,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (81,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (82,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (83,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (84,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (85,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (86,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (87,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (88,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (89,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (90,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (91,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (92,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (93,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (94,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (95,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (96,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (97,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (98,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Barrier error detected. Divergent thread(s) in warp.
+=========     at gpuxtb::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel(gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch, gpuxtb::detail::Gfn2WavefunctionLayoutView, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields, gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity, gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace, unsigned int *, unsigned int *)+0x2b0
+=========     by thread (99,0,0) in block (0,0,0)
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
+=========         Host Frame:  [0x216ca] in libcudart.so.12
+=========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
+=========         Host Frame: gpuxtb::detail::cuda::Gfn2SccLoopCudaGraphOwner::launch(CUstream_st*) const [0xdff58] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: (anonymous namespace)::test_large_singleton_tridiagonal_sanitizer_smoke() [0x1b12e6] in gpuxtb_cuda_scc_iteration_production_test
+=========         Host Frame: main [0xa6c1] in gpuxtb_cuda_scc_iteration_production_test
+=========
+========= Target application returned an error
+========= ERROR SUMMARY: 256 errors
+========= ERROR SUMMARY: 156 errors were not printed. Use --print-limit option to adjust the number of printed errors
