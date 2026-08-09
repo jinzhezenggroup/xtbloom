@@ -312,6 +312,46 @@ int test_explicit_thread_counts_are_deterministic() {
     CHECK(parallel.converged == serial.converged);
     CHECK(parallel.statuses == serial.statuses);
   }
+
+  /* Transition the same contexts to batch one, where the parallel context
+   * dispatches Mulliken phases over otherwise-idle workers. Repeated calls
+   * must remain bit-identical to the one-thread public path. */
+  PublicBatch serial_single = make_repeated_h2_he_batch(1u);
+  PublicBatch parallel_single = make_repeated_h2_he_batch(1u);
+  serial_single.bind(flags);
+  parallel_single.bind(flags);
+  CHECK(gpuxtb_compute(serial_context.get(), &serial_single.batch, &serial_single.options,
+                       &serial_single.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_compute(parallel_context.get(), &parallel_single.batch, &parallel_single.options,
+                       &parallel_single.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(parallel_single.energies == serial_single.energies);
+  CHECK(parallel_single.forces == serial_single.forces);
+  CHECK(parallel_single.atomic_charges == serial_single.atomic_charges);
+  CHECK(parallel_single.iterations == serial_single.iterations);
+  CHECK(parallel_single.converged == serial_single.converged);
+  CHECK(parallel_single.statuses == serial_single.statuses);
+
+  for (int repetition = 0; repetition < 4; ++repetition) {
+    CHECK(gpuxtb_compute(parallel_context.get(), &parallel_single.batch, &parallel_single.options,
+                         &parallel_single.result) == GPUXTB_STATUS_SUCCESS);
+    CHECK(parallel_single.energies == serial_single.energies);
+    CHECK(parallel_single.forces == serial_single.forces);
+    CHECK(parallel_single.atomic_charges == serial_single.atomic_charges);
+    CHECK(parallel_single.iterations == serial_single.iterations);
+    CHECK(parallel_single.converged == serial_single.converged);
+    CHECK(parallel_single.statuses == serial_single.statuses);
+  }
+
+  /* Returning to the multi-system outer scheduler must restore the original
+   * batch result without retaining the intra-system executor assignment. */
+  CHECK(gpuxtb_compute(parallel_context.get(), &parallel.batch, &parallel.options,
+                       &parallel.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(parallel.energies == reference_energies);
+  CHECK(parallel.forces == reference_forces);
+  CHECK(parallel.atomic_charges == reference_charges);
+  CHECK(parallel.iterations == reference_iterations);
+  CHECK(parallel.converged == serial.converged);
+  CHECK(parallel.statuses == serial.statuses);
   return 0;
 }
 

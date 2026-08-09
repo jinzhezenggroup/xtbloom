@@ -1707,6 +1707,21 @@ SccParallelExecutor test_parallel_executor() {
   return {nullptr, 4u, &Dispatcher::run};
 }
 
+/* Deterministically run high chunk indices first. This is a valid executor
+ * schedule and proves that a later-range failure cannot suppress an earlier
+ * serial failure whose chunk has not started yet. */
+SccParallelExecutor test_reverse_chunk_executor() {
+  struct Dispatcher {
+    static void run(void*, std::size_t chunk_count, void (*body)(void*, std::size_t) noexcept,
+                    void* body_context) {
+      for (std::size_t chunk = chunk_count; chunk > 0u; --chunk) {
+        body(body_context, chunk - 1u);
+      }
+    }
+  };
+  return {nullptr, 4u, &Dispatcher::run};
+}
+
 int test_parallel_path_is_bit_identical() {
   const auto fill_fixture = [](Fixture& fixture) {
     for (std::size_t index = 0; index < fixture.overlap.size(); ++index) {
@@ -1824,8 +1839,7 @@ int test_parallel_path_is_bit_identical() {
 
   /* Multiple failing sites must report the serially-first failure
    * deterministically, independent of chunk assignment: an early density NaN
-   * (element 0) must win over a late dipole-integral NaN, and stay stable
-   * across many differently-scheduled parallel runs. */
+   * (element 0) must win even when a late dipole-integral NaN runs first. */
   Fixture multi_failure;
   CHECK(make_fixture({0, 6}, {6, 6, 1, 1, 1, 1}, {0.0}, {0}, {1}, multi_failure, error));
   fill_fixture(multi_failure);
@@ -1838,16 +1852,26 @@ int test_parallel_path_is_bit_identical() {
     multi_failure.dipole_integrals[static_cast<std::size_t>(late_element)] =
         std::numeric_limits<double>::quiet_NaN();
   }
-  for (int run = 0; run < 8; ++run) {
-    error.clear();
-    SccParallelExecutor varied = test_parallel_executor();
-    CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
-              multi_failure.plan, integral_view(multi_failure), density_view(multi_failure),
-              population_view(multi_failure), 0, workspace_view(multi_failure), error,
-              &varied) == GPUXTB_STATUS_INTERNAL_ERROR);
-    CHECK(error.find("Mulliken target density or overlap contains NaN or infinity") !=
-          std::string::npos);
-  }
+  SccParallelExecutor reverse = test_reverse_chunk_executor();
+  error.clear();
+  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
+            multi_failure.plan, integral_view(multi_failure), density_view(multi_failure),
+            population_view(multi_failure), 0, workspace_view(multi_failure), error,
+            &reverse) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(error.find("Mulliken target density or overlap contains NaN or infinity") !=
+        std::string::npos);
+
+  /* Hamiltonian assembly uses row chunks and must obey the same failure order:
+   * the first overlap entry wins after the last-row dipole failure ran first. */
+  multi_failure.overlap[0] = std::numeric_limits<double>::quiet_NaN();
+  const std::vector<double> before_multi_failure = multi_failure.hamiltonian;
+  error.clear();
+  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+            multi_failure.plan, integral_view(multi_failure), potential_view(multi_failure),
+            hamiltonian_view(multi_failure), 0, workspace_view(multi_failure), error,
+            &reverse) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(error.find("Mulliken target overlap input contains NaN or infinity") != std::string::npos);
+  CHECK(multi_failure.hamiltonian == before_multi_failure);
   return 0;
 }
 

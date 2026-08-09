@@ -321,9 +321,10 @@ void mulliken_population_fail(MullikenPopulationTask& task, int code,
 
 void mulliken_population_chunk(void* opaque, std::size_t chunk) noexcept {
   MullikenPopulationTask& task = *static_cast<MullikenPopulationTask*>(opaque);
-  if (task.failure.load(std::memory_order_relaxed) != 0u) {
-    return;
-  }
+  /* Every chunk must inspect its own range even after a peer reports failure.
+   * Otherwise a later serial range can win merely because it ran first. Each
+   * chunk still returns at its own first failure, which is sufficient for the
+   * global CAS minimum to reproduce serial traversal deterministically. */
   const std::int64_t per_chunk = (task.atoms + task.chunk_count - 1) / task.chunk_count;
   const std::int64_t local_atom_begin =
       std::min<std::int64_t>(static_cast<std::int64_t>(chunk) * per_chunk, task.atoms);
@@ -477,9 +478,9 @@ void mulliken_hamiltonian_fail(MullikenHamiltonianTask& task, int code,
 
 void mulliken_hamiltonian_chunk(void* opaque, std::size_t chunk) noexcept {
   MullikenHamiltonianTask& task = *static_cast<MullikenHamiltonianTask*>(opaque);
-  if (task.failure.load(std::memory_order_relaxed) != 0u) {
-    return;
-  }
+  /* As in the population contraction, all chunks must participate after a
+   * peer failure so the CAS minimum observes failures in earlier serial
+   * ranges regardless of scheduling order. */
   const std::int64_t per_chunk = (task.orbitals + task.chunk_count - 1) / task.chunk_count;
   const std::int64_t local_row_begin =
       std::min<std::int64_t>(static_cast<std::int64_t>(chunk) * per_chunk, task.orbitals);
