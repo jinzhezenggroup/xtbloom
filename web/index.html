@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>xTBloom · GFN2-xTB 在线计算（WASM）</title>
+<title>xTBloom · 浏览器内运行 GFN2-xTB</title>
 <link rel="icon" href="xtbloom-mark.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -13,7 +13,7 @@
     <img class="logo" src="xtbloom-mark.svg" width="42" height="42" alt="" aria-hidden="true">
     <div>
       <h1>xTBloom<span class="accent">·GFN2-xTB</span></h1>
-      <p class="tagline" data-i18n="tagline">浏览器内运行的原生 GFN2-xTB 单点能与几何优化 · C++17 WASM32 · CPU 后端</p>
+      <p class="tagline" data-i18n="tagline">无需安装或上传，在浏览器中运行 GFN2-xTB 单点与几何优化</p>
     </div>
   </div>
   <div class="badges">
@@ -162,7 +162,7 @@
 
     <div class="stats">
       <div class="stat"><div class="stat-k" id="stat-atoms">–</div><div class="stat-l" data-i18n="stat_atoms">原子</div></div>
-      <div class="stat"><div class="stat-k" id="stat-iter">–</div><div class="stat-l" data-i18n="stat_iter">SCC 迭代</div></div>
+      <div class="stat"><div class="stat-k" id="stat-iter">–</div><div class="stat-l" id="stat-iter-label" data-i18n="stat_iter">SCC 迭代</div></div>
       <div class="stat"><div class="stat-k" id="stat-conv">–</div><div class="stat-l" data-i18n="stat_conv">收敛</div></div>
       <div class="stat"><div class="stat-k" id="stat-ms">–</div><div class="stat-l" data-i18n="stat_ms">耗时 ms</div></div>
     </div>
@@ -203,9 +203,9 @@
   </div><!-- .col-right -->
 </main>
 
-<!-- 路线图 -->
+<!-- 可直接尝试的浏览器工作流 -->
 <section class="card roadmap">
-  <h2 class="panel-title" data-i18n="roadmap">路线图</h2>
+  <h2 class="panel-title" data-i18n="roadmap">浏览器中可以尝试</h2>
   <div class="roadmap-grid">
     <div class="roadmap-item" title="">
       <span class="rm-emoji">🧪</span>
@@ -232,7 +232,7 @@
     可选的 SMILES 三维结构由固定版本的 OpenChemLib 生成并以 MMFF94 预优化。BLAS/LAPACK 层为演示用最小实现。仅供演示，非科学计算生产环境。
   </p>
   <p class="legal-links">
-    <a href="https://jinzhezeng.group/xtbloom/">Web demo</a> ·
+    <a href="https://xtbloom.jinzhezeng.group">Web demo</a> ·
     <a href="LICENSE">GPL-3.0-or-later</a> ·
     <a href="THIRD_PARTY_NOTICES.md">Third-party notices</a> ·
     <a href="LICENSES/openchemlib-BSD-3-Clause.txt">OpenChemLib license</a> ·

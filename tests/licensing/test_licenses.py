@@ -134,7 +134,7 @@ class WebSiteLicenseTests(unittest.TestCase):
             '<a href="THIRD_PARTY_NOTICES.md">notices</a>\n'
             '<a href="LICENSES/openchemlib-BSD-3-Clause.txt">OpenChemLib</a>\n'
             '<a href="CUDA_MKL_LINKING_EXCEPTION">permission</a>\n'
-            '<a href="https://jinzhezeng.group/xtbloom/">demo</a>\n'
+            '<a href="https://xtbloom.jinzhezeng.group">demo</a>\n'
             '<a href="https://github.com/jinzhezenggroup/xtbloom">source</a>\n',
             encoding="utf-8",
         )

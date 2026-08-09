@@ -1,81 +1,68 @@
 # xTBloom documentation
 
-xTBloom exposes GFN2-xTB single-point inference through one stable C ABI and
-Python interfaces built on that ABI. Start with the guide for your role.
+xTBloom provides native, batched GFN2-xTB energies, analytic forces, and
+charges through one stable C ABI and Python interfaces built on that ABI.
 
-## Browser demo
+[Try the browser demo](https://xtbloom.jinzhezeng.group) ·
+[Install from source](user-guide/index.md#installation) ·
+[Python API](user-guide/python.md) ·
+[C/C++ API](user-guide/c-api.md)
 
-The experimental browser build is available at
-<https://jinzhezeng.group/xtbloom/>. It runs the CPU backend entirely on the
-client as wasm32 without requiring Memory64, targeting modern iOS Safari,
-Safari, Chrome, and Firefox with WebAssembly and module Worker support. It
-includes an adapter-local L-BFGS geometry optimizer for interactive
-demonstrations. The page also loads the pinned OpenChemLib 9.21.0 module and
-resource registry from jsDelivr in the background. Its SMILES workflow adds
-explicit hydrogens, generates a seeded 3D conformer, applies an MMFF94
-pre-relaxation, and populates the existing XYZ and formal-charge inputs without
-blocking ordinary XYZ use if the optional CDN dependency is unavailable.
+## See it run
 
-The query parameter `?smiles=CCO` preloads the SMILES and, after both workers
-are ready, automatically runs the xTBloom geometry optimizer and writes the
-final angstrom coordinates back to the XYZ editor. URL syntax requires a
-literal `+` in a charged SMILES to be encoded as `%2B`, for example
-`?smiles=%5BNH4%2B%5D`. The SMILES/conformer workflow and optimizer are browser
-adapter features; neither is exported by the stable C ABI or supported as a
-native-library capability. A separate wasm64 CI build verifies that
-pointer-width changes do not alter ABI-local behavior or numerical results.
-OpenChemLib provenance and exact CDN digests are recorded in
-[`web/openchemlib_manifest.json`](../web/openchemlib_manifest.json).
+[![xTBloom browser demo running an ethanol calculation](assets/web-demo-ethanol.png)](https://xtbloom.jinzhezeng.group/?smiles=CCO)
 
-## User guide
+The browser demo runs entirely on the client: enter SMILES or XYZ coordinates,
+inspect the 3D structure, and calculate GFN2-xTB results without uploading the
+molecule. Its SMILES-to-3D and geometry-optimization workflow belongs to the
+demo adapter, not the native single-point API.
 
-The [user guide](user-guide/index.md) covers supported capabilities,
-installation, units, backend selection, and runtime behavior.
+[Open the demo](https://xtbloom.jinzhezeng.group) ·
+[Browser usage and limitations](user-guide/browser-demo.md)
 
-- [Python API](user-guide/python.md): single systems, ragged batches, spin,
-  explicit point charges, periodic response, ASE, and dpdata.
-- [C and C++ API](user-guide/c-api.md): native installation, a complete C
-  example, descriptor ownership, CUDA memory, and error handling.
-- [QM/MM usage](user-guide/qmmm.md): what xTBloom computes and what the caller
-  must provide.
+## Start here
 
-## Theory guide
+- **Using Python:** [installation and API guide](user-guide/python.md) for
+  single systems, native ragged batches, spin, point charges, Array API/DLPack,
+  ASE, and dpdata.
+- **Using C or C++:** [C ABI guide](user-guide/c-api.md) for installation, a
+  complete example, descriptor ownership, CUDA memory, and error handling.
+- **Embedding QM/MM:** [QM/MM guide](user-guide/qmmm.md) for explicit point
+  charges and caller-supplied charge response.
+- **Evaluating performance:** [performance summary](user-guide/performance.md)
+  for published results and [benchmark harnesses](../benchmarks/README.md) for
+  reproducible methodology.
 
-The [theory guide](theory/index.md) explains the numerical meaning behind the
-public results rather than reproducing every implementation equation.
+## Understand the model
+
+The [theory guide](theory/index.md) explains the numerical meaning of public
+results and external interactions:
 
 - [GFN2-xTB model and SCC](theory/gfn2.md)
 - [Explicit point charges and periodic response](theory/qmmm.md)
 
-## Developer guide
+## Develop xTBloom
 
-The [developer guide](developer-guide/index.md) documents contracts that must
-remain true when changing the implementation.
+The [developer guide](developer-guide/index.md) records implementation
+contracts and validation requirements:
 
 - [Architecture](developer-guide/architecture.md)
 - [Validation and scientific evidence](developer-guide/validation.md)
 - [Packaging, dependencies, and licensing](developer-guide/packaging.md)
+- [Web demo implementation](../web/README.md)
 
 Repository contributors and coding agents must also follow
 [`AGENTS.md`](../AGENTS.md). The installed public contract is
 [`include/xtbloom/xtbloom.h`](../include/xtbloom/xtbloom.h).
 
-## Current support
+## Capability boundary
 
-| Capability | Status |
-| --- | --- |
-| GFN2-xTB restricted and unrestricted energy/forces/charges | CPU and CUDA |
-| Ragged batches and peer-local SCC/eigensolver failures | Supported |
-| Host input/output descriptors | CPU and CUDA |
-| CUDA-device and mixed descriptors | Low-level C ABI |
-| Explicit point charges in SCC and point-charge forces | Supported |
-| Caller-supplied periodic `b + A q` response | Supported; no lattice descriptor |
-| Uniform external electric field (ABI-v3 interaction) | CPU; CUDA reserved |
-| Per-system molecular dipole moments | CPU; CUDA reserved |
-| ASE and dpdata | Supported Python integrations |
-| External interaction slot (solvation, field gradient, ...) | ABI-v3 slot reserved; not implemented |
-| Browser adapter single points, SMILES-to-3D, and demo geometry optimization | Experimental wasm32 CPU site |
-| Native GFN1-xTB, ROCm, solvation, optimization, MD, Hessians | Not implemented |
+xTBloom currently implements restricted and unrestricted GFN2-xTB on CPU and
+CUDA, native ragged batches, analytic forces and charges, explicit point
+charges, caller-supplied periodic charge response, ASE, and dpdata. The
+low-level CUDA ABI accepts host, device, and mixed descriptors.
 
-Documentation describes the current repository state. Reserved ABI values and
-planned extensions are not reported as supported features.
+GFN1-xTB, ROCm, native geometry optimization, molecular dynamics, solvation,
+Hessians, and lattice/PBC descriptors are not implemented. The browser and
+dpdata optimizers are higher-level adapters built on repeated single-point
+calls.
