@@ -13,6 +13,34 @@
 import createGpuxTbModule from "./gpuxtb_web.js";
 
 let Module = null;
+let stepFn = null;
+let onStep = null;
+
+function ensureStepCallback() {
+  if (stepFn !== null || !Module || typeof Module.addFunction !== "function") return;
+  try {
+    stepFn = Module.addFunction((iter, natoms, ptr, energy, fmax) => {
+      // coords arrive as wasm64 pointers (BigInt); floats live in wasm memory.
+      // Build a fresh Float64Array over the shared buffer so it stays valid
+      // regardless of wasm memory growth.
+      const mem = Module.wasmMemory || Module.memory;
+      const coords = new Array(natoms * 3);
+      if (mem && mem.buffer) {
+        const f64 = new Float64Array(mem.buffer);
+        const base = Number(ptr) / 8;
+        for (let i = 0; i < coords.length; i++) {
+          coords[i] = f64[base + i];
+        }
+      } else {
+        for (let i = 0; i < coords.length; i++) coords[i] = NaN;
+      }
+      if (onStep) onStep(iter, natoms, coords, energy, fmax);
+    }, "viipdd");
+    Module.ccall("gpuxtb_web_set_optimize_step_cb", "void", ["number"], [stepFn]);
+  } catch (err) {
+    stepFn = null; /* animation is optional; core optimize still works */
+  }
+}
 
 self.onmessage = async (event) => {
   const msg = event.data;
@@ -54,11 +82,19 @@ self.onmessage = async (event) => {
           msg.args,
         );
       } else if (msg.cmd === "optimize") {
-        raw = Module.ccall(
-          "gpuxtb_web_optimize", "string",
-          ["string", "number", "number", "number", "number", "number", "number", "number", "number", "number"],
-          msg.args,
-        );
+        onStep = (iter, natoms, coords, energy, fmax) => {
+          self.postMessage({ type: "step", id: msg.id, iter, natoms, coords, energy, fmax });
+        };
+        ensureStepCallback();
+        try {
+          raw = Module.ccall(
+            "gpuxtb_web_optimize", "string",
+            ["string", "number", "number", "number", "number", "number", "number", "number", "number", "number"],
+            msg.args,
+          );
+        } finally {
+          onStep = null;
+        }
       } else {
         throw new Error("unknown command: " + msg.cmd);
       }

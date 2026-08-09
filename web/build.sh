@@ -36,8 +36,8 @@ EMCC_FORCE_STDLIBS=1 em++ "$OUT/gpuxtb_web.o" "$LIB_A" -I"$INCLUDE" \
   -sSTACK_SIZE=8MB -sALLOW_MEMORY_GROWTH \
   -sFORCE_FILESYSTEM \
   --preload-file "$OUT/libscipy_openblas.so@/libscipy_openblas.so" \
-  -sEXPORTED_FUNCTIONS=_gpuxtb_web_compute,_gpuxtb_web_optimize,_gpuxtb_web_version,_malloc,_free \
-  -sEXPORTED_RUNTIME_METHODS=UTF8ToString,stringToUTF8OnStack,ccall,cwrap
+  -sEXPORTED_FUNCTIONS=_gpuxtb_web_compute,_gpuxtb_web_optimize,_gpuxtb_web_set_optimize_step_cb,_gpuxtb_web_version,_malloc,_free \
+  -sEXPORTED_RUNTIME_METHODS=UTF8ToString,stringToUTF8OnStack,ccall,cwrap,addFunction,wasmMemory
 
 echo "[4/4] copy static assets"
 cp "$WEB/index.html" "$WEB/style.css" "$WEB/app.js" "$WEB/worker.js" "$OUT/"

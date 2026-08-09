@@ -505,6 +505,17 @@ static void w_axpy(double* y, double a, const double* x, int n) {
   }
 }
 
+/* Optional per-iteration callback that lets the front end animate the
+ * geometry during optimization. Called on the worker thread after every
+ * accepted L-BFGS step, with the running iteration count (1-based), the atom
+ * count, coordinates in angstrom, the energy (Eh), and the largest per-atom
+ * force (Eh/bohr). Reset to NULL to disable. */
+typedef void (*GpuxtbOptimizeStepFn)(int iteration, int atom_count, const double* coords_angstrom,
+                                     double energy_eh, double force_max_eh_per_bohr);
+static GpuxtbOptimizeStepFn g_optimize_step_fn = NULL;
+
+void gpuxtb_web_set_optimize_step_cb(GpuxtbOptimizeStepFn fn) { g_optimize_step_fn = fn; }
+
 const char* gpuxtb_web_optimize(const char* xyz, double charge, int unpaired,
                                 double electronic_temperature_eh, double energy_tolerance,
                                 double charge_tolerance, int scc_max_iterations,
@@ -569,12 +580,13 @@ const char* gpuxtb_web_optimize(const char* xyz, double charge, int unpaired,
   double* rho = (double*)malloc(LBFGS_M * sizeof(double));
   double* alpha = (double*)malloc(LBFGS_M * sizeof(double));
   double* trajectory = (double*)malloc((size_t)(traj_cap) * sizeof(double));
+  double* step_buf = (double*)malloc((size_t)dim * sizeof(double));
   if (atom_offsets == NULL || atomic_numbers == NULL || positions == NULL ||
       molecular_charges == NULL || unpaired_electrons == NULL || energy == NULL ||
       charges_q == NULL || forces == NULL || scc_iterations == NULL || scc_converged == NULL ||
       per_system_status == NULL || x == NULL || g == NULL || g2 == NULL || x2 == NULL ||
       p == NULL || q == NULL || r == NULL || s_hist == NULL || y_hist == NULL || rho == NULL ||
-      alpha == NULL || trajectory == NULL) {
+      alpha == NULL || trajectory == NULL || step_buf == NULL) {
     free(atom_offsets);
     free(atomic_numbers);
     free(positions);
@@ -598,6 +610,7 @@ const char* gpuxtb_web_optimize(const char* xyz, double charge, int unpaired,
     free(rho);
     free(alpha);
     free(trajectory);
+    free(step_buf);
     return error_json("err_alloc", NULL);
   }
 
@@ -784,6 +797,12 @@ const char* gpuxtb_web_optimize(const char* xyz, double charge, int unpaired,
       goto done;
     }
     trajectory[steps + 1] = f;
+    if (g_optimize_step_fn != NULL) {
+      for (int j = 0; j < dim; ++j) {
+        step_buf[j] = x[j] / BOHR_PER_ANGSTROM;
+      }
+      g_optimize_step_fn(steps + 1, n_atoms, step_buf, f, w_maxabs(g, dim));
+    }
   }
   if (steps >= opt_max_iterations && w_maxabs(g, dim) < grad_tol) {
     converged = 1;
@@ -885,6 +904,7 @@ done:
   free(rho);
   free(alpha);
   free(trajectory);
+  free(step_buf);
   return sb_finish(&g_result);
 }
 

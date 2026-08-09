@@ -75,6 +75,16 @@ html, body {
 }
 @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
 
+/* Right column groups the 3Dmol viewer and the results panel together so the
+   structure frame stays on the right regardless of how many cards exist. */
+.col-right {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+
 .card {
   background: linear-gradient(180deg, var(--bg2), var(--bg1));
   border: 1px solid var(--border);

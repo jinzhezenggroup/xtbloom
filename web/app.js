@@ -38,6 +38,7 @@ const I18N = {
     mol_title: "分子可视化",
     mol_hint: "实时显示当前坐标；计算、优化、应用优化坐标后自动更新。",
     mol_unavailable: "当前浏览器不支持 WebGL 分子可视化。",
+    opt_running: "优化中… 迭代 {{n}} · E = {{e}} Eh",
     xyz_label: "坐标（XYZ，单位：埃 Å）",
     xyz_placeholder: "每行：元素符号 x y z（埃，Å）",
     charge_label: "分子电荷 q / e",
@@ -121,6 +122,7 @@ const I18N = {
     mol_title: "Molecule",
     mol_hint: "Live view of the current coordinates; refreshes after compute, optimize, or applying optimized coordinates.",
     mol_unavailable: "WebGL molecular visualization is not available in this browser.",
+    opt_running: "Optimizing… step {{n}} · E = {{e}} Eh",
     xyz_label: "Coordinates (XYZ, angstrom)",
     xyz_placeholder: "One atom per line: Symbol x y z (Å)",
     charge_label: "Molecular charge q / e",
@@ -280,6 +282,8 @@ function initWorker(wasmBinary) {
       hideOverlay();
       setError((t("load_fail") + String(m.error)).trim());
       $("retry").hidden = false;
+    } else if (m.type === "step") {
+      handleStepMessage(m);
     } else if (m.type === "result") {
       const entry = pending.get(m.id);
       if (!entry) return;
@@ -299,12 +303,31 @@ function initWorker(wasmBinary) {
   worker.postMessage({ type: "init", wasmBinary }, [wasmBinary.buffer]);
 }
 
-function callWorker(cmd, args) {
+function callWorker(cmd, args, onStep) {
   return new Promise((resolve, reject) => {
     const id = ++msgSeq;
-    pending.set(id, { resolve, reject });
+    pending.set(id, onStep ? { resolve, reject, onStep } : { resolve, reject });
     worker.postMessage({ type: "call", id, cmd, args });
   });
+}
+
+function handleStepMessage(m) {
+  const entry = pending.get(m.id);
+  if (entry && entry.onStep) {
+    entry.onStep(m);
+  }
+}
+
+function getElementSymbols(xyz) {
+  const symbols = [];
+  for (const line of xyz.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    const tok = t.split(/\s+/)[0];
+    const n = Number(tok);
+    symbols.push(Number.isInteger(n) && n >= 1 && n <= 103 ? (ELEMENT_SYMBOLS[n] || "?") : tok);
+  }
+  return symbols;
 }
 
 const overlayText = $("overlay-text");
@@ -588,11 +611,26 @@ async function runOptimize() {
   const optMax = parseInt($("opt-maxiter").value, 10) || 200;
   const gradTol = parseFloat($("opt-gradtol").value) || 4.5e-4;
   const maxMove = parseFloat($("opt-maxmove").value) || 0.4;
-  showOverlay("overlay_opt");
+  /* No blocking overlay: the engine runs in the worker, so the page stays
+   * responsive and the 3Dmol viewer animates each accepted step. */
+  const symbols = getElementSymbols(xyz);
+  $("mol-hint").textContent = tf("opt_running", { n: 0, e: "…" });
   try {
     const t0 = performance.now();
     const m = await callWorker("optimize",
-      [xyz, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, optMax, gradTol, maxMove]);
+      [xyz, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, optMax, gradTol, maxMove],
+      (step) => {
+        $("mol-hint").textContent = tf("opt_running", { n: step.iter, e: fmt(step.energy, 6) });
+        if (symbols.length === step.natoms && molViewer && !molUnavailable) {
+          const lines = [];
+          for (let i = 0; i < step.natoms; i++) {
+            lines.push(
+              `${symbols[i]} ${step.coords[i * 3].toFixed(6)} ${step.coords[i * 3 + 1].toFixed(6)} ${step.coords[i * 3 + 2].toFixed(6)}`,
+            );
+          }
+          updateMoleculeViewer(lines.join("\n"));
+        }
+      });
     const dt = performance.now() - t0;
     const d = JSON.parse(m.raw);
     if (!d.ok) { setError(errorText(d)); return; }
@@ -602,7 +640,7 @@ async function runOptimize() {
   } catch (e) {
     setError(t("engine_call_fail") + e.message);
   } finally {
-    hideOverlay();
+    $("mol-hint").textContent = t("mol_hint");
   }
 }
 
