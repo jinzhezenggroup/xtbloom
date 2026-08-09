@@ -1954,6 +1954,27 @@ gpuxtb_status_t validate_iteration_bindings(
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
 
+  /* The uniform-field pilot contributes a per-atom scalar potential vat and a
+   * per-atom dipolar potential vdp; they are released together. Element counts
+   * prove the caller's byte extents without touching the pointed-to storage
+   * here (the SCC loop reads them through the validated geometry ranges). */
+  const std::int64_t total_atoms = data.wavefunction.total_atoms;
+  const bool field_atomic_present =
+      geometry.field_atomic_potential != nullptr || geometry.field_atomic_potential_elements != 0;
+  const bool field_dipole_present =
+      geometry.field_dipole_potential != nullptr || geometry.field_dipole_potential_elements != 0;
+  if (field_atomic_present != field_dipole_present) {
+    error = "SCC driver field atomic and dipolar potentials must be supplied together";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  if (field_atomic_present && (geometry.field_atomic_potential_elements != total_atoms ||
+                               geometry.field_dipole_potential_elements != 3 * total_atoms ||
+                               !aligned(geometry.field_atomic_potential, alignof(double)) ||
+                               !aligned(geometry.field_dipole_potential, alignof(double)))) {
+    error = "SCC driver field potentials have invalid extents or alignment";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+
   const std::size_t batch = static_cast<std::size_t>(data.wavefunction.batch_size);
   std::array<AddressRange, 5> principal{};
   std::array<AddressRange, 9> controls{};
@@ -2007,6 +2028,8 @@ gpuxtb_status_t validate_iteration_bindings(
   std::size_t point_potential_bytes = 0u;
   std::size_t periodic_shift_bytes = 0u;
   std::size_t periodic_response_bytes = 0u;
+  std::size_t field_atomic_potential_bytes = 0u;
+  std::size_t field_dipole_potential_bytes = 0u;
   if (!bytes_for(data.mulliken.matrix_elements(), sizeof(double), matrix_bytes) ||
       !checked_multiply_size(matrix_bytes, 3u, dipole_integral_bytes) ||
       !checked_multiply_size(matrix_bytes, 6u, quadrupole_integral_bytes) ||
@@ -2018,11 +2041,15 @@ gpuxtb_status_t validate_iteration_bindings(
       !bytes_for(geometry.explicit_point_charge_shell_elements, sizeof(double),
                  point_potential_bytes) ||
       !bytes_for(geometry.periodic_shift_elements, sizeof(double), periodic_shift_bytes) ||
-      !bytes_for(geometry.periodic_response_elements, sizeof(double), periodic_response_bytes)) {
+      !bytes_for(geometry.periodic_response_elements, sizeof(double), periodic_response_bytes) ||
+      !bytes_for(geometry.field_atomic_potential_elements, sizeof(double),
+                 field_atomic_potential_bytes) ||
+      !bytes_for(geometry.field_dipole_potential_elements, sizeof(double),
+                 field_dipole_potential_bytes)) {
     error = "SCC driver geometry storage extents are not representable";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
-  std::array<AddressRange, 11> geometry_ranges{};
+  std::array<AddressRange, 13> geometry_ranges{};
   if (!make_range(geometry.h0, matrix_bytes, geometry_ranges[0]) ||
       !make_range(geometry.integrals.overlap, matrix_bytes, geometry_ranges[1]) ||
       !make_range(geometry.integrals.dipole, dipole_integral_bytes, geometry_ranges[2]) ||
@@ -2036,7 +2063,11 @@ gpuxtb_status_t validate_iteration_bindings(
                   geometry_ranges[8]) ||
       !make_range(geometry.periodic_shifts, periodic_shift_bytes, geometry_ranges[9]) ||
       !make_range(geometry.periodic_response_matrices, periodic_response_bytes,
-                  geometry_ranges[10])) {
+                  geometry_ranges[10]) ||
+      !make_range(geometry.field_atomic_potential, field_atomic_potential_bytes,
+                  geometry_ranges[11]) ||
+      !make_range(geometry.field_dipole_potential, field_dipole_potential_bytes,
+                  geometry_ranges[12])) {
     error = "SCC driver geometry buffers have invalid address ranges";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
@@ -2177,6 +2208,28 @@ gpuxtb_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
     }
   }
 
+  /* Uniform external electric field energy: -sum_i q_i (E . r_i) - sum_i E . d_i.
+   * With vat_i = -E . r_i and vdp = -E this is sum_i (q_i * vat_i +
+   * vdp_i . d_i), evaluated from the converged raw multipoles. */
+  double field_energy = 0.0;
+  if (geometry.field_atomic_potential_elements != 0) {
+    for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
+      const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
+      const double vat = geometry.field_atomic_potential[atom];
+      const double charge = workspace.atomic_charges[atom];
+      double contribution = std::fma(vat, charge, 0.0);
+      for (std::size_t component = 0u; component < 3u; ++component) {
+        contribution = std::fma(geometry.field_dipole_potential[atom * 3u + component],
+                                workspace.atomic_dipoles[atom * 3u + component], contribution);
+      }
+      if (!std::isfinite(contribution)) {
+        error = "SCC driver electric-field energy is not finite";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      field_energy += contribution;
+    }
+  }
+
   double periodic_energy = 0.0;
   if (data.periodic_embedding.sealed()) {
     const PeriodicEmbeddingView periodic_view{geometry.periodic_shifts,
@@ -2205,7 +2258,7 @@ gpuxtb_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
   if (!add_finite(es2_energy, internal_energy) || !add_finite(es3_energy, internal_energy) ||
       !add_finite(aes2_energy, internal_energy) || !add_finite(spin_energy, internal_energy) ||
       !add_finite(d4_energy, internal_energy) || !add_finite(explicit_pc_energy, internal_energy) ||
-      !add_finite(periodic_energy, internal_energy)) {
+      !add_finite(field_energy, internal_energy) || !add_finite(periodic_energy, internal_energy)) {
     error = "SCC driver complete internal energy overflowed";
     return GPUXTB_STATUS_INTERNAL_ERROR;
   }
@@ -2493,6 +2546,35 @@ gpuxtb_status_t prepare_system_potentials_and_hamiltonian(
       if (!add_finite(workspace.d4_atomic_potentials[atom], target)) {
         error = "SCC driver AES2+embedding+D4 atom potential exceeded floating-point range";
         return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+    }
+  }
+
+  /* Uniform external electric field: vat_i = -E . r_i enters the charge-channel
+   * scalar atom potential and vdp_alpha = -E_alpha the charge-channel dipolar
+   * potential, exactly as in tblite's field potential. The arrays are batch-wide
+   * geometry inputs validated by validate_iteration_bindings; a zero-order flow
+   * (both absent) preserves the field-free byte-for-byte behavior. */
+  if (geometry.field_atomic_potential_elements != 0) {
+    if (workspace.active_systems[system] != 1u) {
+      error.clear();
+      return GPUXTB_STATUS_SUCCESS;
+    }
+    for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
+      const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
+      double& scalar_target =
+          workspace.atomic_potentials[static_cast<std::size_t>(qat_base + local_atom)];
+      if (!add_finite(geometry.field_atomic_potential[atom], scalar_target)) {
+        error = "SCC driver electric-field scalar potential is not finite";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      for (std::size_t component = 0u; component < 3u; ++component) {
+        double& dipolar_target = workspace.dipole_potentials[static_cast<std::size_t>(
+            dipole_base + local_atom * 3 + static_cast<std::int64_t>(component))];
+        if (!add_finite(geometry.field_dipole_potential[atom * 3u + component], dipolar_target)) {
+          error = "SCC driver electric-field dipolar potential is not finite";
+          return GPUXTB_STATUS_INTERNAL_ERROR;
+        }
       }
     }
   }

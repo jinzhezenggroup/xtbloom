@@ -206,6 +206,63 @@ static int run_installed_inference(gpuxtb_context_t* context, const char* mode_n
     return 11;
   }
 
+  /* Exercise the CPU-released ABI-v3 electric-field attachment and ABI-v2
+   * dipole-moment outlet end to end. CUDA deliberately returns NOT_IMPLEMENTED
+   * for both until #237 P3, so its installed consumer retains the field-free
+   * inference and plan probes below. The released field block is 32 bytes:
+   * int32 block_version=1, int32 reserved=0, three doubles in atomic units. */
+  if (gpuxtb_context_get_backend(context) == GPUXTB_BACKEND_CPU) {
+    const uint32_t field_flags =
+        GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_DIPOLE_MOMENTS;
+    uint8_t payload[32];
+    memset(payload, 0, sizeof(payload));
+    {
+      const int32_t version = 1;
+      const double efield[3] = {0.001, 0.002, -0.0015};
+      memcpy(payload, &version, sizeof(version));
+      memcpy(payload + 8, efield, sizeof(efield));
+    }
+    gpuxtb_interaction_t interaction;
+    memset(&interaction, 0, sizeof(interaction));
+    interaction.type = GPUXTB_INTERACTION_ELECTRIC_FIELD;
+    interaction.system_index = 0;
+    interaction.payload_offset = 0;
+    interaction.payload_size = sizeof(payload);
+    double field_forces[6] = {NAN, NAN, NAN, NAN, NAN, NAN};
+    double dipole[3] = {NAN, NAN, NAN};
+    gpuxtb_batch_t field_batch = batch;
+    gpuxtb_compute_options_t field_options = options;
+    gpuxtb_batch_result_t field_result = result;
+    field_options.flags = field_flags;
+    field_batch.total_interactions = 1;
+    field_batch.interaction_descriptors = input_buffer(&interaction, sizeof(interaction));
+    field_batch.interaction_payload = input_buffer(payload, sizeof(payload));
+    field_result.forces = output_buffer(field_forces, sizeof(field_forces));
+    field_result.dipole_moments = output_buffer(dipole, sizeof(dipole));
+    if (gpuxtb_compute(context, &field_batch, &field_options, &field_result) !=
+        GPUXTB_STATUS_SUCCESS) {
+      fprintf(stderr, "installed %s electric-field inference failed: %s\n", mode_name,
+              gpuxtb_get_last_error());
+      return 11;
+    }
+    if (!(field_result.flags & GPUXTB_RESULT_DIPOLE_MOMENTS)) {
+      fprintf(stderr, "installed %s dipole publication flag not set\n", mode_name);
+      return 11;
+    }
+    for (int component = 0; component < 6; ++component) {
+      if (!isfinite(field_forces[component])) {
+        fprintf(stderr, "installed %s electric-field forces are not finite\n", mode_name);
+        return 11;
+      }
+    }
+    for (int component = 0; component < 3; ++component) {
+      if (!isfinite(dipole[component])) {
+        fprintf(stderr, "installed %s dipole moments are not finite\n", mode_name);
+        return 11;
+      }
+    }
+  }
+
   /* Exercise the installed fixed-topology plan and workspace-query ABI. */
   gpuxtb_plan_t* plan = NULL;
   if (gpuxtb_plan_create(context, &batch, &options, &plan) != GPUXTB_STATUS_SUCCESS ||

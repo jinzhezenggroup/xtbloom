@@ -4,6 +4,46 @@
 
 #include "gpuxtb/gpuxtb.h"
 
+#if UINTPTR_MAX == UINT64_MAX
+#define EXPECTED_CONTEXT_OPTIONS_SIZE 32
+#define EXPECTED_BUFFER_SIZE 24
+#define EXPECTED_BUFFER_SIZE_OFFSET 8
+#define EXPECTED_BUFFER_MEMORY_OFFSET 16
+#define EXPECTED_BATCH_V1_SIZE 328
+#define EXPECTED_BATCH_V2_SIZE 352
+#define EXPECTED_BATCH_V3_SIZE 408
+#define EXPECTED_BATCH_TOTAL_INTERACTIONS_OFFSET 352
+#define EXPECTED_BATCH_DESCRIPTORS_OFFSET 360
+#define EXPECTED_BATCH_PAYLOAD_OFFSET 384
+#define EXPECTED_RESULT_V1_SIZE 184
+#define EXPECTED_RESULT_V2_SIZE 280
+#define EXPECTED_RESULT_DIPOLE_OFFSET 184
+#define EXPECTED_RESULT_QUADRUPOLE_OFFSET 208
+#define EXPECTED_RESULT_WIBERG_OFFSET 232
+#define EXPECTED_RESULT_SPIN_OFFSET 256
+#define EXPECTED_DLPACK_SHAPE_OFFSET 40
+#elif UINTPTR_MAX == UINT32_MAX
+#define EXPECTED_CONTEXT_OPTIONS_SIZE 28
+#define EXPECTED_BUFFER_SIZE 16
+#define EXPECTED_BUFFER_SIZE_OFFSET 4
+#define EXPECTED_BUFFER_MEMORY_OFFSET 8
+#define EXPECTED_BATCH_V1_SIZE 232
+#define EXPECTED_BATCH_V2_SIZE 248
+#define EXPECTED_BATCH_V3_SIZE 288
+#define EXPECTED_BATCH_TOTAL_INTERACTIONS_OFFSET 248
+#define EXPECTED_BATCH_DESCRIPTORS_OFFSET 256
+#define EXPECTED_BATCH_PAYLOAD_OFFSET 272
+#define EXPECTED_RESULT_V1_SIZE 128
+#define EXPECTED_RESULT_V2_SIZE 192
+#define EXPECTED_RESULT_DIPOLE_OFFSET 128
+#define EXPECTED_RESULT_QUADRUPOLE_OFFSET 144
+#define EXPECTED_RESULT_WIBERG_OFFSET 160
+#define EXPECTED_RESULT_SPIN_OFFSET 176
+#define EXPECTED_DLPACK_SHAPE_OFFSET 36
+#else
+#error "c_api_test requires a 32-bit or 64-bit pointer ABI"
+#endif
+
 _Static_assert(GPUXTB_COMPUTE_OPTIONS_V1_SIZE == 48,
                "compute-options ABI-v1 prefix must remain 48 bytes");
 _Static_assert(GPUXTB_COMPUTE_OPTIONS_V2_SIZE == 56,
@@ -26,16 +66,33 @@ _Static_assert(sizeof(gpuxtb_dlpack_view_t) == GPUXTB_DLPACK_VIEW_V1_SIZE,
                "DLPack view public layout must end at the ABI-v1 suffix");
 _Static_assert(offsetof(gpuxtb_dlpack_view_t, byte_offset) == 8,
                "DLPack view byte-offset offset must remain stable");
-_Static_assert(offsetof(gpuxtb_dlpack_view_t, shape) == 40,
-               "DLPack view shape offset must remain stable");
-_Static_assert(GPUXTB_BATCH_V1_SIZE == 328, "batch ABI-v1 prefix must remain 328 bytes");
-_Static_assert(GPUXTB_BATCH_V2_SIZE == 352, "batch ABI-v2 prefix must remain 352 bytes");
-_Static_assert(GPUXTB_BATCH_V3_SIZE == 408, "batch ABI-v3 image must remain 408 bytes");
-_Static_assert(offsetof(gpuxtb_batch_t, total_interactions) == 352,
-               "batch ABI-v3 interaction count must begin after the 352-byte prefix");
-_Static_assert(offsetof(gpuxtb_batch_t, interaction_descriptors) == 360,
+_Static_assert(offsetof(gpuxtb_context_options_t, stream) == 24,
+               "context stream offset must remain stable");
+_Static_assert(sizeof(gpuxtb_context_options_t) == EXPECTED_CONTEXT_OPTIONS_SIZE,
+               "context layout must match the target pointer width");
+_Static_assert(sizeof(gpuxtb_const_buffer_t) == EXPECTED_BUFFER_SIZE,
+               "const-buffer layout must match the target pointer width");
+_Static_assert(sizeof(gpuxtb_buffer_t) == EXPECTED_BUFFER_SIZE,
+               "buffer layout must match the target pointer width");
+_Static_assert(offsetof(gpuxtb_const_buffer_t, size_bytes) == EXPECTED_BUFFER_SIZE_OFFSET,
+               "const-buffer size offset must match the target pointer width");
+_Static_assert(offsetof(gpuxtb_const_buffer_t, memory_space) == EXPECTED_BUFFER_MEMORY_OFFSET,
+               "const-buffer memory offset must match the target pointer width");
+_Static_assert(offsetof(gpuxtb_dlpack_view_t, shape) == EXPECTED_DLPACK_SHAPE_OFFSET,
+               "DLPack view shape offset must match the target pointer width");
+_Static_assert(GPUXTB_BATCH_V1_SIZE == EXPECTED_BATCH_V1_SIZE,
+               "batch ABI-v1 prefix must match the target pointer width");
+_Static_assert(GPUXTB_BATCH_V2_SIZE == EXPECTED_BATCH_V2_SIZE,
+               "batch ABI-v2 prefix must match the target pointer width");
+_Static_assert(GPUXTB_BATCH_V3_SIZE == EXPECTED_BATCH_V3_SIZE,
+               "batch ABI-v3 image must match the target pointer width");
+_Static_assert(offsetof(gpuxtb_batch_t, total_interactions) ==
+                   EXPECTED_BATCH_TOTAL_INTERACTIONS_OFFSET,
+               "batch ABI-v3 interaction count must match the target pointer width");
+_Static_assert(offsetof(gpuxtb_batch_t, interaction_descriptors) ==
+                   EXPECTED_BATCH_DESCRIPTORS_OFFSET,
                "batch ABI-v3 descriptors must follow the interaction count");
-_Static_assert(offsetof(gpuxtb_batch_t, interaction_payload) == 384,
+_Static_assert(offsetof(gpuxtb_batch_t, interaction_payload) == EXPECTED_BATCH_PAYLOAD_OFFSET,
                "batch ABI-v3 payload must begin after the descriptor buffers");
 _Static_assert(sizeof(gpuxtb_interaction_t) == GPUXTB_INTERACTION_V1_SIZE,
                "interaction descriptor public layout must end at its ABI-v1 suffix");
@@ -49,17 +106,18 @@ _Static_assert(offsetof(gpuxtb_interaction_t, payload_offset) == 16,
                "interaction payload-offset offset must remain stable");
 _Static_assert(offsetof(gpuxtb_interaction_t, payload_size) == 24,
                "interaction payload-size offset must remain stable");
-_Static_assert(GPUXTB_BATCH_RESULT_V1_SIZE == 184,
-               "batch-result ABI-v1 prefix must remain 184 bytes");
-_Static_assert(GPUXTB_BATCH_RESULT_V2_SIZE == 280,
-               "batch-result ABI-v2 image must remain 280 bytes");
-_Static_assert(offsetof(gpuxtb_batch_result_t, dipole_moments) == 184,
-               "batch-result ABI-v2 suffix must begin after the 184-byte prefix");
-_Static_assert(offsetof(gpuxtb_batch_result_t, quadrupole_moments) == 208,
+_Static_assert(GPUXTB_BATCH_RESULT_V1_SIZE == EXPECTED_RESULT_V1_SIZE,
+               "batch-result ABI-v1 prefix must match the target pointer width");
+_Static_assert(GPUXTB_BATCH_RESULT_V2_SIZE == EXPECTED_RESULT_V2_SIZE,
+               "batch-result ABI-v2 image must match the target pointer width");
+_Static_assert(offsetof(gpuxtb_batch_result_t, dipole_moments) == EXPECTED_RESULT_DIPOLE_OFFSET,
+               "batch-result ABI-v2 suffix must match the target pointer width");
+_Static_assert(offsetof(gpuxtb_batch_result_t, quadrupole_moments) ==
+                   EXPECTED_RESULT_QUADRUPOLE_OFFSET,
                "batch-result quadrupole outlet offset must remain stable");
-_Static_assert(offsetof(gpuxtb_batch_result_t, wiberg_orders) == 232,
+_Static_assert(offsetof(gpuxtb_batch_result_t, wiberg_orders) == EXPECTED_RESULT_WIBERG_OFFSET,
                "batch-result Wiberg outlet offset must remain stable");
-_Static_assert(offsetof(gpuxtb_batch_result_t, spin_populations) == 256,
+_Static_assert(offsetof(gpuxtb_batch_result_t, spin_populations) == EXPECTED_RESULT_SPIN_OFFSET,
                "batch-result spin outlet offset must remain stable");
 _Static_assert(GPUXTB_RESULT_DIPOLE_MOMENTS == (1 << 4),
                "dipole publication result flag must remain at bit 4");

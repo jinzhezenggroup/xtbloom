@@ -56,7 +56,7 @@ struct DlpackDevice {
   std::int32_t device_id;
 };
 
-/* Mirrors DLTensor: 48-byte plain tensor descriptor. */
+/* Mirrors DLTensor. Pointer-bearing DLPack images follow the target ABI. */
 struct DlpackTensor {
   void* data;
   DlpackDevice device;
@@ -69,7 +69,7 @@ struct DlpackTensor {
 
 struct DlpackManagedTensor;
 
-/* Mirrors DLManagedTensor (64 bytes, unversioned). */
+/* Mirrors the unversioned DLManagedTensor. */
 struct DlpackManagedTensor {
   DlpackTensor dl_tensor;
   void* manager_ctx;
@@ -78,7 +78,7 @@ struct DlpackManagedTensor {
 
 struct DlpackManagedTensorVersioned;
 
-/* Mirrors DLManagedTensorVersioned (80 bytes, DLPack 1.0). */
+/* Mirrors DLManagedTensorVersioned from DLPack 1.0. */
 struct DlpackManagedTensorVersioned {
   std::uint32_t version_major;
   std::uint32_t version_minor;
@@ -99,18 +99,41 @@ constexpr std::uint32_t kDlpackVersionMinor = 0u;
 
 static_assert(sizeof(DlpackDataType) == 4u, "DLDataType must be 4 bytes");
 static_assert(sizeof(DlpackDevice) == 8u, "DLDevice must be 8 bytes");
-static_assert(sizeof(DlpackTensor) == 48u, "DLTensor must be 48 bytes");
-static_assert(sizeof(DlpackManagedTensor) == 64u, "legacy DLManagedTensor must be 64 bytes");
-static_assert(sizeof(DlpackManagedTensorVersioned) == 80u,
-              "versioned DLManagedTensorVersioned must be 80 bytes");
 static_assert(offsetof(DlpackManagedTensor, dl_tensor) == 0u,
               "legacy DLManagedTensor must start with DLTensor");
+#if UINTPTR_MAX == UINT64_MAX
+static_assert(sizeof(DlpackTensor) == 48u, "LP64 DLTensor must be 48 bytes");
+static_assert(sizeof(DlpackManagedTensor) == 64u, "LP64 legacy DLManagedTensor must be 64 bytes");
+static_assert(sizeof(DlpackManagedTensorVersioned) == 80u,
+              "LP64 versioned DLManagedTensorVersioned must be 80 bytes");
 static_assert(offsetof(DlpackManagedTensor, manager_ctx) == 48u,
-              "legacy manager_ctx must sit at byte 48");
-static_assert(offsetof(DlpackManagedTensorVersioned, dl_tensor) == 32u,
-              "versioned DLTensor must sit at byte 32");
+              "LP64 legacy manager_ctx must sit at byte 48");
+static_assert(offsetof(DlpackManagedTensorVersioned, manager_ctx) == 8u,
+              "LP64 versioned manager_ctx must sit at byte 8");
+static_assert(offsetof(DlpackManagedTensorVersioned, deleter) == 16u,
+              "LP64 versioned deleter must sit at byte 16");
 static_assert(offsetof(DlpackManagedTensorVersioned, flags) == 24u,
-              "versioned flags must sit at byte 24");
+              "LP64 versioned flags must sit at byte 24");
+static_assert(offsetof(DlpackManagedTensorVersioned, dl_tensor) == 32u,
+              "LP64 versioned DLTensor must sit at byte 32");
+#elif UINTPTR_MAX == UINT32_MAX
+static_assert(sizeof(DlpackTensor) == 40u, "ILP32 DLTensor must be 40 bytes");
+static_assert(sizeof(DlpackManagedTensor) == 48u, "ILP32 legacy DLManagedTensor must be 48 bytes");
+static_assert(sizeof(DlpackManagedTensorVersioned) == 64u,
+              "ILP32 versioned DLManagedTensorVersioned must be 64 bytes");
+static_assert(offsetof(DlpackManagedTensor, manager_ctx) == 40u,
+              "ILP32 legacy manager_ctx must sit at byte 40");
+static_assert(offsetof(DlpackManagedTensor, deleter) == 44u,
+              "ILP32 legacy deleter must sit at byte 44");
+static_assert(offsetof(DlpackManagedTensorVersioned, manager_ctx) == 8u,
+              "ILP32 versioned manager_ctx must sit at byte 8");
+static_assert(offsetof(DlpackManagedTensorVersioned, deleter) == 12u,
+              "ILP32 versioned deleter must sit at byte 12");
+static_assert(offsetof(DlpackManagedTensorVersioned, flags) == 16u,
+              "ILP32 versioned flags must sit at byte 16");
+static_assert(offsetof(DlpackManagedTensorVersioned, dl_tensor) == 24u,
+              "ILP32 versioned DLTensor must sit at byte 24");
+#endif
 
 }  // namespace gpuxtb::detail
 

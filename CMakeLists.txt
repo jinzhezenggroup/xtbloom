@@ -19,7 +19,7 @@ set(GPUXTB_ENABLE_CUDA "AUTO" CACHE STRING "Build the CUDA backend: AUTO, ON, or
 set_property(CACHE GPUXTB_ENABLE_CUDA PROPERTY STRINGS AUTO ON OFF)
 option(GPUXTB_BUILD_TESTS "Build gpuxtb tests" ${PROJECT_IS_TOP_LEVEL})
 option(GPUXTB_BUILD_WEB_DEMO
-  "Build the GitHub Pages wasm64 web demo assets (requires the Emscripten toolchain)"
+  "Build the GitHub Pages WebAssembly demo assets (requires the Emscripten toolchain)"
   OFF)
 option(GPUXTB_PYTHON_WHEEL
   "Install an unversioned single-copy shared library for a Python wheel" OFF)

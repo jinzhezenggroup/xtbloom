@@ -163,6 +163,28 @@ class WebSiteLicenseTests(unittest.TestCase):
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "pako-Zlib"):
                 CHECKER.check_web_site(root, REPOSITORY)
 
+    def test_web_site_rejects_raw_lapack_side_module(self) -> None:
+        """Do not deploy a second untracked copy of the preloaded side module."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / "libscipy_openblas.so").write_bytes(b"unexpected raw side module")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "raw LAPACK side module"
+            ):
+                CHECKER.check_web_site(root, REPOSITORY)
+
+    def test_web_site_rejects_arbitrary_stale_artifact(self) -> None:
+        """Reject obsolete engine variants because Pages uploads every file."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / "gpuxtb_web-old.wasm").write_bytes(b"stale engine")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "unexpected or orphaned files"
+            ):
+                CHECKER.check_web_site(root, REPOSITORY)
+
 
 class DependencyPolicyTests(unittest.TestCase):
     """Verify mandatory and optional dependency licensing boundaries."""

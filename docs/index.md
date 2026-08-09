@@ -7,9 +7,12 @@ Python interfaces built on that ABI. Start with the guide for your role.
 
 The experimental browser build is available at
 <https://jinzhezeng.group/gpuxtb/>. It runs the CPU backend entirely on the
-client as wasm64 and includes an adapter-local L-BFGS geometry optimizer for
-interactive demonstrations. That optimizer is not exported by the stable C
-ABI and is not a supported native-library capability.
+client as wasm32 without requiring Memory64, targeting modern iOS Safari,
+Safari, Chrome, and Firefox with WebAssembly and module Worker support. It
+includes an adapter-local L-BFGS geometry optimizer for interactive
+demonstrations. That optimizer is not exported by the stable C ABI and is not
+a supported native-library capability. A separate wasm64 CI build verifies
+that pointer-width changes do not alter ABI-local behavior or numerical results.
 
 ## User guide
 
@@ -54,9 +57,11 @@ Repository contributors and coding agents must also follow
 | CUDA-device and mixed descriptors | Low-level C ABI |
 | Explicit point charges in SCC and point-charge forces | Supported |
 | Caller-supplied periodic `b + A q` response | Supported; no lattice descriptor |
+| Uniform external electric field (ABI-v3 interaction) | CPU; CUDA reserved |
+| Per-system molecular dipole moments | CPU; CUDA reserved |
 | ASE and dpdata | Supported Python integrations |
-| External interaction slot (electric field, solvation, field gradient, ...) | ABI-v3 slot reserved; not implemented |
-| Browser adapter single points and demo geometry optimization | Experimental wasm64 CPU site |
+| External interaction slot (solvation, field gradient, ...) | ABI-v3 slot reserved; not implemented |
+| Browser adapter single points and demo geometry optimization | Experimental wasm32 CPU site |
 | Native GFN1-xTB, ROCm, solvation, optimization, MD, Hessians | Not implemented |
 
 Documentation describes the current repository state. Reserved ABI values and

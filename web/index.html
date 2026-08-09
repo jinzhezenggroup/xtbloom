@@ -13,7 +13,7 @@
     <span class="logo">⚛️</span>
     <div>
       <h1>gpuxtb<span class="accent">·GFN2-xTB</span></h1>
-      <p class="tagline" data-i18n="tagline">浏览器内运行的原生 GFN2-xTB 单点能与几何优化 · C++17 WASM64 · CPU 后端</p>
+      <p class="tagline" data-i18n="tagline">浏览器内运行的原生 GFN2-xTB 单点能与几何优化 · C++17 WASM32 · CPU 后端</p>
     </div>
   </div>
   <div class="badges">
@@ -84,7 +84,7 @@
     </label>
 
     <div class="actions">
-      <button class="btn btn-primary" id="run" data-i18n="run">计算能量</button>
+      <button class="btn btn-primary" id="run" data-i18n="run" disabled>计算能量</button>
       <button class="btn" id="reset" data-i18n="reset">重置</button>
     </div>
 
@@ -106,7 +106,7 @@
       </div>
     </div>
     <div class="actions">
-      <button class="btn btn-secondary" id="opt-run" data-i18n="opt_run">几何优化</button>
+      <button class="btn btn-secondary" id="opt-run" data-i18n="opt_run" disabled>几何优化</button>
     </div>
   </section>
 
@@ -209,7 +209,7 @@
 
 <footer class="footer">
   <p data-i18n="footer">
-    由 gpuxtb 驱动 —— 同一套 C ABI 的 C++17 原生库编译为 wasm64（需要支持 WebAssembly memory64 的浏览器，如 Chrome 133+ / Firefox 128+ / Safari 18.4+）。
+    由 gpuxtb 驱动 —— 同一套 C ABI 的 C++17 原生库编译为不依赖 Memory64 的 wasm32，面向支持 WebAssembly 与模块 Worker 的现代浏览器。
     BLAS/LAPACK 层为演示用最小实现，经 numpy 与原生 gpuxtb 逐位验证。仅供演示，非科学计算生产环境。
   </p>
   <p class="legal-links">
