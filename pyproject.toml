@@ -1,5 +1,16 @@
 [build-system]
-requires = ["scikit-build-core>=0.9"]
+requires = [
+  "scikit-build-core>=0.9",
+  # Build-time requirement for the optional PyTorch stable-ABI extension
+  # (libgpuxtb_torch_ext): pip's PEP-517 isolation cannot see a torch that
+  # would otherwise be installed in the outer environment, so the extension's
+  # headers and libtorch_cpu must come from the isolated build env itself.
+  # Only the CPU wheel variant is needed to compile it; the shipped extension
+  # then works with whatever CPU/CUDA torch the end user installs, because the
+  # stable-ABI binary is version-portable. The rest of gpuxtb builds without
+  # torch.
+  "torch>=2.10",
+]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -156,7 +167,9 @@ test-command = "python -c 'import gpuxtb; print(gpuxtb.library.get_version())'"
 [tool.cibuildwheel.linux]
 # before-build runs inside the build container (once per container, idempotent
 # scripts). CUDA deps come first, then a CUDA-capable ccache (>= 4.1, needed
-# for nvcc; the manylinux_2_28 distro ccache 3.7 cannot cache CUDA).
+# for nvcc; the manylinux_2_28 distro ccache 3.7 cannot cache CUDA). The
+# PyTorch stable-ABI extension is compiled from the torch installed into the
+# PEP-517 build isolation via [build-system].requires.
 before-build = "bash {package}/python/ci/install-cuda-wheel-deps.sh && bash {package}/python/ci/install-ccache.sh"
 # CUDA host shared libraries (cublas/cusolver/cudart/...) are intentionally not
 # bundled: the trampolines resolve the system CUDA driver plus the
@@ -164,7 +177,10 @@ before-build = "bash {package}/python/ci/install-cuda-wheel-deps.sh && bash {pac
 # driver interface and is likewise provided by the system, never bundled.
 # The device link disables cudadevrt explicitly. NVIDIA libdevice compiler
 # output may still be present and remains covered by the additional permission.
-repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel} --exclude libcublas.so.12 --exclude libcublasLt.so.12 --exclude libcusolver.so.11 --exclude libcusparse.so.12 --exclude libcudart.so.12 --exclude libnvJitLink.so.12 --exclude libcufft.so.11 --exclude libcurand.so.10 --exclude libcuda.so.1"
+# The torch extension links only libtorch_cpu.so for its stable aoti_torch_*
+# C shim symbols; that library ships inside the torch package the runtime user
+# installs, so it is excluded (never bundled) exactly like the nvidia-* stack.
+repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel} --exclude libcublas.so.12 --exclude libcublasLt.so.12 --exclude libcusolver.so.11 --exclude libcusparse.so.12 --exclude libcudart.so.12 --exclude libnvJitLink.so.12 --exclude libcufft.so.11 --exclude libcurand.so.10 --exclude libcuda.so.1 --exclude libtorch_cpu.so"
 
 [tool.ruff]
 # Ruff owns both formatting and import ordering so those policies cannot drift.

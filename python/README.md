@@ -224,13 +224,16 @@ assert result.forces is out_forces
 ### PyTorch autograd op
 
 `gpuxtb_torch(positions, atomic_numbers, atom_offsets, molecular_charges,
-unpaired_electrons, ...)` runs the packed DLPack inference on PyTorch tensors
-(host or CUDA) and is the only autograd entry point in the Python API. It
-supports exactly the positions gradient `dE/dR = -F`; autograd on any other
-input, or a gradient flowing through the `forces` output (the Hessian), raises
+unpaired_electrons, ...)` runs gpuxtb inference on PyTorch tensors (host or
+CUDA) and is the only autograd entry point in the Python API. It supports
+exactly the positions gradient `dE/dR = -F`; autograd on any other input, or a
+gradient flowing through the `forces` output (the Hessian), raises
 `GPUxtbNotSupportedError`. Higher-order differentiation is likewise rejected
-explicitly rather than returning a partial or zero Hessian. PyTorch is imported
-only when the op is called. See
+explicitly rather than returning a partial or zero Hessian. The native data
+plane is a compiled extension written against the LibTorch Stable ABI
+(torch >= 2.10), so a single binary works across torch releases; building it
+needs a torch install, but the rest of gpuxtb builds and runs without torch.
+PyTorch is imported only when the op is called. See
 `docs/user-guide/python.md` for the full contract.
 
 ## Explicit point charges

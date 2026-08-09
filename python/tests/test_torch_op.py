@@ -461,6 +461,47 @@ def test_positions_must_be_float64() -> None:
         )
 
 
+def test_torch_compile_graph_breaks_for_sync_op() -> None:
+    """torch.compile around the op graph-breaks and stays correct (no error).
+
+    gpuxtb_torch is eager-only: it drives the native library through
+    ctypes/DLPack, which Dynamo cannot trace, so the op is marked opaque and
+    ``torch.compile`` inserts a graph break.  There is no compilation speedup
+    for the gpuxtb call, but compilation must never fail at trace time.
+    """
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+
+    positions = torch.tensor(
+        WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
+    )
+    arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
+
+    def loss(p: torch.Tensor) -> torch.Tensor:
+        energies, _ = gpuxtb_torch(
+            p,
+            arrays["atomic_numbers"],
+            arrays["atom_offsets"],
+            arrays["molecular_charges"],
+            arrays["unpaired_electrons"],
+            arrays["spin_channels"],
+            backend="cpu",
+        )
+        return energies.sum() + (p * 1e-9).sum()
+
+    eager = loss(positions)
+    eager_grad = torch.autograd.grad(eager, positions)[0]
+    compiled = torch.compile(loss)
+    out = compiled(positions)
+    assert torch.allclose(out, eager, atol=1.0e-12, rtol=1.0e-12)
+    compiled(positions).sum().backward()
+    assert positions.grad is not None
+    assert torch.allclose(positions.grad, eager_grad, atol=1.0e-12, rtol=1.0e-12)
+    assert torch.allclose(compiled(positions), eager, atol=1.0e-12, rtol=1.0e-12)
+
+
 @pytest.mark.cuda
 def test_torch_cuda_matches_host() -> None:
     """CUDA tensors through the op give the same energies, forces, and dR."""

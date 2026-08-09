@@ -34,6 +34,7 @@ SOURCE_FILES = (
     "LICENSES/LGPL-3.0-or-later.txt",
     "LICENSES/Apache-2.0.txt",
     "LICENSES/MIT.txt",
+    "LICENSES/BSD-3-Clause.txt",
     ARRAY_API_COMPAT_LICENSE,
     "data/parameters/d4.NOTICE",
     "data/parameters/tblite_sto.hpp",
@@ -55,6 +56,7 @@ COMMON_ARCHIVE_SUFFIXES = (
     "LICENSES/LGPL-3.0-or-later.txt",
     "LICENSES/Apache-2.0.txt",
     "LICENSES/MIT.txt",
+    "LICENSES/BSD-3-Clause.txt",
     ARRAY_API_COMPAT_LICENSE,
 )
 SDIST_ARCHIVE_SUFFIXES = (
@@ -81,6 +83,7 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/gpuxtb/provenance/mctc_manifest.json",
     "share/licenses/gpuxtb/provenance/implib_manifest.json",
     "share/licenses/gpuxtb/third-party/MIT.txt",
+    "share/licenses/gpuxtb/third-party/BSD-3-Clause.txt",
     "share/licenses/gpuxtb/third-party/array-api-compat-MIT.txt",
     "share/licenses/gpuxtb/third-party/d4/d4.NOTICE",
     "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING",
@@ -95,6 +98,7 @@ INSTALL_FILES = (
     "share/licenses/gpuxtb/third-party/LGPL-3.0-or-later.txt",
     "share/licenses/gpuxtb/third-party/Apache-2.0.txt",
     "share/licenses/gpuxtb/third-party/MIT.txt",
+    "share/licenses/gpuxtb/third-party/BSD-3-Clause.txt",
     "share/licenses/gpuxtb/third-party/array-api-compat-MIT.txt",
     "share/licenses/gpuxtb/provenance/manifest.json",
     "share/licenses/gpuxtb/provenance/sto_manifest.json",

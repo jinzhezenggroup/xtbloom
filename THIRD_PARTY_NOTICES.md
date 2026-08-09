@@ -26,6 +26,26 @@ runtime Python dependency only and is not bundled in gpuxtb source archives,
 native installs, or wheels; the canonical resolution is recorded in
 `pyproject.toml` and `uv.lock`.
 
+## PyTorch (build-time dependency of the optional torch extension)
+
+Repository: <https://github.com/pytorch/pytorch>
+
+License: `BSD-3-Clause` (`LICENSES/BSD-3-Clause.txt`; Copyright (c) 2016,
+Facebook, Inc.)
+
+The optional compiled torch integration `libgpuxtb_torch_ext` is written
+against the LibTorch Stable ABI and linked against `libtorch_cpu.so` solely to
+resolve the `aoti_torch_*` C shim symbols at load time. PyTorch is a
+build-time dependency only: its stable headers are needed to compile the
+extension, and `libtorch_cpu.so` must be present in the torch installation the
+end user imports at runtime. No PyTorch source, header, or binary is copied
+into gpuxtb source archives, native installs, or wheels; the extension carries
+a `DT_NEEDED` reference to `libtorch_cpu.so` which is resolved from the
+already-loaded torch. The torch version used to build is recorded in
+`pyproject.toml` (`torch>=2.10` in `[build-system].requires` for isolated
+wheel builds, and `torch-testing` in the dependency groups for the test
+environment) and in `uv.lock`.
+
 ## DLPack
 
 Specification: <https://github.com/dmlc/dlpack>

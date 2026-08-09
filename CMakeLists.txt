@@ -17,6 +17,8 @@ find_package(Threads REQUIRED)
 
 set(GPUXTB_ENABLE_CUDA "AUTO" CACHE STRING "Build the CUDA backend: AUTO, ON, or OFF")
 set_property(CACHE GPUXTB_ENABLE_CUDA PROPERTY STRINGS AUTO ON OFF)
+option(GPUXTB_ENABLE_TORCH_EXT
+  "Build the PyTorch stable-ABI integration extension when Torch >= 2.10 is found" ON)
 option(GPUXTB_BUILD_TESTS "Build gpuxtb tests" ${PROJECT_IS_TOP_LEVEL})
 option(GPUXTB_PYTHON_WHEEL
   "Install an unversioned single-copy shared library for a Python wheel" OFF)
@@ -2813,5 +2815,116 @@ install(FILES
   ${CMAKE_CURRENT_BINARY_DIR}/gpuxtbConfigVersion.cmake
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/gpuxtb
 )
+
+# ----------------------------------------------------------------------------#
+# PyTorch integration extension (LibTorch Stable ABI).
+#
+# python/gpuxtb/_torch_ext/gpuxtb_torch_ext.cpp is a compiled torch extension
+# that binds torch tensors directly to the public gpuxtb C ABI.  It is built
+# against the LibTorch Stable ABI headers and links only libtorch_cpu.so (for
+# the aoti_torch_* C shim symbols), so one binary works across torch >= 2.10
+# releases without per-version rebuilds.  The extension is loaded at runtime
+# through torch.ops.load_library -- never imported as a Python module -- so the
+# wheel stays a pure `py3` archive.
+#
+# Building still requires a torch install (its stable headers ship in the
+# torch package): compiling the CPU/GPU library itself never needs torch, and
+# when Torch is unavailable at configure time this target is skipped rather
+# than failing the build.  Enable it for wheels by setting
+# CMAKE_PREFIX_PATH to torch's cmake prefix.
+set(GPUXTB_HAS_TORCH_EXT OFF)
+if(GPUXTB_ENABLE_TORCH_EXT)
+  # Torch's own TorchConfig.cmake pulls in Caffe2's CUDA detection, which can
+  # fail a CPU-only gpuxtb configure when the discovered torch is a CUDA build.
+  # The extension needs only the stable headers and libtorch_cpu, so discover
+  # them directly from the Python interpreter when possible (works for CPU and
+  # CUDA torch wheels alike) and fall back to find_package(Torch) for a system
+  # libtorch install without a Python package.
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_FOUND)
+    execute_process(
+      COMMAND ${Python3_EXECUTABLE} -c
+        "import os, torch; from torch.utils.cpp_extension import include_paths as _inc; inc = _inc(); print(torch.__version__); print(inc[0]); print(inc[1].replace(';', '%3B') if len(inc) > 1 else ''); print(os.path.join(os.path.dirname(torch.__file__), 'lib'))"
+      OUTPUT_VARIABLE gpuxtb_torch_probe
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      RESULT_VARIABLE gpuxtb_torch_probe_result
+      ERROR_QUIET
+    )
+  endif()
+  if(gpuxtb_torch_probe_result EQUAL 0 AND gpuxtb_torch_probe)
+    string(REPLACE "\n" ";" gpuxtb_torch_probe "${gpuxtb_torch_probe}")
+    list(GET gpuxtb_torch_probe 0 gpuxtb_torch_probe_version)
+    list(GET gpuxtb_torch_probe 1 gpuxtb_torch_probe_include)
+    list(GET gpuxtb_torch_probe 2 gpuxtb_torch_probe_include_api)
+    list(GET gpuxtb_torch_probe 3 gpuxtb_torch_probe_libdir)
+    if(gpuxtb_torch_probe_version VERSION_GREATER_EQUAL "2.10")
+      set(GPUXTB_TORCH_VERSION "${gpuxtb_torch_probe_version}")
+      set(GPUXTB_TORCH_LIB_DIR "${gpuxtb_torch_probe_libdir}")
+      set(GPUXTB_TORCH_INCLUDE_DIRS
+        "${gpuxtb_torch_probe_include}" "${gpuxtb_torch_probe_include_api}"
+      )
+      if(WIN32)
+        set(GPUXTB_TORCH_CPU_LINK "${gpuxtb_torch_probe_libdir}/torch_cpu.lib")
+      elseif(APPLE)
+        set(GPUXTB_TORCH_CPU_LINK "${gpuxtb_torch_probe_libdir}/libtorch_cpu.dylib")
+      else()
+        set(GPUXTB_TORCH_CPU_LINK "${gpuxtb_torch_probe_libdir}/libtorch_cpu.so")
+      endif()
+    endif()
+  endif()
+  if(NOT GPUXTB_TORCH_VERSION)
+    find_package(Torch QUIET)
+    if(Torch_FOUND AND NOT Torch_VERSION VERSION_LESS "2.10")
+      set(GPUXTB_TORCH_VERSION "${Torch_VERSION}")
+      get_filename_component(GPUXTB_TORCH_LIB_DIR "${TORCH_LIBRARY}" DIRECTORY)
+      set(GPUXTB_TORCH_INCLUDE_DIRS ${TORCH_INCLUDE_DIRS})
+      if(WIN32)
+        set(GPUXTB_TORCH_CPU_LINK "${GPUXTB_TORCH_LIB_DIR}/torch_cpu.lib")
+      elseif(APPLE)
+        set(GPUXTB_TORCH_CPU_LINK "${GPUXTB_TORCH_LIB_DIR}/libtorch_cpu.dylib")
+      else()
+        set(GPUXTB_TORCH_CPU_LINK "${GPUXTB_TORCH_LIB_DIR}/libtorch_cpu.so")
+      endif()
+    endif()
+  endif()
+  if(GPUXTB_TORCH_VERSION)
+    add_library(gpuxtb_torch_ext SHARED
+      python/gpuxtb/_torch_ext/gpuxtb_torch_ext.cpp
+    )
+    set_target_properties(gpuxtb_torch_ext PROPERTIES
+      OUTPUT_NAME gpuxtb_torch_ext
+      CXX_VISIBILITY_PRESET hidden
+      VISIBILITY_INLINES_HIDDEN YES
+    )
+    target_include_directories(gpuxtb_torch_ext PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/include"
+      ${GPUXTB_TORCH_INCLUDE_DIRS}
+    )
+    # Only the aoti_torch_* stable C shim symbols are used; DT_NEEDED binds to
+    # the already-loaded libtorch_cpu when torch.ops.load_library runs, so no
+    # RPATH or per-torch-version rebuild is needed.
+    target_link_libraries(gpuxtb_torch_ext PRIVATE
+      "${GPUXTB_TORCH_CPU_LINK}"
+    )
+    if(GPUXTB_TORCH_VERSION VERSION_GREATER_EQUAL "2.13")
+      # Torch 2.13+ stable headers require C++20 (the same rule as the
+      # upstream cpp_extension module).
+      target_compile_features(gpuxtb_torch_ext PRIVATE cxx_std_20)
+    else()
+      target_compile_features(gpuxtb_torch_ext PRIVATE cxx_std_17)
+    endif()
+    install(TARGETS gpuxtb_torch_ext
+      LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+    set(GPUXTB_HAS_TORCH_EXT ON)
+    message(STATUS
+      "gpuxtb PyTorch stable-ABI extension: enabled (Torch ${GPUXTB_TORCH_VERSION})"
+    )
+  else()
+    message(STATUS
+      "gpuxtb PyTorch extension disabled: Torch >= 2.10 not found"
+    )
+  endif()
+endif()
 
 message(STATUS "gpuxtb CUDA backend: ${GPUXTB_HAS_CUDA}")
