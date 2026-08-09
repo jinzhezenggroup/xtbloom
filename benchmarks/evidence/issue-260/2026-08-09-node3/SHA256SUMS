@@ -1,4 +1,3 @@
-353b63a066038ec8b498f5709d32674288a3d40cf4b06d85605b58c176ff513c  benchmarks/evidence/issue-260/2026-08-09-node3/README.md
-d8c45c56ed189539fbf4416bbda77289231e789f2060d791db64afedcdcbb063  benchmarks/evidence/issue-260/2026-08-09-node3/cuda-fresh.json
-faf9a9b6caed8ce5737cfe8ef63899e1ac83cc5f88763ee27f9196b6f966484c  benchmarks/evidence/issue-260/2026-08-09-node3/cuda-fresh.csv
+a7ba4ec304d4b4fdc5208513a9b1a1e21866c412f8364718d8797d87b7a32e44  benchmarks/evidence/issue-260/2026-08-09-node3/README.md
+4eca8b796f77ed8b9cd89ee4c4f467643ccd2330c2ba4052ded8ae6147dd15fc  benchmarks/evidence/issue-260/2026-08-09-node3/cuda-fresh.csv
 5c3ce997f491e818d96820fc4d9234824976fe9a812f77812262fbe2f2ccfe68  benchmarks/evidence/issue-260/2026-08-09-node3/nsys-kernel_cuda_gpu_kern_sum.csv

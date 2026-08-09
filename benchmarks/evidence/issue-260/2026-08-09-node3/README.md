@@ -15,9 +15,10 @@ This bundle records committed-head evidence for PR #261 after fix commit
 
 ## Public Timing
 
-The authoritative timing artifact is `cuda-fresh.json`; `cuda-fresh.csv` is
-its compact view. The run used the repository `benchmarks/natoms_scaling.py`
-harness through the public C ABI:
+The retained timing artifact is `cuda-fresh.csv`. It contains every measured
+latency sample plus the per-cell timing, energy, SCC-iteration, and numerical
+drift summaries needed for the performance claim. The run used the repository
+`benchmarks/natoms_scaling.py` harness through the public C ABI:
 
 ```text
 srun --partition=main --gres=gpu:5090:1 --ntasks=1 --cpus-per-task=48 --wait=60 env PYTHONPATH="$PWD/python" LD_LIBRARY_PATH="$PWD/build/bench-cuda-shared:/group/software/cuda-12.9.1/lib64:/group/software/deepmd-kit-3.1.1/lib:$LD_LIBRARY_PATH" OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 OMP_DYNAMIC=FALSE MKL_DYNAMIC=FALSE MKL_INTERFACE_LAYER=LP64 MKL_THREADING_LAYER=SEQUENTIAL python3 benchmarks/natoms_scaling.py --engine gpuxtb --library "$PWD/build/bench-cuda-shared/libgpuxtb.so.0.1.0" --backend cuda --property force --natoms 62,122,242 --batch-sizes 1,128 --warmups 3 --repetitions 5 --start-mode fresh --output-json "$PWD/benchmarks/evidence/issue-260/2026-08-09-node3/cuda-fresh.json" --output-csv "$PWD/benchmarks/evidence/issue-260/2026-08-09-node3/cuda-fresh.csv"
@@ -38,6 +39,14 @@ regression coordinate; its work is homogeneous and therefore retains the split
 path. The public timing does not by itself prove an independent oracle; the
 same commit passed the full CUDA CTest and public CUDA conformance/invariant
 matrix.
+
+The harness also generated a 34,903,491-byte full JSON artifact with complete
+force vectors (SHA-256
+`d8c45c56ed189539fbf4416bbda77289231e789f2060d791db64afedcdcbb063`).
+It is intentionally omitted from the repository to keep the retained evidence
+compact. Consequently, the CSV preserves all raw latency samples and recorded
+drift maxima, while the separately executed CUDA conformance and CTest matrix
+is the retained numerical-correctness evidence.
 
 ## Nsight Summary
 
