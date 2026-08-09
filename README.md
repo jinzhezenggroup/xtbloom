@@ -100,10 +100,11 @@ batch=128 rows cold-start on the first call and continue warm afterwards, like
 a repeated steady-state workflow. Reference adapters run the same 16-thread
 budget as gpuxtb (OpenMP/OpenBLAS/MKL on xTB and tblite, Torch intra-op on
 dxtb; dxtb uses its recommended `tad-libcint` integral interface).
-gpuxtb CPU and CUDA rows were re-measured at the PR merged head (including
-the #252/#254/#257/#259/#261 CUDA fixes); no engine was compiled with
-`-march=native` (all generic x86-64 `-O3` builds). Raw samples, hardware, and
-the exact commits are archived under
+gpuxtb CPU and CUDA rows were re-measured at the PR merged heads (the
+#252/#254/#257/#259/#261 CUDA fixes for both; the CUDA rows again at
+`1d2838b` after merging the #244/#263 CUDA eigensolver work); no engine was
+compiled with `-march=native` (all generic x86-64 `-O3` builds). Raw
+samples, hardware, and the exact commits are archived under
 [`benchmarks/evidence/issue-256/2026-08-09-node3/`](benchmarks/evidence/issue-256/2026-08-09-node3/).
 
 The measured pattern is what ragged high-throughput inference is for:
@@ -131,10 +132,11 @@ The measured pattern is what ragged high-throughput inference is for:
 - **gpuxtb CUDA:** at batch=1 the GPU rows carry a fixed per-call cost
   (14-62 ms at 14-32 atoms) and the single-system CUDA eigensolve develops a
   sharp efficiency cliff past ~272 atoms (the divide-and-conquer `syevd`
-  path issues thousands of tiny serial kernels; forces add <1%; at 362 atoms
-  the call costs 10 161 ms vs 1.4 s on CPU). At batch=128/512 the overhead
-  amortizes and CUDA matches or beats CPU (@242 x 128: 2576 ms vs CPU 2761;
-  @122 x 512: 3797 ms vs CPU
+  path issues thousands of tiny serial kernels; forces add <1%). Merging the
+  #263 large-singleton eigensolver into this PR's branch cut the 362-atom
+  single-system cost ~4x (10.2 s before, 2547 ms after; CPU 1.4 s). At
+  batch=128/512 the overhead amortizes and CUDA matches or beats CPU (@242 x
+  128: 2576 ms vs CPU 2761; @122 x 512: 3797 ms vs CPU
   4633), far ahead of the serial reference loops.
 
 Reproduce it with the committed runner, then regenerate the figure:

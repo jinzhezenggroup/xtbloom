@@ -48,7 +48,9 @@ continue warm.
   advantage is a cross-system parallelism effect (it collapses toward parity
   at `--cpu-threads 1`). The reference sweeps stop at 362 atoms (xTB 6.7.1
   segfaults on the 602-atom alkane). gpuxtb CUDA at batch=1 adds a fixed
-  per-call cost (14-62 ms at 14-32 atoms).
+  per-call cost (14-62 ms at 14-32 atoms) and a single-system eigensolve
+  cliff past ~272 atoms; the #263 large-singleton eigensolver cut that
+  362-atom cost ~4x (10.2 s before, 2547 ms now vs CPU 1448 ms).
 - **batch = 128 (first call cold, then WARM)**: gpuxtb CPU is about 10-12x
   faster than xTB and tblite per call at 14-302 atoms (62 atoms: 178 ms vs
   xTB 2113 ms / tblite 1635 ms), because gpuxtb solves the whole ragged batch

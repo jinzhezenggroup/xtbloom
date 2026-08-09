@@ -2,11 +2,11 @@
   "schema_version": 1,
   "metadata": {
     "schema_version": 1,
-    "generated_at_utc": "2026-08-09T03:56:02.609797+00:00",
+    "generated_at_utc": "2026-08-09T10:04:37.599457+00:00",
     "command": [
       "benchmarks/natoms_cross_engine.py",
       "--library",
-      "/tmp/opencode/build-merged-cuda/libgpuxtb.so.0.1.0",
+      "/tmp/opencode/pr231-perf/build/bench-cuda-shared-231/libgpuxtb.so.0.1.0",
       "--engines",
       "gpuxtb-cuda",
       "--natoms",
@@ -26,19 +26,19 @@
       "--scc-energy-tolerance",
       "1e-4",
       "--output-json",
-      "benchmarks/evidence/issue-256/2026-08-09-node3/final-gpuxtb-cuda-cold.json",
+      "/tmp/opencode/pr231-cuda-evidence/final-gpuxtb-cuda-cold.json",
       "--output-csv",
-      "benchmarks/evidence/issue-256/2026-08-09-node3/final-gpuxtb-cuda-cold.csv"
+      "/tmp/opencode/pr231-cuda-evidence/final-gpuxtb-cuda-cold.csv"
     ],
     "commit": {
-      "head": "b51452b0a0143872ffce12daa9e0095f6f586a2a",
-      "dirty": true
+      "head": "1d2838b5af86110ad72388eb04004e64f56684a1",
+      "dirty": false
     },
     "runner": {
       "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0]",
       "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.35",
-      "gpuxtb_library": "/tmp/opencode/build-merged-cuda/libgpuxtb.so.0.1.0",
-      "gpuxtb_library_sha256": "82f0fc722aea35ed201a89dfc2425c8610c284f14ce5668ce73a8d3f517bd203",
+      "gpuxtb_library": "/tmp/opencode/pr231-perf/build/bench-cuda-shared-231/libgpuxtb.so.0.1.0",
+      "gpuxtb_library_sha256": "850e04b1a3ba6bba5eb36f86292ef61528560ec867177d556bb20caee63b531c",
       "xtb_library": null,
       "xtb_library_sha256": null,
       "tblite_library": null,
@@ -49,7 +49,7 @@
       "hostname": "node3",
       "cpu_model": "AMD EPYC 7K62 48-Core Processor",
       "logical_cpu_count": 48,
-      "process_rss_bytes": 637464576,
+      "process_rss_bytes": 638615552,
       "nvidia_smi": "GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8)",
       "gpu_memory_mib": "NVIDIA GeForce RTX 5090, 32607 MiB"
     },
@@ -90,7 +90,7 @@
       "raw_samples": [
         {
           "sample_index": 0,
-          "latency_ms": 14.565508999999999,
+          "latency_ms": 14.556073,
           "energies_hartree": [
             -13.654978473636158
           ],
@@ -106,7 +106,7 @@
         },
         {
           "sample_index": 1,
-          "latency_ms": 14.547113,
+          "latency_ms": 14.527047,
           "energies_hartree": [
             -13.654978473636158
           ],
@@ -122,7 +122,7 @@
         },
         {
           "sample_index": 2,
-          "latency_ms": 14.524671,
+          "latency_ms": 14.514774,
           "energies_hartree": [
             -13.654978473636158
           ],
@@ -139,16 +139,16 @@
       ],
       "timing": {
         "samples_ms": [
-          14.565508999999999,
-          14.547113,
-          14.524671
+          14.556073,
+          14.527047,
+          14.514774
         ],
         "count": 3,
-        "min_ms": 14.524671,
-        "median_ms": 14.547113,
-        "mean_ms": 14.545764333333333,
-        "p95_ms": 14.565508999999999,
-        "systems_per_second_at_median": 68.74216210460453
+        "min_ms": 14.514774,
+        "median_ms": 14.527047,
+        "mean_ms": 14.532631333333333,
+        "p95_ms": 14.556073,
+        "systems_per_second_at_median": 68.83711465929724
       },
       "energies_hartree": [
         -13.654978473636158
@@ -178,7 +178,7 @@
       "raw_samples": [
         {
           "sample_index": 0,
-          "latency_ms": 38.196714,
+          "latency_ms": 38.206119,
           "energies_hartree": [
             -32.639101380001186
           ],
@@ -194,7 +194,7 @@
         },
         {
           "sample_index": 1,
-          "latency_ms": 38.182657,
+          "latency_ms": 38.176842,
           "energies_hartree": [
             -32.639101380001186
           ],
@@ -210,7 +210,7 @@
         },
         {
           "sample_index": 2,
-          "latency_ms": 38.189861,
+          "latency_ms": 38.165892,
           "energies_hartree": [
             -32.639101380001186
           ],
@@ -227,16 +227,16 @@
       ],
       "timing": {
         "samples_ms": [
-          38.196714,
-          38.182657,
-          38.189861
+          38.206119,
+          38.176842,
+          38.165892
         ],
         "count": 3,
-        "min_ms": 38.182657,
-        "median_ms": 38.189861,
-        "mean_ms": 38.189744,
-        "p95_ms": 38.196714,
-        "systems_per_second_at_median": 26.184960453247
+        "min_ms": 38.165892,
+        "median_ms": 38.176842,
+        "mean_ms": 38.182951,
+        "p95_ms": 38.206119,
+        "systems_per_second_at_median": 26.193890002740403
       },
       "energies_hartree": [
         -32.639101380001186
@@ -266,7 +266,7 @@
       "raw_samples": [
         {
           "sample_index": 0,
-          "latency_ms": 61.596056,
+          "latency_ms": 61.616333999999995,
           "energies_hartree": [
             -64.27950668998193
           ],
@@ -282,7 +282,7 @@
         },
         {
           "sample_index": 1,
-          "latency_ms": 61.244572999999995,
+          "latency_ms": 60.361008,
           "energies_hartree": [
             -64.27950668998193
           ],
@@ -298,7 +298,7 @@
         },
         {
           "sample_index": 2,
-          "latency_ms": 61.648225999999994,
+          "latency_ms": 59.788309999999996,
           "energies_hartree": [
             -64.27950668998193
           ],
@@ -315,16 +315,16 @@
       ],
       "timing": {
         "samples_ms": [
-          61.596056,
-          61.244572999999995,
-          61.648225999999994
+          61.616333999999995,
+          60.361008,
+          59.788309999999996
         ],
         "count": 3,
-        "min_ms": 61.244572999999995,
-        "median_ms": 61.596056,
-        "mean_ms": 61.496285,
-        "p95_ms": 61.648225999999994,
-        "systems_per_second_at_median": 16.23480568301321
+        "min_ms": 59.788309999999996,
+        "median_ms": 60.361008,
+        "mean_ms": 60.58855066666666,
+        "p95_ms": 61.616333999999995,
+        "systems_per_second_at_median": 16.566986422758216
       },
       "energies_hartree": [
         -64.27950668998193
@@ -354,7 +354,7 @@
       "raw_samples": [
         {
           "sample_index": 0,
-          "latency_ms": 174.680567,
+          "latency_ms": 172.327519,
           "energies_hartree": [
             -127.56031913535192
           ],
@@ -370,7 +370,7 @@
         },
         {
           "sample_index": 1,
-          "latency_ms": 171.661451,
+          "latency_ms": 172.76888599999998,
           "energies_hartree": [
             -127.56031913535192
           ],
@@ -386,7 +386,7 @@
         },
         {
           "sample_index": 2,
-          "latency_ms": 171.733288,
+          "latency_ms": 175.863167,
           "energies_hartree": [
             -127.56031913535192
           ],
@@ -403,16 +403,16 @@
       ],
       "timing": {
         "samples_ms": [
-          174.680567,
-          171.661451,
-          171.733288
+          172.327519,
+          172.76888599999998,
+          175.863167
         ],
         "count": 3,
-        "min_ms": 171.661451,
-        "median_ms": 171.733288,
-        "mean_ms": 172.69176866666666,
-        "p95_ms": 174.680567,
-        "systems_per_second_at_median": 5.822982903582444
+        "min_ms": 172.327519,
+        "median_ms": 172.76888599999998,
+        "mean_ms": 173.65319066666666,
+        "p95_ms": 175.863167,
+        "systems_per_second_at_median": 5.788079226256053
       },
       "energies_hartree": [
         -127.56031913535192
@@ -442,7 +442,7 @@
       "raw_samples": [
         {
           "sample_index": 0,
-          "latency_ms": 825.835774,
+          "latency_ms": 828.334344,
           "energies_hartree": [
             -254.12194504821684
           ],
@@ -458,7 +458,7 @@
         },
         {
           "sample_index": 1,
-          "latency_ms": 825.712648,
+          "latency_ms": 827.949706,
           "energies_hartree": [
             -254.12194504821684
           ],
@@ -474,7 +474,7 @@
         },
         {
           "sample_index": 2,
-          "latency_ms": 825.520089,
+          "latency_ms": 827.7408439999999,
           "energies_hartree": [
             -254.12194504821684
           ],
@@ -491,16 +491,16 @@
       ],
       "timing": {
         "samples_ms": [
-          825.835774,
-          825.712648,
-          825.520089
+          828.334344,
+          827.949706,
+          827.7408439999999
         ],
         "count": 3,
-        "min_ms": 825.520089,
-        "median_ms": 825.712648,
-        "mean_ms": 825.6895036666666,
-        "p95_ms": 825.835774,
-        "systems_per_second_at_median": 1.211075066395253
+        "min_ms": 827.7408439999999,
+        "median_ms": 827.949706,
+        "mean_ms": 828.0082980000001,
+        "p95_ms": 828.334344,
+        "systems_per_second_at_median": 1.2078028324102092
       },
       "energies_hartree": [
         -254.12194504821684
@@ -530,9 +530,9 @@
       "raw_samples": [
         {
           "sample_index": 0,
-          "latency_ms": 10151.542967,
+          "latency_ms": 2546.8447349999997,
           "energies_hartree": [
-            -380.6835712572781
+            -380.68357125727823
           ],
           "scc_iterations": [
             6
@@ -546,9 +546,9 @@
         },
         {
           "sample_index": 1,
-          "latency_ms": 10160.882769,
+          "latency_ms": 2547.880247,
           "energies_hartree": [
-            -380.6835712572781
+            -380.68357125727823
           ],
           "scc_iterations": [
             6
@@ -562,9 +562,9 @@
         },
         {
           "sample_index": 2,
-          "latency_ms": 10163.434453,
+          "latency_ms": 2546.968535,
           "energies_hartree": [
-            -380.6835712572781
+            -380.68357125727823
           ],
           "scc_iterations": [
             6
@@ -579,19 +579,19 @@
       ],
       "timing": {
         "samples_ms": [
-          10151.542967,
-          10160.882769,
-          10163.434453
+          2546.8447349999997,
+          2547.880247,
+          2546.968535
         ],
         "count": 3,
-        "min_ms": 10151.542967,
-        "median_ms": 10160.882769,
-        "mean_ms": 10158.620063,
-        "p95_ms": 10163.434453,
-        "systems_per_second_at_median": 0.09841664575157938
+        "min_ms": 2546.8447349999997,
+        "median_ms": 2546.968535,
+        "mean_ms": 2547.2311723333332,
+        "p95_ms": 2547.880247,
+        "systems_per_second_at_median": 0.3926236175508937
       },
       "energies_hartree": [
-        -380.6835712572781
+        -380.68357125727823
       ],
       "iteration_summary": {
         "min": 6,

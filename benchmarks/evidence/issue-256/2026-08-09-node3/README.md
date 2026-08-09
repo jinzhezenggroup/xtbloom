@@ -38,11 +38,17 @@ environment with 16 Torch intra-op threads.
   rows ran conformance-tight 1e-10/1e-12, which forced strictly more SCC
   iterations and made gpuxtb look 1.3-3.0x slower at batch=1; that gap was a
   measurement artifact, not runtime behavior.
-- gpuxtb CPU and CUDA rows were re-measured on 2026-08-09 at the PR merged
-  head `b51452b` (origin/main merged into `perf/natoms-readme-benchmark`,
+- gpuxtb CPU rows were re-measured on 2026-08-09 at the PR merged head
+  `b51452b` (origin/main merged into `perf/natoms-readme-benchmark`,
   including CUDA fixes #247/#252/#254/#257/#259/#261). The 302-atom batch=128
   CPU row is back inside `final-gpuxtb-b128.*` (the old separate
   `final-gpuxtb-cpu-b128-302` file is gone).
+- gpuxtb **CUDA** rows were re-measured on 2026-08-09 at the next PR merged
+  head `1d2838b` (origin/main merged again, now also including the CUDA
+  eigensolver changes #244 and #263). All other engines keep their rows
+  unchanged. The batch=1 @362 CUDA eigensolve cliff dropped from 10160.9 ms
+  to 2546.97 ms (the #263 large-singleton eigensolver); every other CUDA row
+  is unchanged within noise.
 
 ## Environment
 
@@ -50,7 +56,8 @@ environment with 16 Torch intra-op threads.
   single socket; CPU rows pinned to 16 threads. Every GPU row ran under
   `srun -n 1 --gres=gpu:1 -c 16 -w node3`.
 - CPU gpuxtb and CUDA gpuxtb: shared Release builds (`-O3`, MKL LP64 shim;
-  CUDA `sm_120`, NVCC 12.9.1) from the PR merged head `b51452b`; CUDA runtime
+  CUDA `sm_120`, NVCC 12.9.1) from the PR merged heads (`b51452b` for CPU,
+  `1d2838b` for the re-measured CUDA rows); CUDA runtime
   `LD_LIBRARY_PATH=/group/software/cuda-12.9.1/targets/x86_64-linux/lib`.
 - GPU: NVIDIA GeForce RTX 5090 (32 GiB), driver 580.95.05 / CUDA 13.0
   driver. CUDA rows use host-pointed descriptors with a trailing
@@ -136,10 +143,10 @@ Panel 1 (batch=1, cold start, 16 threads, SCC 1e-4):
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 14 | 3.0 | 14.5 | 4.0 | 5.3 | 148.0 | 366.2 |
 | 32 | 10.9 | 38.2 | 15.6 | 18.6 | 206.1 | 400.7 |
-| 62 | 33.6 | 61.6 | 52.2 | 60.5 | 341.6 | 444.5 |
-| 122 | 120.3 | 171.7 | 178.7 | 205.8 | 748.0 | 513.2 |
-| 242 | 548.5 | 825.7 | 651.5 | 707.8 | -- | -- |
-| 362 | 1448.4 | 10160.9 | 1405.8 | 1545.3 | -- | -- |
+| 62 | 33.6 | 60.4 | 52.2 | 60.5 | 341.6 | 444.5 |
+| 122 | 120.3 | 172.8 | 178.7 | 205.8 | 748.0 | 513.2 |
+| 242 | 548.5 | 828.0 | 651.5 | 707.8 | -- | -- |
+| 362 | 1448.4 | 2547.0 | 1405.8 | 1545.3 | -- | -- |
 
 Panel 2 (batch=128, distinct conformers, first call cold then WARM, 16 threads):
 
@@ -147,9 +154,9 @@ Panel 2 (batch=128, distinct conformers, first call cold then WARM, 16 threads):
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 14 | 18.2 | 28.2 | 205.4 | 181.8 | 1456.7 | 1162.7 |
 | 32 | 53.6 | 60.7 | 677.3 | 588.3 | 3938.3 | 2363.5 |
-| 62 | 177.6 | 182.0 | 2113.5 | 1634.8 | 16578.6 | 6755.7 |
-| 122 | 641.1 | 636.9 | 7394.7 | 5342.5 | -- | -- |
-| 242 | 2760.7 | 2576.3 | -- | -- | -- | -- |
+| 62 | 177.6 | 182.2 | 2113.5 | 1634.8 | 16578.6 | 6755.7 |
+| 122 | 641.1 | 637.0 | 7394.7 | 5342.5 | -- | -- |
+| 242 | 2760.7 | 2578.0 | -- | -- | -- | -- |
 | 302 | 4520.2 | -- | -- | -- | -- | -- |
 
 Panel 3 (batch=512, cold start, 16 threads):
@@ -158,8 +165,8 @@ Panel 3 (batch=512, cold start, 16 threads):
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 14 | 64.9 | 207.0 | 1926.0 | 2398.2 | 6291.9 | 3465.7 |
 | 32 | 322.8 | 289.5 | 8216.3 | 9842.7 | 27699.0 | 15732.3 |
-| 62 | 1139.0 | 1093.5 | 26470.9 | 29313.2 | 122434.0 | OOM |
-| 122 | 4633.1 | 3797.5 | 91984.1 | 99209.3 | -- | -- |
+| 62 | 1139.0 | 1094.6 | 26470.9 | 29313.2 | 122434.0 | OOM |
+| 122 | 4633.1 | 3796.7 | 91984.1 | 99209.3 | -- | -- |
 
 \* dxtb resets per call by design (Torch autograd prevents warm continuation
 of the measured public path), so its rows are cold-every-call. dxtb-cuda
@@ -187,16 +194,20 @@ of the measured public path), so its rows are cold-every-call. dxtb-cuda
   91984/99209) and gpuxtb CUDA ~10-25x faster (62: 1093 ms vs 26471/29313),
   because gpuxtb solves the whole ragged batch in one call across its worker
   pool while the reference adapters loop systems serially.
-- gpuxtb CUDA at batch=1 carries a fixed per-call cost (14-192 ms up to 62
+- gpuxtb CUDA at batch=1 carries a fixed per-call cost (14-62 ms up to 62
   atoms) and a single-system eigensolve cliff past ~272 atoms (the cuSOLVER
   `syevd` path degenerates into thousands of tiny serial kernels; forces add
-  <1%; 362 atoms costs 10161 ms vs 1448 ms on CPU), but amortizes at
-  batch=128/512: @242 x 128 it is already faster than gpuxtb CPU (2576 vs
+  <1%; 362 atoms costs 2547 ms vs 1448 ms on CPU). Merging the #263
+  large-singleton CUDA eigensolver into this PR's branch cut that 362-atom
+  cost ~4x (10161 ms before, 2547 ms after) with unchanged SCC iterations
+  (6) and identical energies. The cliff still amortizes at batch=128/512:
+  @242 x 128 it is already faster than gpuxtb CPU (2576 vs
   2761 ms), and at batch=512 @62-122 it is at or below CPU latency.
 
 ## Files
 
 - `final-<engine>-{cold,b128,b512}.json/.csv` for gpuxtb-cpu, xtb, tblite, dxtb-cpu
-- `final-{gpuxtb-cuda,dxtb-cuda}-{cold,b128,b512}.json/.csv` (re-measured 2026-08-09)
+- `final-{gpuxtb-cuda,dxtb-cuda}-{cold,b128,b512}.json/.csv` (gpuxtb-cuda
+  re-measured 2026-08-09 at merged head `1d2838b`; dxtb-cuda unchanged)
 - `natoms_cross_engine.svg` (rendered figure)
 - `README.md`, `SHA256SUMS`
