@@ -9,15 +9,62 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 from gpuxtb import library
-from gpuxtb.exceptions import GPUxtbValueError
+from gpuxtb.exceptions import GPUxtbRuntimeError, GPUxtbValueError
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
+class _FakeSymbol:
+    """Minimal mutable stand-in for a configured ``ctypes`` function."""
+
+    argtypes: object = None
+    restype: object = None
+
+
+class _FakeLibrary:
+    """Weak-referenceable fake shared-library handle for symbol probing."""
+
+
+def _fake_request_library(*, omit: str | None = None) -> _FakeLibrary:
+    """Build a fake library with all but an optional request ABI symbol."""
+    fake = _FakeLibrary()
+    for name in library._REQUEST_API_SYMBOLS:
+        if name != omit:
+            setattr(fake, name, _FakeSymbol())
+    return fake
+
+
 def test_version_string() -> None:
     """Expose the native library version through the ctypes wrapper."""
     assert library.get_version() == "0.1.0"
+
+
+def test_request_api_is_optional_as_a_complete_symbol_group() -> None:
+    """An older core library remains usable when every request symbol is absent."""
+    fake = _FakeLibrary()
+
+    assert not library._configure_request_api(fake)
+    assert not library.request_api_available(fake)
+
+
+def test_request_api_configures_only_when_complete() -> None:
+    """Configure all signatures and advertise the complete additive ABI."""
+    fake = _fake_request_library()
+
+    assert library._configure_request_api(fake)
+    assert library.request_api_available(fake)
+    assert fake.gpuxtb_request_info_init.restype is ctypes.c_int32
+    assert fake.gpuxtb_plan_compute_enqueue.restype is ctypes.c_int32
+    assert fake.gpuxtb_request_destroy.restype is None
+
+
+def test_partial_request_api_is_incompatible() -> None:
+    """Reject a library that cannot provide one coherent request contract."""
+    fake = _fake_request_library(omit="gpuxtb_request_wait")
+
+    with pytest.raises(GPUxtbRuntimeError, match="gpuxtb_request_wait"):
+        library._configure_request_api(fake)
 
 
 def test_runtime_search_includes_user_site_packages(
