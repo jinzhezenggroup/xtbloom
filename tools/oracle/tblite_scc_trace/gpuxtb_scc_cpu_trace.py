@@ -321,9 +321,10 @@ def run_batch(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
                 or header[9] != "3"
             ):
                 failures += 1
+                first_line = raw_body.splitlines()[0] if raw_body.splitlines() else ""
                 print(  # noqa: T201
                     f"batch lane {index}: FAIL expected a zero-iteration "
-                    f"terminal-failed recorder header, got {raw_body.splitlines()[0] if raw_body.splitlines() else ''}"
+                    f"terminal-failed recorder header, got {first_line}"
                 )
                 continue
             print(f"batch lane {index} (failure isolation): PASS")  # noqa: T201
@@ -451,6 +452,15 @@ def run_replay(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
             # compare_iteration validates the snapshot against the golden
             # iteration at logical_index; canonicalize always emits index 1 for
             # its single iteration, so fix the logical index first.
+            if not trace["iterations"]:
+                failures += 1
+                print(  # noqa: T201
+                    f"{case_id} iteration {logical_index}: FAIL replay produced "
+                    f"no completed iteration (terminal {trace['terminal']}); "
+                    "a data-level eigensolver/preparation/mixer failure left "
+                    "the replayed step uncommitted"
+                )
+                continue
             snapshot = trace["iterations"][0]
             snapshot["index"] = logical_index
             snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
@@ -592,9 +602,18 @@ def run_mixer(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
                 scale = max(abs(predicted_value), abs(golden_value))
                 tolerance = 1.0e-8 + 1.0e-9 * scale
                 absolute = abs(predicted_value - golden_value)
-                if absolute > tolerance and absolute > worst_absolute:
-                    worst_absolute = absolute
-                    worst_path = f"mixed[{component}]"
+                if absolute <= tolerance:
+                    continue
+                # Report the first logical component above tolerance so the
+                # diagnostic localizes the earliest diverging mixed element.
+                worst_absolute = absolute
+                worst_path = (
+                    f"mixed[{component}] (abs={absolute:.6e} "
+                    f"rel={absolute / scale if scale else 0.0:.6e} "
+                    f"actual={predicted_value:.17e} expected={golden_value:.17e} "
+                    f"tol={tolerance:.3e})"
+                )
+                break
             if worst_absolute < 0.0:
                 print(  # noqa: T201
                     f"{case_id} transition {logical_index - 1}->{logical_index}: "
