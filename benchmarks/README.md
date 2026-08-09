@@ -125,9 +125,10 @@ This is benchmark eligibility, not a tblite default or a replacement for
 gpuxtb scientific conformance. `plot_natoms_cross_engine.py` rejects dirty or
 protocol-incompatible artifacts, preserves failed/unavailable coordinates,
 and renders the three batch-size panels used in the README and user guide. It
-declares its pinned Matplotlib dependency through PEP 723 inline metadata, so
-run it with `uv run --script benchmarks/plot_natoms_cross_engine.py ...`
-without adding plotting packages to gpuxtb's project dependencies.
+declares its Matplotlib dependency through PEP 723 inline metadata, with the
+complete isolated resolution pinned by the adjacent script lock. Run it with
+`uv run --script benchmarks/plot_natoms_cross_engine.py ...` without adding
+plotting packages to gpuxtb's project dependencies.
 JSON retains every raw sample, complete final force vectors, convergence and
 correctness state, source/build/runtime identities, and binary hashes; CSV is
 the compact tabular view.

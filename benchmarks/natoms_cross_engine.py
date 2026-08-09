@@ -2335,15 +2335,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--reference-json",
         type=Path,
         help=(
-            "clean cold-start xTB/tblite artifact used to qualify every timed "
-            "energy and force sample against the public benchmark output gate"
+            "clean panel-matched xTB/tblite artifact used to qualify every "
+            "timed energy and force sample against the public benchmark output "
+            "gate"
         ),
     )
     parser.add_argument(
         "--make-reference",
         action="store_true",
         help=(
-            "designate this single-engine cold xTB/tblite run as the "
+            "designate this single-engine panel-matched xTB/tblite run as the "
             "independent output reference"
         ),
     )

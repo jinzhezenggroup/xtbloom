@@ -184,6 +184,21 @@ The locked Linux resolution also installs NVIDIA CUDA provider packages under
 their vendor terms; those test-environment packages are likewise not
 redistributed in gpuxtb artifacts.
 
+## Matplotlib publication tool
+
+Repository: <https://github.com/matplotlib/matplotlib>
+
+License: Matplotlib License (classified by the upstream distribution as the
+Python Software Foundation License and retained by the separately installed
+distribution).
+
+The benchmark figure renderer declares Matplotlib 3.10.9 through PEP 723
+inline script metadata. Its complete isolated PyPI resolution and artifact
+hashes are recorded in `benchmarks/plot_natoms_cross_engine.py.lock`.
+Matplotlib and its dependencies are publication tools only: they are not
+gpuxtb project dependencies and are not bundled in source distributions,
+native installs, or wheels.
+
 ## OpenBLAS runtime dependency
 
 Repository: <https://github.com/MacPython/openblas-libs>
