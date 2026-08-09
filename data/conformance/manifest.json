@@ -134,12 +134,12 @@
       "golden_sha256": "d63a1dfc900190c9aeb7508c9a3cf9ab1be9e071578cc7df54abc314a58c7035",
       "id": "water_efield",
       "input": "data/conformance/inputs/water_efield.coord",
-      "input_sha256": "32311c947d9d7aa1bd1df786b3710bf103ec5e2f20eebded2cc01d21221073cd",
+      "input_sha256": "a8d8e170921a7b79316b72495540c18bc1ee97ea502a7ba172937e05a2be17ac",
       "molecular_charge": 0,
       "reference_engine": "tblite",
       "reference_output_sha256": "4044828a6e7742f614fcf1256d93480eb573a18ee5c396c48216328a91edf7de",
       "unpaired_electrons": 0,
-      "upstream_input_sha256": "32311c947d9d7aa1bd1df786b3710bf103ec5e2f20eebded2cc01d21221073cd",
+      "upstream_input_sha256": "a8d8e170921a7b79316b72495540c18bc1ee97ea502a7ba172937e05a2be17ac",
       "upstream_validation_case": "gpuxtb efield pilot"
     }
   ],
