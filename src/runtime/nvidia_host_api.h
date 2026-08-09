@@ -26,9 +26,10 @@
  *     prototype, so these names are a stable binary contract across minor
  *     CUDA releases within a major version.
  *   - The handle types (cublasHandle_t, cusolverDnHandle_t,
- *     cusolverDnParams_t, syevjInfo_t) are opaque struct pointers and the
- *     status/enum values are documented stable integers, so the declarations
- *     cannot drift from the deployed library ABI.
+ *     cusolverDnParams_t, syevjInfo_t) are opaque struct pointers. Provider
+ *     status returns use explicit 32-bit integer carriers so legitimate or
+ *     future failure codes remain representable; named constants retain the
+ *     stable values used by the supported provider ABIs.
  *   - Runtime enforcement: cuda_dlopen.c resolves every name in this header
  *     against the deployed SONAME cohort at first use and disables the GPU
  *     backend with a typed-fallback diagnostic if any symbol is absent. The
@@ -62,16 +63,19 @@ extern "C" {
 
 typedef struct cublasContext* cublasHandle_t;
 
-typedef enum {
+typedef uint32_t cublasStatus_t;
+enum {
   CUBLAS_STATUS_SUCCESS = 0,
   CUBLAS_STATUS_NOT_INITIALIZED = 1,
   CUBLAS_STATUS_ALLOC_FAILED = 3,
   CUBLAS_STATUS_INVALID_VALUE = 7,
   CUBLAS_STATUS_ARCH_MISMATCH = 8,
-  CUBLAS_STATUS_INTERNAL_ERROR = 11,
-  CUBLAS_STATUS_NOT_SUPPORTED = 12,
-  CUBLAS_STATUS_EXECUTION_FAILED = 13
-} cublasStatus_t;
+  CUBLAS_STATUS_MAPPING_ERROR = 11,
+  CUBLAS_STATUS_EXECUTION_FAILED = 13,
+  CUBLAS_STATUS_INTERNAL_ERROR = 14,
+  CUBLAS_STATUS_NOT_SUPPORTED = 15,
+  CUBLAS_STATUS_LICENSE_ERROR = 16
+};
 
 typedef enum { CUBLAS_OP_N = 0, CUBLAS_OP_T = 1, CUBLAS_OP_C = 2 } cublasOperation_t;
 
@@ -125,15 +129,34 @@ typedef struct cusolverDnContext* cusolverDnHandle_t;
 typedef struct syevjInfo* syevjInfo_t;
 typedef struct cusolverDnParams* cusolverDnParams_t;
 
-typedef enum {
+typedef uint32_t cusolverStatus_t;
+enum {
   CUSOLVER_STATUS_SUCCESS = 0,
   CUSOLVER_STATUS_NOT_INITIALIZED = 1,
   CUSOLVER_STATUS_ALLOC_FAILED = 2,
   CUSOLVER_STATUS_INVALID_VALUE = 3,
   CUSOLVER_STATUS_ARCH_MISMATCH = 4,
+  CUSOLVER_STATUS_MAPPING_ERROR = 5,
   CUSOLVER_STATUS_EXECUTION_FAILED = 6,
-  CUSOLVER_STATUS_INTERNAL_ERROR = 7
-} cusolverStatus_t;
+  CUSOLVER_STATUS_INTERNAL_ERROR = 7,
+  CUSOLVER_STATUS_MATRIX_TYPE_NOT_SUPPORTED = 8,
+  CUSOLVER_STATUS_NOT_SUPPORTED = 9,
+  CUSOLVER_STATUS_ZERO_PIVOT = 10,
+  CUSOLVER_STATUS_INVALID_LICENSE = 11,
+  CUSOLVER_STATUS_IRS_PARAMS_NOT_INITIALIZED = 12,
+  CUSOLVER_STATUS_IRS_PARAMS_INVALID = 13,
+  CUSOLVER_STATUS_IRS_PARAMS_INVALID_PREC = 14,
+  CUSOLVER_STATUS_IRS_PARAMS_INVALID_REFINE = 15,
+  CUSOLVER_STATUS_IRS_PARAMS_INVALID_MAXITER = 16,
+  CUSOLVER_STATUS_IRS_INTERNAL_ERROR = 20,
+  CUSOLVER_STATUS_IRS_NOT_SUPPORTED = 21,
+  CUSOLVER_STATUS_IRS_OUT_OF_RANGE = 22,
+  CUSOLVER_STATUS_IRS_NRHS_NOT_SUPPORTED_FOR_REFINE_GMRES = 23,
+  CUSOLVER_STATUS_IRS_INFOS_NOT_INITIALIZED = 25,
+  CUSOLVER_STATUS_IRS_INFOS_NOT_DESTROYED = 26,
+  CUSOLVER_STATUS_IRS_MATRIX_SINGULAR = 30,
+  CUSOLVER_STATUS_INVALID_WORKSPACE = 31
+};
 
 typedef enum { CUSOLVER_EIG_MODE_NOVECTOR = 0, CUSOLVER_EIG_MODE_VECTOR = 1 } cusolverEigMode_t;
 

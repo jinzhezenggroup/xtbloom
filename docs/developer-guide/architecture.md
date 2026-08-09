@@ -288,9 +288,10 @@ one ELF trampoline shim per wrapped host library
 libraries, the shims are derived from the real ELF files with the byte-pinned
 `cmake/3rdparty/implib` tool, which pins each SONAME. When they are absent,
 `tools/implib_stubgen.py` regenerates byte-identical shims from the curated
-symbol lists against the same pinned templates, with SONAMEs from overridable
-cache variables (`GPUXTB_CUDA_*_SONAME`); a CUDA build then needs only nvcc and the
-cudart headers, because `src/runtime/nvidia_host_api.h` self-declares the
+symbol lists against the same pinned templates, with toolkit-major defaults
+and overridable cache variables (`GPUXTB_CUDA_*_SONAME`); a CUDA build then
+needs nvcc's compiler-support files and the cudart headers, but no provider
+shared libraries, because `src/runtime/nvidia_host_api.h` self-declares the
 host-facing cuBLAS/cuSOLVER/driver C ABI surface. An early ELF constructor opens the exact build-major SONAMEs and
 pre-resolves each complete symbol cohort before ordinary NVCC registration constructors run. The
 resolved tables are then immutable, avoiding races on concurrent CUDA calls. A host without the

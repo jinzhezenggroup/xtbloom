@@ -146,7 +146,7 @@ build-frontend = "build[uv]"
 skip = ["*-win32", "*-manylinux_i686", "*-musllinux*"]
 # CUDA-enabled manylinux images provided by PyPA (quay.io/manylinux_cuda). They
 # ship nvcc and the cudart headers the compile needs; the proprietary provider
-# libraries (cuBLAS/cuSOLVER/cuDRT/driver) are never required to build, because
+# libraries (cuBLAS/cuSOLVER/cudart/driver) are never required to build, because
 # gpuxtb self-declares the host C API surface (src/runtime/nvidia_host_api.h)
 # and generates lazy-dlopen trampolines from the curated symbol lists with
 # pinned SONAMEs. The dlopen'd libraries are supplied at run time by the system
@@ -159,9 +159,10 @@ test-command = "python -c 'import gpuxtb; print(gpuxtb.library.get_version())'"
 
 [tool.cibuildwheel.linux]
 # before-build runs inside the build container (once per container, idempotent
-# scripts). The CUDA backend needs no toolkit libraries (see the stub-mode
-# comment above), so only the CUDA-capable ccache (>= 4.1, needed for nvcc; the
-# manylinux_2_28 distro ccache 3.7 cannot cache CUDA) is installed.
+# scripts). The image supplies nvcc's compiler-support files, while provider
+# shared libraries are unnecessary (see the stub-mode comment above), so only
+# the CUDA-capable ccache (>= 4.1, needed for nvcc; the manylinux_2_28 distro
+# ccache 3.7 cannot cache CUDA) is installed.
 before-build = "bash {package}/python/ci/install-ccache.sh"
 # CUDA host shared libraries (cublas/cusolver/cudart/...) are intentionally not
 # bundled: the trampolines resolve the system CUDA driver plus the

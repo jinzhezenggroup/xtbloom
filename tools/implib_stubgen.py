@@ -14,9 +14,9 @@ the library bytes themselves.
 
 This script reproduces implib-gen.py's non-vtable output byte-for-byte from
 the same vendored templates so the CUDA backend can be configured and built
-with just nvcc plus the cudart headers, with the real runtime libraries only
-required at run time.  It is original gpuxtb code; implib assumes no input
-library because it never inspects one.
+from nvcc's compiler-support files and the cudart headers, with provider
+shared libraries required only at run time.  It is original gpuxtb code;
+implib assumes no input library because it never inspects one.
 
 The build uses this stub path whenever the proprietary CUDA libraries are
 absent from the build environment, and the byte-exact output keeps the two

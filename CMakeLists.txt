@@ -13,6 +13,7 @@ include(CheckCXXSourceCompiles)
 include(CMakePushCheckState)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/gpuxtb_cuda_toolkit.cmake)
 find_package(Threads REQUIRED)
 
 set(GPUXTB_ENABLE_CUDA "AUTO" CACHE STRING "Build the CUDA backend: AUTO, ON, or OFF")
@@ -40,7 +41,17 @@ if(NOT GPUXTB_ENABLE_CUDA_NORMALIZED STREQUAL "OFF")
   check_language(CUDA)
   if(CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
-    find_package(CUDAToolkit REQUIRED)
+    # FindCUDAToolkit is optional provider discovery: its required variable
+    # set includes libcudart, while gpuxtb can build without provider shared
+    # libraries. The enabled compiler remains the authority for toolkit
+    # version and the cudart header set.
+    find_package(CUDAToolkit QUIET)
+    gpuxtb_resolve_cuda_toolkit_metadata(
+      GPUXTB_CUDA_TOOLKIT_VERSION
+      GPUXTB_CUDA_TOOLKIT_MAJOR
+      GPUXTB_CUDA_TOOLKIT_MINOR
+      GPUXTB_CUDA_TOOLKIT_INCLUDE_DIRS)
+    gpuxtb_validate_cuda_runtime_headers(${GPUXTB_CUDA_TOOLKIT_INCLUDE_DIRS})
     set(GPUXTB_HAS_CUDA ON)
   elseif(GPUXTB_ENABLE_CUDA_NORMALIZED STREQUAL "ON")
     message(FATAL_ERROR "GPUXTB_ENABLE_CUDA=ON, but no CUDA compiler was found")
@@ -651,18 +662,29 @@ if(GPUXTB_HAS_CUDA)
   # real ELF so the artifacts adapt to the exact toolchain version. When they
   # are absent, gpuxtb generates byte-identical shims from the curated symbol
   # lists with pinned SONAMEs (overridable cache variables), so configuring
-  # and building the CUDA backend requires only nvcc plus the cudart headers;
-  # the runtime cohort preflight in cuda_dlopen.c enforces the deployed names
+  # and building the CUDA backend requires no provider shared libraries;
+  # nvcc's compiler-support files and the cudart headers still come from the
+  # CUDA compiler installation.
+  # The runtime cohort preflight in cuda_dlopen.c enforces the deployed names
   # and symbol set either way.
-  set(GPUXTB_CUDA_CUDART_SONAME "libcudart.so.12" CACHE STRING
+  gpuxtb_cuda_default_provider_sonames(
+    "${GPUXTB_CUDA_TOOLKIT_MAJOR}"
+    _gpuxtb_cuda_default_cudart_soname
+    _gpuxtb_cuda_default_cublas_soname
+    _gpuxtb_cuda_default_cusolver_soname
+    _gpuxtb_cuda_default_driver_soname)
+  gpuxtb_cache_cuda_provider_soname(
+    GPUXTB_CUDA_CUDART_SONAME "${_gpuxtb_cuda_default_cudart_soname}"
     "dlopen'd CUDA runtime SONAME used when the build toolkit ships no CUDA libraries")
-  set(GPUXTB_CUDA_CUBLAS_SONAME "libcublas.so.12" CACHE STRING
+  gpuxtb_cache_cuda_provider_soname(
+    GPUXTB_CUDA_CUBLAS_SONAME "${_gpuxtb_cuda_default_cublas_soname}"
     "dlopen'd cuBLAS SONAME used when the build toolkit ships no CUDA libraries")
-  set(GPUXTB_CUDA_CUSOLVER_SONAME "libcusolver.so.11" CACHE STRING
+  gpuxtb_cache_cuda_provider_soname(
+    GPUXTB_CUDA_CUSOLVER_SONAME "${_gpuxtb_cuda_default_cusolver_soname}"
     "dlopen'd cuSOLVER SONAME used when the build toolkit ships no CUDA libraries")
-  set(GPUXTB_CUDA_DRIVER_SONAME "libcuda.so.1" CACHE STRING
+  gpuxtb_cache_cuda_provider_soname(
+    GPUXTB_CUDA_DRIVER_SONAME "${_gpuxtb_cuda_default_driver_soname}"
     "dlopen'd CUDA driver SONAME used when the build toolkit ships no CUDA libraries")
-
   set(_gpuxtb_cuda_providers_present ON)
   foreach(_gpuxtb_cuda_target IN ITEMS CUDA::cudart CUDA::cublas CUDA::cusolver)
     if(NOT TARGET ${_gpuxtb_cuda_target})
@@ -671,6 +693,24 @@ if(GPUXTB_HAS_CUDA)
   endforeach()
   if(NOT CUDA_cuda_driver_LIBRARY)
     set(_gpuxtb_cuda_providers_present OFF)
+  endif()
+  if(_gpuxtb_cuda_providers_present)
+    message(STATUS
+      "gpuxtb CUDA provider shims: scanning the complete toolkit library cohort")
+  else()
+    foreach(_gpuxtb_cuda_required_soname_var IN ITEMS
+        GPUXTB_CUDA_CUDART_SONAME
+        GPUXTB_CUDA_CUBLAS_SONAME
+        GPUXTB_CUDA_CUSOLVER_SONAME)
+      if("${${_gpuxtb_cuda_required_soname_var}}" STREQUAL "")
+        message(FATAL_ERROR
+          "CUDA ${GPUXTB_CUDA_TOOLKIT_VERSION} has no curated fallback provider "
+          "SONAME mapping; set GPUXTB_CUDA_CUDART_SONAME, "
+          "GPUXTB_CUDA_CUBLAS_SONAME, and GPUXTB_CUDA_CUSOLVER_SONAME explicitly")
+      endif()
+    endforeach()
+    message(STATUS
+      "gpuxtb CUDA provider shims: curated symbols with toolkit-major SONAMEs")
   endif()
 
   set(_gpuxtb_cuda_implib_bases
@@ -846,7 +886,7 @@ if(GPUXTB_HAS_CUDA)
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CUDAToolkit_INCLUDE_DIRS}
+    ${GPUXTB_CUDA_TOOLKIT_INCLUDE_DIRS}
   )
   target_include_directories(gpuxtb_cuda_backend PRIVATE
     ${GPUXTB_CUDA_IMPLIB_DIR}
@@ -928,6 +968,11 @@ if(GPUXTB_BUILD_TESTS)
       benchmarks.test_run benchmarks.test_natoms_scaling
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
+  add_test(
+    NAME gpuxtb.cmake.cuda_toolkit_metadata
+    COMMAND ${CMAKE_COMMAND} -P
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/cuda_toolkit_metadata_test.cmake
+  )
 
   if(GPUXTB_CPU_LINALG_RUNTIME)
     get_filename_component(GPUXTB_CPU_LINALG_DIRECTORY
@@ -992,6 +1037,22 @@ if(GPUXTB_BUILD_TESTS)
   add_test(NAME gpuxtb.runtime COMMAND gpuxtb_runtime_test)
   if(GPUXTB_CPU_LINALG_RUNTIME)
     gpuxtb_configure_linalg_runtime_test(gpuxtb_runtime_test gpuxtb.runtime)
+  endif()
+
+  if(GPUXTB_HAS_CUDA)
+    # This host-only test must compile in the provider-free configuration. It
+    # verifies that provider status returns remain fixed-width integer domains
+    # even when compilers are asked to shorten ordinary enum types.
+    add_executable(gpuxtb_nvidia_host_api_test tests/nvidia_host_api_test.cpp)
+    target_include_directories(gpuxtb_nvidia_host_api_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${GPUXTB_CUDA_TOOLKIT_INCLUDE_DIRS}
+    )
+    target_compile_features(gpuxtb_nvidia_host_api_test PRIVATE cxx_std_17)
+    target_compile_options(gpuxtb_nvidia_host_api_test PRIVATE
+      $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-fshort-enums>
+    )
+    add_test(NAME gpuxtb.cuda.nvidia_host_api COMMAND gpuxtb_nvidia_host_api_test)
   endif()
 
   if(GPUXTB_CPU_LINALG_RUNTIME)
@@ -1066,7 +1127,8 @@ if(GPUXTB_BUILD_TESTS)
 
   # CUDA runtime tests link CUDA::cudart and run on a real GPU. They are
   # built only when the build environment actually provides the provider
-  # libraries; a stub-generation build (nvcc plus cudart headers only) still
+  # libraries; a stub-generation build (nvcc support files plus cudart
+  # headers, but no provider shared objects) still
   # compiles and publishes the CUDA backend but cannot exercise it here.
   if(GPUXTB_HAS_CUDA AND _gpuxtb_cuda_providers_present)
     add_executable(gpuxtb_cuda_descriptor_validation_test
@@ -2989,10 +3051,7 @@ install(EXPORT gpuxtbTargets
 # runtime it dlopens so the installed CMake config can warn consumers that the
 # runtime they have may be incompatible (the library itself no longer links
 # against the toolkit; see src/runtime/cuda_dlopen.c).
-if(GPUXTB_HAS_CUDA)
-  set(GPUXTB_CUDA_TOOLKIT_MAJOR ${CUDAToolkit_VERSION_MAJOR})
-  set(GPUXTB_CUDA_TOOLKIT_MINOR ${CUDAToolkit_VERSION_MINOR})
-else()
+if(NOT GPUXTB_HAS_CUDA)
   set(GPUXTB_CUDA_TOOLKIT_MAJOR 0)
   set(GPUXTB_CUDA_TOOLKIT_MINOR 0)
 endif()
