@@ -83,6 +83,7 @@ try:
         DEFAULT_CROSS_ENGINE_FORCE_ATOL,
         Molecule,
         SystemSlice,
+        _meson_compiler_executable_provenance,
         make_alkane,
     )
 except ImportError:  # Direct ``python benchmarks/natoms_cross_engine.py`` execution.
@@ -92,6 +93,7 @@ except ImportError:  # Direct ``python benchmarks/natoms_cross_engine.py`` execu
         DEFAULT_CROSS_ENGINE_FORCE_ATOL,
         Molecule,
         SystemSlice,
+        _meson_compiler_executable_provenance,
         make_alkane,
     )
 
@@ -291,16 +293,21 @@ def sanitize_direct_url_identity(text: str | None) -> dict[str, Any] | None:
         return None
     try:
         direct_url = json.loads(text)
+        if not isinstance(direct_url, dict):
+            raise TypeError("direct_url.json root is not an object")
         parsed_url = urllib.parse.urlparse(str(direct_url.get("url", "")))
         if parsed_url.scheme == "file":
+            if parsed_url.netloc not in {"", "localhost"}:
+                return {"scheme": "file", "parse_status": "nonlocal_authority"}
+            dir_info = direct_url.get("dir_info") or {}
+            if not isinstance(dir_info, dict):
+                raise TypeError("direct_url.json dir_info is not an object")
             return {
                 "scheme": "file",
                 "local_source_path": str(
                     Path(urllib.parse.unquote(parsed_url.path)).resolve()
                 ),
-                "editable": bool(
-                    (direct_url.get("dir_info") or {}).get("editable", False)
-                ),
+                "editable": bool(dir_info.get("editable", False)),
             }
         return {"scheme": parsed_url.scheme or None}
     except (TypeError, ValueError, json.JSONDecodeError):
@@ -426,15 +433,10 @@ def meson_build_identity(library: Path, source_root: Path) -> dict[str, Any] | N
     compiler_identities: list[dict[str, Any]] = []
     for machine, languages in compilers.items():
         for language, compiler in languages.items():
-            executable = (compiler.get("exelist") or [None])[0]
-            executable_path = Path(executable) if executable else None
-            resolved_executable = (
-                executable_path.resolve()
-                if executable_path is not None
-                and executable_path.is_absolute()
-                and executable_path.is_file()
-                else None
+            executable_files, unresolved_entries = (
+                _meson_compiler_executable_provenance(compiler.get("exelist"))
             )
+            primary = executable_files[0] if executable_files else {}
             compiler_identities.append(
                 {
                     "machine": machine,
@@ -442,15 +444,11 @@ def meson_build_identity(library: Path, source_root: Path) -> dict[str, Any] | N
                     "id": compiler.get("id"),
                     "version": compiler.get("version"),
                     "full_version": compiler.get("full_version"),
-                    "executable": str(resolved_executable)
-                    if resolved_executable
-                    else None,
-                    "executable_sha256": sha256_file(resolved_executable),
-                    "unresolved_configure_time_entry": (
-                        executable
-                        if executable and resolved_executable is None
-                        else None
-                    ),
+                    "exelist": compiler.get("exelist"),
+                    "executable": primary.get("path"),
+                    "executable_sha256": primary.get("sha256"),
+                    "executable_files": executable_files,
+                    "unresolved_configure_time_entries": unresolved_entries,
                 }
             )
     compiler_identities.sort(key=lambda item: (item["machine"], item["language"]))
@@ -564,6 +562,7 @@ def cpu_model() -> str | None:
     return None
 
 
+@functools.cache
 def selected_cuda_device_identity(device_id: int) -> dict[str, Any] | None:
     """Resolve one CUDA ordinal through CUDA_VISIBLE_DEVICES to GPU identity."""
     inventory = run_text(
@@ -2490,10 +2489,19 @@ def validate_publication_provenance(
             )
         compilers = build_identity.get("compilers") or []
         if not compilers or any(
-            not item.get("executable_sha256") for item in compilers
+            not item.get("executable_files")
+            or item.get("unresolved_configure_time_entries")
+            for item in compilers
         ):
             raise BenchmarkError(
                 f"{label} build compiler bytes could not be identified"
+            )
+    if any(engine.endswith("cuda") for engine in args.engines):
+        selected_cuda = selected_cuda_device_identity(args.device_id) or {}
+        selected_device = selected_cuda.get("device") or {}
+        if not selected_device.get("uuid"):
+            raise BenchmarkError(
+                "CUDA publication evidence requires a resolved selected GPU UUID"
             )
 
 
@@ -2584,6 +2592,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"reference protocol {name}={reference_protocol.get(name)!r} "
                         f"does not match requested {expected!r}"
                     )
+            expected_contract = {
+                "gpuxtb": {
+                    "charge_tolerance": args.scc_charge_tolerance,
+                    "energy_tolerance": args.scc_energy_tolerance,
+                },
+                "xtb": {"public_accuracy_factor": REFERENCE_ACCURACY},
+                "tblite": {"public_accuracy_factor": REFERENCE_ACCURACY},
+                "dxtb": {
+                    "x_atol": DXTB_FIXED_POINT_TOLERANCE,
+                    "x_atol_max": DXTB_MAX_NORM_TOLERANCE,
+                    "f_atol": DXTB_FUNCTION_TOLERANCE,
+                    "force_convergence": DXTB_FORCE_CONVERGENCE,
+                },
+            }
+            if reference_protocol.get("convergence_contract") != expected_contract:
+                raise BenchmarkError(
+                    "reference artifact uses a different native convergence contract"
+                )
             reference_threads = reference.metadata.get("threads") or {}
             if reference_threads.get("reference_threads") != args.cpu_threads:
                 raise BenchmarkError(

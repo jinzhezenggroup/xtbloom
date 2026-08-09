@@ -86,8 +86,18 @@ def artifact_metadata(
             "scc_charge_tolerance": 1.0e-4,
             "scc_energy_tolerance": 1.0e-6,
             "convergence_contract": {
+                "gpuxtb": {
+                    "charge_tolerance": 1.0e-4,
+                    "energy_tolerance": 1.0e-6,
+                },
                 "xtb": {"public_accuracy_factor": 1.0},
                 "tblite": {"public_accuracy_factor": 1.0},
+                "dxtb": {
+                    "x_atol": 1.0e-4,
+                    "x_atol_max": 1.0e-5,
+                    "f_atol": 1.0e-4,
+                    "force_convergence": True,
+                },
             },
         },
     }
@@ -163,6 +173,22 @@ class NatomsCrossEngineTest(unittest.TestCase):
         )
         self.assertEqual(
             nce.sanitize_direct_url_identity("not-json"),
+            {"scheme": None, "parse_status": "invalid"},
+        )
+        self.assertEqual(
+            nce.sanitize_direct_url_identity("[]"),
+            {"scheme": None, "parse_status": "invalid"},
+        )
+        self.assertEqual(
+            nce.sanitize_direct_url_identity(
+                '{"url":"file://remote.example/tmp/dxtb"}'
+            ),
+            {"scheme": "file", "parse_status": "nonlocal_authority"},
+        )
+        self.assertEqual(
+            nce.sanitize_direct_url_identity(
+                '{"url":"file:///tmp/dxtb","dir_info":"editable"}'
+            ),
             {"scheme": None, "parse_status": "invalid"},
         )
 
@@ -887,6 +913,89 @@ class NatomsCrossEngineTest(unittest.TestCase):
         metadata_a = artifact_metadata()
         metadata_b = artifact_metadata()
         metadata_b["hardware"]["process_cpu_affinity"] = [4, 5, 6, 7]
+
+        def reference_row(natoms: int) -> dict[str, object]:
+            return {
+                "engine": "xtb",
+                "natoms": natoms,
+                "batch_size": 1,
+                "availability": "available",
+                "timing": {"median_ms": 1.0},
+                "correctness": qualified_correctness("xtb"),
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / "a.json", Path(directory) / "b.json"]
+            for path, metadata, natoms in zip(
+                paths, (metadata_a, metadata_b), (14, 32), strict=True
+            ):
+                path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 2,
+                            "metadata": metadata,
+                            "rows": [reference_row(natoms)],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            with self.assertRaisesRegex(plotters.PlotError, "incompatible run"):
+                plotters.load_rows(paths)
+
+    def test_plotter_ignores_volatile_gpu_telemetry_for_cpu_artifacts(self) -> None:
+        """P-state and current clocks may change between valid CPU processes."""
+        metadata_a = artifact_metadata()
+        metadata_b = artifact_metadata()
+        metadata_a["hardware"]["nvidia_smi_runtime"] = "P8, 210 MHz"
+        metadata_b["hardware"]["nvidia_smi_runtime"] = "P0, 2750 MHz"
+
+        def reference_row(natoms: int) -> dict[str, object]:
+            return {
+                "engine": "xtb",
+                "natoms": natoms,
+                "batch_size": 1,
+                "availability": "available",
+                "timing": {"median_ms": 1.0},
+                "correctness": qualified_correctness("xtb"),
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / "a.json", Path(directory) / "b.json"]
+            for path, metadata, natoms in zip(
+                paths, (metadata_a, metadata_b), (14, 32), strict=True
+            ):
+                path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 2,
+                            "metadata": metadata,
+                            "rows": [reference_row(natoms)],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            rows, _metadata = plotters.load_rows(paths)
+        self.assertEqual(len(rows), 2)
+
+    def test_cuda_runtime_identity_requires_the_same_selected_gpu(self) -> None:
+        """CUDA rows cannot be merged across different selected GPU UUIDs."""
+        metadata_a = artifact_metadata()
+        metadata_b = artifact_metadata()
+        metadata_b["hardware"]["selected_cuda_device"]["device"]["uuid"] = (
+            "different-uuid"
+        )
+        self.assertNotEqual(
+            plotters._engine_runtime_identity(metadata_a, "gpuxtb-cuda"),
+            plotters._engine_runtime_identity(metadata_b, "gpuxtb-cuda"),
+        )
+
+    def test_plotter_rejects_mismatched_convergence_contract(self) -> None:
+        """Native stopping-control changes cannot be mixed in one figure."""
+        metadata_a = artifact_metadata()
+        metadata_b = artifact_metadata()
+        metadata_b["protocol"]["convergence_contract"]["tblite"][
+            "public_accuracy_factor"
+        ] = 0.5
 
         def reference_row(natoms: int) -> dict[str, object]:
             return {

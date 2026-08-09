@@ -139,6 +139,15 @@ def _engine_runtime_identity(metadata: dict[str, Any], engine: str) -> str:
         }
     else:
         raise PlotError(f"unsupported engine runtime identity: {engine}")
+    if engine.endswith("cuda"):
+        selected = (metadata.get("hardware") or {}).get("selected_cuda_device") or {}
+        device = selected.get("device") or {}
+        cuda_device = {
+            name: device.get(name) for name in ("uuid", "name", "driver", "memory_mib")
+        }
+        if not cuda_device.get("uuid"):
+            raise PlotError(f"artifact has no resolved selected GPU for {engine}")
+        identity["cuda_device"] = cuda_device
     serialized = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     if not identity.get("source_head") or identity.get("source_dirty") is not False:
         raise PlotError(f"artifact has incomplete clean source identity for {engine}")
@@ -202,13 +211,6 @@ def load_rows(
             hardware.get("hostname"),
             hardware.get("cpu_model"),
             tuple(hardware.get("process_cpu_affinity") or ()),
-            hardware.get("nvidia_smi"),
-            hardware.get("nvidia_smi_runtime"),
-            json.dumps(
-                hardware.get("selected_cuda_device"),
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
             threads.get("cpu_threads"),
             threads.get("reference_threads"),
             threads.get("dxtb_cpu_threads"),
@@ -221,6 +223,11 @@ def load_rows(
             protocol.get("scc_max_iterations"),
             protocol.get("scc_charge_tolerance"),
             protocol.get("scc_energy_tolerance"),
+            json.dumps(
+                protocol.get("convergence_contract"),
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
         )
         if common_identity is None:
             common_identity = identity
@@ -345,11 +352,9 @@ def _hardware_note(metadata: dict[str, Any]) -> str:
         compact_cpu = str(cpu_model).replace(" 48-Core Processor", "")
         pieces.append(compact_cpu)
         pieces.append(f"{threads.get('cpu_threads', '?')} CPU threads per engine")
-    gpu = hardware.get("nvidia_smi")
-    if gpu:
-        compact_gpu = str(gpu).split("(UUID:", maxsplit=1)[0]
-        compact_gpu = compact_gpu.replace("GPU 0:", "").strip()
-        pieces.append(compact_gpu)
+    selected = (hardware.get("selected_cuda_device") or {}).get("device") or {}
+    if selected.get("name"):
+        pieces.append(str(selected["name"]))
     return "  ·  ".join(pieces)
 
 
@@ -396,20 +401,43 @@ def _protocol_note(metadata: dict[str, Any]) -> str:
             f"E {_scientific_notation(float(energy_tolerance))}"
         )
     contract = protocol.get("convergence_contract") or {}
-    reference_accuracy = (contract.get("tblite") or {}).get("public_accuracy_factor")
-    if not isinstance(reference_accuracy, int | float):
-        reference_accuracy_text = "?"
+    xtb_accuracy = (contract.get("xtb") or {}).get("public_accuracy_factor")
+    tblite_accuracy = (contract.get("tblite") or {}).get("public_accuracy_factor")
+    dxtb_contract = contract.get("dxtb") or {}
+    if (
+        not all(
+            isinstance(value, int | float)
+            for value in (
+                xtb_accuracy,
+                tblite_accuracy,
+                dxtb_contract.get("x_atol"),
+                dxtb_contract.get("x_atol_max"),
+                dxtb_contract.get("f_atol"),
+            )
+        )
+        or dxtb_contract.get("force_convergence") is not True
+    ):
+        raise PlotError("plot artifacts have an incomplete convergence contract")
+    if math.isclose(float(xtb_accuracy), float(tblite_accuracy)):
+        reference_text = f"xTB/tblite accuracy {float(xtb_accuracy):g}"
     else:
-        reference_accuracy_text = f"{float(reference_accuracy):g}"
+        reference_text = (
+            f"xTB accuracy {float(xtb_accuracy):g} / "
+            f"tblite accuracy {float(tblite_accuracy):g}"
+        )
+    dxtb_text = (
+        f"dxtb x {_scientific_notation(float(dxtb_contract['x_atol']))}/"
+        f"{_scientific_notation(float(dxtb_contract['x_atol_max']))}, "
+        f"f {_scientific_notation(float(dxtb_contract['f_atol']))}"
+    )
     return (
-        "Public APIs · energy + analytic forces · nominal native settings: "
-        f"gpuxtb {tolerance_text} · xTB/tblite accuracy {reference_accuracy_text}\n"
-        f"dxtb native fixed-point/function defaults · {cpu_threads} CPU threads · "
-        f"distinct alkane conformers · median n={repetitions}; min\N{EN DASH}max\n"
-        "Owner-authorized output gate: "
+        "Public APIs · energy + analytic forces · native controls (not identical): "
+        f"gpuxtb {tolerance_text} · {reference_text} · {dxtb_text}\n"
+        f"{cpu_threads} CPU threads · distinct alkane conformers · "
+        f"median n={repetitions}, min\N{EN DASH}max · benchmark eligibility gate "
         f"{_scientific_notation(float(output_energy_atol))} Eh / "
-        f"{_scientific_notation(float(output_force_atol))} Eh bohr⁻¹; "
-        "not primary conformance"
+        f"{_scientific_notation(float(output_force_atol))} Eh bohr⁻¹ "
+        "(not conformance)"
     )
 
 
@@ -691,7 +719,7 @@ def _annotate_speedup(
     summary = _speedup_range(rows, batch_size, natoms)
     if summary is None:
         return
-    target, nearest_reference, minimum, maximum, comparison = summary
+    target, nearest_reference, minimum, maximum, _comparison = summary
     axes.annotate(
         "",
         xy=(natoms, target),
@@ -716,13 +744,13 @@ def _annotate_speedup(
     else:
         speedup = f"{minimum:.0f}\N{EN DASH}{maximum:.0f}\N{MULTIPLICATION SIGN}"
     axes.annotate(
-        f"{speedup} lower median\nvs {comparison}",
+        speedup,
         xy=(natoms, math.sqrt(target * nearest_reference)),
         xytext=(8, 0),
         textcoords="offset points",
         ha="left",
         va="center",
-        fontsize=7.0,
+        fontsize=7.2,
         fontweight="medium",
         color="#343a40",
         bbox={
@@ -831,8 +859,8 @@ def main(argv: list[str] | None = None) -> int:
             "svg.hashsalt": "gpuxtb-natoms-cross-engine-v2",
         }
     )
-    fig, axes = plt.subplots(1, 3, figsize=(7.4, 4.65), squeeze=True, sharey=True)
-    fig.subplots_adjust(left=0.082, right=0.992, bottom=0.235, top=0.625, wspace=0.2)
+    fig, axes = plt.subplots(1, 3, figsize=(7.4, 3.9), squeeze=True, sharey=True)
+    fig.subplots_adjust(left=0.082, right=0.992, bottom=0.17, top=0.6, wspace=0.2)
     _scaling_panel(
         axes[0],
         rows,
@@ -869,20 +897,39 @@ def main(argv: list[str] | None = None) -> int:
         handles, labels = axes_item.get_legend_handles_labels()
         for handle, label in zip(handles, labels, strict=True):
             legend_items.setdefault(label, handle)
+    from matplotlib.lines import Line2D
+
+    legend_items["Failed eligibility gate"] = Line2D(
+        [],
+        [],
+        linestyle="none",
+        marker="o",
+        markersize=4.6,
+        markerfacecolor="white",
+        markeredgecolor="#59616b",
+    )
+    legend_items["Unavailable / OOM"] = Line2D(
+        [],
+        [],
+        linestyle="none",
+        marker="x",
+        markersize=4.6,
+        markeredgecolor="#59616b",
+    )
     if legend_items:
         fig.legend(
             list(legend_items.values()),
             list(legend_items),
             loc="upper left",
-            ncol=3,
+            ncol=4,
             frameon=False,
-            bbox_to_anchor=(0.078, 0.78),
+            bbox_to_anchor=(0.078, 0.765),
             borderaxespad=0.0,
             handlelength=2.3,
             handletextpad=0.5,
             columnspacing=1.25,
-            labelspacing=0.7,
-            fontsize=7.8,
+            labelspacing=0.55,
+            fontsize=7.3,
         )
     fig.text(
         0.08,
@@ -896,45 +943,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     fig.text(
         0.08,
-        0.925,
+        0.915,
         protocol_note,
         ha="left",
         va="top",
-        fontsize=7.5,
+        fontsize=7.1,
         color="#59616b",
         linespacing=1.35,
     )
     fig.text(
         0.082,
-        0.095,
-        "Timing: gpuxtb FRESH initialization and dxtb reset + host tensor copy "
-        "inside; xTB/tblite calculator rebuild and all Python list conversion outside.",
+        0.035,
+        "Engine-specific state boundaries are detailed in the caption · "
+        "CUDA: † host descriptors, ‡ device tensors; not directly comparable.",
         ha="left",
         va="bottom",
-        fontsize=6.5,
-        color="#69717b",
-    )
-    fig.text(
-        0.082,
-        0.057,
-        _hardware_note(metadata)
-        + " · runner "
-        + str((metadata.get("commit") or {}).get("head", "unknown"))[:8]
-        + " · hollow markers fail an eligibility gate; "
-        + "\N{MULTIPLICATION SIGN}: unavailable/error.",
-        ha="left",
-        va="bottom",
-        fontsize=6.5,
-        color="#69717b",
-    )
-    fig.text(
-        0.082,
-        0.025,
-        "CUDA protocols differ—† gpuxtb uses host descriptors; ‡ dxtb uses "
-        "persistent device inputs; no direct CUDA speedup comparison.",
-        ha="left",
-        va="bottom",
-        fontsize=6.5,
+        fontsize=6.7,
         color="#69717b",
     )
     if args.output.suffix == ".svg":

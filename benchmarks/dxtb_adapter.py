@@ -94,6 +94,15 @@ def _import_runtime(
 
     if not hasattr(dxtb, "Calculator") or not hasattr(dxtb, "GFN2_XTB"):
         raise DxtbError("imported dxtb module lacks Calculator or GFN2_XTB")
+    if source_root is not None:
+        module_path_text = getattr(dxtb, "__file__", None)
+        module_path = Path(module_path_text).resolve() if module_path_text else None
+        expected_package = source_root.expanduser().resolve() / "src" / "dxtb"
+        if module_path is None or not module_path.is_relative_to(expected_package):
+            raise DxtbError(
+                "imported dxtb module is not bound to the requested source checkout: "
+                f"{module_path_text!r} is outside {expected_package}"
+            )
     return torch, dxtb
 
 

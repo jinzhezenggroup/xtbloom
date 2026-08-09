@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import sys
+import tempfile
 import unittest
-from types import SimpleNamespace
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from typing import ClassVar
 from unittest import mock
 
 import torch  # noqa: TID253 - this dedicated fake-runtime test needs torch types
 
-from benchmarks.dxtb_adapter import DxtbAdapter, DxtbError, timed_invoke
+from benchmarks.dxtb_adapter import (
+    DxtbAdapter,
+    DxtbError,
+    _import_runtime,
+    timed_invoke,
+)
 
 
 class FakeCalculator:
@@ -240,6 +248,23 @@ class DxtbAdapterTest(unittest.TestCase):
         storage.point_charge_values = [0.5]
         with self.assertRaisesRegex(DxtbError, "external point-charge SCC"):
             DxtbAdapter(storage, "energy", "cpu")
+
+    def test_import_rejects_preloaded_module_outside_requested_source(self) -> None:
+        """PEP 610 binding cannot be bypassed by a preloaded foreign module."""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            package = source / "src" / "dxtb"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            foreign = ModuleType("dxtb")
+            foreign.Calculator = FakeCalculator  # type: ignore[attr-defined]
+            foreign.GFN2_XTB = object()  # type: ignore[attr-defined]
+            foreign.__file__ = "/tmp/foreign-dxtb/__init__.py"
+            with (
+                mock.patch.dict(sys.modules, {"dxtb": foreign}),
+                self.assertRaisesRegex(DxtbError, "not bound"),
+            ):
+                _import_runtime(source)
 
     def test_rejects_cuda_when_pytorch_has_no_visible_device(self) -> None:
         """Reject CUDA requests when PyTorch exposes no usable device."""
