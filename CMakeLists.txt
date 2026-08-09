@@ -18,6 +18,9 @@ find_package(Threads REQUIRED)
 set(GPUXTB_ENABLE_CUDA "AUTO" CACHE STRING "Build the CUDA backend: AUTO, ON, or OFF")
 set_property(CACHE GPUXTB_ENABLE_CUDA PROPERTY STRINGS AUTO ON OFF)
 option(GPUXTB_BUILD_TESTS "Build gpuxtb tests" ${PROJECT_IS_TOP_LEVEL})
+option(GPUXTB_BUILD_WEB_DEMO
+  "Build the GitHub Pages wasm64 web demo assets (requires the Emscripten toolchain)"
+  OFF)
 option(GPUXTB_PYTHON_WHEEL
   "Install an unversioned single-copy shared library for a Python wheel" OFF)
 set(GPUXTB_CPU_LINALG_LIBRARY "" CACHE FILEPATH
@@ -901,6 +904,22 @@ if(GPUXTB_BUILD_TESTS)
   target_link_libraries(gpuxtb_c_api_test PRIVATE gpuxtb::gpuxtb)
   set_target_properties(gpuxtb_c_api_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
   add_test(NAME gpuxtb.c_api COMMAND gpuxtb_c_api_test)
+
+  # The browser adapter test supplies a fake public C ABI so failure
+  # publication and optimizer math remain testable without a WASM toolchain or
+  # an external BLAS/LAPACK runtime.
+  add_executable(gpuxtb_web_adapter_test tests/web_adapter_test.c)
+  target_include_directories(gpuxtb_web_adapter_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  if(NOT WIN32)
+    target_link_libraries(gpuxtb_web_adapter_test PRIVATE m)
+  endif()
+  set_target_properties(gpuxtb_web_adapter_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED YES
+  )
+  add_test(NAME gpuxtb.web.adapter COMMAND gpuxtb_web_adapter_test)
 
   add_executable(gpuxtb_result_owner_test tests/result_owner_test.cpp)
   target_link_libraries(gpuxtb_result_owner_test PRIVATE gpuxtb::gpuxtb)
@@ -2933,3 +2952,7 @@ install(FILES
 )
 
 message(STATUS "gpuxtb CUDA backend: ${GPUXTB_HAS_CUDA}")
+
+if(GPUXTB_BUILD_WEB_DEMO)
+  add_subdirectory(web)
+endif()

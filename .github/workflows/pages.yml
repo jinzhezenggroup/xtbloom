@@ -1,0 +1,123 @@
+# Builds the gpuxtb WASM web demo and publishes it to GitHub Pages.
+#
+# The artifact is a fully client-side GFN2-xTB single-point + geometry
+# optimization page: a single-threaded wasm64 module (so no COOP/COEP headers
+# are needed, which GitHub Pages cannot configure anyway) that dlopens a
+# preloaded minimal LP64 LAPACK side module. Everything — 3Dmol.js via npm,
+# the side module, the adapter, the main module, and the static assets — is
+# produced by the CMake web target (web/CMakeLists.txt, enabled here with
+# -DGPUXTB_BUILD_WEB_DEMO=ON).
+#
+# Deploys only on pushes to main; pull requests build + smoke-test without
+# publishing.
+name: wasm-web-pages
+
+on:
+  push:
+    branches: [main]
+  # Feature-branch pushes do not trigger a second run: each PR validates once,
+  # while the post-merge main push rebuilds the exact artifact that is deployed.
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CCACHE_MAXSIZE: 1G
+      # Emscripten invokes this wrapper around its internal Clang compilation,
+      # including custom web-adapter and side-module commands.
+      EM_COMPILER_WRAPPER: ccache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node for npm and wasm64 smoke tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Pin both the reviewed setup action and the release compiler version.
+      - uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021
+        with:
+          version: '6.0.6'
+
+      - name: Install ccache
+        run: sudo apt-get update && sudo apt-get install --yes ccache
+
+      - name: Restore ccache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ccache
+          # ccache validates compiler identity and flags itself. The broad
+          # restore prefix therefore safely reuses unchanged objects while a
+          # source/configuration hash creates a fresh writable cache entry.
+          key: ccache-wasm-emscripten-6.0.6-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'include/**', 'src/**', 'data/parameters/**', 'web/CMakeLists.txt', 'web/*.c', 'web/wasm/**') }}
+          restore-keys: |
+            ccache-wasm-emscripten-6.0.6-
+
+      - name: Configure wasm64 build (library + web demo site)
+        run: |
+          emcmake cmake -S . -B build/wasm-web -G Ninja \
+            -DGPUXTB_ENABLE_CUDA=OFF \
+            -DGPUXTB_BUILD_TESTS=OFF \
+            -DGPUXTB_BUILD_WEB_DEMO=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-m64 -fPIC" \
+            -DCMAKE_CXX_FLAGS="-m64 -fPIC"
+
+      - name: Build
+        run: cmake --build build/wasm-web --parallel 2
+
+      - name: Show ccache statistics
+        run: ccache -s
+
+      - name: Test browser helpers
+        run: npm test --prefix web
+
+      - name: Check deployed legal payload
+        run: >-
+          python3 tools/licensing/check_licenses.py --source-root .
+          --web-site build/wasm-web/web/site
+
+      - name: Run wasm64 scientific smoke tests
+        # memory64 first shipped in V8 13.3 (Chrome 133); Node 24 is the first
+        # Node release line that enables it by default.
+        run: node web/tests/wasm_smoke.mjs build/wasm-web/web/site
+
+      - name: Upload trusted main site artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/wasm-web/web/site
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # This job consumes the already-built Pages artifact and never checks out
+      # or executes repository-controlled code with deployment credentials.
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
