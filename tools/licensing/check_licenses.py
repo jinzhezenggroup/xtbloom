@@ -246,6 +246,7 @@ WEB_SITE_SOURCE_MAP = {
     "LICENSES/Apache-2.0.txt": "LICENSES/Apache-2.0.txt",
     "LICENSES/LGPL-3.0-or-later.txt": "LICENSES/LGPL-3.0-or-later.txt",
     "LICENSES/MIT.txt": "LICENSES/MIT.txt",
+    "LICENSES/MPL-2.0.txt": MPL_LICENSE,
     "LICENSES/array-api-compat-MIT.txt": ARRAY_API_COMPAT_LICENSE,
     **{path: path for path in WEB_LICENSE_FILES},
     "LICENSES/parameters/d4.NOTICE": "data/parameters/d4.NOTICE",

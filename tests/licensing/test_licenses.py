@@ -193,6 +193,15 @@ class WebSiteLicenseTests(unittest.TestCase):
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "pako-Zlib"):
                 CHECKER.check_web_site(root, REPOSITORY)
 
+    def test_web_site_requires_exact_mpl_text(self) -> None:
+        """Retain the reviewed pathspec grant copied into the Pages artifact."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / "LICENSES/MPL-2.0.txt").unlink()
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "MPL-2.0"):
+                CHECKER.check_web_site(root, REPOSITORY)
+
     def test_web_site_requires_openchemlib_license(self) -> None:
         """Retain the BSD grant for the runtime-provided SMILES dependency."""
         with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
