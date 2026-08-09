@@ -383,20 +383,66 @@ def native_library_identity(path_text: str) -> dict[str, Any] | None:
     }
 
 
-@functools.cache
-def meson_build_identity(library: Path, source_root: Path) -> dict[str, Any] | None:
-    """Bind one native library to Meson source, options, and compiler bytes."""
-    resolved_library = library.resolve()
-    build_root = next(
+_MESON_SYNC_RESULTS: dict[tuple[str, str], dict[str, Any]] = {}
+
+
+def meson_build_root(library: Path) -> Path | None:
+    """Locate the Meson build tree containing one requested library path."""
+    requested_library = library.absolute()
+    return next(
         (
             directory
-            for directory in (resolved_library.parent, *resolved_library.parents[:5])
+            for directory in (
+                requested_library.parent,
+                *requested_library.parents[:5],
+            )
             if (directory / "meson-info" / "meson-info.json").is_file()
         ),
         None,
     )
+
+
+def synchronize_meson_target(library: Path, source_root: Path) -> dict[str, Any]:
+    """Update a clean Meson tree before publication timing and identity capture."""
+    build_root = meson_build_root(library)
+    if build_root is None:
+        raise BenchmarkError("cannot locate Meson build tree for publication target")
+    info_root = build_root / "meson-info"
+    try:
+        info = json.loads((info_root / "meson-info.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BenchmarkError(f"cannot read Meson build identity: {exc}") from exc
+    directories = info.get("directories") or {}
+    if Path(str(directories.get("source", ""))).resolve() != source_root.resolve():
+        raise BenchmarkError("Meson build tree is not bound to the requested source")
+    output = run_text(
+        ("meson", "compile", "-C", str(build_root)), required=True, allow_empty=True
+    )
+    resolved_library = library.resolve()
+    if not resolved_library.is_file():
+        raise BenchmarkError("Meson compile did not produce the selected library")
+    result = {
+        "command": ["meson", "compile", "-C", str(build_root.resolve())],
+        "status": "up_to_date_or_rebuilt",
+        "output": output,
+        "library_path": str(resolved_library),
+        "library_sha256": sha256_file(resolved_library),
+        "library_mtime_ns": resolved_library.stat().st_mtime_ns,
+    }
+    key = (str(library.absolute()), str(source_root.resolve()))
+    _MESON_SYNC_RESULTS[key] = result
+    meson_build_identity.cache_clear()
+    native_library_identity.cache_clear()
+    return result
+
+
+@functools.cache
+def meson_build_identity(library: Path, source_root: Path) -> dict[str, Any] | None:
+    """Bind one native library to Meson source, options, and compiler bytes."""
+    build_root = meson_build_root(library)
     if build_root is None:
         return None
+    resolved_library = library.resolve()
     info_root = build_root / "meson-info"
     try:
         info = json.loads((info_root / "meson-info.json").read_text(encoding="utf-8"))
@@ -469,6 +515,9 @@ def meson_build_identity(library: Path, source_root: Path) -> dict[str, Any] | N
             "type": target.get("type"),
             "filename": [str(Path(item).resolve()) for item in target["filename"]],
         },
+        "source_target_sync": _MESON_SYNC_RESULTS.get(
+            (str(library.absolute()), str(source_root.resolve()))
+        ),
         "build_options": {
             str(item.get("name")): item.get("value") for item in build_options
         },
@@ -562,6 +611,40 @@ def cpu_model() -> str | None:
     return None
 
 
+def cuda_runtime_device_uuid(device_id: int) -> str | None:
+    """Query the selected logical device UUID through the CUDA driver API."""
+    try:
+        driver = ctypes.CDLL("libcuda.so.1")
+        driver.cuInit.argtypes = [ctypes.c_uint]
+        driver.cuInit.restype = ctypes.c_int
+        driver.cuDeviceGet.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+        driver.cuDeviceGet.restype = ctypes.c_int
+        uuid_function = getattr(driver, "cuDeviceGetUuid_v2", None)
+        if uuid_function is None:
+            uuid_function = driver.cuDeviceGetUuid
+        uuid_function.argtypes = [ctypes.POINTER(ctypes.c_ubyte), ctypes.c_int]
+        uuid_function.restype = ctypes.c_int
+        if driver.cuInit(0) != 0:
+            return None
+        device = ctypes.c_int()
+        if driver.cuDeviceGet(ctypes.byref(device), device_id) != 0:
+            return None
+        raw_uuid = (ctypes.c_ubyte * 16)()
+        if uuid_function(raw_uuid, device.value) != 0:
+            return None
+    except (AttributeError, OSError):
+        return None
+    hexadecimal = bytes(raw_uuid).hex()
+    groups = (
+        hexadecimal[:8],
+        hexadecimal[8:12],
+        hexadecimal[12:16],
+        hexadecimal[16:20],
+        hexadecimal[20:],
+    )
+    return "GPU-" + "-".join(groups)
+
+
 @functools.cache
 def selected_cuda_device_identity(device_id: int) -> dict[str, Any] | None:
     """Resolve one CUDA ordinal through CUDA_VISIBLE_DEVICES to GPU identity."""
@@ -588,6 +671,7 @@ def selected_cuda_device_identity(device_id: int) -> dict[str, Any] | None:
                 )
             )
         )
+    runtime_uuid = cuda_runtime_device_uuid(device_id)
     visible_text = os.environ.get("CUDA_VISIBLE_DEVICES")
     visible = (
         [item.strip() for item in visible_text.split(",") if item.strip()]
@@ -601,7 +685,8 @@ def selected_cuda_device_identity(device_id: int) -> dict[str, Any] | None:
         (
             item
             for item in devices
-            if token in {item["physical_index"], item["uuid"]}
+            if item["uuid"] == runtime_uuid
+            or token in {item["physical_index"], item["uuid"]}
             or item["uuid"].startswith(token)
         ),
         None,
@@ -609,7 +694,9 @@ def selected_cuda_device_identity(device_id: int) -> dict[str, Any] | None:
     return {
         "cuda_ordinal": device_id,
         "CUDA_VISIBLE_DEVICES": visible_text,
+        "CUDA_DEVICE_ORDER": os.environ.get("CUDA_DEVICE_ORDER"),
         "resolved_visibility_token": token,
+        "runtime_uuid": runtime_uuid,
         "device": selected,
         "inventory": devices,
     }
@@ -2459,17 +2546,6 @@ def validate_publication_provenance(
     if any(engine.startswith("dxtb") for engine in args.engines):
         source_inputs.append(("dxtb", args.dxtb_source))
 
-    for label, path in native_inputs:
-        if path is None or not path.is_file():
-            raise BenchmarkError(
-                f"{label} evidence requires an existing shared library"
-            )
-        identity = native_library_identity(str(path.resolve()))
-        if identity is None:
-            raise BenchmarkError(f"{label} shared-library identity is unavailable")
-        if identity.get("unresolved_dependencies"):
-            raise BenchmarkError(f"{label} shared library has unresolved dependencies")
-
     for label, source in source_inputs:
         if source is None:
             raise BenchmarkError(f"{label} evidence requires its clean source checkout")
@@ -2482,6 +2558,7 @@ def validate_publication_provenance(
     for label, library, source in external_builds:
         if library is None or source is None:
             raise BenchmarkError(f"{label} build identity is incomplete")
+        synchronize_meson_target(library, source)
         build_identity = meson_build_identity(library, source)
         if build_identity is None:
             raise BenchmarkError(
@@ -2496,12 +2573,33 @@ def validate_publication_provenance(
             raise BenchmarkError(
                 f"{label} build compiler bytes could not be identified"
             )
+        sync = build_identity.get("source_target_sync") or {}
+        if sync.get("library_sha256") != sha256_file(library.resolve()):
+            raise BenchmarkError(
+                f"{label} source-target synchronization is inconsistent"
+            )
+
+    for label, path in native_inputs:
+        if path is None or not path.is_file():
+            raise BenchmarkError(
+                f"{label} evidence requires an existing shared library"
+            )
+        identity = native_library_identity(str(path.resolve()))
+        if identity is None:
+            raise BenchmarkError(f"{label} shared-library identity is unavailable")
+        if identity.get("unresolved_dependencies"):
+            raise BenchmarkError(f"{label} shared library has unresolved dependencies")
     if any(engine.endswith("cuda") for engine in args.engines):
         selected_cuda = selected_cuda_device_identity(args.device_id) or {}
         selected_device = selected_cuda.get("device") or {}
-        if not selected_device.get("uuid"):
+        if (
+            not selected_device.get("uuid")
+            or not selected_cuda.get("runtime_uuid")
+            or selected_device.get("uuid") != selected_cuda.get("runtime_uuid")
+        ):
             raise BenchmarkError(
-                "CUDA publication evidence requires a resolved selected GPU UUID"
+                "CUDA publication evidence requires a runtime-verified "
+                "selected GPU UUID"
             )
 
 

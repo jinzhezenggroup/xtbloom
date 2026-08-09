@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from benchmarks import natoms_cross_engine as nce
 from benchmarks import plot_natoms_cross_engine as plotters
@@ -29,6 +32,7 @@ def artifact_metadata(
             "selected_cuda_device": {
                 "cuda_ordinal": 0,
                 "CUDA_VISIBLE_DEVICES": "0",
+                "runtime_uuid": "test-uuid",
                 "resolved_visibility_token": "0",
                 "device": {"physical_index": "0", "uuid": "test-uuid"},
             },
@@ -72,6 +76,18 @@ def artifact_metadata(
                 "sha256": "t" * 64,
                 "resolved_dependencies": [],
                 "unresolved_dependencies": [],
+            },
+            "dxtb_source": {"head": "dxtb-head", "dirty": False},
+            "python_distributions": {
+                name: {
+                    "version": "test-version",
+                    "payload_verification": {
+                        "status": "verified",
+                        "payload_sha256": name[0] * 64,
+                    },
+                    "direct_url_identity": None,
+                }
+                for name in ("dxtb", "torch", "tad-libcint")
             },
         },
         "protocol": {
@@ -791,9 +807,10 @@ class NatomsCrossEngineTest(unittest.TestCase):
     def test_figure_protocol_note_is_metadata_derived(self) -> None:
         """Figure header must not silently hard-code publication settings."""
         note = plotters._protocol_note(artifact_metadata())
-        self.assertIn("4 CPU threads", note)
+        self.assertIn("CPU rows: 4 threads", note)
         self.assertIn("median n=3", note)
         self.assertIn("10⁻⁴", note)
+        self.assertIn("maxᵢ|ΔFᵢ|", note)
 
     def test_artifact_pair_refuses_overwrite(self) -> None:
         """Publication must not replace a stale JSON/CSV pair."""
@@ -810,6 +827,85 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 )
             self.assertEqual(json_path.read_text(encoding="utf-8"), "stale\n")
             self.assertFalse(csv_path.exists())
+
+    def test_meson_sync_precedes_fresh_identity_capture(self) -> None:
+        """A rebuild must update the target before hashes/introspection are read."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            build = root / "build"
+            info = build / "meson-info"
+            source.mkdir()
+            info.mkdir(parents=True)
+            old_target = build / "libxtb-old.so"
+            new_target = build / "libxtb-new.so"
+            old_target.write_bytes(b"old")
+            library = build / "libxtb.so"
+            library.symlink_to(old_target.name)
+
+            def write_metadata(version: str) -> None:
+                documents = {
+                    "meson-info.json": {
+                        "meson_version": {"full": "1.11.2"},
+                        "directories": {
+                            "source": str(source),
+                            "build": str(build),
+                        },
+                    },
+                    "intro-projectinfo.json": {
+                        "descriptive_name": "xtb",
+                        "version": version,
+                    },
+                    "intro-targets.json": [
+                        {
+                            "name": "xtb",
+                            "id": "xtb@sha",
+                            "type": "shared library",
+                            "filename": [str(library)],
+                        }
+                    ],
+                    "intro-compilers.json": {
+                        "host": {
+                            "c": {
+                                "id": "gcc",
+                                "version": "test",
+                                "exelist": [sys.executable],
+                            }
+                        }
+                    },
+                    "intro-buildoptions.json": [
+                        {"name": "buildtype", "value": "release"}
+                    ],
+                }
+                for name, document in documents.items():
+                    (info / name).write_text(json.dumps(document), encoding="utf-8")
+
+            write_metadata("old")
+
+            def fake_run(command: tuple[str, ...], **_kwargs: object) -> str:
+                if command[:2] == ("meson", "compile"):
+                    new_target.write_bytes(b"new")
+                    library.unlink()
+                    library.symlink_to(new_target.name)
+                    write_metadata("new")
+                    return "rebuilt"
+                if "rev-parse" in command:
+                    return "h" * 40
+                if "status" in command:
+                    return ""
+                raise AssertionError(command)
+
+            nce.meson_build_identity.cache_clear()
+            nce.native_library_identity.cache_clear()
+            with mock.patch.object(nce, "run_text", side_effect=fake_run):
+                sync = nce.synchronize_meson_target(library, source)
+                identity = nce.meson_build_identity(library, source)
+        self.assertEqual(sync["library_sha256"], hashlib.sha256(b"new").hexdigest())
+        self.assertEqual(identity["project"]["version"], "new")
+        self.assertEqual(
+            identity["source_target_sync"]["library_sha256"], sync["library_sha256"]
+        )
+        self.assertEqual(identity["target"]["filename"], [str(new_target.resolve())])
 
     def test_measure_cell_rejects_missing_requested_forces(self) -> None:
         """A force benchmark cannot pass when an adapter omits force output."""
@@ -860,7 +956,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
         ]
         self.assertEqual(
             plotters._speedup_range(rows, 128, 62),
-            (100.0, 900.0, 9.0, 12.0, "xTB / tblite"),
+            (100.0, 1200.0, 9.0, 12.0, "xTB / tblite"),
         )
 
     def test_plotter_rejects_dirty_artifact(self) -> None:
@@ -979,15 +1075,49 @@ class NatomsCrossEngineTest(unittest.TestCase):
 
     def test_cuda_runtime_identity_requires_the_same_selected_gpu(self) -> None:
         """CUDA rows cannot be merged across different selected GPU UUIDs."""
-        metadata_a = artifact_metadata()
         metadata_b = artifact_metadata()
         metadata_b["hardware"]["selected_cuda_device"]["device"]["uuid"] = (
             "different-uuid"
         )
-        self.assertNotEqual(
-            plotters._engine_runtime_identity(metadata_a, "gpuxtb-cuda"),
-            plotters._engine_runtime_identity(metadata_b, "gpuxtb-cuda"),
+        with self.assertRaisesRegex(plotters.PlotError, "runtime-verified"):
+            plotters._engine_runtime_identity(metadata_b, "gpuxtb-cuda")
+
+    def test_plotter_rejects_different_gpus_across_cuda_engines(self) -> None:
+        """Gpuxtb and dxtb CUDA rows must share one physical selected GPU."""
+        metadata_a = artifact_metadata(designation="dependent_run")
+        metadata_b = artifact_metadata(designation="dependent_run")
+        selected_b = metadata_b["hardware"]["selected_cuda_device"]
+        selected_b["runtime_uuid"] = "other-uuid"
+        selected_b["device"]["uuid"] = "other-uuid"
+        rows = (
+            {
+                "engine": "gpuxtb-cuda",
+                "natoms": 14,
+                "batch_size": 1,
+                "availability": "error",
+                "correctness": {"status": "fail"},
+            },
+            {
+                "engine": "dxtb-cuda",
+                "natoms": 32,
+                "batch_size": 1,
+                "availability": "error",
+                "correctness": {"status": "fail"},
+            },
         )
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / "a.json", Path(directory) / "b.json"]
+            for path, metadata, row in zip(
+                paths, (metadata_a, metadata_b), rows, strict=True
+            ):
+                path.write_text(
+                    json.dumps(
+                        {"schema_version": 2, "metadata": metadata, "rows": [row]}
+                    ),
+                    encoding="utf-8",
+                )
+            with self.assertRaisesRegex(plotters.PlotError, "different selected GPUs"):
+                plotters.load_rows(paths)
 
     def test_plotter_rejects_mismatched_convergence_contract(self) -> None:
         """Native stopping-control changes cannot be mixed in one figure."""

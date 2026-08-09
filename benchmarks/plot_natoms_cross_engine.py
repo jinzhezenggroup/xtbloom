@@ -92,6 +92,18 @@ def _native_fingerprint(identity: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _cuda_device_identity(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Return the runtime-verified stable selected GPU identity."""
+    selected = (metadata.get("hardware") or {}).get("selected_cuda_device") or {}
+    device = selected.get("device") or {}
+    identity = {
+        name: device.get(name) for name in ("uuid", "name", "driver", "memory_mib")
+    }
+    if not identity.get("uuid") or selected.get("runtime_uuid") != identity.get("uuid"):
+        raise PlotError("artifact has no runtime-verified selected GPU")
+    return identity
+
+
 def _engine_runtime_identity(metadata: dict[str, Any], engine: str) -> str:
     """Build one stable runtime fingerprint for cross-artifact consistency."""
     runner = metadata.get("runner") or {}
@@ -140,14 +152,7 @@ def _engine_runtime_identity(metadata: dict[str, Any], engine: str) -> str:
     else:
         raise PlotError(f"unsupported engine runtime identity: {engine}")
     if engine.endswith("cuda"):
-        selected = (metadata.get("hardware") or {}).get("selected_cuda_device") or {}
-        device = selected.get("device") or {}
-        cuda_device = {
-            name: device.get(name) for name in ("uuid", "name", "driver", "memory_mib")
-        }
-        if not cuda_device.get("uuid"):
-            raise PlotError(f"artifact has no resolved selected GPU for {engine}")
-        identity["cuda_device"] = cuda_device
+        identity["cuda_device"] = _cuda_device_identity(metadata)
     serialized = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     if not identity.get("source_head") or identity.get("source_dirty") is not False:
         raise PlotError(f"artifact has incomplete clean source identity for {engine}")
@@ -180,6 +185,7 @@ def load_rows(
     common_identity: tuple[Any, ...] | None = None
     row_keys: set[tuple[Any, ...]] = set()
     engine_identities: dict[str, str] = {}
+    common_cuda_device: str | None = None
     independent_artifacts: set[tuple[str, str, str]] = set()
     for path in artifact_paths:
         try:
@@ -262,6 +268,18 @@ def load_rows(
                 raise PlotError(
                     f"artifact set changes the runtime identity for engine {engine}"
                 )
+            if engine.endswith("cuda"):
+                cuda_device = json.dumps(
+                    _cuda_device_identity(artifact_metadata),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if common_cuda_device is None:
+                    common_cuda_device = cuda_device
+                elif cuda_device != common_cuda_device:
+                    raise PlotError(
+                        "artifact set mixes different selected GPUs across CUDA engines"
+                    )
             rows.append(row)
         if not metadata and "metadata" in document:
             metadata = artifact_metadata
@@ -342,22 +360,6 @@ def _is_eligible(row: dict[str, Any]) -> bool:
     }
 
 
-def _hardware_note(metadata: dict[str, Any]) -> str:
-    """Build one concise hardware note; full provenance stays in the archive."""
-    hardware = metadata.get("hardware", {})
-    threads = metadata.get("threads", {})
-    pieces: list[str] = []
-    cpu_model = hardware.get("cpu_model")
-    if cpu_model:
-        compact_cpu = str(cpu_model).replace(" 48-Core Processor", "")
-        pieces.append(compact_cpu)
-        pieces.append(f"{threads.get('cpu_threads', '?')} CPU threads per engine")
-    selected = (hardware.get("selected_cuda_device") or {}).get("device") or {}
-    if selected.get("name"):
-        pieces.append(str(selected["name"]))
-    return "  ·  ".join(pieces)
-
-
 def _scientific_notation(value: float) -> str:
     """Format a positive tolerance with a compact Unicode power of ten."""
     if value <= 0.0 or not math.isfinite(value):
@@ -431,12 +433,12 @@ def _protocol_note(metadata: dict[str, Any]) -> str:
         f"f {_scientific_notation(float(dxtb_contract['f_atol']))}"
     )
     return (
-        "Public APIs · energy + analytic forces · native controls (not identical): "
+        "Native controls (not identical): "
         f"gpuxtb {tolerance_text} · {reference_text} · {dxtb_text}\n"
-        f"{cpu_threads} CPU threads · distinct alkane conformers · "
-        f"median n={repetitions}, min\N{EN DASH}max · benchmark eligibility gate "
-        f"{_scientific_notation(float(output_energy_atol))} Eh / "
-        f"{_scientific_notation(float(output_force_atol))} Eh bohr⁻¹ "
+        f"CPU rows: {cpu_threads} threads · median n={repetitions}, "
+        f"min\N{EN DASH}max · eligibility |ΔE| ≤ "
+        f"{_scientific_notation(float(output_energy_atol))} Eh; "
+        f"maxᵢ|ΔFᵢ| ≤ {_scientific_notation(float(output_force_atol))} Eh bohr⁻¹ "
         "(not conformance)"
     )
 
@@ -706,7 +708,7 @@ def _speedup_range(
     ratios = [reference / target for reference in references]
     labels = {"xtb": "xTB", "tblite": "tblite"}
     comparison = " / ".join(labels[name] for name in reference_names)
-    return target, min(references), min(ratios), max(ratios), comparison
+    return target, max(references), min(ratios), max(ratios), comparison
 
 
 def _annotate_speedup(
@@ -719,11 +721,11 @@ def _annotate_speedup(
     summary = _speedup_range(rows, batch_size, natoms)
     if summary is None:
         return
-    target, nearest_reference, minimum, maximum, _comparison = summary
+    target, farthest_reference, minimum, maximum, comparison = summary
     axes.annotate(
         "",
         xy=(natoms, target),
-        xytext=(natoms, nearest_reference),
+        xytext=(natoms, farthest_reference),
         arrowprops={
             "arrowstyle": "<->",
             "color": "#555d66",
@@ -744,13 +746,13 @@ def _annotate_speedup(
     else:
         speedup = f"{minimum:.0f}\N{EN DASH}{maximum:.0f}\N{MULTIPLICATION SIGN}"
     axes.annotate(
-        speedup,
-        xy=(natoms, math.sqrt(target * nearest_reference)),
+        f"{speedup} lower latency\nvs {comparison}",
+        xy=(natoms, math.sqrt(target * farthest_reference)),
         xytext=(8, 0),
         textcoords="offset points",
         ha="left",
         va="center",
-        fontsize=7.2,
+        fontsize=6.7,
         fontweight="medium",
         color="#343a40",
         bbox={
@@ -899,23 +901,36 @@ def main(argv: list[str] | None = None) -> int:
             legend_items.setdefault(label, handle)
     from matplotlib.lines import Line2D
 
-    legend_items["Failed eligibility gate"] = Line2D(
-        [],
-        [],
-        linestyle="none",
-        marker="o",
-        markersize=4.6,
-        markerfacecolor="white",
-        markeredgecolor="#59616b",
-    )
-    legend_items["Unavailable / OOM"] = Line2D(
-        [],
-        [],
-        linestyle="none",
-        marker="x",
-        markersize=4.6,
-        markeredgecolor="#59616b",
-    )
+    panel_rows = [
+        row
+        for row in rows
+        if row.get("batch_size") in {1, 128, 512}
+        and _matches_panel_protocol(row, int(row["batch_size"]))
+    ]
+    if any(
+        row.get("availability") == "available"
+        and _median_ms(row) is not None
+        and not _is_eligible(row)
+        for row in panel_rows
+    ):
+        legend_items["Failed eligibility gate"] = Line2D(
+            [],
+            [],
+            linestyle="none",
+            marker="o",
+            markersize=4.6,
+            markerfacecolor="white",
+            markeredgecolor="#59616b",
+        )
+    if any(row.get("availability") != "available" for row in panel_rows):
+        legend_items["Unavailable / OOM"] = Line2D(
+            [],
+            [],
+            linestyle="none",
+            marker="x",
+            markersize=4.6,
+            markeredgecolor="#59616b",
+        )
     if legend_items:
         fig.legend(
             list(legend_items.values()),
@@ -923,7 +938,7 @@ def main(argv: list[str] | None = None) -> int:
             loc="upper left",
             ncol=4,
             frameon=False,
-            bbox_to_anchor=(0.078, 0.765),
+            bbox_to_anchor=(0.078, 0.8),
             borderaxespad=0.0,
             handlelength=2.3,
             handletextpad=0.5,
