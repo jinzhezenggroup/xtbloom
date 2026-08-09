@@ -10,7 +10,7 @@ integrations.
 Atomic units everywhere: bohr, Hartree, Hartree/bohr, elementary charge.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.0.0"
 
 from ._dlpack import DLPackResultBuffer
 from .exceptions import (

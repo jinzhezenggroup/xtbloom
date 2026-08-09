@@ -23,7 +23,7 @@ extern "C" {
 #endif
 
 #define XTBLOOM_VERSION_MAJOR 0
-#define XTBLOOM_VERSION_MINOR 1
+#define XTBLOOM_VERSION_MINOR 0
 #define XTBLOOM_VERSION_PATCH 0
 
 /* Increment this value only when an ABI-incompatible C API change is made. */
