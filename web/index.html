@@ -115,8 +115,18 @@
 
   <!-- ================= 分子可视化 ================= -->
   <section class="card panel-mol">
-    <h2 class="panel-title" id="panel_mol" data-i18n="mol_title">分子可视化</h2>
+    <div class="mol-head">
+      <h2 class="panel-title" id="panel_mol" data-i18n="mol_title">分子可视化</h2>
+      <span class="mol-status" id="mol-status" hidden></span>
+    </div>
     <div class="mol-container" id="mol"></div>
+    <div class="replay" id="replay" hidden>
+      <div class="replay-controls">
+        <button class="btn btn-small replay-btn" id="replay-play" title="">▶</button>
+        <input type="range" id="replay-slider" min="0" max="1" step="1" value="0" aria-label="replay">
+        <span class="replay-label" id="replay-label"></span>
+      </div>
+    </div>
     <p class="hint" id="mol-hint" data-i18n="mol_hint">实时显示当前坐标，计算 / 优化 / 应用优化坐标后自动更新。</p>
   </section>
 

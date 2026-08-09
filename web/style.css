@@ -367,3 +367,20 @@ a.btn { text-decoration: none; max-width: 120px; }
   text-align: center;
   padding: 12px;
 }
+
+.mol-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.mol-head .panel-title { margin: 0; }
+.mol-status {
+  font: 12px var(--mono);
+  color: var(--accent);
+  border: 1px solid rgba(76,201,240,.45);
+  border-radius: 999px;
+  padding: 3px 11px;
+  background: rgba(76,201,240,.08);
+  white-space: nowrap;
+}
+.replay { margin-top: 10px; }
+.replay-controls { display: flex; align-items: center; gap: 10px; }
+.replay-btn { flex: 0 0 auto; padding: 5px 12px; font-size: 13px; }
+#replay-slider { flex: 1; accent-color: var(--accent); margin: 0; }
+.replay-label { font: 12px var(--mono); color: var(--muted); white-space: nowrap; }

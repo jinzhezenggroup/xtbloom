@@ -38,7 +38,8 @@ const I18N = {
     mol_title: "分子可视化",
     mol_hint: "实时显示当前坐标；计算、优化、应用优化坐标后自动更新。",
     mol_unavailable: "当前浏览器不支持 WebGL 分子可视化。",
-    opt_running: "优化中… 迭代 {{n}} · E = {{e}} Eh",
+    opt_running: "优化中… {{n}}/{{max}} 步 · E = {{e}} Eh",
+    opt_done: "完成 ✓",
     xyz_label: "坐标（XYZ，单位：埃 Å）",
     xyz_placeholder: "每行：元素符号 x y z（埃，Å）",
     charge_label: "分子电荷 q / e",
@@ -122,7 +123,8 @@ const I18N = {
     mol_title: "Molecule",
     mol_hint: "Live view of the current coordinates; refreshes after compute, optimize, or applying optimized coordinates.",
     mol_unavailable: "WebGL molecular visualization is not available in this browser.",
-    opt_running: "Optimizing… step {{n}} · E = {{e}} Eh",
+    opt_running: "Optimizing… step {{n}}/{{max}} · E = {{e}} Eh",
+    opt_done: "done ✓",
     xyz_label: "Coordinates (XYZ, angstrom)",
     xyz_placeholder: "One atom per line: Symbol x y z (Å)",
     charge_label: "Molecular charge q / e",
@@ -540,6 +542,63 @@ function updateMoleculeViewer(xyz) {
   } catch (e) { /* ignore per-frame viewer errors */ }
 }
 
+/* ---- optimization replay (scrubber over recorded step frames) ---- */
+let optFrames = [];
+let optSymbols = [];
+let replayTimer = null;
+let replayPlaying = false;
+
+function renderOptFrame(frame) {
+  if (!frame) return;
+  $("replay-label").textContent = `#${frame.iter} · ${fmt(frame.energy, 6)} Eh`;
+  if (molViewer && !molUnavailable && frame.symbols && frame.symbols.length === frame.natoms) {
+    const lines = [];
+    for (let i = 0; i < frame.natoms; i++) {
+      lines.push(
+        `${frame.symbols[i]} ${frame.coords[i * 3].toFixed(6)} ${frame.coords[i * 3 + 1].toFixed(6)} ${frame.coords[i * 3 + 2].toFixed(6)}`,
+      );
+    }
+    updateMoleculeViewer(lines.join("\n"));
+  }
+}
+
+function stopReplay() {
+  if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
+  replayPlaying = false;
+  $("replay-play").textContent = "▶";
+}
+
+function playReplay() {
+  if (optFrames.length < 2) return;
+  if (replayPlaying) { stopReplay(); return; }
+  replayPlaying = true;
+  $("replay-play").textContent = "⏸";
+  replayTimer = setInterval(() => {
+    const maxV = parseInt($("replay-slider").max, 10);
+    let v = parseInt($("replay-slider").value, 10) + 1;
+    if (v > maxV) { stopReplay(); return; }
+    $("replay-slider").value = String(v);
+    renderOptFrame(optFrames[v]);
+  }, 150);
+}
+
+function showReplay() {
+  stopReplay();
+  if (optFrames.length < 2) { $("replay").hidden = true; return; }
+  const last = optFrames.length - 1;
+  $("replay-slider").max = String(last);
+  $("replay-slider").value = String(last);
+  renderOptFrame(optFrames[last]);
+  $("replay").hidden = false;
+}
+
+$("replay-play").addEventListener("click", playReplay);
+$("replay-slider").addEventListener("input", () => {
+  stopReplay();
+  const v = parseInt($("replay-slider").value, 10);
+  renderOptFrame(optFrames[v]);
+});
+
 /* ---- preset wiring ---- */
 Object.entries(PRESETS).forEach(([key, p]) => {
   const btn = document.querySelector(`[data-preset="${key}"]`);
@@ -614,33 +673,44 @@ async function runOptimize() {
   /* No blocking overlay: the engine runs in the worker, so the page stays
    * responsive and the 3Dmol viewer animates each accepted step. */
   const symbols = getElementSymbols(xyz);
-  $("mol-hint").textContent = tf("opt_running", { n: 0, e: "…" });
+  optFrames = [];
+  optSymbols = symbols;
+  stopReplay();
+  $("replay").hidden = true;
+  const statusShownAt = performance.now();
+  const MIN_STATUS_MS = 400;
+  $("mol-status").hidden = false;
+  $("mol-status").textContent = tf("opt_running", { n: 0, max: optMax, e: "…" });
   try {
     const t0 = performance.now();
     const m = await callWorker("optimize",
       [xyz, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, optMax, gradTol, maxMove],
       (step) => {
-        $("mol-hint").textContent = tf("opt_running", { n: step.iter, e: fmt(step.energy, 6) });
-        if (symbols.length === step.natoms && molViewer && !molUnavailable) {
-          const lines = [];
-          for (let i = 0; i < step.natoms; i++) {
-            lines.push(
-              `${symbols[i]} ${step.coords[i * 3].toFixed(6)} ${step.coords[i * 3 + 1].toFixed(6)} ${step.coords[i * 3 + 2].toFixed(6)}`,
-            );
-          }
-          updateMoleculeViewer(lines.join("\n"));
-        }
+        $("mol-status").textContent = tf("opt_running", { n: step.iter, max: optMax, e: fmt(step.energy, 6) });
+        const frame = { iter: step.iter, natoms: step.natoms, coords: step.coords, energy: step.energy, fmax: step.fmax, symbols };
+        optFrames.push(frame);
+        const idx = optFrames.length - 1;
+        $("replay-slider").max = String(idx);
+        $("replay-slider").value = String(idx);
+        renderOptFrame(frame);
       });
     const dt = performance.now() - t0;
     const d = JSON.parse(m.raw);
     if (!d.ok) { setError(errorText(d)); return; }
     renderOptimize(d);
     updateMoleculeViewer(d.geometry);
+    showReplay();
     $("stat-ms").textContent = fmt(dt, 1);
+    $("mol-status").textContent = t("opt_done");
   } catch (e) {
     setError(t("engine_call_fail") + e.message);
   } finally {
     $("mol-hint").textContent = t("mol_hint");
+    const shown = performance.now() - statusShownAt;
+    if (shown < MIN_STATUS_MS) {
+      await new Promise((r) => setTimeout(r, MIN_STATUS_MS - shown));
+    }
+    $("mol-status").hidden = true;
   }
 }
 
@@ -668,6 +738,9 @@ $("reset").addEventListener("click", () => {
   $("forces").checked = true;
   updateXyzHint();
   updateMoleculeViewer(PRESETS.water.xyz);
+  stopReplay();
+  optFrames = [];
+  $("replay").hidden = true;
   setError(null);
   $("energy").textContent = "—";
   $("energy-ev").textContent = "—";
