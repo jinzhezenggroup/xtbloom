@@ -310,6 +310,119 @@ bool HostSccCase::Impl::append_system(SmallSystemKind kind, std::int64_t system)
     atomic_numbers.push_back(atomic_number);
     positions.insert(positions.end(), {x + shift, y, z});
   };
+  const auto append_alkane = [&](std::int32_t carbon_count) {
+    constexpr double kAngstromPerBohr = 0.529177210903;
+    constexpr double bond = 1.54 / kAngstromPerBohr;
+    constexpr double h_bond = 1.09 / kAngstromPerBohr;
+    constexpr double h_y = h_bond * std::sin(109.5 * 3.14159265358979323846 / 180.0 / 2.0);
+    constexpr double h_z = h_bond * std::cos(109.5 * 3.14159265358979323846 / 180.0 / 2.0);
+    atom(6, 0.0, 0.0, 0.0);
+    for (std::int32_t carbon = 0; carbon < carbon_count; ++carbon) {
+      const double z = static_cast<double>(carbon) * bond;
+      if (carbon > 0) {
+        atom(6, 0.0, 0.0, z);
+      }
+      if (carbon == 0 || carbon == carbon_count - 1) {
+        atom(1, 0.0, h_y, z + (carbon == 0 ? -h_z : h_z));
+        atom(1, h_y, 0.0, z);
+        atom(1, -h_y, 0.0, z);
+      } else {
+        atom(1, 0.0, h_y, z);
+        atom(1, 0.0, -h_y, z);
+      }
+    }
+  };
+  const auto append_benchmark_alkane = [&](std::int32_t carbon_count) {
+    /* Match benchmarks/natoms_scaling.py exactly so the focused CUDA SCC test
+     * and the retained public performance sweep use one physical coordinate. */
+    using Point = std::array<double, 3>;
+    constexpr double kAngstromToBohr = 1.8897261254579021;
+    constexpr double cc = 1.54;
+    constexpr double ch = 1.09;
+    const auto unit = [](Point value) {
+      const double norm =
+          std::sqrt(value[0] * value[0] + value[1] * value[1] + value[2] * value[2]);
+      for (double& component : value) {
+        component /= norm;
+      }
+      return value;
+    };
+    const auto cross = [](const Point& left, const Point& right) {
+      return Point{left[1] * right[2] - left[2] * right[1], left[2] * right[0] - left[0] * right[2],
+                   left[0] * right[1] - left[1] * right[0]};
+    };
+    const auto orthogonal = [&](const Point& axis) {
+      return unit(std::abs(axis[0]) < 0.9 ? Point{-axis[1], axis[0], 0.0}
+                                          : Point{0.0, -axis[2], axis[1]});
+    };
+
+    const double half_external = 0.5 * std::acos(1.0 / 3.0);
+    const Point even_step{cc * std::cos(half_external), cc * std::sin(half_external), 0.0};
+    const Point odd_step{cc * std::cos(half_external), -cc * std::sin(half_external), 0.0};
+    std::vector<Point> carbons{{0.0, 0.0, 0.0}};
+    for (std::int32_t index = 1; index < carbon_count; ++index) {
+      const Point& step = index % 2 == 1 ? even_step : odd_step;
+      const Point& previous = carbons.back();
+      carbons.push_back({previous[0] + step[0], previous[1] + step[1], previous[2] + step[2]});
+    }
+
+    std::vector<Point> hydrogens;
+    hydrogens.reserve(static_cast<std::size_t>(2 * carbon_count + 2));
+    for (std::int32_t index = 0; index < carbon_count; ++index) {
+      const Point& position = carbons[static_cast<std::size_t>(index)];
+      std::vector<Point> neighbors;
+      if (index > 0) {
+        neighbors.push_back(carbons[static_cast<std::size_t>(index - 1)]);
+      }
+      if (index + 1 < carbon_count) {
+        neighbors.push_back(carbons[static_cast<std::size_t>(index + 1)]);
+      }
+      std::vector<Point> directions;
+      if (neighbors.size() == 1u) {
+        Point axis = unit({position[0] - neighbors[0][0], position[1] - neighbors[0][1],
+                           position[2] - neighbors[0][2]});
+        const Point perpendicular = orthogonal(axis);
+        const Point binormal = unit(cross(axis, perpendicular));
+        constexpr double axial = 1.0 / 3.0;
+        const double radial = std::sqrt(8.0 / 9.0);
+        for (const double azimuth :
+             {0.0, 2.0 * 3.14159265358979323846 / 3.0, 4.0 * 3.14159265358979323846 / 3.0}) {
+          directions.push_back({axial * axis[0] + radial * (std::cos(azimuth) * perpendicular[0] +
+                                                            std::sin(azimuth) * binormal[0]),
+                                axial * axis[1] + radial * (std::cos(azimuth) * perpendicular[1] +
+                                                            std::sin(azimuth) * binormal[1]),
+                                axial * axis[2] + radial * (std::cos(azimuth) * perpendicular[2] +
+                                                            std::sin(azimuth) * binormal[2])});
+        }
+      } else {
+        const Point first = unit({neighbors[0][0] - position[0], neighbors[0][1] - position[1],
+                                  neighbors[0][2] - position[2]});
+        const Point second = unit({neighbors[1][0] - position[0], neighbors[1][1] - position[1],
+                                   neighbors[1][2] - position[2]});
+        const Point bisector =
+            unit({first[0] + second[0], first[1] + second[1], first[2] + second[2]});
+        const Point normal = unit(cross(first, second));
+        const double axial = -1.0 / std::sqrt(3.0);
+        const double radial = std::sqrt(2.0 / 3.0);
+        directions.push_back({axial * bisector[0] + radial * normal[0],
+                              axial * bisector[1] + radial * normal[1],
+                              axial * bisector[2] + radial * normal[2]});
+        directions.push_back({axial * bisector[0] - radial * normal[0],
+                              axial * bisector[1] - radial * normal[1],
+                              axial * bisector[2] - radial * normal[2]});
+      }
+      for (const Point& direction : directions) {
+        hydrogens.push_back({position[0] + ch * direction[0], position[1] + ch * direction[1],
+                             position[2] + ch * direction[2]});
+      }
+    }
+    for (const Point& point : hydrogens) {
+      atom(1, point[0] * kAngstromToBohr, point[1] * kAngstromToBohr, point[2] * kAngstromToBohr);
+    }
+    for (const Point& point : carbons) {
+      atom(6, point[0] * kAngstromToBohr, point[1] * kAngstromToBohr, point[2] * kAngstromToBohr);
+    }
+  };
 
   switch (kind) {
     case SmallSystemKind::kH2:
@@ -340,26 +453,13 @@ bool HostSccCase::Impl::append_system(SmallSystemKind kind, std::int64_t system)
        * neutral, closed-shell, and wide-gap, so restricted 0 K SCC converges
        * reliably, and 62 atoms crosses the 40-atom sparse pair-list crossover
        * used by the production bucketed CN consistency gate. */
-      constexpr double kAngstromPerBohr = 0.529177210903;
-      constexpr double bond = 1.54 / kAngstromPerBohr;
-      constexpr double h_bond = 1.09 / kAngstromPerBohr;
-      constexpr double h_y = h_bond * std::sin(109.5 * 3.14159265358979323846 / 180.0 / 2.0);
-      constexpr double h_z = h_bond * std::cos(109.5 * 3.14159265358979323846 / 180.0 / 2.0);
-      atom(6, 0.0, 0.0, 0.0);
-      for (std::int32_t carbon = 0; carbon < 20; ++carbon) {
-        const double z = static_cast<double>(carbon) * bond;
-        if (carbon > 0) {
-          atom(6, 0.0, 0.0, z);
-        }
-        if (carbon == 0 || carbon == 19) {
-          atom(1, h_y * 0.0, h_y, z + (carbon == 0 ? -h_z : h_z));
-          atom(1, h_y, 0.0, z);
-          atom(1, -h_y, 0.0, z);
-        } else {
-          atom(1, 0.0, h_y, z);
-          atom(1, 0.0, -h_y, z);
-        }
-      }
+      append_alkane(20);
+      break;
+    }
+    case SmallSystemKind::kC90H182: {
+      /* Keep the same deterministic all-trans construction as C20H42 while
+       * crossing CUDA 12.9's 512-orbital vector-capture boundary. */
+      append_benchmark_alkane(90);
       break;
     }
     default:

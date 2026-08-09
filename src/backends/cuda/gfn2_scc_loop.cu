@@ -912,7 +912,6 @@ Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::Stat
 
   /* ---- eig + back executables per bucket ---- */
   const double* const hamiltonians_device = binding.input.eigensolver_hamiltonians;
-  const bool debug = plan.eigensolver_options.deterministic_debug;
   for (std::int64_t b = 0; b < bucket_count; ++b) {
     const Gfn2EigensolverBucket bucket = buckets[b];
     const std::int64_t cap = capacity[static_cast<std::size_t>(b)];
@@ -926,7 +925,7 @@ Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::Stat
           capture_stream, static_cast<std::uint32_t>(c), plan.eigensolver_batch, bucket, b,
           plan.overlap_cache, hamiltonians_device, plan.eigensolver_provider.solver,
           plan.eigensolver_provider.parameters, plan.eigensolver_provider.blas,
-          workspace.eigensolver_workspace, eigen_codes, eigen_device, debug);
+          workspace.eigensolver_workspace, eigen_codes, eigen_device, plan.eigensolver_options);
       if (captured.success()) {
         captured = compact_gfn2_successful_eigenpair_counts_cuda(
             bucket, b, workspace.eigensolver_workspace, eigen_codes, eigen_device, capture_stream);
@@ -978,7 +977,8 @@ Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::Stat
         Gfn2EigensolverLaunchResult captured = enqueue_gfn2_backtransform_capacity_cuda(
             capture_stream, static_cast<std::uint32_t>(c), plan.eigensolver_batch, bucket, b,
             plan.eigensolver_provider.blas, workspace.eigensolver_workspace,
-            workspace.staged_eigenpairs, eigen_codes, eigen_device, debug);
+            workspace.staged_eigenpairs, eigen_codes, eigen_device,
+            plan.eigensolver_options.deterministic_debug);
         if (!captured.success()) {
           finish_stream();
           destroy_dispatch_chain_resources(state);

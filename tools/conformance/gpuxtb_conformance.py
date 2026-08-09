@@ -28,6 +28,11 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPOSITORY_ROOT / "data" / "conformance" / "manifest.json"
 PRIMARY_ORACLE_ACCURACY = 1.0e-4
 PRIMARY_ORACLE_ACCURACY_TEXT = "0.0001"
+# One atomic unit of electric field (Hartree per elementary charge per bohr)
+# expressed in V/angstrom; the tblite --efield flag takes V/angstrom.
+ELECTRIC_FIELD_VAA_PER_AU = 0.019446903964791384
+# Optional tblite command token describing a uniform electric field attachment.
+EFIELD_COMMAND_TOKEN = "[--efield {efield_vperangstrom}]"
 
 
 class ConformanceError(RuntimeError):
@@ -47,6 +52,33 @@ def reference_accuracy(reference: dict[str, Any], engine: str) -> str:
             f"manifest {engine} accuracy must be {PRIMARY_ORACLE_ACCURACY_TEXT}"
         )
     return PRIMARY_ORACLE_ACCURACY_TEXT
+
+
+def accepted_tblite_command_templates(
+    reference: dict[str, Any], case: dict[str, Any]
+) -> list[list[str]]:
+    """Return provenance templates valid for one tblite-backed case.
+
+    Field-free goldens may predate the optional ``--efield`` token in the
+    manifest template. A field case must retain that token because it is the
+    defining interaction of the oracle calculation.
+    """
+    expected = reference.get("cli_command_template")
+    if not isinstance(expected, list) or not all(
+        isinstance(token, str) for token in expected
+    ):
+        raise ConformanceError(
+            "manifest tblite command template must be a string array"
+        )
+    if case.get("efield") is not None and EFIELD_COMMAND_TOKEN not in expected:
+        raise ConformanceError(
+            f"case {case['id']} has an electric field but the tblite template "
+            "does not contain --efield"
+        )
+    accepted = [expected]
+    if case.get("efield") is None and EFIELD_COMMAND_TOKEN in expected:
+        accepted.append([token for token in expected if token != EFIELD_COMMAND_TOKEN])
+    return accepted
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -711,6 +743,17 @@ def check_manifest(manifest_path: Path) -> None:
         )
     point_hardness = xtb_reference["point_charge_hardness_hartree"]
     for case in cases:
+        backends = case.get("gpuxtb_backends", ["cpu", "cuda"])
+        if (
+            not isinstance(backends, list)
+            or not backends
+            or any(backend not in ("cpu", "cuda") for backend in backends)
+            or len(set(backends)) != len(backends)
+        ):
+            raise ConformanceError(
+                f"case {case['id']} gpuxtb_backends must be a nonempty unique "
+                "subset of ['cpu', 'cuda']"
+            )
         input_path = resolve_manifest_path(manifest_path, case["input"])
         golden_path = resolve_manifest_path(manifest_path, case["golden"])
         for label, path, digest_key in (
@@ -753,6 +796,35 @@ def check_manifest(manifest_path: Path) -> None:
             raise ConformanceError(
                 f"golden {golden_path} does not embed its exact QMMM input"
             )
+        golden_properties = golden.get("properties")
+        if not isinstance(golden_properties, dict):
+            raise ConformanceError(f"golden {golden_path} has no properties object")
+        oracle_properties = case.get("gpuxtb_oracle_properties")
+        if oracle_properties is not None:
+            if (
+                not isinstance(oracle_properties, list)
+                or not oracle_properties
+                or any(
+                    not isinstance(property_name, str)
+                    or property_name not in golden_properties
+                    for property_name in oracle_properties
+                )
+                or len(set(oracle_properties)) != len(oracle_properties)
+            ):
+                raise ConformanceError(
+                    f"case {case['id']} gpuxtb_oracle_properties must be a "
+                    "nonempty unique subset of its golden properties"
+                )
+            if (
+                "forces_hartree_per_bohr" in golden_properties
+                and "forces_hartree_per_bohr" not in oracle_properties
+                and case.get("gpuxtb_force_evidence")
+                != "public_energy_finite_difference"
+            ):
+                raise ConformanceError(
+                    f"case {case['id']} excludes the golden force but does not "
+                    "name public_energy_finite_difference evidence"
+                )
         provenance = golden.get("provenance", {})
         reference_engine = case.get("reference_engine", "tblite")
         if provenance.get("engine") != reference_engine:
@@ -784,10 +856,12 @@ def check_manifest(manifest_path: Path) -> None:
                 f"golden {golden_path} does not pin the primary oracle accuracy"
             )
         if reference_engine == "tblite":
-            expected_template = tblite_reference["cli_command_template"]
+            accepted_templates = accepted_tblite_command_templates(
+                tblite_reference, case
+            )
             if (
-                provenance.get("command") != expected_template
-                or provenance.get("command_template") != expected_template
+                provenance.get("command") not in accepted_templates
+                or provenance.get("command_template") not in accepted_templates
             ):
                 raise ConformanceError(
                     f"golden {golden_path} has the wrong tblite command template"
@@ -1151,7 +1225,14 @@ def tblite_environment() -> tuple[dict[str, str], dict[str, Any]]:
 def tblite_command(
     executable: Path, case: dict[str, Any], input_path: Path, output_path: Path
 ) -> list[str]:
-    """Construct the command used by tblite's own validation benchmarks."""
+    """Construct the command used by tblite's own validation benchmarks.
+
+    When ``case`` carries an ``efield`` list of three finite field components
+    in atomic units (Hartree per elementary charge per bohr), the command
+    gains ``--efield`` with the components converted to V/angstrom using at
+    least twelve significant digits. Cases without an ``efield`` entry keep
+    the unchanged legacy command.
+    """
     command = [
         str(executable),
         str(input_path),
@@ -1169,6 +1250,26 @@ def tblite_command(
     unpaired_electrons = int(case["unpaired_electrons"])
     if unpaired_electrons:
         command.extend(["--spin", str(unpaired_electrons)])
+    efield = case.get("efield")
+    if efield is not None:
+        if (
+            not isinstance(efield, list)
+            or len(efield) != 3
+            or any(not math.isfinite(float(component)) for component in efield)
+        ):
+            raise ConformanceError(
+                f"case {case['id']} efield must be a finite three-component "
+                "list in atomic units"
+            )
+        command.extend(
+            [
+                "--efield",
+                ",".join(
+                    f"{float(component) / ELECTRIC_FIELD_VAA_PER_AU:.12g}"
+                    for component in efield
+                ),
+            ]
+        )
     command.extend(["--json", str(output_path)])
     return command
 
@@ -1487,15 +1588,16 @@ def actual_properties(raw: dict[str, Any], case: dict[str, Any]) -> dict[str, An
         return normalize_tblite_output(raw, case)
     energy = raw.get("energy_hartree", raw.get("energy"))
     forces = raw.get("forces_hartree_per_bohr", raw.get("forces"))
-    if energy is None or forces is None:
+    properties: dict[str, Any] = {}
+    if energy is not None:
+        properties["energy_hartree"] = float(energy)
+    if forces is not None:
+        properties["forces_hartree_per_bohr"] = [float(value) for value in forces]
+    if not properties:
         raise ConformanceError(
             "actual JSON must be canonical golden, raw tblite output, or contain "
-            "energy_hartree and forces_hartree_per_bohr"
+            "at least one gpuxtb energy/force property"
         )
-    properties = {
-        "energy_hartree": float(energy),
-        "forces_hartree_per_bohr": [float(value) for value in forces],
-    }
     for property_name in (
         "partial_charges_e",
         "atomic_dipoles_e_bohr",
@@ -1576,6 +1678,16 @@ def compare_directory(
         actual = actual_properties(actual_document, case)
         expected_engine = golden.get("provenance", {}).get("engine")
         actual_engine = actual_document.get("provenance", {}).get("engine")
+        minimal_gpuxtb_result = (
+            actual_engine is None
+            and not isinstance(actual_document.get("properties"), dict)
+            and not ("energy" in actual_document and "gradient" in actual_document)
+        )
+        oracle_properties = (
+            case.get("gpuxtb_oracle_properties")
+            if actual_engine == "gpuxtb" or minimal_gpuxtb_result
+            else None
+        )
         tolerances = manifest["tolerances"]
         if (
             actual_engine in manifest["reference_engines"]
@@ -1602,6 +1714,12 @@ def compare_directory(
             if property_name in expected
         )
         for property_name, tolerance_name in compared_properties:
+            if oracle_properties is not None and property_name not in oracle_properties:
+                print(  # noqa: T201 - CLI validation report
+                    f"INFO {case['id']} {property_name}: pinned reference is "
+                    "diagnostic-only for gpuxtb"
+                )
+                continue
             if property_name not in actual:
                 failures.append(f"{case['id']} is missing {property_name}")
                 print(  # noqa: T201 - CLI validation report

@@ -63,6 +63,12 @@ struct Gfn2D4DeviceBatch {
   const std::int64_t* atom_offsets = nullptr;
   const std::int64_t* pair_offsets = nullptr;
   const std::int32_t* atomic_numbers = nullptr;
+  /*
+   * Conservative host-side dispatch metadata. A zero value disables topology-
+   * dependent optimizations; setup records the exact minimum over atom_offsets.
+   * Device kernels still use the canonical offsets for all numerical indexing.
+   */
+  std::int64_t minimum_atoms_per_system = 0;
 };
 
 /*

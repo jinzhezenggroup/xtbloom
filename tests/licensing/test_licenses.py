@@ -129,6 +129,75 @@ class LicenseArchiveTests(unittest.TestCase):
                 CHECKER.check_archive(wheel)
 
 
+class WebSiteLicenseTests(unittest.TestCase):
+    """Require the Pages artifact to retain its complete legal boundary."""
+
+    def _write_valid_site(self, root: Path) -> None:
+        for site_relative, source_relative in CHECKER.WEB_SITE_SOURCE_MAP.items():
+            destination = root / site_relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPOSITORY / source_relative, destination)
+        for relative in CHECKER.WEB_SITE_RUNTIME_FILES:
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"test\n")
+        (root / "index.html").write_text(
+            '<a href="LICENSE">license</a>\n'
+            '<a href="THIRD_PARTY_NOTICES.md">notices</a>\n'
+            '<a href="CUDA_MKL_LINKING_EXCEPTION">permission</a>\n'
+            '<a href="https://jinzhezeng.group/gpuxtb/">demo</a>\n'
+            '<a href="https://github.com/jinzhezenggroup/gpuxtb">source</a>\n',
+            encoding="utf-8",
+        )
+
+    def test_complete_web_site_payload_is_accepted(self) -> None:
+        """Accept exact source legal bytes beside the deployed runtime."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            CHECKER.check_web_site(root, REPOSITORY)
+
+    def test_web_site_requires_project_license(self) -> None:
+        """The GPL-covered WASM cannot be deployed without the project grant."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / "LICENSE").unlink()
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "LICENSE"):
+                CHECKER.check_web_site(root, REPOSITORY)
+
+    def test_web_site_requires_pako_zlib_notice(self) -> None:
+        """Keep the non-MIT zlib grant for code inside the 3Dmol bundle."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / "LICENSES/pako-Zlib.txt").unlink()
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "pako-Zlib"):
+                CHECKER.check_web_site(root, REPOSITORY)
+
+    def test_web_site_rejects_raw_lapack_side_module(self) -> None:
+        """Do not deploy a second untracked copy of the preloaded side module."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / "libscipy_openblas.so").write_bytes(b"unexpected raw side module")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "raw LAPACK side module"
+            ):
+                CHECKER.check_web_site(root, REPOSITORY)
+
+    def test_web_site_rejects_arbitrary_stale_artifact(self) -> None:
+        """Reject obsolete engine variants because Pages uploads every file."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / "gpuxtb_web-old.wasm").write_bytes(b"stale engine")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "unexpected or orphaned files"
+            ):
+                CHECKER.check_web_site(root, REPOSITORY)
+
+
 class DependencyPolicyTests(unittest.TestCase):
     """Verify mandatory and optional dependency licensing boundaries."""
 

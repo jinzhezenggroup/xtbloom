@@ -207,6 +207,14 @@ std::int64_t maximum_partition(const std::int64_t* offsets, std::int64_t partiti
   return maximum;
 }
 
+std::int64_t minimum_partition(const std::int64_t* offsets, std::int64_t partitions) noexcept {
+  std::int64_t minimum = std::numeric_limits<std::int64_t>::max();
+  for (std::int64_t index = 0; index < partitions; ++index) {
+    minimum = std::min(minimum, offsets[index + 1] - offsets[index]);
+  }
+  return minimum;
+}
+
 }  // namespace
 
 struct Gfn2SccSetupInputs::Impl {
@@ -267,6 +275,7 @@ struct Gfn2SccSetupInputs::Impl {
   std::int64_t total_matrix_elements = 0;
   std::int64_t es2_matrix_elements = 0;
   std::int64_t total_pairs = 0;
+  std::int64_t minimum_atoms = 0;
   std::int64_t maximum_atoms = 0;
   std::int64_t maximum_shells = 0;
   std::int64_t mixer_history = 0;
@@ -516,10 +525,16 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
                  sources.warm_start_generations.elements != 0))) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kGeometry);
   }
+  const bool valid_eigensolver_strategy =
+      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kAuto ||
+      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kBatchedDivideAndConquer ||
+      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kBatchedJacobi ||
+      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kTridiagonalBisection;
   if (!std::isfinite(sources.eigensolver_options.minimum_overlap_rcond) ||
       !(sources.eigensolver_options.minimum_overlap_rcond > 0.0) ||
       !std::isfinite(sources.eigensolver_options.symmetry_tolerance) ||
-      sources.eigensolver_options.symmetry_tolerance < 0.0) {
+      sources.eigensolver_options.symmetry_tolerance < 0.0 || !valid_eigensolver_strategy ||
+      sources.eigensolver_options.jacobi != nullptr) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kEigensolver);
   }
 
@@ -653,6 +668,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     candidate->total_matrix_elements = matrices;
     candidate->es2_matrix_elements = es2.total_matrix_elements();
     candidate->total_pairs = aes2.total_pairs();
+    candidate->minimum_atoms = minimum_partition(host_topology.atom_offsets, batch);
     candidate->maximum_atoms = maximum_partition(host_topology.atom_offsets, batch);
     candidate->maximum_shells = maximum_partition(host_topology.batch_shell_offsets, batch);
     candidate->mixer_history = mixer.history_size();
@@ -1127,7 +1143,8 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
                                    atoms),
         device_topology.atom_offsets,
         cptr(impl_->layout.pair_offsets, static_cast<std::int64_t*>(nullptr)),
-        cptr(impl_->layout.atomic_numbers, static_cast<std::int32_t*>(nullptr))};
+        cptr(impl_->layout.atomic_numbers, static_cast<std::int32_t*>(nullptr)),
+        impl_->minimum_atoms};
     candidate.d4_parameters = {
         cptr(impl_->layout.d4_elements, static_cast<Gfn2D4DeviceElementData*>(nullptr)),
         impl_->layout.d4_elements.elements,

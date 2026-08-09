@@ -7,6 +7,14 @@ small and medium molecular systems. It combines a C++17 implementation, CPU
 and CUDA backends, one stable C ABI, and Python interfaces built on that same
 ABI.
 
+Try the experimental, fully client-side browser demo at
+<https://jinzhezeng.group/gpuxtb/>. It compiles the CPU backend to wasm32
+without requiring Memory64, targeting modern iOS Safari, Safari, Chrome, and
+Firefox with WebAssembly and module Worker support. It also adds a small
+Web-adapter L-BFGS optimizer; that optimizer is not part of the stable C ABI or
+the native library API. A wasm64 build remains in CI as an ABI and numerical
+parity gate.
+
 The current pre-release implements restricted and unrestricted GFN2-xTB
 energies, analytic forces, and atomic charges. It is designed for reusable
 contexts and ragged batches rather than wrapping a command-line calculation
@@ -20,18 +28,22 @@ once per molecule.
   GFN2-xTB. The CUDA ABI accepts caller-owned host, device, or mixed buffers.
 - **Failure isolation.** SCC or eigensolver failure in one molecule publishes
   NaNs and diagnostics for that molecule without discarding successful peers.
-- **Analytic derivatives.** Energies, QM forces, atomic charges, and optional
-  point-charge forces are available through the public API.
-- **QM/MM inputs inside SCC.** Explicit point charges and caller-supplied
-  periodic charge-response operators participate in every SCC iteration.
+- **Analytic derivatives.** Energies, QM forces, atomic charges, optional
+  point-charge forces, and per-system molecular dipole moments are available
+  through the public API.
+- **QM/MM inputs inside SCC.** Explicit point charges, caller-supplied
+  periodic charge-response operators, and a uniform external electric field
+  participate in every SCC iteration.
 - **Reusable execution state.** Contexts retain CPU workers, CUDA workspaces,
   fixed-topology plans, and strict compatible electronic warm starts.
 - **One deployment boundary.** C, C++, Python, ASE, and dpdata all call the
   same versioned, caller-buffer C ABI.
 
-GFN1-xTB and ROCm have reserved ABI values but are **not implemented**.
-gpuxtb also does not currently provide geometry optimization, molecular
-dynamics, solvation, Hessians, or a lattice/PBC descriptor.
+GFN1-xTB and ROCm have reserved ABI values but are **not implemented**. The
+native library also does not currently provide geometry optimization,
+molecular dynamics, solvation, Hessians, or a lattice/PBC descriptor. The
+browser demo's adapter-local optimizer does not change that public capability
+boundary.
 
 ## Choosing an xTB implementation
 

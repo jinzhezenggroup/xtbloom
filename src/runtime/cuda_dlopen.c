@@ -715,6 +715,13 @@ static cusolverStatus_t gpu_xtb_cusolver_create_params(cusolverDnParams_t* param
   return CUSOLVER_STATUS_NOT_INITIALIZED;
 }
 
+static cusolverStatus_t gpu_xtb_cusolver_create_syevj_info(syevjInfo_t* information) {
+  if (information != NULL) {
+    *information = NULL;
+  }
+  return CUSOLVER_STATUS_NOT_INITIALIZED;
+}
+
 static cusolverStatus_t gpu_xtb_cusolver_destroy(cusolverDnHandle_t handle) {
   (void)handle;
   return CUSOLVER_STATUS_NOT_INITIALIZED;
@@ -722,6 +729,55 @@ static cusolverStatus_t gpu_xtb_cusolver_destroy(cusolverDnHandle_t handle) {
 
 static cusolverStatus_t gpu_xtb_cusolver_destroy_params(cusolverDnParams_t parameters) {
   (void)parameters;
+  return CUSOLVER_STATUS_NOT_INITIALIZED;
+}
+
+static cusolverStatus_t gpu_xtb_cusolver_destroy_syevj_info(syevjInfo_t information) {
+  (void)information;
+  return CUSOLVER_STATUS_NOT_INITIALIZED;
+}
+
+static cusolverStatus_t gpu_xtb_cusolver_dormtr_buffer_size(
+    cusolverDnHandle_t handle, cublasSideMode_t side, cublasFillMode_t fill,
+    cublasOperation_t operation, int rows, int columns, const double* reflectors,
+    int reflector_leading_dimension, const double* tau, const double* matrix,
+    int matrix_leading_dimension, int* workspace_size) {
+  (void)handle;
+  (void)side;
+  (void)fill;
+  (void)operation;
+  (void)rows;
+  (void)columns;
+  (void)reflectors;
+  (void)reflector_leading_dimension;
+  (void)tau;
+  (void)matrix;
+  (void)matrix_leading_dimension;
+  if (workspace_size != NULL) *workspace_size = 0;
+  return CUSOLVER_STATUS_NOT_INITIALIZED;
+}
+
+static cusolverStatus_t gpu_xtb_cusolver_dormtr(cusolverDnHandle_t handle, cublasSideMode_t side,
+                                                cublasFillMode_t fill, cublasOperation_t operation,
+                                                int rows, int columns, double* reflectors,
+                                                int reflector_leading_dimension, double* tau,
+                                                double* matrix, int matrix_leading_dimension,
+                                                double* workspace, int workspace_size,
+                                                int* information) {
+  (void)handle;
+  (void)side;
+  (void)fill;
+  (void)operation;
+  (void)rows;
+  (void)columns;
+  (void)reflectors;
+  (void)reflector_leading_dimension;
+  (void)tau;
+  (void)matrix;
+  (void)matrix_leading_dimension;
+  (void)workspace;
+  (void)workspace_size;
+  (void)information;
   return CUSOLVER_STATUS_NOT_INITIALIZED;
 }
 
@@ -739,6 +795,80 @@ static cusolverStatus_t gpu_xtb_cusolver_dpotrf_batched(cusolverDnHandle_t handl
   return CUSOLVER_STATUS_NOT_INITIALIZED;
 }
 
+static cusolverStatus_t gpu_xtb_cusolver_dsytrd_buffer_size(
+    cusolverDnHandle_t handle, cublasFillMode_t fill, int dimension, const double* matrix,
+    int leading_dimension, const double* diagonal, const double* off_diagonal, const double* tau,
+    int* workspace_size) {
+  (void)handle;
+  (void)fill;
+  (void)dimension;
+  (void)matrix;
+  (void)leading_dimension;
+  (void)diagonal;
+  (void)off_diagonal;
+  (void)tau;
+  if (workspace_size != NULL) *workspace_size = 0;
+  return CUSOLVER_STATUS_NOT_INITIALIZED;
+}
+
+static cusolverStatus_t gpu_xtb_cusolver_dsytrd(cusolverDnHandle_t handle, cublasFillMode_t fill,
+                                                int dimension, double* matrix,
+                                                int leading_dimension, double* diagonal,
+                                                double* off_diagonal, double* tau,
+                                                double* workspace, int workspace_size,
+                                                int* information) {
+  (void)handle;
+  (void)fill;
+  (void)dimension;
+  (void)matrix;
+  (void)leading_dimension;
+  (void)diagonal;
+  (void)off_diagonal;
+  (void)tau;
+  (void)workspace;
+  (void)workspace_size;
+  (void)information;
+  return CUSOLVER_STATUS_NOT_INITIALIZED;
+}
+
+static cusolverStatus_t gpu_xtb_cusolver_dsyevj_batched_buffer_size(
+    cusolverDnHandle_t handle, cusolverEigMode_t job, cublasFillMode_t fill, int dimension,
+    const double* matrices, int leading_dimension, const double* eigenvalues, int* workspace_size,
+    syevjInfo_t parameters, int batch_size) {
+  (void)handle;
+  (void)job;
+  (void)fill;
+  (void)dimension;
+  (void)matrices;
+  (void)leading_dimension;
+  (void)eigenvalues;
+  (void)parameters;
+  (void)batch_size;
+  if (workspace_size != NULL) {
+    *workspace_size = 0;
+  }
+  return CUSOLVER_STATUS_NOT_INITIALIZED;
+}
+
+static cusolverStatus_t gpu_xtb_cusolver_dsyevj_batched(
+    cusolverDnHandle_t handle, cusolverEigMode_t job, cublasFillMode_t fill, int dimension,
+    double* matrices, int leading_dimension, double* eigenvalues, double* workspace,
+    int workspace_size, int* information, syevjInfo_t parameters, int batch_size) {
+  (void)handle;
+  (void)job;
+  (void)fill;
+  (void)dimension;
+  (void)matrices;
+  (void)leading_dimension;
+  (void)eigenvalues;
+  (void)workspace;
+  (void)workspace_size;
+  (void)information;
+  (void)parameters;
+  (void)batch_size;
+  return CUSOLVER_STATUS_NOT_INITIALIZED;
+}
+
 static cusolverStatus_t gpu_xtb_cusolver_get_stream(cusolverDnHandle_t handle,
                                                     cudaStream_t* stream) {
   (void)handle;
@@ -752,6 +882,27 @@ static cusolverStatus_t gpu_xtb_cusolver_set_stream(cusolverDnHandle_t handle,
                                                     cudaStream_t stream) {
   (void)handle;
   (void)stream;
+  return CUSOLVER_STATUS_NOT_INITIALIZED;
+}
+
+static cusolverStatus_t gpu_xtb_cusolver_syevj_set_max_sweeps(syevjInfo_t information,
+                                                              int max_sweeps) {
+  (void)information;
+  (void)max_sweeps;
+  return CUSOLVER_STATUS_NOT_INITIALIZED;
+}
+
+static cusolverStatus_t gpu_xtb_cusolver_syevj_set_sort_eig(syevjInfo_t information,
+                                                            int sort_eigenvalues) {
+  (void)information;
+  (void)sort_eigenvalues;
+  return CUSOLVER_STATUS_NOT_INITIALIZED;
+}
+
+static cusolverStatus_t gpu_xtb_cusolver_syevj_set_tolerance(syevjInfo_t information,
+                                                             double tolerance) {
+  (void)information;
+  (void)tolerance;
   return CUSOLVER_STATUS_NOT_INITIALIZED;
 }
 
@@ -920,11 +1071,23 @@ GPU_XTB_CHECK_SIGNATURE(cublasSetWorkspace_v2, gpu_xtb_cublas_set_workspace);
 
 GPU_XTB_CHECK_SIGNATURE(cusolverDnCreate, gpu_xtb_cusolver_create);
 GPU_XTB_CHECK_SIGNATURE(cusolverDnCreateParams, gpu_xtb_cusolver_create_params);
+GPU_XTB_CHECK_SIGNATURE(cusolverDnCreateSyevjInfo, gpu_xtb_cusolver_create_syevj_info);
 GPU_XTB_CHECK_SIGNATURE(cusolverDnDestroy, gpu_xtb_cusolver_destroy);
 GPU_XTB_CHECK_SIGNATURE(cusolverDnDestroyParams, gpu_xtb_cusolver_destroy_params);
+GPU_XTB_CHECK_SIGNATURE(cusolverDnDestroySyevjInfo, gpu_xtb_cusolver_destroy_syevj_info);
+GPU_XTB_CHECK_SIGNATURE(cusolverDnDormtr, gpu_xtb_cusolver_dormtr);
+GPU_XTB_CHECK_SIGNATURE(cusolverDnDormtr_bufferSize, gpu_xtb_cusolver_dormtr_buffer_size);
 GPU_XTB_CHECK_SIGNATURE(cusolverDnDpotrfBatched, gpu_xtb_cusolver_dpotrf_batched);
+GPU_XTB_CHECK_SIGNATURE(cusolverDnDsytrd, gpu_xtb_cusolver_dsytrd);
+GPU_XTB_CHECK_SIGNATURE(cusolverDnDsytrd_bufferSize, gpu_xtb_cusolver_dsytrd_buffer_size);
+GPU_XTB_CHECK_SIGNATURE(cusolverDnDsyevjBatched, gpu_xtb_cusolver_dsyevj_batched);
+GPU_XTB_CHECK_SIGNATURE(cusolverDnDsyevjBatched_bufferSize,
+                        gpu_xtb_cusolver_dsyevj_batched_buffer_size);
 GPU_XTB_CHECK_SIGNATURE(cusolverDnGetStream, gpu_xtb_cusolver_get_stream);
 GPU_XTB_CHECK_SIGNATURE(cusolverDnSetStream, gpu_xtb_cusolver_set_stream);
+GPU_XTB_CHECK_SIGNATURE(cusolverDnXsyevjSetMaxSweeps, gpu_xtb_cusolver_syevj_set_max_sweeps);
+GPU_XTB_CHECK_SIGNATURE(cusolverDnXsyevjSetSortEig, gpu_xtb_cusolver_syevj_set_sort_eig);
+GPU_XTB_CHECK_SIGNATURE(cusolverDnXsyevjSetTolerance, gpu_xtb_cusolver_syevj_set_tolerance);
 GPU_XTB_CHECK_SIGNATURE(cusolverDnXsyevBatched, gpu_xtb_cusolver_xsyev_batched);
 GPU_XTB_CHECK_SIGNATURE(cusolverDnXsyevBatched_bufferSize,
                         gpu_xtb_cusolver_xsyev_batched_buffer_size);
@@ -1063,11 +1226,22 @@ static void* gpu_xtb_fallback_for_symbol(const char* symbol) {
 
   GPU_XTB_SYMBOL("cusolverDnCreate", gpu_xtb_cusolver_create)
   GPU_XTB_SYMBOL("cusolverDnCreateParams", gpu_xtb_cusolver_create_params)
+  GPU_XTB_SYMBOL("cusolverDnCreateSyevjInfo", gpu_xtb_cusolver_create_syevj_info)
   GPU_XTB_SYMBOL("cusolverDnDestroy", gpu_xtb_cusolver_destroy)
   GPU_XTB_SYMBOL("cusolverDnDestroyParams", gpu_xtb_cusolver_destroy_params)
+  GPU_XTB_SYMBOL("cusolverDnDestroySyevjInfo", gpu_xtb_cusolver_destroy_syevj_info)
+  GPU_XTB_SYMBOL("cusolverDnDormtr", gpu_xtb_cusolver_dormtr)
+  GPU_XTB_SYMBOL("cusolverDnDormtr_bufferSize", gpu_xtb_cusolver_dormtr_buffer_size)
   GPU_XTB_SYMBOL("cusolverDnDpotrfBatched", gpu_xtb_cusolver_dpotrf_batched)
+  GPU_XTB_SYMBOL("cusolverDnDsytrd", gpu_xtb_cusolver_dsytrd)
+  GPU_XTB_SYMBOL("cusolverDnDsytrd_bufferSize", gpu_xtb_cusolver_dsytrd_buffer_size)
+  GPU_XTB_SYMBOL("cusolverDnDsyevjBatched", gpu_xtb_cusolver_dsyevj_batched)
+  GPU_XTB_SYMBOL("cusolverDnDsyevjBatched_bufferSize", gpu_xtb_cusolver_dsyevj_batched_buffer_size)
   GPU_XTB_SYMBOL("cusolverDnGetStream", gpu_xtb_cusolver_get_stream)
   GPU_XTB_SYMBOL("cusolverDnSetStream", gpu_xtb_cusolver_set_stream)
+  GPU_XTB_SYMBOL("cusolverDnXsyevjSetMaxSweeps", gpu_xtb_cusolver_syevj_set_max_sweeps)
+  GPU_XTB_SYMBOL("cusolverDnXsyevjSetSortEig", gpu_xtb_cusolver_syevj_set_sort_eig)
+  GPU_XTB_SYMBOL("cusolverDnXsyevjSetTolerance", gpu_xtb_cusolver_syevj_set_tolerance)
   GPU_XTB_SYMBOL("cusolverDnXsyevBatched", gpu_xtb_cusolver_xsyev_batched)
   GPU_XTB_SYMBOL("cusolverDnXsyevBatched_bufferSize", gpu_xtb_cusolver_xsyev_batched_buffer_size)
   GPU_XTB_SYMBOL("cusolverGetProperty", gpu_xtb_cusolver_get_property)

@@ -2,6 +2,7 @@
 // gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
@@ -333,9 +334,17 @@ struct HostRequest {
   std::vector<double> periodic_shifts;
   std::vector<std::int64_t> response_offsets;
   std::vector<double> response_matrices;
+  /* Per-system uniform electric field in atomic units (Hartree per elementary
+   * charge per bohr), plus a distinct attachment-presence bit. The ABI permits
+   * an explicit zero-valued field, which is physically a no-op but remains a
+   * different WARM interaction identity from no attachment. */
+  std::vector<std::array<double, 3>> field_by_system;
+  std::vector<std::uint8_t> field_attached_by_system;
   bool shifts_enabled = false;
   bool response_enabled = false;
 };
+
+void stage_electric_fields(const gpuxtb_batch_t& batch, HostRequest& request);
 
 void stage_request(const gpuxtb_batch_t& batch, HostRequest& request) {
   request.batch_size = batch.batch_size;
@@ -397,6 +406,52 @@ void stage_request(const gpuxtb_batch_t& batch, HostRequest& request) {
     request.response_offsets.clear();
     request.response_matrices.clear();
   }
+
+  request.field_by_system.assign(static_cast<std::size_t>(batch.batch_size),
+                                 std::array<double, 3>{0.0, 0.0, 0.0});
+  request.field_attached_by_system.assign(static_cast<std::size_t>(batch.batch_size), 0u);
+  if (batch.struct_size >= GPUXTB_BATCH_V3_SIZE && batch.total_interactions != 0) {
+    stage_electric_fields(batch, request);
+  }
+}
+
+/*
+ * Stage ABI-v3 electric-field attachments into the per-system field vectors.
+ *
+ * The structural host semantics have already validated the descriptor and
+ * payload bytes (matching block versions, alignment, finite values, duplicate
+ * rejection), so this pass only relocates the released 32-byte payload block
+ * into the per-system field vector. Only the electric-field tag is released;
+ * every other tag is refused before execution by the validation layer.
+ */
+void stage_electric_fields(const gpuxtb_batch_t& batch, HostRequest& request) {
+  const unsigned char* descriptors =
+      static_cast<const unsigned char*>(batch.interaction_descriptors.data);
+  const unsigned char* payload = static_cast<const unsigned char*>(batch.interaction_payload.data);
+  for (std::int64_t index = 0; index < batch.total_interactions; ++index) {
+    const unsigned char* descriptor =
+        descriptors + static_cast<std::size_t>(index) * sizeof(gpuxtb_interaction_t);
+    std::int32_t type = 0;
+    std::int64_t system_index = 0;
+    std::uint64_t payload_offset = 0u;
+    std::memcpy(&type, descriptor + offsetof(gpuxtb_interaction_t, type), sizeof(type));
+    std::memcpy(&system_index, descriptor + offsetof(gpuxtb_interaction_t, system_index),
+                sizeof(system_index));
+    std::memcpy(&payload_offset, descriptor + offsetof(gpuxtb_interaction_t, payload_offset),
+                sizeof(payload_offset));
+    if (type != GPUXTB_INTERACTION_ELECTRIC_FIELD) {
+      /* Validation refuses every other tag before execution; keep this branch
+       * defensive and unreachable. */
+      continue;
+    }
+    double field[3] = {0.0, 0.0, 0.0};
+    std::memcpy(field,
+                payload + static_cast<std::size_t>(payload_offset) + 2u * sizeof(std::int32_t),
+                sizeof(field));
+    request.field_by_system[static_cast<std::size_t>(system_index)] = {field[0], field[1],
+                                                                       field[2]};
+    request.field_attached_by_system[static_cast<std::size_t>(system_index)] = 1u;
+  }
 }
 
 bool all_finite(const std::vector<double>& values) {
@@ -455,6 +510,11 @@ struct SystemKey {
   std::int32_t spin_channels = 1;
   std::int64_t point_count = 0;
   bool periodic_enabled = false;
+  /* Uniform external electric field in atomic units. Presence is recorded
+   * separately because an explicit zero field remains part of the interaction
+   * set and therefore differs from no attachment for strict WARM identity. */
+  bool field_attached = false;
+  std::array<double, 3> field{0.0, 0.0, 0.0};
   std::uint32_t compute_flags = 0u;
   std::int32_t maximum_iterations = 0;
   double charge_tolerance = 0.0;
@@ -466,7 +526,9 @@ struct SystemKey {
            lhs.molecular_charge == rhs.molecular_charge &&
            lhs.unpaired_electrons == rhs.unpaired_electrons &&
            lhs.spin_channels == rhs.spin_channels && lhs.point_count == rhs.point_count &&
-           lhs.periodic_enabled == rhs.periodic_enabled && lhs.compute_flags == rhs.compute_flags &&
+           lhs.periodic_enabled == rhs.periodic_enabled &&
+           lhs.field_attached == rhs.field_attached && lhs.field == rhs.field &&
+           lhs.compute_flags == rhs.compute_flags &&
            lhs.maximum_iterations == rhs.maximum_iterations &&
            lhs.charge_tolerance == rhs.charge_tolerance &&
            lhs.energy_tolerance == rhs.energy_tolerance &&
@@ -492,12 +554,29 @@ void make_system_keys(const HostRequest& request, const gpuxtb_compute_options_t
     key.spin_channels = request.spin_channels[index];
     key.point_count = point_end - point_begin;
     key.periodic_enabled = periodic_enabled;
+    key.field_attached = request.field_attached_by_system[index] != 0u;
+    key.field = request.field_by_system[index];
     key.compute_flags = options.flags;
     key.maximum_iterations = options.max_scc_iterations;
     key.charge_tolerance = options.charge_tolerance;
     key.energy_tolerance = options.energy_tolerance;
     key.electronic_temperature = options.electronic_temperature;
   }
+}
+
+/* Field presence and values change only numerical inputs. Every CPU system
+ * preallocates field_vat/field_vdp for its full atom count, so these members
+ * are excluded from the identity that decides whether rebuilding would be
+ * necessary. The exact SystemKey equality above remains the strict WARM gate. */
+bool same_prepared_layout(const SystemKey& lhs, const SystemKey& rhs) {
+  return lhs.atomic_numbers == rhs.atomic_numbers && lhs.molecular_charge == rhs.molecular_charge &&
+         lhs.unpaired_electrons == rhs.unpaired_electrons &&
+         lhs.spin_channels == rhs.spin_channels && lhs.point_count == rhs.point_count &&
+         lhs.periodic_enabled == rhs.periodic_enabled && lhs.compute_flags == rhs.compute_flags &&
+         lhs.maximum_iterations == rhs.maximum_iterations &&
+         lhs.charge_tolerance == rhs.charge_tolerance &&
+         lhs.energy_tolerance == rhs.energy_tolerance &&
+         lhs.electronic_temperature == rhs.electronic_temperature;
 }
 
 struct SystemOutput {
@@ -508,6 +587,9 @@ struct SystemOutput {
   std::vector<double> forces;
   std::vector<double> atomic_charges;
   std::vector<double> point_forces;
+  /* Per-system molecular dipole moment (three doubles, atomic units),
+   * published when GPUXTB_COMPUTE_DIPOLE_MOMENTS is requested. */
+  std::array<double, 3> dipole_moments{0.0, 0.0, 0.0};
 
   void reset() noexcept {
     status = GPUXTB_STATUS_EIGENSOLVER_FAILED;
@@ -518,6 +600,7 @@ struct SystemOutput {
     forces.clear();
     atomic_charges.clear();
     point_forces.clear();
+    dipole_moments = {0.0, 0.0, 0.0};
   }
 };
 
@@ -620,6 +703,15 @@ struct SystemExecution {
   std::vector<double> periodic_energy;
   std::vector<gpuxtb_status_t> periodic_status;
 
+  /* Uniform external electric field in atomic units. Presence is distinct from
+   * the three values so an explicit zero block remains visible to WARM policy.
+   * field_vat holds the per-atom scalar potential -E . r and field_vdp the
+   * per-atom dipolar potential -E, both recomputed when positions change. */
+  bool field_attached = false;
+  std::array<double, 3> field{0.0, 0.0, 0.0};
+  std::vector<double> field_vat;
+  std::vector<double> field_vdp;
+
   std::vector<double> energy_scratch;
   std::vector<double> component_energy_scratch;
   std::vector<double> total_gradient;
@@ -663,6 +755,16 @@ struct SystemExecution {
    * is topology- and spin-dependent but independent of the requested property
    * flags (all scratch is preallocated up front). */
   std::size_t resident_bytes() const noexcept;
+
+  /* Update only numerical field state. This is noexcept and allocation-free,
+   * which lets a fixed plan accept FRESH field changes without rebuilding its
+   * topology-sized SystemExecution. */
+  void set_field(bool attached, const std::array<double, 3>& value) noexcept {
+    key.field_attached = attached;
+    key.field = value;
+    field_attached = attached;
+    field = value;
+  }
 
  private:
   gpuxtb_status_t refresh_geometry(const CpuLinearAlgebraBackend& backend, bool warm_start,
@@ -753,6 +855,10 @@ gpuxtb_status_t SystemExecution::build(std::string& error) {
   dipole_integrals.resize(3u * matrix);
   quadrupole_integrals.resize(6u * matrix);
   core_hamiltonian.resize(matrix);
+  field_attached = key.field_attached;
+  field = key.field;
+  field_vat.resize(atom_count);
+  field_vdp.resize(3u * atom_count);
   status =
       allocate(integral_workspace, integrals.workspace_size_bytes, "integral workspace", error);
   if (status != GPUXTB_STATUS_SUCCESS) return status;
@@ -976,6 +1082,8 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
       &dipole_integrals,
       &quadrupole_integrals,
       &core_hamiltonian,
+      &field_vat,
+      &field_vdp,
       &es2_matrix,
       &es2_matrix_scratch,
       &es2_shell_scratch,
@@ -1100,6 +1208,22 @@ gpuxtb_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend&
     geometry.periodic_embedding_generation = geometry_generation;
     geometry.periodic_plan_identity = periodic.identity();
   }
+  if (field_attached) {
+    /* vat_i = -E . r_i and vdp_alpha = -E_alpha, matching the released
+     * electric-field block contract and the tblite field potential. The field
+     * is uniform, so the dipolar potential is identical on every atom. */
+    for (std::size_t atom = 0; atom < field_vat.size(); ++atom) {
+      const double* r = positions.data() + 3u * atom;
+      field_vat[atom] = -(field[0] * r[0] + field[1] * r[1] + field[2] * r[2]);
+      field_vdp[3u * atom + 0u] = -field[0];
+      field_vdp[3u * atom + 1u] = -field[1];
+      field_vdp[3u * atom + 2u] = -field[2];
+    }
+    geometry.field_atomic_potential = field_vat.data();
+    geometry.field_atomic_potential_elements = static_cast<std::int64_t>(field_vat.size());
+    geometry.field_dipole_potential = field_vdp.data();
+    geometry.field_dipole_potential_elements = static_cast<std::int64_t>(field_vdp.size());
+  }
   return GPUXTB_STATUS_SUCCESS;
 }
 
@@ -1196,6 +1320,20 @@ gpuxtb_status_t SystemExecution::refresh_stationary_potentials(std::string& erro
   for (std::size_t atom = 0; atom < atomic_potential.size(); ++atom) {
     atomic_potential[atom] += d4_atomic_potential[atom] + periodic_atomic_potential[atom];
   }
+  if (field_attached) {
+    /* Mirror the SCC driver injection: the field's scalar potential -E . r
+     * contributes on the charge-channel atom potential (mapped onto shells by
+     * the loop below) and its dipolar potential -E on the charge-channel
+     * dipole potential, so the stationary integral adjoints retain the field's
+     * density-response terms. The remaining explicit coordinate derivative,
+     * +q_i E in the public force convention, is added at the force boundary. */
+    for (std::size_t atom = 0; atom < atomic_potential.size(); ++atom) {
+      atomic_potential[atom] += field_vat[atom];
+    }
+    for (std::size_t component = 0; component < dipole_potential.size(); ++component) {
+      dipole_potential[component] += field_vdp[component];
+    }
+  }
   for (std::size_t shell = 0; shell < scalar_shell_potential.size(); ++shell) {
     const std::size_t atom = static_cast<std::size_t>(basis.shell_to_atom[shell]);
     scalar_shell_potential[shell] += atomic_potential[atom];
@@ -1253,6 +1391,24 @@ gpuxtb_status_t SystemExecution::infer(
   output.converged = 1u;
   output.atomic_charges.assign(wavefunction.qat,
                                wavefunction.qat + wavefunction_layout.total_atoms);
+
+  if ((compute_flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0u) {
+    /* Molecular dipole moment in the tblite molmom convention:
+     * sum_i (r_i * q_i + d_i) over the charge-channel SCC multipoles. The
+     * dipole population field stores [channel, atom, 3]; channel zero is the
+     * charge channel in both restricted and unrestricted layouts. */
+    const std::int64_t dipole_stride = 3 * wavefunction_layout.total_atoms;
+    std::array<double, 3> moment{0.0, 0.0, 0.0};
+    for (std::int64_t atom = 0; atom < wavefunction_layout.total_atoms; ++atom) {
+      const double charge = wavefunction.qat[atom];
+      for (std::int64_t component = 0; component < 3; ++component) {
+        moment[static_cast<std::size_t>(component)] +=
+            positions[static_cast<std::size_t>(3 * atom + component)] * charge +
+            wavefunction.dipole[static_cast<std::size_t>(atom * 3 + component)];
+      }
+    }
+    output.dipole_moments = moment;
+  }
 
   const bool need_energy_or_force =
       (compute_flags &
@@ -1330,6 +1486,18 @@ gpuxtb_status_t SystemExecution::infer(
       compose_qm_forces ? output.forces.data() : nullptr,
       need_point_forces ? output.point_forces.data() : nullptr, {}, composer_workspace, error);
   if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (compose_qm_forces && field_attached) {
+    /* The stationary composer already carries the response of the converged
+     * density and atomic multipoles through the injected field potentials.
+     * The remaining explicit derivative of -sum_i q_i E.r_i is +q_i E in the
+     * public F=-dE/dR convention. */
+    for (std::size_t atom = 0; atom < field_vat.size(); ++atom) {
+      const double charge = wavefunction.qat[atom];
+      output.forces[3u * atom + 0u] = std::fma(charge, field[0], output.forces[3u * atom + 0u]);
+      output.forces[3u * atom + 1u] = std::fma(charge, field[1], output.forces[3u * atom + 1u]);
+      output.forces[3u * atom + 2u] = std::fma(charge, field[2], output.forces[3u * atom + 2u]);
+    }
+  }
   return GPUXTB_STATUS_SUCCESS;
 }
 
@@ -1363,6 +1531,7 @@ struct Gfn2CpuExecutionCache::Impl {
   std::vector<double> forces;
   std::vector<double> atomic_charges;
   std::vector<double> point_forces;
+  std::vector<double> dipole_moments;
   std::vector<std::int32_t> iterations;
   std::vector<std::uint8_t> converged;
   std::vector<std::int32_t> system_statuses;
@@ -1391,6 +1560,22 @@ struct Gfn2CpuExecutionCache::Impl {
 
   gpuxtb_status_t ensure_systems(const std::vector<SystemKey>& requested, std::string& error) {
     if (requested == keys) {
+      return GPUXTB_STATUS_SUCCESS;
+    }
+    const bool reusable_layout = requested.size() == keys.size() &&
+                                 requested.size() == systems.size() &&
+                                 std::equal(requested.begin(), requested.end(), keys.begin(),
+                                            [](const SystemKey& next, const SystemKey& current) {
+                                              return same_prepared_layout(next, current);
+                                            });
+    if (reusable_layout) {
+      /* Only field presence/value changed. Update the preallocated numerical
+       * storage in place and keep the exact key for subsequent WARM checks. */
+      for (std::size_t index = 0u; index < requested.size(); ++index) {
+        systems[index]->set_field(requested[index].field_attached, requested[index].field);
+        keys[index].field_attached = requested[index].field_attached;
+        keys[index].field = requested[index].field;
+      }
       return GPUXTB_STATUS_SUCCESS;
     }
     std::vector<std::unique_ptr<SystemExecution>> candidate;
@@ -1468,6 +1653,11 @@ struct Gfn2CpuExecutionCache::Impl {
       point_forces.assign(3u * point_count, nan);
     } else {
       point_forces.clear();
+    }
+    if ((flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0u) {
+      dipole_moments.assign(3u * batch_size, nan);
+    } else {
+      dipole_moments.clear();
     }
   }
 
@@ -1632,6 +1822,10 @@ gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
         std::copy(output.point_forces.begin(), output.point_forces.end(),
                   implementation.point_forces.begin() + 3 * point_begin);
       }
+      if ((options.flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0u) {
+        std::copy_n(output.dipole_moments.begin(), 3,
+                    implementation.dipole_moments.begin() + 3 * index);
+      }
     }
 
     if ((options.flags & GPUXTB_COMPUTE_ENERGY) != 0u) {
@@ -1646,13 +1840,19 @@ gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
     if ((options.flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0u) {
       publish_to_c_buffer(implementation.point_forces, result.point_charge_forces);
     }
+    if ((options.flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0u) {
+      publish_to_c_buffer(implementation.dipole_moments, result.dipole_moments);
+    }
     publish_to_c_buffer(implementation.iterations, result.scc_iterations);
     publish_to_c_buffer(implementation.converged, result.scc_converged);
     publish_to_c_buffer(implementation.system_statuses, result.per_system_status);
     result.flags =
-        (request.shifts_enabled || request.response_enabled)
-            ? static_cast<std::uint32_t>(GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES)
-            : 0u;
+        static_cast<std::uint32_t>((request.shifts_enabled || request.response_enabled)
+                                       ? GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES
+                                       : 0u) |
+        static_cast<std::uint32_t>((options.flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0u
+                                       ? GPUXTB_RESULT_DIPOLE_MOMENTS
+                                       : 0u);
     implementation.systems_ready_for_warm = all_converged;
     error.clear();
     return GPUXTB_STATUS_SUCCESS;
@@ -1742,8 +1942,9 @@ std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache
            vector_bytes(implementation.inference_statuses) +
            vector_bytes(implementation.task_failures) + vector_bytes(implementation.energies) +
            vector_bytes(implementation.forces) + vector_bytes(implementation.atomic_charges) +
-           vector_bytes(implementation.point_forces) + vector_bytes(implementation.iterations) +
-           vector_bytes(implementation.converged) + vector_bytes(implementation.system_statuses);
+           vector_bytes(implementation.point_forces) + vector_bytes(implementation.dipole_moments) +
+           vector_bytes(implementation.iterations) + vector_bytes(implementation.converged) +
+           vector_bytes(implementation.system_statuses);
 
   const HostRequest& request = implementation.request;
   total += vector_bytes(request.atom_offsets) + vector_bytes(request.atomic_numbers) +
@@ -1752,7 +1953,8 @@ std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache
            vector_bytes(request.point_offsets) + vector_bytes(request.point_positions) +
            vector_bytes(request.point_charges) + vector_bytes(request.point_hardnesses) +
            vector_bytes(request.periodic_shifts) + vector_bytes(request.response_offsets) +
-           vector_bytes(request.response_matrices);
+           vector_bytes(request.response_matrices) + vector_bytes(request.field_by_system) +
+           vector_bytes(request.field_attached_by_system);
   return total;
 }
 

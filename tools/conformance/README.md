@@ -121,9 +121,12 @@ packaged xTB 6.7.1 CLI prints `pcgrad` less precisely than the QM `gradient`
 artifact, so the corpus validates total QM+PC force conservation at a tolerance
 consistent with that text precision.
 
-`compare` also accepts raw tblite JSON (`energy` plus `gradient`) and
-gpuxtb-style JSON (`energy_hartree` plus `forces_hartree_per_bohr`). SCC-gated
-cases additionally require `partial_charges_e`, `atomic_dipoles_e_bohr`, and
+`compare` also accepts raw tblite JSON (`energy` plus `gradient`) and flat
+gpuxtb-style JSON. The latter must contain every property required by the
+selected case's gpuxtb oracle-property set; ordinary cases therefore require
+`energy_hartree` plus `forces_hartree_per_bohr`, while a documented
+diagnostic-only force may be omitted. SCC-gated cases additionally require
+`partial_charges_e`, `atomic_dipoles_e_bohr`, and
 `atomic_quadrupoles_e_bohr2`. Each case must be named `<case-id>.json`. This
 makes the same comparison entry usable by the reference generators and future
 C API integration tests.
@@ -155,14 +158,27 @@ srun --gres=gpu:1 env \
 ```
 
 Actual JSON is written before comparison. The primary manifest tolerances are
-used unchanged. Energy and QM forces are gated for every case; QM/MM goldens
-also gate atomic charges and point-charge forces. `oh_radical` uses the standard
+used unchanged. Energy and QM forces are gated when named by each case's
+gpuxtb oracle-property set; QM/MM goldens also gate atomic charges and
+point-charge forces. `oh_radical` uses the standard
 shared-orbital (`spin_channels=1`) xTB semantics and gates energy, force, and
 atom-resolved charges on both backends. Spin-polarized (`spin_channels=2`)
 inference and analytic forces are exercised on CPU and CUDA separately until an
-independently generated spin-polarized golden is committed. Atomic dipoles and
-quadrupoles are not compared because the current C result ABI has no output
-buffers for them.
+independently generated spin-polarized golden is committed. Molecular dipoles
+are published for requested CPU calculations but are not yet part of the
+golden comparison; atomic dipoles and quadrupoles likewise remain diagnostic
+oracle state rather than public conformance outputs.
+
+Case-level `gpuxtb_backends` metadata keeps interactions on only the released
+public backends. The `water_efield` pilot is CPU-only until #237 P3 implements
+CUDA interaction execution, so CUDA host/device/mixed batches continue to run
+the eight previously supported cases instead of failing the whole ragged call
+with `NOT_IMPLEMENTED`. Its pinned tblite 0.7.0 energy remains an independent
+oracle. The tblite analytic field gradient uses `+E` per atom instead of the
+energy derivative `+q_i E`; that force array remains in the canonical golden
+as diagnostic provenance but is excluded from gpuxtb oracle comparison.
+`gpuxtb_invariants.py` central differences of the reported public energy are
+the mandatory force evidence for this case.
 
 `--memory-mode device` places every nonempty input and output descriptor in
 CUDA memory. `mixed` leaves topology offsets, atomic numbers, energies,
@@ -182,14 +198,18 @@ thresholds are absolute rather than relative because the corpus intentionally
 mixes charged anions, tiny near-zero systems, and large energies where a
 relative scale would grant unphysical slack. Behavior gates:
 
-- Every property must match the same pinned live oracle to its own threshold.
-  The cross-engine `cross_engine_tolerances` block is used only when both
-  compared documents explicitly identify distinct independent reference
-  engines; gpuxtb results always use the primary tolerances.
-- CPU and CUDA must both satisfy the primary energy, forces, and charges
-  thresholds (5e-7 each in atomic units), so a CPU/CUDA pair on identical
-  inputs can deviate by at most twice that value (1e-6) by the triangle
-  inequality. The manifest records this as `cpu_cuda_agreement`.
+- Every property named by a case's gpuxtb oracle-property set must match the
+  same pinned live oracle to its own threshold; cases without that metadata
+  retain the complete default property set. The cross-engine
+  `cross_engine_tolerances` block is used only when both compared documents
+  explicitly identify distinct independent reference engines; gpuxtb results
+  always use the primary tolerances.
+- For cases released on both backends, CPU and CUDA must both satisfy the
+  primary energy, forces, and charges thresholds (5e-7 each in atomic units),
+  so a CPU/CUDA pair on identical inputs can deviate by at most twice that
+  value (1e-6) by the triangle inequality. The manifest records this as
+  `cpu_cuda_agreement`. CPU-only cases acquire the same parity gate when their
+  CUDA execution path is released.
 - Within one backend, execution is deterministic for identical descriptors and
   launch configuration: fresh-SCC results are bit-identical across repeated
   calls (the batch-versus-sequential gates below fail at 1e-12), which makes
@@ -229,19 +249,21 @@ The gates cover:
   together) is displaced; tested for two deterministic translations.
 - **Rotation covariance**: energy and atomic charges are invariant under a
   proper rotation, while QM and point-charge forces rotate with the structure;
-  tested with a 37-degree axis rotation and an integer-exact 90-degree
-  rotation about z.
+  uniform electric fields rotate with the structure as Cartesian vectors;
+  tested with a 37-degree axis rotation and an integer-exact 90-degree rotation
+  about z.
 - **Force conservation**: the net force on an isolated system vanishes
   componentwise (QM plus point-charge forces for QM/MM cases).
 - **Charge conservation**: the summed atomic charges reproduce the declared
   molecular charge.
-- **Central finite differences**: every corpus case, QM atom axis, and external
-  point-charge axis is displaced by ``+-1e-3`` bohr in isolation, and the
-  numeric force ``-(E(+)-E(-)) / (2e-3)`` must match the analytic force
-  published for the undisplaced geometry (limit ``1e-5`` Ha/bohr for QM forces,
-  ``1e-7`` Ha/bohr for point-charge forces). This directly checks the force
-  definition (including point-charge force signs) across the whole corpus and
-  both backends.
+- **Central finite differences**: every selected case on each released
+  backend, QM atom axis, and external point-charge axis is displaced by
+  ``+-1e-3`` bohr in isolation, and the numeric force
+  ``-(E(+)-E(-)) / (2e-3)`` must match the analytic force published for the
+  undisplaced geometry (limit ``1e-5`` Ha/bohr for QM forces, ``1e-7``
+  Ha/bohr for point-charge forces). This directly checks the force definition,
+  including point-charge force signs, throughout the backend's supported
+  corpus.
 
 The invariance gates reuse the golden runner's strict single-shot options
 (fresh SCC, charge tolerance 1e-10, energy tolerance 1e-12) so the two paths can

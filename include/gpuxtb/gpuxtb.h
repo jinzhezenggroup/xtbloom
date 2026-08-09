@@ -245,6 +245,94 @@ typedef struct gpuxtb_buffer {
 } gpuxtb_buffer_t;
 
 /*
+ * Pointer-bearing ABI images are architecture-local. A wasm32/native ILP32
+ * caller and library use 32-bit pointers and size_t, while wasm64/native LP64
+ * uses 64-bit pointers and size_t. Fixed-width counts and offsets below remain
+ * 64-bit on both targets. Keep exact assertions for both supported widths so a
+ * compiler or packing change fails at build time instead of corrupting views.
+ */
+#if UINTPTR_MAX == UINT64_MAX
+#define GPUXTB_DETAIL_EXPECTED_CONTEXT_OPTIONS_V1_SIZE 32u
+#define GPUXTB_DETAIL_EXPECTED_BUFFER_SIZE 24u
+#define GPUXTB_DETAIL_EXPECTED_BUFFER_SIZE_BYTES_OFFSET 8u
+#define GPUXTB_DETAIL_EXPECTED_BUFFER_MEMORY_SPACE_OFFSET 16u
+#define GPUXTB_DETAIL_EXPECTED_BUFFER_RESERVED_OFFSET 20u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_V1_SIZE 328u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_V2_SIZE 352u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_TOTAL_INTERACTIONS_OFFSET 352u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_INTERACTION_DESCRIPTORS_OFFSET 360u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_INTERACTION_PAYLOAD_OFFSET 384u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_V3_SIZE 408u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_V1_SIZE 184u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_DIPOLE_OFFSET 184u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_QUADRUPOLE_OFFSET 208u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_WIBERG_OFFSET 232u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_SPIN_OFFSET 256u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_V2_SIZE 280u
+#define GPUXTB_DETAIL_EXPECTED_DLPACK_SHAPE_OFFSET 40u
+#define GPUXTB_DETAIL_EXPECTED_DLPACK_VIEW_V1_SIZE 48u
+#elif UINTPTR_MAX == UINT32_MAX
+#define GPUXTB_DETAIL_EXPECTED_CONTEXT_OPTIONS_V1_SIZE 28u
+#define GPUXTB_DETAIL_EXPECTED_BUFFER_SIZE 16u
+#define GPUXTB_DETAIL_EXPECTED_BUFFER_SIZE_BYTES_OFFSET 4u
+#define GPUXTB_DETAIL_EXPECTED_BUFFER_MEMORY_SPACE_OFFSET 8u
+#define GPUXTB_DETAIL_EXPECTED_BUFFER_RESERVED_OFFSET 12u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_V1_SIZE 232u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_V2_SIZE 248u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_TOTAL_INTERACTIONS_OFFSET 248u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_INTERACTION_DESCRIPTORS_OFFSET 256u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_INTERACTION_PAYLOAD_OFFSET 272u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_V3_SIZE 288u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_V1_SIZE 128u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_DIPOLE_OFFSET 128u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_QUADRUPOLE_OFFSET 144u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_WIBERG_OFFSET 160u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_SPIN_OFFSET 176u
+#define GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_V2_SIZE 192u
+#define GPUXTB_DETAIL_EXPECTED_DLPACK_SHAPE_OFFSET 36u
+#define GPUXTB_DETAIL_EXPECTED_DLPACK_VIEW_V1_SIZE 40u
+#endif
+
+#if defined(__cplusplus)
+#define GPUXTB_DETAIL_ABI_ASSERT(condition, message) static_assert((condition), message)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define GPUXTB_DETAIL_ABI_ASSERT(condition, message) _Static_assert((condition), message)
+#endif
+
+#if defined(GPUXTB_DETAIL_ABI_ASSERT) && defined(GPUXTB_DETAIL_EXPECTED_BUFFER_SIZE)
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_context_options_t, stream) == 24u,
+                         "gpuxtb_context_options_t stream must start at byte 24");
+GPUXTB_DETAIL_ABI_ASSERT(GPUXTB_CONTEXT_OPTIONS_V1_SIZE ==
+                             GPUXTB_DETAIL_EXPECTED_CONTEXT_OPTIONS_V1_SIZE,
+                         "gpuxtb_context_options_t image must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(sizeof(gpuxtb_context_options_t) == GPUXTB_CONTEXT_OPTIONS_V1_SIZE,
+                         "gpuxtb_context_options_t must not add trailing ABI padding");
+GPUXTB_DETAIL_ABI_ASSERT(sizeof(gpuxtb_const_buffer_t) == GPUXTB_DETAIL_EXPECTED_BUFFER_SIZE,
+                         "gpuxtb_const_buffer_t image must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(sizeof(gpuxtb_buffer_t) == GPUXTB_DETAIL_EXPECTED_BUFFER_SIZE,
+                         "gpuxtb_buffer_t image must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_const_buffer_t, size_bytes) ==
+                             GPUXTB_DETAIL_EXPECTED_BUFFER_SIZE_BYTES_OFFSET,
+                         "gpuxtb_const_buffer_t size must follow its target-width pointer");
+GPUXTB_DETAIL_ABI_ASSERT(
+    offsetof(gpuxtb_const_buffer_t, memory_space) ==
+        GPUXTB_DETAIL_EXPECTED_BUFFER_MEMORY_SPACE_OFFSET,
+    "gpuxtb_const_buffer_t memory tag offset must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(
+    offsetof(gpuxtb_const_buffer_t, reserved) == GPUXTB_DETAIL_EXPECTED_BUFFER_RESERVED_OFFSET,
+    "gpuxtb_const_buffer_t reserved offset must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_buffer_t, size_bytes) ==
+                             GPUXTB_DETAIL_EXPECTED_BUFFER_SIZE_BYTES_OFFSET,
+                         "gpuxtb_buffer_t size must follow its target-width pointer");
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_buffer_t, memory_space) ==
+                             GPUXTB_DETAIL_EXPECTED_BUFFER_MEMORY_SPACE_OFFSET,
+                         "gpuxtb_buffer_t memory tag offset must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_buffer_t, reserved) ==
+                             GPUXTB_DETAIL_EXPECTED_BUFFER_RESERVED_OFFSET,
+                         "gpuxtb_buffer_t reserved offset must match the target pointer width");
+#endif
+
+/*
  * Ragged molecular batch. All real-valued inputs use IEEE binary64 and atomic
  * units: bohr for positions and elementary-charge units for charges.
  *
@@ -374,53 +462,36 @@ _Static_assert(sizeof(gpuxtb_compute_options_t) == GPUXTB_COMPUTE_OPTIONS_V2_SIZ
                "gpuxtb_compute_options_t must not add trailing ABI padding");
 #endif
 
-#if defined(__cplusplus)
-static_assert(GPUXTB_BATCH_V1_SIZE == 328u, "gpuxtb_batch_t ABI-v1 prefix must remain 328 bytes");
-static_assert(GPUXTB_BATCH_V2_SIZE == 352u, "gpuxtb_batch_t ABI-v2 image must remain 352 bytes");
-static_assert(offsetof(gpuxtb_batch_t, total_interactions) == 352u,
-              "gpuxtb_batch_t ABI-v3 suffix must start at byte 352");
-static_assert(offsetof(gpuxtb_batch_t, interaction_descriptors) == 360u,
-              "gpuxtb_batch_t ABI-v3 descriptors must start at byte 360");
-static_assert(offsetof(gpuxtb_batch_t, interaction_payload) == 384u,
-              "gpuxtb_batch_t ABI-v3 payload must start at byte 384");
-static_assert(GPUXTB_BATCH_V3_SIZE == 408u, "gpuxtb_batch_t ABI-v3 image must remain 408 bytes");
-static_assert(sizeof(gpuxtb_batch_t) == GPUXTB_BATCH_V3_SIZE,
-              "gpuxtb_batch_t must not add trailing ABI padding");
-static_assert(GPUXTB_INTERACTION_V1_SIZE == 32u, "gpuxtb_interaction_t image must remain 32 bytes");
-static_assert(sizeof(gpuxtb_interaction_t) == GPUXTB_INTERACTION_V1_SIZE,
-              "gpuxtb_interaction_t must not add trailing ABI padding");
-static_assert(offsetof(gpuxtb_interaction_t, flags) == 4u,
-              "gpuxtb_interaction_t flags must start at byte 4");
-static_assert(offsetof(gpuxtb_interaction_t, system_index) == 8u,
-              "gpuxtb_interaction_t system index must start at byte 8");
-static_assert(offsetof(gpuxtb_interaction_t, payload_offset) == 16u,
-              "gpuxtb_interaction_t payload offset must start at byte 16");
-static_assert(offsetof(gpuxtb_interaction_t, payload_size) == 24u,
-              "gpuxtb_interaction_t payload size must start at byte 24");
-#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-_Static_assert(GPUXTB_BATCH_V1_SIZE == 328u, "gpuxtb_batch_t ABI-v1 prefix must remain 328 bytes");
-_Static_assert(GPUXTB_BATCH_V2_SIZE == 352u, "gpuxtb_batch_t ABI-v2 image must remain 352 bytes");
-_Static_assert(offsetof(gpuxtb_batch_t, total_interactions) == 352u,
-               "gpuxtb_batch_t ABI-v3 suffix must start at byte 352");
-_Static_assert(offsetof(gpuxtb_batch_t, interaction_descriptors) == 360u,
-               "gpuxtb_batch_t ABI-v3 descriptors must start at byte 360");
-_Static_assert(offsetof(gpuxtb_batch_t, interaction_payload) == 384u,
-               "gpuxtb_batch_t ABI-v3 payload must start at byte 384");
-_Static_assert(GPUXTB_BATCH_V3_SIZE == 408u, "gpuxtb_batch_t ABI-v3 image must remain 408 bytes");
-_Static_assert(sizeof(gpuxtb_batch_t) == GPUXTB_BATCH_V3_SIZE,
-               "gpuxtb_batch_t must not add trailing ABI padding");
-_Static_assert(GPUXTB_INTERACTION_V1_SIZE == 32u,
-               "gpuxtb_interaction_t image must remain 32 bytes");
-_Static_assert(sizeof(gpuxtb_interaction_t) == GPUXTB_INTERACTION_V1_SIZE,
-               "gpuxtb_interaction_t must not add trailing ABI padding");
-_Static_assert(offsetof(gpuxtb_interaction_t, flags) == 4u,
-               "gpuxtb_interaction_t flags must start at byte 4");
-_Static_assert(offsetof(gpuxtb_interaction_t, system_index) == 8u,
-               "gpuxtb_interaction_t system index must start at byte 8");
-_Static_assert(offsetof(gpuxtb_interaction_t, payload_offset) == 16u,
-               "gpuxtb_interaction_t payload offset must start at byte 16");
-_Static_assert(offsetof(gpuxtb_interaction_t, payload_size) == 24u,
-               "gpuxtb_interaction_t payload size must start at byte 24");
+#if defined(GPUXTB_DETAIL_ABI_ASSERT) && defined(GPUXTB_DETAIL_EXPECTED_BUFFER_SIZE)
+GPUXTB_DETAIL_ABI_ASSERT(GPUXTB_BATCH_V1_SIZE == GPUXTB_DETAIL_EXPECTED_BATCH_V1_SIZE,
+                         "gpuxtb_batch_t ABI-v1 prefix must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(GPUXTB_BATCH_V2_SIZE == GPUXTB_DETAIL_EXPECTED_BATCH_V2_SIZE,
+                         "gpuxtb_batch_t ABI-v2 image must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_batch_t, total_interactions) ==
+                             GPUXTB_DETAIL_EXPECTED_BATCH_TOTAL_INTERACTIONS_OFFSET,
+                         "gpuxtb_batch_t ABI-v3 suffix must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_batch_t, interaction_descriptors) ==
+                             GPUXTB_DETAIL_EXPECTED_BATCH_INTERACTION_DESCRIPTORS_OFFSET,
+                         "gpuxtb_batch_t descriptors must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_batch_t, interaction_payload) ==
+                             GPUXTB_DETAIL_EXPECTED_BATCH_INTERACTION_PAYLOAD_OFFSET,
+                         "gpuxtb_batch_t payload must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(GPUXTB_BATCH_V3_SIZE == GPUXTB_DETAIL_EXPECTED_BATCH_V3_SIZE,
+                         "gpuxtb_batch_t ABI-v3 image must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(sizeof(gpuxtb_batch_t) == GPUXTB_BATCH_V3_SIZE,
+                         "gpuxtb_batch_t must not add trailing ABI padding");
+GPUXTB_DETAIL_ABI_ASSERT(GPUXTB_INTERACTION_V1_SIZE == 32u,
+                         "gpuxtb_interaction_t image must remain 32 bytes");
+GPUXTB_DETAIL_ABI_ASSERT(sizeof(gpuxtb_interaction_t) == GPUXTB_INTERACTION_V1_SIZE,
+                         "gpuxtb_interaction_t must not add trailing ABI padding");
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_interaction_t, flags) == 4u,
+                         "gpuxtb_interaction_t flags must start at byte 4");
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_interaction_t, system_index) == 8u,
+                         "gpuxtb_interaction_t system index must start at byte 8");
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_interaction_t, payload_offset) == 16u,
+                         "gpuxtb_interaction_t payload offset must start at byte 16");
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_interaction_t, payload_size) == 24u,
+                         "gpuxtb_interaction_t payload size must start at byte 24");
 #endif
 
 /*
@@ -472,36 +543,26 @@ typedef struct gpuxtb_batch_result {
 #define GPUXTB_BATCH_RESULT_V2_SIZE \
   (offsetof(gpuxtb_batch_result_t, spin_populations) + sizeof(gpuxtb_buffer_t))
 
-#if defined(__cplusplus)
-static_assert(GPUXTB_BATCH_RESULT_V1_SIZE == 184u,
-              "gpuxtb_batch_result_t ABI-v1 prefix must remain 184 bytes");
-static_assert(offsetof(gpuxtb_batch_result_t, dipole_moments) == 184u,
-              "gpuxtb_batch_result_t ABI-v2 suffix must start at byte 184");
-static_assert(offsetof(gpuxtb_batch_result_t, quadrupole_moments) == 208u,
-              "gpuxtb_batch_result_t quadrupole outlet must start at byte 208");
-static_assert(offsetof(gpuxtb_batch_result_t, wiberg_orders) == 232u,
-              "gpuxtb_batch_result_t Wiberg outlet must start at byte 232");
-static_assert(offsetof(gpuxtb_batch_result_t, spin_populations) == 256u,
-              "gpuxtb_batch_result_t spin outlet must start at byte 256");
-static_assert(GPUXTB_BATCH_RESULT_V2_SIZE == 280u,
-              "gpuxtb_batch_result_t ABI-v2 image must remain 280 bytes");
-static_assert(sizeof(gpuxtb_batch_result_t) == GPUXTB_BATCH_RESULT_V2_SIZE,
-              "gpuxtb_batch_result_t must not add trailing ABI padding");
-#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-_Static_assert(GPUXTB_BATCH_RESULT_V1_SIZE == 184u,
-               "gpuxtb_batch_result_t ABI-v1 prefix must remain 184 bytes");
-_Static_assert(offsetof(gpuxtb_batch_result_t, dipole_moments) == 184u,
-               "gpuxtb_batch_result_t ABI-v2 suffix must start at byte 184");
-_Static_assert(offsetof(gpuxtb_batch_result_t, quadrupole_moments) == 208u,
-               "gpuxtb_batch_result_t quadrupole outlet must start at byte 208");
-_Static_assert(offsetof(gpuxtb_batch_result_t, wiberg_orders) == 232u,
-               "gpuxtb_batch_result_t Wiberg outlet must start at byte 232");
-_Static_assert(offsetof(gpuxtb_batch_result_t, spin_populations) == 256u,
-               "gpuxtb_batch_result_t spin outlet must start at byte 256");
-_Static_assert(GPUXTB_BATCH_RESULT_V2_SIZE == 280u,
-               "gpuxtb_batch_result_t ABI-v2 image must remain 280 bytes");
-_Static_assert(sizeof(gpuxtb_batch_result_t) == GPUXTB_BATCH_RESULT_V2_SIZE,
-               "gpuxtb_batch_result_t must not add trailing ABI padding");
+#if defined(GPUXTB_DETAIL_ABI_ASSERT) && defined(GPUXTB_DETAIL_EXPECTED_BUFFER_SIZE)
+GPUXTB_DETAIL_ABI_ASSERT(GPUXTB_BATCH_RESULT_V1_SIZE == GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_V1_SIZE,
+                         "gpuxtb_batch_result_t ABI-v1 prefix must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_batch_result_t, dipole_moments) ==
+                             GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_DIPOLE_OFFSET,
+                         "gpuxtb_batch_result_t ABI-v2 suffix must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(
+    offsetof(gpuxtb_batch_result_t, quadrupole_moments) ==
+        GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_QUADRUPOLE_OFFSET,
+    "gpuxtb_batch_result_t quadrupole outlet must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_batch_result_t, wiberg_orders) ==
+                             GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_WIBERG_OFFSET,
+                         "gpuxtb_batch_result_t Wiberg outlet must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_batch_result_t, spin_populations) ==
+                             GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_SPIN_OFFSET,
+                         "gpuxtb_batch_result_t spin outlet must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(GPUXTB_BATCH_RESULT_V2_SIZE == GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_V2_SIZE,
+                         "gpuxtb_batch_result_t ABI-v2 image must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(sizeof(gpuxtb_batch_result_t) == GPUXTB_BATCH_RESULT_V2_SIZE,
+                         "gpuxtb_batch_result_t must not add trailing ABI padding");
 #endif
 
 /*
@@ -730,6 +791,37 @@ typedef struct gpuxtb_dlpack_view {
 
 #define GPUXTB_DLPACK_MAX_NDIM 8
 #define GPUXTB_DLPACK_VIEW_V1_SIZE (offsetof(gpuxtb_dlpack_view_t, shape) + sizeof(const int64_t*))
+
+#if defined(GPUXTB_DETAIL_ABI_ASSERT) && defined(GPUXTB_DETAIL_EXPECTED_BUFFER_SIZE)
+GPUXTB_DETAIL_ABI_ASSERT(offsetof(gpuxtb_dlpack_view_t, shape) ==
+                             GPUXTB_DETAIL_EXPECTED_DLPACK_SHAPE_OFFSET,
+                         "gpuxtb_dlpack_view_t shape must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(GPUXTB_DLPACK_VIEW_V1_SIZE == GPUXTB_DETAIL_EXPECTED_DLPACK_VIEW_V1_SIZE,
+                         "gpuxtb_dlpack_view_t image must match the target pointer width");
+GPUXTB_DETAIL_ABI_ASSERT(sizeof(gpuxtb_dlpack_view_t) == GPUXTB_DLPACK_VIEW_V1_SIZE,
+                         "gpuxtb_dlpack_view_t must not add trailing ABI padding");
+#endif
+
+#undef GPUXTB_DETAIL_ABI_ASSERT
+#undef GPUXTB_DETAIL_EXPECTED_CONTEXT_OPTIONS_V1_SIZE
+#undef GPUXTB_DETAIL_EXPECTED_BUFFER_SIZE
+#undef GPUXTB_DETAIL_EXPECTED_BUFFER_SIZE_BYTES_OFFSET
+#undef GPUXTB_DETAIL_EXPECTED_BUFFER_MEMORY_SPACE_OFFSET
+#undef GPUXTB_DETAIL_EXPECTED_BUFFER_RESERVED_OFFSET
+#undef GPUXTB_DETAIL_EXPECTED_BATCH_V1_SIZE
+#undef GPUXTB_DETAIL_EXPECTED_BATCH_V2_SIZE
+#undef GPUXTB_DETAIL_EXPECTED_BATCH_TOTAL_INTERACTIONS_OFFSET
+#undef GPUXTB_DETAIL_EXPECTED_BATCH_INTERACTION_DESCRIPTORS_OFFSET
+#undef GPUXTB_DETAIL_EXPECTED_BATCH_INTERACTION_PAYLOAD_OFFSET
+#undef GPUXTB_DETAIL_EXPECTED_BATCH_V3_SIZE
+#undef GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_V1_SIZE
+#undef GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_DIPOLE_OFFSET
+#undef GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_QUADRUPOLE_OFFSET
+#undef GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_WIBERG_OFFSET
+#undef GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_SPIN_OFFSET
+#undef GPUXTB_DETAIL_EXPECTED_BATCH_RESULT_V2_SIZE
+#undef GPUXTB_DETAIL_EXPECTED_DLPACK_SHAPE_OFFSET
+#undef GPUXTB_DETAIL_EXPECTED_DLPACK_VIEW_V1_SIZE
 
 GPUXTB_API gpuxtb_status_t gpuxtb_result_owner_options_init(gpuxtb_result_owner_options_t* options,
                                                             size_t struct_size);

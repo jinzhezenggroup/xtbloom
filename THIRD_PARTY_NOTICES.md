@@ -239,6 +239,57 @@ grants no redistribution rights beyond those terms. gpuxtb's device link
 passes `--cudadevrt=none`; NVIDIA libdevice code incorporated by nvcc may still
 be present and is covered expressly by the permission.
 
+## 3Dmol.js
+
+Repository: <https://github.com/3Dmol/3Dmol.js>
+
+License: `BSD-3-Clause` (`LICENSES/3Dmol.js-BSD-3-Clause.txt`; Copyright (c)
+2014, University of Pittsburgh and contributors; incorporates code from
+GLmol, Three.js, and jQuery per the upstream license text).
+
+Build-time npm dependency (not vendored):
+
+- `web/package.json` pins `3dmol@2.5.5` (published 2026-05-22); the exact
+  resolution and integrity is recorded in `web/package-lock.json`.
+- The prebuilt browser bundle `node_modules/3dmol/build/3Dmol-min.js` is
+  downloaded by `npm ci` during the CMake web build and copied into the
+  artifact by `web/CMakeLists.txt`. Its content hash is SHA-256
+  `f7cc78921ae72e7623e89cdd111434f58c2efddd2ffda1cd212644b406fb8016`, with the
+  upstream `/*! 3dmol v2.5.5 ... */` banner retained at the top of the file.
+
+The gpuxtb WASM web demo (`web/`) uses it only for client-side molecular
+visualization of the user-supplied geometry. It is not part of the native
+library, CMake installs, source archives, or Python wheels.
+
+The prebuilt 3Dmol bundle incorporates these npm transitive dependencies. They
+are distributed inside `vendor/3Dmol-min.js`, rather than as separate files:
+
+- iobuffer 5.4.0, repository <https://github.com/jDataView/iobuffer>, MIT
+  (`LICENSES/iobuffer-MIT.txt`; Copyright (c) 2015 Michaël Zasso), npm
+  integrity
+  `sha512-DRebOWuqDvxunfkNJAlc3IzWIPD5xVxwUNbHr7xKB8E6aLJxIPfNX3CoMJghcFjpv6RWQsrcJbghtEwSPoJqMA==`;
+- netcdfjs 3.0.0, repository <https://github.com/cheminfo/netcdfjs>, MIT
+  (`LICENSES/netcdfjs-MIT.txt`; Copyright (c) 2016 cheminfo), npm integrity
+  `sha512-LOvT8KkC308qtpUkcBPiCMBtii7ZQCN6LxcVheWgyUeZ6DQWcpSRFV9dcVXLj/2eHZ/bre9tV5HTH4Sf93vrFw==`;
+- UPNG.js 2.1.0, repository <https://github.com/photopea/UPNG.js>, MIT
+  (`LICENSES/upng-js-MIT.txt`; Copyright (c) 2017 Photopea), npm integrity
+  `sha512-d3xzZzpMP64YkjP5pr8gNyvBt7dLk/uGI67EctzDuVp4lCZyVMo0aJO6l/VDlgbInJYDY6cnClLoBp29eKWI6g==`;
+- pako 2.2.0 and pako 1.0.11, repository
+  <https://github.com/nodeca/pako>, MIT for the pako wrapper
+  (`LICENSES/pako-MIT.txt`) and Zlib for the ported `/lib/zlib` code
+  (`LICENSES/pako-Zlib.txt`). The two locked npm integrities are
+  `sha512-zJq6RP/5q+TO2OpFV3FHzlPnFjmkb7Nc99a5SNjJE+uu/PkpChs+NIZSSzbBoD+6kjiISXjfYdwj1ZRQ81dz/w==`
+  and
+  `sha512-4hLB8Py4zZce5s4yd9XzopqwVv/yGNhV1Bl8NTmCq1763HeK2+EwVTv+leGeL13Dnh2wfbqowVPXCIO0z4taYw==`.
+  Pako 2.2.0 records zlib 1.3.2 as its original implementation; the nested
+  pako 1.0.11 records zlib 1.2.8.
+
+`web/package-lock.json` (SHA-256
+`475e2213ac02fbf2d4a8c4fc287b570fc476da2fda9de3f5a72a2554b5716e71`)
+is the reviewed resolution. Every Pages artifact carries the project GPL,
+this notice, the additional permission, the 3Dmol license, all transitive npm
+license texts above, and the parameter-data licenses and provenance manifests.
+
 ## Distribution policy
 
 Generated artifacts remain accompanied by their upstream SPDX identifier,

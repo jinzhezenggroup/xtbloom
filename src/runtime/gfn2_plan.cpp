@@ -316,9 +316,9 @@ gpuxtb_status_t Gfn2Plan::query_workspace(std::uint32_t compute_flags,
     error = "plan is not created or has been destroyed";
     return GPUXTB_STATUS_INVALID_ARGUMENT;
   }
-  constexpr std::uint32_t kKnownComputeFlags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES |
-                                               GPUXTB_COMPUTE_ATOMIC_CHARGES |
-                                               GPUXTB_COMPUTE_POINT_CHARGE_FORCES;
+  constexpr std::uint32_t kKnownComputeFlags =
+      GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES |
+      GPUXTB_COMPUTE_POINT_CHARGE_FORCES | GPUXTB_COMPUTE_DIPOLE_MOMENTS;
   if (query.reserved != 0u || query.reserved_v2 != 0u || compute_flags == 0u ||
       (compute_flags & ~kKnownComputeFlags) != 0u) {
     error = "workspace query contains unknown flags or nonzero reserved fields";
