@@ -50,6 +50,14 @@ constexpr std::uint32_t kAllProperties = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_
                                          GPUXTB_COMPUTE_ATOMIC_CHARGES |
                                          GPUXTB_COMPUTE_POINT_CHARGE_FORCES;
 
+__global__ void hold_result_stream_kernel(unsigned long long clock_cycles) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) return;
+  const unsigned long long start = clock64();
+  while (clock64() - start < clock_cycles) {
+    __nanosleep(1000u);
+  }
+}
+
 template <typename T>
 class DeviceBuffer {
  public:
@@ -690,6 +698,43 @@ bool test_unrequested_outputs(cudaStream_t stream) {
   return true;
 }
 
+bool test_prepare_submission_precedes_host_acceptance(cudaStream_t stream) {
+  Fixture fixture(1, kAllProperties);
+  CHECK(fixture.initialize());
+  fixture.configure(uniform_routes(Gfn2PublicResultRoute::kHost));
+
+  int device = 0;
+  int clock_rate_khz = 0;
+  CUDA_CHECK(cudaGetDevice(&device));
+  CUDA_CHECK(cudaDeviceGetAttribute(&clock_rate_khz, cudaDevAttrClockRate, device));
+  CHECK(clock_rate_khz > 0);
+  const unsigned long long delay_cycles = static_cast<unsigned long long>(clock_rate_khz) * 250ULL;
+  hold_result_stream_kernel<<<1, 1, 0, stream>>>(delay_cycles);
+  CUDA_CHECK(cudaPeekAtLastError());
+
+  CUDA_CHECK(prepare_gfn2_public_results_cuda(fixture.plan, fixture.input, fixture.device_staging,
+                                              fixture.destinations, fixture.staging,
+                                              fixture.diagnostics, stream));
+  const cudaError_t query_status = cudaStreamQuery(stream);
+  CHECK(query_status == cudaErrorNotReady || query_status == cudaSuccess);
+
+  /* Submission owns the pending flag image immediately, but the downloaded
+   * aggregate is not host-readable as an acceptance decision until the owner
+   * observes stream completion. Instrumented CUDA runtimes may serialize the
+   * delay; in an ordinary run the not-ready branch proves that separation. */
+  CHECK(*fixture.pending_flags.get() == fixture.plan.result_flags);
+  if (query_status == cudaErrorNotReady) {
+    CHECK(fixture.host_control.get()->aggregate_error == UINT32_MAX);
+  }
+
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(fixture.host_control.get()->aggregate_error ==
+        static_cast<std::uint32_t>(Gfn2PublicResultBridgeError::kSuccess));
+  CHECK(fixture.verify_prepared_shadow());
+  CHECK(fixture.all_device_outputs_are_sentinels());
+  return true;
+}
+
 bool test_staging_enqueue_failure_precedes_device_writes(cudaStream_t stream) {
   Fixture fixture(8, kAllProperties);
   CHECK(fixture.initialize());
@@ -738,6 +783,7 @@ int main(int argc, char** argv) {
   const bool success =
       test_success_matrix(stream) && test_aggregate_gate(stream) &&
       test_unrequested_outputs(stream) &&
+      test_prepare_submission_precedes_host_acceptance(stream) &&
       (skip_expected_api_error || test_staging_enqueue_failure_precedes_device_writes(stream));
   const cudaError_t destroy_status = cudaStreamDestroy(stream);
   return success && destroy_status == cudaSuccess ? 0 : 1;

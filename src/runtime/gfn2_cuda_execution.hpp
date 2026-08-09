@@ -283,8 +283,11 @@ class Gfn2CudaExecutionCache {
  * Execute one synchronous public CUDA request as a single cache transaction.
  * Validation, topology staging, candidate refresh, SCC, internal publication,
  * public result bridging, and completion all remain serialized by the cache
- * mutex. Failures detected before caller-output commit leave output bytes and
- * result.flags unchanged. Any later catastrophic failure may return
+ * mutex. The owner drives prepare submission, completion observation, host
+ * aggregate acceptance, caller-device commit, and host publication as
+ * separate phases while preserving the synchronous wait points. Failures
+ * detected before caller-output commit leave output bytes and result.flags
+ * unchanged. Any later catastrophic failure may return
  * INTERNAL_ERROR after results were modified. Current-device restoration is a
  * separate exit boundary and may fail before or after output commit, as
  * documented by the public API.

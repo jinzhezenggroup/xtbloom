@@ -1935,13 +1935,32 @@ struct PublicResultState {
   bool ready = false;
 };
 
-/* Stack-owned descriptor image kept between the prepare and final commit
- * phases of one synchronous public transaction. All referenced storage is
- * owned by Prepared or by the caller and remains live until the call returns. */
-struct PendingPublicResultCommit {
+/*
+ * The public bridge is intentionally represented as explicit host phases.
+ * CUDA submission, completion observation, aggregate acceptance, and host
+ * publication have different lifetime and failure boundaries; keeping those
+ * boundaries visible lets the synchronous owner preserve today's ordering
+ * while a later request owner can drive the same transaction incrementally.
+ */
+enum class PublicResultTransactionPhase : std::uint32_t {
+  kEmpty = 0u,
+  kPrepareSubmitted = 1u,
+  kPrepareCompletionRecorded = 2u,
+  kPrepareCompleted = 3u,
+  kPrepareAccepted = 4u,
+  kCommitSubmitted = 5u,
+  kCommitCompletionRecorded = 6u,
+  kCommitCompleted = 7u,
+  kPublished = 8u,
+};
+
+/* Stack-owned descriptor image retained across one public result transaction.
+ * All referenced storage is owned by Prepared or by the caller and remains
+ * live until the synchronous call returns. */
+struct PublicResultTransaction {
   Gfn2PublicResultBridgeDevicePlan plan{};
   Gfn2PublicResultBridgeDeviceDestinations destinations{};
-  bool ready = false;
+  PublicResultTransactionPhase phase = PublicResultTransactionPhase::kEmpty;
 };
 
 }  // namespace
@@ -5805,12 +5824,10 @@ struct Gfn2CudaExecutionCache::Impl {
     return GPUXTB_STATUS_INTERNAL_ERROR;
   }
 
-  gpuxtb_status_t prepare_public_results_locked(Prepared& current, const gpuxtb_batch_t& batch,
-                                                const gpuxtb_compute_options_t& options,
-                                                gpuxtb_batch_result_t& result,
-                                                PendingPublicResultCommit& pending,
-                                                std::string& error) {
-    pending = {};
+  gpuxtb_status_t enqueue_public_result_prepare_locked(
+      Prepared& current, const gpuxtb_batch_t& batch, const gpuxtb_compute_options_t& options,
+      gpuxtb_batch_result_t& result, PublicResultTransaction& transaction, std::string& error) {
+    transaction = {};
     if (!current.public_result.ready || !current.inference.ready ||
         current.public_result_completion_event.get() == nullptr) {
       error = "CUDA public result bridge requires a complete prepared runtime";
@@ -5927,15 +5944,80 @@ struct Gfn2CudaExecutionCache::Impl {
       error = cuda_error_message("CUDA warm-checkpoint readiness download", cuda_status);
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
-    cuda_status = cudaEventRecord(current.public_result_completion_event.get(), stream);
-    if (cuda_status == cudaSuccess) {
-      cuda_status = cudaEventSynchronize(current.public_result_completion_event.get());
+
+    transaction.plan = plan;
+    transaction.destinations = destinations;
+    transaction.phase = PublicResultTransactionPhase::kPrepareSubmitted;
+    error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  }
+
+  /*
+   * Append one completion marker after a submitted public bridge phase. The
+   * commit phase retains the historical stream-fence fallback when recording
+   * the event itself fails; prepare keeps its existing strict event behavior.
+   */
+  gpuxtb_status_t record_public_result_completion_locked(
+      Prepared& current, PublicResultTransaction& transaction,
+      PublicResultTransactionPhase submitted_phase, PublicResultTransactionPhase recorded_phase,
+      PublicResultTransactionPhase completed_phase, bool fallback_to_stream,
+      const char* failure_context, std::string& error) {
+    if (transaction.phase != submitted_phase ||
+        current.public_result_completion_event.get() == nullptr) {
+      error = "CUDA public result completion marker has an invalid transaction phase";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
     }
+
+    const cudaError_t record_status =
+        cudaEventRecord(current.public_result_completion_event.get(), stream);
+    if (record_status == cudaSuccess) {
+      transaction.phase = recorded_phase;
+      return GPUXTB_STATUS_SUCCESS;
+    }
+    if (fallback_to_stream && cudaStreamSynchronize(stream) == cudaSuccess) {
+      current.submitted = false;
+      transaction.phase = completed_phase;
+      return GPUXTB_STATUS_SUCCESS;
+    }
+
+    error = cuda_error_message(failure_context, record_status);
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+
+  /* Completion observation never publishes host bytes or result.flags. */
+  gpuxtb_status_t wait_public_result_completion_locked(Prepared& current,
+                                                       PublicResultTransaction& transaction,
+                                                       PublicResultTransactionPhase recorded_phase,
+                                                       PublicResultTransactionPhase completed_phase,
+                                                       const char* failure_context,
+                                                       std::string& error) {
+    if (transaction.phase == completed_phase) return GPUXTB_STATUS_SUCCESS;
+    if (transaction.phase != recorded_phase ||
+        current.public_result_completion_event.get() == nullptr) {
+      error = "CUDA public result completion wait has an invalid transaction phase";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+
+    const cudaError_t cuda_status =
+        cudaEventSynchronize(current.public_result_completion_event.get());
     if (cuda_status != cudaSuccess) {
-      error = cuda_error_message("CUDA public inference completion", cuda_status);
+      error = cuda_error_message(failure_context, cuda_status);
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
     current.submitted = false;
+    transaction.phase = completed_phase;
+    return GPUXTB_STATUS_SUCCESS;
+  }
+
+  /* Read the pinned aggregate only after prepare completion is observed. */
+  gpuxtb_status_t accept_public_result_prepare_locked(Prepared& current,
+                                                      PublicResultTransaction& transaction,
+                                                      std::string& error) {
+    if (transaction.phase != PublicResultTransactionPhase::kPrepareCompleted) {
+      error = "CUDA public result prepare acceptance precedes completion";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    const auto& public_state = current.public_result;
     const auto aggregate =
         static_cast<Gfn2PublicResultBridgeError>(public_state.host_control->aggregate_error);
     if (aggregate != Gfn2PublicResultBridgeError::kSuccess) {
@@ -5949,22 +6031,20 @@ struct Gfn2CudaExecutionCache::Impl {
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
 
-    pending.plan = plan;
-    pending.destinations = destinations;
-    pending.ready = true;
+    transaction.phase = PublicResultTransactionPhase::kPrepareAccepted;
     error.clear();
     return GPUXTB_STATUS_SUCCESS;
   }
 
   gpuxtb_status_t enqueue_public_result_commit_locked(Prepared& current,
-                                                      const PendingPublicResultCommit& pending,
+                                                      PublicResultTransaction& transaction,
                                                       std::string& error) {
-    if (!pending.ready) {
+    if (transaction.phase != PublicResultTransactionPhase::kPrepareAccepted) {
       error = "CUDA public result commit has no accepted prepared image";
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
     const cudaError_t cuda_status = commit_gfn2_public_results_cuda(
-        pending.plan, current.public_result.device_staging, pending.destinations,
+        transaction.plan, current.public_result.device_staging, transaction.destinations,
         current.public_result.diagnostics, stream);
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("CUDA caller-device result commit submission", cuda_status);
@@ -5974,29 +6054,20 @@ struct Gfn2CudaExecutionCache::Impl {
     /* From this point onward caller CUDA bytes may be modified. No later
      * failure is recoverable by pretending that the transaction rolled back. */
     current.submitted = true;
+    transaction.phase = PublicResultTransactionPhase::kCommitSubmitted;
     return GPUXTB_STATUS_SUCCESS;
   }
 
-  gpuxtb_status_t finalize_public_result_commit_locked(Prepared& current,
-                                                       const gpuxtb_compute_options_t& options,
-                                                       gpuxtb_batch_result_t& result,
-                                                       bool commit_host_outputs,
-                                                       std::string& error) {
-    cudaError_t cuda_status = cudaEventRecord(current.public_result_completion_event.get(), stream);
-    if (cuda_status == cudaSuccess) {
-      cuda_status = cudaEventSynchronize(current.public_result_completion_event.get());
-    } else {
-      const cudaError_t fallback = cudaStreamSynchronize(stream);
-      if (fallback == cudaSuccess) cuda_status = cudaSuccess;
-    }
-    if (cuda_status != cudaSuccess) {
-      error = cuda_error_message(
-          "CUDA caller-device result commit failed after its kernel was accepted; caller CUDA "
-          "outputs may have been modified",
-          cuda_status);
+  /* Host result publication is a separate, non-CUDA phase after commit wait. */
+  gpuxtb_status_t publish_public_results_locked(Prepared& current,
+                                                const gpuxtb_compute_options_t& options,
+                                                gpuxtb_batch_result_t& result,
+                                                PublicResultTransaction& transaction,
+                                                bool commit_host_outputs, std::string& error) {
+    if (transaction.phase != PublicResultTransactionPhase::kCommitCompleted) {
+      error = "CUDA public result host publication precedes commit completion";
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
-    current.submitted = false;
     if (!commit_host_outputs) return GPUXTB_STATUS_INTERNAL_ERROR;
 
     const std::int64_t batch_size = current.host.basis.batch_size;
@@ -6038,6 +6109,7 @@ struct Gfn2CudaExecutionCache::Impl {
                 sizeof(gpuxtb_status_t));
     result.flags = public_state.pending_result_flags;
     current.inference.warm_checkpoint_ready = *public_state.warm_checkpoint_ready != 0u;
+    transaction.phase = PublicResultTransactionPhase::kPublished;
     error.clear();
     return GPUXTB_STATUS_SUCCESS;
   }
@@ -6372,13 +6444,27 @@ gpuxtb_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache,
      * event and aggregate bridge diagnostics are known to have succeeded. */
     working->inference.warm_checkpoint_ready = false;
 
-    PendingPublicResultCommit pending_result;
-    status = implementation.prepare_public_results_locked(*working, batch, options, result,
-                                                          pending_result, error);
+    PublicResultTransaction public_result_transaction;
+    status = implementation.enqueue_public_result_prepare_locked(*working, batch, options, result,
+                                                                 public_result_transaction, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return fail_working_transaction(status);
+    status = implementation.record_public_result_completion_locked(
+        *working, public_result_transaction, PublicResultTransactionPhase::kPrepareSubmitted,
+        PublicResultTransactionPhase::kPrepareCompletionRecorded,
+        PublicResultTransactionPhase::kPrepareCompleted, false, "CUDA public inference completion",
+        error);
+    if (status != GPUXTB_STATUS_SUCCESS) return fail_working_transaction(status);
+    status = implementation.wait_public_result_completion_locked(
+        *working, public_result_transaction,
+        PublicResultTransactionPhase::kPrepareCompletionRecorded,
+        PublicResultTransactionPhase::kPrepareCompleted, "CUDA public inference completion", error);
+    if (status != GPUXTB_STATUS_SUCCESS) return fail_working_transaction(status);
+    status = implementation.accept_public_result_prepare_locked(*working, public_result_transaction,
+                                                                error);
     if (status != GPUXTB_STATUS_SUCCESS) return fail_working_transaction(status);
 
-    /* The prepare event accepted the aggregate diagnostics and the private
-     * host-upload stream is settled before any caller CUDA output is touched. */
+    /* The completed prepare is accepted before the private host-upload stream
+     * is settled and before any caller CUDA output is touched. */
     status = implementation.settle_public_submissions_locked(*working, status, error);
     if (status != GPUXTB_STATUS_SUCCESS) {
       abort_topology_candidate();
@@ -6394,7 +6480,8 @@ gpuxtb_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache,
       }
     }
 
-    status = implementation.enqueue_public_result_commit_locked(*working, pending_result, error);
+    status = implementation.enqueue_public_result_commit_locked(*working, public_result_transaction,
+                                                                error);
     if (status != GPUXTB_STATUS_SUCCESS) return fail_working_transaction(status);
 
     /* A successful launch is the caller-device commit point. Ownership moves
@@ -6409,8 +6496,21 @@ gpuxtb_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache,
         error = "CUDA topology publication invariant failed after caller-device commit acceptance";
       }
     }
-    status = implementation.finalize_public_result_commit_locked(*working, options, result,
-                                                                 ownership_published, error);
+    constexpr const char* kCommitCompletionFailure =
+        "CUDA caller-device result commit failed after its kernel was accepted; caller CUDA "
+        "outputs may have been modified";
+    status = implementation.record_public_result_completion_locked(
+        *working, public_result_transaction, PublicResultTransactionPhase::kCommitSubmitted,
+        PublicResultTransactionPhase::kCommitCompletionRecorded,
+        PublicResultTransactionPhase::kCommitCompleted, true, kCommitCompletionFailure, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = implementation.wait_public_result_completion_locked(
+        *working, public_result_transaction,
+        PublicResultTransactionPhase::kCommitCompletionRecorded,
+        PublicResultTransactionPhase::kCommitCompleted, kCommitCompletionFailure, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    status = implementation.publish_public_results_locked(
+        *working, options, result, public_result_transaction, ownership_published, error);
     return status;
   }();
   return finish(transaction_status);

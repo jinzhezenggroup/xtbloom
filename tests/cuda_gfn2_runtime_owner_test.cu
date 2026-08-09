@@ -33,6 +33,7 @@
 namespace {
 
 using gpuxtb::detail::Context;
+using gpuxtb::detail::execute_restricted_gfn2_cuda;
 using gpuxtb::detail::Gfn2CudaExecutionCache;
 using gpuxtb::detail::Gfn2CudaExecutionIdentity;
 using gpuxtb::detail::Gfn2CudaNumericalInputView;
@@ -47,6 +48,12 @@ using gpuxtb::test::gfn2::SmallSystemKind;
 
 template <typename T>
 gpuxtb_const_buffer_t host_buffer(const std::vector<T>& values) noexcept {
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), GPUXTB_MEMORY_HOST,
+          0u};
+}
+
+template <typename T>
+gpuxtb_buffer_t mutable_host_buffer(std::vector<T>& values) noexcept {
   return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), GPUXTB_MEMORY_HOST,
           0u};
 }
@@ -1624,6 +1631,46 @@ int test_publication_plan_failure_provenance(cudaStream_t stream, std::int32_t d
   return 0;
 }
 
+int test_synchronous_public_result_transaction(cudaStream_t stream, std::int32_t device_id) {
+  Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
+  HostSccCase host;
+  std::string error;
+  CHECK(HostSccCase::create(homogeneous_case_options(1, SmallSystemKind::kHe, false, false, false),
+                            host, error) == GPUXTB_STATUS_SUCCESS);
+  PublicHostBatch batch = PublicHostBatch::from_host(host, false);
+  gpuxtb_compute_options_t options = compute_options(false);
+  options.max_scc_iterations = 32;
+
+  constexpr double kEnergyCanary = 8125.75;
+  constexpr std::int32_t kIterationCanary = INT32_C(0x13572468);
+  constexpr std::uint8_t kConvergedCanary = UINT8_C(0xa5);
+  constexpr gpuxtb_status_t kStatusCanary = INT32_C(0x24681357);
+  constexpr std::uint32_t kFlagsCanary = UINT32_C(0xc35aa53c);
+  std::vector<double> energies(1, kEnergyCanary);
+  std::vector<std::int32_t> iterations(1, kIterationCanary);
+  std::vector<std::uint8_t> converged(1, kConvergedCanary);
+  std::vector<gpuxtb_status_t> statuses(1, kStatusCanary);
+  gpuxtb_batch_result_t result{};
+  result.struct_size = GPUXTB_BATCH_RESULT_V1_SIZE;
+  result.api_version = GPUXTB_API_VERSION;
+  result.flags = kFlagsCanary;
+  result.energies = mutable_host_buffer(energies);
+  result.scc_iterations = mutable_host_buffer(iterations);
+  result.scc_converged = mutable_host_buffer(converged);
+  result.per_system_status = mutable_host_buffer(statuses);
+
+  CHECK(execute_restricted_gfn2_cuda(cache, batch.descriptor, options, result, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  /* The synchronous owner must observe commit completion before publishing
+   * any pinned result image or result.flags to the caller. */
+  CHECK(result.flags == 0u);
+  CHECK(std::isfinite(energies[0]));
+  CHECK(iterations[0] > 0);
+  CHECK(converged[0] == 1u);
+  CHECK(statuses[0] == GPUXTB_STATUS_SUCCESS);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -1650,6 +1697,7 @@ int main() {
   if (status == 0) status = test_failed_refresh_revokes_warm_checkpoint(stream, device_id);
   if (status == 0) status = test_failed_inference_consumes_warm_checkpoint(stream, device_id);
   if (status == 0) status = test_publication_plan_failure_provenance(stream, device_id);
+  if (status == 0) status = test_synchronous_public_result_transaction(stream, device_id);
   if (status == 0) status = test_default_stream_refresh(device_id);
 
   CUDA_CHECK(cudaStreamSynchronize(stream));
