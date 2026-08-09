@@ -913,6 +913,13 @@ def measure_cell(
         energy_drift <= repeatability_energy_atol_hartree
         and force_drift <= repeatability_force_atol_hartree_per_bohr
     )
+    # A persistent WARM call starts from the electronic state published by the
+    # preceding call.  At a finite SCC tolerance, repeated calls at identical
+    # geometry may therefore continue converging and are not identical-state
+    # repetitions.  Preserve that drift as useful evidence, but apply the
+    # strict repeatability eligibility gate only when every measured call is
+    # independently cold/reset (including dxtb, whose reset is timed).
+    repeatability_gate_applied = start_policy == "cold" or always_cold
     latencies = [sample["latency_ms"] for sample in raw_samples]
     iteration_min = iteration_max = None
     iterations = [
@@ -946,7 +953,7 @@ def measure_cell(
                 if (
                     (status_ok or not status_known)
                     and (converged_ok or not convergence_known)
-                    and repeatability_ok
+                    and (repeatability_ok or not repeatability_gate_applied)
                 )
                 else "fail"
             ),
@@ -956,6 +963,12 @@ def measure_cell(
             "scc_converged_ok": converged_ok if convergence_known else None,
             "scc_status_ok": status_ok if status_known else None,
             "repeatability": {
+                "gate_applied": repeatability_gate_applied,
+                "gate_reason": (
+                    "independent_cold_or_reset_calls"
+                    if repeatability_gate_applied
+                    else "persistent_warm_state_can_continue_scc_convergence"
+                ),
                 "energy_atol_hartree": repeatability_energy_atol_hartree,
                 "max_abs_energy_drift_hartree": energy_drift,
                 "force_atol_hartree_per_bohr": (

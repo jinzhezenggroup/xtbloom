@@ -371,6 +371,56 @@ class NatomsCrossEngineTest(unittest.TestCase):
         self.assertEqual(runner.modes, ["fresh", "warm"])
         self.assertEqual(fragment["effective_start_policy"], "auto-warm")
 
+    def test_auto_warm_records_drift_without_cold_repeatability_gate(self) -> None:
+        """Warm-state refinement is diagnostic, not cold-call repeatability."""
+
+        class RefiningWarmRunner:
+            def __init__(self) -> None:
+                self.invocations = 0
+
+            def set_start_mode(self, _mode: str) -> None:
+                return
+
+            def invoke(self) -> None:
+                self.invocations += 1
+
+            def snapshot(self) -> dict[str, object]:
+                drift = self.invocations * 1.0e-6
+                return {
+                    "energies_hartree": [-1.0 + drift],
+                    "forces_hartree_per_bohr": [drift, 0.0, 0.0],
+                    "scc_iterations": [2],
+                    "scc_converged": [1],
+                    "per_system_status": [0],
+                }
+
+        fragment = nce.measure_cell(
+            RefiningWarmRunner(),
+            (0, 2),
+            nce.Cell("gpuxtb-cpu", 1, 1, 1, 0),
+            "auto-warm",
+            repeatability_energy_atol_hartree=1.0e-10,
+            repeatability_force_atol_hartree_per_bohr=1.0e-8,
+        )
+        repeatability = fragment["correctness"]["repeatability"]
+        self.assertEqual(fragment["correctness"]["status"], "pass")
+        self.assertFalse(repeatability["gate_applied"])
+        self.assertGreater(repeatability["max_abs_energy_drift_hartree"], 1.0e-10)
+        self.assertGreater(
+            repeatability["max_abs_force_drift_hartree_per_bohr"], 1.0e-8
+        )
+
+        cold = nce.measure_cell(
+            RefiningWarmRunner(),
+            (0, 2),
+            nce.Cell("gpuxtb-cpu", 1, 1, 1, 0),
+            "cold",
+            repeatability_energy_atol_hartree=1.0e-10,
+            repeatability_force_atol_hartree_per_bohr=1.0e-8,
+        )
+        self.assertEqual(cold["correctness"]["status"], "fail")
+        self.assertTrue(cold["correctness"]["repeatability"]["gate_applied"])
+
     def test_dxtb_policy_is_recorded_as_cold(self) -> None:
         """A requested auto-warm row must expose dxtb's actual cold behavior."""
 
@@ -402,6 +452,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
         self.assertEqual(runner.invocations, 1)
         self.assertEqual(fragment["effective_start_policy"], "cold")
         self.assertEqual(fragment["state_preparation_timing"], "inside_timed_invoke")
+        self.assertTrue(fragment["correctness"]["repeatability"]["gate_applied"])
         self.assertIsNone(fragment["correctness"]["scc_converged_ok"])
         self.assertIsNone(fragment["correctness"]["scc_status_ok"])
 
