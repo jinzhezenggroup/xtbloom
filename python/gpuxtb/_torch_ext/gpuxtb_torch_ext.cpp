@@ -32,14 +32,12 @@
 // data-level per_system_status results with quiet-NaN floating slices, and
 // call-level errors surfaced as exceptions with gpuxtb_get_last_error text.
 
+#include <gpuxtb/gpuxtb.h>
 #include <torch/csrc/stable/library.h>
 #include <torch/csrc/stable/tensor.h>
-
 #include <torch/headeronly/core/ScalarType.h>
 #include <torch/headeronly/macros/Macros.h>
 #include <torch/headeronly/util/Exception.h>
-
-#include <gpuxtb/gpuxtb.h>
 
 #include <cstdint>
 #include <cstring>
@@ -57,8 +55,8 @@
 
 namespace {
 
-using torch::stable::Tensor;
 using torch::headeronly::ScalarType;
+using torch::stable::Tensor;
 
 // ---------------------------------------------------------------------------
 // Native library loading.  libgpuxtb is a caller-owned shared library found
@@ -77,8 +75,8 @@ struct GpuxtbApi {
   void (*context_destroy)(gpuxtb_context_t*);
   int32_t (*context_get_backend)(const gpuxtb_context_t*);
   int32_t (*context_get_device_id)(const gpuxtb_context_t*);
-  int32_t (*compute)(gpuxtb_context_t*, const gpuxtb_batch_t*,
-                     const gpuxtb_compute_options_t*, gpuxtb_batch_result_t*);
+  int32_t (*compute)(gpuxtb_context_t*, const gpuxtb_batch_t*, const gpuxtb_compute_options_t*,
+                     gpuxtb_batch_result_t*);
   const char* (*get_last_error)(void);
   const char* (*status_string)(int32_t);
 };
@@ -91,8 +89,7 @@ extern "C" void gpuxtb_torch_ext_anchor() {}
 std::string own_directory() {
   HMODULE module = nullptr;
   if (!GetModuleHandleExA(
-          GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+          GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
           reinterpret_cast<const char*>(&gpuxtb_torch_ext_anchor), &module)) {
     return {};
   }
@@ -130,12 +127,8 @@ std::string own_directory() {
   return separator == std::string::npos ? std::string() : path.substr(0, separator);
 }
 
-void* load_shared(const std::string& path) {
-  return dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
-}
-void* resolve_symbol(void* handle, const char* symbol) {
-  return dlsym(handle, symbol);
-}
+void* load_shared(const std::string& path) { return dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL); }
+void* resolve_symbol(void* handle, const char* symbol) { return dlsym(handle, symbol); }
 void* open_candidate(const std::string& directory, const std::string& name) {
   if (directory.empty()) {
     return nullptr;
@@ -180,30 +173,23 @@ const GpuxtbApi& gpuxtb_api() {
       return nullptr;
     }
     auto api = new GpuxtbApi();
-    api->context_options_init =
-        reinterpret_cast<int32_t (*)(gpuxtb_context_options_t*, size_t)>(
-            resolve_symbol(handle, "gpuxtb_context_options_init"));
-    api->batch_init =
-        reinterpret_cast<int32_t (*)(gpuxtb_batch_t*, size_t)>(
-            resolve_symbol(handle, "gpuxtb_batch_init"));
-    api->compute_options_init =
-        reinterpret_cast<int32_t (*)(gpuxtb_compute_options_t*, size_t)>(
-            resolve_symbol(handle, "gpuxtb_compute_options_init"));
-    api->batch_result_init =
-        reinterpret_cast<int32_t (*)(gpuxtb_batch_result_t*, size_t)>(
-            resolve_symbol(handle, "gpuxtb_batch_result_init"));
+    api->context_options_init = reinterpret_cast<int32_t (*)(gpuxtb_context_options_t*, size_t)>(
+        resolve_symbol(handle, "gpuxtb_context_options_init"));
+    api->batch_init = reinterpret_cast<int32_t (*)(gpuxtb_batch_t*, size_t)>(
+        resolve_symbol(handle, "gpuxtb_batch_init"));
+    api->compute_options_init = reinterpret_cast<int32_t (*)(gpuxtb_compute_options_t*, size_t)>(
+        resolve_symbol(handle, "gpuxtb_compute_options_init"));
+    api->batch_result_init = reinterpret_cast<int32_t (*)(gpuxtb_batch_result_t*, size_t)>(
+        resolve_symbol(handle, "gpuxtb_batch_result_init"));
     api->context_create =
         reinterpret_cast<int32_t (*)(const gpuxtb_context_options_t*, gpuxtb_context_t**)>(
             resolve_symbol(handle, "gpuxtb_context_create"));
-    api->context_destroy =
-        reinterpret_cast<void (*)(gpuxtb_context_t*)>(
-            resolve_symbol(handle, "gpuxtb_context_destroy"));
-    api->context_get_backend =
-        reinterpret_cast<int32_t (*)(const gpuxtb_context_t*)>(
-            resolve_symbol(handle, "gpuxtb_context_get_backend"));
-    api->context_get_device_id =
-        reinterpret_cast<int32_t (*)(const gpuxtb_context_t*)>(
-            resolve_symbol(handle, "gpuxtb_context_get_device_id"));
+    api->context_destroy = reinterpret_cast<void (*)(gpuxtb_context_t*)>(
+        resolve_symbol(handle, "gpuxtb_context_destroy"));
+    api->context_get_backend = reinterpret_cast<int32_t (*)(const gpuxtb_context_t*)>(
+        resolve_symbol(handle, "gpuxtb_context_get_backend"));
+    api->context_get_device_id = reinterpret_cast<int32_t (*)(const gpuxtb_context_t*)>(
+        resolve_symbol(handle, "gpuxtb_context_get_device_id"));
     api->compute =
         reinterpret_cast<int32_t (*)(gpuxtb_context_t*, const gpuxtb_batch_t*,
                                      const gpuxtb_compute_options_t*, gpuxtb_batch_result_t*)>(
@@ -245,8 +231,7 @@ void require_contiguous_1d(const Tensor& tensor, ScalarType dtype, const char* n
   STD_TORCH_CHECK(tensor.is_contiguous(), "gpuxtb_torch: ", name,
                   " must be C-contiguous (the op packs non-contiguous inputs)");
   STD_TORCH_CHECK(tensor.dim() == 1, "gpuxtb_torch: ", name, " must be one-dimensional");
-  STD_TORCH_CHECK(tensor.scalar_type() == dtype, "gpuxtb_torch: ", name,
-                  " has the wrong dtype");
+  STD_TORCH_CHECK(tensor.scalar_type() == dtype, "gpuxtb_torch: ", name, " has the wrong dtype");
   if (expected_size >= 0) {
     STD_TORCH_CHECK(tensor.size(0) == expected_size, "gpuxtb_torch: ", name,
                     " has the wrong length");
@@ -277,7 +262,8 @@ void check_status(int32_t status, const char* what) {
   const char* label = gpuxtb_api().status_string(status);
   STD_TORCH_CHECK(false, "gpuxtb_torch: ", what, " failed with ",
                   label != nullptr ? label : "unknown status", " (", status, ")",
-                  detail != nullptr && detail[0] != '\0' ? ": " : "", detail != nullptr ? detail : "");
+                  detail != nullptr && detail[0] != '\0' ? ": " : "",
+                  detail != nullptr ? detail : "");
 }
 
 }  // namespace
@@ -299,11 +285,11 @@ void check_status(int32_t status, const char* what) {
 // ---------------------------------------------------------------------------
 
 std::tuple<Tensor, Tensor> gpuxtb_torch_forward(
-    Tensor positions, Tensor atomic_numbers, Tensor atom_offsets,
-    Tensor molecular_charges, Tensor unpaired_electrons, Tensor spin_channels,
-    Tensor out_energies, Tensor out_forces, int64_t backend, int64_t device_id,
-    int64_t cpu_threads, int64_t stream, int64_t max_scc_iterations,
-    double charge_tolerance, double energy_tolerance, double electronic_temperature) {
+    Tensor positions, Tensor atomic_numbers, Tensor atom_offsets, Tensor molecular_charges,
+    Tensor unpaired_electrons, Tensor spin_channels, Tensor out_energies, Tensor out_forces,
+    int64_t backend, int64_t device_id, int64_t cpu_threads, int64_t stream,
+    int64_t max_scc_iterations, double charge_tolerance, double energy_tolerance,
+    double electronic_temperature) {
   const GpuxtbApi& api = gpuxtb_api();
   // Fail fast when the torch extension was built against an incompatible
   // ABI level, before any tensor contract is assumed.
@@ -337,9 +323,8 @@ std::tuple<Tensor, Tensor> gpuxtb_torch_forward(
   {
     const int64_t device_index = positions.get_device_index();
     const bool cuda = positions.is_cuda();
-    for (const Tensor& tensor :
-         {atomic_numbers, atom_offsets, molecular_charges, unpaired_electrons,
-          spin_channels, out_energies, out_forces}) {
+    for (const Tensor& tensor : {atomic_numbers, atom_offsets, molecular_charges,
+                                 unpaired_electrons, spin_channels, out_energies, out_forces}) {
       STD_TORCH_CHECK(tensor.is_cuda() == cuda,
                       "gpuxtb_torch: all inputs and outputs must be on the same device");
       if (cuda) {
@@ -401,8 +386,8 @@ std::tuple<Tensor, Tensor> gpuxtb_torch_forward(
   gpuxtb_compute_options_t options;
   check_status(api.compute_options_init(&options, sizeof(options)), "gpuxtb_compute_options_init");
   options.model = GPUXTB_MODEL_GFN2_XTB;
-  options.flags = static_cast<uint32_t>(
-      GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES);
+  options.flags = static_cast<uint32_t>(GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES |
+                                        GPUXTB_COMPUTE_ATOMIC_CHARGES);
   options.max_scc_iterations = static_cast<int32_t>(max_scc_iterations);
   options.charge_tolerance = charge_tolerance;
   options.energy_tolerance = energy_tolerance;
@@ -432,12 +417,12 @@ std::tuple<Tensor, Tensor> gpuxtb_torch_forward(
               static_cast<size_t>(nsystems) * sizeof(double), memory_space_of(out_energies));
   bind_output(&result.forces, out_forces.mutable_data_ptr(),
               static_cast<size_t>(natoms * 3) * sizeof(double), memory_space_of(out_forces));
-  bind_output(&result.atomic_charges, atomic_charges.data(),
-              atomic_charges.size() * sizeof(double), GPUXTB_MEMORY_HOST);
+  bind_output(&result.atomic_charges, atomic_charges.data(), atomic_charges.size() * sizeof(double),
+              GPUXTB_MEMORY_HOST);
   bind_output(&result.scc_iterations, scc_iterations.data(),
               scc_iterations.size() * sizeof(int32_t), GPUXTB_MEMORY_HOST);
-  bind_output(&result.scc_converged, scc_converged.data(),
-              scc_converged.size() * sizeof(uint8_t), GPUXTB_MEMORY_HOST);
+  bind_output(&result.scc_converged, scc_converged.data(), scc_converged.size() * sizeof(uint8_t),
+              GPUXTB_MEMORY_HOST);
   bind_output(&result.per_system_status, per_system_status.data(),
               per_system_status.size() * sizeof(int32_t), GPUXTB_MEMORY_HOST);
 
@@ -447,11 +432,12 @@ std::tuple<Tensor, Tensor> gpuxtb_torch_forward(
 }
 
 STABLE_TORCH_LIBRARY(gpuxtb, m) {
-  m.def("gpuxtb_torch_forward(Tensor positions, Tensor atomic_numbers, Tensor atom_offsets, "
-        "Tensor molecular_charges, Tensor unpaired_electrons, Tensor spin_channels, "
-        "Tensor out_energies, Tensor out_forces, int backend, int device_id, int cpu_threads, "
-        "int stream, int max_scc_iterations, float charge_tolerance, float energy_tolerance, "
-        "float electronic_temperature) -> (Tensor, Tensor)");
+  m.def(
+      "gpuxtb_torch_forward(Tensor positions, Tensor atomic_numbers, Tensor atom_offsets, "
+      "Tensor molecular_charges, Tensor unpaired_electrons, Tensor spin_channels, "
+      "Tensor out_energies, Tensor out_forces, int backend, int device_id, int cpu_threads, "
+      "int stream, int max_scc_iterations, float charge_tolerance, float energy_tolerance, "
+      "float electronic_temperature) -> (Tensor, Tensor)");
 }
 STABLE_TORCH_LIBRARY_IMPL(gpuxtb, CompositeExplicitAutograd, m) {
   m.impl("gpuxtb_torch_forward", TORCH_BOX(&gpuxtb_torch_forward));

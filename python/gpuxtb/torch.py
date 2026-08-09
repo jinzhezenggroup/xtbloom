@@ -39,6 +39,7 @@ load either torch or the extension.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import queue
 import threading
@@ -186,12 +187,17 @@ _TORCH_EXT_LOADED = False
 
 
 def _torch_extension_path() -> Path | None:
-    """Locate ``libgpuxtb_torch_ext`` next to the Python package in a wheel.
+    """Locate ``libgpuxtb_torch_ext`` next to the resolved ``libgpuxtb``.
 
-    Mirrors ``library._installed_package_library``: CMake installs the
-    extension into the same ``lib`` directory as ``libgpuxtb``, and the build
-    tree keeps both next to each other.
+    CMake installs the extension into the same ``lib`` directory as
+    ``libgpuxtb``.  Mirror ``library.library_path`` resolution so an explicit
+    ``GPUXTB_LIBRARY`` (or an installed wheel whose native libraries sit next
+    to the Python package) still yields the extension when the Python package
+    itself is imported from a source tree on ``PYTHONPATH``.
     """
+    runtime_dirs: list[Path] = []
+    with contextlib.suppress(library.GPUxtbRuntimeError):
+        runtime_dirs.append(Path(library.library_path()).resolve().parent)
     package_dir = Path(__file__).resolve().parent
     for runtime_dir in (
         package_dir / "lib",
@@ -199,6 +205,9 @@ def _torch_extension_path() -> Path | None:
         package_dir / "bin",
         package_dir,
     ):
+        if runtime_dir not in runtime_dirs:
+            runtime_dirs.append(runtime_dir)
+    for runtime_dir in runtime_dirs:
         for pattern in (
             "libgpuxtb_torch_ext*.so*",
             "libgpuxtb_torch_ext*.dylib*",
