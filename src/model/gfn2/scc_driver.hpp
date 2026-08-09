@@ -135,9 +135,9 @@ struct SccDriverGeometryView {
    * present (fields are then added to the charge-channel atomic and dipolar
    * SCC potentials every iteration) or both be null, preserving the
    * field-free path byte-for-byte. The energy term -sum_i q_i (E . r_i)
-   * - sum_i E . d_i is folded into the SCC energy trace, and the constant
-   * Hellmann-Feynman gradient contribution -E per atom is added at the
-   * stationary force boundary. */
+   * - sum_i E . d_i is folded into the SCC energy trace. The stationary
+   * response follows from these potentials, while the remaining explicit
+   * coordinate force +q_i E is added at the stationary force boundary. */
   const double* field_atomic_potential = nullptr;
   std::int64_t field_atomic_potential_elements = 0;
   const double* field_dipole_potential = nullptr;

@@ -298,20 +298,40 @@ def _water_calculator(**kwargs: object) -> Calculator:
     )
 
 
-def test_efield_matches_tblite_golden() -> None:
-    """Uniform electric field matches the pinned tblite 0.7.0 golden.
+def test_efield_matches_tblite_energy_and_force_derivative() -> None:
+    """Match the tblite energy while forces follow public energy derivatives.
 
     The oracle ran with ``--efield 0.0514221,0.1028442,-0.0771332`` (V/A),
-    which is (0.001, 0.002, -0.0015) atomic units.
+    which is (0.001, 0.002, -0.0015) atomic units. Its analytic gradient uses
+    the nonvariational ``+E``-per-atom term, so it remains diagnostic only.
     """
-    calc = _water_calculator(efield=[0.001, 0.002, -0.0015])
+    calc = _water_calculator(
+        efield=[0.001, 0.002, -0.0015],
+        max_scc_iterations=500,
+        charge_tolerance=1.0e-10,
+        energy_tolerance=1.0e-12,
+    )
     result = calc.singlepoint()
     assert result.energy == pytest.approx(-4.7652477392228, abs=1e-7)
-    # tblite golden gradient (dE/dR) -> public forces (F = -dE/dR).
-    assert result.forces[0, 0] == pytest.approx(9.790244663631768e-4, abs=1e-7)
-    assert result.forces[0, 1] == pytest.approx(2.4302543510081234e-3, abs=1e-7)
-    assert result.forces[0, 2] == pytest.approx(0.0922494, abs=1e-7)
-    assert result.forces[1, 1] == pytest.approx(-0.0542307, abs=1e-7)
+
+    reference_positions = calc.positions.copy()
+    analytic_forces = result.forces.reshape(-1).copy()
+    for step in (2.0e-3, 1.0e-3, 5.0e-4):
+        for coordinate in range(reference_positions.size):
+            displaced = reference_positions.copy().reshape(-1)
+            displaced[coordinate] += step
+            calc.update(positions=displaced.reshape(reference_positions.shape))
+            energy_plus = calc.singlepoint().energy
+
+            displaced[coordinate] -= 2.0 * step
+            calc.update(positions=displaced.reshape(reference_positions.shape))
+            energy_minus = calc.singlepoint().energy
+
+            numerical_force = -(energy_plus - energy_minus) / (2.0 * step)
+            assert numerical_force == pytest.approx(
+                analytic_forces[coordinate], abs=1.0e-5
+            )
+
     dipole = result.get("dipole_moments")
     assert dipole is not None
     assert np.isfinite(dipole).all()

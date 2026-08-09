@@ -462,11 +462,21 @@ class ConformanceToolTest(unittest.TestCase):
             )
 
     def test_electric_field_case_packs_payload_and_matches_golden(self) -> None:
-        """The uniform-field pilot drives --efield, an ABI-v3 payload, and a golden."""
+        """The field pilot retains energy provenance and explicit force evidence."""
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         cases = {case["id"]: case for case in manifest["cases"]}
         case = cases["water_efield"]
         self.assertEqual(case["efield"], [0.003, -0.004, 0.005])
+        self.assertEqual(case["gpuxtb_backends"], ["cpu"])
+        self.assertEqual(case["gpuxtb_oracle_properties"], ["energy_hartree"])
+        self.assertEqual(
+            case["gpuxtb_force_evidence"], "public_energy_finite_difference"
+        )
+        self.assertEqual(
+            [item["id"] for item in PUBLIC_API.supported_cases(manifest, None, "cuda")],
+            [item["id"] for item in manifest["cases"] if item["id"] != "water_efield"],
+        )
+        self.assertIn(case, PUBLIC_API.supported_cases(manifest, None, "cpu"))
 
         command = CONFORMANCE.tblite_command(
             Path("{executable}"), case, Path("{input}"), Path("{json_output}")
@@ -492,6 +502,11 @@ class ConformanceToolTest(unittest.TestCase):
         self.assertEqual(len(payload), 32)
         self.assertEqual(struct.unpack("<2i", payload[:8]), (1, 0))
         self.assertEqual(struct.unpack("<3d", payload[8:]), tuple(case["efield"]))
+        zero_descriptors, zero_payload = PUBLIC_API.pack_efield_interactions(
+            [[0.0, 0.0, 0.0]]
+        )
+        self.assertEqual(len(zero_descriptors), 1)
+        self.assertEqual(len(zero_payload), 32)
 
         golden = json.loads(
             (REPOSITORY_ROOT / case["golden"]).read_text(encoding="utf-8")
@@ -504,8 +519,9 @@ class ConformanceToolTest(unittest.TestCase):
             properties["forces_hartree_per_bohr"],
             [-value for value in properties["gradient_hartree_per_bohr"]],
         )
-        # The pinned tblite 0.7.0 live run is the authoritative oracle for this
-        # pilot; the committed golden must reproduce those exact values.
+        # The pinned tblite 0.7.0 energy remains authoritative. Its analytic
+        # field gradient is retained byte-for-byte for provenance diagnostics,
+        # but gpuxtb forces use public energy finite differences instead.
         self.assertAlmostEqual(
             properties["energy_hartree"], -4.772344124360096, delta=5e-7
         )
@@ -527,6 +543,117 @@ class ConformanceToolTest(unittest.TestCase):
                 expected,
                 delta=5e-7,
             )
+
+        storage = PUBLIC_API.assemble_batch(MANIFEST, manifest, [case])
+        case_slice = storage.slices[0]
+        actual = {
+            "energy_hartree": properties["energy_hartree"],
+            "forces_hartree_per_bohr": [99.0] * 9,
+        }
+        with redirect_stdout(io.StringIO()) as captured:
+            self.assertEqual(
+                PUBLIC_API._compare_case(manifest, case_slice, actual, {}), []
+            )
+        self.assertIn("diagnostic-only", captured.getvalue())
+
+        # The standalone directory comparator accepts both canonical public
+        # artifacts and its documented minimal gpuxtb result shape. Neither
+        # may re-enable the diagnostic tblite force comparison.
+        with tempfile.TemporaryDirectory() as temporary:
+            actual_dir = Path(temporary)
+            public_document = {
+                "properties": actual,
+                "provenance": {"engine": "gpuxtb"},
+            }
+            (actual_dir / "water_efield.json").write_text(
+                json.dumps(public_document), encoding="utf-8"
+            )
+            completed = self.run_tool(
+                "compare",
+                "--actual-dir",
+                str(actual_dir),
+                "--case",
+                "water_efield",
+            )
+            self.assertIn("diagnostic-only", completed.stdout)
+
+            (actual_dir / "water_efield.json").write_text(
+                json.dumps({"energy_hartree": properties["energy_hartree"]}),
+                encoding="utf-8",
+            )
+            self.run_tool(
+                "compare",
+                "--actual-dir",
+                str(actual_dir),
+                "--case",
+                "water_efield",
+            )
+
+    def test_field_provenance_requires_the_efield_template_token(self) -> None:
+        """Legacy tblite templates remain valid only for field-free cases."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        reference = manifest["reference_engines"]["tblite"]
+        cases = {case["id"]: case for case in manifest["cases"]}
+        field_templates = CONFORMANCE.accepted_tblite_command_templates(
+            reference, cases["water_efield"]
+        )
+        plain_templates = CONFORMANCE.accepted_tblite_command_templates(
+            reference, cases["h3_plus"]
+        )
+        self.assertEqual(len(field_templates), 1)
+        self.assertIn(CONFORMANCE.EFIELD_COMMAND_TOKEN, field_templates[0])
+        self.assertEqual(len(plain_templates), 2)
+        self.assertNotIn(CONFORMANCE.EFIELD_COMMAND_TOKEN, plain_templates[1])
+
+    def test_field_free_batch_does_not_bind_empty_interaction_owners(self) -> None:
+        """A focused device-style plain batch never uploads zero-byte owners."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        case = next(case for case in manifest["cases"] if case["id"] == "h3_plus")
+        storage = PUBLIC_API.assemble_batch(MANIFEST, manifest, [case])
+        self.assertEqual(storage.efields, [None])
+
+        class FakeLibrary:
+            @staticmethod
+            def gpuxtb_batch_init(_batch: object, _size: int) -> int:
+                return PUBLIC_API.GPUXTB_STATUS_SUCCESS
+
+        class RejectEmptyOwnerMemory:
+            @staticmethod
+            def input(*_args: object) -> PUBLIC_API.ConstBuffer:
+                return PUBLIC_API.ConstBuffer(None, 0, PUBLIC_API.GPUXTB_MEMORY_HOST, 0)
+
+            @staticmethod
+            def input_owner(*_args: object) -> PUBLIC_API.ConstBuffer:
+                raise AssertionError(
+                    "field-free batches must not bind interaction owners"
+                )
+
+        batch = PUBLIC_API._make_batch(
+            FakeLibrary(), storage, RejectEmptyOwnerMemory(), include_spin_channels=True
+        )
+        self.assertEqual(batch.total_interactions, 0)
+
+    def test_cuda_field_selection_skips_before_loading_a_library(self) -> None:
+        """The CPU-only field case cannot poison a CUDA conformance batch."""
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(PUBLIC_API_TOOL),
+                "--library",
+                "/does/not/exist/libgpuxtb.so",
+                "--backend",
+                "cuda",
+                "--case",
+                "water_efield",
+            ],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("SKIP water_efield", completed.stdout)
+        self.assertNotIn("shared library is missing", completed.stderr)
 
     def test_generate_xtb_normalizes_gradient_and_scc_multipoles(self) -> None:
         """The xtb adapter joins its gradient artifact with atom-resolved JSON."""
@@ -888,6 +1015,30 @@ class InvarianceToolTest(unittest.TestCase):
                 baseline_distance,
                 places=12,
             )
+
+    def test_field_geometry_is_preserved_and_rotated_with_the_system(self) -> None:
+        """Invariant batches carry the field and rotate it as a Cartesian vector."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        case = next(case for case in manifest["cases"] if case["id"] == "water_efield")
+        geometry = INVARIANTS.load_geometries(MANIFEST, manifest, [case])[0]
+        self.assertEqual(geometry.efield, [0.003, -0.004, 0.005])
+        self.assertEqual(
+            INVARIANTS.geometry_storage([geometry]).efields,
+            [[0.003, -0.004, 0.005]],
+        )
+        self.assertEqual(
+            INVARIANTS.translated(geometry, (1.0, 2.0, 3.0)).efield,
+            geometry.efield,
+        )
+        self.assertEqual(
+            INVARIANTS.displaced_atom(geometry, 0, 1, 0.1).efield,
+            geometry.efield,
+        )
+        rotation = [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+        self.assertEqual(
+            INVARIANTS.rotated(geometry, rotation).efield,
+            [0.004, 0.003, 0.005],
+        )
 
     def test_zero_solver_passes_every_gate(self) -> None:
         """A trivially symmetric solver satisfies all self-consistency gates."""

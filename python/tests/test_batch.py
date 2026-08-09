@@ -58,6 +58,7 @@ def test_batch_single_matches_serial(case_id: str) -> None:
     assert result.energies[0] == pytest.approx(serial.energy, abs=1e-12)
     assert result.forces == pytest.approx(serial.forces, abs=1e-12)
     assert result[0].energy == pytest.approx(serial.energy, abs=1e-12)
+    assert result.get("dipole_moments") is None
 
 
 def test_batch_matches_goldens_all_molecular_cases() -> None:
@@ -360,7 +361,10 @@ def test_batch_warm_start_rejects_auto_slicing(
     assert calls == 0
 
 
-def test_batch_per_system_efield_matches_serial() -> None:
+@pytest.mark.parametrize("auto_batch_size", [None, 1])
+def test_batch_per_system_efield_matches_serial(
+    auto_batch_size: int | None,
+) -> None:
     """Each batch member attaches its own uniform electric field."""
     angstrom_per_bohr = 1.8897261246257702
     xyz = [
@@ -378,7 +382,10 @@ def test_batch_per_system_efield_matches_serial() -> None:
         efield=[0.001, 0.002, -0.0015],
     )
     batch = BatchCalculator([plain, fielded, plain])
-    result = batch.compute()
+    # Dipoles are a logical-batch property: when auto-slicing separates the
+    # fielded system from plain peers, every chunk still requests the same
+    # result shape so merging retains one (nsystems, 3) array.
+    result = batch.compute(auto_batch_size=auto_batch_size)
 
     serial_field = Calculator(
         "GFN2-xTB",
@@ -388,4 +395,10 @@ def test_batch_per_system_efield_matches_serial() -> None:
     ).singlepoint()
     assert result[1].energy == pytest.approx(serial_field.energy, abs=1e-10)
     assert result[1].forces == pytest.approx(serial_field.forces, abs=1e-10)
+    assert result.dipole_moments is not None
+    assert result.dipole_moments.shape == (3, 3)
+    assert result[1].dipole_moments == pytest.approx(
+        serial_field.dipole_moments, abs=1e-10
+    )
+    assert result.get("dipole_moments") is result.dipole_moments
     assert result[0].energy == pytest.approx(result[2].energy, abs=1e-12)

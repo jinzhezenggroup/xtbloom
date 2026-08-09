@@ -1313,12 +1313,13 @@ class BatchResult:
             )
 
     def get(self, attribute: str) -> object:
-        """Return scalar batch arrays by name (``energies``, ``forces``, ...)."""
+        """Return a batch array by name, including optional dipole moments."""
         names = {
             "energies": self.energies,
             "forces": self.forces,
             "charges": self.charges,
             "point_charge_forces": self.point_charge_forces,
+            "dipole_moments": self.dipole_moments,
             "scc_iterations": self.scc_iterations,
             "scc_converged": self.scc_converged,
             "per_system_status": self.per_system_status,
@@ -1651,6 +1652,11 @@ class BatchCalculator:
             | library.COMPUTE_FORCES
             | library.COMPUTE_ATOMIC_CHARGES
         )
+        if any(structure.efield is not None for structure in self._structures):
+            # Request a uniform result shape for every auto-sized chunk. A
+            # logical mixed field/plain batch must not produce some chunks
+            # with dipoles and others without them.
+            base_flags |= library.COMPUTE_DIPOLE_MOMENTS
 
         def run_once(structures: Sequence[Structure]) -> _ComputedBatch:
             # Output descriptors are batch-local. In particular, requesting a

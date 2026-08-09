@@ -88,8 +88,9 @@ struct PublicBatch {
   std::vector<std::int64_t> response_offsets;
   std::vector<double> response_matrix;
 
-  /* ABI-v3 uniform external electric fields (one entry per system; a zero
-   * vector means no attachment). The batch suffix is bound when non-empty. */
+  /* ABI-v3 uniform external electric fields (one attachment per system when
+   * non-empty). A zero vector is still an explicit attachment for WARM
+   * identity; an empty vector leaves the interaction suffix unbound. */
   std::vector<std::array<double, 3>> fields;
 
   std::vector<double> energies;
@@ -913,11 +914,12 @@ int test_point_charges_and_periodic_operator() {
   return 0;
 }
 
-/* tblite 0.7.0 CLI golden for water (h2o.xyz at 0.0001 accuracy) with the
- * electric field --efield 0.0514221,0.1028442,-0.0771332 V/A, which is
- * (0.001, 0.002, -0.0015) atomic units. Energy and gradient are pinned by the
- * independent oracle; charges and dipoles come from the same converged SCC. */
-int test_electric_field_golden_energy_forces_charges() {
+/* tblite 0.7.0 CLI energy golden for water (h2o.xyz at 0.0001 accuracy) with
+ * --efield 0.0514221,0.1028442,-0.0771332 V/A, which is
+ * (0.001, 0.002, -0.0015) atomic units. The tblite analytic field gradient is
+ * intentionally not an oracle: it applies +E per atom rather than the
+ * derivative +q_i E. Public energy finite differences below gate forces. */
+int test_electric_field_golden_energy_and_scc_state() {
   ContextHandle context = make_cpu_context();
   CHECK(context != nullptr);
 
@@ -956,9 +958,7 @@ int test_electric_field_golden_energy_forces_charges() {
   CHECK(near(request.atomic_charges[0], -0.412317, 1.0e-5));
   CHECK(near(request.atomic_charges[1], 0.206158, 1.0e-5));
 
-  /* Field golden (tblite 0.7.0): total energy -4.7652477392228025 Eh,
-   * gradient O=(-9.790e-4,-2.430e-3,-9.225e-2), H1=(-1.011e-3,5.423e-2,
-   * 4.858e-2), H2=(-1.010e-3,-5.780e-2,4.817e-2). */
+  /* The pinned field energy remains independent oracle evidence. */
   request.fields = {{0.001, 0.002, -0.0015}};
   std::vector<std::uint8_t> payload_storage;
   std::vector<gpuxtb_interaction_t> descriptor_storage;
@@ -968,19 +968,10 @@ int test_electric_field_golden_energy_forces_charges() {
   CHECK(request.statuses[0] == GPUXTB_STATUS_SUCCESS);
   CHECK(request.converged[0] == 1u);
   CHECK(near(request.energies[0], -4.7652477392228, 1.0e-7));
-  CHECK(near(request.forces[0], 9.790244663631768e-4, 1.0e-7));
-  CHECK(near(request.forces[1], 2.4302543510081234e-3, 1.0e-7));
-  CHECK(near(request.forces[2], 0.0922494, 1.0e-7));
-  CHECK(near(request.forces[3], 1.0114525487991809e-3, 1.0e-7));
-  CHECK(near(request.forces[4], -0.0542307, 1.0e-7));
-  CHECK(near(request.forces[5], -0.0485820, 1.0e-7));
-  CHECK(near(request.forces[6], 1.0095248823061760e-3, 1.0e-7));
-  CHECK(near(request.forces[7], 0.0578004, 1.0e-7));
-  CHECK(near(request.forces[8], -0.0481674, 1.0e-7));
   /* Mulliken charges conserve the molecular charge and respond to the field:
    * the oxygen gains charge (becomes more positive) as the field pulls
-   * electron density toward it. Exact golden charges are covered by the
-   * pinned conformance corpus. */
+   * electron density toward it. The pinned CLI golden does not publish
+   * fielded charges, so only these independent physical checks apply here. */
   CHECK(std::all_of(request.atomic_charges.begin(), request.atomic_charges.end(),
                     [](double value) { return std::isfinite(value); }));
   CHECK(std::abs(request.atomic_charges[0] + request.atomic_charges[1] +
@@ -992,65 +983,71 @@ int test_electric_field_golden_energy_forces_charges() {
   return 0;
 }
 
-/* The uniform electric field contributes exactly +E per atom to the force:
- * the tblite field get_gradient keeps the SCC-response terms inside the Fock
- * assembly and adds the constant Hellmann-Feynman gradient -E per atom (which
- * is +E per atom in the public F=-dE/dR convention). This is the reference
- * invariant that gpuxtb must reproduce rather than a generic energy
- * finite-difference gate, which the tblite oracle itself does not satisfy for
- * the uniform-field term (its analytic gradient exceeds the energy FD by
- * exactly E per atom). */
+/* The analytic force must be the negative derivative of the reported field
+ * energy. Multiple central-difference steps distinguish the correct explicit
+ * +q_i E term from the nonvariational +E-per-atom tblite gradient. */
 int test_electric_field_force_matches_energy_finite_difference() {
   ContextHandle context = make_cpu_context();
   CHECK(context != nullptr);
 
   PublicBatch request;
-  request.atom_offsets = {0, 2};
-  request.atomic_numbers = {1, 1};
-  request.positions = {-0.70, 0.0, 0.1, 0.70, 0.0, -0.1};
+  request.atom_offsets = {0, 3};
+  request.atomic_numbers = {8, 1, 1};
+  request.positions = {0.0,          0.0,           -0.7357858611, 1.4418315287, 0.0,
+                       0.3678929305, -1.4418315287, 0.0,           0.3678929305};
   request.molecular_charges = {0.0};
   request.unpaired_electrons = {0};
+  request.fields = {{0.003, -0.004, 0.005}};
   std::vector<std::uint8_t> payload_storage;
   std::vector<gpuxtb_interaction_t> descriptor_storage;
-  const std::uint32_t flags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES;
+  const std::uint32_t flags =
+      GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
 
-  /* Field-free analytic forces. */
   request.bind(flags);
-  CHECK(gpuxtb_compute(context.get(), &request.batch, &request.options, &request.result) ==
-        GPUXTB_STATUS_SUCCESS);
-  CHECK(request.statuses[0] == GPUXTB_STATUS_SUCCESS);
-  std::vector<double> no_field_forces = request.forces;
-
-  /* Uniform field +E per atom on top of the field-free forces. */
-  request.fields = {{0.003, -0.004, 0.005}};
-  request.bind(flags);
+  request.options.max_scc_iterations = 500;
+  request.options.charge_tolerance = 1.0e-10;
+  request.options.energy_tolerance = 1.0e-12;
   request.bind_fields(&payload_storage, &descriptor_storage);
   CHECK(gpuxtb_compute(context.get(), &request.batch, &request.options, &request.result) ==
         GPUXTB_STATUS_SUCCESS);
   CHECK(request.statuses[0] == GPUXTB_STATUS_SUCCESS);
-  for (std::size_t atom = 0u; atom < 2u; ++atom) {
-    for (std::size_t component = 0u; component < 3u; ++component) {
-      const std::size_t index = 3u * atom + component;
-      /* The field also self-consistently repolarizes densities and dipoles
-       * through the SCC injection, so the constant +E per atom is reproduced
-       * to the small residual of that response (tens of ppm here). */
-      CHECK(near(request.forces[index], no_field_forces[index] + request.fields[0][component],
-                 1.0e-5));
+  const std::vector<double> analytic_forces = request.forces;
+  const std::vector<double> reference_positions = request.positions;
+  for (std::size_t axis = 0u; axis < 3u; ++axis) {
+    double net_force = 0.0;
+    for (std::size_t atom = 0u; atom < 3u; ++atom) {
+      net_force += analytic_forces[3u * atom + axis];
     }
+    CHECK(std::abs(net_force) < 1.0e-9);
   }
 
-  /* Same geometry, opposite field: the constant term flips sign. */
-  request.fields = {{-0.003, 0.004, -0.005}};
-  request.bind(flags);
-  request.bind_fields(&payload_storage, &descriptor_storage);
-  CHECK(gpuxtb_compute(context.get(), &request.batch, &request.options, &request.result) ==
-        GPUXTB_STATUS_SUCCESS);
-  CHECK(request.statuses[0] == GPUXTB_STATUS_SUCCESS);
-  for (std::size_t atom = 0u; atom < 2u; ++atom) {
-    for (std::size_t component = 0u; component < 3u; ++component) {
-      const std::size_t index = 3u * atom + component;
-      CHECK(near(request.forces[index], no_field_forces[index] + request.fields[0][component],
-                 1.0e-5));
+  for (const double step : {2.0e-3, 1.0e-3, 5.0e-4}) {
+    for (std::size_t coordinate = 0u; coordinate < reference_positions.size(); ++coordinate) {
+      request.positions = reference_positions;
+      request.positions[coordinate] += step;
+      request.bind(GPUXTB_COMPUTE_ENERGY);
+      request.options.max_scc_iterations = 500;
+      request.options.charge_tolerance = 1.0e-10;
+      request.options.energy_tolerance = 1.0e-12;
+      request.bind_fields(&payload_storage, &descriptor_storage);
+      CHECK(gpuxtb_compute(context.get(), &request.batch, &request.options, &request.result) ==
+            GPUXTB_STATUS_SUCCESS);
+      CHECK(request.statuses[0] == GPUXTB_STATUS_SUCCESS);
+      const double energy_plus = request.energies[0];
+
+      request.positions = reference_positions;
+      request.positions[coordinate] -= step;
+      request.bind(GPUXTB_COMPUTE_ENERGY);
+      request.options.max_scc_iterations = 500;
+      request.options.charge_tolerance = 1.0e-10;
+      request.options.energy_tolerance = 1.0e-12;
+      request.bind_fields(&payload_storage, &descriptor_storage);
+      CHECK(gpuxtb_compute(context.get(), &request.batch, &request.options, &request.result) ==
+            GPUXTB_STATUS_SUCCESS);
+      CHECK(request.statuses[0] == GPUXTB_STATUS_SUCCESS);
+      const double energy_minus = request.energies[0];
+      const double numerical_force = -(energy_plus - energy_minus) / (2.0 * step);
+      CHECK(std::abs(numerical_force - analytic_forces[coordinate]) < 1.0e-5);
     }
   }
   return 0;
@@ -1141,12 +1138,38 @@ int test_electric_field_warm_identity_is_strict() {
   h2.options.scc_start_mode = GPUXTB_SCC_START_WARM;
   CHECK(warm_rejection_is_atomic(context.get(), h2));
   CHECK(std::strstr(gpuxtb_get_last_error(), "identical") != nullptr);
+
+  /* Attachment presence is identity even when every component is zero. A
+   * field-free WARM call must not consume an explicit-zero checkpoint. */
+  ContextHandle zero_context = make_cpu_context();
+  CHECK(zero_context != nullptr);
+  PublicBatch explicit_zero = h2;
+  explicit_zero.fields = {{0.0, 0.0, 0.0}};
+  explicit_zero.bind(flags);
+  explicit_zero.bind_fields(&payload_storage, &descriptor_storage);
+  CHECK(gpuxtb_compute(zero_context.get(), &explicit_zero.batch, &explicit_zero.options,
+                       &explicit_zero.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(explicit_zero.statuses[0] == GPUXTB_STATUS_SUCCESS);
+
+  explicit_zero.fields.clear();
+  explicit_zero.bind(flags);
+  explicit_zero.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(zero_context.get(), explicit_zero));
+
+  /* The failed mismatched request leaves the explicit-zero checkpoint valid. */
+  explicit_zero.fields = {{0.0, 0.0, 0.0}};
+  explicit_zero.bind(flags);
+  explicit_zero.bind_fields(&payload_storage, &descriptor_storage);
+  explicit_zero.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_compute(zero_context.get(), &explicit_zero.batch, &explicit_zero.options,
+                       &explicit_zero.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(explicit_zero.statuses[0] == GPUXTB_STATUS_SUCCESS);
   return 0;
 }
 
-/* A rigid translation of a field-free neutral system is invariant; with a
- * uniform field the translation changes the energy by -Q (E . delta) and the
- * force sum gains +Q E, so for a neutral system the total force stays zero. */
+/* With a uniform field, a rigid translation changes energy by -Q(E.delta) and
+ * total force by +Q E. A neutral system therefore retains its energy, atomic
+ * forces, and zero net force under translation. */
 int test_electric_field_translation_invariance() {
   ContextHandle context = make_cpu_context();
   CHECK(context != nullptr);
@@ -1157,19 +1180,27 @@ int test_electric_field_translation_invariance() {
   request.positions = {-0.70, 0.0, 0.1, 0.70, 0.0, -0.1};
   request.molecular_charges = {0.0};
   request.unpaired_electrons = {0};
-  request.fields = {{0.0, 0.0, 0.0}};
+  request.fields = {{0.003, -0.004, 0.005}};
   std::vector<std::uint8_t> payload_storage;
   std::vector<gpuxtb_interaction_t> descriptor_storage;
-  request.bind(GPUXTB_COMPUTE_FORCES);
+  const std::uint32_t flags =
+      GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
+  request.bind(flags);
   request.bind_fields(&payload_storage, &descriptor_storage);
   CHECK(gpuxtb_compute(context.get(), &request.batch, &request.options, &request.result) ==
         GPUXTB_STATUS_SUCCESS);
-  const std::vector<double> translated = {-0.2, 0.5, 1.1, 1.0, 0.5, 0.9};
+  const double reference_energy = request.energies[0];
+  const std::vector<double> reference_forces = request.forces;
+  const std::vector<double> translated = {-0.2, 0.5, 1.1, 1.2, 0.5, 0.9};
   request.positions = translated;
-  request.bind(GPUXTB_COMPUTE_FORCES);
+  request.bind(flags);
   request.bind_fields(&payload_storage, &descriptor_storage);
   CHECK(gpuxtb_compute(context.get(), &request.batch, &request.options, &request.result) ==
         GPUXTB_STATUS_SUCCESS);
+  CHECK(near(request.energies[0], reference_energy, 1.0e-10));
+  for (std::size_t component = 0u; component < reference_forces.size(); ++component) {
+    CHECK(near(request.forces[component], reference_forces[component], 1.0e-9));
+  }
   for (std::size_t axis = 0u; axis < 3u; ++axis) {
     CHECK(std::abs(request.forces[axis] + request.forces[3u + axis]) < 2.0e-10);
   }
@@ -1726,6 +1757,88 @@ int test_plan_fixed_topology_zero_steady_state_allocations() {
   CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
   CHECK(request.statuses[0] == GPUXTB_STATUS_SUCCESS);
   CHECK(std::isfinite(request.energies[0]));
+  const std::vector<double> no_field_energies = request.energies;
+  const std::vector<double> no_field_forces = request.forces;
+
+  gpuxtb_workspace_query_t workspace_before{};
+  CHECK(gpuxtb_workspace_query_init(&workspace_before, sizeof(workspace_before)) ==
+        GPUXTB_STATUS_SUCCESS);
+  workspace_before.compute_flags = flags;
+  CHECK(gpuxtb_plan_query_workspace(plan.get(), &workspace_before) == GPUXTB_STATUS_SUCCESS);
+
+  /* Field presence and values are numerical plan inputs. Every system owns
+   * topology-sized field storage from plan creation, so adding and changing a
+   * FRESH field must update in place without rebuilding or allocating. */
+  request.fields.assign(static_cast<std::size_t>(request.batch.batch_size),
+                        std::array<double, 3>{0.001, -0.002, 0.003});
+  std::vector<std::uint8_t> payload_storage;
+  std::vector<gpuxtb_interaction_t> descriptor_storage;
+  request.bind(flags);
+  request.bind_fields(&payload_storage, &descriptor_storage);
+  allocation_test::count.store(0u, std::memory_order_relaxed);
+  allocation_test::enabled.store(true, std::memory_order_release);
+  const gpuxtb_status_t field_status =
+      gpuxtb_plan_compute(plan.get(), &request.batch, &request.options, &request.result);
+  allocation_test::enabled.store(false, std::memory_order_release);
+  CHECK(field_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
+  const std::vector<double> first_field_energies = request.energies;
+  const std::vector<double> first_field_forces = request.forces;
+
+  ContextHandle reference_context = make_cpu_context(1);
+  CHECK(reference_context != nullptr);
+  PublicBatch reference = request;
+  std::vector<std::uint8_t> reference_payload;
+  std::vector<gpuxtb_interaction_t> reference_descriptors;
+  reference.bind(flags);
+  reference.bind_fields(&reference_payload, &reference_descriptors);
+  CHECK(gpuxtb_compute(reference_context.get(), &reference.batch, &reference.options,
+                       &reference.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(first_field_energies == reference.energies);
+  CHECK(first_field_forces == reference.forces);
+
+  for (std::array<double, 3>& field : request.fields) {
+    field = {-0.002, 0.0015, 0.0005};
+  }
+  request.bind(flags);
+  request.bind_fields(&payload_storage, &descriptor_storage);
+  allocation_test::count.store(0u, std::memory_order_relaxed);
+  allocation_test::enabled.store(true, std::memory_order_release);
+  const gpuxtb_status_t changed_field_status =
+      gpuxtb_plan_compute(plan.get(), &request.batch, &request.options, &request.result);
+  allocation_test::enabled.store(false, std::memory_order_release);
+  CHECK(changed_field_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
+  CHECK(request.energies != first_field_energies);
+
+  reference.fields = request.fields;
+  reference.bind(flags);
+  reference.bind_fields(&reference_payload, &reference_descriptors);
+  CHECK(gpuxtb_compute(reference_context.get(), &reference.batch, &reference.options,
+                       &reference.result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(request.energies == reference.energies);
+  CHECK(request.forces == reference.forces);
+
+  /* Detaching the field is the same allocation-free numerical update and must
+   * restore the field-free result for the unchanged geometry. */
+  request.fields.clear();
+  request.bind(flags);
+  allocation_test::count.store(0u, std::memory_order_relaxed);
+  allocation_test::enabled.store(true, std::memory_order_release);
+  const gpuxtb_status_t detached_field_status =
+      gpuxtb_plan_compute(plan.get(), &request.batch, &request.options, &request.result);
+  allocation_test::enabled.store(false, std::memory_order_release);
+  CHECK(detached_field_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
+  CHECK(request.energies == no_field_energies);
+  CHECK(request.forces == no_field_forces);
+
+  gpuxtb_workspace_query_t workspace_after{};
+  CHECK(gpuxtb_workspace_query_init(&workspace_after, sizeof(workspace_after)) ==
+        GPUXTB_STATUS_SUCCESS);
+  workspace_after.compute_flags = flags;
+  CHECK(gpuxtb_plan_query_workspace(plan.get(), &workspace_after) == GPUXTB_STATUS_SUCCESS);
+  CHECK(workspace_after.host_required_bytes == workspace_before.host_required_bytes);
   return 0;
 }
 
@@ -1915,7 +2028,7 @@ int main() {
   if (const int line = test_plan_multi_threaded_reuse(); line != 0) {
     return line;
   }
-  if (const int line = test_electric_field_golden_energy_forces_charges(); line != 0) {
+  if (const int line = test_electric_field_golden_energy_and_scc_state(); line != 0) {
     return line;
   }
   if (const int line = test_electric_field_force_matches_energy_finite_difference(); line != 0) {

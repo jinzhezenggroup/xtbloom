@@ -556,10 +556,17 @@ def _call_ok(library: ctypes.CDLL, status: int, operation: str) -> None:
 
 
 def supported_cases(
-    manifest: dict[str, Any], names: list[str] | None
+    manifest: dict[str, Any], names: list[str] | None, backend: str | None = None
 ) -> list[dict[str, Any]]:
-    """Return every selected case supported by at least one public backend."""
-    return conformance.selected_cases(manifest, names)
+    """Return selected cases supported by ``backend`` (or by either backend)."""
+    cases = conformance.selected_cases(manifest, names)
+    if backend is None:
+        return cases
+    return [
+        case
+        for case in cases
+        if backend in case.get("gpuxtb_backends", ["cpu", "cuda"])
+    ]
 
 
 def _flatten(matrix: Sequence[Sequence[float]]) -> list[float]:
@@ -737,7 +744,7 @@ def _make_batch(
         batch.spin_channels = memory.input(
             storage, storage.spin_channels, ctypes.c_int32, "spin_channels"
         )
-    if storage.efields:
+    if any(efield is not None for efield in storage.efields):
         descriptors, payload = pack_efield_interactions(storage.efields)
         batch.total_interactions = len(descriptors)
         descriptor_owner = (Interaction * len(descriptors))(*descriptors)
@@ -821,8 +828,16 @@ def _compare_case(
         ("point_charge_forces_hartree_per_bohr", "point_charge_forces"),
     ]
     failures: list[str] = []
+    oracle_properties = case_slice.case.get("gpuxtb_oracle_properties")
     for property_name, tolerance_name in mappings:
         if property_name not in case_slice.expected:
+            continue
+        if oracle_properties is not None and property_name not in oracle_properties:
+            print(  # noqa: T201 - CLI validation report
+                f"INFO {case_slice.case['id']} {property_name}: pinned reference "
+                "is diagnostic-only; public energy finite differences are the "
+                "force authority"
+            )
             continue
         if property_name in unsupported_properties:
             print(  # noqa: T201 - CLI validation report
@@ -1136,15 +1151,36 @@ def main(argv: Iterable[str] | None = None) -> int:
                 "--backend cuda for device or mixed descriptors"
             )
         manifest = conformance.load_json(args.manifest)
-        cases = supported_cases(manifest, args.cases)
-        if not cases:
+        selected = supported_cases(manifest, args.cases)
+        backends = ("cpu", "cuda") if args.backend == "all" else (args.backend,)
+        cases_by_backend = {
+            backend: supported_cases(manifest, args.cases, backend)
+            for backend in backends
+        }
+        if not selected:
             print(  # noqa: T201 - CLI validation report
                 "no GFN2 conformance cases selected"
             )
             return 0
+        if not any(cases_by_backend.values()):
+            for backend in backends:
+                for case in selected:
+                    print(  # noqa: T201 - CLI validation report
+                        f"SKIP {case['id']}: public backend {backend} is not "
+                        "released for this case"
+                    )
+            return 0
         library = _configure_library(args.library)
-        backends = ("cpu", "cuda") if args.backend == "all" else (args.backend,)
         for backend in backends:
+            cases = cases_by_backend[backend]
+            unsupported = [case for case in selected if case not in cases]
+            for case in unsupported:
+                print(  # noqa: T201 - CLI validation report
+                    f"SKIP {case['id']}: public backend {backend} is not released "
+                    "for this case"
+                )
+            if not cases:
+                continue
             shared_orbital = [
                 case for case in cases if int(case.get("spin_channels", 1)) == 1
             ]

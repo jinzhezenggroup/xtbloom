@@ -124,7 +124,7 @@
     },
     {
       "atom_count": 3,
-      "description": "One water molecule in the uniform electric field (0.003, -0.004, 0.005) Hartree per elementary charge per bohr is the ABI-v3 electric-field interaction pilot; the field is stored in atomic units and converted to V/angstrom for the pinned tblite oracle.",
+      "description": "One water molecule in the uniform electric field (0.003, -0.004, 0.005) Hartree per elementary charge per bohr is the ABI-v3 electric-field interaction pilot. The pinned tblite energy remains the independent primary oracle; its analytic field gradient applies +E per atom instead of +q_i E and is retained only as diagnostic provenance, while gpuxtb forces are gated by public energy finite differences.",
       "efield": [
         0.003,
         -0.004,
@@ -132,6 +132,13 @@
       ],
       "golden": "data/conformance/golden/water_efield.json",
       "golden_sha256": "d63a1dfc900190c9aeb7508c9a3cf9ab1be9e071578cc7df54abc314a58c7035",
+      "gpuxtb_backends": [
+        "cpu"
+      ],
+      "gpuxtb_force_evidence": "public_energy_finite_difference",
+      "gpuxtb_oracle_properties": [
+        "energy_hartree"
+      ],
       "id": "water_efield",
       "input": "data/conformance/inputs/water_efield.coord",
       "input_sha256": "a8d8e170921a7b79316b72495540c18bc1ee97ea502a7ba172937e05a2be17ac",

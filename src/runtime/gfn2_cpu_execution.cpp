@@ -335,9 +335,11 @@ struct HostRequest {
   std::vector<std::int64_t> response_offsets;
   std::vector<double> response_matrices;
   /* Per-system uniform electric field in atomic units (Hartree per elementary
-   * charge per bohr). A zero vector means no field attachment; only the first
-   * three elements of each entry are used. Filled from ABI-v3 interactions. */
+   * charge per bohr), plus a distinct attachment-presence bit. The ABI permits
+   * an explicit zero-valued field, which is physically a no-op but remains a
+   * different WARM interaction identity from no attachment. */
   std::vector<std::array<double, 3>> field_by_system;
+  std::vector<std::uint8_t> field_attached_by_system;
   bool shifts_enabled = false;
   bool response_enabled = false;
 };
@@ -407,6 +409,7 @@ void stage_request(const gpuxtb_batch_t& batch, HostRequest& request) {
 
   request.field_by_system.assign(static_cast<std::size_t>(batch.batch_size),
                                  std::array<double, 3>{0.0, 0.0, 0.0});
+  request.field_attached_by_system.assign(static_cast<std::size_t>(batch.batch_size), 0u);
   if (batch.struct_size >= GPUXTB_BATCH_V3_SIZE && batch.total_interactions != 0) {
     stage_electric_fields(batch, request);
   }
@@ -447,6 +450,7 @@ void stage_electric_fields(const gpuxtb_batch_t& batch, HostRequest& request) {
                 sizeof(field));
     request.field_by_system[static_cast<std::size_t>(system_index)] = {field[0], field[1],
                                                                        field[2]};
+    request.field_attached_by_system[static_cast<std::size_t>(system_index)] = 1u;
   }
 }
 
@@ -506,10 +510,10 @@ struct SystemKey {
   std::int32_t spin_channels = 1;
   std::int64_t point_count = 0;
   bool periodic_enabled = false;
-  /* Uniform external electric field in atomic units; zero means no field. It is
-   * part of the WARM identity because the field participates in every SCC
-   * iteration and a WARM call with a different field must be rejected rather
-   * than silently reconverged from the previous checkpoint. */
+  /* Uniform external electric field in atomic units. Presence is recorded
+   * separately because an explicit zero field remains part of the interaction
+   * set and therefore differs from no attachment for strict WARM identity. */
+  bool field_attached = false;
   std::array<double, 3> field{0.0, 0.0, 0.0};
   std::uint32_t compute_flags = 0u;
   std::int32_t maximum_iterations = 0;
@@ -522,7 +526,8 @@ struct SystemKey {
            lhs.molecular_charge == rhs.molecular_charge &&
            lhs.unpaired_electrons == rhs.unpaired_electrons &&
            lhs.spin_channels == rhs.spin_channels && lhs.point_count == rhs.point_count &&
-           lhs.periodic_enabled == rhs.periodic_enabled && lhs.field == rhs.field &&
+           lhs.periodic_enabled == rhs.periodic_enabled &&
+           lhs.field_attached == rhs.field_attached && lhs.field == rhs.field &&
            lhs.compute_flags == rhs.compute_flags &&
            lhs.maximum_iterations == rhs.maximum_iterations &&
            lhs.charge_tolerance == rhs.charge_tolerance &&
@@ -549,6 +554,7 @@ void make_system_keys(const HostRequest& request, const gpuxtb_compute_options_t
     key.spin_channels = request.spin_channels[index];
     key.point_count = point_end - point_begin;
     key.periodic_enabled = periodic_enabled;
+    key.field_attached = request.field_attached_by_system[index] != 0u;
     key.field = request.field_by_system[index];
     key.compute_flags = options.flags;
     key.maximum_iterations = options.max_scc_iterations;
@@ -556,6 +562,21 @@ void make_system_keys(const HostRequest& request, const gpuxtb_compute_options_t
     key.energy_tolerance = options.energy_tolerance;
     key.electronic_temperature = options.electronic_temperature;
   }
+}
+
+/* Field presence and values change only numerical inputs. Every CPU system
+ * preallocates field_vat/field_vdp for its full atom count, so these members
+ * are excluded from the identity that decides whether rebuilding would be
+ * necessary. The exact SystemKey equality above remains the strict WARM gate. */
+bool same_prepared_layout(const SystemKey& lhs, const SystemKey& rhs) {
+  return lhs.atomic_numbers == rhs.atomic_numbers && lhs.molecular_charge == rhs.molecular_charge &&
+         lhs.unpaired_electrons == rhs.unpaired_electrons &&
+         lhs.spin_channels == rhs.spin_channels && lhs.point_count == rhs.point_count &&
+         lhs.periodic_enabled == rhs.periodic_enabled && lhs.compute_flags == rhs.compute_flags &&
+         lhs.maximum_iterations == rhs.maximum_iterations &&
+         lhs.charge_tolerance == rhs.charge_tolerance &&
+         lhs.energy_tolerance == rhs.energy_tolerance &&
+         lhs.electronic_temperature == rhs.electronic_temperature;
 }
 
 struct SystemOutput {
@@ -682,12 +703,11 @@ struct SystemExecution {
   std::vector<double> periodic_energy;
   std::vector<gpuxtb_status_t> periodic_status;
 
-  /* Uniform external electric field (atomic units; zero entries mean no field).
+  /* Uniform external electric field in atomic units. Presence is distinct from
+   * the three values so an explicit zero block remains visible to WARM policy.
    * field_vat holds the per-atom scalar potential -E . r and field_vdp the
-   * per-atom dipolar potential -E, both recomputed when positions change. They
-   * are injected into the SCC atomic/dipole potentials and, together with the
-   * constant Hellmann-Feynman gradient -E per atom, into the stationary force.
-   */
+   * per-atom dipolar potential -E, both recomputed when positions change. */
+  bool field_attached = false;
   std::array<double, 3> field{0.0, 0.0, 0.0};
   std::vector<double> field_vat;
   std::vector<double> field_vdp;
@@ -735,6 +755,16 @@ struct SystemExecution {
    * is topology- and spin-dependent but independent of the requested property
    * flags (all scratch is preallocated up front). */
   std::size_t resident_bytes() const noexcept;
+
+  /* Update only numerical field state. This is noexcept and allocation-free,
+   * which lets a fixed plan accept FRESH field changes without rebuilding its
+   * topology-sized SystemExecution. */
+  void set_field(bool attached, const std::array<double, 3>& value) noexcept {
+    key.field_attached = attached;
+    key.field = value;
+    field_attached = attached;
+    field = value;
+  }
 
  private:
   gpuxtb_status_t refresh_geometry(const CpuLinearAlgebraBackend& backend, bool warm_start,
@@ -825,6 +855,7 @@ gpuxtb_status_t SystemExecution::build(std::string& error) {
   dipole_integrals.resize(3u * matrix);
   quadrupole_integrals.resize(6u * matrix);
   core_hamiltonian.resize(matrix);
+  field_attached = key.field_attached;
   field = key.field;
   field_vat.resize(atom_count);
   field_vdp.resize(3u * atom_count);
@@ -1051,6 +1082,8 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
       &dipole_integrals,
       &quadrupole_integrals,
       &core_hamiltonian,
+      &field_vat,
+      &field_vdp,
       &es2_matrix,
       &es2_matrix_scratch,
       &es2_shell_scratch,
@@ -1175,7 +1208,7 @@ gpuxtb_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend&
     geometry.periodic_embedding_generation = geometry_generation;
     geometry.periodic_plan_identity = periodic.identity();
   }
-  if (field != std::array<double, 3>{0.0, 0.0, 0.0}) {
+  if (field_attached) {
     /* vat_i = -E . r_i and vdp_alpha = -E_alpha, matching the released
      * electric-field block contract and the tblite field potential. The field
      * is uniform, so the dipolar potential is identical on every atom. */
@@ -1287,13 +1320,13 @@ gpuxtb_status_t SystemExecution::refresh_stationary_potentials(std::string& erro
   for (std::size_t atom = 0; atom < atomic_potential.size(); ++atom) {
     atomic_potential[atom] += d4_atomic_potential[atom] + periodic_atomic_potential[atom];
   }
-  if (field != std::array<double, 3>{0.0, 0.0, 0.0}) {
+  if (field_attached) {
     /* Mirror the SCC driver injection: the field's scalar potential -E . r
      * contributes on the charge-channel atom potential (mapped onto shells by
      * the loop below) and its dipolar potential -E on the charge-channel
      * dipole potential, so the stationary integral adjoints retain the field's
-     * density-response terms. The constant Hellmann-Feynman force +E per atom
-     * is added at the public force boundary. */
+     * density-response terms. The remaining explicit coordinate derivative,
+     * +q_i E in the public force convention, is added at the force boundary. */
     for (std::size_t atom = 0; atom < atomic_potential.size(); ++atom) {
       atomic_potential[atom] += field_vat[atom];
     }
@@ -1453,15 +1486,16 @@ gpuxtb_status_t SystemExecution::infer(
       compose_qm_forces ? output.forces.data() : nullptr,
       need_point_forces ? output.point_forces.data() : nullptr, {}, composer_workspace, error);
   if (status != GPUXTB_STATUS_SUCCESS) return status;
-  if (compose_qm_forces && field != std::array<double, 3>{0.0, 0.0, 0.0}) {
-    /* Constant Hellmann-Feynman field force. In the dE/dR gradient convention
-     * used by the stationary composer, the electric field contributes
-     * gradient -= E per atom (tblite get_gradient), so the public
-     * F = -dE/dR force gains +E per atom. */
+  if (compose_qm_forces && field_attached) {
+    /* The stationary composer already carries the response of the converged
+     * density and atomic multipoles through the injected field potentials.
+     * The remaining explicit derivative of -sum_i q_i E.r_i is +q_i E in the
+     * public F=-dE/dR convention. */
     for (std::size_t atom = 0; atom < field_vat.size(); ++atom) {
-      output.forces[3u * atom + 0u] += field[0];
-      output.forces[3u * atom + 1u] += field[1];
-      output.forces[3u * atom + 2u] += field[2];
+      const double charge = wavefunction.qat[atom];
+      output.forces[3u * atom + 0u] = std::fma(charge, field[0], output.forces[3u * atom + 0u]);
+      output.forces[3u * atom + 1u] = std::fma(charge, field[1], output.forces[3u * atom + 1u]);
+      output.forces[3u * atom + 2u] = std::fma(charge, field[2], output.forces[3u * atom + 2u]);
     }
   }
   return GPUXTB_STATUS_SUCCESS;
@@ -1526,6 +1560,22 @@ struct Gfn2CpuExecutionCache::Impl {
 
   gpuxtb_status_t ensure_systems(const std::vector<SystemKey>& requested, std::string& error) {
     if (requested == keys) {
+      return GPUXTB_STATUS_SUCCESS;
+    }
+    const bool reusable_layout = requested.size() == keys.size() &&
+                                 requested.size() == systems.size() &&
+                                 std::equal(requested.begin(), requested.end(), keys.begin(),
+                                            [](const SystemKey& next, const SystemKey& current) {
+                                              return same_prepared_layout(next, current);
+                                            });
+    if (reusable_layout) {
+      /* Only field presence/value changed. Update the preallocated numerical
+       * storage in place and keep the exact key for subsequent WARM checks. */
+      for (std::size_t index = 0u; index < requested.size(); ++index) {
+        systems[index]->set_field(requested[index].field_attached, requested[index].field);
+        keys[index].field_attached = requested[index].field_attached;
+        keys[index].field = requested[index].field;
+      }
       return GPUXTB_STATUS_SUCCESS;
     }
     std::vector<std::unique_ptr<SystemExecution>> candidate;
@@ -1903,7 +1953,8 @@ std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache
            vector_bytes(request.point_offsets) + vector_bytes(request.point_positions) +
            vector_bytes(request.point_charges) + vector_bytes(request.point_hardnesses) +
            vector_bytes(request.periodic_shifts) + vector_bytes(request.response_offsets) +
-           vector_bytes(request.response_matrices);
+           vector_bytes(request.response_matrices) + vector_bytes(request.field_by_system) +
+           vector_bytes(request.field_attached_by_system);
   return total;
 }
 

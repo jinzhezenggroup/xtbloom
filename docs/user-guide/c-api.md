@@ -196,9 +196,13 @@ On the CPU backend the uniform electric field contributes a per-atom scalar
 potential `vat_i = -E . r_i` and a per-atom dipolar potential `vdp = -E` to the
 charge channel of the SCC Hamiltonian on every iteration (matching the pinned
 tblite `field.f90` potential), an energy term `-sum_i q_i (E . r_i)
-- sum_i E . d_i` in the SCC trace, and the constant Hellmann-Feynman force
-`+E` per atom (`-E` per atom in the `dE/dR` gradient convention used by
-tblite). Because the field participates in every SCC iteration it is part of
+- sum_i E . d_i` in the SCC trace, and the explicit Hellmann-Feynman force
+`+q_i E` on atom `i`. The stationary response of the converged charges and
+atomic dipoles is already carried by the field potentials. The pinned tblite
+0.7.0 analytic gradient applies `+E` per atom and is nonvariational for partial
+charges, so gpuxtb validates field forces against central differences of its
+reported energy instead of treating that gradient as an oracle. Because the
+field participates in every SCC iteration it is part of
 the strict warm-start identity: a `WARM` call whose field differs from the
 latest fully converged compatible call is rejected like any other changed
 compute policy.

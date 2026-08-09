@@ -206,10 +206,12 @@ static int run_installed_inference(gpuxtb_context_t* context, const char* mode_n
     return 11;
   }
 
-  /* Exercise the installed ABI-v3 electric-field attachment and ABI-v2
-   * dipole-moment outlet end to end. The released field block is 32 bytes:
+  /* Exercise the CPU-released ABI-v3 electric-field attachment and ABI-v2
+   * dipole-moment outlet end to end. CUDA deliberately returns NOT_IMPLEMENTED
+   * for both until #237 P3, so its installed consumer retains the field-free
+   * inference and plan probes below. The released field block is 32 bytes:
    * int32 block_version=1, int32 reserved=0, three doubles in atomic units. */
-  {
+  if (gpuxtb_context_get_backend(context) == GPUXTB_BACKEND_CPU) {
     const uint32_t field_flags =
         GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_DIPOLE_MOMENTS;
     uint8_t payload[32];
