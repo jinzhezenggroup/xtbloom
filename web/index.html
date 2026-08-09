@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gpuxtb · GFN2-xTB 在线计算（WASM）</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='24' font-size='24'%3E%E2%9A%9B%EF%B8%8F%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">⚛️</span>
+    <div>
+      <h1>gpuxtb<span class="accent">·GFN2-xTB</span></h1>
+      <p class="tagline" data-i18n="tagline">浏览器内运行的原生 GFN2-xTB 单点能与几何优化 · C++17 WASM64 · CPU 后端</p>
+    </div>
+  </div>
+  <div class="badges">
+    <span class="badge badge-engine" id="engine-badge">引擎加载中…</span>
+    <span class="badge badge-ver" id="ver-badge">v–</span>
+    <button class="badge badge-lang" id="lang-toggle" title="切换语言 / Toggle language">EN</button>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- ================= 输入 ================= -->
+  <section class="card panel-input">
+    <h2 class="panel-title" data-i18n="panel_input">输入</h2>
+
+    <div class="field">
+      <label data-i18n="presets_label">模板分子</label>
+      <div class="preset-row" id="preset-row">
+        <button class="chip" data-preset="water">H₂O</button>
+        <button class="chip" data-preset="ketene" data-i18n="preset_ketene">乙烯酮</button>
+        <button class="chip" data-preset="oh">OH·</button>
+        <button class="chip" data-preset="benzene" data-i18n="preset_benzene">苯</button>
+        <button class="chip" data-preset="ethanol" data-i18n="preset_ethanol">乙醇</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="xyz" data-i18n="xyz_label">坐标（XYZ，单位：埃 Å）</label>
+      <textarea id="xyz" spellcheck="false" rows="12" data-i18n-placeholder="xyz_placeholder" placeholder="每行：元素符号 x y z&#10;O  0.00000000  0.00000000  0.00000000&#10;H  0.00000000  0.00000000  0.95720000&#10;H  0.00000000  0.75718000 -0.58552000"></textarea>
+      <div class="hint" id="xyz-hint"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="field">
+        <label for="charge" data-i18n="charge_label">分子电荷 q / e</label>
+        <input id="charge" type="number" step="1" value="0">
+      </div>
+      <div class="field">
+        <label for="unpaired" data-i18n="unpaired_label">未配对电子数</label>
+        <input id="unpaired" type="number" step="1" value="0">
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="field">
+        <label for="etemp"><span data-i18n="etemp_label">电子温度 K</span> <a class="tip" id="etemp-tip" title="">ⓘ</a></label>
+        <input id="etemp" type="number" step="10" value="0">
+      </div>
+      <div class="field">
+        <label for="maxiter" data-i18n="maxiter_label">最大 SCC 迭代</label>
+        <input id="maxiter" type="number" step="1" value="250">
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="field">
+        <label for="etol" data-i18n="etol_label">能量收敛 (Eh)</label>
+        <input id="etol" type="number" step="1e-8" value="1e-8">
+      </div>
+      <div class="field">
+        <label for="qtol" data-i18n="qtol_label">电荷收敛 (e)</label>
+        <input id="qtol" type="number" step="1e-5" value="1e-5">
+      </div>
+    </div>
+
+    <label class="check">
+      <input type="checkbox" id="forces" checked>
+      <span data-i18n="forces_label">同时计算解析力（forces）</span>
+    </label>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="run" data-i18n="run">计算能量</button>
+      <button class="btn" id="reset" data-i18n="reset">重置</button>
+    </div>
+
+    <hr class="sep">
+
+    <h3 class="sub-title" data-i18n="opt_title">几何优化 <span class="hint-inline" data-i18n="opt_hint">L-BFGS · 解析力</span></h3>
+    <div class="grid3" id="opt-settings">
+      <div class="field">
+        <label for="opt-maxiter" data-i18n="opt_maxiter_label">最大迭代</label>
+        <input id="opt-maxiter" type="number" step="1" value="200">
+      </div>
+      <div class="field">
+        <label for="opt-gradtol" data-i18n="opt_gradtol_label">收敛力 (Eh/bohr)</label>
+        <input id="opt-gradtol" type="number" step="1e-5" value="4.5e-4">
+      </div>
+      <div class="field">
+        <label for="opt-maxmove" data-i18n="opt_maxmove_label">单步位移上限 (Å)</label>
+        <input id="opt-maxmove" type="number" step="0.05" value="0.4">
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="opt-run" data-i18n="opt_run">几何优化</button>
+    </div>
+  </section>
+
+  <!-- 右列：分子可视化 + 结果 -->
+  <div class="col-right">
+
+  <!-- ================= 分子可视化 ================= -->
+  <section class="card panel-mol">
+    <div class="mol-head">
+      <h2 class="panel-title" id="panel_mol" data-i18n="mol_title">分子可视化</h2>
+      <span class="mol-status" id="mol-status" hidden></span>
+    </div>
+    <div class="mol-container" id="mol"></div>
+    <div class="replay" id="replay" hidden>
+      <div class="replay-controls">
+        <button class="btn btn-small replay-btn" id="replay-play" title="">▶</button>
+        <input type="range" id="replay-slider" min="0" max="1" step="1" value="0" aria-label="replay">
+        <span class="replay-label" id="replay-label"></span>
+      </div>
+    </div>
+    <p class="hint" id="mol-hint" data-i18n="mol_hint">实时显示当前坐标，计算 / 优化 / 应用优化坐标后自动更新。</p>
+  </section>
+
+  <!-- ================= 结果 ================= -->
+  <section class="card panel-output">
+    <h2 class="panel-title" id="panel_output" data-i18n="panel_output">结果</h2>
+
+    <div class="energy-block">
+      <div class="energy-val" id="energy">—</div>
+      <div class="energy-sub">
+        <span id="energy-ev">—</span><span class="dim"> · </span><span id="energy-kcal">—</span>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="stat-k" id="stat-atoms">–</div><div class="stat-l" data-i18n="stat_atoms">原子</div></div>
+      <div class="stat"><div class="stat-k" id="stat-iter">–</div><div class="stat-l" data-i18n="stat_iter">SCC 迭代</div></div>
+      <div class="stat"><div class="stat-k" id="stat-conv">–</div><div class="stat-l" data-i18n="stat_conv">收敛</div></div>
+      <div class="stat"><div class="stat-k" id="stat-ms">–</div><div class="stat-l" data-i18n="stat_ms">耗时 ms</div></div>
+    </div>
+
+    <div class="table-wrap" id="table-wrap" hidden>
+      <table id="atom-table">
+        <thead>
+          <tr>
+            <th>#</th><th>Z</th><th data-i18n="th_atom">原子</th>
+            <th class="num" data-i18n="th_q">电荷 q</th>
+            <th class="num" data-i18n="th_fx">Fx (Eh/bohr)</th>
+            <th class="num" data-i18n="th_fy">Fy (Eh/bohr)</th>
+            <th class="num" data-i18n="th_fz">Fz (Eh/bohr)</th>
+            <th class="num" data-i18n="th_fmag">|F| (eV/Å)</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="traj" id="traj" hidden>
+      <h4 class="traj-title" id="traj-title">能量迭代轨迹（Eh）</h4>
+      <div class="traj-svg" id="traj-svg"></div>
+    </div>
+
+    <div class="output-tools" id="output-tools" hidden>
+      <button class="btn btn-small" id="copy-json" data-i18n="copy_json">复制 JSON</button>
+      <button class="btn btn-small btn-accent" id="opt-apply" hidden data-i18n="opt_apply">把优化坐标填回输入框</button>
+      <span class="hint" id="copy-done" hidden data-i18n="copy_done">已复制</span>
+    </div>
+
+    <div class="err" id="error" hidden></div>
+    <div style="margin-top:10px">
+      <button class="btn btn-small" id="retry" hidden data-i18n="load_retry">重试 / Retry</button>
+    </div>
+  </section>
+
+  </div><!-- .col-right -->
+</main>
+
+<!-- 路线图 -->
+<section class="card roadmap">
+  <h2 class="panel-title" data-i18n="roadmap">路线图</h2>
+  <div class="roadmap-grid">
+    <div class="roadmap-item disabled" title="">
+      <span class="rm-emoji">🧪</span>
+      <div>
+        <div class="rm-title"><span data-i18n="roadmap_smiles_title">SMILES → 结构</span> <span class="tag" data-i18n="tag_pending">暂不实现</span></div>
+        <div class="rm-desc" data-i18n="roadmap_smiles_desc">输入 SMILES 自动生成三维坐标，然后直接计算。</div>
+      </div>
+      <button class="btn" id="smiles-alert" data-i18n="btn_pending">即将推出</button>
+    </div>
+    <div class="roadmap-item" title="">
+      <span class="rm-emoji">🎯</span>
+      <div>
+        <div class="rm-title"><span data-i18n="roadmap_opt_title">几何优化</span> <span class="tag tag-good" data-i18n="tag_done">已支持</span></div>
+        <div class="rm-desc" data-i18n="roadmap_opt_desc">内置 L-BFGS 优化器，使用解析力收敛到稳定结构。在左侧“优化”区配置后点击“几何优化”。</div>
+      </div>
+      <a class="btn" href="#opt-settings" data-i18n="opt_go" style="text-align:center">去优化</a>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <p data-i18n="footer">
+    由 gpuxtb 驱动 —— 同一套 C ABI 的 C++17 原生库编译为 wasm64（需要支持 WebAssembly memory64 的浏览器，如 Chrome 133+ / Firefox 128+ / Safari 18.4+）。
+    BLAS/LAPACK 层为演示用最小实现，经 numpy 与原生 gpuxtb 逐位验证。仅供演示，非科学计算生产环境。
+  </p>
+  <p class="legal-links">
+    <a href="https://jinzhezeng.group/gpuxtb/">Web demo</a> ·
+    <a href="LICENSE">GPL-3.0-or-later</a> ·
+    <a href="THIRD_PARTY_NOTICES.md">Third-party notices</a> ·
+    <a href="CUDA_MKL_LINKING_EXCEPTION">Additional permission</a> ·
+    <a href="https://github.com/jinzhezenggroup/gpuxtb">Source</a>
+  </p>
+</footer>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="overlay-box">
+    <div class="spinner"></div>
+    <p id="overlay-text" data-i18n="overlay_loading">正在加载 WASM 引擎…</p>
+    <div class="loadbar" id="load-bar-wrap" hidden>
+      <div class="loadbar-track"><div class="loadbar-fill" id="load-bar-fill"></div></div>
+      <p class="loadbar-text" id="load-bar-text">0%</p>
+    </div>
+  </div>
+</div>
+
+<script src="vendor/3Dmol-min.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

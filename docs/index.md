@@ -3,6 +3,14 @@
 gpuxtb exposes GFN2-xTB single-point inference through one stable C ABI and
 Python interfaces built on that ABI. Start with the guide for your role.
 
+## Browser demo
+
+The experimental browser build is available at
+<https://jinzhezeng.group/gpuxtb/>. It runs the CPU backend entirely on the
+client as wasm64 and includes an adapter-local L-BFGS geometry optimizer for
+interactive demonstrations. That optimizer is not exported by the stable C
+ABI and is not a supported native-library capability.
+
 ## User guide
 
 The [user guide](user-guide/index.md) covers supported capabilities,
@@ -50,7 +58,8 @@ Repository contributors and coding agents must also follow
 | Per-system molecular dipole moments | CPU; CUDA reserved |
 | ASE and dpdata | Supported Python integrations |
 | External interaction slot (solvation, field gradient, ...) | ABI-v3 slot reserved; not implemented |
-| GFN1-xTB, ROCm, solvation, optimization, MD, Hessians | Not implemented |
+| Browser adapter single points and demo geometry optimization | Experimental wasm64 CPU site |
+| Native GFN1-xTB, ROCm, solvation, optimization, MD, Hessians | Not implemented |
 
 Documentation describes the current repository state. Reserved ABI values and
 planned extensions are not reported as supported features.

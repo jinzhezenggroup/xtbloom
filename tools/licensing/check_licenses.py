@@ -27,6 +27,19 @@ IMPLIB_VENDOR_PATH = "cmake/3rdparty/implib"
 IMPLIB_REVISION = "6f4fc02ae058ef11848046af01a1a756f3229c29"
 IMPLIB_TREE = "5fbe7e9f2c4efe0c2be4d2eed409e81f35458ba4"
 ARRAY_API_COMPAT_LICENSE = "LICENSES/array-api-compat-MIT.txt"
+WEB_LICENSE_FILES = (
+    "LICENSES/3Dmol.js-BSD-3-Clause.txt",
+    "LICENSES/iobuffer-MIT.txt",
+    "LICENSES/netcdfjs-MIT.txt",
+    "LICENSES/pako-MIT.txt",
+    "LICENSES/pako-Zlib.txt",
+    "LICENSES/upng-js-MIT.txt",
+)
+WEB_SOURCE_FILES = (
+    *WEB_LICENSE_FILES,
+    "web/package.json",
+    "web/package-lock.json",
+)
 SOURCE_FILES = (
     "LICENSE",
     EXCEPTION_FILE,
@@ -35,6 +48,7 @@ SOURCE_FILES = (
     "LICENSES/Apache-2.0.txt",
     "LICENSES/MIT.txt",
     ARRAY_API_COMPAT_LICENSE,
+    *WEB_SOURCE_FILES,
     "data/parameters/d4.NOTICE",
     "data/parameters/tblite_sto.hpp",
     "data/parameters/tblite_spin.hpp",
@@ -58,6 +72,7 @@ COMMON_ARCHIVE_SUFFIXES = (
     ARRAY_API_COMPAT_LICENSE,
 )
 SDIST_ARCHIVE_SUFFIXES = (
+    *WEB_SOURCE_FILES,
     "data/parameters/d4.NOTICE",
     "data/parameters/tblite_sto.hpp",
     "data/parameters/tblite_spin.hpp",
@@ -129,6 +144,12 @@ NOTICE_TOKENS = (
     "array-api-compat",
     "076218e4f5aa18578418c7d04fad9ab581a16bb8",
     "Copyright (c) 2022 Consortium for Python Data API Standards",
+    "3dmol@2.5.5",
+    "iobuffer 5.4.0",
+    "netcdfjs 3.0.0",
+    "UPNG.js 2.1.0",
+    "pako 2.2.0 and pako 1.0.11",
+    "475e2213ac02fbf2d4a8c4fc287b570fc476da2fda9de3f5a72a2554b5716e71",
     EXCEPTION_FILE,
 )
 EXCEPTION_TOKENS = (
@@ -160,6 +181,35 @@ FORBIDDEN_VENDOR_LIBRARY_RE = re.compile(
     r"(?:^|/)(?:lib(?:cuda|cudart|cublas|cusolver|cusparse|nvjitlink|mkl)[^/]*)"
     r"(?:\.a|\.so(?:\.[0-9]+)*)$",
     re.IGNORECASE,
+)
+WEB_SITE_SOURCE_MAP = {
+    "LICENSE": "LICENSE",
+    EXCEPTION_FILE: EXCEPTION_FILE,
+    "THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+    **{path: path for path in WEB_LICENSE_FILES},
+    "LICENSES/parameters/d4.NOTICE": "data/parameters/d4.NOTICE",
+    "LICENSES/parameters/dftd4-COPYING": ("data/parameters/licenses/dftd4-COPYING"),
+    "LICENSES/parameters/dftd4-COPYING.LESSER": (
+        "data/parameters/licenses/dftd4-COPYING.LESSER"
+    ),
+    "LICENSES/parameters/mctc-lib-LICENSE": (
+        "data/parameters/licenses/mctc-lib-LICENSE"
+    ),
+    "provenance/parameters/manifest.json": "data/parameters/manifest.json",
+    "provenance/parameters/sto_manifest.json": "data/parameters/sto_manifest.json",
+    "provenance/parameters/spin_manifest.json": "data/parameters/spin_manifest.json",
+    "provenance/parameters/d4_manifest.json": "data/parameters/d4_manifest.json",
+    "provenance/parameters/mctc_manifest.json": "data/parameters/mctc_manifest.json",
+}
+WEB_SITE_RUNTIME_FILES = (
+    "index.html",
+    "app.js",
+    "app_helpers.js",
+    "worker.js",
+    "gpuxtb_web.js",
+    "gpuxtb_web.wasm",
+    "gpuxtb_web.data",
+    "vendor/3Dmol-min.js",
 )
 
 
@@ -439,6 +489,65 @@ def check_source(root: Path) -> None:
         if token not in notice:
             raise LicenseCheckError(f"THIRD_PARTY_NOTICES.md omits {token}")
 
+    web_lock = json.loads((root / "web/package-lock.json").read_text(encoding="utf-8"))
+    web_packages = web_lock.get("packages", {})
+    expected_web_packages = {
+        "node_modules/3dmol": (
+            "2.5.5",
+            "sha512-kqNHouGqq3YfW58174tdERvm0XYTmP0tavQKOqIw1ouc2OJ7epkXEFrtEkVXV0clBZT2Ze2xHRC/qxX0u0qCdw==",
+        ),
+        "node_modules/iobuffer": (
+            "5.4.0",
+            "sha512-DRebOWuqDvxunfkNJAlc3IzWIPD5xVxwUNbHr7xKB8E6aLJxIPfNX3CoMJghcFjpv6RWQsrcJbghtEwSPoJqMA==",
+        ),
+        "node_modules/netcdfjs": (
+            "3.0.0",
+            "sha512-LOvT8KkC308qtpUkcBPiCMBtii7ZQCN6LxcVheWgyUeZ6DQWcpSRFV9dcVXLj/2eHZ/bre9tV5HTH4Sf93vrFw==",
+        ),
+        "node_modules/pako": (
+            "2.2.0",
+            "sha512-zJq6RP/5q+TO2OpFV3FHzlPnFjmkb7Nc99a5SNjJE+uu/PkpChs+NIZSSzbBoD+6kjiISXjfYdwj1ZRQ81dz/w==",
+        ),
+        "node_modules/upng-js": (
+            "2.1.0",
+            "sha512-d3xzZzpMP64YkjP5pr8gNyvBt7dLk/uGI67EctzDuVp4lCZyVMo0aJO6l/VDlgbInJYDY6cnClLoBp29eKWI6g==",
+        ),
+        "node_modules/upng-js/node_modules/pako": (
+            "1.0.11",
+            "sha512-4hLB8Py4zZce5s4yd9XzopqwVv/yGNhV1Bl8NTmCq1763HeK2+EwVTv+leGeL13Dnh2wfbqowVPXCIO0z4taYw==",
+        ),
+    }
+    for package_path, (version, integrity) in expected_web_packages.items():
+        package = web_packages.get(package_path)
+        if not isinstance(package, dict) or (
+            package.get("version") != version or package.get("integrity") != integrity
+        ):
+            raise LicenseCheckError(
+                f"web/package-lock.json has unreviewed {package_path} resolution"
+            )
+
+    web_license_tokens = {
+        "LICENSES/3Dmol.js-BSD-3-Clause.txt": (
+            "University of Pittsburgh",
+            "Redistribution and use in source and binary forms",
+        ),
+        "LICENSES/iobuffer-MIT.txt": ("Copyright (c) 2015 Michaël Zasso",),
+        "LICENSES/netcdfjs-MIT.txt": ("Copyright (c) 2016 cheminfo",),
+        "LICENSES/upng-js-MIT.txt": ("Copyright (c) 2017 Photopea",),
+        "LICENSES/pako-MIT.txt": (
+            "Copyright (C) 2014-2017 by Vitaly Puzrin and Andrei Tuputcyn",
+        ),
+        "LICENSES/pako-Zlib.txt": (
+            "Copyright (C) 1995-2013 Jean-loup Gailly and Mark Adler",
+            "This notice may not be removed or altered",
+        ),
+    }
+    for relative, tokens in web_license_tokens.items():
+        text = (root / relative).read_text(encoding="utf-8")
+        for token in tokens:
+            if token not in text:
+                raise LicenseCheckError(f"{relative} omits upstream text: {token}")
+
     array_compat_license = (root / ARRAY_API_COMPAT_LICENSE).read_text(encoding="utf-8")
     for token in (
         "MIT License",
@@ -537,6 +646,34 @@ def check_install(prefix: Path) -> None:
         raise LicenseCheckError(
             "install tree bundles a CUDA/MKL provider library: " + bundled[0]
         )
+
+
+def check_web_site(site: Path, source_root: Path | None = None) -> None:
+    """Validate the legal payload conveyed beside the browser binaries."""
+    _require_files(
+        site,
+        WEB_SITE_RUNTIME_FILES + tuple(WEB_SITE_SOURCE_MAP),
+        "web site",
+    )
+    index = (site / "index.html").read_text(encoding="utf-8")
+    for token in (
+        'href="LICENSE"',
+        'href="THIRD_PARTY_NOTICES.md"',
+        f'href="{EXCEPTION_FILE}"',
+        "https://jinzhezeng.group/gpuxtb/",
+        "https://github.com/jinzhezenggroup/gpuxtb",
+    ):
+        if token not in index:
+            raise LicenseCheckError(f"web site index does not expose {token}")
+
+    if source_root is not None:
+        for site_relative, source_relative in WEB_SITE_SOURCE_MAP.items():
+            if (site / site_relative).read_bytes() != (
+                source_root / source_relative
+            ).read_bytes():
+                raise LicenseCheckError(
+                    f"web site legal file differs from source: {site_relative}"
+                )
 
 
 def _archive_names(path: Path) -> set[str]:
@@ -656,6 +793,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", type=Path, default=Path.cwd())
     parser.add_argument("--install-prefix", type=Path)
+    parser.add_argument("--web-site", type=Path)
     parser.add_argument("archives", nargs="*", type=Path)
     args = parser.parse_args()
 
@@ -663,6 +801,8 @@ def main() -> int:
         check_source(args.source_root.resolve())
         if args.install_prefix is not None:
             check_install(args.install_prefix.resolve())
+        if args.web_site is not None:
+            check_web_site(args.web_site.resolve(), args.source_root.resolve())
         for archive in args.archives:
             check_archive(archive.resolve())
     except (LicenseCheckError, OSError, KeyError, ValueError) as exc:

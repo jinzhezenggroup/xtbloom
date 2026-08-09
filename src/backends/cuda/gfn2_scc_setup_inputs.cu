@@ -528,7 +528,8 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
   const bool valid_eigensolver_strategy =
       sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kAuto ||
       sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kBatchedDivideAndConquer ||
-      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kBatchedJacobi;
+      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kBatchedJacobi ||
+      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kTridiagonalBisection;
   if (!std::isfinite(sources.eigensolver_options.minimum_overlap_rcond) ||
       !(sources.eigensolver_options.minimum_overlap_rcond > 0.0) ||
       !std::isfinite(sources.eigensolver_options.symmetry_tolerance) ||
