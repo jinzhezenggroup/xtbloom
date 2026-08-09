@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 def test_version_string() -> None:
     """Expose the native library version through the ctypes wrapper."""
-    assert library.get_version() == "0.1.0"
+    assert library.get_version() == "0.0.0"
 
 
 def test_runtime_search_includes_user_site_packages(

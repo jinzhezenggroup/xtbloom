@@ -168,6 +168,23 @@ archives, installs, or wheels, and does not alter the licensing of build
 outputs (the project is itself `GPL-3.0-or-later`, so building with ccache
 introduces no incompatibility).
 
+## Nox validation orchestrator
+
+Repository: <https://github.com/wntrblm/nox>
+
+License: `Apache-2.0` (`LICENSES/Apache-2.0.txt`).
+
+The optional developer validation workflow uses Nox 2026.7.11 solely to
+orchestrate the repository's authoritative CMake, CTest, uv, conformance, and
+licensing commands. The PyPI wheel
+`nox-2026.7.11-py3-none-any.whl` has SHA-256
+`f5e811693ee8374d269396204eb39990d2084da67ed968239f94301805c9a169`; the
+sdist has SHA-256
+`dec9bd2c854540a2d5c0b841eaaf1d23a7c26cd90af36d9f1f1668b34524bfd9`.
+Nox and its transitive dependencies are resolved in the locked `nox`
+dependency group. They are test/development tools only: they are not project
+extras, runtime dependencies, native install payloads, or bundled wheel files.
+
 ## PyTorch CI test dependency
 
 Repository: <https://github.com/pytorch/pytorch>

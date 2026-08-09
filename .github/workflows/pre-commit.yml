@@ -26,9 +26,13 @@ jobs:
           restore-keys: prek-0.3.1-${{ runner.os }}-
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          # Cache uv's package cache (uvx prek downloads) across runs.
+          # Match the version used to generate uv.lock and cache both the
+          # isolated Nox runner and uvx prek downloads across runs.
+          version: "0.10.7"
           enable-cache: true
-      - name: Run pre-commit hooks
-        # Pin the runner as well as every hook revision so CI behavior cannot
-        # change merely because a new prek release is published.
-        run: uvx prek@0.3.1 run --show-diff-on-failure --color=always --all-files
+      - name: Run fast Nox validation
+        # Exercise the same pinned wrapper used locally. The session itself
+        # retains the exact prek pin and also verifies uv.lock consistency.
+        env:
+          UV_DEFAULT_INDEX: https://pypi.org/simple
+        run: uv run --isolated --locked --only-group nox nox -s fast

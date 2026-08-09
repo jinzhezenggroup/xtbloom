@@ -1,30 +1,27 @@
 # xTBloom for Python
 
 xTBloom provides batched GFN2-xTB energies, analytic forces, and atomic charges
-through a NumPy-friendly Python interface. The package calls the same native C
-ABI used by C and C++ applications and can select a CPU or CUDA backend without
-changing the calculation API.
+through a NumPy-friendly interface backed by the same stable C ABI used by
+native C and C++ applications.
 
-Current support includes restricted and unrestricted GFN2-xTB, ragged batches,
-explicit point charges with force output, periodic caller-supplied charge
-response, ASE, and dpdata. GFN1-xTB, ROCm, lattice/PBC inputs, solvation,
-optimization, and Hessians are not implemented.
+It supports restricted and unrestricted GFN2-xTB, native ragged batches,
+explicit point charges with force output, caller-supplied periodic charge
+response, CPU and CUDA backends, ASE, dpdata, and eager Array API/DLPack arrays.
 
 ## Installation
 
-xTBloom is being prepared for its first PyPI release. For a published release,
-install the CPU package with:
+xTBloom is not yet published on PyPI. From a source checkout, build and install
+the CPU package with:
 
 ```console
-python -m pip install xtbloom
+XTBLOOM_ENABLE_CUDA=OFF python -m pip install .
 ```
 
-Optional extras install integrations or CUDA 12 host libraries:
+Install optional integrations from the checkout:
 
 ```console
-python -m pip install "xtbloom[ase]"
-python -m pip install "xtbloom[dpdata]"
-python -m pip install "xtbloom[cuda12]"
+XTBLOOM_ENABLE_CUDA=OFF python -m pip install ".[ase,dpdata]"
+XTBLOOM_ENABLE_CUDA=ON python -m pip install ".[cuda12]"
 ```
 
 Python 3.10 or newer is required. Linux wheels include a private LP64 OpenBLAS
@@ -34,16 +31,14 @@ additionally needs an NVIDIA driver and compatible CUDA 12 host libraries; the
 `cuda12` extra supplies the supported `nvidia-*` packages. CUDA libraries are
 not bundled inside the xTBloom wheel.
 
-The planned PyPI artifacts are Linux x86_64 and aarch64 wheels. macOS and
-Windows wheels are not supported yet. Source-build instructions are kept in the
-[developer guide](https://github.com/njzjz/xtbloom/blob/main/docs/developer-guide/packaging.md).
+Source-build and package-boundary details are in the
+[developer guide](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/developer-guide/packaging.md).
 
 ## Single-point calculation
 
 The high-level API uses atomic units: positions are in bohr, energies in
 Hartree, forces in Hartree/bohr, and charges in elementary-charge units.
-`electronic_temperature` is the one exception: Python accepts kelvin and
-converts it to the C ABI's `k_B T` energy scale.
+`electronic_temperature` is the exception: Python accepts kelvin.
 
 ```python
 import numpy as np
@@ -67,51 +62,19 @@ print(result["charges"])
 ```
 
 `result["gradient"]` is the negative of `result["forces"]`. At finite
-electronic temperature, the reported energy is the variational electronic
-Helmholtz free energy used by xTB and tblite.
+electronic temperature, the reported variational energy is the electronic
+Helmholtz free energy.
 
-Set `backend="cpu"` or `backend="cuda"` to require a backend. `"auto"`
-prefers an available CUDA backend and otherwise selects CPU. `cpu_threads`
-controls molecule-level CPU parallelism and defaults to one in the Python API.
-The high-level Python interface uses host NumPy arrays for both backends; direct
-CUDA-device and mixed descriptors are available only through the low-level C
-ABI.
-
-`Calculator` and `BatchCalculator` use independent fresh SCC initialization by
-default. Pass `warm_start=True` to seed each compatible call from the previous
-fully converged state on the same native context; an incompatible identity
-transparently retries once from fresh state. The ASE calculator enables this
-policy by default for dynamics and accepts `warm_start=False` for independent
-steps.
-
-## Charge and spin
-
-Use either `multiplicity` or `uhf = multiplicity - 1`. Open-shell Python
-calculations default to two unrestricted spin channels; `spin_channels=1`
-requests the restricted open-shell form explicitly.
-
-```python
-with Calculator(
-    "GFN2-xTB",
-    numbers=[7, 1, 1],
-    positions=np.array(
-        [
-            [0.0, 0.0, 0.0],
-            [1.8, 0.0, 0.0],
-            [-0.6, 1.7, 0.0],
-        ]
-    ),
-    charge=0,
-    multiplicity=2,
-) as calc:
-    radical = calc.singlepoint()
-```
+Set `backend="cpu"` or `backend="cuda"` to require one backend. `"auto"`
+prefers an available CUDA backend and otherwise selects CPU. Compatible calls
+can opt into electronic warm starts; the default is an independent fresh SCC
+solve.
 
 ## Native ragged batches
 
-`BatchCalculator` packs differently sized structures into one native request.
-Per-system SCC or eigensolver failures remain local: successful peers are
-preserved, and failed floating-point slices contain NaNs.
+`BatchCalculator` packs differently sized `Structure` objects into one native
+request. Per-system SCC or eigensolver failures remain local: successful peers
+are preserved, and failed floating-point slices contain NaNs plus diagnostics.
 
 ```python
 import numpy as np
@@ -137,138 +100,48 @@ with BatchCalculator(structures, backend="auto") as calc:
 print(batch.energies)
 print(batch[1].forces)
 print(batch.failed_indices)
-batch.raise_for_status()
 ```
 
-For large workloads, `compute(auto_batch_size=True)` chooses conservative CUDA
-chunks from current free memory. An integer such as
-`compute(auto_batch_size=20_000)` instead limits the target total atom count per
-native call while preserving input order. Automatic batching cannot be combined
-with `warm_start=True` because the native context retains one whole-batch SCC
-checkpoint rather than independent checkpoints for each chunk.
+`compute(auto_batch_size=True)` can split very large workloads into
+conservative CUDA chunks while preserving input order.
 
-## Array API and DLPack input arrays
+## Advanced array and CUDA paths
 
-`ArrayBatch` is the packed, zero-copy entry point: instead of building
-`Structure` objects, pass the flat ragged-batch descriptor arrays directly.
-Every array may come from any library that implements the Array API
-`__dlpack__`/`__dlpack_device__` producer protocols — NumPy, CuPy, JAX eager
-arrays, or PyTorch tensors — without xTBloom importing any of those libraries.
+`ArrayBatch` accepts packed ragged descriptors from eager NumPy, CuPy, JAX, or
+PyTorch arrays through `__dlpack__` and `__dlpack_device__`. Host arrays map
+to host descriptors; CUDA arrays can remain device-resident. By default,
+results return as host NumPy arrays.
 
-```python
-import numpy as np
-from xtbloom import ArrayBatch
+Use an `out=` mapping for caller-owned NumPy, CuPy, or PyTorch output buffers,
+or `result_memory="cuda"` for one xTBloom-owned packed device arena exported as
+DLPack producers. Exact dtype, shape, layout, lifetime, stream, and ownership
+rules are documented in the
+[Python API guide](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/python.md#array-api-and-dlpack-input-arrays).
 
-atom_offsets = np.array([0, 2, 5], dtype=np.int64)
-atomic_numbers = np.array([8, 1, 1, 1, 1], dtype=np.int32)
-positions = np.array([
-    [0.0000, 0.0000, -0.7358],
-    [1.4418, 0.0000, 0.3679],
-    [-1.4418, 0.0000, 0.3679],
-    [-0.7, 0.0, 0.0],
-    [0.7, 0.0, 0.0],
-])
-molecular_charges = np.array([0.0, 0.0])
-unpaired_electrons = np.array([0, 0], dtype=np.int32)
+`xtbloom_torch(...)` is the optional PyTorch autograd entry point. It supports
+the positions gradient `dE/dR = -F`. Gradients with respect to other inputs,
+force-output differentiation, Hessians, and higher-order differentiation are
+rejected explicitly.
 
-with ArrayBatch(
-    atom_offsets,
-    atomic_numbers,
-    positions,
-    molecular_charges,
-    unpaired_electrons,
-    backend="cuda",
-) as batch:
-    result = batch.compute()
-print(result.energies, result.forces, result.charges)
-```
+## Charge, spin, and embedding
 
-Host arrays become `XTBLOOM_MEMORY_HOST` descriptors; CUDA device arrays (a
-PyTorch tensor or CuPy array on `cuda`) become `XTBLOOM_MEMORY_CUDA_DEVICE`
-descriptors and are executed by the CUDA backend with no host round trip.
-CUDA-managed memory, ROCm, and lazy/tracer objects (`jit`/`grad`/`vmap`
-inputs, `torch.compile` graphs) are rejected with a precise error — pass a
-concrete eager array instead.
+Use either `multiplicity` or `uhf = multiplicity - 1` for open-shell
+calculations. Open-shell Python calculations default to two unrestricted spin
+channels; `spin_channels=1` requests the restricted open-shell form.
 
-- `copy=False` (default) requires the exact dtype, shape, and a compact
-  C-contiguous layout; anything else raises rather than silently copying. Set
-  `copy=True` to ask the producer for a compact copy. Copying never coerces
-  dtype; descriptors must still match the C ABI's exact scalar types.
-- The optional `point_charge_*` and `atomic_potential_shifts` /
-  `charge_response_offsets` / `charge_response_matrix` groups mirror the
-  `PointCharge`/`ChargeResponse` descriptors and must each be supplied
-  all-or-nothing.
-- `stream` selects the native `CUstream` for the context (the default `None`
-  means the CUDA legacy default stream; DLPack producers receive stream value
-  `1` in that case). `stream` is not meaningful for the CPU backend.
+`PointCharge` inputs participate in every SCC iteration, and xTBloom can
+return forces on both QM atoms and point charges. `ChargeResponse(shifts=b,
+matrix=A)` supplies a caller-owned `b + A q` operator on the atomic-charge
+channel. Returned forces hold those external fields fixed; callers own their
+coordinate derivatives and classical MM-MM terms.
 
-### Output policy
+See the
+[QM/MM guide](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/qmmm.md)
+for the complete contract.
 
-Results are ordinary host NumPy arrays by default, matching the rest of the
-Python API. Pass an `out=` mapping to have xTBloom write directly into your own
-writable NumPy, CuPy, or PyTorch buffers (no copy); JAX arrays are never
-mutated and are rejected as outputs.
+## ASE and dpdata
 
-```python
-out_forces = torch.empty((5, 3), dtype=torch.float64, device="cuda")
-result = batch.compute(out={"forces": out_forces})
-assert result.forces is out_forces
-```
-
-`out=` keys: `energies`, `forces`, `charges` (alias `atomic_charges`),
-`point_charge_forces`, `scc_iterations`, `scc_converged`, and
-`per_system_status`.
-
-`compute_arrays(...)` is a convenience alias that builds a temporary
-`ArrayBatch` and computes in one call.
-
-### PyTorch autograd op
-
-`xtbloom_torch(positions, atomic_numbers, atom_offsets, molecular_charges,
-unpaired_electrons, ...)` runs the packed DLPack inference on PyTorch tensors
-(host or CUDA) and is the only autograd entry point in the Python API. It
-supports exactly the positions gradient `dE/dR = -F`; autograd on any other
-input, or a gradient flowing through the `forces` output (the Hessian), raises
-`XTBloomNotSupportedError`. Higher-order differentiation is likewise rejected
-explicitly rather than returning a partial or zero Hessian. PyTorch is imported
-only when the op is called. See
-`docs/user-guide/python.md` for the full contract.
-
-## Explicit point charges
-
-Point charges participate in every SCC iteration. Their positions are in bohr,
-charges in elementary-charge units, and positive screening parameters
-`gammas` in Hartree. xTBloom returns analytic forces on both QM atoms and point
-charges, but does not calculate point-charge/point-charge interactions.
-
-```python
-from xtbloom import Calculator, PointCharge
-
-embedding = PointCharge(
-    positions=np.array([[4.0, 0.0, 0.0]]),
-    charges=np.array([0.5]),
-    gammas=np.array([0.405771]),
-)
-
-with Calculator(
-    "GFN2-xTB",
-    numbers=[1, 1],
-    positions=np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]]),
-    point_charges=embedding,
-) as calc:
-    embedded = calc.singlepoint()
-
-print(embedded.point_charge_forces)
-```
-
-`ChargeResponse(shifts=b, matrix=A)` additionally supplies a periodic
-`b + A q` operator on the atomic-charge channel. xTBloom treats `b` and `A` as
-caller-owned fixed fields; returned forces exclude their coordinate
-derivatives. The caller must add those derivatives and classical MM-MM terms.
-
-## ASE
-
-ASE converts xTBloom's atomic units to its usual eV and Angstrom conventions.
+ASE exposes xTBloom through its usual eV and angstrom conventions:
 
 ```python
 from ase.build import molecule
@@ -278,43 +151,36 @@ atoms = molecule("H2O")
 atoms.calc = XTBloom(method="GFN2-xTB")
 energy_ev = atoms.get_potential_energy()
 forces_ev_per_angstrom = atoms.get_forces()
-charges_e = atoms.get_charges()
 ```
 
-## dpdata
+dpdata can label systems through the xTBloom driver:
 
 ```python
 import dpdata
-from xtbloom.dpdata import XTBloomDriver
 
 system = dpdata.System("geometry.xyz", fmt="xyz")
 labeled = system.predict(driver="xtbloom", charge=0, multiplicity=1)
 ```
 
-Geometries can be minimized with the batch-native minimizer, which relaxes
-every frame in lockstep and evaluates energies and forces for all active
-frames in one xTBloom ragged-batch call per step:
+The dpdata integration also provides a batch-native minimizer built from
+repeated xTBloom single-point calls. This is a higher-level adapter, not native
+geometry optimization in the C ABI.
 
-```python
-labeled = system.minimize(
-    minimizer="xtbloom",
-    driver=XTBloomDriver(backend="cpu"),
-    fmax=5e-3,  # eV/Angstrom
-    max_steps=1000,
-)
-```
+## Scope
 
-Unlike the reference ``ase`` minimizer (one frame per optimizer step), a batch
-of molecules is relaxed with full xTBloom batch throughput; converged frames are
-frozen and dropped from the batch as it shrinks. dpdata receives energies in eV
-and forces in eV/Angstrom. Periodic systems are rejected because xTBloom does
-not expose a lattice/PBC descriptor.
+GFN1-xTB, ROCm, lattice/PBC inputs, solvation, native geometry optimization,
+molecular dynamics, Hessians, and higher-order autograd are not implemented.
+The high-level `Calculator` and `BatchCalculator` APIs use host NumPy arrays;
+direct device and mixed descriptors are exposed through `ArrayBatch` and the
+low-level C ABI.
 
 ## More documentation
 
-- [Python user guide](https://github.com/njzjz/xtbloom/blob/main/docs/user-guide/python.md)
-- [Units and model semantics](https://github.com/njzjz/xtbloom/blob/main/docs/user-guide/index.md#units-and-result-meaning)
-- [QM/MM theory](https://github.com/njzjz/xtbloom/blob/main/docs/theory/qmmm.md)
-- [Source repository](https://github.com/njzjz/xtbloom)
-- [Issue tracker](https://github.com/njzjz/xtbloom/issues)
-- [License and third-party notices](https://github.com/njzjz/xtbloom/blob/main/THIRD_PARTY_NOTICES.md)
+- [Documentation home](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/index.md)
+- [Python API guide](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/python.md)
+- [Units and result meaning](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/index.md#units-and-result-meaning)
+- [QM/MM theory](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/theory/qmmm.md)
+- [Browser demo](https://xtbloom.jinzhezeng.group)
+- [Source repository](https://github.com/jinzhezenggroup/xtbloom)
+- [Issue tracker](https://github.com/jinzhezenggroup/xtbloom/issues)
+- [License and notices](https://github.com/jinzhezenggroup/xtbloom/blob/main/THIRD_PARTY_NOTICES.md)

@@ -194,11 +194,10 @@ remains the preferred steady-state zero-copy route: it allocates no xTBloom
 device memory per call and accepts preallocated caller buffers that the caller
 can reuse. The xTBloom-owned `result_memory="cuda"` path is intended for
 callers that want finished device results without managing output buffers
-themselves. On the archived RTX 5090 small-molecule workload it passed the
-  explicit maximum 5% mean-overhead gate (`7.530 ms` arena versus `7.834 ms`
-`out=` across 300 counterbalanced pairs); see
-`benchmarks/evidence/issue-214/2026-08-07-rtx5090/` for the raw profiler and
-latency evidence.
+themselves. The allocation-cost question has its own
+[benchmark protocol](../../benchmarks/dlpack-result-memory.md) and
+[archived evidence](../../benchmarks/evidence/issue-214/2026-08-07-rtx5090/README.md);
+API semantics do not depend on one device's measured timing.
 
 ## PyTorch autograd op (positions gradient only)
 

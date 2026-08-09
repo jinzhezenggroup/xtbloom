@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 project(
   xtbloom
-  VERSION 0.1.0
+  VERSION 0.0.0
   DESCRIPTION "Batched CPU and GPU inference for GFN-xTB"
   LANGUAGES C CXX
 )
