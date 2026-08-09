@@ -1173,14 +1173,14 @@ int test_electric_field_warm_identity_is_strict() {
   return 0;
 }
 
-/* Repeated identical FRESH-then-WARM electric-field instrumentation for
+/* Repeated identical FRESH-then-WARM electric-field transactions for
  * issue #277. The intermittency cannot be triggered on every host: the WARM
  * reconvergence coincides with the FRESH energy bit-for-bit on hosts whose
  * BLAS kernels reproduce the SCC fixed point exactly, and differs in the last
  * ulp on others. The runtime contract is numerical equivalence to the SCC
  * energy tolerance, so this stress test asserts that bound across many
- * trials, the strict WARM iteration bound, and the bitwise self-consistency
- * that the library does guarantee for repeated identical calls. */
+ * trials, the strict WARM iteration bound, and exact repeatability of the
+ * energies and iteration counts for this fixed CPU FRESH-then-WARM sequence. */
 int test_electric_field_warm_repeated_reconvergence() {
   ContextHandle context = make_cpu_context();
   CHECK(context != nullptr);
@@ -1237,9 +1237,10 @@ int test_electric_field_warm_repeated_reconvergence() {
     warm_iterations.push_back(h2.iterations[0]);
   }
 
-  /* Repeated identical FRESH calls and repeated identical WARM calls are each
-   * bitwise deterministic for a fixed backend and configuration; only the
-   * FRESH-versus-WARM reconvergence comparison above is numerical. */
+  /* Every trial resets to FRESH before its WARM call. Compare exact
+   * repeatability of that transaction's energies and iteration counts; this
+   * does not assert bitwise determinism for stateful consecutive WARM calls,
+   * because each fully converged WARM call replaces the consumed checkpoint. */
   for (std::size_t trial = 1u; trial < fresh_energies.size(); ++trial) {
     CHECK(fresh_energies[trial] == fresh_energies[0]);
     CHECK(warm_energies[trial] == warm_energies[0]);
