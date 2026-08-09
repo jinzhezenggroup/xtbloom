@@ -49,6 +49,20 @@ CPU_TRACE = importlib.util.module_from_spec(SPEC3)
 sys.modules.setdefault("gpuxtb_scc_cpu_trace", CPU_TRACE)
 SPEC3.loader.exec_module(CPU_TRACE)
 
+SPEC4 = importlib.util.spec_from_file_location(
+    "gpuxtb_scc_compare", TOOL_DIR / "gpuxtb_scc_compare.py"
+)
+assert SPEC4 is not None and SPEC4.loader is not None
+COMPARE = importlib.util.module_from_spec(SPEC4)
+sys.modules.setdefault("gpuxtb_scc_compare", COMPARE)
+SPEC4.loader.exec_module(COMPARE)
+
+
+def cpu_trace_safe_compare(actual: dict, golden: dict) -> object:
+    """Compare two in-memory trace documents with the shared comparator."""
+    return COMPARE.compare_trace(actual, golden)
+
+
 CASES = sorted(GENERATOR.CASES)
 
 
@@ -480,6 +494,58 @@ class RestrictedCorpusTest(unittest.TestCase):
             self.assertIn("iterations[2].energy", mismatch.stdout)
         finally:
             perturbed_path.unlink(missing_ok=True)
+
+    def test_cpu_capture_provenance_command_does_not_fail_golden_compare(
+        self,
+    ) -> None:
+        """A CPU capture (different oracle_command) compares against the golden."""
+        golden = json.loads((CORPUS_DIR / "h3_plus.json").read_text(encoding="utf-8"))
+        actual = copy.deepcopy(golden)
+        actual["provenance"]["oracle_command"] = "gpuxtb_scc_cpu_trace.py (capture)"
+        result = cpu_trace_safe_compare(actual, golden)
+        self.assertTrue(result.matches, msg=result.render())
+
+    def test_batch_lane_splitting_parses_status_and_bodies(self) -> None:
+        """Split a synthetic batch raw stream into lanes and summaries."""
+        synthetic = (
+            "batch_system 0\n"
+            "status 0 iterations 3\n"
+            "nat 3 nsh 3 nao 3 niterations 3 terminal 1\n"
+            "atomic_numbers\n1\n1\n1\n"
+            "batch_system 1\n"
+            "status -1 iterations 0\n"
+            "nat 3 nsh 3 nao 3 niterations 0 terminal 3\n"
+        )
+        lanes = CPU_TRACE.split_batch_lanes(synthetic)
+        self.assertEqual(len(lanes), 2)
+        self.assertEqual(lanes[0][0], 0)
+        self.assertEqual(CPU_TRACE.status_bits(lanes[0][1]), (0, 3))
+        self.assertEqual(CPU_TRACE.status_bits(lanes[1][1]), (-1, 0))
+        self.assertIn("niterations 0 terminal 3", lanes[1][2])
+
+    def test_wrapper_requires_exactly_one_mode(self) -> None:
+        """Reject wrappers that select zero or multiple capture modes."""
+        wrapper = TOOL_DIR / "gpuxtb_scc_cpu_trace.py"
+        without_mode = subprocess.run(
+            [sys.executable, str(wrapper)], capture_output=True, text=True, check=False
+        )
+        self.assertNotEqual(without_mode.returncode, 0)
+        self.assertIn("exactly one of", without_mode.stdout)
+        with_mode = subprocess.run(
+            [
+                sys.executable,
+                str(wrapper),
+                "--capture",
+                "capture",
+                "--batch-capture",
+                "batch",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(with_mode.returncode, 0)
+        self.assertIn("exactly one of", with_mode.stdout)
 
 
 if __name__ == "__main__":

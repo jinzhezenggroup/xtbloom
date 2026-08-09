@@ -2561,39 +2561,117 @@ if(GPUXTB_BUILD_TESTS)
       gpuxtb_scc_temperature_continuation_test gpuxtb.gfn2.scc_temperature_continuation
     )
 
-    # Issue #50: harness that drives the production CPU SCC driver through the
-    # pinned restricted corpus and compares against the goldens.  This is the
-    # executable machine for proving/reporting CPU-vs-tblite per-iteration
-    # parity.  It is not yet a passing acceptance gate: current measurements
-    # show the gpuxtb SAD multipole seed differs from tblite's zero-charge
-    # first iteration, so strict closed-loop traces legitimately differ (see
-    # the #49/#50 ledger).  The harness records the honest divergence; it is
-    # built and metadata-tested here without registering a strict numerical
-    # comparison.  The metadata gate independently checks every convergence
-    # subflag, iteration count, and terminal state against the pinned H3+ trace.
+    # Issues #49/#50: harnesses that drive the production CPU GFN2 SCC driver
+    # through the pinned restricted corpus and compare against the goldens.
+    # These are now passing acceptance gates:
+    #   * gpuxtb_scc_trace_capture drives one case sequentially and compares the
+    #     complete closed-loop trajectory with the cpu_closed_loop_v1 profile;
+    #   * gpuxtb_scc_trace_batch_capture runs several cases in one ragged batch
+    #     and proves each lane equals its sequential trajectory, with early
+    #     convergence and an optional controlled per-system failure lane;
+    #   * gpuxtb_scc_trace_replay injects one golden mixed state and compares a
+    #     single independently executed iteration (cuda/cpu replay profile).
+    # They require the host-isolated LP64 runtime for the eigensolver, so they
+    # are only registered when that runtime is present.
     add_executable(gpuxtb_scc_trace_capture
       tests/scc_trace_capture.cpp
     )
-    target_compile_definitions(gpuxtb_scc_trace_capture PRIVATE
-      GPUXTB_SCC_TRACE_SPEC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces/specs"
-    )
+    target_include_directories(gpuxtb_scc_trace_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
     target_link_libraries(gpuxtb_scc_trace_capture PRIVATE
       gpuxtb_gfn2_cpu
       Threads::Threads
     )
     target_compile_features(gpuxtb_scc_trace_capture PRIVATE cxx_std_17)
+
+    add_executable(gpuxtb_scc_trace_batch_capture
+      tests/scc_trace_batch_capture.cpp
+    )
+    target_include_directories(gpuxtb_scc_trace_batch_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+    target_link_libraries(gpuxtb_scc_trace_batch_capture PRIVATE
+      gpuxtb_gfn2_cpu
+      Threads::Threads
+    )
+    target_compile_features(gpuxtb_scc_trace_batch_capture PRIVATE cxx_std_17)
+
+    add_executable(gpuxtb_scc_trace_replay
+      tests/scc_trace_replay.cpp
+    )
+    target_include_directories(gpuxtb_scc_trace_replay PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+    target_link_libraries(gpuxtb_scc_trace_replay PRIVATE
+      gpuxtb_gfn2_cpu
+      Threads::Threads
+    )
+    target_compile_features(gpuxtb_scc_trace_replay PRIVATE cxx_std_17)
+
+    # Native ragged-batch structure test: early-convergence freezing, per-lane
+    # status/iteration/flags, controlled per-system failure isolation, and
+    # disjoint per-system output placement under the CPU driver.  Registered
+    # in every CPU configuration so sanitizer builds cover ragged execution.
+    add_executable(gpuxtb_scc_trace_harness_native_test
+      tests/scc_trace_harness_native_test.cpp
+    )
+    target_compile_definitions(gpuxtb_scc_trace_harness_native_test PRIVATE
+      GPUXTB_SCC_TRACE_SPEC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces/specs"
+    )
+    target_include_directories(gpuxtb_scc_trace_harness_native_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    )
+    target_link_libraries(gpuxtb_scc_trace_harness_native_test PRIVATE
+      gpuxtb_gfn2_cpu
+      Threads::Threads
+    )
+    target_compile_features(gpuxtb_scc_trace_harness_native_test PRIVATE cxx_std_17)
+    add_test(NAME gpuxtb.gfn2.scc_trace_ragged_batch_native
+      COMMAND gpuxtb_scc_trace_harness_native_test
+    )
+    gpuxtb_configure_linalg_runtime_test(
+      gpuxtb_scc_trace_harness_native_test gpuxtb.gfn2.scc_trace_ragged_batch_native
+    )
+
+    # Sequential closed-loop gate: all five restricted goldens must match the
+    # full per-iteration trajectory within the cpu_closed_loop_v1 profile.
     add_test(
-      NAME gpuxtb.gfn2.scc_trace_capture_smoke
+      NAME gpuxtb.gfn2.scc_trace_cpu_closed_loop
       COMMAND ${Python3_EXECUTABLE}
               ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/gpuxtb_scc_cpu_trace.py
               --capture $<TARGET_FILE:gpuxtb_scc_trace_capture>
               --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
-              --work-dir ${CMAKE_CURRENT_BINARY_DIR}/scc-trace-capture-smoke
-              --cases h3_plus
-              --metadata-only
+              --work-dir ${CMAKE_CURRENT_BINARY_DIR}/scc-trace-capture
     )
     gpuxtb_configure_linalg_runtime_test(
-      gpuxtb_scc_trace_capture gpuxtb.gfn2.scc_trace_capture_smoke
+      gpuxtb_scc_trace_capture gpuxtb.gfn2.scc_trace_cpu_closed_loop
+    )
+
+    # Ragged batch gate: h3_plus (converges early), nenacl (slowest), and the
+    # six-point-charge water dimer run in one heterogeneous batch and each lane
+    # must equal its pinned sequential trajectory.  --poison 3 adds a controlled
+    # preparation-failure lane that must not corrupt or suppress the peers.
+    add_test(
+      NAME gpuxtb.gfn2.scc_trace_ragged_batch
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/gpuxtb_scc_cpu_trace.py
+              --batch-capture $<TARGET_FILE:gpuxtb_scc_trace_batch_capture>
+              --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+              --work-dir ${CMAKE_CURRENT_BINARY_DIR}/scc-trace-batch
+              --batch-cases h3_plus nenacl water_dimer_6pc_hardness
+    )
+    gpuxtb_configure_linalg_runtime_test(
+      gpuxtb_scc_trace_batch_capture gpuxtb.gfn2.scc_trace_ragged_batch
+    )
+
+    # Single-iteration replay gate: every golden iteration replayed from its
+    # injected mixed state must equal the pinned iteration snapshot.
+    add_test(
+      NAME gpuxtb.gfn2.scc_trace_cpu_replay
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/gpuxtb_scc_cpu_trace.py
+              --replay $<TARGET_FILE:gpuxtb_scc_trace_replay>
+              --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+              --work-dir ${CMAKE_CURRENT_BINARY_DIR}/scc-trace-replay
+              --replay-cases h3_plus nenacl water_dimer_6pc_hardness
+    )
+    gpuxtb_configure_linalg_runtime_test(
+      gpuxtb_scc_trace_replay gpuxtb.gfn2.scc_trace_cpu_replay
     )
   endif()
 

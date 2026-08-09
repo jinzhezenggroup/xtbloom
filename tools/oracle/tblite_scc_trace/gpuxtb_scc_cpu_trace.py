@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
 """Run the pinned CPU corpus through the production SCC driver and compare.
 
-Issue #50: prove that the gpuxtb CPU SCC driver follows the pinned tblite
-iteration traces both one system at a time and (with --ragged) in a homogeneous
-build of the corpus.  This tool:
+Issues #42/#49/#50: prove that the gpuxtb CPU SCC driver follows the pinned
+tblite iteration traces one system at a time, in heterogeneous ragged batches,
+and for independently replayed iterations.  This tool:
 
-  * runs the ``gpuxtb_scc_trace_capture`` binary on each case.spec;
-  * canonically converts the captured raw stream with the same generator
-    pipeline that produced the goldens;
-  * compares the complete closed-loop trace against the pinned golden with the
-    documented ``cpu_closed_loop_v1`` profile (field-level
-    ``abs <= atol + rtol*max`` rule);
-  * prints one ``PASS``/``FAIL`` line per case naming the first divergent
-    iteration and field, and exits non-zero when any case diverges.
+  * ``--capture`` runs the ``gpuxtb_scc_trace_capture`` binary on each case.spec
+    and compares each complete closed-loop trajectory against the pinned golden
+    with the documented ``cpu_closed_loop_v1`` profile;
+  * ``--batch-capture`` runs ``gpuxtb_scc_trace_batch_capture`` with several
+    cases in one ragged driver batch (plus a controlled failing lane), proves
+    each healthy lane equals its pinned sequential trajectory, and checks that
+    a per-system failure neither corrupts nor suppresses the peers;
+  * ``--replay`` runs ``gpuxtb_scc_trace_replay`` for every golden iteration:
+    the golden mixed q/d/Q state is injected, one driver iteration is executed,
+    and the snapshot is compared with the ``cpu_replay_v1`` single-iteration
+    profile, so a divergence is assigned to the exact iteration where it
+    originates without inheriting Broyden drift.
 
+Every comparison names the case, batch lane (where relevant), SCC iteration,
+and first mismatching trace field, and exits non-zero when any case diverges.
 The capture uses the internal GFN2 driver with the same mixer history, damping,
-tolerances, temperature, and initial SAD guess as the fortran oracle where the
-production path permits; any divergence is a real scientific finding, not a
-tolerance change.
+tolerances, temperature, and zero-charge initial guess as the fortran oracle
+where the production path permits; any divergence is a real scientific finding,
+not a tolerance change.
 """
 
 from __future__ import annotations
@@ -36,6 +42,11 @@ TOOL_DIR = Path(__file__).resolve().parent
 REPOSITORY_ROOT = TOOL_DIR.parents[2]
 CORPUS_DIR = REPOSITORY_ROOT / "data" / "conformance" / "scc-traces"
 COMPARE = TOOL_DIR / "gpuxtb_scc_compare.py"
+
+# gpuxtb_status_t values mirrored for the batch failure-lane assertions.
+STATUS_SUCCESS = 0
+STATUS_SCC_NOT_CONVERGED = 2
+STATUS_INTERNAL_ERROR = -1  # per-system numerical failure value used by the test
 
 
 def canonicalize_capture(raw: str, case_id: str) -> dict:
@@ -77,60 +88,44 @@ def compare_with_comparator(
     return result.returncode, (result.stdout + result.stderr)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Build the command-line parser for the CPU trace comparison tool."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--capture",
-        type=Path,
-        required=True,
-        help="path to the gpuxtb_scc_trace_capture driver executable",
-    )
-    parser.add_argument(
+def compare_iteration_with_comparator(
+    actual_iteration: Path,
+    golden: Path,
+    logical_index: int,
+    golden_sha256: str,
+) -> tuple[int, str]:
+    """Compare one replayed iteration snapshot with the golden via the CLI."""
+    command = [
+        sys.executable,
+        str(COMPARE),
+        "iteration",
+        str(actual_iteration),
+        str(golden),
+        "--iteration",
+        str(logical_index),
         "--profile",
-        default="cpu_closed_loop_v1",
-        choices=("cpu_closed_loop_v1", "cuda_replay_v1"),
-        help="comparator tolerance profile",
+        "cpu_replay_v1",
+        "--golden-sha256",
+        golden_sha256,
+        "--max-reported",
+        "3",
+    ]
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    parser.add_argument(
-        "--corpus-dir",
-        type=Path,
-        default=CORPUS_DIR,
-        help="directory containing the pinned goldens and specs",
-    )
-    parser.add_argument(
-        "--work-dir",
-        type=Path,
-        default=Path("."),
-        help="scratch directory for captured traces",
-    )
-    parser.add_argument(
-        "--metadata-only",
-        action="store_true",
-        help="compare exact dimensions, lifecycle, and convergence flags only",
-    )
-    parser.add_argument(
-        "--cases",
-        default=sorted(generator.CASES),
-        nargs="*",
-        help="restricted cases to compare (default: all)",
-    )
-    return parser
+    return result.returncode, (result.stdout + result.stderr)
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run every requested corpus case through the CPU driver and compare."""
-    arguments = build_parser().parse_args(argv)
-
+def run_capture(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
+    """Run every requested case sequentially through the CPU driver."""
+    failures = 0
     corpus_dir = arguments.corpus_dir
     work_dir = arguments.work_dir
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    goldens = json.loads((corpus_dir / "manifest.json").read_text(encoding="utf-8"))[
-        "cases"
-    ]
-
-    failures = 0
     for case_id in arguments.cases:
         golden_entry = goldens[case_id]
         spec_path = corpus_dir / "specs" / f"{case_id}.spec"
@@ -192,6 +187,326 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"all {len(arguments.cases)} CPU trace comparisons passed")  # noqa: T201
     return 1 if failures else 0
+
+
+def split_batch_lanes(stdout: str) -> list[tuple[int, str, str]]:
+    """Split the batch raw output into (lane index, status line, raw body)."""
+    lanes: list[tuple[int, str, str]] = []
+    current_raw: list[str] = []
+    current_status = ""
+    for line in stdout.splitlines():
+        line = line.rstrip("\n")
+        if line.startswith("batch_system "):
+            if current_status or current_raw:
+                lanes.append((len(lanes), current_status, "\n".join(current_raw)))
+            current_raw = []
+            current_status = ""
+        elif line.startswith("status "):
+            current_status = line
+        else:
+            current_raw.append(line)
+    if current_status or current_raw:
+        lanes.append((len(lanes), current_status, "\n".join(current_raw)))
+    return lanes
+
+
+def status_bits(status: str) -> tuple[int, int]:
+    """Parse the batch "status <int> iterations <int>" summary line."""
+    parts = status.split()
+    return int(parts[1]), int(parts[3])
+
+
+def run_batch(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
+    """Run the ragged heterogeneous batch and compare every lane."""
+    failures = 0
+    corpus_dir = arguments.corpus_dir
+    work_dir = arguments.work_dir
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    cases = list(arguments.batch_cases)
+    if len(cases) < 2:
+        print("--batch-cases needs at least two cases")  # noqa: T201
+        return 1
+    spec_paths = [str(corpus_dir / "specs" / f"{case_id}.spec") for case_id in cases]
+    # Controlled per-system failure lane: a copy of the first case whose H0 is
+    # poisoned with NaN.  It must fail exactly its first preparation and leave
+    # the healthy peers fully converging.
+    poison_index = len(cases)
+    spec_paths.append(spec_paths[0])
+
+    result = subprocess.run(
+        [str(arguments.batch_capture), *spec_paths, "--poison", str(poison_index)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        print(  # noqa: T201 - CLI diagnostics
+            f"batch capture died with {result.returncode}: {result.stderr}"
+        )
+        return 1
+
+    lanes = split_batch_lanes(result.stdout)
+    if len(lanes) != len(cases) + 1:
+        print(  # noqa: T201
+            f"batch emitted {len(lanes)} lanes, expected {len(cases) + 1}"
+        )
+        return 1
+
+    for index, (_, status_line, raw_body) in enumerate(lanes):
+        status_value, banner_iterations = status_bits(status_line)
+        if index == poison_index:
+            # The poisoned lane must fail its first preparation without
+            # advancing an iteration and without corrupting the peers.
+            if status_value == STATUS_SCC_NOT_CONVERGED or status_value == 0:
+                failures += 1
+                print(  # noqa: T201
+                    f"batch lane {index}: FAIL expected per-system failure, "
+                    f"got status {status_value} iterations {banner_iterations}"
+                )
+                continue
+            if banner_iterations != 0:
+                failures += 1
+                print(  # noqa: T201
+                    f"batch lane {index}: FAIL failing lane advanced "
+                    f"{banner_iterations} iterations"
+                )
+                continue
+            print(f"batch lane {index} (failure isolation): PASS")  # noqa: T201
+            continue
+
+        case_id = cases[index]
+        golden_entry = goldens[case_id]
+        golden_path = corpus_dir / golden_entry["path"]
+        actual_path = work_dir / f"batch_lane{index}_{case_id}.json"
+        try:
+            trace = canonicalize_capture(raw_body, case_id)
+            actual_path.write_text(writer.dumps(trace), encoding="utf-8")
+        except (
+            writer.TraceError,
+            generator.CorpusError,
+            ValueError,
+            AssertionError,
+            IndexError,
+        ) as error:
+            failures += 1
+            print(f"batch lane {index} {case_id}: FAIL cannot canonicalize: {error}")  # noqa: T201
+            continue
+
+        return_code, report = compare_with_comparator(
+            actual_path,
+            golden_path,
+            arguments.profile,
+            golden_entry["sha256"],
+        )
+        if return_code == 0:
+            print(  # noqa: T201
+                f"batch lane {index} {case_id}: PASS ({arguments.profile}, "
+                f"{banner_iterations} iterations)"
+            )
+        else:
+            failures += 1
+            summary = report.strip().splitlines()
+            print(  # noqa: T201
+                f"batch lane {index} {case_id}: FAIL ({arguments.profile})"
+            )
+            for line in summary[:6]:
+                print(f"  {line}")  # noqa: T201
+    return 1 if failures else 0
+
+
+def write_mixed_state(state_path: Path, iteration: dict, nat: int, nsh: int) -> None:
+    """Write one golden iteration's mixed q/d/Q in the replay state layout."""
+    lines = [f"qsh {nsh}"]
+    lines.extend(repr(value) for value in iteration["mixed_qsh"][0])
+    lines.append(f"qat {nat}")
+    lines.extend(repr(value) for value in iteration["mixed_qat"][0])
+    lines.append(f"dipoles {3 * nat}")
+    for atom in iteration["mixed_dipoles"][0]:
+        lines.extend(repr(value) for value in atom)
+    lines.append(f"quadrupoles {6 * nat}")
+    for atom in iteration["mixed_quadrupoles"][0]:
+        lines.extend(repr(value) for value in atom)
+    state_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_replay(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
+    """Replay every golden iteration from its injected mixed state."""
+    failures = 0
+    corpus_dir = arguments.corpus_dir
+    work_dir = arguments.work_dir
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    total_iterations = 0
+    for case_id in arguments.replay_cases:
+        golden_entry = goldens[case_id]
+        golden_path = corpus_dir / golden_entry["path"]
+        spec_path = corpus_dir / "specs" / f"{case_id}.spec"
+        golden = json.loads(golden_path.read_text(encoding="utf-8"))
+        nat = golden["basis"]["n_atoms"]
+        nsh = golden["basis"]["n_shells"]
+        iterations = golden["iterations"]
+        for logical_index in range(1, len(iterations) + 1):
+            total_iterations += 1
+            state_path = work_dir / f"{case_id}_it{logical_index}.state"
+            snapshot_path = work_dir / f"{case_id}_it{logical_index}_cpu.json"
+            previous_energy = (
+                iterations[logical_index - 2]["energy"] if logical_index > 1 else 0.0
+            )
+            write_mixed_state(state_path, iterations[logical_index - 1], nat, nsh)
+            result = subprocess.run(
+                [
+                    str(arguments.replay),
+                    str(spec_path),
+                    str(state_path),
+                    str(logical_index),
+                    repr(previous_energy),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                failures += 1
+                print(  # noqa: T201
+                    f"{case_id} iteration {logical_index}: FAIL replay died with "
+                    f"{result.returncode}: {result.stderr}"
+                )
+                continue
+            try:
+                trace = canonicalize_capture(result.stdout, case_id)
+            except (
+                writer.TraceError,
+                generator.CorpusError,
+                ValueError,
+                AssertionError,
+            ) as error:
+                failures += 1
+                print(  # noqa: T201
+                    f"{case_id} iteration {logical_index}: FAIL cannot parse "
+                    f"replay: {error}"
+                )
+                continue
+            # compare_iteration validates the snapshot against the golden
+            # iteration at logical_index; canonicalize always emits index 1 for
+            # its single iteration, so fix the logical index first.
+            snapshot = trace["iterations"][0]
+            snapshot["index"] = logical_index
+            snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+            return_code, report = compare_iteration_with_comparator(
+                snapshot_path,
+                golden_path,
+                logical_index,
+                golden_entry["sha256"],
+            )
+            if return_code == 0:
+                print(  # noqa: T201
+                    f"{case_id} iteration {logical_index}: PASS (cpu_replay_v1)"
+                )
+            else:
+                failures += 1
+                summary = report.strip().splitlines()
+                print(  # noqa: T201
+                    f"{case_id} iteration {logical_index}: FAIL (cpu_replay_v1)"
+                )
+                for line in summary[:6]:
+                    print(f"  {line}")  # noqa: T201
+
+    if failures:
+        print(f"{failures} replayed comparisons failed")  # noqa: T201
+    else:
+        print(f"all {total_iterations} replayed iterations passed")  # noqa: T201
+    return 1 if failures else 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser for the CPU trace comparison tool."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--capture",
+        type=Path,
+        help="path to the gpuxtb_scc_trace_capture driver executable",
+    )
+    parser.add_argument(
+        "--batch-capture",
+        type=Path,
+        help="path to the gpuxtb_scc_trace_batch_capture executable",
+    )
+    parser.add_argument(
+        "--replay",
+        type=Path,
+        help="path to the gpuxtb_scc_trace_replay executable",
+    )
+    parser.add_argument(
+        "--profile",
+        default="cpu_closed_loop_v1",
+        choices=("cpu_closed_loop_v1", "cpu_replay_v1", "cuda_replay_v1"),
+        help="comparator tolerance profile for closed-loop trace comparison",
+    )
+    parser.add_argument(
+        "--corpus-dir",
+        type=Path,
+        default=CORPUS_DIR,
+        help="directory containing the pinned goldens and specs",
+    )
+    parser.add_argument(
+        "--work-dir",
+        type=Path,
+        default=Path("."),
+        help="scratch directory for captured traces",
+    )
+    parser.add_argument(
+        "--metadata-only",
+        action="store_true",
+        help="compare exact dimensions, lifecycle, and convergence flags only",
+    )
+    parser.add_argument(
+        "--cases",
+        default=sorted(generator.CASES),
+        nargs="*",
+        help="restricted cases to compare sequentially (default: all)",
+    )
+    parser.add_argument(
+        "--batch-cases",
+        nargs="*",
+        help="restricted cases to run in one ragged batch (default: none)",
+    )
+    parser.add_argument(
+        "--replay-cases",
+        nargs="*",
+        help="restricted cases whose every iteration is replayed (default: none)",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the requested capture/batch/replay modes and exit non-zero on fail."""
+    arguments = build_parser().parse_args(argv)
+
+    modes = [
+        arguments.capture is not None,
+        arguments.batch_capture is not None,
+        arguments.replay is not None,
+    ]
+    if sum(modes) != 1:
+        print("exactly one of --capture, --batch-capture, --replay is required")  # noqa: T201
+        return 2
+
+    corpus_dir = arguments.corpus_dir
+    goldens = json.loads((corpus_dir / "manifest.json").read_text(encoding="utf-8"))[
+        "cases"
+    ]
+    if arguments.capture is not None:
+        return run_capture(arguments, goldens)
+    if arguments.batch_capture is not None:
+        if not arguments.batch_cases:
+            print("--batch-capture requires --batch-cases")  # noqa: T201
+            return 2
+        return run_batch(arguments, goldens)
+    if not arguments.replay_cases:
+        print("--replay requires --replay-cases")  # noqa: T201
+        return 2
+    return run_replay(arguments, goldens)
 
 
 if __name__ == "__main__":

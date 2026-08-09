@@ -274,6 +274,44 @@ class TraceCompareTest(unittest.TestCase):
         self.assertTrue(result.matches)
         self.assertEqual(result.profile, "cuda_replay_v1")
 
+    def test_cpu_replay_profile_is_versioned(self) -> None:
+        """Expose a stable versioned identifier for the CPU replay profile."""
+        golden = _trace(1)
+        actual = deepcopy(golden)
+        actual["iterations"][0]["energy"] += 1.0e-9
+        result = COMPARE.compare_trace(actual, golden, profile="cpu_replay_v1")
+        self.assertTrue(result.matches)
+        self.assertEqual(result.profile, "cpu_replay_v1")
+        # The CPU replay profile shares the closed-loop magnitude and must
+        # reject a residual-scale perturbation.
+        actual["iterations"][0]["energy"] += 1.0e-2
+        self.assertFalse(
+            COMPARE.compare_trace(actual, golden, profile="cpu_replay_v1").matches
+        )
+
+    def test_capture_provenance_command_is_ignored(self) -> None:
+        """Ignore the documentary oracle_command string in trace comparison."""
+        golden = _trace(1)
+        actual = deepcopy(golden)
+        actual["provenance"]["oracle_command"] = "gpuxtb_scc_cpu_trace.py (capture)"
+        golden["provenance"]["oracle_command"] = (
+            "generate_scc_corpus.py --source-root ..."
+        )
+        result = COMPARE.compare_trace(actual, golden)
+        self.assertTrue(result.matches, msg=result.render())
+
+    def test_ignored_path_skips_only_the_documentary_field(self) -> None:
+        """Numerical and other provenance fields still compare after ignoring."""
+        golden = _trace(1)
+        actual = deepcopy(golden)
+        actual["provenance"]["oracle_command"] = "different"
+        result = COMPARE.compare_trace(actual, golden)
+        self.assertTrue(result.matches, msg=result.render())
+        actual["provenance"]["tblite_revision"] = "0" * 40
+        result = COMPARE.compare_trace(actual, golden)
+        self.assertFalse(result.matches)
+        self.assertEqual(result.mismatches[0].path, "provenance.tblite_revision")
+
     def test_unknown_profile_is_actionable(self) -> None:
         """Report unknown comparison profiles with actionable context."""
         with self.assertRaisesRegex(COMPARE.TraceCompareError, "choose one of"):
