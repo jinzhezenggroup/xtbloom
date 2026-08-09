@@ -594,7 +594,11 @@ if(GPUXTB_HAS_CUDA)
     cusolverDnDestroy
     cusolverDnDestroyParams
     cusolverDnDestroySyevjInfo
+    cusolverDnDormtr
+    cusolverDnDormtr_bufferSize
     cusolverDnDpotrfBatched
+    cusolverDnDsytrd
+    cusolverDnDsytrd_bufferSize
     cusolverDnDsyevjBatched
     cusolverDnDsyevjBatched_bufferSize
     cusolverDnGetStream
@@ -2132,6 +2136,9 @@ if(GPUXTB_BUILD_TESTS)
     )
     add_test(NAME gpuxtb.cuda.scc_iteration_production
       COMMAND gpuxtb_cuda_scc_iteration_production_test
+    )
+    add_test(NAME gpuxtb.cuda.scc_iteration_large_singleton
+      COMMAND gpuxtb_cuda_scc_iteration_production_test --large-singleton-tridiagonal
     )
 
     # Focused #130 benchmark. It reuses the production SCC fixture but runs a

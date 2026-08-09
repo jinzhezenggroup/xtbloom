@@ -160,7 +160,8 @@ bool valid_options(const Gfn2EigensolverOptions& options) noexcept {
   const bool valid_strategy =
       options.strategy == Gfn2EigensolverStrategy::kAuto ||
       options.strategy == Gfn2EigensolverStrategy::kBatchedDivideAndConquer ||
-      options.strategy == Gfn2EigensolverStrategy::kBatchedJacobi;
+      options.strategy == Gfn2EigensolverStrategy::kBatchedJacobi ||
+      options.strategy == Gfn2EigensolverStrategy::kTridiagonalBisection;
   return std::isfinite(options.minimum_overlap_rcond) && options.minimum_overlap_rcond > 0.0 &&
          options.minimum_overlap_rcond <= 1.0 && std::isfinite(options.symmetry_tolerance) &&
          options.symmetry_tolerance >= 0.0 && valid_strategy &&
@@ -1813,13 +1814,421 @@ Gfn2EigensolverLaunchResult configure_blas(cublasHandle_t blas, cudaStream_t str
   return status == CUBLAS_STATUS_SUCCESS ? launch_success() : cublas_failure(status);
 }
 
+struct TridiagonalProviderWorkspace {
+  double* provider_work = nullptr;
+  double* off_diagonal = nullptr;
+  double* householder_tau = nullptr;
+  double* computed_eigenvalues = nullptr;
+  double* spectral_bounds = nullptr;
+  double* tridiagonal_eigenvectors = nullptr;
+  int* apply_info = nullptr;
+  int provider_work_elements = 0;
+  std::size_t required_bytes = 0u;
+};
+
+bool append_workspace_bytes(std::size_t bytes, std::size_t alignment, std::size_t& cursor,
+                            std::size_t& offset) noexcept {
+  if (alignment == 0u || (alignment & (alignment - 1u)) != 0u ||
+      cursor > std::numeric_limits<std::size_t>::max() - (alignment - 1u)) {
+    return false;
+  }
+  const std::size_t aligned = (cursor + alignment - 1u) & ~(alignment - 1u);
+  if (aligned > std::numeric_limits<std::size_t>::max() - bytes) {
+    return false;
+  }
+  offset = aligned;
+  cursor = aligned + bytes;
+  return true;
+}
+
+bool make_tridiagonal_provider_workspace(std::int32_t orbital_count, int reduction_work_elements,
+                                         int apply_work_elements, void* storage,
+                                         std::size_t storage_bytes,
+                                         TridiagonalProviderWorkspace& output) noexcept {
+  if (orbital_count <= 0 || orbital_count > kGfn2TridiagonalMaximumOrbitals ||
+      reduction_work_elements < 0 || apply_work_elements < 0) {
+    return false;
+  }
+  const std::size_t n = static_cast<std::size_t>(orbital_count);
+  if (n > std::numeric_limits<std::size_t>::max() / n ||
+      n * n > std::numeric_limits<std::size_t>::max() / sizeof(double)) {
+    return false;
+  }
+  const int provider_work_elements = std::max(reduction_work_elements, apply_work_elements);
+  const auto double_bytes = [](std::size_t elements, std::size_t& bytes) noexcept {
+    if (elements > std::numeric_limits<std::size_t>::max() / sizeof(double)) return false;
+    bytes = elements * sizeof(double);
+    return true;
+  };
+
+  std::size_t cursor = 0u;
+  std::size_t work_offset = 0u;
+  std::size_t off_diagonal_offset = 0u;
+  std::size_t tau_offset = 0u;
+  std::size_t eigenvalue_offset = 0u;
+  std::size_t bounds_offset = 0u;
+  std::size_t vectors_offset = 0u;
+  std::size_t apply_info_offset = 0u;
+  std::size_t work_bytes = 0u;
+  std::size_t vector_bytes = 0u;
+  std::size_t orbital_bytes = 0u;
+  if (!double_bytes(static_cast<std::size_t>(provider_work_elements), work_bytes) ||
+      !double_bytes(n, orbital_bytes) || !double_bytes(n * n, vector_bytes) ||
+      !append_workspace_bytes(work_bytes, alignof(double), cursor, work_offset) ||
+      !append_workspace_bytes(orbital_bytes, alignof(double), cursor, off_diagonal_offset) ||
+      !append_workspace_bytes(orbital_bytes, alignof(double), cursor, tau_offset) ||
+      !append_workspace_bytes(orbital_bytes, alignof(double), cursor, eigenvalue_offset) ||
+      !append_workspace_bytes(2u * sizeof(double), alignof(double), cursor, bounds_offset) ||
+      !append_workspace_bytes(vector_bytes, alignof(double), cursor, vectors_offset) ||
+      !append_workspace_bytes(sizeof(int), alignof(int), cursor, apply_info_offset)) {
+    return false;
+  }
+
+  output = {};
+  output.provider_work_elements = provider_work_elements;
+  output.required_bytes = cursor;
+  if (storage == nullptr) {
+    return storage_bytes == 0u;
+  }
+  if (cursor > storage_bytes) {
+    return false;
+  }
+  auto* const base = static_cast<std::byte*>(storage);
+  output.provider_work = reinterpret_cast<double*>(base + work_offset);
+  output.off_diagonal = reinterpret_cast<double*>(base + off_diagonal_offset);
+  output.householder_tau = reinterpret_cast<double*>(base + tau_offset);
+  output.computed_eigenvalues = reinterpret_cast<double*>(base + eigenvalue_offset);
+  output.spectral_bounds = reinterpret_cast<double*>(base + bounds_offset);
+  output.tridiagonal_eigenvectors = reinterpret_cast<double*>(base + vectors_offset);
+  output.apply_info = reinterpret_cast<int*>(base + apply_info_offset);
+  return true;
+}
+
+__global__ void tridiagonal_spectral_bounds_kernel(std::int32_t orbital_count,
+                                                   const double* diagonal,
+                                                   const double* off_diagonal, double* bounds,
+                                                   const int* info) {
+  if (blockIdx.x != 0 || threadIdx.x != 0 || *info != 0) return;
+  double lower = diagonal[0];
+  double upper = diagonal[0];
+  if (orbital_count > 1) {
+    lower -= fabs(off_diagonal[0]);
+    upper += fabs(off_diagonal[0]);
+  }
+  for (std::int32_t index = 1; index < orbital_count; ++index) {
+    const double radius = fabs(off_diagonal[index - 1]) +
+                          (index + 1 < orbital_count ? fabs(off_diagonal[index]) : 0.0);
+    lower = fmin(lower, diagonal[index] - radius);
+    upper = fmax(upper, diagonal[index] + radius);
+  }
+  constexpr double kEpsilon = 2.220446049250313080847263336181640625e-16;
+  const double padding = 16.0 * kEpsilon * fmax(1.0, fmax(fabs(lower), fabs(upper)));
+  bounds[0] = lower - padding;
+  bounds[1] = upper + padding;
+}
+
+__device__ int tridiagonal_sturm_count(std::int32_t orbital_count, const double* diagonal,
+                                       const double* off_diagonal, double trial,
+                                       double pivot_minimum) {
+  double pivot = diagonal[0] - trial;
+  /* A zero/tiny pivot is assigned the negative limiting sign used by stable
+   * Sturm recurrences. Choosing +pivot_minimum can add a spurious sign change
+   * (for example, T=[[0,1],[1,0]] at trial zero) and discard an eigenvalue's
+   * bisection interval while still producing finite output. */
+  if (fabs(pivot) < pivot_minimum) pivot = -pivot_minimum;
+  int count = pivot < 0.0 ? 1 : 0;
+  for (std::int32_t index = 1; index < orbital_count; ++index) {
+    pivot = diagonal[index] - trial - off_diagonal[index - 1] * off_diagonal[index - 1] / pivot;
+    if (fabs(pivot) < pivot_minimum) pivot = -pivot_minimum;
+    count += pivot < 0.0 ? 1 : 0;
+  }
+  return count;
+}
+
+/* One block owns one sorted eigenvalue. The Sturm recurrence is serial but all
+ * eigenvalues bisect concurrently, which keeps this O(n^2) stage small beside
+ * the provider's O(n^3) symmetric reduction. */
+__global__ void tridiagonal_bisection_kernel(std::int32_t orbital_count, const double* diagonal,
+                                             const double* off_diagonal, const double* bounds,
+                                             double* eigenvalues, const int* info) {
+  const std::int32_t target = static_cast<std::int32_t>(blockIdx.x);
+  if (target >= orbital_count || threadIdx.x != 0 || *info != 0) return;
+  double lower = bounds[0];
+  double upper = bounds[1];
+  const double norm = fmax(1.0, fmax(fabs(lower), fabs(upper)));
+  constexpr double kSafeMinimum = 2.225073858507201383090232717332404064e-308;
+  const double pivot_minimum = kSafeMinimum * norm;
+  for (int iteration = 0; iteration < 80; ++iteration) {
+    const double middle = lower + 0.5 * (upper - lower);
+    if (middle == lower || middle == upper) break;
+    if (tridiagonal_sturm_count(orbital_count, diagonal, off_diagonal, middle, pivot_minimum) <=
+        target) {
+      lower = middle;
+    } else {
+      upper = middle;
+    }
+  }
+  eigenvalues[target] = lower + 0.5 * (upper - lower);
+}
+
+__device__ double deterministic_inverse_iteration_rhs(std::int32_t row, std::int32_t column) {
+  std::uint32_t value = static_cast<std::uint32_t>(row + 1) * 0x9e3779b9u;
+  value ^= static_cast<std::uint32_t>(column + 1) * 0x85ebca6bu;
+  value ^= value >> 16;
+  value *= 0x7feb352du;
+  value ^= value >> 15;
+  return static_cast<double>(value & 0xffffu) / 32767.5 - 1.0;
+}
+
+/* Each eigenvalue owns one block and one setup-bounded shared pivot vector.
+ * Three shifted inverse iterations produce a deterministic eigenvector; a
+ * following cluster pass restores orthogonality for exact degeneracies. */
+__global__ void tridiagonal_inverse_iteration_kernel(
+    std::int32_t orbital_count, const double* diagonal, const double* off_diagonal,
+    const double* bounds, const double* eigenvalues, double* eigenvectors, int* info) {
+  const std::int32_t column = static_cast<std::int32_t>(blockIdx.x);
+  if (column >= orbital_count || threadIdx.x != 0 || *info != 0) return;
+  extern __shared__ double pivots[];
+  double* const vector = eigenvectors + static_cast<std::int64_t>(column) * orbital_count;
+  constexpr double kEpsilon = 2.220446049250313080847263336181640625e-16;
+  const double norm = fmax(1.0, fmax(fabs(bounds[0]), fabs(bounds[1])));
+  const double offset = 16.0 * kEpsilon * norm * (1.0 + static_cast<double>(column & 3));
+  const double shift = eigenvalues[column] + ((column & 1) == 0 ? offset : -offset);
+  const double pivot_minimum = 64.0 * kEpsilon * norm;
+  for (std::int32_t row = 0; row < orbital_count; ++row) {
+    vector[row] = deterministic_inverse_iteration_rhs(row, column);
+  }
+  for (int iteration = 0; iteration < 3; ++iteration) {
+    pivots[0] = diagonal[0] - shift;
+    if (fabs(pivots[0]) < pivot_minimum) {
+      pivots[0] = pivots[0] < 0.0 ? -pivot_minimum : pivot_minimum;
+    }
+    for (std::int32_t row = 1; row < orbital_count; ++row) {
+      const double multiplier = off_diagonal[row - 1] / pivots[row - 1];
+      pivots[row] = diagonal[row] - shift - multiplier * off_diagonal[row - 1];
+      if (fabs(pivots[row]) < pivot_minimum) {
+        pivots[row] = pivots[row] < 0.0 ? -pivot_minimum : pivot_minimum;
+      }
+      vector[row] -= multiplier * vector[row - 1];
+    }
+    vector[orbital_count - 1] /= pivots[orbital_count - 1];
+    for (std::int32_t row = orbital_count - 2; row >= 0; --row) {
+      vector[row] = (vector[row] - off_diagonal[row] * vector[row + 1]) / pivots[row];
+    }
+    double scale = 0.0;
+    for (std::int32_t row = 0; row < orbital_count; ++row) {
+      scale = fmax(scale, fabs(vector[row]));
+    }
+    double norm_squared = 0.0;
+    if (scale != 0.0 && isfinite(scale)) {
+      for (std::int32_t row = 0; row < orbital_count; ++row) {
+        const double scaled = vector[row] / scale;
+        norm_squared += scaled * scaled;
+      }
+    }
+    const double inverse_norm =
+        norm_squared > 0.0 && isfinite(norm_squared) ? 1.0 / (scale * sqrt(norm_squared)) : 0.0;
+    if (inverse_norm == 0.0 || !isfinite(inverse_norm)) {
+      atomicCAS(info, 0, column + 1);
+      return;
+    }
+    for (std::int32_t row = 0; row < orbital_count; ++row) {
+      vector[row] *= inverse_norm;
+    }
+  }
+}
+
+__global__ void orthogonalize_tridiagonal_clusters_kernel(std::int32_t orbital_count,
+                                                          const double* bounds,
+                                                          const double* eigenvalues,
+                                                          double* eigenvectors, int* info) {
+  __shared__ double partial[256];
+  __shared__ double scalar;
+  __shared__ std::int32_t cluster_begin;
+  if (blockIdx.x != 0 || blockDim.x != 256 || *info != 0) return;
+  constexpr double kEpsilon = 2.220446049250313080847263336181640625e-16;
+  const double tolerance = 4096.0 * kEpsilon * fmax(1.0, fmax(fabs(bounds[0]), fabs(bounds[1])));
+  if (threadIdx.x == 0) cluster_begin = 0;
+  __syncthreads();
+  for (std::int32_t column = 0; column < orbital_count; ++column) {
+    if (threadIdx.x == 0 &&
+        (column == 0 || eigenvalues[column] - eigenvalues[column - 1] > tolerance)) {
+      cluster_begin = column;
+    }
+    __syncthreads();
+    /* Reorthogonalized modified Gram-Schmidt is intentional. Exact molecular
+     * degeneracies can make independent inverse iterations select the same
+     * vector even though any orthonormal basis of the subspace is valid. */
+    for (int pass = 0; pass < 2; ++pass) {
+      for (std::int32_t previous = cluster_begin; previous < column; ++previous) {
+        double local = 0.0;
+        for (std::int32_t row = static_cast<std::int32_t>(threadIdx.x); row < orbital_count;
+             row += static_cast<std::int32_t>(blockDim.x)) {
+          local += eigenvectors[row + static_cast<std::int64_t>(previous) * orbital_count] *
+                   eigenvectors[row + static_cast<std::int64_t>(column) * orbital_count];
+        }
+        partial[threadIdx.x] = local;
+        __syncthreads();
+        for (int stride = static_cast<int>(blockDim.x) / 2; stride != 0; stride /= 2) {
+          if (static_cast<int>(threadIdx.x) < stride) {
+            partial[threadIdx.x] += partial[threadIdx.x + stride];
+          }
+          __syncthreads();
+        }
+        if (threadIdx.x == 0) scalar = partial[0];
+        __syncthreads();
+        for (std::int32_t row = static_cast<std::int32_t>(threadIdx.x); row < orbital_count;
+             row += static_cast<std::int32_t>(blockDim.x)) {
+          eigenvectors[row + static_cast<std::int64_t>(column) * orbital_count] -=
+              scalar * eigenvectors[row + static_cast<std::int64_t>(previous) * orbital_count];
+        }
+        __syncthreads();
+      }
+    }
+    double local = 0.0;
+    for (std::int32_t row = static_cast<std::int32_t>(threadIdx.x); row < orbital_count;
+         row += static_cast<std::int32_t>(blockDim.x)) {
+      const double value = eigenvectors[row + static_cast<std::int64_t>(column) * orbital_count];
+      local += value * value;
+    }
+    partial[threadIdx.x] = local;
+    __syncthreads();
+    for (int stride = static_cast<int>(blockDim.x) / 2; stride != 0; stride /= 2) {
+      if (static_cast<int>(threadIdx.x) < stride) {
+        partial[threadIdx.x] += partial[threadIdx.x + stride];
+      }
+      __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+      scalar = partial[0] > 0.0 && isfinite(partial[0]) ? rsqrt(partial[0]) : 0.0;
+      if (scalar == 0.0 || !isfinite(scalar)) atomicCAS(info, 0, column + 1);
+    }
+    __syncthreads();
+    for (std::int32_t row = static_cast<std::int32_t>(threadIdx.x); row < orbital_count;
+         row += static_cast<std::int32_t>(blockDim.x)) {
+      eigenvectors[row + static_cast<std::int64_t>(column) * orbital_count] *= scalar;
+    }
+    __syncthreads();
+  }
+}
+
+__global__ void publish_tridiagonal_eigenpairs_kernel(std::int32_t orbital_count,
+                                                      const double* computed_eigenvalues,
+                                                      const double* computed_eigenvectors,
+                                                      double* matrix, double* eigenvalues,
+                                                      int* info, const int* apply_info) {
+  __shared__ int publish;
+  if (threadIdx.x == 0) {
+    if (*info == 0 && *apply_info != 0) *info = *apply_info;
+    publish = *info == 0 ? 1 : 0;
+  }
+  __syncthreads();
+  if (publish == 0) return;
+  for (std::int32_t orbital = static_cast<std::int32_t>(threadIdx.x); orbital < orbital_count;
+       orbital += static_cast<std::int32_t>(blockDim.x)) {
+    eigenvalues[orbital] = computed_eigenvalues[orbital];
+  }
+  const std::int64_t matrix_elements = static_cast<std::int64_t>(orbital_count) * orbital_count;
+  for (std::int64_t index = threadIdx.x; index < matrix_elements; index += blockDim.x) {
+    matrix[index] = computed_eigenvectors[index];
+  }
+}
+
+Gfn2EigensolverLaunchResult tridiagonal_symmetric_eigensolve(
+    cusolverDnHandle_t solver, const Gfn2EigensolverBucket& submission, double* matrices,
+    double* eigenvalues, const Gfn2EigensolverDeviceWorkspace& workspace, int* info,
+    cudaStream_t stream) noexcept {
+  if (submission.orbital_count <= 0 || submission.orbital_count > kGfn2TridiagonalMaximumOrbitals ||
+      submission.system_count <= 0) {
+    return invalid_argument();
+  }
+  int reduction_work_elements = 0;
+  int apply_work_elements = 0;
+  cusolverStatus_t status = cusolverDnDsytrd_bufferSize(
+      solver, CUBLAS_FILL_MODE_LOWER, submission.orbital_count, matrices, submission.orbital_count,
+      eigenvalues, eigenvalues, eigenvalues, &reduction_work_elements);
+  if (status == CUSOLVER_STATUS_SUCCESS) {
+    status = cusolverDnDormtr_bufferSize(
+        solver, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, submission.orbital_count,
+        submission.orbital_count, matrices, submission.orbital_count, eigenvalues, matrices,
+        submission.orbital_count, &apply_work_elements);
+  }
+  if (status != CUSOLVER_STATUS_SUCCESS) return cusolver_failure(status);
+
+  TridiagonalProviderWorkspace tridiagonal{};
+  if (!make_tridiagonal_provider_workspace(submission.orbital_count, reduction_work_elements,
+                                           apply_work_elements, workspace.solver_device_workspace,
+                                           workspace.solver_device_workspace_bytes, tridiagonal)) {
+    return invalid_argument();
+  }
+  const std::int64_t matrix_stride =
+      static_cast<std::int64_t>(submission.orbital_count) * submission.orbital_count;
+  for (std::int32_t local = 0; local < submission.system_count; ++local) {
+    double* const matrix = matrices + static_cast<std::int64_t>(local) * matrix_stride;
+    double* const output_eigenvalues =
+        eigenvalues + static_cast<std::int64_t>(local) * submission.orbital_count;
+    int* const output_info = info + local;
+    cudaError_t cuda_status = cudaMemsetAsync(tridiagonal.apply_info, 0, sizeof(int), stream);
+    if (cuda_status != cudaSuccess) return cuda_failure(cuda_status);
+    status = cusolverDnDsytrd(solver, CUBLAS_FILL_MODE_LOWER, submission.orbital_count, matrix,
+                              submission.orbital_count, output_eigenvalues,
+                              tridiagonal.off_diagonal, tridiagonal.householder_tau,
+                              tridiagonal.provider_work, reduction_work_elements, output_info);
+    if (status != CUSOLVER_STATUS_SUCCESS) return cusolver_failure(status);
+
+    tridiagonal_spectral_bounds_kernel<<<1, 1, 0, stream>>>(
+        submission.orbital_count, output_eigenvalues, tridiagonal.off_diagonal,
+        tridiagonal.spectral_bounds, output_info);
+    Gfn2EigensolverLaunchResult result = check_kernel_launch();
+    if (!result.success()) return result;
+    tridiagonal_bisection_kernel<<<static_cast<unsigned int>(submission.orbital_count), 1, 0,
+                                   stream>>>(submission.orbital_count, output_eigenvalues,
+                                             tridiagonal.off_diagonal, tridiagonal.spectral_bounds,
+                                             tridiagonal.computed_eigenvalues, output_info);
+    result = check_kernel_launch();
+    if (!result.success()) return result;
+    tridiagonal_inverse_iteration_kernel<<<
+        static_cast<unsigned int>(submission.orbital_count), 1,
+        static_cast<std::size_t>(submission.orbital_count) * sizeof(double), stream>>>(
+        submission.orbital_count, output_eigenvalues, tridiagonal.off_diagonal,
+        tridiagonal.spectral_bounds, tridiagonal.computed_eigenvalues,
+        tridiagonal.tridiagonal_eigenvectors, output_info);
+    result = check_kernel_launch();
+    if (!result.success()) return result;
+    orthogonalize_tridiagonal_clusters_kernel<<<1, 256, 0, stream>>>(
+        submission.orbital_count, tridiagonal.spectral_bounds, tridiagonal.computed_eigenvalues,
+        tridiagonal.tridiagonal_eigenvectors, output_info);
+    result = check_kernel_launch();
+    if (!result.success()) return result;
+
+    status = cusolverDnDormtr(
+        solver, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, submission.orbital_count,
+        submission.orbital_count, matrix, submission.orbital_count, tridiagonal.householder_tau,
+        tridiagonal.tridiagonal_eigenvectors, submission.orbital_count, tridiagonal.provider_work,
+        apply_work_elements, tridiagonal.apply_info);
+    if (status != CUSOLVER_STATUS_SUCCESS) return cusolver_failure(status);
+    publish_tridiagonal_eigenpairs_kernel<<<1, 256, 0, stream>>>(
+        submission.orbital_count, tridiagonal.computed_eigenvalues,
+        tridiagonal.tridiagonal_eigenvectors, matrix, output_eigenvalues, output_info,
+        tridiagonal.apply_info);
+    result = check_kernel_launch();
+    if (!result.success()) return result;
+  }
+  return launch_success();
+}
+
 Gfn2EigensolverLaunchResult symmetric_eigensolve(
     cusolverDnHandle_t solver, cusolverDnParams_t parameters, cusolverEigMode_t vectors,
-    const Gfn2EigensolverBucket& bucket, double* matrices, double* eigenvalues,
-    const Gfn2EigensolverOptions& options, const Gfn2EigensolverDeviceWorkspace& workspace,
-    int* info) noexcept {
-  const bool jacobi_requested = gfn2_eigensolver_uses_jacobi(options, bucket.orbital_count);
-  if (jacobi_requested && bucket.orbital_count > kGfn2JacobiProviderMaximumOrbitals) {
+    const Gfn2EigensolverBucket& policy_bucket, const Gfn2EigensolverBucket& submission,
+    double* matrices, double* eigenvalues, const Gfn2EigensolverOptions& options,
+    const Gfn2EigensolverDeviceWorkspace& workspace, int* info, cudaStream_t stream) noexcept {
+  if (vectors == CUSOLVER_EIG_MODE_VECTOR &&
+      gfn2_eigensolver_uses_tridiagonal(options, policy_bucket)) {
+    return tridiagonal_symmetric_eigensolve(solver, submission, matrices, eigenvalues, workspace,
+                                            info, stream);
+  }
+  const bool jacobi_requested = gfn2_eigensolver_uses_jacobi(options, submission.orbital_count);
+  if (jacobi_requested && submission.orbital_count > kGfn2JacobiProviderMaximumOrbitals) {
     return invalid_argument();
   }
   cusolverStatus_t status = CUSOLVER_STATUS_SUCCESS;
@@ -1830,16 +2239,17 @@ Gfn2EigensolverLaunchResult symmetric_eigensolve(
       return invalid_argument();
     }
     status = cusolverDnDsyevjBatched(
-        solver, vectors, CUBLAS_FILL_MODE_LOWER, bucket.orbital_count, matrices,
-        bucket.orbital_count, eigenvalues, static_cast<double*>(workspace.solver_device_workspace),
-        static_cast<int>(workspace_elements), info, options.jacobi, bucket.system_count);
+        solver, vectors, CUBLAS_FILL_MODE_LOWER, submission.orbital_count, matrices,
+        submission.orbital_count, eigenvalues,
+        static_cast<double*>(workspace.solver_device_workspace),
+        static_cast<int>(workspace_elements), info, options.jacobi, submission.system_count);
   } else {
     status = cusolverDnXsyevBatched(
-        solver, parameters, vectors, CUBLAS_FILL_MODE_LOWER, bucket.orbital_count, CUDA_R_64F,
-        matrices, bucket.orbital_count, CUDA_R_64F, eigenvalues, CUDA_R_64F,
+        solver, parameters, vectors, CUBLAS_FILL_MODE_LOWER, submission.orbital_count, CUDA_R_64F,
+        matrices, submission.orbital_count, CUDA_R_64F, eigenvalues, CUDA_R_64F,
         workspace.solver_device_workspace, workspace.solver_device_workspace_bytes,
         workspace.solver_host_workspace, workspace.solver_host_workspace_bytes, info,
-        bucket.system_count);
+        submission.system_count);
   }
   return status == CUSOLVER_STATUS_SUCCESS ? launch_success() : cusolver_failure(status);
 }
@@ -2000,11 +2410,11 @@ Gfn2EigensolverLaunchResult enqueue_capacity_eigensolver_body(
     result = configure_solver(solver, capture_stream);
   }
   if (result.success()) {
-    result =
-        symmetric_eigensolve(solver, parameters, CUSOLVER_EIG_MODE_VECTOR, submission,
-                             workspace.matrix_scratch_b + bucket.matrix_scratch_offset,
-                             workspace.eigenvalue_scratch + bucket.orbital_scratch_offset, options,
-                             workspace, workspace.info_a + bucket.system_index_offset);
+    result = symmetric_eigensolve(solver, parameters, CUSOLVER_EIG_MODE_VECTOR, bucket, submission,
+                                  workspace.matrix_scratch_b + bucket.matrix_scratch_offset,
+                                  workspace.eigenvalue_scratch + bucket.orbital_scratch_offset,
+                                  options, workspace, workspace.info_a + bucket.system_index_offset,
+                                  capture_stream);
   }
   return result;
 }
@@ -2651,6 +3061,37 @@ Gfn2EigensolverLaunchResult query_gfn2_jacobi_bucket_workspace_cuda(
   return launch_success();
 }
 
+Gfn2EigensolverLaunchResult query_gfn2_tridiagonal_bucket_workspace_cuda(
+    cusolverDnHandle_t solver, const Gfn2EigensolverBucket& bucket, const double* device_matrix,
+    const double* device_eigenvalues, Gfn2EigensolverWorkspaceRequirements& requirements) noexcept {
+  if (solver == nullptr || bucket.orbital_count <= 0 ||
+      bucket.orbital_count > kGfn2TridiagonalMaximumOrbitals || bucket.system_count <= 0 ||
+      !is_aligned(device_matrix, alignof(double)) ||
+      !is_aligned(device_eigenvalues, alignof(double))) {
+    return invalid_argument();
+  }
+  int reduction_work_elements = 0;
+  int apply_work_elements = 0;
+  cusolverStatus_t status = cusolverDnDsytrd_bufferSize(
+      solver, CUBLAS_FILL_MODE_LOWER, bucket.orbital_count, device_matrix, bucket.orbital_count,
+      device_eigenvalues, device_eigenvalues, device_eigenvalues, &reduction_work_elements);
+  if (status == CUSOLVER_STATUS_SUCCESS) {
+    status = cusolverDnDormtr_bufferSize(solver, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER,
+                                         CUBLAS_OP_N, bucket.orbital_count, bucket.orbital_count,
+                                         device_matrix, bucket.orbital_count, device_eigenvalues,
+                                         device_matrix, bucket.orbital_count, &apply_work_elements);
+  }
+  if (status != CUSOLVER_STATUS_SUCCESS) return cusolver_failure(status);
+  TridiagonalProviderWorkspace tridiagonal{};
+  if (!make_tridiagonal_provider_workspace(bucket.orbital_count, reduction_work_elements,
+                                           apply_work_elements, nullptr, 0u, tridiagonal)) {
+    return invalid_argument();
+  }
+  requirements.solver_device_workspace_bytes =
+      std::max(requirements.solver_device_workspace_bytes, tridiagonal.required_bytes);
+  return launch_success();
+}
+
 Gfn2EigensolverLaunchResult compact_gfn2_solve_bucket_counts_cuda(
     const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverBucket& bucket,
     std::int64_t bucket_index, const Gfn2EigensolverDeviceWorkspace& workspace,
@@ -2853,10 +3294,10 @@ Gfn2EigensolverLaunchResult factor_overlap_impl(
     if (!result.success()) {
       return result;
     }
-    result = symmetric_eigensolve(solver, parameters, CUSOLVER_EIG_MODE_NOVECTOR, bucket,
+    result = symmetric_eigensolve(solver, parameters, CUSOLVER_EIG_MODE_NOVECTOR, bucket, bucket,
                                   workspace.matrix_scratch_b + matrix_begin,
                                   workspace.eigenvalue_scratch + orbital_begin, options, workspace,
-                                  workspace.info_a + info_begin);
+                                  workspace.info_a + info_begin, stream);
     if (!result.success()) {
       return result;
     }
@@ -2981,10 +3422,10 @@ static Gfn2EigensolverLaunchResult solve_eigensystems_impl(
     if (!result.success()) {
       return result;
     }
-    result = symmetric_eigensolve(solver, parameters, CUSOLVER_EIG_MODE_VECTOR, bucket,
+    result = symmetric_eigensolve(solver, parameters, CUSOLVER_EIG_MODE_VECTOR, bucket, bucket,
                                   workspace.matrix_scratch_b + matrix_begin,
                                   workspace.eigenvalue_scratch + orbital_begin, options, workspace,
-                                  workspace.info_a + info_begin);
+                                  workspace.info_a + info_begin, stream);
     if (!result.success()) {
       return result;
     }
@@ -3099,10 +3540,11 @@ static Gfn2EigensolverLaunchResult solve_spin_eigensystems_impl(
     if (!result.success()) {
       return result;
     }
-    result = symmetric_eigensolve(solver, parameters, CUSOLVER_EIG_MODE_VECTOR, submission,
+    result = symmetric_eigensolve(solver, parameters, CUSOLVER_EIG_MODE_VECTOR, bucket, submission,
                                   workspace.matrix_scratch_b + bucket.spin_matrix_scratch_offset,
                                   workspace.eigenvalue_scratch + bucket.spin_orbital_scratch_offset,
-                                  options, workspace, workspace.info_a + bucket.solve_index_offset);
+                                  options, workspace, workspace.info_a + bucket.solve_index_offset,
+                                  stream);
     if (!result.success()) {
       return result;
     }

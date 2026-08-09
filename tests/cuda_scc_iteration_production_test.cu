@@ -871,7 +871,9 @@ struct ProductionFixture {
   Gfn2SccIterationBinding binding{};
   bool create(bool optional_components, std::int64_t batch_size = 4, bool unrestricted_spin = false,
               bool mixed_spin_batch = false, const std::vector<SmallSystemKind>& systems = {},
-              double electronic_temperature = 0.0, CouplingSelection coupling = {}) {
+              double electronic_temperature = 0.0, CouplingSelection coupling = {},
+              std::uint64_t maximum_iterations = 8u, double residual_tolerance = 1.0e-10,
+              double energy_tolerance = 1.0e-8) {
     if (batch_size <= 0) {
       return false;
     }
@@ -915,8 +917,10 @@ struct ProductionFixture {
       options.spin_channels.assign(static_cast<std::size_t>(batch_size), 2);
     }
     options.geometry_generation = kGeometryGeneration;
-    options.maximum_iterations = 8u;
+    options.maximum_iterations = maximum_iterations;
     options.mixer_history = 3;
+    options.residual_tolerance = residual_tolerance;
+    options.energy_tolerance = energy_tolerance;
     options.electronic_temperature = electronic_temperature;
     options.enable_d4 = optional_components || coupling.d4;
     options.enable_explicit_point_charges = optional_components || coupling.point_charges;
@@ -1971,6 +1975,162 @@ int test_conditional_graph_exact_body_count(std::int64_t batch_size,
   return 0;
 }
 
+/* CUDA 12.9 vector-mode XsyevBatched capture succeeds through 512 orbitals and
+ * fails at 513. This physical 542-orbital singleton must select the low-level
+ * tridiagonal provider so the device-tail Graph stops at convergence instead
+ * of submitting all 500 bounded SCC bodies. */
+int test_large_singleton_tridiagonal_graph() {
+  ProductionFixture fixture;
+  CHECK(fixture.create(false, 1, false, false, {SmallSystemKind::kC90H182}, 0.0, {}, 500u, 1.0e-4,
+                       1.0e-4));
+  CHECK(fixture.host.total_atoms() == 272);
+  CHECK(fixture.binding.plan.eigensolver_provider.bucket_count == 1);
+  CHECK(fixture.binding.plan.eigensolver_provider.buckets[0].system_count == 1);
+  CHECK(fixture.binding.plan.eigensolver_provider.buckets[0].orbital_count == 542);
+  CHECK(gfn2_eigensolver_uses_tridiagonal(fixture.binding.plan.eigensolver_options,
+                                          fixture.binding.plan.eigensolver_provider.buckets[0]));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  Gfn2SccLoopCudaGraphOwner owner;
+  const Gfn2SccLoopGraphBuildResult build = owner.build(fixture.binding);
+  CHECK(build.success());
+  CHECK(build.device_tail_graph_ready());
+  CHECK(build.conditional_graph_ready());
+  CHECK(build.fallback_reason == Gfn2SccLoopGraphFallbackReason::kNone);
+  CHECK(owner.device_tail_graph_ready());
+  CHECK(owner.conditional_graph_ready());
+  CHECK(owner.canonical_active_count_device() != nullptr);
+  CHECK(owner.numerical_body_count_device() != nullptr);
+
+  const Gfn2SccLoopLaunchResult launch = owner.launch(fixture.handles.stream());
+  CHECK(launch.success());
+  CHECK(launch.execution_mode == Gfn2SccLoopExecutionMode::kDeviceTailGraph);
+  CHECK(launch.submitted_graphs == 1u);
+  CHECK(launch.submitted_iterations == 0u);
+
+  std::vector<std::uint64_t> iterations;
+  std::vector<std::uint8_t> converged;
+  std::vector<gpuxtb_status_t> statuses;
+  std::vector<double> free_energies;
+  std::uint32_t terminal_active_count = 1u;
+  std::uint64_t body_count = 0u;
+  CHECK(download(fixture.binding.state.scc.iterations, 1, iterations, fixture.handles.stream()));
+  CHECK(download(fixture.binding.state.scc.converged, 1, converged, fixture.handles.stream()));
+  CHECK(download(fixture.binding.state.scc.system_statuses, 1, statuses, fixture.handles.stream()));
+  CHECK(download(fixture.binding.state.scc.free_energies, 1, free_energies,
+                 fixture.handles.stream()));
+  CHECK(download_value(owner.canonical_active_count_device(), terminal_active_count,
+                       fixture.handles.stream()));
+  CHECK(download_value(owner.numerical_body_count_device(), body_count, fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(iterations[0] > 0u);
+  CHECK(iterations[0] < fixture.host.options().maximum_iterations);
+  CHECK(converged[0] == 1u);
+  CHECK(statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(std::isfinite(free_energies[0]));
+  CHECK(body_count == iterations[0]);
+  CHECK(terminal_active_count == 0u);
+
+  const Gfn2SccLoopLaunchResult terminal = owner.launch(fixture.handles.stream());
+  CHECK(terminal.success());
+  CHECK(terminal.execution_mode == Gfn2SccLoopExecutionMode::kDeviceTailGraph);
+  CHECK(terminal.submitted_iterations == 0u);
+  CHECK(download_value(owner.numerical_body_count_device(), body_count, fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(body_count == 0u);
+
+  /* A deliberately nonconvergent cap proves the device-tail Graph retains the
+   * exact public correctness bound instead of relying on the benchmark's
+   * normal six-iteration convergence. */
+  ProductionFixture limited;
+  CHECK(limited.create(false, 1, false, false, {SmallSystemKind::kC90H182}, 0.0, {}, 7u, 1.0e-30,
+                       1.0e-30));
+  CUDA_CHECK(cudaStreamSynchronize(limited.handles.stream()));
+  Gfn2SccLoopCudaGraphOwner limited_owner;
+  CHECK(limited_owner.build(limited.binding).device_tail_graph_ready());
+  const Gfn2SccLoopLaunchResult limited_launch = limited_owner.launch(limited.handles.stream());
+  CHECK(limited_launch.success());
+  CHECK(limited_launch.execution_mode == Gfn2SccLoopExecutionMode::kDeviceTailGraph);
+  CHECK(limited_launch.submitted_graphs == 1u);
+  CHECK(limited_launch.submitted_iterations == 0u);
+  CHECK(download(limited.binding.state.scc.iterations, 1, iterations, limited.handles.stream()));
+  CHECK(download(limited.binding.state.scc.converged, 1, converged, limited.handles.stream()));
+  CHECK(download(limited.binding.state.scc.system_statuses, 1, statuses, limited.handles.stream()));
+  CHECK(download_value(limited_owner.numerical_body_count_device(), body_count,
+                       limited.handles.stream()));
+  CHECK(download_value(limited_owner.canonical_active_count_device(), terminal_active_count,
+                       limited.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(limited.handles.stream()));
+  CHECK(iterations[0] == 7u);
+  CHECK(converged[0] == 0u);
+  CHECK(statuses[0] == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+  CHECK(body_count == 7u);
+  CHECK(terminal_active_count == 0u);
+
+  /* Unrestricted singletons submit alpha and beta sequentially through the
+   * same provider arena. Prove both calls remain device-launchable and retain
+   * the composed SCC loop's convergence and publication semantics. */
+  ProductionFixture unrestricted;
+  CHECK(unrestricted.create(false, 1, true, false, {SmallSystemKind::kC90H182}, 0.0, {}, 50u,
+                            1.0e-2, 1.0e-2));
+  CHECK(unrestricted.binding.plan.eigensolver_provider.bucket_count == 1);
+  CHECK(unrestricted.binding.plan.eigensolver_provider.buckets[0].orbital_count == 542);
+  CHECK(unrestricted.binding.plan.eigensolver_provider.buckets[0].system_count == 1);
+  CHECK(unrestricted.binding.plan.eigensolver_provider.buckets[0].solve_count == 2);
+  CUDA_CHECK(cudaStreamSynchronize(unrestricted.handles.stream()));
+  Gfn2SccLoopCudaGraphOwner unrestricted_owner;
+  CHECK(unrestricted_owner.build(unrestricted.binding).device_tail_graph_ready());
+  const Gfn2SccLoopLaunchResult unrestricted_launch =
+      unrestricted_owner.launch(unrestricted.handles.stream());
+  CHECK(unrestricted_launch.success());
+  CHECK(unrestricted_launch.execution_mode == Gfn2SccLoopExecutionMode::kDeviceTailGraph);
+  CHECK(download_value(unrestricted_owner.numerical_body_count_device(), body_count,
+                       unrestricted.handles.stream()));
+  CHECK(download(unrestricted.binding.state.scc.iterations, 1, iterations,
+                 unrestricted.handles.stream()));
+  CHECK(download(unrestricted.binding.state.scc.converged, 1, converged,
+                 unrestricted.handles.stream()));
+  CHECK(download(unrestricted.binding.state.scc.system_statuses, 1, statuses,
+                 unrestricted.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(unrestricted.handles.stream()));
+  CHECK(body_count == iterations[0]);
+  CHECK(iterations[0] > 0u && iterations[0] < 50u);
+  CHECK(converged[0] == 1u);
+  CHECK(statuses[0] == GPUXTB_STATUS_SUCCESS);
+  return 0;
+}
+
+/* Sanitizers instrument every kernel in a device-tail replay and can make the
+ * full convergence/terminal/unrestricted matrix prohibitively slow. This
+ * one-body production smoke keeps the same 542-orbital provider, setup-owned
+ * workspace, and device-launchable SCC Graph while bounding instrumentation. */
+int test_large_singleton_tridiagonal_sanitizer_smoke() {
+  ProductionFixture fixture;
+  CHECK(fixture.create(false, 1, false, false, {SmallSystemKind::kC90H182}, 0.0, {}, 1u, 1.0e-30,
+                       1.0e-30));
+  CHECK(fixture.binding.plan.eigensolver_provider.bucket_count == 1);
+  CHECK(fixture.binding.plan.eigensolver_provider.buckets[0].orbital_count == 542);
+  CHECK(gfn2_eigensolver_uses_tridiagonal(fixture.binding.plan.eigensolver_options,
+                                          fixture.binding.plan.eigensolver_provider.buckets[0]));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  Gfn2SccLoopCudaGraphOwner owner;
+  CHECK(owner.build(fixture.binding).device_tail_graph_ready());
+  const Gfn2SccLoopLaunchResult launch = owner.launch(fixture.handles.stream());
+  CHECK(launch.success());
+  CHECK(launch.execution_mode == Gfn2SccLoopExecutionMode::kDeviceTailGraph);
+  std::uint64_t body_count = 0u;
+  std::vector<std::uint64_t> iterations;
+  std::vector<gpuxtb_status_t> statuses;
+  CHECK(download_value(owner.numerical_body_count_device(), body_count, fixture.handles.stream()));
+  CHECK(download(fixture.binding.state.scc.iterations, 1, iterations, fixture.handles.stream()));
+  CHECK(download(fixture.binding.state.scc.system_statuses, 1, statuses, fixture.handles.stream()));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  CHECK(body_count == 1u);
+  CHECK(iterations == std::vector<std::uint64_t>{1u});
+  CHECK(statuses == std::vector<gpuxtb_status_t>{GPUXTB_STATUS_SCC_NOT_CONVERGED});
+  return 0;
+}
+
 /* Forced exact-capacity dispatch-chain build, launch, terminal replay, and
  * CPU parity for restricted batches. Preferring kDeviceDispatchChain must
  * produce a ready chain whose executable count equals the documented table
@@ -2178,6 +2338,22 @@ int test_kauto_dispatch_chain_regime_selection() {
 
   synthetic_buckets[1].orbital_count = 122;
   CHECK(!gfn2_scc_dispatch_chain_regime_applies(plan));
+
+  plan.eigensolver_provider.bucket_count = 1;
+  plan.topology.batch_size = 1;
+  synthetic_buckets[0].system_count = 1;
+  synthetic_buckets[0].orbital_count = 512;
+  CHECK(!gfn2_eigensolver_uses_tridiagonal(plan.eigensolver_options, synthetic_buckets[0]));
+  synthetic_buckets[0].orbital_count = 513;
+  CHECK(gfn2_eigensolver_uses_tridiagonal(plan.eigensolver_options, synthetic_buckets[0]));
+  synthetic_buckets[0].system_count = 2;
+  CHECK(!gfn2_eigensolver_uses_tridiagonal(plan.eigensolver_options, synthetic_buckets[0]));
+  synthetic_buckets[0].system_count = 1;
+  plan.topology.batch_size = 2;
+  CHECK(gfn2_eigensolver_uses_tridiagonal(plan.eigensolver_options, synthetic_buckets[0]));
+  plan.topology.batch_size = 1;
+  synthetic_buckets[0].orbital_count = kGfn2TridiagonalMaximumOrbitals + 1;
+  CHECK(!gfn2_eigensolver_uses_tridiagonal(plan.eigensolver_options, synthetic_buckets[0]));
   plan = fixture.binding.plan;
 
   /* The real small-AO fixture must still prefer the chain under kAuto. */
@@ -3613,12 +3789,19 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::strcmp(argv[1], "--mixed-conditional") == 0) {
     return test_mixed_spin_conditional_acceptance();
   }
+  if (argc == 2 && std::strcmp(argv[1], "--large-singleton-tridiagonal") == 0) {
+    return test_large_singleton_tridiagonal_graph();
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--large-singleton-sanitizer") == 0) {
+    return test_large_singleton_tridiagonal_sanitizer_smoke();
+  }
   if (argc != 1) {
     std::fprintf(stderr,
                  "usage: %s "
                  "[--benchmark|--unrestricted-smoke|--unrestricted-parity|--mixed-parity|"
                  "--mixed-acceptance|--mixed-bounded|--mixed-conditional|"
-                 "--dispatch-chain|--finite-temperature-parity]\n",
+                 "--dispatch-chain|--finite-temperature-parity|--large-singleton-tridiagonal|"
+                 "--large-singleton-sanitizer]\n",
                  argv[0]);
     return 2;
   }

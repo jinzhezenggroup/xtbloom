@@ -110,7 +110,8 @@ bool valid_options(const Gfn2EigensolverOptions& options) noexcept {
   const bool valid_strategy =
       options.strategy == Gfn2EigensolverStrategy::kAuto ||
       options.strategy == Gfn2EigensolverStrategy::kBatchedDivideAndConquer ||
-      options.strategy == Gfn2EigensolverStrategy::kBatchedJacobi;
+      options.strategy == Gfn2EigensolverStrategy::kBatchedJacobi ||
+      options.strategy == Gfn2EigensolverStrategy::kTridiagonalBisection;
   return std::isfinite(options.minimum_overlap_rcond) && options.minimum_overlap_rcond > 0.0 &&
          options.minimum_overlap_rcond <= 1.0 && std::isfinite(options.symmetry_tolerance) &&
          options.symmetry_tolerance >= 0.0 && valid_strategy &&
@@ -524,6 +525,13 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::create(
           candidate->requirements.provider);
       if (!query_result.success()) {
         break;
+      }
+      if (gfn2_eigensolver_uses_tridiagonal(candidate->options, bucket)) {
+        query_result = query_gfn2_tridiagonal_bucket_workspace_cuda(
+            solver, bucket, query_matrix, query_eigenvalues, candidate->requirements.provider);
+        if (!query_result.success()) {
+          break;
+        }
       }
       if (gfn2_eigensolver_uses_jacobi(candidate->options, bucket.orbital_count)) {
         query_result = query_gfn2_jacobi_bucket_workspace_cuda(
