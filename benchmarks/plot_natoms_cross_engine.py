@@ -110,6 +110,7 @@ def _footnote_lines(metadata: dict[str, Any], commit: str) -> list[str]:
     if gpu:
         line.append(gpu.replace("\n", " "))
     line.append("gpuxtb SCC 1e-10/1e-12; refs acc 1e-4")
+    line.append("build: -O3 generic x86-64 (no -march=native); dxtb: PyTorch AVX2")
     line.append("gpuxtb batch=1: 1 of 16 workers active (outer-batch pool idle)")
     return line
 

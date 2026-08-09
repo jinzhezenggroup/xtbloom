@@ -56,6 +56,30 @@ The previous #231 figures dropped CUDA entirely; the current figure restores
 - gpuxtb SCC conformance-tight (charge 1e-10, energy 1e-12, up to 500 iters);
   xTB/tblite default acc 1e-4. gpuxtb timings include strictly more SCC work.
 
+### Build and optimization flags (CPU fairness)
+
+No engine in this comparison was compiled with `-march=native`; the CPU rows
+therefore do not give any single engine a hard ISA advantage:
+
+- **gpuxtb CPU** (this benchmark's `build/batch1-cpu`): system GCC
+  (`/usr/bin/c++`), `-O3 -DNDEBUG`, generic x86-64 baseline (no `-march` /
+  `-mtune`). The eigensolve uses runtime-loaded MKL LP64 (issue #30 isolated
+  shim); MKL internally dispatches to AVX2/AVX512 at run time.
+- **xTB 6.7.1**: conda-forge binary, linked against conda OpenBLAS 0.3.33
+  (runtime dispatch), gfortran/gcc from the conda env, generic x86-64.
+- **tblite 0.7.0** (`/tmp/tblite-pr169-6f7f1e2`): Meson `-Dbuildtype=release`
+  with conda gfortran, `-O3` (a few files `-O1`), linked against conda
+  OpenBLAS 0.3.33, generic x86-64.
+- **dxtb 0.4.0**: pure Python over PyTorch 2.13.0+cu130; the PyTorch wheel
+  reports CPU capability AVX2 and dispatches AVX2/AVX512 kernels at run time,
+  which (if anything) favors the reference side, yet dxtb remains
+  10-95x slower because framework/autograd overhead dominates.
+
+Both gpuxtb and the references thus run runtime-dispatching vendor BLAS (MKL
+vs OpenBLAS) on top of generic `-O3` builds, so the latency comparison is
+not distorted by a bespoke `-march` for any engine. The CUDA rows use the
+same gpuxtb host build plus NVCC 12.9.1 kernels for `sm_120`.
+
 ## Commands
 
 Per engine group (xTB/tblite in separate processes, dxtb and GPU rows in their
