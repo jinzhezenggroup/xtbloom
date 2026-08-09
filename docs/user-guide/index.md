@@ -18,7 +18,7 @@ not expectations that callers must reconstruct from implementation details.
 | Temperature-unit safety | The high-level Python API accepts kelvin and converts explicitly to the native `k_B T` Hartree scale. | tblite [#73](https://github.com/tblite/tblite/issues/73) records a real `temperature=300` mistake that meant `300 Eh` and changed an energy from about `-31.716 Eh` to `-31158.785 Eh`. gpuxtb keeps atomic units in the C ABI while making the Python boundary unit explicit. |
 | Reproducible work partitioning | For a fixed backend and configuration, explicit CPU thread counts, repeated fresh calls, and automatic batch slicing are tested for bit-identical results. | xTB [#999](https://github.com/grimme-lab/xtb/issues/999) records thread-count-dependent optimized structures; version 6.7.1 greatly reduced the effect but still reported small differences. gpuxtb's narrower guarantee is enforced by [native thread](../../tests/cpu_public_inference_test.cpp) and [Python batch-slicing](../../python/tests/test_auto_batch.py) tests. |
 | Strict electronic reuse | Native `WARM` consumes only a fully converged compatible checkpoint. A first call or identity mismatch fails atomically and never silently falls back to `FRESH`; high-level Python `warm_start=True` builds a transparent policy on top by retrying that rejection once with `FRESH`. | The [issue #168 evidence](../../benchmarks/evidence/issue-168/2026-08-06-epyc7k62/README.md) covers 360 correctness-qualified samples: 17-18 SCC iterations fell to 2, gpuxtb WARM was 3.09x-4.76x faster than gpuxtb FRESH and 1.09x-1.54x faster than persistent tblite on the measured 32-122 atom alkanes. |
-| Ragged batch throughput | One public call solves a whole ragged batch of distinct molecules on CPU or CUDA; per-system cost collapses well below a serial per-system loop. | The [cross-engine scaling benchmark](index.md#cross-engine-scaling-benchmark) and its [archived evidence](../../benchmarks/evidence/issue-256/2026-08-09-node3/README.md) show gpuxtb CPU solving 128 distinct 62-atom systems about 12x faster than xTB, about 9x faster than tblite, and about 95x faster than dxtb CPU per call. |
+| Ragged batch throughput | One public call solves a whole ragged batch of distinct molecules on CPU or CUDA; per-system cost collapses well below a serial per-system loop. | The [cross-engine scaling benchmark](index.md#cross-engine-scaling-benchmark) and its [archived evidence](../../benchmarks/evidence/issue-256/2026-08-09-node3/README.md) show gpuxtb CPU solving 128 distinct 62-atom systems about 12x faster than xTB, about 9x faster than tblite, and about 93x faster than dxtb CPU per call; at 512 systems the CPU speedup over xTB/tblite grows to ~23x at 62 atoms. |
 
 These are scoped advantages, not a claim that gpuxtb replaces every xTB-family
 package. xTB provides much broader end-user workflows and method coverage;
@@ -33,38 +33,41 @@ buffers, explicit failure semantics, and reproducible reusable state.
 
 The figure compares GFN2-xTB energy + analytic forces from public interfaces
 only: gpuxtb CPU (16 threads) and gpuxtb CUDA (RTX 5090) versus vanilla xTB,
-tblite, and dxtb CPU/CUDA, every engine with the same 16-thread budget. Every
-batch of 128 uses 128 *distinct* thermal-like
+tblite, and dxtb CPU/CUDA, every engine with the same 16-thread budget and the
+same SCC accuracy (1e-4). Every batch is built from *distinct* thermal-like
 conformers of an alkane (identical atomic numbers, different coordinates) so
 no engine can win by reusing one geometry. Start semantics are explicit:
-batch=1 rows are genuine cold start (xTB/tblite rebuild their calculator every
-sample), batch=128 rows cold-start on the first call and continue warm, and
-the trajectory panel streams nearly identical frames with gpuxtb using strict
-`WARM` continuation and the references continuing their persistent state.
+batch=1 and batch=512 rows are genuine cold starts (xTB/tblite rebuild their
+calculator every sample), and batch=128 rows cold-start on the first call and
+continue warm.
 
-- **batch = 1 (cold start)**: gpuxtb CPU is competitive at small sizes
-  (14-32 atoms) and 1.3-3.0x slower at 62-362 atoms (242: gpuxtb 1680 ms vs
-  xTB 651 ms / tblite 708 ms). The gap is per-SCC-iteration cost plus gpuxtb's
-  strictly tighter SCC tolerance; gpuxtb's batch-parallel worker pool is idle
-  for a single system, tracked in issue 256. The reference sweeps stop at 362
-  atoms (xTB 6.7.1 segfaults on the 602-atom alkane). gpuxtb CUDA adds a fixed
-  per-call overhead here (27-192 ms at 14-62 atoms).
-- **batch = 128 (first call cold, then WARM)**: gpuxtb CPU is about 9-13x
-  faster than xTB and tblite per call (62 atoms: 174 ms vs xTB 2113 ms /
-  tblite 1635 ms), because gpuxtb solves the whole ragged batch in one call
-  across its worker pool while the reference adapters loop systems serially.
-  gpuxtb CUDA lands in the same range once the fixed overhead amortizes
-  (@242 x 128 systems: CUDA 2852 ms vs CPU 3115 ms).
-- **MD trajectory (WARM)**: per-frame latency at 32-242 atoms. gpuxtb CPU is
-  1.3-2.9x slower than xTB/tblite at the largest sizes (242: 1786 ms vs
-  xTB 620 / tblite 684 ms), from the same per-iteration cost and tighter
-  tolerance; dxtb CPU rows reset per call by design.
+- **batch = 1 (cold start)**: with matched 1e-4 accuracy gpuxtb CPU is
+  faster than xTB/tblite at 14-242 atoms (62: 34 ms vs xTB 52 / tblite 61;
+  242: 548 vs 651/708) and at parity at 362 (1448 vs 1406/1545). gpuxtb's
+  batch-parallel worker pool is idle for a single system, so its batch=128
+  advantage is a cross-system parallelism effect (it collapses toward parity
+  at `--cpu-threads 1`). The reference sweeps stop at 362 atoms (xTB 6.7.1
+  segfaults on the 602-atom alkane). gpuxtb CUDA at batch=1 adds a fixed
+  per-call cost (14-62 ms at 14-32 atoms).
+- **batch = 128 (first call cold, then WARM)**: gpuxtb CPU is about 10-12x
+  faster than xTB and tblite per call at 14-302 atoms (62 atoms: 178 ms vs
+  xTB 2113 ms / tblite 1635 ms), because gpuxtb solves the whole ragged batch
+  in one call across its worker pool while the reference adapters loop
+  systems serially. gpuxtb CUDA matches CPU once the fixed overhead amortizes
+  (@242 x 128 systems: CUDA 2576 ms vs CPU 2761 ms).
+- **batch = 512 (cold start)**: the high-throughput panel. gpuxtb CPU is
+  ~20-30x faster than xTB/tblite (62: 1139 ms vs 26471/29313; 122: 4633 vs
+  91984/99209) and gpuxtb CUDA ~10-25x faster (62: 1093 ms), so a 512-system
+  call finishes in about a second to a few seconds where the references need
+  tens of seconds to a minute and a half. dxtb rows reset per call by design.
 
 Hardware: AMD EPYC 7K62 with every engine using 16 threads per call, plus an
-NVIDIA RTX 5090 for the CUDA rows. gpuxtb
-runs SCC to charge tolerance 1e-10 and energy tolerance 1e-12 while the
-reference engines use their default `--acc 1e-4`, so gpuxtb's timings include
-strictly more SCC work. Raw samples, revisions, and reproduction commands are
+NVIDIA RTX 5090 for the CUDA rows. All engines converge SCC to energy
+accuracy 1e-4 (up to 500 iterations): gpuxtb runs with
+`--scc-charge-tolerance 1e-4 --scc-energy-tolerance 1e-4` and xTB/tblite
+with their default `--acc 1e-4`, so no engine is measured under a stricter
+(or looser) tolerance. dxtb uses its recommended `tad-libcint` integral
+interface. Raw samples, revisions, and reproduction commands are
 archived under
 [`benchmarks/evidence/issue-256/2026-08-09-node3/`](../../benchmarks/evidence/issue-256/2026-08-09-node3/).
 

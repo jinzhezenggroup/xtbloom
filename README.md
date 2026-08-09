@@ -77,60 +77,62 @@ benchmark evidence.
 
 The figure below is a correctness-qualified, end-to-end steady-state
 comparison of GFN2-xTB energy + analytic forces from public interfaces only:
-gpuxtb CPU (16 threads) and gpuxtb CUDA versus vanilla xTB, tblite, and dxtb.
-Every batch of 128 is built from 128 *distinct* thermal-like conformers of one
-alkane (identical atomic numbers, different coordinates), so no engine can
-win by reusing one geometry. The MD-trajectory panel streams nearly identical
-frames and runs gpuxtb with strict `WARM` SCC continuation, its documented
-massively-parallel mode.
+gpuxtb CPU (16 threads) and gpuxtb CUDA versus vanilla xTB, tblite, and dxtb,
+with the **same SCC accuracy (1e-4) for every engine**. Every batch is built
+from *distinct* thermal-like conformers of one alkane (identical atomic
+numbers, different coordinates), so no engine can win by reusing one
+geometry. The three panels compare batch=1 and batch=128 (the latter
+cold-start then warm) with a new **batch=512 cold-start** panel for
+high-throughput use.
 
 ![Cross-engine GFN2-xTB scaling benchmark](docs/assets/natoms_cross_engine.svg)
 
 Hardware: AMD EPYC 7K62 (48 cores; every engine uses the same 16-thread budget
-per call) and an NVIDIA RTX 5090 (32 GiB) for the CUDA rows. gpuxtb runs the
-conformance-tight SCC (tolerance 1e-10 on charges /
-1e-12 on energy, up to 500 iterations) while the reference engines use their
-default `--acc 1e-4`, so gpuxtb's timings include strictly *more* SCC work.
-Start semantics are explicit per panel: batch=1 rows are genuine cold-start
-(every sample rebuilt from scratch, xTB/tblite rebuild their calculator);
+per call) and an NVIDIA RTX 5090 (32 GiB) for the CUDA rows. All engines
+converge SCC to energy accuracy 1e-4 (up to 500 iterations): gpuxtb is run
+with `--scc-charge-tolerance 1e-4 --scc-energy-tolerance 1e-4` and xTB/tblite
+with their default `--acc 1e-4`, so the timings include the same amount of
+SCC work (an earlier revision ran gpuxtb conformance-tight at 1e-10/1e-12,
+which forced strictly more SCC iterations and made gpuxtb look slower than it
+is). Start semantics are explicit per panel: batch=1 and batch=512 rows are
+genuine cold starts (xTB/tblite rebuild their calculator every sample);
 batch=128 rows cold-start on the first call and continue warm afterwards, like
-a repeated steady-state workflow; the trajectory panel is strictly `WARM`
-(nearly identical MD frames). Reference adapters run the same 16-thread budget
-as gpuxtb (OpenMP/OpenBLAS/MKL on xTB and tblite, Torch intra-op on dxtb).
-The CPU rows were measured from main-tree commit `81e3d67`; the CUDA rows were
-re-measured at the merged head (including the #252/#254/#257 CUDA fixes).
-Raw samples, hardware, and the exact commits are archived under
+a repeated steady-state workflow. Reference adapters run the same 16-thread
+budget as gpuxtb (OpenMP/OpenBLAS/MKL on xTB and tblite, Torch intra-op on
+dxtb; dxtb uses its recommended `tad-libcint` integral interface).
+gpuxtb CPU and CUDA rows were re-measured at the PR merged head (including
+the #252/#254/#257/#259/#261 CUDA fixes); no engine was compiled with
+`-march=native` (all generic x86-64 `-O3` builds). Raw samples, hardware, and
+the exact commits are archived under
 [`benchmarks/evidence/issue-256/2026-08-09-node3/`](benchmarks/evidence/issue-256/2026-08-09-node3/).
 
 The measured pattern is what ragged high-throughput inference is for:
 
-- **Single molecule, cold start (batch = 1):** gpuxtb CPU is competitive with
-  xTB/tblite at small sizes (14-32 atoms) and 1.3-3.0x slower at 62-362 atoms
-  (242: gpuxtb 1680 ms vs xTB 651 ms / tblite 708 ms; 362: 4660 vs 1406 /
-  1545). The gap is per-SCC-iteration cost plus gpuxtb's strictly tighter
-  tolerance, and gpuxtb's batch-parallel worker pool is idle for a single
-  system (same latency at 1 and 16 threads); closing it is tracked in
-  [issue 256](../../issues/256). xTB 6.7.1 crashes on the 602-atom alkane so
-  the reference sweeps stop at 362.
-- **128 systems per call (batch = 128, first call cold then WARM):** is where
-  gpuxtb separates. From 14 to 122 atoms gpuxtb CPU is roughly 9-13x faster
-  than xTB and tblite per call (62 atoms: 174 ms vs xTB 2113 ms / tblite 1635
-  ms; 122: 651 ms vs 7395 / 5342), because gpuxtb solves the whole ragged
-  batch in one call across its worker pool while the reference adapters loop
-  systems serially. gpuxtb CPU extends the sweep to 302 atoms (3115 @242 ->
-  5424 ms @302); CUDA and the references stop earlier (the RTX 5090 cannot
-  hold 128 x 302 systems and the reference bindings were capped in the
-  archived matrix). dxtb CPU rows reset per call by design, so they stay cold.
-- **MD trajectory (WARM):** per-frame latency at 32-242 atoms. gpuxtb CPU is
-  1.3-2.9x slower than xTB/tblite at the largest sizes here too (242: 1786 ms
-  vs xTB 620 / tblite 684), again from per-iteration cost plus tighter SCC
-  tolerance; gpuxtb's strict WARM continuation is the exact path an ASE MD run
-  takes.
-- **gpuxtb CUDA:** at batch=1 the GPU rows carry a fixed per-call overhead
-  (27-192 ms at 14-62 atoms; 362 atoms is dominated by a slow force stage at
-  14 629 ms). At batch=128 the overhead amortizes and CUDA is in the same
-  range as CPU (@242 x 128 systems: CUDA 2852 ms vs CPU 3115 ms; @14: 28 ms
-  vs 15 ms), well ahead of the serial reference loops.
+- **Single molecule, cold start (batch = 1):** with matched 1e-4 accuracy,
+  gpuxtb CPU is actually *faster* than xTB/tblite at 14-242 atoms (62: 34 ms
+  vs xTB 52 / tblite 61; 242: 548 vs 651/708) and reaches parity at 362
+  (1448 vs 1406/1545). gpuxtb's batch-parallel worker pool is idle for a
+  single system (same latency at 1 and 16 threads); at `--cpu-threads 1` the
+  batch=128 advantage also collapses toward parity, confirming the big
+  multi-system speedups below are a 16-worker cross-system parallelism
+  effect. xTB 6.7.1 crashes on the 602-atom alkane so the reference sweeps
+  stop at 362.
+- **128 systems per call (batch = 128, first call cold then WARM):** gpuxtb
+  CPU is ~10-12x faster than xTB and tblite per call from 14 to 302 atoms
+  (62 atoms: 178 ms vs xTB 2113 / tblite 1635; 122: 641 vs 7395/5342),
+  because gpuxtb solves the whole ragged batch in one call across its worker
+  pool while the reference adapters loop systems serially.
+- **512 systems per call (batch = 512, cold):** the new high-throughput
+  panel. gpuxtb CPU is ~20-30x faster than xTB/tblite (62: 1139 ms vs
+  26471/29313; 122: 4633 vs 91984/99209), and gpuxtb CUDA ~10-25x faster
+  (62: 1093 ms vs 26471/29313), i.e. a 512-system call completes in about
+  a second to a few seconds where the references need tens of seconds to
+  a minute and a half.
+- **gpuxtb CUDA:** at batch=1 the GPU rows carry a fixed per-call cost
+  (14-62 ms at 14-32 atoms) and a slower force stage at 362 atoms
+  (10 161 ms). At batch=128/512 the overhead amortizes and CUDA matches or
+  beats CPU (@242 x 128: 2576 ms vs CPU 2761; @122 x 512: 3797 ms vs CPU
+  4633), far ahead of the serial reference loops.
 
 Reproduce it with the committed runner, then regenerate the figure:
 
@@ -142,22 +144,24 @@ srun -n 1 -c 16 python3 benchmarks/natoms_cross_engine.py \
   --tblite-library /path/to/libtblite.so.0.7.0 \
   --engines gpuxtb-cpu,xtb,tblite --natoms 14,32,62,122,242,362 \
   --batch-sizes 1 --warmups 1 --repetitions 5 --cpu-threads 16 \
-  --start-policy cold \
+  --start-policy cold --scc-charge-tolerance 1e-4 --scc-energy-tolerance 1e-4 \
   --output-json build/benchmarks/final/cold.json --output-csv build/benchmarks/final/cold.csv
 
-# batch = 128 auto-warm matrix (panel 2), ngine=same but --batch-sizes 128
-# --natoms-large-batch 14,32,62,122 --start-policy auto-warm, then:
-# trajectory panel (WARM) with --trajectory flags, then:
+# batch = 128 auto-warm matrix (panel 2): --batch-sizes 128
+# --natoms-large-batch 14,32,62,122,242,302 --start-policy auto-warm, then:
+# batch = 512 cold matrix (panel 3): --batch-sizes 512
+# --natoms-large-batch 14,32,62,122 --start-policy cold, then:
 python3 benchmarks/plot_natoms_cross_engine.py \
   --artifact build/benchmarks/final/cold.json --artifact build/benchmarks/final/b128.json \
-  --artifact build/benchmarks/final/traj.json \
+  --artifact build/benchmarks/final/b512.json \
   --commit "$(git rev-parse HEAD)" \
   --output docs/assets/natoms_cross_engine.svg
 ```
 
 xTB and tblite expose the same `libtblite.so.0` SONAME but need different
 tblite versions, so run their rows in separate processes (as the archived
-evidence does). dxtb rows need its dedicated environment. Plotting requires
+evidence does). dxtb rows need its dedicated environment (with `tad-libcint`
+installed, matching dxtb's recommended GFN2 configuration). Plotting requires
 matplotlib in the active Python environment.
 
 The same public-API protocol measures energy-only and force workloads, host or

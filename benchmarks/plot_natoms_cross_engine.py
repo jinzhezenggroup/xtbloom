@@ -9,8 +9,8 @@ keeps only correctness-qualified ``available`` rows, and draws:
    (all engines that succeeded; gpuxtb lines highlighted);
 2. ``batch=128``: same latency axis for ragged batches of 128 *distinct*
    systems (gpuxtb highlighted);
-3. MD-trajectory: per-frame latency vs molecule size for nearly identical
-   coordinate sequences (gpuxtb WARM highlighted).
+3. ``batch=512``: cold-start latency for ragged batches of 512 *distinct*
+   systems (gpuxtb highlighted).
 
 A footnote below the panels records the exact hardware (CPU model + worker
 count, GPU model) and the repository commit.  Reference engines without a
@@ -109,7 +109,7 @@ def _footnote_lines(metadata: dict[str, Any], commit: str) -> list[str]:
     gpu = hardware.get("nvidia_smi")
     if gpu:
         line.append(gpu.replace("\n", " "))
-    line.append("gpuxtb SCC 1e-10/1e-12; refs acc 1e-4")
+    line.append("all engines SCC accuracy 1e-4 (matched)")
     line.append("build: -O3 generic x86-64 (no -march=native); dxtb: PyTorch AVX2")
     line.append("gpuxtb batch=1: 1 of 16 workers active (outer-batch pool idle)")
     return line
@@ -181,60 +181,9 @@ def _scaling_panel(
     if batch_size == 128:
         axes.set_title("batch size = 128\n(first call cold, then WARM)")
     else:
-        axes.set_title("batch size = 1\n(cold start)")
+        axes.set_title(f"batch size = {batch_size}\n(cold start)")
     axes.grid(True, which="both", ls=":", alpha=0.5)
     axes.set_xscale(x_scale)
-
-
-def _trajectory_panel(
-    axes: Any,  # noqa: ANN401 - matplotlib axes
-    rows: list[dict[str, Any]],
-    engines: list[str],
-) -> None:
-    """Draw per-frame MD-trajectory latency vs molecule size, gpuxtb WARM."""
-    for engine in engines:
-        qualified = [
-            row
-            for row in rows
-            if _is_eligible(row)
-            and row.get("engine") == engine
-            and row.get("job") == "trajectory"
-            and row.get("batch_size") == 1
-        ]
-        qualified.sort(key=lambda row: row["natoms"])
-        if not qualified:
-            continue
-        x_values = [float(row["natoms"]) for row in qualified]
-        y_values = [_median_ms(row) for row in qualified if _median_ms(row) is not None]
-        if len(x_values) != len(y_values) or len(x_values) < 1:
-            continue
-        highlight = engine.startswith("gpuxtb")
-        axes.loglog(
-            x_values,
-            y_values,
-            marker="o",
-            markersize=(9 if highlight else 5),
-            linewidth=(3.2 if highlight else 1.6),
-            linestyle="-",
-            color=_engine_color(engine),
-            zorder=(5 if highlight else 2),
-            label=_engine_label(engine),
-        )
-        if not highlight:
-            axes.scatter(
-                x_values,
-                y_values,
-                marker="x",
-                s=14,
-                color=_engine_color(engine),
-                zorder=3,
-            )
-    axes.set_xlabel("molecule size (atoms)")
-    axes.set_ylabel("per-frame latency (ms)")
-    axes.set_title("MD trajectory (WARM)\n(nearly identical frames)")
-    axes.grid(True, which="both", ls=":", alpha=0.5)
-    axes.set_xscale("log")
-    axes.set_yscale("log")
 
 
 def _strip_svg_trailing_whitespace(path: Path) -> None:
@@ -301,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     _scaling_panel(axes_list[0, 0], rows, 1, args.engines, "log")
     _scaling_panel(axes_list[0, 1], rows, 128, args.engines, "log")
-    _trajectory_panel(axes_list[0, 2], rows, args.engines)
+    _scaling_panel(axes_list[0, 2], rows, 512, args.engines, "log")
 
     handles, labels = axes_list[0, 0].get_legend_handles_labels()
     if handles:
@@ -315,8 +264,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     title = (
         "gpuxtb GFN2-xTB energy + force inference scaling\n"
-        "batch = 1 (single molecule) | batch = 128 (128 distinct systems per "
-        "batch) | trajectory (WARM)"
+        "batch = 1 (single molecule) | batch = 128 (first call cold, then "
+        "WARM) | batch = 512 (cold)"
     )
     fig.suptitle(title, fontsize=13, y=1.18 if handles else 1.02)
     fig.supxlabel(

@@ -1,2 +1,0 @@
-engine,natoms,batch_size,total_atoms_in_batch,cpu_threads,device_id,job,availability,median_ms,mean_ms,p95_ms,min_ms,systems_per_second_at_median
-gpuxtb-cpu,302,128,38656,16,0,,available,5424.290058,5525.8501093333325,6295.367063,4857.893207,23.597558137810044

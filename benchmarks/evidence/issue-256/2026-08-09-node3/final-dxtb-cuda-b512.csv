@@ -1,0 +1,4 @@
+engine,natoms,batch_size,total_atoms_in_batch,cpu_threads,device_id,job,availability,median_ms,mean_ms,p95_ms,min_ms,systems_per_second_at_median
+dxtb-cuda,14,512,7168,16,0,,available,3465.7469389999997,3474.860254666666,3566.086454,3392.747371,147.7315017546352
+dxtb-cuda,32,512,16384,16,0,,available,15732.329425999998,15665.763688333333,15745.087529999999,15519.874108999998,32.544449466831296
+dxtb-cuda,62,512,31744,16,0,,error,,,,,

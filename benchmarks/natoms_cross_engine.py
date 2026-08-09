@@ -315,11 +315,20 @@ def build_trajectory(
 
 def configure_gpuxtb_scc(
     options: Any,  # noqa: ANN401 - ctypes compute-options mirror
+    charge_tolerance: float = 1.0e-10,
+    energy_tolerance: float = 1.0e-12,
+    max_iterations: int = 500,
 ) -> None:
-    """Pin the same SCC convergence controls as the conformance oracle."""
-    options.max_scc_iterations = 500
-    options.charge_tolerance = 1.0e-10
-    options.energy_tolerance = 1.0e-12
+    """Pin the SCC convergence controls on a gpuxtb options object.
+
+    Defaults match the conformance oracle.  A tolerance-matched benchmark
+    (e.g. ``--scc-charge-tolerance 1e-4 --scc-energy-tolerance 1e-4``) lets
+    gpuxtb stop at the same accuracy the reference engines use (their
+    ``accuracy=1e-4``), removing the strict-tolerance iteration gap.
+    """
+    options.max_scc_iterations = max_iterations
+    options.charge_tolerance = charge_tolerance
+    options.energy_tolerance = energy_tolerance
 
 
 def cuda_synchronize(
@@ -342,6 +351,9 @@ class GpuxtbRunner:
         backend: str,
         cpu_threads: int,
         device_id: int,
+        scc_charge_tolerance: float = 1.0e-10,
+        scc_energy_tolerance: float = 1.0e-12,
+        scc_max_iterations: int = 500,
     ) -> None:
         self.library = public_api._configure_library(library_path)
         self.storage = storage
@@ -371,7 +383,12 @@ class GpuxtbRunner:
         self.options.model = public_api.GPUXTB_MODEL_GFN2_XTB
         self.options.flags = public_api.GPUXTB_COMPUTE_ENERGY
         self.options.flags |= public_api.GPUXTB_COMPUTE_FORCES
-        configure_gpuxtb_scc(self.options)
+        configure_gpuxtb_scc(
+            self.options,
+            charge_tolerance=scc_charge_tolerance,
+            energy_tolerance=scc_energy_tolerance,
+            max_iterations=scc_max_iterations,
+        )
         systems = len(storage.slices)
         atoms = len(storage.atomic_numbers)
         self.energies = (ctypes.c_double * systems)()
@@ -746,6 +763,9 @@ def run_cell(
     repetitions: int,
     energy_atol_hartree: float,
     start_policy: str = "auto-warm",
+    scc_charge_tolerance: float = 1.0e-10,
+    scc_energy_tolerance: float = 1.0e-12,
+    scc_max_iterations: int = 500,
 ) -> dict[str, Any]:
     """Measure one cell and return a complete row."""
     base = base_row(cell)
@@ -763,7 +783,14 @@ def run_cell(
         if cell.engine in ("gpuxtb-cpu", "gpuxtb-cuda"):
             backend = "cpu" if cell.engine == "gpuxtb-cpu" else "cuda"
             runner = GpuxtbRunner(
-                library, storage, backend, cell.cpu_threads, cell.device_id
+                library,
+                storage,
+                backend,
+                cell.cpu_threads,
+                cell.device_id,
+                scc_charge_tolerance=scc_charge_tolerance,
+                scc_energy_tolerance=scc_energy_tolerance,
+                scc_max_iterations=scc_max_iterations,
             )
         elif cell.engine == "xtb":
             if xtb_library is None:
@@ -835,6 +862,9 @@ def run_trajectory(
     warmups: int,
     repetitions: int,
     energy_atol_hartree: float,
+    scc_charge_tolerance: float = 1.0e-10,
+    scc_energy_tolerance: float = 1.0e-12,
+    scc_max_iterations: int = 500,
 ) -> dict[str, Any]:
     """Measure per-frame latency over one nearly identical MD-style trajectory."""
     base = {
@@ -855,7 +885,16 @@ def run_trajectory(
         try:
             if engine in ("gpuxtb-cpu", "gpuxtb-cuda"):
                 backend = "cpu" if engine == "gpuxtb-cpu" else "cuda"
-                runner = GpuxtbRunner(library, storage, backend, cpu_threads, device_id)
+                runner = GpuxtbRunner(
+                    library,
+                    storage,
+                    backend,
+                    cpu_threads,
+                    device_id,
+                    scc_charge_tolerance=scc_charge_tolerance,
+                    scc_energy_tolerance=scc_energy_tolerance,
+                    scc_max_iterations=scc_max_iterations,
+                )
             elif engine == "xtb":
                 if xtb_library is None:
                     row = dict(base)
@@ -999,9 +1038,9 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
             "cross_engine_energy_atol_hartree": args.energy_atol,
             "perturb_sigma_bohr": PERTURB_SIGMA_BOHR,
             "trajectory_step_sigma_bohr": TRAJECTORY_STEP_SIGMA_BOHR,
-            "scc_max_iterations": 500,
-            "scc_charge_tolerance": 1.0e-10,
-            "scc_energy_tolerance": 1.0e-12,
+            "scc_max_iterations": args.scc_max_iterations,
+            "scc_charge_tolerance": args.scc_charge_tolerance,
+            "scc_energy_tolerance": args.scc_energy_tolerance,
         },
     }
 
@@ -1038,7 +1077,12 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         "systems_per_second_at_median",
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=columns,
+            extrasaction="ignore",
+            lineterminator="\n",
+        )
         writer.writeheader()
         for row in rows:
             flat = dict(row)
@@ -1121,6 +1165,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cpu-threads", type=int, default=1)
     parser.add_argument("--dxtb-cpu-threads", type=int, default=1)
     parser.add_argument("--device-id", type=int, default=0)
+    parser.add_argument(
+        "--scc-charge-tolerance",
+        type=float,
+        default=1.0e-10,
+        help="gpuxtb SCC charge convergence tolerance",
+    )
+    parser.add_argument(
+        "--scc-energy-tolerance",
+        type=float,
+        default=1.0e-12,
+        help="gpuxtb SCC energy convergence tolerance",
+    )
+    parser.add_argument(
+        "--scc-max-iterations",
+        type=int,
+        default=500,
+        help="gpuxtb SCC iteration cap",
+    )
     return parser
 
 
@@ -1187,6 +1249,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.repetitions,
                 args.energy_atol,
                 start_policy=args.start_policy,
+                scc_charge_tolerance=args.scc_charge_tolerance,
+                scc_energy_tolerance=args.scc_energy_tolerance,
+                scc_max_iterations=args.scc_max_iterations,
             )
             # Record the SCC start policy on the cell row itself.  A
             # trajectory-invoked matrix cell (for example a batch=1 sample
@@ -1231,6 +1296,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         warmups=args.warmups,
                         repetitions=args.repetitions,
                         energy_atol_hartree=args.energy_atol,
+                        scc_charge_tolerance=args.scc_charge_tolerance,
+                        scc_energy_tolerance=args.scc_energy_tolerance,
+                        scc_max_iterations=args.scc_max_iterations,
                     )
                     rows.append(row)
                     if row["availability"] == "available":

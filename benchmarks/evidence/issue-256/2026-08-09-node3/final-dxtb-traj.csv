@@ -1,3 +1,0 @@
-engine,natoms,batch_size,total_atoms_in_batch,cpu_threads,device_id,job,availability,median_ms,mean_ms,p95_ms,min_ms,systems_per_second_at_median
-dxtb-cpu,32,1,32,16,0,trajectory,available,203.72043399999998,206.1067881111111,216.143529,202.261801,4.908687755888052
-dxtb-cpu,62,1,62,16,0,trajectory,available,348.91227449999997,352.69995316666666,364.593621,344.404921,2.866049930266928

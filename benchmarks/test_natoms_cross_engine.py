@@ -132,7 +132,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
             }
             for engine in ("gpuxtb-cpu", "xtb", "tblite")
             for natoms in (14, 32)
-            for batch_size in (1, 128)
+            for batch_size in (1, 128, 512)
         ]
         rows.append(
             {

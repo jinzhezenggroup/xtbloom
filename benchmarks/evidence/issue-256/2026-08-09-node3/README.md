@@ -1,19 +1,21 @@
-# Issue #256: corrected cross-engine benchmark, CPU + CUDA (cold / auto-warm / WARM)
+# Issue #256: matched-accuracy cross-engine benchmark, CPU + CUDA
+# (batch=1 cold / batch=128 auto-warm / batch=512 cold)
 
 Corrected-protocol measurements that replace the misleading archived #231 rows.
-Every engine runs with the same `--cpu-threads 16` budget on every panel, and
-each panel has explicit SCC start semantics:
+Every engine runs with the same `--cpu-threads 16` budget on every panel,
+with the **same SCC energy accuracy (1e-4)** and explicit start semantics:
 
 - **batch=1 (cold)**: every measured sample is a genuine cold start (gpuxtb
   FRESH; xTB/tblite rebuild their calculator; dxtb resets per call). Rows are
   `final-<engine>-cold.*`.
-- **batch=128 (auto-warm)**: the first call in a cell is cold (gpuxtb FRESH;
-  xTB/tblite/dxtb start cold by construction), every later warmup and measured
-  sample continues warm for gpuxtb (strict `WARM`), xTB and tblite (persistent
-  calculator). All 128 systems per call are distinct conformers. Rows are
-  `final-<engine>-b128.*`.
-- **trajectory (WARM)**: nearly identical MD frames; gpuxtb strict `WARM`,
-  references persistent. Rows are `final-<engine>-traj.*`.
+- **batch=128 (auto-warm)**: the first call in a cell is cold, every later
+  warmup and measured sample continues warm for gpuxtb (strict `WARM`), xTB
+  and tblite (persistent calculator). All 128 systems per call are distinct
+  conformers. Rows are `final-<engine>-b128.*`.
+- **batch=512 (cold)**: a ragged cold-start batch of 512 *distinct* systems
+  per call (gpuxtb FRESH each sample; references rebuilt per sample). Replaces
+  the earlier MD-trajectory panel, which duplicated the batch=1 regime. Rows
+  are `final-<engine>-b512.*`.
 
 xTB 6.7.1 and tblite 0.7.0 both export `libtblite.so.0` but need different
 tblite versions, so their rows are measured in separate processes
@@ -23,48 +25,49 @@ environment with 16 Torch intra-op threads.
 
 ## Data-correction note (2026-08-09)
 
-The first archived `final-<engine>-traj.*` files leaked one job-less
-steady-state batch=1 row (the auto-warm `--natoms 62` matrix cell that a
-trajectory invocation also runs) into the trajectory output. That warm row
-was ~3.6x cheaper than a genuine cold sample and made the batch=1 cold panel
-dip at 62 atoms. The runner now records each cell row's `start_policy`, the
-plotter excludes auto-warm rows from the batch=1 cold panel, and the leaked
-rows were removed from every archived `-traj` artifact. The earlier files
-without `start_policy` in their rows are treated as cold by the plotter.
-
-The CUDA rows in this archive were re-measured on 2026-08-09 at the PR merged
-head `506da8c5` (merge of main `fa05133` into `perf/natoms-readme-benchmark`,
-i.e. including CUDA fixes #247/#252/#254/#257) with the corrected runner.
-The previous #231 figures dropped CUDA entirely; the current figure restores
-`gpuxtb-cuda` and `dxtb-cuda` lines.
+- The first archived `final-<engine>-traj.*` files leaked one job-less
+  steady-state batch=1 row (the auto-warm `--natoms 62` matrix cell that a
+  trajectory invocation also runs) into the trajectory output, which made
+  the batch=1 cold panel dip at 62 atoms. The runner now records each cell
+  row's `start_policy` and the plotter excludes auto-warm rows from the
+  batch=1 cold panel. The MD-trajectory panel is removed entirely (it was
+  too similar to batch=1) and replaced by batch=512 cold.
+- SCC accuracy is now **matched at 1e-4 for every engine** (gpuxtb via
+  `--scc-charge-tolerance 1e-4 --scc-energy-tolerance 1e-4`; xTB/tblite keep
+  their default `accuracy=1e-4`, max 500 iterations). The earlier gpuxtb
+  rows ran conformance-tight 1e-10/1e-12, which forced strictly more SCC
+  iterations and made gpuxtb look 1.3-3.0x slower at batch=1; that gap was a
+  measurement artifact, not runtime behavior.
+- gpuxtb CPU and CUDA rows were re-measured on 2026-08-09 at the PR merged
+  head `b51452b` (origin/main merged into `perf/natoms-readme-benchmark`,
+  including CUDA fixes #247/#252/#254/#257/#259/#261). The 302-atom batch=128
+  CPU row is back inside `final-gpuxtb-b128.*` (the old separate
+  `final-gpuxtb-cpu-b128-302` file is gone).
 
 ## Environment
 
 - node3 (SLURM): Ubuntu 22.04.5, kernel 6.8.0-110, AMD EPYC 7K62 48-core,
   single socket; CPU rows pinned to 16 threads. Every GPU row ran under
   `srun -n 1 --gres=gpu:1 -c 16 -w node3`.
-- CPU gpuxtb: shared Release build `build/batch1-cpu/libgpuxtb.so.0.1.0` from
-  main-tree `81e3d67` (clean; dev timing instrumentation removed).
-- CUDA gpuxtb: shared Release build (sm_120, CUDA toolkit 12.9.1,
-  MKL LP64 shim) from the PR merged head `506da8c5`; runtime
+- CPU gpuxtb and CUDA gpuxtb: shared Release builds (`-O3`, MKL LP64 shim;
+  CUDA `sm_120`, NVCC 12.9.1) from the PR merged head `b51452b`; CUDA runtime
   `LD_LIBRARY_PATH=/group/software/cuda-12.9.1/targets/x86_64-linux/lib`.
 - GPU: NVIDIA GeForce RTX 5090 (32 GiB), driver 580.95.05 / CUDA 13.0
   driver. CUDA rows use host-pointed descriptors with a trailing
   `cudaDeviceSynchronize`; correctness downloads happen after timing.
 - xTB 6.7.1 `libxtb.so.6.7.1`; tblite 0.7.0 `libtblite.so.0.7.0`;
   dxtb 0.4.0 (PyTorch CPU 16 threads; PyTorch 2.13.0+cu130 on CUDA).
-- gpuxtb SCC conformance-tight (charge 1e-10, energy 1e-12, up to 500 iters);
-  xTB/tblite default acc 1e-4. gpuxtb timings include strictly more SCC work.
+- SCC accuracy: 1e-4 for every engine (matched), up to 500 iterations.
 
 ### Build and optimization flags (CPU fairness)
 
 No engine in this comparison was compiled with `-march=native`; the CPU rows
 therefore do not give any single engine a hard ISA advantage:
 
-- **gpuxtb CPU** (this benchmark's `build/batch1-cpu`): system GCC
-  (`/usr/bin/c++`), `-O3 -DNDEBUG`, generic x86-64 baseline (no `-march` /
-  `-mtune`). The eigensolve uses runtime-loaded MKL LP64 (issue #30 isolated
-  shim); MKL internally dispatches to AVX2/AVX512 at run time.
+- **gpuxtb CPU**: system GCC (`/usr/bin/c++`), `-O3 -DNDEBUG`, generic x86-64
+  baseline (no `-march` / `-mtune`). The eigensolve uses runtime-loaded MKL
+  LP64 (issue #30 isolated shim); MKL internally dispatches to AVX2/AVX512
+  at run time.
 - **xTB 6.7.1**: conda-forge binary, linked against conda OpenBLAS 0.3.33
   (runtime dispatch), gfortran/gcc from the conda env, generic x86-64.
 - **tblite 0.7.0** (`/tmp/tblite-pr169-6f7f1e2`): Meson `-Dbuildtype=release`
@@ -72,8 +75,7 @@ therefore do not give any single engine a hard ISA advantage:
   OpenBLAS 0.3.33, generic x86-64.
 - **dxtb 0.4.0**: pure Python over PyTorch 2.13.0+cu130; the PyTorch wheel
   reports CPU capability AVX2 and dispatches AVX2/AVX512 kernels at run time,
-  which (if anything) favors the reference side, yet dxtb remains
-  10-95x slower because framework/autograd overhead dominates.
+  which (if anything) favors the reference side.
 
 Both gpuxtb and the references thus run runtime-dispatching vendor BLAS (MKL
 vs OpenBLAS) on top of generic `-O3` builds, so the latency comparison is
@@ -83,7 +85,7 @@ same gpuxtb host build plus NVCC 12.9.1 kernels for `sm_120`.
 ## Commands
 
 Per engine group (xTB/tblite in separate processes, dxtb and GPU rows in their
-own processes/environments):
+own processes/environments). gpuxtb rows add the matched SCC flags:
 
 ```bash
 # panel 1 (cold)
@@ -91,20 +93,22 @@ python3 benchmarks/natoms_cross_engine.py --library <lib> \
   --engines <gpuxtb-cpu|xtb|tblite|dxtb-cpu> \
   --natoms 14,32,62,122,242,362 --batch-sizes 1 \
   --warmups 1 --repetitions 3 --cpu-threads 16 --start-policy cold \
+  --scc-charge-tolerance 1e-4 --scc-energy-tolerance 1e-4 \
   --output-json final-<engine>-cold.json --output-csv final-<engine>-cold.csv
 
 # panel 2 (batch=128, auto-warm)
 python3 benchmarks/natoms_cross_engine.py --library <lib> \
   --engines <engine> --natoms-large-batch 14,32,62,122,242,302 --batch-sizes 128 \
   --warmups 1 --repetitions 3 --cpu-threads 16 --start-policy auto-warm \
+  --scc-charge-tolerance 1e-4 --scc-energy-tolerance 1e-4 \
   --output-json final-<engine>-b128.json --output-csv final-<engine>-b128.csv
 
-# panel 3 (trajectory, WARM)
+# panel 3 (batch=512, cold)
 python3 benchmarks/natoms_cross_engine.py --library <lib> \
-  --engines <engine> --natoms 62 --batch-sizes 1 \
-  --warmups 1 --repetitions 3 --cpu-threads 16 \
-  --trajectory --trajectory-natoms 32,62,122,242 --trajectory-frames 6 \
-  --output-json final-<engine>-traj.json --output-csv final-<engine>-traj.csv
+  --engines <engine> --natoms-large-batch 14,32,62,122 --batch-sizes 512 \
+  --warmups 1 --repetitions 3 --cpu-threads 16 --start-policy cold \
+  --scc-charge-tolerance 1e-4 --scc-energy-tolerance 1e-4 \
+  --output-json final-<engine>-b512.json --output-csv final-<engine>-b512.csv
 
 # CUDA rows (same panels; dxtb-cuda via its environment)
 srun -n 1 --gres=gpu:1 -c 16 -w node3 bash -c ' \
@@ -112,85 +116,85 @@ srun -n 1 --gres=gpu:1 -c 16 -w node3 bash -c ' \
   python3 benchmarks/natoms_cross_engine.py --library <cuda-lib> \
   --engines gpuxtb-cuda --natoms 14,32,62,122,242,362 --batch-sizes 1 \
   --warmups 1 --repetitions 3 --cpu-threads 16 --start-policy cold \
+  --scc-charge-tolerance 1e-4 --scc-energy-tolerance 1e-4 \
   --output-json final-gpuxtb-cuda-cold.json --output-csv final-gpuxtb-cuda-cold.csv'
 ```
 
 Figure: `python3 benchmarks/plot_natoms_cross_engine.py --artifact ...-cold.json
---artifact ...-b128.json --artifact ...-traj.json --artifact final-gpuxtb-cpu-b128-302.json
+--artifact ...-b128.json --artifact ...-b512.json
 --artifact final-gpuxtb-cuda-cold.json --artifact final-gpuxtb-cuda-b128.json
---artifact final-gpuxtb-cuda-traj.json
+--artifact final-gpuxtb-cuda-b512.json
 --artifact final-dxtb-cuda-cold.json --artifact final-dxtb-cuda-b128.json
---artifact final-dxtb-cuda-traj.json --commit <sha> --output natoms_cross_engine.svg`
+--artifact final-dxtb-cuda-b512.json --commit <sha> --output natoms_cross_engine.svg`
 (also `docs/assets/natoms_cross_engine.svg`).
 
 ## Results (median energy+force latency, ms)
 
-Panel 1 (batch=1, cold start, 16 threads):
+Panel 1 (batch=1, cold start, 16 threads, SCC 1e-4):
 
-| natoms | gpuxtb CPU | gpuxtb CUDA | xTB | tblite | dxtb CPU | dxtb CUDA |
+| natoms | gpuxtb CPU | gpuxtb CUDA | xTB | tblite | dxtb CPU\* | dxtb CUDA\* |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 14 | 3.3 | 26.6 | 4.0 | 5.3 | 148.0 | 366.2 |
-| 32 | 19.8 | 80.2 | 15.6 | 18.6 | 206.1 | 400.7 |
-| 62 | 76.0 | 191.5 | 52.2 | 60.5 | 341.6 | 444.5 |
-| 122 | 339.3 | 565.6 | 178.7 | 205.8 | 748.0 | 513.2 |
-| 242 | 1679.9 | 2467.2 | 651.5 | 707.8 | -- | -- |
-| 362 | 4659.7 | 14628.9 | 1405.8 | 1545.3 | -- | -- |
+| 14 | 3.0 | 14.5 | 4.0 | 5.3 | 148.0 | 366.2 |
+| 32 | 10.9 | 38.2 | 15.6 | 18.6 | 206.1 | 400.7 |
+| 62 | 33.6 | 61.6 | 52.2 | 60.5 | 341.6 | 444.5 |
+| 122 | 120.3 | 171.7 | 178.7 | 205.8 | 748.0 | 513.2 |
+| 242 | 548.5 | 825.7 | 651.5 | 707.8 | -- | -- |
+| 362 | 1448.4 | 10160.9 | 1405.8 | 1545.3 | -- | -- |
 
 Panel 2 (batch=128, distinct conformers, first call cold then WARM, 16 threads):
 
 | natoms | gpuxtb CPU | gpuxtb CUDA | xTB | tblite | dxtb CPU\* | dxtb CUDA\* |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 14 | 15.3 | 28.1 | 205.4 | 181.8 | 1456.7 | 1162.7 |
-| 32 | 52.3 | 60.6 | 677.3 | 588.3 | 3938.3 | 2363.5 |
-| 62 | 174.4 | 216.9 | 2113.5 | 1634.8 | 16578.6 | 6755.7 |
-| 122 | 651.3 | 735.6 | 7394.7 | 5342.5 | -- | -- |
-| 242 | 3115.2 | 2851.9 | -- | -- | -- | -- |
-| 302 | 5424.3 | -- | -- | -- | -- | -- |
+| 14 | 18.2 | 28.2 | 205.4 | 181.8 | 1456.7 | 1162.7 |
+| 32 | 53.6 | 60.7 | 677.3 | 588.3 | 3938.3 | 2363.5 |
+| 62 | 177.6 | 182.0 | 2113.5 | 1634.8 | 16578.6 | 6755.7 |
+| 122 | 641.1 | 636.9 | 7394.7 | 5342.5 | -- | -- |
+| 242 | 2760.7 | 2576.3 | -- | -- | -- | -- |
+| 302 | 4520.2 | -- | -- | -- | -- | -- |
 
-\* dxtb resets per call by design (Torch autograd prevents warm continuation
-of the measured public path), so its rows are cold-every-call.
-
-The 302-atom gpuxtb CPU row is archived separately in
-`final-gpuxtb-cpu-b128-302.json/.csv`; it re-extends the batch=128 panel to
-the 302-atom sweep of the earlier revision (the corrected 16-thread value,
-5424 ms, replaces the old harness's 28 109 ms). gpuxtb CUDA stops at 242 as
-before: 302 x 128 systems exceeds the 32 GiB card in the first revision and
-was recorded unavailable.
-
-Panel 3 (trajectory, WARM continuation, ms/frame, 16 threads):
+Panel 3 (batch=512, cold start, 16 threads):
 
 | natoms | gpuxtb CPU | gpuxtb CUDA | xTB | tblite | dxtb CPU\* | dxtb CUDA\* |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 32 | 18.4 | 73.1 | 13.9 | 17.7 | 203.7 | 394.9 |
-| 62 | 70.8 | 178.1 | 48.9 | 53.6 | 348.9 | 436.4 |
-| 122 | 300.5 | 520.9 | 164.3 | 185.2 | -- | 508.9 |
-| 242 | 1785.9 | 2359.8 | 619.9 | 683.8 | -- | -- |
+| 14 | 64.9 | 207.0 | 1926.0 | 2398.2 | 6291.9 | 3465.7 |
+| 32 | 322.8 | 289.5 | 8216.3 | 9842.7 | 27699.0 | 15732.3 |
+| 62 | 1139.0 | 1093.5 | 26470.9 | 29313.2 | 122434.0 | OOM |
+| 122 | 4633.1 | 3797.5 | 91984.1 | 99209.3 | -- | -- |
+
+\* dxtb resets per call by design (Torch autograd prevents warm continuation
+of the measured public path), so its rows are cold-every-call. dxtb-cuda
+@62 x 512 ran out of device memory (OOM) and is recorded as error in
+`final-dxtb-cuda-b512.json`; the row is excluded from the figure.
 
 ## Key findings
 
-- With equal 16-thread budgets and honest cold/vs/warm semantics, gpuxtb's
-  real single-molecule disadvantage is 1.3-3.0x (cold) and 1.3-2.9x (WARM
-  trajectory), NOT the 6.4x in the archived #231 figure (which compared a
-  warm-continued 2-iteration tblite against FRESH 17-iteration gpuxtb).
-- gpuxtb batch=1 does not use its 16 annotated workers: FRESH @242 is 1593 ms
-  at cpu_threads=1 and 1592 ms at 16. The outer-batch pool is idle for one
-  system; issuing #256 records the measured per-iteration breakdown (~92 ms:
-  eigensolve 57, potentials+H 16.5, mulliken 14.4) and the dsyevd threading
-  ceiling (MKL 2.6x, OpenBLAS 1.6x at n=484).
-- gpuxtb's ragged-batch advantage is real and large: batch=128 from 14-122
-  atoms is 9-13x faster than xTB/tblite, because it parallelizes systems
-  across the worker pool while reference adapters loop serially.
-- gpuxtb CUDA is a fixed per-call cost at batch=1 (26-190 ms for 14-62
-  atoms; 362 atoms is dominated by a slow force stage, 14 629 ms) and
-  becomes competitive at batch=128 where the fixed overhead is amortized:
-  @242 x 128 systems gpuxtb CUDA (2852 ms) edges out gpuxtb CPU (3115 ms).
-  The re-measured batch=128 CUDA rows are 5-7x faster than the CUDA rows
-  archived under #231, which predated the #252/#254/#257 CUDA fixes.
+- **Matched accuracy changes the story at batch=1.** With every engine at
+  SCC 1e-4, gpuxtb CPU no longer carries a strict-tolerance iteration
+  penalty and is 1.2-1.7x *faster* than xTB/tblite at 14-242 atoms
+  (62: 33.6 ms vs 52.2/60.5; 242: 548 vs 651/708), reaching parity at 362
+  (1448 vs 1406/1545). The previous 1.3-3.0x "single-molecule gap" was the
+  conformance-tight 1e-10/1e-12 measurement artifact.
+- gpuxtb batch=1 does not use its 16 annotated workers (1 worker active;
+  the outer-batch pool is idle for a single system). At `--cpu-threads 1`
+  the batch=128 per-call advantage collapses toward 1.0-1.3x vs tblite
+  (62: 2792 ms vs 3508; 122: 9664 vs 10091), confirming the ragged-batch
+  speedup is a 16-worker cross-system parallelism effect, and that gpuxtb
+  per-system cost is otherwise comparable at equal accuracy.
+- **Ragged-batch advantage is large and real at 16 threads**: batch=128
+  gpuxtb CPU is ~10-12x faster than xTB/tblite per call (62: 178 vs 2113/
+  1635; extending to 302 atoms), and the new **batch=512 cold panel** shows
+  gpuxtb CPU ~20-30x faster (62: 1139 ms vs 26471/29313; 122: 4633 vs
+  91984/99209) and gpuxtb CUDA ~10-25x faster (62: 1093 ms vs 26471/29313),
+  because gpuxtb solves the whole ragged batch in one call across its worker
+  pool while the reference adapters loop systems serially.
+- gpuxtb CUDA at batch=1 carries a fixed per-call cost (14-192 ms up to 62
+  atoms) and a slow force stage at 362 atoms (10161 ms), but amortizes at
+  batch=128/512: @242 x 128 it is already faster than gpuxtb CPU (2576 vs
+  2761 ms), and at batch=512 @62-122 it is at or below CPU latency.
 
 ## Files
 
-- `final-<engine>-{cold,b128,traj}.json/.csv` for gpuxtb-cpu, xtb, tblite, dxtb-cpu
-- `final-gpuxtb-cpu-b128-302.json/.csv` (302-atom batch=128 extension, 2026-08-09)
-- `final-{gpuxtb-cuda,dxtb-cuda}-{cold,b128,traj}.json/.csv` (re-measured 2026-08-09)
+- `final-<engine>-{cold,b128,b512}.json/.csv` for gpuxtb-cpu, xtb, tblite, dxtb-cpu
+- `final-{gpuxtb-cuda,dxtb-cuda}-{cold,b128,b512}.json/.csv` (re-measured 2026-08-09)
 - `natoms_cross_engine.svg` (rendered figure)
 - `README.md`, `SHA256SUMS`
