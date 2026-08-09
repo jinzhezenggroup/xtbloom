@@ -178,12 +178,9 @@ def _scaling_panel(
     axes.set_xlabel("molecule size (atoms)")
     axes.set_ylabel("energy + force latency (ms)")
     if batch_size == 128:
-        axes.set_title(
-            f"batch size = {batch_size} "
-            "(128 distinct systems; first call cold, then WARM)"
-        )
+        axes.set_title("batch size = 128\n(first call cold, then WARM)")
     else:
-        axes.set_title(f"batch size = {batch_size} (cold-start)")
+        axes.set_title("batch size = 1\n(cold start)")
     axes.grid(True, which="both", ls=":", alpha=0.5)
     axes.set_xscale(x_scale)
 
@@ -233,9 +230,7 @@ def _trajectory_panel(
             )
     axes.set_xlabel("molecule size (atoms)")
     axes.set_ylabel("per-frame latency (ms)")
-    axes.set_title(
-        "MD-style trajectory (nearly identical frames), gpuxtb = WARM SCC continuation"
-    )
+    axes.set_title("MD trajectory (WARM)\n(nearly identical frames)")
     axes.grid(True, which="both", ls=":", alpha=0.5)
     axes.set_xscale("log")
     axes.set_yscale("log")
@@ -323,12 +318,9 @@ def main(argv: list[str] | None = None) -> int:
         "batch) | trajectory (WARM)"
     )
     fig.suptitle(title, fontsize=13, y=1.18 if handles else 1.02)
-    fig.text(
-        0.5,
-        0.012,
+    fig.supxlabel(
         "\n".join(_footnote_lines(metadata, commit)),
-        ha="center",
-        va="bottom",
+        x=0.5,
         fontsize=8,
         family="monospace",
         color="#444444",
