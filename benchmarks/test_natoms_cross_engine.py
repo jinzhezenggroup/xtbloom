@@ -149,6 +149,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
         for natoms in (5, 14, 32):
             storage = nce.build_batch(make_alkane(natoms), 8, seed=100 * natoms)
             self.assertEqual(len(storage.slices), 8)
+            self.assertEqual(storage.efields, [None] * 8)
             positions = [
                 tuple(storage.positions[3 * it.atom_begin : 3 * it.atom_end])
                 for it in storage.slices
@@ -289,6 +290,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
             import matplotlib  # noqa: F401
         except ImportError:
             self.skipTest("matplotlib is unavailable")
+        latency_scale = {"gpuxtb-cpu": 1.0, "xtb": 2.0, "tblite": 3.0}
         rows = [
             {
                 "engine": engine,
@@ -299,7 +301,11 @@ class NatomsCrossEngineTest(unittest.TestCase):
                     "auto-warm" if batch_size == 128 else "cold"
                 ),
                 "availability": "available",
-                "timing": {"median_ms": float(batch_size * natoms)},
+                # Keep synthetic series visibly distinct so a rendered layout
+                # preview cannot hide reference engines under the gpuxtb line.
+                "timing": {
+                    "median_ms": float(batch_size * natoms * latency_scale[engine])
+                },
                 "correctness": qualified_correctness(engine),
             }
             for engine in ("gpuxtb-cpu", "xtb", "tblite")

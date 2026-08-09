@@ -814,6 +814,7 @@ class BatchStorage:
     point_charge_positions: list[float]
     point_charge_values: list[float]
     point_charge_gammas: list[float]
+    efields: list[list[float] | None]
     slices: list[SystemSlice]
     keepalive: list[Any]
 
@@ -867,6 +868,7 @@ def build_batch(
         point_charge_positions=[],
         point_charge_values=[],
         point_charge_gammas=[],
+        efields=[None] * batch_size,
         slices=slices,
         keepalive=[],
     )
