@@ -1,5 +1,6 @@
 // gpuxtb's PyTorch integration as a compiled extension built against the
 // LibTorch Stable ABI (torch 2.10+).
+// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 //
 // TORCH_TARGET_VERSION floors the extension at the torch 2.10 stable symbol
 // set: building with newer headers only emits symbols that already existed in

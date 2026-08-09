@@ -9,7 +9,7 @@ import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
-SOURCE_SUFFIX = "python/src/gpuxtb_torch_ext.cpp"
+SOURCE_SUFFIX = "src/bindings/torch/gpuxtb_torch_ext.cpp"
 WHEEL_EXTENSION_PATH = "gpuxtb/lib/libgpuxtb_torch_ext.so"
 
 
@@ -45,16 +45,16 @@ def check_wheel(path: Path) -> None:
 def check_sdist(path: Path) -> None:
     """Require the non-package C++ source needed by downstream wheel builds."""
     names = _sdist_names(path)
-    roots = {PurePosixPath(name).parts[0] for name in names if PurePosixPath(name).parts}
+    roots = {
+        PurePosixPath(name).parts[0] for name in names if PurePosixPath(name).parts
+    }
     if len(roots) != 1:
         raise RuntimeError(
             f"{path} must contain exactly one archive root; found {sorted(roots)}"
         )
     expected = f"{next(iter(roots))}/{SOURCE_SUFFIX}"
     sources = sorted(
-        name
-        for name in names
-        if PurePosixPath(name).name == "gpuxtb_torch_ext.cpp"
+        name for name in names if PurePosixPath(name).name == "gpuxtb_torch_ext.cpp"
     )
     if sources != [expected]:
         raise RuntimeError(f"{path} must contain only {expected}; found {sources}")

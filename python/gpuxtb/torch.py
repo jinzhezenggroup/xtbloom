@@ -6,7 +6,8 @@ or CUDA device) with zero copy, and exposes exactly one analytic gradient:
 already evaluates.
 
 The native data plane lives in a compiled torch extension,
-``libgpuxtb_torch_ext`` (built from ``python/src/gpuxtb_torch_ext.cpp``), which is
+``libgpuxtb_torch_ext`` (built from
+``src/bindings/torch/gpuxtb_torch_ext.cpp``), which is
 written against the **LibTorch Stable ABI** (torch >= 2.10): it binds torch
 tensor data pointers directly to the public gpuxtb C ABI descriptors and runs
 one synchronous ``gpuxtb_compute`` per call, so the results (and gpuxtb's

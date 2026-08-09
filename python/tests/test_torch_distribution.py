@@ -58,7 +58,7 @@ def test_sdist_keeps_nonpackage_cpp(tmp_path: Path) -> None:
     sdist = tmp_path / "gpuxtb.tar.gz"
     with tarfile.open(sdist, "w:gz") as archive:
         payload = b"source"
-        info = tarfile.TarInfo("gpuxtb-0.1.0/python/src/gpuxtb_torch_ext.cpp")
+        info = tarfile.TarInfo("gpuxtb-0.1.0/src/bindings/torch/gpuxtb_torch_ext.cpp")
         info.size = len(payload)
         archive.addfile(info, io.BytesIO(payload))
     _CHECKER.check_sdist(sdist)
@@ -68,7 +68,7 @@ def test_sdist_keeps_nonpackage_cpp(tmp_path: Path) -> None:
     "wrong_path",
     [
         "gpuxtb-0.1.0/python/gpuxtb/_torch_ext/gpuxtb_torch_ext.cpp",
-        "gpuxtb-0.1.0/junk/python/src/gpuxtb_torch_ext.cpp",
+        "gpuxtb-0.1.0/junk/src/bindings/torch/gpuxtb_torch_ext.cpp",
     ],
 )
 def test_sdist_rejects_misplaced_cpp(tmp_path: Path, wrong_path: str) -> None:
@@ -76,7 +76,7 @@ def test_sdist_rejects_misplaced_cpp(tmp_path: Path, wrong_path: str) -> None:
     sdist = tmp_path / "gpuxtb.tar.gz"
     with tarfile.open(sdist, "w:gz") as archive:
         for name in (
-            "gpuxtb-0.1.0/python/src/gpuxtb_torch_ext.cpp",
+            "gpuxtb-0.1.0/src/bindings/torch/gpuxtb_torch_ext.cpp",
             wrong_path,
         ):
             payload = b"source"
