@@ -118,12 +118,13 @@ bool valid_options(const Gfn2EigensolverOptions& options) noexcept {
          (options.strategy != Gfn2EigensolverStrategy::kBatchedJacobi || options.jacobi != nullptr);
 }
 
-/* XsyevBatched, DsyevjBatched, DpotrfBatched, and DtrsmBatched are all
- * capture-capable in the CUDA 12.9 provider stack used by the production
- * sm_120 build. Keep the
- * decision conservative for older or mismatched runtime libraries: callers
- * can still execute through the explicit uncaptured-segment contract instead
- * of discovering an unsupported provider call halfway through capture. */
+/* This version gate enables the Graph-capable production route, but it is not
+ * a per-shape provider guarantee. CUDA 12.9 vector-mode XsyevBatched stops
+ * being capturable above 512 orbitals, so kAuto diverts 513-1024-orbital
+ * singletons to the device-only tridiagonal provider. Keep the decision
+ * conservative for older or mismatched runtime libraries: callers can still
+ * execute through the explicit uncaptured-segment contract instead of
+ * discovering an unsupported provider call halfway through capture. */
 Gfn2SccIterationProviderCaptureMode detect_provider_capture_mode(cublasHandle_t blas) noexcept {
 #if CUDART_VERSION >= 12090 && CUBLAS_VERSION >= 120901 && CUSOLVER_VERSION >= 11705
   int runtime_version = 0;
