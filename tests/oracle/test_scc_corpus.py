@@ -523,6 +523,35 @@ class RestrictedCorpusTest(unittest.TestCase):
         self.assertEqual(CPU_TRACE.status_bits(lanes[1][1]), (-1, 0))
         self.assertIn("niterations 0 terminal 3", lanes[1][2])
 
+    def test_mixer_flatten_helpers_match_residual_layout(self) -> None:
+        """Flatten mixed/raw multipoles in the canonical residual order."""
+        golden = json.loads((CORPUS_DIR / "h3_plus.json").read_text(encoding="utf-8"))
+        iteration = golden["iterations"][1]
+        flat = CPU_TRACE.flatten_multipoles(iteration)
+        expected = (
+            iteration["mixed_qsh"][0]
+            + [value for atom in iteration["mixed_dipoles"][0] for value in atom]
+            + [value for atom in iteration["mixed_quadrupoles"][0] for value in atom]
+        )
+        self.assertEqual(flat, expected)
+        self.assertEqual(
+            len(flat), golden["basis"]["n_shells"] + 9 * golden["basis"]["n_atoms"]
+        )
+        raw = CPU_TRACE.flatten_raw(iteration)
+        self.assertEqual(len(raw), len(flat))
+
+    def test_mixer_wrapper_requires_mixer_cases(self) -> None:
+        """Reject the mixer mode without a case list."""
+        wrapper = TOOL_DIR / "gpuxtb_scc_cpu_trace.py"
+        result = subprocess.run(
+            [sys.executable, str(wrapper), "--mixer", "mixer"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--mixer requires --mixer-cases", result.stdout)
+
     def test_wrapper_requires_exactly_one_mode(self) -> None:
         """Reject wrappers that select zero or multiple capture modes."""
         wrapper = TOOL_DIR / "gpuxtb_scc_cpu_trace.py"

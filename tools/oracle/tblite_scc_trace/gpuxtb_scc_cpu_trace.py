@@ -43,10 +43,11 @@ REPOSITORY_ROOT = TOOL_DIR.parents[2]
 CORPUS_DIR = REPOSITORY_ROOT / "data" / "conformance" / "scc-traces"
 COMPARE = TOOL_DIR / "gpuxtb_scc_compare.py"
 
-# gpuxtb_status_t values mirrored for the batch failure-lane assertions.
+# gpuxtb_status_t ABI values (mirrored from include/gpuxtb/gpuxtb.h) used for
+# the batch failure-lane assertions.
 STATUS_SUCCESS = 0
-STATUS_SCC_NOT_CONVERGED = 2
-STATUS_INTERNAL_ERROR = -1  # per-system numerical failure value used by the test
+STATUS_INTERNAL_ERROR = 6
+STATUS_SCC_NOT_CONVERGED = 7
 
 
 def canonicalize_capture(raw: str, case_id: str) -> dict:
@@ -256,13 +257,15 @@ def run_batch(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
     for index, (_, status_line, raw_body) in enumerate(lanes):
         status_value, banner_iterations = status_bits(status_line)
         if index == poison_index:
-            # The poisoned lane must fail its first preparation without
-            # advancing an iteration and without corrupting the peers.
-            if status_value == STATUS_SCC_NOT_CONVERGED or status_value == 0:
+            # The poisoned lane must fail exactly its first preparation (both
+            # INTERNAL_ERROR status and zero completed iterations) without
+            # corrupting the peers.
+            if status_value != STATUS_INTERNAL_ERROR:
                 failures += 1
                 print(  # noqa: T201
-                    f"batch lane {index}: FAIL expected per-system failure, "
-                    f"got status {status_value} iterations {banner_iterations}"
+                    f"batch lane {index}: FAIL expected INTERNAL_ERROR "
+                    f"(status {STATUS_INTERNAL_ERROR}), got {status_value} "
+                    f"iterations {banner_iterations}"
                 )
                 continue
             if banner_iterations != 0:
@@ -419,6 +422,124 @@ def run_replay(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
     return 1 if failures else 0
 
 
+def flatten_multipoles(iteration: dict) -> list[float]:
+    """Flatten one iteration's multipoles in the canonical residual order."""
+    return [
+        *iteration["mixed_qsh"][0],
+        *[value for atom in iteration["mixed_dipoles"][0] for value in atom],
+        *[value for atom in iteration["mixed_quadrupoles"][0] for value in atom],
+    ]
+
+
+def flatten_raw(iteration: dict) -> list[float]:
+    """Flatten one iteration's raw multipoles in the canonical residual order."""
+    return [
+        *iteration["raw_qsh"][0],
+        *[value for atom in iteration["raw_dipoles"][0] for value in atom],
+        *[value for atom in iteration["raw_quadrupoles"][0] for value in atom],
+    ]
+
+
+def run_mixer(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
+    """Replay the pinned golden residual sequence through gpuxtb's mixer."""
+    failures = 0
+    corpus_dir = arguments.corpus_dir
+    work_dir = arguments.work_dir
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    total_steps = 0
+    for case_id in arguments.mixer_cases:
+        golden_entry = goldens[case_id]
+        golden_path = corpus_dir / golden_entry["path"]
+        spec_path = corpus_dir / "specs" / f"{case_id}.spec"
+        golden = json.loads(golden_path.read_text(encoding="utf-8"))
+        iterations = golden["iterations"]
+        if not iterations:
+            continue
+        nat = golden["basis"]["n_atoms"]
+        nsh = golden["basis"]["n_shells"]
+        lines = [f"nat {nat} nsh {nsh} steps {len(iterations)}"]
+        dimension = nsh + 9 * nat
+        for logical_index, iteration in enumerate(iterations, start=1):
+            lines.append(f"step {logical_index}")
+            lines.append(
+                "mixed "
+                + " ".join(repr(value) for value in flatten_multipoles(iteration))
+            )
+            lines.append(
+                "raw " + " ".join(repr(value) for value in flatten_raw(iteration))
+            )
+        sequence_path = work_dir / f"{case_id}_sequence.txt"
+        sequence_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        result = subprocess.run(
+            [str(arguments.mixer), str(spec_path), str(sequence_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            failures += 1
+            print(  # noqa: T201
+                f"{case_id}: FAIL mixer replay died with "
+                f"{result.returncode}: {result.stderr}"
+            )
+            continue
+
+        # Parse the predicted next-mixed lines and compare to the golden.
+        predicted: dict[int, list[float]] = {}
+        for line in result.stdout.splitlines():
+            if line.startswith("predicted "):
+                parts = line.split()
+                predicted[int(parts[1])] = [float(value) for value in parts[2:]]
+        for logical_index in range(2, len(iterations) + 1):
+            total_steps += 1
+            if logical_index not in predicted:
+                failures += 1
+                print(  # noqa: T201
+                    f"{case_id} transition {logical_index - 1}->{logical_index}: "
+                    "FAIL no prediction emitted"
+                )
+                continue
+            expected = flatten_multipoles(iterations[logical_index - 1])
+            actual = predicted[logical_index]
+            if len(actual) != dimension:
+                failures += 1
+                print(  # noqa: T201
+                    f"{case_id} transition {logical_index - 1}->{logical_index}: "
+                    f"FAIL predicted length {len(actual)} != {dimension}"
+                )
+                continue
+            worst_absolute = 0.0
+            worst_path = ""
+            for component, (predicted_value, golden_value) in enumerate(
+                zip(actual, expected, strict=True)
+            ):
+                scale = max(abs(predicted_value), abs(golden_value))
+                tolerance = 1.0e-8 + 1.0e-9 * scale
+                absolute = abs(predicted_value - golden_value)
+                if absolute > tolerance and absolute > worst_absolute:
+                    worst_absolute = absolute
+                    worst_path = f"mixed[{component}]"
+            if worst_absolute == 0.0:
+                print(  # noqa: T201
+                    f"{case_id} transition {logical_index - 1}->{logical_index}: "
+                    "PASS (cpu_replay_v1)"
+                )
+            else:
+                failures += 1
+                print(  # noqa: T201
+                    f"{case_id} transition {logical_index - 1}->{logical_index}: "
+                    f"FAIL first above tolerance at {worst_path} "
+                    f"(abs_err={worst_absolute:.6e})"
+                )
+    if failures:
+        print(f"{failures} mixer transition comparisons failed")  # noqa: T201
+    else:
+        print(f"all {total_steps} mixer transition comparisons passed")  # noqa: T201
+    return 1 if failures else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for the CPU trace comparison tool."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -436,6 +557,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--replay",
         type=Path,
         help="path to the gpuxtb_scc_trace_replay executable",
+    )
+    parser.add_argument(
+        "--mixer",
+        type=Path,
+        help="path to the gpuxtb_scc_trace_mixer executable",
     )
     parser.add_argument(
         "--profile",
@@ -476,20 +602,29 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="*",
         help="restricted cases whose every iteration is replayed (default: none)",
     )
+    parser.add_argument(
+        "--mixer-cases",
+        nargs="*",
+        help="restricted cases whose golden residual sequence is mixer-replayed "
+        "(default: none)",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the requested capture/batch/replay modes and exit non-zero on fail."""
+    """Run the requested capture/batch/replay/mixer modes; non-zero on fail."""
     arguments = build_parser().parse_args(argv)
 
     modes = [
         arguments.capture is not None,
         arguments.batch_capture is not None,
         arguments.replay is not None,
+        arguments.mixer is not None,
     ]
     if sum(modes) != 1:
-        print("exactly one of --capture, --batch-capture, --replay is required")  # noqa: T201
+        print(  # noqa: T201
+            "exactly one of --capture, --batch-capture, --replay, --mixer is required"
+        )
         return 2
 
     corpus_dir = arguments.corpus_dir
@@ -503,10 +638,15 @@ def main(argv: list[str] | None = None) -> int:
             print("--batch-capture requires --batch-cases")  # noqa: T201
             return 2
         return run_batch(arguments, goldens)
-    if not arguments.replay_cases:
-        print("--replay requires --replay-cases")  # noqa: T201
+    if arguments.replay is not None:
+        if not arguments.replay_cases:
+            print("--replay requires --replay-cases")  # noqa: T201
+            return 2
+        return run_replay(arguments, goldens)
+    if not arguments.mixer_cases:
+        print("--mixer requires --mixer-cases")  # noqa: T201
         return 2
-    return run_replay(arguments, goldens)
+    return run_mixer(arguments, goldens)
 
 
 if __name__ == "__main__":

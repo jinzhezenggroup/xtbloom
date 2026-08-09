@@ -42,14 +42,12 @@ int main(int argc, char** argv) {
     std::cerr << "geometry build failed: " << err << "\n";
     return static_cast<int>(s);
   }
-  if (gpuxtb_status_t s = batch.inject_mixed_state(0, argv[2], err);
-      s != GPUXTB_STATUS_SUCCESS) {
+  if (gpuxtb_status_t s = batch.inject_mixed_state(0, argv[2], err); s != GPUXTB_STATUS_SUCCESS) {
     std::cerr << "state injection failed: " << err << "\n";
     return static_cast<int>(s);
   }
   batch.set_replay_context(0, logical_index, previous_energy);
-  if (gpuxtb_status_t s = batch.restart_mixer_system(0, err);
-      s != GPUXTB_STATUS_SUCCESS) {
+  if (gpuxtb_status_t s = batch.restart_mixer_system(0, err); s != GPUXTB_STATUS_SUCCESS) {
     std::cerr << "mixer restart failed: " << err << "\n";
     return static_cast<int>(s);
   }

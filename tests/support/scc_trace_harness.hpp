@@ -194,9 +194,7 @@ class TraceBatch {
   TraceBatch& operator=(const TraceBatch&) = delete;
 
   std::int64_t system_count() const noexcept { return static_cast<std::int64_t>(specs_.size()); }
-  const CaseSpec& spec(std::int64_t index) const {
-    return specs_[static_cast<std::size_t>(index)];
-  }
+  const CaseSpec& spec(std::int64_t index) const { return specs_[static_cast<std::size_t>(index)]; }
 
   gpuxtb_status_t system_status(std::int64_t index) const;
   std::uint64_t system_iterations(std::int64_t index) const;
@@ -224,12 +222,24 @@ class TraceBatch {
   // Choose the injected state's logical iteration number and previous internal
   // energy so a replay of golden iteration k computes the same energy_delta
   // and convergence flags as tblite.
-  void set_replay_context(std::int64_t system, std::uint64_t logical_index,
-                          double previous_energy);
+  void set_replay_context(std::int64_t system, std::uint64_t logical_index, double previous_energy);
   // Re-capture one system's mixer current input from the injected wavefunction
   // state and clear its history, so a single-iteration replay's residual is
   // raw minus the injected golden mixed state (not the zero init).
   gpuxtb_status_t restart_mixer_system(std::int64_t system, std::string& err);
+  // Overwrite one system's multipole state from flattened vectors in the
+  // canonical residual order (qsh, then atom-major dipoles, then atom-major
+  // quadrupoles).  Used by the independent golden-residual mixer replay.
+  gpuxtb_status_t write_multipoles(std::int64_t system, const std::vector<double>& qsh,
+                                   const std::vector<double>& dpat, const std::vector<double>& qpat,
+                                   std::string& err);
+  // Run one production Broyden mixer transition for one system against its
+  // current wavefunction raw multipoles and mixer current input.  After a
+  // successful call the wavefunction multipoles hold the next mixed input.
+  gpuxtb_status_t mixer_mix(std::int64_t system, std::string& err);
+  // Return the wavefunction multipoles flattened in the residual order after
+  // a mixer transition (the next mixed input).
+  std::vector<double> next_mixed_flattened(std::int64_t system) const;
   // Advance every active system by exactly one driver iteration.  Successful
   // peers are committed even when another lane failed.
   gpuxtb_status_t step(std::string& err);
@@ -439,8 +449,8 @@ gpuxtb_status_t TraceBatch::build_geometry(std::string& err) {
   s = evaluate_overlap_cpu(g.basis, g.integrals, g.positions.data(), g.overlap.data(),
                            g.iscratch.data, g.iscratch.size, err);
   if (s) return s;
-  s = evaluate_multipole_cpu(g.basis, g.integrals, g.positions.data(), g.dint.data(),
-                             g.qint.data(), g.iscratch.data, g.iscratch.size, err);
+  s = evaluate_multipole_cpu(g.basis, g.integrals, g.positions.data(), g.dint.data(), g.qint.data(),
+                             g.iscratch.data, g.iscratch.size, err);
   if (s) return s;
   s = evaluate_h0_cpu(g.basis, g.integrals, g.h0_plan, g.positions.data(), g.cn.data(),
                       g.overlap.data(), g.h0.data(), err);
@@ -530,9 +540,9 @@ gpuxtb_status_t TraceBatch::build_geometry(std::string& err) {
 gpuxtb_status_t TraceBatch::build_stage(const CaseSpec& reference, std::string& err) {
   Geometry& g = *geometry_;
   auto stage = std::make_shared<Stage>();
-  gpuxtb_status_t s = make_scc_mixer_plan(g.layout, reference.mixer_memory, reference.mixer_damping,
-                                          kTbliteRmsTolerance, kTbliteRmsTolerance,
-                                          stage->mixer_plan, err);
+  gpuxtb_status_t s =
+      make_scc_mixer_plan(g.layout, reference.mixer_memory, reference.mixer_damping,
+                          kTbliteRmsTolerance, kTbliteRmsTolerance, stage->mixer_plan, err);
   if (s) return s;
   s = make_scc_driver_plan(g.layout, g.mulliken_plan, g.es2_plan, g.es3_plan, g.aes2_plan,
                            g.eig_plan, stage->mixer_plan, &g.d4_plan, nullptr,
@@ -686,6 +696,59 @@ gpuxtb_status_t TraceBatch::restart_mixer_system(std::int64_t system, std::strin
                                       stage_->mixer_state, err);
 }
 
+gpuxtb_status_t TraceBatch::write_multipoles(std::int64_t system, const std::vector<double>& qsh,
+                                             const std::vector<double>& dpat,
+                                             const std::vector<double>& qpat, std::string& err) {
+  Geometry& g = *geometry_;
+  const std::int64_t shell_begin = g.basis.batch_shell_offsets[system];
+  const std::int64_t shell_end = g.basis.batch_shell_offsets[system + 1u];
+  const std::int64_t atom_begin = g.layout.atom_offsets[system];
+  const std::int64_t atom_end = g.layout.atom_offsets[system + 1u];
+  const std::int64_t dip_base = g.layout.dipole.system_offsets[system];
+  const std::int64_t quad_base = g.layout.quadrupole.system_offsets[system];
+  const std::int64_t shells = shell_end - shell_begin;
+  const std::int64_t atoms = atom_end - atom_begin;
+  if (static_cast<std::int64_t>(qsh.size()) != shells ||
+      static_cast<std::int64_t>(dpat.size()) != 3 * atoms ||
+      static_cast<std::int64_t>(qpat.size()) != 6 * atoms) {
+    err = "multipole write has wrong element counts";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  for (std::int64_t local = 0; local < shells; ++local) {
+    g.wfn.qsh[shell_begin + local] = qsh[static_cast<std::size_t>(local)];
+  }
+  for (std::int64_t local = 0; local < 3 * atoms; ++local) {
+    g.wfn.dipole[dip_base + local] = dpat[static_cast<std::size_t>(local)];
+  }
+  for (std::int64_t local = 0; local < 6 * atoms; ++local) {
+    g.wfn.quadrupole[quad_base + local] = qpat[static_cast<std::size_t>(local)];
+  }
+  err.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t TraceBatch::mixer_mix(std::int64_t system, std::string& err) {
+  return mix_scc_broyden_system_cpu(stage_->mixer_plan, system, geometry_->wfn, stage_->mixer_state,
+                                    stage_->drv_ws.mixer_workspace, err);
+}
+
+std::vector<double> TraceBatch::next_mixed_flattened(std::int64_t system) const {
+  const Geometry& g = *geometry_;
+  const std::int64_t shell_begin = g.basis.batch_shell_offsets[system];
+  const std::int64_t shell_end = g.basis.batch_shell_offsets[system + 1u];
+  const std::int64_t atom_begin = g.layout.atom_offsets[system];
+  const std::int64_t atom_end = g.layout.atom_offsets[system + 1u];
+  const std::int64_t dip_base = g.layout.dipole.system_offsets[system];
+  const std::int64_t quad_base = g.layout.quadrupole.system_offsets[system];
+  std::vector<double> flattened;
+  flattened.insert(flattened.end(), g.wfn.qsh + shell_begin, g.wfn.qsh + shell_end);
+  flattened.insert(flattened.end(), g.wfn.dipole + dip_base,
+                   g.wfn.dipole + dip_base + 3 * (atom_end - atom_begin));
+  flattened.insert(flattened.end(), g.wfn.quadrupole + quad_base,
+                   g.wfn.quadrupole + quad_base + 6 * (atom_end - atom_begin));
+  return flattened;
+}
+
 gpuxtb_status_t TraceBatch::run(std::string& err) {
   Geometry& g = *geometry_;
   const std::int64_t batch = g.batch_size;
@@ -716,8 +779,7 @@ gpuxtb_status_t TraceBatch::run(std::string& err) {
 void TraceBatch::capture_mixed_pre_step() {
   Geometry& g = *geometry_;
   const std::int64_t batch = g.batch_size;
-  pending_mixed_.assign(static_cast<std::size_t>(batch),
-                        std::vector<std::vector<double>>(4u));
+  pending_mixed_.assign(static_cast<std::size_t>(batch), std::vector<std::vector<double>>(4u));
   for (std::int64_t system = 0; system < batch; ++system) {
     if (stage_->driver_state.system_statuses[system] != GPUXTB_STATUS_SUCCESS ||
         stage_->driver_state.converged[system] != 0u) {
@@ -780,18 +842,17 @@ void TraceBatch::record_iteration_snapshots() {
 
     const std::int64_t matrix_begin = g.mulliken_plan.matrix_offsets()[system];
     const std::int64_t matrix_end = g.mulliken_plan.matrix_offsets()[system + 1u];
-    const std::int64_t system_nao =
-        g.layout.eigenvalues.system_offsets[system + 1u] - eig_begin;
+    const std::int64_t system_nao = g.layout.eigenvalues.system_offsets[system + 1u] - eig_begin;
     row.hamiltonian.assign(st.drv_ws.hamiltonian + density_base,
                            st.drv_ws.hamiltonian + density_base + (matrix_end - matrix_begin));
-    row.density.assign(st.drv_ws.staged_wavefunction.density + density_base,
-                       st.drv_ws.staged_wavefunction.density + density_base +
-                           (matrix_end - matrix_begin));
+    row.density.assign(
+        st.drv_ws.staged_wavefunction.density + density_base,
+        st.drv_ws.staged_wavefunction.density + density_base + (matrix_end - matrix_begin));
     row.eigenvalues.assign(st.drv_ws.staged_wavefunction.eigenvalues + eig_begin,
                            st.drv_ws.staged_wavefunction.eigenvalues + eig_begin + system_nao);
-    row.occupations_alpha.assign(st.drv_ws.staged_wavefunction.occupations + occ_begin,
-                                 st.drv_ws.staged_wavefunction.occupations + occ_begin +
-                                     system_nao);
+    row.occupations_alpha.assign(
+        st.drv_ws.staged_wavefunction.occupations + occ_begin,
+        st.drv_ws.staged_wavefunction.occupations + occ_begin + system_nao);
     // Restricted: both channels share the same orbital occupations.
     row.occupations_beta = row.occupations_alpha;
 
@@ -802,8 +863,8 @@ void TraceBatch::record_iteration_snapshots() {
                                st.drv_ws.raw_quadrupoles + quad_end);
 
     if (!g.pc_shell_potential.empty()) {
-      row.point_charge_shell_potential.assign(
-          g.pc_shell_potential.begin() + shell_begin, g.pc_shell_potential.begin() + shell_end);
+      row.point_charge_shell_potential.assign(g.pc_shell_potential.begin() + shell_begin,
+                                              g.pc_shell_potential.begin() + shell_end);
       row.point_charge_energy.resize(static_cast<std::size_t>(shell_end - shell_begin));
       for (std::int64_t sh = shell_begin; sh < shell_end; ++sh) {
         row.point_charge_energy[static_cast<std::size_t>(sh - shell_begin)] =
@@ -829,16 +890,15 @@ void emit_int(std::ostream& output, std::int64_t value) { output << value << "\n
 
 void TraceBatch::emit(std::ostream& output, std::int64_t system) const {
   const Geometry& g = *geometry_;
-  const std::vector<CapturedIteration>& rows =
-      iterations_[static_cast<std::size_t>(system)];
+  const std::vector<CapturedIteration>& rows = iterations_[static_cast<std::size_t>(system)];
   const CaseSpec& spec = specs_[static_cast<std::size_t>(system)];
   const std::int64_t nat = spec.nat;
-  const std::int64_t nsh = g.basis.batch_shell_offsets[system + 1] -
-                           g.basis.batch_shell_offsets[system];
+  const std::int64_t nsh =
+      g.basis.batch_shell_offsets[system + 1] - g.basis.batch_shell_offsets[system];
   // Eigenvalue system offsets are per-orbital, so their span is nao (the
   // density offsets are matrix elements, nao*nao).
-  const std::int64_t nao = g.layout.eigenvalues.system_offsets[system + 1] -
-                           g.layout.eigenvalues.system_offsets[system];
+  const std::int64_t nao =
+      g.layout.eigenvalues.system_offsets[system + 1] - g.layout.eigenvalues.system_offsets[system];
   const std::int64_t matrix_begin = g.mulliken_plan.matrix_offsets()[system];
   const std::int64_t matrix_end = g.mulliken_plan.matrix_offsets()[system + 1u];
   const std::int64_t atom_begin = g.layout.atom_offsets[system];
@@ -849,7 +909,8 @@ void TraceBatch::emit(std::ostream& output, std::int64_t system) const {
   output << "nat " << nat << " nsh " << nsh << " nao " << nao << " niterations " << niterations
          << " terminal " << terminal << "\n";
   output << "atomic_numbers\n";
-  for (std::int64_t i = 0; i < nat; ++i) emit_int(output, spec.atomic_numbers[static_cast<std::size_t>(i)]);
+  for (std::int64_t i = 0; i < nat; ++i)
+    emit_int(output, spec.atomic_numbers[static_cast<std::size_t>(i)]);
   output << "positions\n";
   for (std::int64_t i = 0; i < nat; ++i) {
     emit_value(output, g.positions[static_cast<std::size_t>((atom_begin + i) * 3)]);
@@ -871,8 +932,8 @@ void TraceBatch::emit(std::ostream& output, std::int64_t system) const {
   output << "atom_to_shell_count\n";
   for (std::int64_t i = 0; i < nat; ++i) {
     const std::int64_t pos = static_cast<std::int64_t>(g.basis.atom_shell_offsets[atom_begin + i]);
-    const std::int64_t end = static_cast<std::int64_t>(
-        g.basis.atom_shell_offsets[atom_begin + i + 1]);
+    const std::int64_t end =
+        static_cast<std::int64_t>(g.basis.atom_shell_offsets[atom_begin + i + 1]);
     emit_int(output, end - pos);
   }
 

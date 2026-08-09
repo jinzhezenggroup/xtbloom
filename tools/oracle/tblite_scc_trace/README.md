@@ -256,10 +256,11 @@ standalone iteration snapshot.  It is intentionally a read-only comparison
 tool: it never generates or updates a golden file.  The replay harness
 (`gpuxtb_scc_trace_replay`) injects a golden mixed state, executes exactly one
 production CPU driver iteration, and emits the snapshot; the wrapper compares
-it with `compare_iteration` using the `cpu_replay_v1` profile.  The full
-closed-loop trajectory additionally replays the golden residual sequence
-through gpuxtb's Broyden mixer iteration by iteration, so the mixer state
-transitions are validated by the closed-loop gate itself.
+it with `compare_iteration` using the `cpu_replay_v1` profile.  The
+independent mixer harness (`gpuxtb_scc_trace_mixer`) additionally replays the
+pinned golden residual sequence through the production Broyden mixer alone so
+a self-consistent flatten-order defect cannot hide behind a matching physical
+trajectory.
 
 The built-in tolerance policies have stable versioned identifiers:
 
@@ -368,11 +369,17 @@ three modes:
   q/d/Q state and compared with the `cpu_replay_v1` single-iteration profile.
   A divergence is therefore assigned to the exact iteration where it first
   appears instead of inheriting Broyden drift; an injected perturbation in a
-  later iteration is reported only at that iteration.
+  later iteration is reported only at that iteration;
+- `--mixer`: `gpuxtb_scc_trace_mixer` replays the PINNED golden residual
+  sequence (raw minus mixed per iteration, in the canonical flatten order)
+  through gpuxtb's production Broyden mixer alone — no driver, no eigensolver.
+  Every state transition must reproduce the golden next mixed state, which
+  isolates the mixer's flatten order, damping, history, and transitions from
+  the physical trajectory.
 
 The native gates behind these modes are registered as CTest tests
 (`gpuxtb.gfn2.scc_trace_cpu_closed_loop`, `gpuxtb.gfn2.scc_trace_ragged_batch`,
-`gpuxtb.gfn2.scc_trace_cpu_replay`, and
+`gpuxtb.gfn2.scc_trace_cpu_replay`, `gpuxtb.gfn2.scc_trace_mixer_replay`, and
 `gpuxtb.gfn2.scc_trace_ragged_batch_native`) and are passing acceptance gates
-for the restricted CPU closed-loop, ragged-batch, and replay acceptance items
-of issue #42.
+for the restricted CPU closed-loop, ragged-batch, replay, and mixer-history
+acceptance items of issue #42.

@@ -46,8 +46,7 @@ std::string spec_path(const char* name) {
   return std::string(GPUXTB_SCC_TRACE_SPEC_DIR) + "/" + name + ".spec";
 }
 
-bool load(std::vector<CaseSpec>& specs, const std::vector<std::string>& names,
-          std::string& err) {
+bool load(std::vector<CaseSpec>& specs, const std::vector<std::string>& names, std::string& err) {
   for (const std::string& name : names) {
     CaseSpec spec;
     if (!load_spec(spec_path(name.c_str()), spec, err)) {
@@ -99,9 +98,8 @@ int test_early_convergence_freezes_while_peers_advance() {
   for (std::uint64_t step_count = 0u; step_count < kMaximumHarnessIterations; ++step_count) {
     bool any_active = false;
     for (std::int64_t system = 0; system < batch.system_count(); ++system) {
-      const bool active =
-          batch.system_status(system) == GPUXTB_STATUS_SUCCESS &&
-          !batch.system_converged(system) && batch.system_iterations(system) < 256u;
+      const bool active = batch.system_status(system) == GPUXTB_STATUS_SUCCESS &&
+                          !batch.system_converged(system) && batch.system_iterations(system) < 256u;
       any_active = any_active || active;
     }
     if (!any_active) {
@@ -165,8 +163,8 @@ int test_failure_lane_is_isolated_from_peers() {
   }
   // Lane 3 is the controlled per-system preparation failure (NaN H0).
   batch.poison_h0(3);
-  if (gpuxtb_status_t s = batch.run(err); s != GPUXTB_STATUS_SUCCESS &&
-                                             s != GPUXTB_STATUS_INTERNAL_ERROR) {
+  if (gpuxtb_status_t s = batch.run(err);
+      s != GPUXTB_STATUS_SUCCESS && s != GPUXTB_STATUS_INTERNAL_ERROR) {
     std::cerr << "run failed: " << err << "\n";
     return 1;
   }

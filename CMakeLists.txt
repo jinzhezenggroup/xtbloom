@@ -2603,6 +2603,16 @@ if(GPUXTB_BUILD_TESTS)
     )
     target_compile_features(gpuxtb_scc_trace_replay PRIVATE cxx_std_17)
 
+    add_executable(gpuxtb_scc_trace_mixer
+      tests/scc_trace_mixer_replay.cpp
+    )
+    target_include_directories(gpuxtb_scc_trace_mixer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+    target_link_libraries(gpuxtb_scc_trace_mixer PRIVATE
+      gpuxtb_gfn2_cpu
+      Threads::Threads
+    )
+    target_compile_features(gpuxtb_scc_trace_mixer PRIVATE cxx_std_17)
+
     # Native ragged-batch structure test: early-convergence freezing, per-lane
     # status/iteration/flags, controlled per-system failure isolation, and
     # disjoint per-system output placement under the CPU driver.  Registered
@@ -2672,6 +2682,22 @@ if(GPUXTB_BUILD_TESTS)
     )
     gpuxtb_configure_linalg_runtime_test(
       gpuxtb_scc_trace_replay gpuxtb.gfn2.scc_trace_cpu_replay
+    )
+
+    # Independent Broyden mixer gate: replay the pinned golden residual
+    # sequence through gpuxtb's production mixer alone and check every state
+    # transition reproduces the golden next mixed state.
+    add_test(
+      NAME gpuxtb.gfn2.scc_trace_mixer_replay
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/gpuxtb_scc_cpu_trace.py
+              --mixer $<TARGET_FILE:gpuxtb_scc_trace_mixer>
+              --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+              --work-dir ${CMAKE_CURRENT_BINARY_DIR}/scc-trace-mixer
+              --mixer-cases h3_plus nenacl water_dimer_6pc_hardness
+    )
+    gpuxtb_configure_linalg_runtime_test(
+      gpuxtb_scc_trace_mixer gpuxtb.gfn2.scc_trace_mixer_replay
     )
   endif()
 
