@@ -26,6 +26,11 @@ IMPLIB_MANIFEST_PATH = "cmake/3rdparty/implib_manifest.json"
 IMPLIB_VENDOR_PATH = "cmake/3rdparty/implib"
 IMPLIB_REVISION = "6f4fc02ae058ef11848046af01a1a756f3229c29"
 IMPLIB_TREE = "5fbe7e9f2c4efe0c2be4d2eed409e81f35458ba4"
+TORCH_STABLE_MANIFEST_PATH = "cmake/3rdparty/torch-stable/manifest.json"
+TORCH_STABLE_VENDOR_PATH = "cmake/3rdparty/torch-stable"
+TORCH_STABLE_INCLUDE_SUBDIR = "include"
+TORCH_STABLE_REVISION = "2.12.1"
+TORCH_STABLE_TREE = "e2df0197562bc2b0f55ee910d9899ecaac465e78"
 ARRAY_API_COMPAT_LICENSE = "LICENSES/array-api-compat-MIT.txt"
 SOURCE_FILES = (
     "LICENSE",
@@ -48,6 +53,7 @@ SOURCE_FILES = (
     "data/parameters/d4_manifest.json",
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
+    TORCH_STABLE_MANIFEST_PATH,
 )
 COMMON_ARCHIVE_SUFFIXES = (
     "LICENSE",
@@ -72,6 +78,7 @@ SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/d4_manifest.json",
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
+    TORCH_STABLE_MANIFEST_PATH,
 )
 WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/gpuxtb/THIRD_PARTY_NOTICES.md",
@@ -82,6 +89,7 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/gpuxtb/provenance/d4_manifest.json",
     "share/licenses/gpuxtb/provenance/mctc_manifest.json",
     "share/licenses/gpuxtb/provenance/implib_manifest.json",
+    "share/licenses/gpuxtb/provenance/torch_stable_manifest.json",
     "share/licenses/gpuxtb/third-party/MIT.txt",
     "share/licenses/gpuxtb/third-party/BSD-3-Clause.txt",
     "share/licenses/gpuxtb/third-party/array-api-compat-MIT.txt",
@@ -106,6 +114,7 @@ INSTALL_FILES = (
     "share/licenses/gpuxtb/provenance/d4_manifest.json",
     "share/licenses/gpuxtb/provenance/mctc_manifest.json",
     "share/licenses/gpuxtb/provenance/implib_manifest.json",
+    "share/licenses/gpuxtb/provenance/torch_stable_manifest.json",
     "share/licenses/gpuxtb/third-party/d4/d4.NOTICE",
     "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING",
     "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING.LESSER",
@@ -128,6 +137,7 @@ NOTICE_TOKENS = (
     "edcfbbe39d411edc225e27315fbda3a204ddb023",
     "9ab8ca565e0f71d967587e0bca2015f7d689f19f",
     "6f4fc02ae058ef11848046af01a1a756f3229c29",
+    TORCH_STABLE_TREE,
     "No LAMMPS source code",
     "scipy-openblas32",
     "array-api-compat",
@@ -408,6 +418,106 @@ def _check_implib_provenance(root: Path) -> None:
         raise LicenseCheckError("implib vendored tree does not match the pinned tree")
 
 
+def _check_torch_stable_manifest(manifest: object) -> dict[str, tuple[str, str, str]]:
+    """Validate pinned LibTorch Stable ABI metadata and its file mapping."""
+    if not isinstance(manifest, dict):
+        raise LicenseCheckError("torch-stable manifest root must be an object")
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("license") != "BSD-3-Clause"
+        or manifest.get("upstream_repository") != "https://github.com/pytorch/pytorch"
+        or manifest.get("upstream_release") != TORCH_STABLE_REVISION
+        or manifest.get("source_path") != "torch/include"
+        or manifest.get("tree") != TORCH_STABLE_TREE
+    ):
+        raise LicenseCheckError("torch-stable manifest has incorrect pinned provenance")
+
+    declared: dict[str, tuple[str, str, str]] = {}
+    files = manifest.get("files")
+    if not isinstance(files, list) or len(files) != 49:
+        raise LicenseCheckError("torch-stable manifest must describe exactly 49 files")
+    for entry in files:
+        if not isinstance(entry, dict):
+            raise LicenseCheckError("torch-stable manifest has a non-object file entry")
+        path = entry.get("path")
+        mode = entry.get("mode")
+        blob = entry.get("git_blob")
+        sha256 = entry.get("sha256")
+        if (
+            not isinstance(path, str)
+            or not path
+            or Path(path).is_absolute()
+            or ".." in Path(path).parts
+            or mode not in ("100644", "100755")
+            or not isinstance(blob, str)
+            or len(blob) != 40
+            or not isinstance(sha256, str)
+            or len(sha256) != 64
+        ):
+            raise LicenseCheckError(
+                "torch-stable manifest contains an invalid file entry"
+            )
+        if path in declared:
+            raise LicenseCheckError(f"torch-stable manifest duplicates {path}")
+        declared[path] = (mode, blob, sha256)
+
+    declared_tree = _git_tree_id(
+        {path: (mode, blob) for path, (mode, blob, _sha256) in declared.items()}
+    )
+    if declared_tree != TORCH_STABLE_TREE:
+        raise LicenseCheckError(
+            "torch-stable manifest file entries do not match the pinned tree"
+        )
+    return declared
+
+
+def _check_torch_stable_provenance(root: Path) -> None:
+    """Verify the vendored torch-stable tree is exactly the pinned torch copy."""
+    manifest = json.loads(
+        (root / TORCH_STABLE_MANIFEST_PATH).read_text(encoding="utf-8")
+    )
+    declared = _check_torch_stable_manifest(manifest)
+
+    vendor_root = root / TORCH_STABLE_VENDOR_PATH
+    observed_paths = {
+        path.relative_to(vendor_root).as_posix()
+        for path in vendor_root.glob(f"{TORCH_STABLE_INCLUDE_SUBDIR}/**/*")
+        if path.is_file() or path.is_symlink()
+    }
+    expected = {f"{TORCH_STABLE_INCLUDE_SUBDIR}/{relative}" for relative in declared}
+    if observed_paths != expected:
+        missing = sorted(expected - observed_paths)
+        unexpected = sorted(observed_paths - expected)
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected " + ", ".join(unexpected))
+        raise LicenseCheckError(
+            "torch-stable vendored file set differs: " + "; ".join(details)
+        )
+
+    observed_tree: dict[str, tuple[str, str]] = {}
+    for relative, (expected_mode, expected_blob, expected_sha256) in declared.items():
+        path = vendor_root / TORCH_STABLE_INCLUDE_SUBDIR / relative
+        if path.is_symlink():
+            raise LicenseCheckError(
+                f"torch-stable vendored file must not be a symlink: {relative}"
+            )
+        data = path.read_bytes()
+        observed_blob = _git_object_id("blob", data)
+        observed_sha256 = hashlib.sha256(data).hexdigest()
+        if observed_blob != expected_blob or observed_sha256 != expected_sha256:
+            raise LicenseCheckError(
+                f"torch-stable vendored file differs from pinned bytes: {relative}"
+            )
+        observed_tree[relative] = (expected_mode, observed_blob)
+    if _git_tree_id(observed_tree) != TORCH_STABLE_TREE:
+        raise LicenseCheckError(
+            "torch-stable vendored tree does not match the pinned tree"
+        )
+
+
 def check_source(root: Path) -> None:
     """Validate project metadata, provenance, and derived-file SPDX tags."""
     _require_files(root, SOURCE_FILES, "source tree")
@@ -455,6 +565,7 @@ def check_source(root: Path) -> None:
             )
 
     _check_implib_provenance(root)
+    _check_torch_stable_provenance(root)
 
     gfn2 = json.loads(
         (root / "data/parameters/manifest.json").read_text(encoding="utf-8")
@@ -623,6 +734,50 @@ def _check_archived_implib(path: Path, names: set[str], wheel: bool) -> None:
             )
 
 
+def _check_archived_torch_stable(path: Path, names: set[str]) -> None:
+    """Validate the sdist carries the exact vendored LibTorch header tree."""
+    manifest_suffix = TORCH_STABLE_MANIFEST_PATH
+    manifest_name = _find_archive_name(names, manifest_suffix)
+    manifest_bytes = _read_archive_members(path, {manifest_name})[manifest_name]
+    declared = _check_torch_stable_manifest(json.loads(manifest_bytes.decode("utf-8")))
+
+    archive_root = manifest_name[: -len(manifest_suffix)]
+    vendor_prefix = (
+        archive_root
+        + TORCH_STABLE_VENDOR_PATH
+        + "/"
+        + TORCH_STABLE_INCLUDE_SUBDIR
+        + "/"
+    )
+    archived_vendor = {
+        name.removeprefix(vendor_prefix): name
+        for name in names
+        if name.startswith(vendor_prefix)
+    }
+    if set(archived_vendor) != set(declared):
+        missing = sorted(set(declared) - set(archived_vendor))
+        unexpected = sorted(set(archived_vendor) - set(declared))
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected " + ", ".join(unexpected))
+        raise LicenseCheckError(
+            "sdist torch-stable vendored file set differs: " + "; ".join(details)
+        )
+    vendor_payloads = _read_archive_members(path, set(archived_vendor.values()))
+    for relative, (_mode, expected_blob, expected_sha256) in declared.items():
+        data = vendor_payloads[archived_vendor[relative]]
+        if (
+            _git_object_id("blob", data) != expected_blob
+            or hashlib.sha256(data).hexdigest() != expected_sha256
+        ):
+            raise LicenseCheckError(
+                "sdist torch-stable vendored file differs from pinned bytes: "
+                f"{relative}"
+            )
+
+
 def check_archive(path: Path) -> None:
     """Require every distribution archive to retain the common legal set."""
     names = _archive_names(path)
@@ -644,6 +799,8 @@ def check_archive(path: Path) -> None:
             f"{path} bundles a CUDA/MKL provider library: {bundled[0]}"
         )
     _check_archived_implib(path, names, wheel=path.suffix == ".whl")
+    if path.suffix != ".whl":
+        _check_archived_torch_stable(path, names)
     leaked = sorted(
         name
         for name in names

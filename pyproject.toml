@@ -1,16 +1,5 @@
 [build-system]
-requires = [
-  "scikit-build-core>=0.9",
-  # Build-time requirement for the optional PyTorch stable-ABI extension
-  # (libgpuxtb_torch_ext): pip's PEP-517 isolation cannot see a torch that
-  # would otherwise be installed in the outer environment, so the extension's
-  # headers and libtorch_cpu must come from the isolated build env itself.
-  # Only the CPU wheel variant is needed to compile it; the shipped extension
-  # then works with whatever CPU/CUDA torch the end user installs, because the
-  # stable-ABI binary is version-portable. The rest of gpuxtb builds without
-  # torch.
-  "torch>=2.10",
-]
+requires = ["scikit-build-core>=0.9"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -103,6 +92,7 @@ minimum-version = "build-system.requires"
 sdist.include = [
   "cmake/3rdparty/implib/**",
   "cmake/3rdparty/implib_manifest.json",
+  "cmake/3rdparty/torch-stable/**",
   "data/parameters/*_manifest.json",
   "data/parameters/manifest.json",
 ]
@@ -178,8 +168,10 @@ before-build = "bash {package}/python/ci/install-cuda-wheel-deps.sh && bash {pac
 # The device link disables cudadevrt explicitly. NVIDIA libdevice compiler
 # output may still be present and remains covered by the additional permission.
 # The torch extension links only libtorch_cpu.so for its stable aoti_torch_*
-# C shim symbols; that library ships inside the torch package the runtime user
-# installs, so it is excluded (never bundled) exactly like the nvidia-* stack.
+# C shim symbols. With the vendored-headers + build-time-stub build the wheel is
+# produced in an environment that never installs torch, so auditwheel cannot
+# see libtorch_cpu.so and it is never bundled; the explicit exclude below is a
+# defensive no-op in case a future build environment pre-installs torch.
 repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel} --exclude libcublas.so.12 --exclude libcublasLt.so.12 --exclude libcusolver.so.11 --exclude libcusparse.so.12 --exclude libcudart.so.12 --exclude libnvJitLink.so.12 --exclude libcufft.so.11 --exclude libcurand.so.10 --exclude libcuda.so.1 --exclude libtorch_cpu.so"
 
 [tool.ruff]

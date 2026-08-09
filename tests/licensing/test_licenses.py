@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import shutil
+import tarfile
 import tempfile
 import unittest
 import zipfile
@@ -74,6 +75,17 @@ class LicenseArchiveTests(unittest.TestCase):
             wheel = Path(directory) / "gpuxtb-test.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "implib_manifest"):
+                CHECKER.check_archive(wheel)
+
+    def test_wheel_must_retain_torch_stable_provenance_manifest(self) -> None:
+        """Require the vendored LibTorch provenance manifest in wheels."""
+        names = self._valid_wheel_names()
+        missing = "gpuxtb/share/licenses/gpuxtb/provenance/torch_stable_manifest.json"
+        names.remove(missing)
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-license-test-") as directory:
+            wheel = Path(directory) / "gpuxtb-test.whl"
+            self._write_wheel(wheel, names)
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "torch_stable"):
                 CHECKER.check_archive(wheel)
 
     def test_wheel_must_retain_linking_exception(self) -> None:
@@ -253,6 +265,111 @@ class ImplibProvenanceTests(unittest.TestCase):
                 "vendored file differs.*arch/x86_64/config.ini",
             ):
                 CHECKER._check_implib_provenance(root)
+
+
+class TorchStableProvenanceTests(unittest.TestCase):
+    """Verify vendored LibTorch Stable ABI headers against their manifest."""
+
+    def _copy_payload(self, root: Path) -> None:
+        source = REPOSITORY / CHECKER.TORCH_STABLE_VENDOR_PATH
+        destination = root / CHECKER.TORCH_STABLE_VENDOR_PATH
+        destination.parent.mkdir(parents=True)
+        shutil.copytree(source, destination)
+        manifest = root / CHECKER.TORCH_STABLE_MANIFEST_PATH
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPOSITORY / CHECKER.TORCH_STABLE_MANIFEST_PATH, manifest)
+
+    def test_vendored_tree_matches_pinned_torch_release(self) -> None:
+        """Accept the checked-in torch-stable tree at its pinned release."""
+        CHECKER._check_torch_stable_provenance(REPOSITORY)
+
+    def test_unexpected_vendored_file_is_rejected(self) -> None:
+        """Reject undeclared files in the vendored torch-stable tree."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-torch-test-") as directory:
+            root = Path(directory)
+            self._copy_payload(root)
+            vendor_root = root / CHECKER.TORCH_STABLE_VENDOR_PATH
+            (
+                vendor_root
+                / CHECKER.TORCH_STABLE_INCLUDE_SUBDIR
+                / "torch"
+                / "unexpected.h"
+            ).parent.mkdir(parents=True, exist_ok=True)
+            (
+                vendor_root
+                / CHECKER.TORCH_STABLE_INCLUDE_SUBDIR
+                / "torch"
+                / "unexpected.h"
+            ).write_text("// unexpected\n", encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unexpected"):
+                CHECKER._check_torch_stable_provenance(root)
+
+    def test_modified_vendored_bytes_are_rejected(self) -> None:
+        """Reject modified bytes in a declared vendored torch-stable header."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-torch-test-") as directory:
+            root = Path(directory)
+            self._copy_payload(root)
+            modified = (
+                root
+                / CHECKER.TORCH_STABLE_VENDOR_PATH
+                / CHECKER.TORCH_STABLE_INCLUDE_SUBDIR
+                / "torch"
+                / "csrc"
+                / "stable"
+                / "tensor.h"
+            )
+            modified.write_bytes(modified.read_bytes() + b"// modified\n")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError,
+                "vendored file differs.*torch/csrc/stable/tensor.h",
+            ):
+                CHECKER._check_torch_stable_provenance(root)
+
+    def test_sdist_must_carry_the_pinned_header_tree(self) -> None:
+        """Accept an sdist whose vendored headers match the manifest bytes."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-torch-test-") as directory:
+            root = Path(directory)
+            archive = root / "gpuxtb-0.1.0.tar.gz"
+            with tarfile.open(archive, "w:gz") as tar:
+                tar.add(
+                    REPOSITORY / CHECKER.TORCH_STABLE_MANIFEST_PATH,
+                    arcname=f"gpuxtb-0.1.0/{CHECKER.TORCH_STABLE_MANIFEST_PATH}",
+                )
+                vendor_source = REPOSITORY / CHECKER.TORCH_STABLE_VENDOR_PATH
+                for relative in (vendor_source / "include").rglob("*"):
+                    if relative.is_file():
+                        rel = relative.relative_to(REPOSITORY).as_posix()
+                        tar.add(relative, arcname=f"gpuxtb-0.1.0/{rel}")
+            names = CHECKER._archive_names(archive)
+            CHECKER._check_archived_torch_stable(archive, names)
+
+    def test_sdist_with_modified_header_is_rejected(self) -> None:
+        """Reject an sdist whose vendored header bytes were altered."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-torch-test-") as directory:
+            root = Path(directory)
+            archive = root / "gpuxtb-0.1.0.tar.gz"
+            with tarfile.open(archive, "w:gz") as tar:
+                tar.add(
+                    REPOSITORY / CHECKER.TORCH_STABLE_MANIFEST_PATH,
+                    arcname=f"gpuxtb-0.1.0/{CHECKER.TORCH_STABLE_MANIFEST_PATH}",
+                )
+                vendor_source = REPOSITORY / CHECKER.TORCH_STABLE_VENDOR_PATH
+                for relative in (vendor_source / "include").rglob("*"):
+                    if relative.is_file():
+                        rel = relative.relative_to(REPOSITORY).as_posix()
+                        payload = relative.read_bytes()
+                        if rel.endswith("torch/csrc/stable/tensor.h"):
+                            payload += b"// modified\n"
+                        root_child = root / rel
+                        root_child.parent.mkdir(parents=True, exist_ok=True)
+                        root_child.write_bytes(payload)
+                        tar.add(root_child, arcname=f"gpuxtb-0.1.0/{rel}")
+            names = CHECKER._archive_names(archive)
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError,
+                "differs from pinned bytes.*tensor.h",
+            ):
+                CHECKER._check_archived_torch_stable(archive, names)
 
 
 class CudaWheelInspectionTests(unittest.TestCase):

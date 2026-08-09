@@ -231,9 +231,11 @@ gradient flowing through the `forces` output (the Hessian), raises
 `GPUxtbNotSupportedError`. Higher-order differentiation is likewise rejected
 explicitly rather than returning a partial or zero Hessian. The native data
 plane is a compiled extension written against the LibTorch Stable ABI
-(torch >= 2.10), so a single binary works across torch releases; building it
-needs a torch install, but the rest of gpuxtb builds and runs without torch.
-PyTorch is imported only when the op is called. See
+(torch >= 2.10), so a single binary works across torch releases; its stable
+headers are vendored in `cmake/3rdparty/torch-stable` and it links a
+build-time-only stub, so building gpuxtb never downloads or requires torch
+(torch is still required at runtime to call `gpuxtb_torch`). PyTorch is
+imported only when the op is called. See
 `docs/user-guide/python.md` for the full contract.
 
 ## Explicit point charges

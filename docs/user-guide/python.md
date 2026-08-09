@@ -247,8 +247,13 @@ exactly. Because only ABI-stable symbols are used, a single binary works across
 torch releases without per-version rebuilds.  The extension is optional: when
 the wheels were built without it (or Torch < 2.10 is installed), calling
 `gpuxtb_torch` raises a clear error instead of silently degrading. Building the
-extension needs a torch install for its stable headers and `libtorch_cpu.so`;
-the rest of gpuxtb still builds and runs without torch.
+extension never downloads or requires torch: its stable headers are vendored in
+`cmake/3rdparty/torch-stable` and it links a build-time-only stub
+`libtorch_cpu.so`, so the shipped binary simply carries `DT_NEEDED
+libtorch_cpu.so` and binds to the torch the end user already imported. Torch is
+still required at *runtime* to call `gpuxtb_torch`; the rest of gpuxtb builds
+and runs without torch. See `cmake/3rdparty/torch-stable/README.md` for
+provenance and regeneration.
 
 `gpuxtb_torch` is eager-only: it drives the native library through a custom op,
 which `torch.compile` cannot trace.  The op is therefore marked opaque to the

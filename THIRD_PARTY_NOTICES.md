@@ -26,26 +26,6 @@ runtime Python dependency only and is not bundled in gpuxtb source archives,
 native installs, or wheels; the canonical resolution is recorded in
 `pyproject.toml` and `uv.lock`.
 
-## PyTorch (build-time dependency of the optional torch extension)
-
-Repository: <https://github.com/pytorch/pytorch>
-
-License: `BSD-3-Clause` (`LICENSES/BSD-3-Clause.txt`; Copyright (c) 2016,
-Facebook, Inc.)
-
-The optional compiled torch integration `libgpuxtb_torch_ext` is written
-against the LibTorch Stable ABI and linked against `libtorch_cpu.so` solely to
-resolve the `aoti_torch_*` C shim symbols at load time. PyTorch is a
-build-time dependency only: its stable headers are needed to compile the
-extension, and `libtorch_cpu.so` must be present in the torch installation the
-end user imports at runtime. No PyTorch source, header, or binary is copied
-into gpuxtb source archives, native installs, or wheels; the extension carries
-a `DT_NEEDED` reference to `libtorch_cpu.so` which is resolved from the
-already-loaded torch. The torch version used to build is recorded in
-`pyproject.toml` (`torch>=2.10` in `[build-system].requires` for isolated
-wheel builds, and `torch-testing` in the dependency groups for the test
-environment) and in `uv.lock`.
-
 ## DLPack
 
 Specification: <https://github.com/dmlc/dlpack>
@@ -199,10 +179,33 @@ the public `gpuxtb_torch` CPU/autograd tests. The canonical resolution and
 artifact hashes, including PyTorch's separately installed transitive
 dependencies, are recorded in `uv.lock`. PyTorch is imported lazily by the
 optional integration and is not a gpuxtb runtime dependency, project extra,
-source-distribution payload, native install artifact, or bundled wheel file.
-The locked Linux resolution also installs NVIDIA CUDA provider packages under
-their vendor terms; those test-environment packages are likewise not
-redistributed in gpuxtb artifacts.
+native install artifact, or bundled wheel file. The locked Linux resolution
+also installs NVIDIA CUDA provider packages under their vendor terms; those
+test-environment packages are likewise not redistributed in gpuxtb artifacts.
+
+## LibTorch Stable ABI headers (vendored build input)
+
+Repository: <https://github.com/pytorch/pytorch>
+
+License: `BSD-3-Clause` (`LICENSES/BSD-3-Clause.txt`; Copyright (c) 2016,
+Facebook, Inc.)
+
+The optional compiled torch integration `libgpuxtb_torch_ext` is written
+against the LibTorch Stable ABI. The exact transitive `#include` closure of
+its stable-ABI headers is vendored in `cmake/3rdparty/torch-stable/` from the
+PyPI `torch 2.12.1` wheel so the extension compiles without downloading torch.
+Every file is pinned by Git blob and SHA-256 in
+`cmake/3rdparty/torch-stable/manifest.json` (tree `e2df0197562bc2b0f55ee910d9899ecaac465e78`), which is
+regenerated only through `tools/torch_stable_vendor.py --check`. The extension
+links a build-time-only stub `libtorch_cpu.so` that carries the real library's
+SONAME and defines exactly the `aoti_torch_*` / `torch_library_impl` /
+`torch_get_mutable_data_ptr` symbols the extension references; the shipped
+binary therefore has a plain `DT_NEEDED libtorch_cpu.so` that binds to the
+torch the end user already imported. The vendored headers and the stub are
+build-time inputs only: they are never copied into native installs or wheels
+(the sdist retains the pinned header tree so offline wheel builds remain
+possible). The extension itself loads on any torch >= 2.10 because
+`TORCH_TARGET_VERSION` floors the emitted symbol set at 2.10.
 
 ## OpenBLAS runtime dependency
 

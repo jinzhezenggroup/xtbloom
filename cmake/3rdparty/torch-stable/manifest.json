@@ -1,0 +1,305 @@
+{
+  "schema_version": 1,
+  "license": "BSD-3-Clause",
+  "upstream_repository": "https://github.com/pytorch/pytorch",
+  "upstream_release": "2.12.1",
+  "source_path": "torch/include",
+  "tree": "e2df0197562bc2b0f55ee910d9899ecaac465e78",
+  "comment": "LibTorch Stable ABI header closure vendored from the PyPI torch wheel; regenerate with tools/torch_stable_vendor.py. Build-time only: never copied into wheels or install trees.",
+  "files": [
+    {
+      "path": "torch/csrc/inductor/aoti_torch/c/macros.h",
+      "mode": "100644",
+      "git_blob": "e49cd39deac0c8f2f0a5939c1503f515abed0d04",
+      "sha256": "75b0f6b3367ccc40873d8b0a08e0bc953e16263ec29db90abe51abb01994979c"
+    },
+    {
+      "path": "torch/csrc/inductor/aoti_torch/c/shim.h",
+      "mode": "100644",
+      "git_blob": "f719828ba00d6c3e135267c6a42210483b9b1122",
+      "sha256": "5a3f16755defdabf3bdb26a68b05a0e83971161e6f7608c1c64872f7c9855863"
+    },
+    {
+      "path": "torch/csrc/inductor/aoti_torch/c/shim_deprecated.h",
+      "mode": "100644",
+      "git_blob": "964db6b0076c97bcbaac3bf5a831b6b87cec54c3",
+      "sha256": "f387d347aa83d1454d5d8f5a9a69fb2b5169e518fd9af2878c2916b483849828"
+    },
+    {
+      "path": "torch/csrc/stable/accelerator.h",
+      "mode": "100644",
+      "git_blob": "d2a35e58982b84057d85bc047b0d1491ade81071",
+      "sha256": "cda1517676dd098513436d6e6b2f23afc1311e07a7b19d3d6657d96be650b97a"
+    },
+    {
+      "path": "torch/csrc/stable/c/shim.h",
+      "mode": "100644",
+      "git_blob": "3844a3d5cc21df5163bd1b672019c0e13a070965",
+      "sha256": "610b0c1fe30c29029092d49ac6e99218b58ba4e8f88cd5e6f2f60132e250a1c0"
+    },
+    {
+      "path": "torch/csrc/stable/device_struct.h",
+      "mode": "100644",
+      "git_blob": "e7c478578cc09e198c2f6bc8d7d4dbfed8b4957b",
+      "sha256": "22d0eff988317d23730e8fc865ff6fbc0ebfbe56c2e667ea0c9d9869f0e28b9c"
+    },
+    {
+      "path": "torch/csrc/stable/library.h",
+      "mode": "100644",
+      "git_blob": "f12f0d768acfc361825875fb50565a0c5f8343ad",
+      "sha256": "dd60b1253855192f13eba7cdd80e81483387e6452e2da5bb076f2ba9b587ea7a"
+    },
+    {
+      "path": "torch/csrc/stable/stableivalue_conversions.h",
+      "mode": "100644",
+      "git_blob": "eece32c7eb33defaed09117fd53e89e475a3d4e7",
+      "sha256": "85355670f2faac76c0c5e5f4f9955d67db07286d4b81518fe218ba60df2d4f97"
+    },
+    {
+      "path": "torch/csrc/stable/tensor.h",
+      "mode": "100644",
+      "git_blob": "8762372a415cf30f429808980e0e2f2af7942b1d",
+      "sha256": "308c1be8aabd1fd472ff087dba28fae52114a70f8961d749e1423d60532f7fa3"
+    },
+    {
+      "path": "torch/csrc/stable/tensor_inl.h",
+      "mode": "100644",
+      "git_blob": "f6e7ecaf7456fdb9e9ae589f57b1c115b1857a58",
+      "sha256": "63240499baea26865c5da4bd42ebc9dae1ea05629a090d81d55380046b84ed22"
+    },
+    {
+      "path": "torch/csrc/stable/tensor_struct.h",
+      "mode": "100644",
+      "git_blob": "45461211955990e8c022bd6026ed6d1ab259858e",
+      "sha256": "8618bf8cb814edf1139ccefc9314e53ea12c5294be64dbbac387da95bba66caa"
+    },
+    {
+      "path": "torch/csrc/stable/version.h",
+      "mode": "100644",
+      "git_blob": "eeb4f9152546aab161d6ac468eb8f1d2221982e8",
+      "sha256": "f582be5a48b77f095a7aff56991092585500a3d5ebfc533786c5e7ccf0bc67b2"
+    },
+    {
+      "path": "torch/headeronly/core/DeviceType.h",
+      "mode": "100644",
+      "git_blob": "9db3ef2568d341fb9a341a36c02ac91c4dcca30f",
+      "sha256": "dd55facd654421fe4284bcba11429d5c438b301d08f2e20ee1c23a3dceba092e"
+    },
+    {
+      "path": "torch/headeronly/core/Layout.h",
+      "mode": "100644",
+      "git_blob": "62e34ff67b457ae3b6fb5ff4d804d85b3da9cb7a",
+      "sha256": "1c5a0d8abc5859561b01c3cefd4b675afde5840c18dfb44a733cc52a07f7c0ac"
+    },
+    {
+      "path": "torch/headeronly/core/MemoryFormat.h",
+      "mode": "100644",
+      "git_blob": "ad02a901e0169ad6c2e2169a90c72c88fb609097",
+      "sha256": "2bb43b5cb0a952729a16b2349390f58463902b95fba1b590010905edad4f547d"
+    },
+    {
+      "path": "torch/headeronly/core/ScalarType.h",
+      "mode": "100644",
+      "git_blob": "ce43ce6866cd954adc778cec54c3405d2d1569a1",
+      "sha256": "0bb2eb9bcae0540a9cbc37d8991fa5bdd97a54120767d7087a778c3a22a4f5be"
+    },
+    {
+      "path": "torch/headeronly/core/enum_tag.h",
+      "mode": "100644",
+      "git_blob": "f45f3f49e86fb315e6afd58c79d75141447e9395",
+      "sha256": "f7d3b8052bc6ea73c022c597932b7231dd8b3c1ef9c71ed914ef6ef548817682"
+    },
+    {
+      "path": "torch/headeronly/cpu/vec/intrinsics.h",
+      "mode": "100644",
+      "git_blob": "3cf427dae64bce378f9c284e0db6dd452cb0e3d5",
+      "sha256": "3d5dbf5308e68da5532807353e33deac849e3f32674cb29fe62ca750d1669c73"
+    },
+    {
+      "path": "torch/headeronly/cpu/vec/vec_half.h",
+      "mode": "100644",
+      "git_blob": "6ad37b1948306903ea4f92c64d8402ffa3423b23",
+      "sha256": "9176b69ded637b5b969f079cdbbdf6671f2357580d16545aef2c359365f90fda"
+    },
+    {
+      "path": "torch/headeronly/macros/Export.h",
+      "mode": "100644",
+      "git_blob": "14b26c18e7b1b702d2ecd1522e95001aaeb18d60",
+      "sha256": "6c2dbf6f93ebce560141d9260617b6307da710e003b1c1ea74bba205505070ef"
+    },
+    {
+      "path": "torch/headeronly/macros/Macros.h",
+      "mode": "100644",
+      "git_blob": "cef99df3f566fbbe091f9b5932ba00523fc3c127",
+      "sha256": "8e2bb536021a2bc804c58fc80bca381d7444c9009c897aa616628ae22d15269e"
+    },
+    {
+      "path": "torch/headeronly/macros/cmake_macros.h",
+      "mode": "100644",
+      "git_blob": "8b8894ca9473bffc5a7711b74df4ae48f01352bc",
+      "sha256": "6fe4adb1aeb6181ff6903ff6ca6f585baca3093bd7a17e66d65889ff8637a6df"
+    },
+    {
+      "path": "torch/headeronly/util/BFloat16.h",
+      "mode": "100644",
+      "git_blob": "9aa08c265bd2c9e67c34fab9838f5bcf010ab912",
+      "sha256": "cd57705b38b05660840228071eb0ee6dac46f350d1bdfa11496eca643790be69"
+    },
+    {
+      "path": "torch/headeronly/util/Deprecated.h",
+      "mode": "100644",
+      "git_blob": "88440a0242eb4e9e87433278006863fd38c5450d",
+      "sha256": "b7235cc049e385d1ecdcb6e02acb1d010a889e80c95cd860712835cf6b23de77"
+    },
+    {
+      "path": "torch/headeronly/util/Exception.h",
+      "mode": "100644",
+      "git_blob": "0e067244a50e15db01d65ecfeb5908c29aecaeba",
+      "sha256": "20956e0b77401847e1d0ce696a9ee1146c918b11203908f07d1f37085b1d4949"
+    },
+    {
+      "path": "torch/headeronly/util/Float4_e2m1fn_x2.h",
+      "mode": "100644",
+      "git_blob": "00075914cdc346af4d212f089731c5fea6943873",
+      "sha256": "1bbdf8c345b8a0e7b7e4a113f536a9ef8e845b24deec6e926cc9a8347bf2b748"
+    },
+    {
+      "path": "torch/headeronly/util/Float8_e4m3fn.h",
+      "mode": "100644",
+      "git_blob": "06d70e6b4982c908fd13b54a3530d11381453c72",
+      "sha256": "0b5bd8699bdc4e1c49cd483d64c8eb0caa7186bc6eb7c4ebccb45e2382a693ce"
+    },
+    {
+      "path": "torch/headeronly/util/Float8_e4m3fnuz.h",
+      "mode": "100644",
+      "git_blob": "4c11b3be05593fe3f9a2d8787750f546bd875bff",
+      "sha256": "8470fc9ff079655b64b4eaafea3c61b5d32d79a26dfb9255c8d7a111329c568e"
+    },
+    {
+      "path": "torch/headeronly/util/Float8_e5m2.h",
+      "mode": "100644",
+      "git_blob": "0aa856d0d5546fc53b7bf7148fefef72c563b262",
+      "sha256": "602101d6f81fe6b478daa61073a5685f3e3ac1e701b657c697945b5d246b05e3"
+    },
+    {
+      "path": "torch/headeronly/util/Float8_e5m2fnuz.h",
+      "mode": "100644",
+      "git_blob": "6b0f79b75adea4a994a3c44e666b73767b68c66d",
+      "sha256": "f3b3ed913de17ede4179d83048bdfdfb8280e3f2913ff74c156b39d571349e27"
+    },
+    {
+      "path": "torch/headeronly/util/Float8_e8m0fnu.h",
+      "mode": "100644",
+      "git_blob": "80d89439c90b939259e1ec20b0b0c0256d3ced84",
+      "sha256": "52d17d7786d2d9f9d350503f5071caed8de91b58adf7d5caa37662680ebb3ac1"
+    },
+    {
+      "path": "torch/headeronly/util/Float8_fnuz_cvt.h",
+      "mode": "100644",
+      "git_blob": "59fab8cc28dbfb2c9c8cb4951deaf2bb06dd06ec",
+      "sha256": "6952629a80a66607da8419a4451e345121b57927809e0e61ce17256536b94c33"
+    },
+    {
+      "path": "torch/headeronly/util/Half.h",
+      "mode": "100644",
+      "git_blob": "a9c0b166ba2ea825ee8c2933e519de40112dae6f",
+      "sha256": "af6fc3270b3f6f33e01cad633738fcbfc4f64995d4f6c12c8a4f7b3cf0b684ba"
+    },
+    {
+      "path": "torch/headeronly/util/HeaderOnlyArrayRef.h",
+      "mode": "100644",
+      "git_blob": "751ffef32bb1da3a00f3735f9f7200d805f3f9d2",
+      "sha256": "7ffa748e83a76e5dcc4e926e38479f86f44f0a0ff72f502e17477c52240aab3a"
+    },
+    {
+      "path": "torch/headeronly/util/Metaprogramming.h",
+      "mode": "100644",
+      "git_blob": "2589f338d35dbcf569e15966a788dd16130c0681",
+      "sha256": "8cf4809eb9dd718b2a9784aa91b71f7d408899e7e1409c509a535f775d76117d"
+    },
+    {
+      "path": "torch/headeronly/util/TypeList.h",
+      "mode": "100644",
+      "git_blob": "cd81f0cc1dcf97e0444ace259be265693c2935ec",
+      "sha256": "6dbb1f6ac43d2f6e2bc83b218329288ddc8bf7c8db01c15d8ebd3280bbb8c48e"
+    },
+    {
+      "path": "torch/headeronly/util/TypeSafeSignMath.h",
+      "mode": "100644",
+      "git_blob": "c33a286bc5b5577ee9ecd138170688c2906c9dfe",
+      "sha256": "1e363f9ad03e9e0bb7dafdf2fd4fca975492d516655bf384d668f2157306ce0a"
+    },
+    {
+      "path": "torch/headeronly/util/TypeTraits.h",
+      "mode": "100644",
+      "git_blob": "152b3f76eb0944a1ddadbee002b4f0787c36d15f",
+      "sha256": "0b84b479867c7d06671d000a65c9df302044d8fad9f26d16f1d8d56a0dbf9c91"
+    },
+    {
+      "path": "torch/headeronly/util/bit_cast.h",
+      "mode": "100644",
+      "git_blob": "3f357f8a06a985332cfa4c8850ceeac3a38dd585",
+      "sha256": "f9804d63b3d269d63222817723207efd1bd8d7d7af188561f99b7d562f25893f"
+    },
+    {
+      "path": "torch/headeronly/util/bits.h",
+      "mode": "100644",
+      "git_blob": "ac3deb8a6ee500c795d86a73cb6362f63dd41a51",
+      "sha256": "2b5490ba905396d931515007dbc2173bc550a8d7f578b918a8618c28a4fb8267"
+    },
+    {
+      "path": "torch/headeronly/util/complex.h",
+      "mode": "100644",
+      "git_blob": "733a22d5dbb7a52c9217dc21969d84135c91e4be",
+      "sha256": "0c1a096a9574c925bec3c42a2b2de6ba1d58bb196e9c90bfe0a53f631f371efd"
+    },
+    {
+      "path": "torch/headeronly/util/floating_point_utils.h",
+      "mode": "100644",
+      "git_blob": "1e60bd85c10fc529243db43aa30522f368a85816",
+      "sha256": "a37e889c098bcd4b783acad36cd78cd9d370093d316e39a43aa6307b04d9d61d"
+    },
+    {
+      "path": "torch/headeronly/util/qint32.h",
+      "mode": "100644",
+      "git_blob": "b1d89d3d9e1f3dc6ca0d095b9fc66e8e69137365",
+      "sha256": "3634017553154282354b134daed80438e49cbce2e98303eb4c720098894c4896"
+    },
+    {
+      "path": "torch/headeronly/util/qint8.h",
+      "mode": "100644",
+      "git_blob": "36178b6b78c69461407e6782754d30dd4538c1c4",
+      "sha256": "24837e55aa3bf30231d37d3c513f7c51155065d9977d85f7a13bb3aa53a2fbea"
+    },
+    {
+      "path": "torch/headeronly/util/quint2x4.h",
+      "mode": "100644",
+      "git_blob": "26517084985f362cb3446a855172fc180589ab31",
+      "sha256": "bd2a0eb2efab6936afd10225750594858a7d6d8f3c77f1c3dca9ff5577519bd3"
+    },
+    {
+      "path": "torch/headeronly/util/quint4x2.h",
+      "mode": "100644",
+      "git_blob": "cd83fe009a8a3c6d5d9725cd2c860e3f4529f58b",
+      "sha256": "3eef366492aedb5c2a8b6df660cb809ad4d6b6aec329a21e939e8bafdbbe3757"
+    },
+    {
+      "path": "torch/headeronly/util/quint8.h",
+      "mode": "100644",
+      "git_blob": "2c253d6686c9ef312244ef9af8a14d96c00d5c59",
+      "sha256": "d96eedb0f03cf1efe86e913d4ea5807a9ac85e38d9932ab03aabd7e93946cfeb"
+    },
+    {
+      "path": "torch/headeronly/util/shim_utils.h",
+      "mode": "100644",
+      "git_blob": "e0bf304329fe3c3a8d852a6ffbf289cab0c13491",
+      "sha256": "9b4c2defe288532c8fc0fd280f6065d53b1f2e208c11b554e1986c138867a648"
+    },
+    {
+      "path": "torch/headeronly/version.h",
+      "mode": "100644",
+      "git_blob": "90b28cd39d82bc7d0bd2532a8f0ff3b26f769d18",
+      "sha256": "02364879fd264355cffbe697ca65cb0ad940cdd19226451db531ca1189116987"
+    }
+  ]
+}
