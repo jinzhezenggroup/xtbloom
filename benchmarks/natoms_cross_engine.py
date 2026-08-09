@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Cross-engine GFN2-xTB atom-count scaling benchmark with distinct systems.
 
-This runner measures steady-state end-to-end GFN2-xTB inference latency from
-public interfaces only:
+This runner measures public single-point GFN2-xTB inference latency. Context,
+calculator, descriptor, and cold-reset construction happen outside the timed
+region; the timed boundary begins immediately before the public inference call
+and ends after synchronous host-visible energy and force publication:
 
 - ``gpuxtb`` CPU and CUDA through the committed ctypes conformance adapter
   (``gpuxtb_public_api``), exactly like ``natoms_scaling.py``;
@@ -13,9 +15,10 @@ For every molecule size and batch size the batch is built from *distinct*
 seeded thermal-like conformers of the same alkane stoichiometry (identical
 atomic numbers, slightly different coordinates), so an engine cannot win a
 batch row by reusing one identical geometry.  At batch size one the first slot
-keeps the clean ideal alkane geometry.  The sweep therefore reports honest
-per-system and per-batch steady-state latency, and the wide molecule-size axis
-exposes where each engine can and cannot go on this hardware.
+keeps the clean ideal alkane geometry. The sweep therefore reports comparable
+per-call latency rather than process or calculator setup time. ``auto-warm``
+rows are WARM steady state after an untimed cold seed; ``cold`` rows clear
+electronic state before every timed inference call.
 
 An optional MD-trajectory mode measures per-frame latency over a sequence of
 nearly identical frames (positions mutated in place through the persistent
@@ -23,14 +26,17 @@ host descriptors), exercising gpuxtb's sequential geometry path while the
 reference engines update their persistent structures per frame.
 
 Artifacts are two explicit JSON/CSV paths in the same style as the other
-benchmark harnesses: JSON is authoritative and retains raw samples, run
+benchmark harnesses. JSON is authoritative and retains raw timing samples,
+complete final energy/force vectors, force digests for every repetition, run
 identity, hardware, threads, correctness, and per-row diagnostics; CSV is the
-compact row summary.
+compact row summary. Final publication evidence rejects a dirty repository and
+can compare every row with a clean independent xTB reference artifact.
 """
 
 from __future__ import annotations
 
 import argparse
+import array
 import contextlib
 import csv
 import ctypes
@@ -79,7 +85,7 @@ try:
 except ImportError:
     from dxtb_adapter import DxtbAdapter, DxtbError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_NATOMS = (5, 32, 122, 362, 602, 962)
 DEFAULT_BATCH_SIZES = (1, 128)
 SUPPORTED_ENGINES = (
@@ -92,6 +98,7 @@ SUPPORTED_ENGINES = (
 )
 DEFAULT_ENGINES = ("gpuxtb-cpu", "gpuxtb-cuda", "xtb", "tblite", "dxtb-cpu")
 CROSS_ENGINE_ENERGY_ATOL_HARTREE = 2.0e-3
+CROSS_ENGINE_FORCE_ATOL_HARTREE_PER_BOHR = 2.0e-3
 PERTURB_SIGMA_BOHR = 0.02
 TRAJECTORY_STEP_SIGMA_BOHR = 0.01
 
@@ -218,6 +225,16 @@ class Cell:
     batch_size: int
     cpu_threads: int
     device_id: int
+
+
+@dataclass(frozen=True)
+class ReferenceArtifact:
+    """One clean xTB artifact used to qualify dependent engine rows."""
+
+    path: Path
+    sha256: str
+    metadata: dict[str, Any]
+    rows: dict[tuple[int, int], dict[str, Any]]
 
 
 @dataclass
@@ -611,27 +628,45 @@ class ReferenceRunner:
         self.adapter.close()
 
 
+def _force_digest(values: Sequence[float]) -> str:
+    """Hash one complete binary64 force vector in canonical little endian."""
+    packed = array.array("d", values)
+    if sys.byteorder != "little":
+        packed.byteswap()
+    return hashlib.sha256(packed.tobytes()).hexdigest()
+
+
+def _max_abs_delta(left: Sequence[float], right: Sequence[float]) -> float:
+    """Return the maximum absolute difference between equal-length vectors."""
+    if len(left) != len(right):
+        raise BenchmarkError(
+            f"vector length mismatch: observed {len(left)}, expected {len(right)}"
+        )
+    return max(
+        (abs(float(a) - float(b)) for a, b in zip(left, right, strict=True)),
+        default=0.0,
+    )
+
+
 def measure_cell(
     runner: Any,  # noqa: ANN401 - gpuxtb/xtb/tblite/dxtb adapter union
     protocol: tuple[int, int],
     cell: Cell,
     energy_atol_hartree: float,
+    force_atol_hartree_per_bohr: float,
     start_policy: str = "auto-warm",
 ) -> dict[str, Any]:
     """Run warmups and measured samples and return a normalized row fragment.
 
     ``start_policy`` controls SCC restart semantics for every engine:
 
-    - ``auto-warm`` (default, steady-state): the first call in each cell is a
-      cold FRESH solve for gpuxtb (reference engines start cold by
-      construction), every later warmup and all measured samples continue from
-      the converged state (gpuxtb strict WARM; xTB/tblite persistent warm).
-      This is the honest throughput semantics for repeated identical calls:
-      gpuxtb's batch-1 and batch-128 rows and xTB/tblite's persistent rows all
-      measure the same warm steady state after one cold seed.
-    - ``cold``: every warmup and measured sample is a genuine cold start
-      (gpuxtb FRESH; xTB/tblite rebuild their calculator; dxtb resets). Used
-      for panel-1 single-molecule cold-start rows.
+    - ``auto-warm``: one untimed cold seed establishes state, then every timed
+      sample continues from that converged state (gpuxtb strict WARM;
+      xTB/tblite persistent warm state).
+    - ``cold``: electronic state is cleared before every timed inference call
+      (gpuxtb FRESH; xTB/tblite calculator rebuild; dxtb reset). The reset or
+      rebuild itself is deliberately outside the timer, matching gpuxtb's
+      persistent-context boundary rather than claiming process/setup latency.
     """
     warmups, repetitions = protocol
     gpuxtb_runner = hasattr(runner, "set_start_mode")
@@ -651,6 +686,9 @@ def measure_cell(
             cold_start()
         runner.invoke()
     raw_samples: list[dict[str, Any]] = []
+    force_samples: list[list[float]] = []
+    expected_energy_count = cell.batch_size
+    expected_force_count = 3 * cell.natoms * cell.batch_size
     for sample_index in range(repetitions):
         if start_policy == "auto-warm":
             if gpuxtb_runner:
@@ -661,17 +699,38 @@ def measure_cell(
         runner.invoke()
         elapsed_ms = (time.perf_counter_ns() - start) * 1.0e-6
         snapshot = runner.snapshot()
+        energies = snapshot.get("energies_hartree")
+        forces = snapshot.get("forces_hartree_per_bohr")
+        if not isinstance(energies, list) or len(energies) != expected_energy_count:
+            actual = len(energies) if isinstance(energies, list) else None
+            raise BenchmarkError(
+                f"inference returned {actual} energies; expected "
+                f"{expected_energy_count}"
+            )
+        if not isinstance(forces, list) or len(forces) != expected_force_count:
+            actual = len(forces) if isinstance(forces, list) else None
+            raise BenchmarkError(
+                f"inference returned {actual} force values; expected "
+                f"{expected_force_count}"
+            )
+        if not all(math.isfinite(float(value)) for value in energies):
+            raise BenchmarkError("inference returned non-finite energies")
+        if not all(math.isfinite(float(value)) for value in forces):
+            raise BenchmarkError("inference returned non-finite forces")
+        normalized_forces = [float(value) for value in forces]
+        force_samples.append(normalized_forces)
         raw_samples.append(
             {
                 "sample_index": sample_index,
                 "latency_ms": elapsed_ms,
-                "energies_hartree": snapshot["energies_hartree"],
+                "energies_hartree": [float(value) for value in energies],
+                "force_count": len(normalized_forces),
+                "forces_sha256_binary64_le": _force_digest(normalized_forces),
                 "scc_iterations": snapshot["scc_iterations"],
                 "scc_converged": snapshot["scc_converged"],
                 "per_system_status": snapshot["per_system_status"],
             }
         )
-    energies = [raw_samples[-1]["energies_hartree"]]
     status_ok = all(
         sample.get("per_system_status") is None
         or all(
@@ -685,15 +744,18 @@ def measure_cell(
         or all(value == 1 for value in sample["scc_converged"])
         for sample in raw_samples
     )
-    finite_ok = all(
-        math.isfinite(value)
+    energy_reference = raw_samples[0]["energies_hartree"]
+    force_reference = force_samples[0]
+    energy_drift = max(
+        _max_abs_delta(sample["energies_hartree"], energy_reference)
         for sample in raw_samples
-        for value in sample["energies_hartree"]
     )
-    finite_forces_ok = all(
-        sample.get("forces_hartree_per_bohr") is None
-        or all(math.isfinite(value) for value in sample["forces_hartree_per_bohr"])
-        for sample in raw_samples
+    force_drift = max(
+        _max_abs_delta(sample, force_reference) for sample in force_samples
+    )
+    repeatability_ok = (
+        energy_drift <= energy_atol_hartree
+        and force_drift <= force_atol_hartree_per_bohr
     )
     latencies = [sample["latency_ms"] for sample in raw_samples]
     iteration_min = iteration_max = None
@@ -709,19 +771,25 @@ def measure_cell(
     fragment = {
         "raw_samples": raw_samples,
         "timing": timing_summary(latencies, cell.batch_size),
-        "energies_hartree": energies[0],
+        "energies_hartree": raw_samples[-1]["energies_hartree"],
+        "forces_hartree_per_bohr": force_samples[-1],
         "iteration_summary": {"min": iteration_min, "max": iteration_max},
         "correctness": {
             "status": (
-                "pass"
-                if (status_ok and converged_ok and finite_ok and finite_forces_ok)
-                else "fail"
+                "pass" if (status_ok and converged_ok and repeatability_ok) else "fail"
             ),
-            "finite_energies": finite_ok,
-            "finite_forces": finite_forces_ok,
+            "finite_energies": True,
+            "finite_forces": True,
+            "force_value_count": expected_force_count,
             "scc_converged_ok": converged_ok,
             "scc_status_ok": status_ok,
-            "self_energy_atol_hartree": energy_atol_hartree,
+            "repeatability": {
+                "energy_atol_hartree": energy_atol_hartree,
+                "max_abs_energy_drift_hartree": energy_drift,
+                "force_atol_hartree_per_bohr": force_atol_hartree_per_bohr,
+                "max_abs_force_drift_hartree_per_bohr": force_drift,
+            },
+            "cross_engine": {"status": "not_requested"},
         },
     }
     return fragment
@@ -753,6 +821,121 @@ def error_row(cell: Cell, error: str) -> dict[str, Any]:
     return row
 
 
+def load_reference_artifact(
+    path: Path, allow_dirty_evidence: bool = False
+) -> ReferenceArtifact:
+    """Load and validate one xTB JSON artifact for dependent runs."""
+    resolved = path.resolve()
+    try:
+        payload = resolved.read_bytes()
+        document = json.loads(payload.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BenchmarkError(
+            f"cannot read reference artifact {resolved}: {exc}"
+        ) from exc
+    metadata = document.get("metadata")
+    if not isinstance(metadata, dict):
+        raise BenchmarkError("reference artifact has no metadata object")
+    commit = metadata.get("commit") or {}
+    if not commit.get("head") or (
+        commit.get("dirty") is not False and not allow_dirty_evidence
+    ):
+        raise BenchmarkError("reference artifact must come from a verified clean HEAD")
+    rows: dict[tuple[int, int], dict[str, Any]] = {}
+    for index, row in enumerate(document.get("rows") or []):
+        if row.get("availability") != "available":
+            continue
+        if row.get("engine") != "xtb":
+            raise BenchmarkError(
+                f"reference row {index} uses {row.get('engine')!r}, expected 'xtb'"
+            )
+        correctness = row.get("correctness") or {}
+        cross_engine = correctness.get("cross_engine") or {}
+        if (
+            correctness.get("status") != "pass"
+            or cross_engine.get("status") != "reference"
+        ):
+            raise BenchmarkError(f"reference row {index} is not qualified")
+        natoms = row.get("natoms")
+        batch_size = row.get("batch_size")
+        if type(natoms) is not int or type(batch_size) is not int:
+            raise BenchmarkError(f"reference row {index} has invalid coordinate")
+        energies = row.get("energies_hartree")
+        forces = row.get("forces_hartree_per_bohr")
+        if not isinstance(energies, list) or len(energies) != batch_size:
+            raise BenchmarkError(f"reference row {index} has invalid energies")
+        if not isinstance(forces, list) or len(forces) != 3 * natoms * batch_size:
+            raise BenchmarkError(f"reference row {index} has invalid forces")
+        if not all(math.isfinite(float(value)) for value in energies) or not all(
+            math.isfinite(float(value)) for value in forces
+        ):
+            raise BenchmarkError(f"reference row {index} has non-finite observables")
+        key = (natoms, batch_size)
+        if key in rows:
+            raise BenchmarkError(f"reference artifact duplicates coordinate {key}")
+        rows[key] = row
+    if not rows:
+        raise BenchmarkError("reference artifact has no qualified available rows")
+    return ReferenceArtifact(
+        resolved,
+        hashlib.sha256(payload).hexdigest(),
+        metadata,
+        rows,
+    )
+
+
+def apply_cross_engine_reference(
+    row: dict[str, Any],
+    reference: ReferenceArtifact,
+    energy_atol_hartree: float,
+    force_atol_hartree_per_bohr: float,
+) -> bool:
+    """Compare one complete final result with the matching independent xTB row."""
+    if row.get("availability") != "available":
+        return False
+    correctness = row.get("correctness")
+    if not isinstance(correctness, dict) or correctness.get("status") != "pass":
+        return True
+    key = (row["natoms"], row["batch_size"])
+    expected = reference.rows.get(key)
+    comparison: dict[str, Any] = {
+        "status": "missing_reference",
+        "reference_engine": "xtb",
+        "artifact": str(reference.path),
+        "artifact_sha256": reference.sha256,
+        "energy_atol_hartree": energy_atol_hartree,
+        "force_atol_hartree_per_bohr": force_atol_hartree_per_bohr,
+        "max_abs_energy_delta_hartree": None,
+        "max_abs_force_delta_hartree_per_bohr": None,
+    }
+    failed = expected is None
+    if expected is not None:
+        try:
+            energy_delta = _max_abs_delta(
+                row["energies_hartree"], expected["energies_hartree"]
+            )
+            force_delta = _max_abs_delta(
+                row["forces_hartree_per_bohr"],
+                expected["forces_hartree_per_bohr"],
+            )
+        except (BenchmarkError, KeyError, TypeError) as exc:
+            comparison["status"] = "fail"
+            comparison["error"] = str(exc)
+            failed = True
+        else:
+            comparison["max_abs_energy_delta_hartree"] = energy_delta
+            comparison["max_abs_force_delta_hartree_per_bohr"] = force_delta
+            failed = (
+                energy_delta > energy_atol_hartree
+                or force_delta > force_atol_hartree_per_bohr
+            )
+            comparison["status"] = "fail" if failed else "pass"
+    correctness["cross_engine"] = comparison
+    if failed:
+        correctness["status"] = "fail"
+    return failed
+
+
 def run_cell(
     cell: Cell,
     library: Path,
@@ -762,6 +945,7 @@ def run_cell(
     warmups: int,
     repetitions: int,
     energy_atol_hartree: float,
+    force_atol_hartree_per_bohr: float,
     start_policy: str = "auto-warm",
     scc_charge_tolerance: float = 1.0e-10,
     scc_energy_tolerance: float = 1.0e-12,
@@ -828,7 +1012,12 @@ def run_cell(
                 dxtb_source,
             )
         fragment = measure_cell(
-            runner, (warmups, repetitions), cell, energy_atol_hartree, start_policy
+            runner,
+            (warmups, repetitions),
+            cell,
+            energy_atol_hartree,
+            force_atol_hartree_per_bohr,
+            start_policy,
         )
         row = base_row(cell)
         row.update(fragment)
@@ -862,6 +1051,7 @@ def run_trajectory(
     warmups: int,
     repetitions: int,
     energy_atol_hartree: float,
+    force_atol_hartree_per_bohr: float,
     scc_charge_tolerance: float = 1.0e-10,
     scc_energy_tolerance: float = 1.0e-12,
     scc_max_iterations: int = 500,
@@ -936,6 +1126,8 @@ def run_trajectory(
                 runner.invoke()
             sample_latencies: list[float] = []
             energies: list[float] = []
+            force_digests: list[str] = []
+            final_forces: list[float] | None = None
             frame_count = 0
             for _ in range(repetitions):
                 for frame in frames_list:
@@ -946,7 +1138,28 @@ def run_trajectory(
                     runner.invoke()
                     sample_latencies.append((time.perf_counter_ns() - start) * 1.0e-6)
                     snapshot = runner.snapshot()
-                    energies.extend(snapshot["energies_hartree"])
+                    snapshot_energies = snapshot.get("energies_hartree")
+                    snapshot_forces = snapshot.get("forces_hartree_per_bohr")
+                    if (
+                        not isinstance(snapshot_energies, list)
+                        or len(snapshot_energies) != 1
+                    ):
+                        raise BenchmarkError("trajectory frame returned invalid energy")
+                    if (
+                        not isinstance(snapshot_forces, list)
+                        or len(snapshot_forces) != 3 * natoms
+                    ):
+                        raise BenchmarkError("trajectory frame returned invalid forces")
+                    if not all(
+                        math.isfinite(float(value))
+                        for value in (*snapshot_energies, *snapshot_forces)
+                    ):
+                        raise BenchmarkError(
+                            "trajectory frame returned non-finite observables"
+                        )
+                    energies.extend(float(value) for value in snapshot_energies)
+                    final_forces = [float(value) for value in snapshot_forces]
+                    force_digests.append(_force_digest(final_forces))
                     frame_count += 1
                     if frame_count % 8 == 0:
                         log(
@@ -959,8 +1172,20 @@ def run_trajectory(
                     "availability": "available",
                     "timing": timing_summary(sample_latencies, 1),
                     "per_frame_samples_ms": sample_latencies,
+                    "energies_hartree": [energies[-1]],
+                    "forces_hartree_per_bohr": final_forces,
                     "energies_hartree_min": min(energies),
                     "energies_hartree_max": max(energies),
+                    "force_sample_digests_binary64_le": force_digests,
+                    "correctness": {
+                        "status": "pass",
+                        "finite_energies": True,
+                        "finite_forces": True,
+                        "force_value_count": 3 * natoms,
+                        "energy_atol_hartree": energy_atol_hartree,
+                        "force_atol_hartree_per_bohr": (force_atol_hartree_per_bohr),
+                        "cross_engine": {"status": "not_requested"},
+                    },
                 }
             )
             return row
@@ -980,11 +1205,21 @@ def run_trajectory(
 
 def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
     """Capture the exact revisions, hardware, runtime, and thread environment."""
+    repository_state = git_state(REPOSITORY_ROOT)
+    dxtb_threads = args.dxtb_cpu_threads or args.cpu_threads
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "command": sys.argv,
-        "commit": git_state(REPOSITORY_ROOT),
+        "commit": repository_state,
+        "evidence_eligibility": {
+            "status": (
+                "diagnostic_dirty"
+                if repository_state.get("dirty")
+                else "eligible_clean_head"
+            ),
+            "allow_dirty_evidence": bool(args.allow_dirty_evidence),
+        },
         "runner": {
             "python": sys.version,
             "platform": platform.platform(),
@@ -999,6 +1234,10 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
             else None,
             "tblite_library_sha256": sha256_file(args.tblite_library),
             "dxtb_source": git_state(args.dxtb_source) if args.dxtb_source else None,
+            "reference_json": (
+                str(args.reference_json.resolve()) if args.reference_json else None
+            ),
+            "reference_json_sha256": sha256_file(args.reference_json),
         },
         "hardware": {
             "hostname": platform.node(),
@@ -1016,7 +1255,7 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
         },
         "threads": {
             "cpu_threads": args.cpu_threads,
-            "dxtb_cpu_threads": args.dxtb_cpu_threads,
+            "dxtb_cpu_threads": dxtb_threads,
             "reference_threads": args.cpu_threads,
             "OMP_NUM_THREADS": os.environ.get("OMP_NUM_THREADS"),
             "OPENBLAS_NUM_THREADS": os.environ.get("OPENBLAS_NUM_THREADS"),
@@ -1036,6 +1275,7 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
             "repetitions": args.repetitions,
             "start_policy": args.start_policy,
             "cross_engine_energy_atol_hartree": args.energy_atol,
+            "cross_engine_force_atol_hartree_per_bohr": args.force_atol,
             "perturb_sigma_bohr": PERTURB_SIGMA_BOHR,
             "trajectory_step_sigma_bohr": TRAJECTORY_STEP_SIGMA_BOHR,
             "scc_max_iterations": args.scc_max_iterations,
@@ -1075,6 +1315,10 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         "p95_ms",
         "min_ms",
         "systems_per_second_at_median",
+        "correctness_status",
+        "cross_engine_status",
+        "max_abs_energy_delta_hartree",
+        "max_abs_force_delta_hartree_per_bohr",
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
@@ -1094,6 +1338,16 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
             flat["systems_per_second_at_median"] = timing.get(
                 "systems_per_second_at_median"
             )
+            correctness = row.get("correctness") or {}
+            cross_engine = correctness.get("cross_engine") or {}
+            flat["correctness_status"] = correctness.get("status")
+            flat["cross_engine_status"] = cross_engine.get("status")
+            flat["max_abs_energy_delta_hartree"] = cross_engine.get(
+                "max_abs_energy_delta_hartree"
+            )
+            flat["max_abs_force_delta_hartree_per_bohr"] = cross_engine.get(
+                "max_abs_force_delta_hartree_per_bohr"
+            )
             writer.writerow(flat)
 
 
@@ -1109,6 +1363,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--xtb-library", type=Path)
     parser.add_argument("--tblite-library", type=Path)
     parser.add_argument("--dxtb-source", type=Path)
+    parser.add_argument(
+        "--reference-json",
+        type=Path,
+        help="clean xTB artifact used for complete energy/force qualification",
+    )
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-csv", type=Path, required=True)
     parser.add_argument("--engines", type=parse_csv_values, default=DEFAULT_ENGINES)
@@ -1134,11 +1393,9 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto-warm",
         help=(
             "SCC restart policy for the batch matrices. auto-warm (default): "
-            "first call cold, every later warmup and measured sample "
-            "continues warm for all engines (gpuxtb strict WARM; xTB/tblite "
-            "persistent). cold: every sample is a genuine cold start for "
-            "every engine. --cold-samples is kept as an alias for "
-            "--start-policy cold."
+            "one untimed cold seed, then WARM measured samples. cold: clear "
+            "electronic state before every timed inference call; reset/setup "
+            "itself is excluded. --cold-samples is an alias."
         ),
     )
     parser.add_argument(
@@ -1162,9 +1419,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--energy-atol", type=float, default=CROSS_ENGINE_ENERGY_ATOL_HARTREE
     )
+    parser.add_argument(
+        "--force-atol",
+        type=float,
+        default=CROSS_ENGINE_FORCE_ATOL_HARTREE_PER_BOHR,
+    )
     parser.add_argument("--cpu-threads", type=int, default=1)
-    parser.add_argument("--dxtb-cpu-threads", type=int, default=1)
+    parser.add_argument(
+        "--dxtb-cpu-threads",
+        type=int,
+        default=None,
+        help="optional dxtb override; defaults to --cpu-threads",
+    )
     parser.add_argument("--device-id", type=int, default=0)
+    parser.add_argument(
+        "--allow-dirty-evidence",
+        action="store_true",
+        help="diagnostic only: permit a dirty repository and mark it in metadata",
+    )
     parser.add_argument(
         "--scc-charge-tolerance",
         type=float,
@@ -1193,8 +1465,16 @@ def validate_arguments(args: argparse.Namespace) -> None:
             raise BenchmarkError(f"unsupported engine: {engine}")
     if args.warmups < 0 or args.repetitions <= 0:
         raise BenchmarkError("warmups must be >= 0 and repetitions must be > 0")
-    if args.cpu_threads <= 0 or args.dxtb_cpu_threads <= 0:
+    if args.cpu_threads <= 0 or (
+        args.dxtb_cpu_threads is not None and args.dxtb_cpu_threads <= 0
+    ):
         raise BenchmarkError("thread counts must be positive")
+    for name, value in (
+        ("energy tolerance", args.energy_atol),
+        ("force tolerance", args.force_atol),
+    ):
+        if not math.isfinite(value) or value < 0.0:
+            raise BenchmarkError(f"{name} must be finite and nonnegative")
     if args.device_id < 0:
         raise BenchmarkError("device id must be nonnegative")
     if args.trajectory_frames <= 0:
@@ -1223,10 +1503,52 @@ def main(argv: Sequence[str] | None = None) -> int:
     rows: list[dict[str, Any]] = []
     try:
         validate_arguments(args)
+        repository_state = git_state(REPOSITORY_ROOT)
+        if not repository_state.get("head"):
+            raise BenchmarkError("cannot verify the benchmark repository revision")
+        if repository_state.get("dirty") and not args.allow_dirty_evidence:
+            raise BenchmarkError(
+                "publication evidence requires a clean repository; use "
+                "--allow-dirty-evidence only for diagnostics"
+            )
+        reference = (
+            load_reference_artifact(args.reference_json, args.allow_dirty_evidence)
+            if args.reference_json is not None
+            else None
+        )
+        if reference is not None:
+            reference_commit = (reference.metadata.get("commit") or {}).get("head")
+            if reference_commit != repository_state["head"]:
+                raise BenchmarkError(
+                    "reference artifact and current runner must use the same clean HEAD"
+                )
+            reference_protocol = reference.metadata.get("protocol") or {}
+            for name, expected in (
+                ("warmups", args.warmups),
+                ("repetitions", args.repetitions),
+                ("start_policy", args.start_policy),
+            ):
+                if reference_protocol.get(name) != expected:
+                    raise BenchmarkError(
+                        f"reference protocol {name}={reference_protocol.get(name)!r} "
+                        f"does not match requested {expected!r}"
+                    )
+            reference_threads = reference.metadata.get("threads") or {}
+            if reference_threads.get("reference_threads") != args.cpu_threads:
+                raise BenchmarkError(
+                    "reference artifact uses a different thread budget"
+                )
         library = args.library.resolve()
         natoms_large_batch = args.natoms_large_batch or args.natoms
+        dxtb_threads = args.dxtb_cpu_threads or args.cpu_threads
         cells = [
-            Cell(engine, natoms, batch_size, args.cpu_threads, args.device_id)
+            Cell(
+                engine,
+                natoms,
+                batch_size,
+                dxtb_threads if engine.startswith("dxtb") else args.cpu_threads,
+                args.device_id,
+            )
             for engine in args.engines
             for batch_size in args.batch_sizes
             for natoms in (args.natoms if batch_size == 1 else natoms_large_batch)
@@ -1248,6 +1570,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.warmups,
                 args.repetitions,
                 args.energy_atol,
+                args.force_atol,
                 start_policy=args.start_policy,
                 scc_charge_tolerance=args.scc_charge_tolerance,
                 scc_energy_tolerance=args.scc_energy_tolerance,
@@ -1259,6 +1582,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             # unambiguously distinguishable from a genuine cold-start row by
             # downstream consumers such as the plotter.
             row["start_policy"] = args.start_policy
+            if row.get("availability") == "available":
+                if (row.get("correctness") or {}).get("status") != "pass":
+                    failed = True
+                if row.get("engine") == "xtb" and reference is None:
+                    row["correctness"]["cross_engine"] = {
+                        "status": "reference",
+                        "role": "independent_xTB_baseline",
+                    }
+                elif reference is not None:
+                    failed = (
+                        apply_cross_engine_reference(
+                            row,
+                            reference,
+                            args.energy_atol,
+                            args.force_atol,
+                        )
+                        or failed
+                    )
             elapsed_s = time.perf_counter() - log_start
             rows.append(row)
             if row["availability"] == "available":
@@ -1296,6 +1637,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         warmups=args.warmups,
                         repetitions=args.repetitions,
                         energy_atol_hartree=args.energy_atol,
+                        force_atol_hartree_per_bohr=args.force_atol,
                         scc_charge_tolerance=args.scc_charge_tolerance,
                         scc_energy_tolerance=args.scc_energy_tolerance,
                         scc_max_iterations=args.scc_max_iterations,

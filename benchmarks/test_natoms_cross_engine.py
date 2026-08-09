@@ -12,6 +12,41 @@ from benchmarks import natoms_cross_engine as nce
 from benchmarks import plot_natoms_cross_engine as plotters
 
 
+def artifact_metadata(start_policy: str = "cold") -> dict[str, object]:
+    """Return one schema-v2 clean metadata block for plotter tests."""
+    return {
+        "hardware": {
+            "hostname": "test-node",
+            "cpu_model": "test-cpu",
+            "nvidia_smi": "test-gpu",
+        },
+        "threads": {
+            "cpu_threads": 4,
+            "reference_threads": 4,
+            "dxtb_cpu_threads": 4,
+        },
+        "commit": {"head": "0123456789abcdef", "dirty": False},
+        "protocol": {
+            "warmups": 1,
+            "repetitions": 3,
+            "start_policy": start_policy,
+            "cross_engine_energy_atol_hartree": 2.0e-3,
+            "cross_engine_force_atol_hartree_per_bohr": 2.0e-3,
+            "scc_max_iterations": 500,
+            "scc_charge_tolerance": 1.0e-4,
+            "scc_energy_tolerance": 1.0e-4,
+        },
+    }
+
+
+def qualified_correctness(engine: str = "gpuxtb-cpu") -> dict[str, object]:
+    """Return a complete correctness gate accepted by the plotter."""
+    return {
+        "status": "pass",
+        "cross_engine": {"status": "reference" if engine == "xtb" else "pass"},
+    }
+
+
 class StorageCheck:
     """Minimal storage view to spot-check distinct conformer batches."""
 
@@ -77,7 +112,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
         good = {
             "availability": "available",
             "timing": {"median_ms": 1.25},
-            "correctness": {"status": "pass"},
+            "correctness": qualified_correctness(),
         }
         self.assertTrue(plotters._is_eligible(good))
         bad_finite = dict(good)
@@ -89,6 +124,9 @@ class NatomsCrossEngineTest(unittest.TestCase):
         missing = dict(good)
         missing.pop("timing")
         self.assertFalse(plotters._is_eligible(missing))
+        missing_correctness = dict(good)
+        missing_correctness.pop("correctness")
+        self.assertFalse(plotters._is_eligible(missing_correctness))
 
     def test_trajectory_row_sweeps_natoms_per_engine(self) -> None:
         """The runner emits one trajectory row per (engine, natoms)."""
@@ -99,6 +137,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
             "job": "trajectory",
             "availability": "available",
             "timing": {"median_ms": 0.5},
+            "correctness": qualified_correctness(),
         }
         rows = [dict(base, natoms=natoms) for natoms in (32, 62, 122)]
         rows.append(dict(base, engine="xtb", natoms=62))
@@ -128,7 +167,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 "batch_size": batch_size,
                 "availability": "available",
                 "timing": {"median_ms": float(batch_size * natoms)},
-                "correctness": {"status": "pass"},
+                "correctness": qualified_correctness(engine),
             }
             for engine in ("gpuxtb-cpu", "xtb", "tblite")
             for natoms in (14, 32)
@@ -142,6 +181,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 "job": "trajectory",
                 "availability": "available",
                 "timing": {"median_ms": 0.5},
+                "correctness": qualified_correctness(),
             }
         )
         rows.append(
@@ -152,6 +192,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 "job": "trajectory",
                 "availability": "available",
                 "timing": {"median_ms": 1.0},
+                "correctness": qualified_correctness(),
             }
         )
         rows.append(
@@ -162,20 +203,14 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 "job": "trajectory",
                 "availability": "available",
                 "timing": {"median_ms": 0.8},
+                "correctness": qualified_correctness("xtb"),
             }
         )
-        metadata = {
-            "hardware": {
-                "cpu_model": "test-cpu",
-                "nvidia_smi": "test-gpu",
-            },
-            "threads": {"cpu_threads": 4},
-            "commit": {"head": "0123456789abcdef"},
-        }
+        metadata = artifact_metadata()
         with tempfile.TemporaryDirectory() as directory:
             artifact = Path(directory) / "matrix.json"
             artifact.write_text(
-                json.dumps({"metadata": metadata, "rows": rows}),
+                json.dumps({"schema_version": 2, "metadata": metadata, "rows": rows}),
                 encoding="utf-8",
             )
             output = Path(directory) / "figure.png"
@@ -188,8 +223,6 @@ class NatomsCrossEngineTest(unittest.TestCase):
                     "benchmarks.plot_natoms_cross_engine",
                     "--artifact",
                     str(artifact),
-                    "--commit",
-                    "0123456",
                     "--output",
                     str(output),
                 ],
@@ -214,29 +247,29 @@ class NatomsCrossEngineTest(unittest.TestCase):
             "batch_size": 1,
             "availability": "available",
             "timing": {"median_ms": 76.0},
-            "correctness": {"status": "pass"},
+            "correctness": qualified_correctness(),
         }
         leak_row = dict(cold_row)  # same shape, warm auto-warm measurement
         leak_row["timing"] = {"median_ms": 21.4}
-        metadata = {
-            "hardware": {"cpu_model": "test-cpu"},
-            "threads": {"cpu_threads": 4},
-            "commit": {"head": "0123456789abcdef"},
-            "protocol": {"start_policy": "cold"},
-        }
+        metadata = artifact_metadata()
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
             cold_artifact = directory / "cold.json"
             cold_artifact.write_text(
-                json.dumps({"metadata": metadata, "rows": [cold_row]}),
+                json.dumps(
+                    {"schema_version": 2, "metadata": metadata, "rows": [cold_row]}
+                ),
                 encoding="utf-8",
             )
-            auto_warm_metadata = dict(metadata)
-            auto_warm_metadata["protocol"] = {"start_policy": "auto-warm"}
+            auto_warm_metadata = artifact_metadata("auto-warm")
             leak_artifact = directory / "traj.json"
             leak_artifact.write_text(
                 json.dumps(
-                    {"metadata": auto_warm_metadata, "rows": [leak_row]},
+                    {
+                        "schema_version": 2,
+                        "metadata": auto_warm_metadata,
+                        "rows": [leak_row],
+                    },
                 ),
                 encoding="utf-8",
             )
@@ -272,6 +305,116 @@ class NatomsCrossEngineTest(unittest.TestCase):
             legacy = dict(cold_loaded)
             legacy.pop("_artifact_start_policy", None)
             self.assertTrue(plotters._cold_batch1_row(legacy))
+
+    def test_measure_cell_retains_complete_force_evidence(self) -> None:
+        """Every measured repetition hashes forces and retains the final vector."""
+
+        class FakeRunner:
+            def __init__(self) -> None:
+                self.invocations = 0
+
+            def set_start_mode(self, _mode: str) -> None:
+                return
+
+            def invoke(self) -> None:
+                self.invocations += 1
+
+            def snapshot(self) -> dict[str, object]:
+                return {
+                    "energies_hartree": [-1.0],
+                    "forces_hartree_per_bohr": [0.1, -0.2, 0.3],
+                    "scc_iterations": [4],
+                    "scc_converged": [1],
+                    "per_system_status": [0],
+                }
+
+        fragment = nce.measure_cell(
+            FakeRunner(),
+            (0, 2),
+            nce.Cell("gpuxtb-cpu", 1, 1, 1, 0),
+            1.0e-8,
+            1.0e-8,
+            "cold",
+        )
+        self.assertEqual(fragment["forces_hartree_per_bohr"], [0.1, -0.2, 0.3])
+        self.assertEqual(fragment["correctness"]["status"], "pass")
+        self.assertEqual(fragment["correctness"]["force_value_count"], 3)
+        self.assertEqual(len(fragment["raw_samples"]), 2)
+        for sample in fragment["raw_samples"]:
+            self.assertEqual(sample["force_count"], 3)
+            self.assertEqual(len(sample["forces_sha256_binary64_le"]), 64)
+
+    def test_measure_cell_rejects_missing_requested_forces(self) -> None:
+        """A force benchmark cannot pass when an adapter omits force output."""
+
+        class MissingForceRunner:
+            def set_start_mode(self, _mode: str) -> None:
+                return
+
+            def invoke(self) -> None:
+                return
+
+            def snapshot(self) -> dict[str, object]:
+                return {
+                    "energies_hartree": [-1.0],
+                    "forces_hartree_per_bohr": None,
+                    "scc_iterations": [4],
+                    "scc_converged": [1],
+                    "per_system_status": [0],
+                }
+
+        with self.assertRaisesRegex(nce.BenchmarkError, "force values"):
+            nce.measure_cell(
+                MissingForceRunner(),
+                (0, 1),
+                nce.Cell("gpuxtb-cpu", 1, 1, 1, 0),
+                1.0e-8,
+                1.0e-8,
+                "cold",
+            )
+
+    def test_speedup_annotation_is_data_derived(self) -> None:
+        """The plotted headline ratio comes from qualified overlapping rows."""
+        rows = [
+            {
+                "engine": engine,
+                "natoms": 62,
+                "batch_size": 128,
+                "availability": "available",
+                "timing": {"median_ms": latency},
+                "correctness": qualified_correctness(engine),
+            }
+            for engine, latency in (
+                ("gpuxtb-cpu", 100.0),
+                ("xtb", 1200.0),
+                ("tblite", 900.0),
+            )
+        ]
+        self.assertEqual(
+            plotters._speedup_range(rows, 128, 62),
+            (100.0, 900.0, 9.0, 12.0),
+        )
+
+    def test_plotter_rejects_dirty_artifact(self) -> None:
+        """Publication plots cannot silently combine dirty benchmark output."""
+        metadata = artifact_metadata()
+        metadata["commit"] = {"head": "0123456789abcdef", "dirty": True}
+        row = {
+            "engine": "xtb",
+            "natoms": 14,
+            "batch_size": 1,
+            "availability": "available",
+            "timing": {"median_ms": 1.0},
+            "correctness": qualified_correctness("xtb"),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "dirty.json"
+            artifact.write_text(
+                json.dumps({"schema_version": 2, "metadata": metadata, "rows": [row]}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(plotters.PlotError, "clean-HEAD"):
+                plotters.load_rows([artifact])
 
 
 if __name__ == "__main__":
