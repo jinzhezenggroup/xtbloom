@@ -34,6 +34,11 @@ jobs:
       contents: read
     env:
       CCACHE_MAXSIZE: 1G
+      # The SDK action installs the same pinned compiler under a runner-temp
+      # path on every job. Hash compiler content, rather than its fresh mtime,
+      # and normalize source paths so unchanged objects remain reusable.
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
       # Emscripten invokes this wrapper around its internal Clang compilation,
       # including custom web-adapter and side-module commands.
       EM_COMPILER_WRAPPER: ccache
@@ -46,11 +51,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       # Pin both the reviewed setup action and the release compiler version.
       - uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021
         with:
           version: '6.0.6'
+          # Cache the pinned SDK itself. The previous ccache covered compiled
+          # objects only, so every run still downloaded roughly 300 MiB first.
+          actions-cache-folder: emsdk-cache
 
       - name: Install ccache
         run: sudo apt-get update && sudo apt-get install --yes ccache
@@ -66,6 +76,23 @@ jobs:
           restore-keys: |
             ccache-wasm-emscripten-6.0.6-
 
+      - name: Reset ccache statistics
+        # Report this job's reuse instead of lifetime counters restored with
+        # the cache directory.
+        run: ccache --zero-stats
+
+      - name: Install web build dependencies once
+        # Both pointer-width builds consume the same source-tree node_modules.
+        # Resolve it before launching parallel Ninja processes so two npm ci
+        # custom commands cannot race while replacing that directory.
+        run: |
+          npm ci --prefix web --ignore-scripts --no-audit --no-fund
+          test -f web/node_modules/3dmol/build/3Dmol-min.js
+          # The CMake graph models this bundle as the npm custom-command output.
+          # Make it newer than both lock inputs so neither parallel Ninja graph
+          # can decide to launch a second source-tree npm ci.
+          cmake -E touch web/node_modules/3dmol/build/3Dmol-min.js
+
       - name: Configure wasm32 deployment build
         run: |
           emcmake cmake -S . -B build/wasm32-web -G Ninja \
@@ -76,9 +103,6 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS="-m32 -fPIC" \
             -DCMAKE_CXX_FLAGS="-m32 -fPIC"
-
-      - name: Build wasm32 deployment site
-        run: cmake --build build/wasm32-web --parallel 2
 
       - name: Configure wasm64 parity build
         run: |
@@ -91,8 +115,23 @@ jobs:
             -DCMAKE_C_FLAGS="-m64 -fPIC" \
             -DCMAKE_CXX_FLAGS="-m64 -fPIC"
 
-      - name: Build wasm64 parity site
-        run: cmake --build build/wasm64-web --parallel 2
+      - name: Build wasm32 and wasm64 sites concurrently
+        # Each build retains its existing two-way Ninja bound. Running the
+        # independent pointer widths together uses the hosted runner's cores
+        # without increasing either build's own compiler concurrency.
+        run: |
+          set -euo pipefail
+          cmake --build build/wasm32-web --parallel 2 2>&1 \
+            | sed -u 's/^/[wasm32] /' &
+          wasm32_pid=$!
+          cmake --build build/wasm64-web --parallel 2 2>&1 \
+            | sed -u 's/^/[wasm64] /' &
+          wasm64_pid=$!
+
+          status=0
+          wait "${wasm32_pid}" || status=$?
+          wait "${wasm64_pid}" || status=$?
+          exit "${status}"
 
       - name: Show ccache statistics
         run: ccache -s
@@ -104,20 +143,32 @@ jobs:
         run: node web/tests/openchemlib_smoke.mjs
 
       - name: Run public C ABI layout and short-initializer checks
+        # The two widths use disjoint objects and executables, so compile, link,
+        # and Node execution can proceed in parallel while preserving each
+        # width's complete public-ABI validation chain.
         run: |
-          emcc -m32 -std=c11 -Iinclude -c tests/c_api_test.c \
-            -o build/wasm32-c-api-test.o
-          EMCC_FORCE_STDLIBS=1 em++ -m32 build/wasm32-c-api-test.o \
-            build/wasm32-web/libxtbloom.a -o build/wasm32-c-api-test.js \
-            -sMAIN_MODULE=2 -sALLOW_MEMORY_GROWTH
-          node build/wasm32-c-api-test.js
+          set -euo pipefail
+          run_abi_check() {
+            local width="$1"
+            emcc "-m${width}" -std=c11 -Iinclude -c tests/c_api_test.c \
+              -o "build/wasm${width}-c-api-test.o" &&
+            EMCC_FORCE_STDLIBS=1 em++ "-m${width}" \
+              "build/wasm${width}-c-api-test.o" \
+              "build/wasm${width}-web/libxtbloom.a" \
+              -o "build/wasm${width}-c-api-test.js" \
+              -sMAIN_MODULE=2 -sALLOW_MEMORY_GROWTH &&
+            node "build/wasm${width}-c-api-test.js"
+          }
 
-          emcc -m64 -std=c11 -Iinclude -c tests/c_api_test.c \
-            -o build/wasm64-c-api-test.o
-          EMCC_FORCE_STDLIBS=1 em++ -m64 build/wasm64-c-api-test.o \
-            build/wasm64-web/libxtbloom.a -o build/wasm64-c-api-test.js \
-            -sMAIN_MODULE=2 -sALLOW_MEMORY_GROWTH
-          node build/wasm64-c-api-test.js
+          run_abi_check 32 2>&1 | sed -u 's/^/[wasm32 ABI] /' &
+          wasm32_pid=$!
+          run_abi_check 64 2>&1 | sed -u 's/^/[wasm64 ABI] /' &
+          wasm64_pid=$!
+
+          status=0
+          wait "${wasm32_pid}" || status=$?
+          wait "${wasm64_pid}" || status=$?
+          exit "${status}"
 
       - name: Check deployed legal payload
         run: |

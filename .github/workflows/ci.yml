@@ -10,6 +10,16 @@ on:
 permissions:
   contents: read
 
+# Keep only the newest validation for a pull request. Main pushes use their
+# unique run ID, so one merge never cancels another merge's release evidence.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+# C++ coverage upload is currently unavailable and has no separate threshold,
+# so its unused instrumentation and report stay disabled with the consumer.
+# Python coverage remains below because its exact source-path check is an active
+# repository gate even without an uploaded report.
 jobs:
   cpu:
     strategy:
@@ -27,11 +37,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: "0.10.7"
-          enable-cache: true
       - name: Install ccache
         run: sudo apt-get update && sudo apt-get install --yes ccache
       - name: Restore ccache
@@ -50,44 +55,18 @@ jobs:
         env:
           CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
           CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
-          # Instrument the gcc build with gcov coverage flags so the same
-          # build+ctest run that validates correctness also produces coverage.
-          COVERAGE_FLAGS: ${{ matrix.compiler == 'gcc' && '--coverage' || '' }}
         run: |
           cmake -S . -B build -G Ninja \
             -DXTBLOOM_ENABLE_CUDA=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_C_FLAGS="${COVERAGE_FLAGS}" \
-            -DCMAKE_CXX_FLAGS="${COVERAGE_FLAGS}" \
-            -DCMAKE_EXE_LINKER_FLAGS="${COVERAGE_FLAGS}"
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build
         run: cmake --build build --parallel
       - name: Show ccache statistics
         run: ccache -s
       - name: Test
         run: ctest --test-dir build --output-on-failure
-      - name: Collect C++ coverage
-        if: matrix.compiler == 'gcc'
-        env:
-          # Cobertura is the XML schema accepted by actions/upload-code-coverage.
-          COVERAGE_XML: coverage-cpp.xml
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes lcov
-          lcov --capture --directory build --output-file coverage.info \
-            --exclude '/usr/*' --exclude '*/tests/*' \
-            --ignore-errors mismatch,unused
-          uvx --from 'lcov_cobertura==2.1.1' lcov_cobertura coverage.info \
-            --output "${COVERAGE_XML}"
-      - name: Preserve C++ coverage for the upload-only job
-        if: matrix.compiler == 'gcc'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: coverage-report-cpp
-          path: coverage-cpp.xml
-          retention-days: 1
 
   python:
     runs-on: ubuntu-24.04
@@ -104,7 +83,11 @@ jobs:
           # `version` and regenerate the lock together.
           version: "0.10.7"
           python-version: "3.11"
-          enable-cache: true
+          # The torch-testing environment currently fills a roughly 2.6 GiB uv
+          # cache. Recent Actions samples spend longer restoring and saving it
+          # than a locked PyPI install takes, while also evicting useful ccache
+          # entries from the repository cache quota.
+          enable-cache: false
       # --locked fails if uv.lock is stale, so an out-of-date lock shows up as
       # a CI failure instead of drifting silently. --no-editable installs the
       # real wheel (not an editable hook), so xtbloom.library can discover the
@@ -159,47 +142,6 @@ jobs:
                   f"missing={missing}, unexpected={unexpected}"
               )
           PY
-      - name: Preserve Python coverage for the upload-only job
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: coverage-report-python
-          path: coverage-python.xml
-          retention-days: 1
-
-  upload-coverage:
-    needs: [cpu, python]
-    # if: ${{ !cancelled() && needs.cpu.result == 'success' && needs.python.result == 'success' }}
-    # disable due to no license
-    if: false
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - artifact: coverage-report-cpp
-            file: coverage-cpp.xml
-            language: C++
-            label: code-coverage/cpp
-          - artifact: coverage-report-python
-            file: coverage-python.xml
-            language: Python
-            label: code-coverage/python
-    runs-on: ubuntu-24.04
-    # No pull-request code or dependencies execute with this write-scoped token.
-    permissions:
-      contents: read
-      pull-requests: read
-      code-quality: write
-    steps:
-      - name: Download coverage report
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: ${{ matrix.artifact }}
-      - name: Upload coverage to GitHub
-        uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1 # v1.4.1
-        with:
-          file: ${{ matrix.file }}
-          language: ${{ matrix.language }}
-          label: ${{ matrix.label }}
 
   licensing-source-distribution:
     runs-on: ubuntu-24.04
