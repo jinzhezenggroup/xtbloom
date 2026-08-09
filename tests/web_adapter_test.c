@@ -13,12 +13,12 @@
 #include "../web/gpuxtb_web.c"
 #undef main
 
-#define CHECK(condition)                                                                    \
-  do {                                                                                      \
-    if (!(condition)) {                                                                     \
-      fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #condition);      \
-      return 1;                                                                             \
-    }                                                                                       \
+#define CHECK(condition)                                                              \
+  do {                                                                                \
+    if (!(condition)) {                                                               \
+      fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #condition); \
+      return 1;                                                                       \
+    }                                                                                 \
   } while (0)
 
 enum MockComputeMode {
@@ -56,8 +56,7 @@ const char* gpuxtb_status_string(gpuxtb_status_t status) {
 
 const char* gpuxtb_get_last_error(void) { return mock_last_error; }
 
-gpuxtb_status_t gpuxtb_context_options_init(gpuxtb_context_options_t* options,
-                                             size_t struct_size) {
+gpuxtb_status_t gpuxtb_context_options_init(gpuxtb_context_options_t* options, size_t struct_size) {
   memset(options, 0, struct_size);
   return GPUXTB_STATUS_SUCCESS;
 }
@@ -67,28 +66,26 @@ gpuxtb_status_t gpuxtb_batch_init(gpuxtb_batch_t* batch, size_t struct_size) {
   return GPUXTB_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t gpuxtb_compute_options_init(gpuxtb_compute_options_t* options,
-                                             size_t struct_size) {
+gpuxtb_status_t gpuxtb_compute_options_init(gpuxtb_compute_options_t* options, size_t struct_size) {
   memset(options, 0, struct_size);
   return GPUXTB_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t gpuxtb_batch_result_init(gpuxtb_batch_result_t* result,
-                                          size_t struct_size) {
+gpuxtb_status_t gpuxtb_batch_result_init(gpuxtb_batch_result_t* result, size_t struct_size) {
   memset(result, 0, struct_size);
   return GPUXTB_STATUS_SUCCESS;
 }
 
 gpuxtb_status_t gpuxtb_context_create(const gpuxtb_context_options_t* options,
-                                       gpuxtb_context_t** context) {
+                                      gpuxtb_context_t** context) {
   (void)options;
   *context = (gpuxtb_context_t*)(uintptr_t)1;
   return GPUXTB_STATUS_SUCCESS;
 }
 
 gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* batch,
-                                const gpuxtb_compute_options_t* options,
-                                gpuxtb_batch_result_t* result) {
+                               const gpuxtb_compute_options_t* options,
+                               gpuxtb_batch_result_t* result) {
   (void)context;
   mock_compute_flags = options->flags;
   mock_saw_force_buffer = result->forces.data != NULL || result->forces.size_bytes != 0;
@@ -162,8 +159,7 @@ static int test_disabled_forces_are_omitted(void) {
 static int test_initial_optimizer_failure_is_defined(void) {
   reset_adapter();
   mock_compute_mode = MOCK_COMPUTE_SYSTEM_FAILURE;
-  const char* actual = gpuxtb_web_optimize("H 0 0 0", 0.0, 0, 0.0, 1e-8, 1e-5, 1, 2,
-                                           4.5e-4, 0.4);
+  const char* actual = gpuxtb_web_optimize("H 0 0 0", 0.0, 0, 0.0, 1e-8, 1e-5, 1, 2, 4.5e-4, 0.4);
   CHECK(strstr(actual, "\"ok\":0") != NULL);
   CHECK(strstr(actual, "\"error_code\":\"err_initial_calc\"") != NULL);
   CHECK(strstr(actual, "SCC not converged") != NULL);
