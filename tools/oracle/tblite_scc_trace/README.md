@@ -256,7 +256,11 @@ standalone iteration snapshot.  It is intentionally a read-only comparison
 tool: it never generates or updates a golden file.  The replay harness
 (`gpuxtb_scc_trace_replay`) injects a golden mixed state, executes exactly one
 production CPU driver iteration, and emits the snapshot; the wrapper compares
-it with `compare_iteration` using the `cpu_replay_v1` profile.  The
+it with `compare_iteration` using the `cpu_replay_v1` profile. The replay plan
+caps the driver at that logical iteration after seeding its counter, so a
+nonconverged one-step replay reaches a real maximum-iteration terminal instead
+of acquiring terminal metadata only during serialization. The wrapper checks
+that lifecycle before extracting the standalone iteration. The
 independent mixer harness (`gpuxtb_scc_trace_mixer`) additionally replays the
 pinned golden residual sequence through the production Broyden mixer alone so
 a self-consistent flatten-order defect cannot hide behind a matching physical
@@ -369,7 +373,9 @@ three modes:
   q/d/Q state and compared with the `cpu_replay_v1` single-iteration profile.
   A divergence is therefore assigned to the exact iteration where it first
   appears instead of inheriting Broyden drift; an injected perturbation in a
-  later iteration is reported only at that iteration;
+  later iteration is reported only at that iteration. If the eigensolver fails
+  after Hamiltonian assembly, the emitted trace retains only the failed
+  attempt's Hamiltonian and mixed q/d/Q for exact failure localization;
 - `--mixer`: `gpuxtb_scc_trace_mixer` replays the PINNED golden residual
   sequence (raw minus mixed per iteration, in the canonical flatten order)
   through gpuxtb's production Broyden mixer alone — no driver, no eigensolver.

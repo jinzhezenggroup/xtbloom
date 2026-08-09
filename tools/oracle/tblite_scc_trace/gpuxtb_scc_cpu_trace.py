@@ -58,6 +58,24 @@ def canonicalize_capture(raw: str, case_id: str) -> dict:
     return generator.canonicalize(raw, spec, "gpuxtb_scc_cpu_trace.py (capture)")
 
 
+def validate_replay_lifecycle(trace: dict, expected_iteration: dict) -> None:
+    """Require the single-step replay artifact to carry exact terminal state."""
+    converged = bool(expected_iteration["convergence"]["overall"])
+    expected_terminal = {
+        "status": writer.STATUS_CONVERGED
+        if converged
+        else writer.STATUS_MAX_ITERATIONS,
+        "converged": converged,
+        "iterations": 1,
+    }
+    if "failed_attempt" in trace or trace["terminal"] != expected_terminal:
+        raise generator.CorpusError(
+            "replay lifecycle mismatch: expected "
+            f"{expected_terminal}, got terminal={trace['terminal']} "
+            f"failed_attempt={'failed_attempt' in trace}"
+        )
+
+
 def sha256_file(path: Path) -> str:
     """Return the lowercase SHA-256 digest of one file's bytes."""
     digest = hashlib.sha256()
@@ -459,6 +477,15 @@ def run_replay(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
                     f"no completed iteration (terminal {trace['terminal']}); "
                     "a data-level eigensolver/preparation/mixer failure left "
                     "the replayed step uncommitted"
+                )
+                continue
+            try:
+                validate_replay_lifecycle(trace, iterations[logical_index - 1])
+            except generator.CorpusError as error:
+                failures += 1
+                print(  # noqa: T201
+                    f"{case_id} iteration {logical_index}: FAIL invalid replay "
+                    f"lifecycle: {error}"
                 )
                 continue
             snapshot = trace["iterations"][0]

@@ -523,6 +523,78 @@ class RestrictedCorpusTest(unittest.TestCase):
         self.assertEqual(CPU_TRACE.status_bits(lanes[1][1]), (-1, 0))
         self.assertIn("niterations 0 terminal 3", lanes[1][2])
 
+    def test_cpu_raw_parser_preserves_eigensolver_failed_attempt(self) -> None:
+        """Canonicalize only the pre-solve payload of a failed eigensolve."""
+        raw = """nat 1 nsh 1 nao 1 niterations 0 terminal 3 failed_attempt 1
+atomic_numbers
+1
+positions
+0
+0
+0
+molecular_charge
+0
+unpaired_electrons
+0
+temperature
+300
+n_point_charges
+0
+atom_to_shell_count
+1
+overlap
+1
+core_hamiltonian
+-0.5
+failed_attempt
+1
+hamiltonian
+-0.4
+mixed_qsh
+0
+mixed_qat
+0
+mixed_dipoles
+0
+0
+0
+mixed_quadrupoles
+0
+0
+0
+0
+0
+0
+"""
+        trace = GENERATOR.canonicalize(raw, {}, "synthetic eigensolver failure")
+        TRACE.validate(trace)
+        self.assertEqual(trace["iterations"], [])
+        self.assertEqual(
+            trace["terminal"], {"status": 3, "converged": False, "iterations": 1}
+        )
+        attempt = trace["failed_attempt"]
+        self.assertEqual(attempt["index"], 1)
+        self.assertEqual(attempt["hamiltonian"], [[[-0.4]]])
+        for forbidden in (
+            "eigenvalues",
+            "occupations",
+            "density",
+            "raw_qsh",
+            "residual",
+            "energy",
+            "convergence",
+        ):
+            self.assertNotIn(forbidden, attempt)
+
+    def test_replay_lifecycle_metadata_is_checked_before_snapshot_compare(self) -> None:
+        """Do not discard a replay artifact's terminal lifecycle metadata."""
+        expected_iteration = {"convergence": {"overall": False}}
+        trace = {"terminal": {"status": 2, "converged": False, "iterations": 1}}
+        CPU_TRACE.validate_replay_lifecycle(trace, expected_iteration)
+        trace["terminal"] = {"status": 1, "converged": True, "iterations": 1}
+        with self.assertRaisesRegex(GENERATOR.CorpusError, "lifecycle mismatch"):
+            CPU_TRACE.validate_replay_lifecycle(trace, expected_iteration)
+
     def test_mixer_flatten_helpers_match_residual_layout(self) -> None:
         """Flatten mixed/raw multipoles in the canonical residual order."""
         golden = json.loads((CORPUS_DIR / "h3_plus.json").read_text(encoding="utf-8"))

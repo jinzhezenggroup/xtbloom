@@ -177,6 +177,16 @@ struct CapturedIteration {
   int conv = 0;
 };
 
+// A solve attempt that reached the assembled Hamiltonian but failed before
+// producing a valid eigensolution.  The v1 trace contract deliberately keeps
+// only this pre-solve state so stale post-solve workspace cannot masquerade as
+// a completed iteration.
+struct CapturedFailedAttempt {
+  bool present = false;
+  std::vector<double> hamiltonian;
+  std::vector<double> mixed_qsh, mixed_qat, mixed_dipoles, mixed_quadrupoles;
+};
+
 /*
  * One ragged batch of corpus cases driven as a single GFN2 SCC driver plan.
  *
@@ -219,6 +229,10 @@ class TraceBatch {
   // fails per-system without touching peers (controlled failure-isolation
   // member for issue #50).  Must be called after build() and before run().
   void poison_h0(std::int64_t system);
+  // Mark one lane's overlap cache unusable so its next active attempt reaches
+  // Hamiltonian assembly and then fails specifically in the eigensolver.  This
+  // is a test-only injection seam for the trace failed_attempt lifecycle.
+  void poison_eigensolver(std::int64_t system);
   // Inject the golden mixed q/d/Q state into one system before the first
   // step() (single-iteration replay for issue #49).  The state file layout is
   // line-oriented: "qsh <n>" then n values, "qat <n>" then n values,
@@ -276,6 +290,7 @@ class TraceBatch {
   std::shared_ptr<Geometry> geometry_;
   std::shared_ptr<Stage> stage_;
   std::vector<std::vector<CapturedIteration>> iterations_;
+  std::vector<CapturedFailedAttempt> failed_attempts_;
   // Pre-solve mixed state per lane: {qsh, qat, dipoles, quadrupoles}.
   std::vector<std::vector<std::vector<double>>> pending_mixed_;
 };
@@ -582,6 +597,7 @@ gpuxtb_status_t TraceBatch::build_stage(const CaseSpec& reference, std::string& 
   if (s) return s;
   stage_ = std::move(stage);
   iterations_.assign(static_cast<std::size_t>(g.batch_size), {});
+  failed_attempts_.assign(static_cast<std::size_t>(g.batch_size), {});
   err.clear();
   return GPUXTB_STATUS_SUCCESS;
 }
@@ -627,6 +643,10 @@ void TraceBatch::poison_h0(std::int64_t system) {
   for (std::int64_t element = matrix_begin; element < matrix_end; ++element) {
     g.h0[static_cast<std::size_t>(element)] = std::numeric_limits<double>::quiet_NaN();
   }
+}
+
+void TraceBatch::poison_eigensolver(std::int64_t system) {
+  geometry_->ocache.system_statuses[system] = GPUXTB_STATUS_EIGENSOLVER_FAILED;
 }
 
 gpuxtb_status_t TraceBatch::inject_mixed_state(std::int64_t system, const std::string& state_path,
@@ -846,15 +866,43 @@ void TraceBatch::record_iteration_snapshots() {
   Stage& st = *stage_;
   const std::int64_t batch = g.batch_size;
   for (std::int64_t system = 0; system < batch; ++system) {
-    // Lanes that did not advance (terminal or newly failed) contribute no
-    // iteration snapshot.
+    // The driver count includes an eigensolver attempt that fails after
+    // Hamiltonian assembly, while rows contains only completed iterations.
+    // Account for an already-recorded failed attempt so a failed lane is not
+    // recaptured while healthy peers continue stepping.
     const std::uint64_t old_count =
         static_cast<std::uint64_t>(iterations_[static_cast<std::size_t>(system)].size());
-    if (st.driver_state.iterations[system] <= old_count) {
+    CapturedFailedAttempt& failed_attempt = failed_attempts_[static_cast<std::size_t>(system)];
+    const std::uint64_t recorded_attempts = old_count + (failed_attempt.present ? 1u : 0u);
+    if (st.driver_state.iterations[system] <= recorded_attempts) {
       continue;
     }
-    if (st.driver_state.system_statuses[system] != GPUXTB_STATUS_SUCCESS &&
-        st.driver_state.system_statuses[system] != GPUXTB_STATUS_SCC_NOT_CONVERGED) {
+
+    const gpuxtb_status_t lane_status = st.driver_state.system_statuses[system];
+    if (lane_status == GPUXTB_STATUS_EIGENSOLVER_FAILED) {
+      const std::int64_t shell_begin = g.basis.batch_shell_offsets[system];
+      const std::int64_t shell_end = g.basis.batch_shell_offsets[system + 1u];
+      const std::int64_t density_base = g.layout.density.system_offsets[system];
+      const std::int64_t matrix_begin = g.mulliken_plan.matrix_offsets()[system];
+      const std::int64_t matrix_end = g.mulliken_plan.matrix_offsets()[system + 1u];
+
+      // An eigensolver failure is the only driver failure that maps to the
+      // observer's before_solve-without-after_iteration lifecycle.  Preserve
+      // exactly the assembled Hamiltonian and pre-solve mixed q/d/Q, and never
+      // read staged eigenvectors, density, populations, energy, or convergence.
+      failed_attempt.present = true;
+      failed_attempt.hamiltonian.assign(
+          st.drv_ws.hamiltonian + density_base,
+          st.drv_ws.hamiltonian + density_base + (matrix_end - matrix_begin));
+      failed_attempt.mixed_qsh = std::move(pending_mixed_[static_cast<std::size_t>(system)][0u]);
+      failed_attempt.mixed_qat = std::move(pending_mixed_[static_cast<std::size_t>(system)][1u]);
+      failed_attempt.mixed_dipoles =
+          std::move(pending_mixed_[static_cast<std::size_t>(system)][2u]);
+      failed_attempt.mixed_quadrupoles =
+          std::move(pending_mixed_[static_cast<std::size_t>(system)][3u]);
+      continue;
+    }
+    if (lane_status != GPUXTB_STATUS_SUCCESS && lane_status != GPUXTB_STATUS_SCC_NOT_CONVERGED) {
       continue;
     }
     CapturedIteration row;
@@ -950,6 +998,7 @@ void TraceBatch::emit(std::ostream& output, std::int64_t system) const {
   const std::int64_t atom_begin = g.layout.atom_offsets[system];
   const std::int64_t npc = static_cast<std::int64_t>(spec.pc_rows.size() / 5u);
   const std::int64_t niterations = static_cast<std::int64_t>(rows.size());
+  const CapturedFailedAttempt& failed_attempt = failed_attempts_[static_cast<std::size_t>(system)];
   // Classify the terminal state exactly: converged = 1, maximum iterations
   // (including a driver SCC_NOT_CONVERGED status) = 2, implemented failure
   // status = 3.  A failure lane like the poisoned H0 member must not be
@@ -965,7 +1014,8 @@ void TraceBatch::emit(std::ostream& output, std::int64_t system) const {
   }
 
   output << "nat " << nat << " nsh " << nsh << " nao " << nao << " niterations " << niterations
-         << " terminal " << terminal << "\n";
+         << " terminal " << terminal << " failed_attempt " << (failed_attempt.present ? 1 : 0)
+         << "\n";
   output << "atomic_numbers\n";
   for (std::int64_t i = 0; i < nat; ++i)
     emit_int(output, spec.atomic_numbers[static_cast<std::size_t>(i)]);
@@ -1054,6 +1104,22 @@ void TraceBatch::emit(std::ostream& output, std::int64_t system) const {
     emit_int(output, row.pconv);
     emit_int(output, row.tconv);
     emit_int(output, row.conv);
+  }
+  if (failed_attempt.present) {
+    output << "failed_attempt\n";
+    emit_int(output, niterations + 1);
+    output << "hamiltonian\n";
+    for (std::int64_t col = 0; col < nao; ++col)
+      for (std::int64_t row = 0; row < nao; ++row)
+        emit_value(output, failed_attempt.hamiltonian[static_cast<std::size_t>(col * nao + row)]);
+    output << "mixed_qsh\n";
+    for (double v : failed_attempt.mixed_qsh) emit_value(output, v);
+    output << "mixed_qat\n";
+    for (double v : failed_attempt.mixed_qat) emit_value(output, v);
+    output << "mixed_dipoles\n";
+    for (double v : failed_attempt.mixed_dipoles) emit_value(output, v);
+    output << "mixed_quadrupoles\n";
+    for (double v : failed_attempt.mixed_quadrupoles) emit_value(output, v);
   }
 }
 

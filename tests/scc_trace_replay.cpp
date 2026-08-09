@@ -37,6 +37,16 @@ int main(int argc, char** argv) {
     std::cerr << err << "\n";
     return 2;
   }
+  if (logical_index == 0u || spec.maximum_iterations <= 0 ||
+      logical_index > static_cast<std::uint64_t>(spec.maximum_iterations)) {
+    std::cerr << "logical index must be within the case iteration limit\n";
+    return 64;
+  }
+  // The driver counter is seeded to logical_index-1 below.  Capping this
+  // replay plan at logical_index makes the one executed attempt a real driver
+  // terminal (SCC_NOT_CONVERGED unless it converges), so emit() never invents
+  // max-iteration metadata for an otherwise still-active lane.
+  spec.maximum_iterations = static_cast<std::int64_t>(logical_index);
   batch.add_case(spec);
   if (gpuxtb_status_t s = batch.build(err); s != GPUXTB_STATUS_SUCCESS) {
     std::cerr << "geometry build failed: " << err << "\n";
@@ -58,6 +68,10 @@ int main(int argc, char** argv) {
   if (gpuxtb_status_t s = batch.step_once(err); s != GPUXTB_STATUS_SUCCESS) {
     std::cerr << "replay iteration failed: " << err << "\n";
     return static_cast<int>(s);
+  }
+  if (batch.system_status(0) == GPUXTB_STATUS_SUCCESS && !batch.system_converged(0)) {
+    std::cerr << "replay iteration remained active after its one-step limit\n";
+    return static_cast<int>(GPUXTB_STATUS_INTERNAL_ERROR);
   }
   batch.emit(std::cout, 0);
   return 0;

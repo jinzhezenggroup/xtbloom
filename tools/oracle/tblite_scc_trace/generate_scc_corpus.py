@@ -608,7 +608,11 @@ def canonicalize(raw: str, spec: dict[str, object], command_line: str) -> dict:
     CorpusError.  Complete document assembly uses the canonical writer's field
     semantics only; this function parses the fixed raw layout.
     """
-    tokens = [token for line in raw.splitlines() for token in line.split()]
+    lines = raw.splitlines()
+    if not lines:
+        raise CorpusError("raw stream is empty")
+    header = lines[0].split()
+    tokens = [token for line in lines[1:] for token in line.split()]
     iterator = iter(tokens)
 
     def take() -> str:
@@ -617,13 +621,22 @@ def canonicalize(raw: str, spec: dict[str, object], command_line: str) -> dict:
         except StopIteration:
             raise CorpusError("raw stream ended prematurely") from None
 
-    header = take().split()
-    while len(header) < 10:
-        header += take().split()
-    if header[0] != "nat" or header[2] != "nsh" or header[4] != "nao":
+    if (
+        len(header) not in (10, 12)
+        or header[0] != "nat"
+        or header[2] != "nsh"
+        or header[4] != "nao"
+        or header[6] != "niterations"
+        or header[8] != "terminal"
+    ):
         raise CorpusError("raw stream header is malformed")
     nat, nsh, nao = int(header[1]), int(header[3]), int(header[5])
     niterations, terminal = int(header[7]), int(header[9])
+    failed_attempt_present = False
+    if len(header) == 12:
+        if header[10] != "failed_attempt" or header[11] not in ("0", "1"):
+            raise CorpusError("raw stream failed_attempt header is malformed")
+        failed_attempt_present = header[11] == "1"
 
     def floats(count: int) -> list[float]:
         return [float(take()) for _ in range(count)]
@@ -672,6 +685,13 @@ def canonicalize(raw: str, spec: dict[str, object], command_line: str) -> dict:
         # logical [1][row][col]; raw is column-major rows as emitted.
         return column_major_to_rows(values, nao)
 
+    def multipoles(atoms: int, components: int) -> list[list[list[float]]]:
+        flat = floats(atoms * components)
+        return [
+            [flat[atom * components + component] for component in range(components)]
+            for atom in range(atoms)
+        ]
+
     iterations = []
     for iteration_offset in range(niterations):
         label = take()
@@ -691,13 +711,6 @@ def canonicalize(raw: str, spec: dict[str, object], command_line: str) -> dict:
         label = take()
         assert label == "density", label
         density = matrix(floats(nao * nao))
-
-        def multipoles(nat: int, components: int) -> list[list[list[float]]]:
-            flat = floats(nat * components)
-            return [
-                [flat[atom * components + component] for component in range(components)]
-                for atom in range(nat)
-            ]
 
         label = take()
         assert label == "mixed_qsh", label
@@ -814,6 +827,39 @@ def canonicalize(raw: str, spec: dict[str, object], command_line: str) -> dict:
             key: value for key, value in iterations[-1].items() if value is not None
         }
 
+    failed_attempt = None
+    if failed_attempt_present:
+        label = take()
+        assert label == "failed_attempt", label
+        failed_index = int(take())
+        if failed_index != len(iterations) + 1:
+            raise CorpusError(
+                "failed attempt index does not follow completed iterations"
+            )
+        label = take()
+        assert label == "hamiltonian", label
+        failed_hamiltonian = matrix(floats(nao * nao))
+        label = take()
+        assert label == "mixed_qsh", label
+        failed_mixed_qsh = floats(nsh)
+        label = take()
+        assert label == "mixed_qat", label
+        failed_mixed_qat = floats(nat)
+        label = take()
+        assert label == "mixed_dipoles", label
+        failed_mixed_dipoles = multipoles(nat, 3)
+        label = take()
+        assert label == "mixed_quadrupoles", label
+        failed_mixed_quadrupoles = multipoles(nat, 6)
+        failed_attempt = {
+            "index": failed_index,
+            "hamiltonian": [failed_hamiltonian],
+            "mixed_qsh": [failed_mixed_qsh],
+            "mixed_qat": [failed_mixed_qat],
+            "mixed_dipoles": [failed_mixed_dipoles],
+            "mixed_quadrupoles": [failed_mixed_quadrupoles],
+        }
+
     converged = terminal == 1
     trace = {
         "format": FORMAT,
@@ -849,9 +895,11 @@ def canonicalize(raw: str, spec: dict[str, object], command_line: str) -> dict:
         "terminal": {
             "status": terminal,
             "converged": converged,
-            "iterations": niterations,
+            "iterations": niterations + (1 if failed_attempt is not None else 0),
         },
     }
+    if failed_attempt is not None:
+        trace["failed_attempt"] = failed_attempt
     if point_charges:
         trace["input"]["point_charges"] = {
             "positions": [value for row in point_charges for value in row[:3]],

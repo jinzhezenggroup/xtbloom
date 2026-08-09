@@ -178,6 +178,36 @@ int test_case_spec_iteration_cap_is_honored() {
   return 0;
 }
 
+int test_partial_replay_reaches_a_real_driver_terminal() {
+  std::string err;
+  CaseSpec replay = corpus_spec("h3_plus", err);
+  const std::uint64_t logical_index = 2u;
+  // Mirror gpuxtb_scc_trace_replay: the seeded counter is k-1 and the plan cap
+  // is k, so exactly one nonconverged attempt must terminate in the driver.
+  replay.maximum_iterations = static_cast<std::int64_t>(logical_index);
+  TraceBatch batch;
+  batch.add_case(replay);
+  if (gpuxtb_status_t s = batch.build(err); s != GPUXTB_STATUS_SUCCESS) {
+    std::cerr << "partial replay build failed: " << err << "\n";
+    return 1;
+  }
+  batch.set_replay_context(0, logical_index, 0.0);
+  if (gpuxtb_status_t s = batch.step_once(err); s != GPUXTB_STATUS_SUCCESS) {
+    std::cerr << "partial replay step failed: " << err << "\n";
+    return 1;
+  }
+
+  CHECK(batch.system_iterations(0) == logical_index);
+  CHECK(batch.system_status(0) == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+  CHECK(!batch.system_converged(0));
+  CHECK(batch.iterations(0).size() == 1u);
+  std::ostringstream raw;
+  batch.emit(raw, 0);
+  CHECK(raw.str().find("niterations 1 terminal 2 failed_attempt 0") != std::string::npos);
+  std::cout << "partial replay has real max-iteration terminal: PASS\n";
+  return 0;
+}
+
 int test_nonhomogeneous_batch_policy_is_rejected() {
   std::string err;
   CaseSpec hot = corpus_spec("h3_plus", err);
@@ -232,6 +262,37 @@ int test_failure_lane_is_isolated_from_peers() {
   return 0;
 }
 
+int test_eigensolver_failure_preserves_pre_solve_attempt() {
+  std::string err;
+  TraceBatch batch;
+  batch.add_case(corpus_spec("h3_plus", err));
+  if (gpuxtb_status_t s = batch.build(err); s != GPUXTB_STATUS_SUCCESS) {
+    std::cerr << "eigensolver failure build failed: " << err << "\n";
+    return 1;
+  }
+  batch.poison_eigensolver(0);
+  if (gpuxtb_status_t s = batch.step_once(err); s != GPUXTB_STATUS_SUCCESS) {
+    std::cerr << "eigensolver failure step failed: " << err << "\n";
+    return 1;
+  }
+
+  CHECK(batch.system_status(0) == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+  CHECK(batch.system_iterations(0) == 1u);
+  CHECK(batch.iterations(0).empty());
+  std::ostringstream raw;
+  batch.emit(raw, 0);
+  const std::string payload = raw.str();
+  CHECK(payload.find("niterations 0 terminal 3 failed_attempt 1") != std::string::npos);
+  CHECK(payload.find("failed_attempt\n1\nhamiltonian\n") != std::string::npos);
+  CHECK(payload.find("\neigenvalues\n") == std::string::npos);
+  CHECK(payload.find("\ndensity\n") == std::string::npos);
+  CHECK(payload.find("\nraw_qsh\n") == std::string::npos);
+  CHECK(payload.find("\nenergy\n") == std::string::npos);
+  CHECK(payload.find("\nconvergence\n") == std::string::npos);
+  std::cout << "eigensolver failed-attempt payload preserved: PASS\n";
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -242,6 +303,12 @@ int main() {
     return 1;
   }
   if (test_case_spec_iteration_cap_is_honored() != 0) {
+    return 1;
+  }
+  if (test_partial_replay_reaches_a_real_driver_terminal() != 0) {
+    return 1;
+  }
+  if (test_eigensolver_failure_preserves_pre_solve_attempt() != 0) {
     return 1;
   }
   if (test_nonhomogeneous_batch_policy_is_rejected() != 0) {
