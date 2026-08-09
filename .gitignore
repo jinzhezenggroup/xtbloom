@@ -34,3 +34,5 @@ __pycache__/
 
 # WASM web demo build artifacts
 /web/dist/
+
+/web/node_modules/

@@ -1,0 +1,8 @@
+{
+  "name": "gpuxtb-web",
+  "private": true,
+  "description": "Build-time browser dependencies for the gpuxtb WASM web demo (GitHub Pages deployment).",
+  "dependencies": {
+    "3dmol": "2.5.5"
+  }
+}

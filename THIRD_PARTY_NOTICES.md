@@ -224,18 +224,19 @@ License: `BSD-3-Clause` (`LICENSES/3Dmol.js-BSD-3-Clause.txt`; Copyright (c)
 2014, University of Pittsburgh and contributors; incorporates code from
 GLmol, Three.js, and jQuery per the upstream license text).
 
-Vendored web asset:
+Build-time npm dependency (not vendored):
 
-- `web/vendor/3Dmol-min.js` is the prebuilt browser bundle of the pinned
-  release `2.5.5` (npm package `3dmol@2.5.5`, published 2026-05-22),
-  SHA-256 `f7cc78921ae72e7623e89cdd111434f58c2efddd2ffda1cd212644b406fb8016`,
-  with the upstream `/*! 3dmol v2.5.5 ... */` banner retained at the top of the
-  file.
+- `web/package.json` pins `3dmol@2.5.5` (published 2026-05-22); the exact
+  resolution and integrity is recorded in `web/package-lock.json`.
+- The prebuilt browser bundle `node_modules/3dmol/build/3Dmol-min.js` is
+  downloaded by `npm ci` during the Pages build and copied into the artifact
+  by `web/build.sh`. Its content hash is SHA-256
+  `f7cc78921ae72e7623e89cdd111434f58c2efddd2ffda1cd212644b406fb8016`, with the
+  upstream `/*! 3dmol v2.5.5 ... */` banner retained at the top of the file.
 
 The gpuxtb WASM web demo (`web/`) uses it only for client-side molecular
 visualization of the user-supplied geometry. It is not part of the native
-library, CMake installs, source archives, or Python wheels; `web/build.sh`
-copies it into the GitHub Pages artifact verbatim.
+library, CMake installs, source archives, or Python wheels.
 
 ## Distribution policy
 

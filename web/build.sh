@@ -20,6 +20,11 @@ INCLUDE="$ROOT/include"
 
 mkdir -p "$OUT"
 
+echo "[0/4] fetch npm build dependencies (3Dmol.js)"
+if [ ! -d "$WEB/node_modules/3dmol" ]; then
+  (cd "$WEB" && npm ci --ignore-scripts --no-audit --no-fund)
+fi
+
 echo "[1/4] LAPACKEe side module (wasm64, single-threaded)"
 emcc "$WEB/wasm/linalg.c" -o "$OUT/libscipy_openblas.so" \
   -sSIDE_MODULE=2 -m64 -O2 \
@@ -42,7 +47,9 @@ EMCC_FORCE_STDLIBS=1 em++ "$OUT/gpuxtb_web.o" "$LIB_A" -I"$INCLUDE" \
 echo "[4/4] copy static assets"
 cp "$WEB/index.html" "$WEB/style.css" "$WEB/app.js" "$WEB/worker.js" "$OUT/"
 mkdir -p "$OUT/vendor"
-cp "$WEB/vendor/3Dmol-min.js" "$OUT/vendor/"
+# 3Dmol.js is a build-time npm dependency (web/package.json); only the browser
+# bundle lands in the Pages artifact.
+cp "$WEB/node_modules/3dmol/build/3Dmol-min.js" "$OUT/vendor/"
 
 echo "done -> $OUT"
 ls -la "$OUT"
