@@ -290,7 +290,12 @@ def run_batch(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
         if index == poison_index:
             # The poisoned lane must fail exactly its first preparation (both
             # INTERNAL_ERROR status and zero completed iterations) without
-            # corrupting the peers.
+            # corrupting the peers.  Its emitted raw stream is deliberately a
+            # degenerate recorder stream: the poisoned H0 is NaN by
+            # construction, so the payload cannot form a canonical JSON trace
+            # document and is validated only through the banner plus a
+            # zero-iteration, terminal-failed header instead of a golden
+            # comparison.
             if status_value != STATUS_INTERNAL_ERROR:
                 failures += 1
                 print(  # noqa: T201
@@ -304,6 +309,21 @@ def run_batch(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
                 print(  # noqa: T201
                     f"batch lane {index}: FAIL failing lane advanced "
                     f"{banner_iterations} iterations"
+                )
+                continue
+            header = raw_body.splitlines()[0].split() if raw_body.splitlines() else []
+            if (
+                len(header) < 10
+                or header[0] != "nat"
+                or header[6] != "niterations"
+                or header[7] != "0"
+                or header[8] != "terminal"
+                or header[9] != "3"
+            ):
+                failures += 1
+                print(  # noqa: T201
+                    f"batch lane {index}: FAIL expected a zero-iteration "
+                    f"terminal-failed recorder header, got {raw_body.splitlines()[0] if raw_body.splitlines() else ''}"
                 )
                 continue
             print(f"batch lane {index} (failure isolation): PASS")  # noqa: T201

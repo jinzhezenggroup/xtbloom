@@ -950,7 +950,19 @@ void TraceBatch::emit(std::ostream& output, std::int64_t system) const {
   const std::int64_t atom_begin = g.layout.atom_offsets[system];
   const std::int64_t npc = static_cast<std::int64_t>(spec.pc_rows.size() / 5u);
   const std::int64_t niterations = static_cast<std::int64_t>(rows.size());
-  const std::int64_t terminal = (niterations > 0 && rows.back().conv) ? 1 : 2;
+  // Classify the terminal state exactly: converged = 1, maximum iterations
+  // (including a driver SCC_NOT_CONVERGED status) = 2, implemented failure
+  // status = 3.  A failure lane like the poisoned H0 member must not be
+  // reported as a maximum-iteration nonconvergence.
+  int terminal = 2;
+  if (system_converged(system)) {
+    terminal = 1;
+  } else {
+    const gpuxtb_status_t lane_status = stage_->driver_state.system_statuses[system];
+    if (lane_status != GPUXTB_STATUS_SUCCESS && lane_status != GPUXTB_STATUS_SCC_NOT_CONVERGED) {
+      terminal = 3;
+    }
+  }
 
   output << "nat " << nat << " nsh " << nsh << " nao " << nao << " niterations " << niterations
          << " terminal " << terminal << "\n";
