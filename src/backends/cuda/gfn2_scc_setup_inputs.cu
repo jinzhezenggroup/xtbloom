@@ -525,10 +525,16 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
                  sources.warm_start_generations.elements != 0))) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kGeometry);
   }
+  const bool valid_eigensolver_strategy =
+      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kAuto ||
+      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kBatchedDivideAndConquer ||
+      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kBatchedJacobi ||
+      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kTridiagonalBisection;
   if (!std::isfinite(sources.eigensolver_options.minimum_overlap_rcond) ||
       !(sources.eigensolver_options.minimum_overlap_rcond > 0.0) ||
       !std::isfinite(sources.eigensolver_options.symmetry_tolerance) ||
-      sources.eigensolver_options.symmetry_tolerance < 0.0) {
+      sources.eigensolver_options.symmetry_tolerance < 0.0 || !valid_eigensolver_strategy ||
+      sources.eigensolver_options.jacobi != nullptr) {
     return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kEigensolver);
   }
 

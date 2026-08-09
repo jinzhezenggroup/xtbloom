@@ -138,6 +138,21 @@ CPU_CLOSED_LOOP_V1 = CompareProfile(
     },
 )
 
+#: Version 1 single-iteration comparison for a separately executed CPU replay
+#: that injects the golden mixed state (issue #49).  Same magnitudes as the
+#: closed-loop profile because both compare the same production CPU driver.
+CPU_REPLAY_V1 = CompareProfile(
+    name="cpu_replay",
+    version=1,
+    atol=1.0e-8,
+    rtol=1.0e-9,
+    per_field={
+        "residual": (1.0e-7, 1.0e-7),
+        "residual_rms": (1.0e-7, 1.0e-7),
+        "energy": (1.0e-8, 1.0e-8),
+    },
+)
+
 #: Version 1 single-iteration comparison for a separately executed replay.
 CUDA_REPLAY_V1 = CompareProfile(
     name="cuda_replay",
@@ -153,10 +168,12 @@ CUDA_REPLAY_V1 = CompareProfile(
 # Compatibility constants retain the original import names while diagnostics
 # and CLI arguments always expose the versioned identifiers.
 CPU_CLOSED_LOOP = CPU_CLOSED_LOOP_V1
+CPU_REPLAY = CPU_REPLAY_V1
 CUDA_REPLAY = CUDA_REPLAY_V1
 
 _PROFILES = {
     CPU_CLOSED_LOOP_V1.identifier: CPU_CLOSED_LOOP_V1,
+    CPU_REPLAY_V1.identifier: CPU_REPLAY_V1,
     CUDA_REPLAY_V1.identifier: CUDA_REPLAY_V1,
 }
 
@@ -179,6 +196,13 @@ EXACT_PATHS = (
     "terminal.status",
     "terminal.converged",
 )
+
+# Normalized dotted paths excluded from every trace comparison.  These are
+# documentary fields that legitimately differ between two independent
+# executions of the same science (for example the generator CLI that produced
+# the pinned golden versus the CPU capture driver), so they must not be treated
+# as either an exact or a numerical invariant.
+IGNORED_PATHS = ("provenance.oracle_command",)
 
 
 @dataclass(frozen=True)
@@ -250,6 +274,14 @@ def _under_exact_path(path: str) -> bool:
     )
 
 
+def _under_ignored_path(path: str) -> bool:
+    normalized = _normalized_path(path)
+    return any(
+        normalized == prefix or normalized.startswith((prefix + ".", prefix + "["))
+        for prefix in IGNORED_PATHS
+    )
+
+
 def _is_exact(path: str, actual: object, expected: object) -> bool:
     if _under_exact_path(path):
         return True
@@ -309,8 +341,12 @@ class _Comparator:
         expected: object,
         mismatches: list[Mismatch],
     ) -> None:
+        if _under_ignored_path(parent):
+            return
         if isinstance(actual, Mapping) and isinstance(expected, Mapping):
             for key in sorted(set(actual) | set(expected)):
+                if _under_ignored_path(_scalar_path(parent, key)):
+                    continue
                 if key not in actual:
                     mismatches.append(
                         Mismatch(
@@ -683,6 +719,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 __all__ = [
     "CPU_CLOSED_LOOP",
     "CPU_CLOSED_LOOP_V1",
+    "CPU_REPLAY",
+    "CPU_REPLAY_V1",
     "CUDA_REPLAY",
     "CUDA_REPLAY_V1",
     "EXACT_PATHS",
@@ -690,6 +728,7 @@ __all__ = [
     "EXIT_MATCH",
     "EXIT_MISMATCH",
     "FORMAT",
+    "IGNORED_PATHS",
     "CompareProfile",
     "Mismatch",
     "TraceCompareError",

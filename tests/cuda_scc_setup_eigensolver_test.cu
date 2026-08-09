@@ -32,6 +32,8 @@ using gpuxtb::detail::Gfn2RaggedTopologyView;
 using gpuxtb::detail::cuda::Gfn2EigensolverBucket;
 using gpuxtb::detail::cuda::Gfn2EigensolverDeviceError;
 using gpuxtb::detail::cuda::Gfn2EigensolverDeviceWorkspace;
+using gpuxtb::detail::cuda::Gfn2EigensolverOptions;
+using gpuxtb::detail::cuda::Gfn2EigensolverStrategy;
 using gpuxtb::detail::cuda::Gfn2GeometryEpochDevice;
 using gpuxtb::detail::cuda::Gfn2SccIterationArenaRequirements;
 using gpuxtb::detail::cuda::Gfn2SccIterationDevicePlan;
@@ -336,7 +338,8 @@ struct ProductionFixture {
   DeviceAllocation setup_arena;
   Gfn2SccSetupEigensolverBinding binding{};
 
-  bool create(std::int64_t batch_size = 4) {
+  bool create(std::int64_t batch_size = 4,
+              const Gfn2EigensolverOptions& eigensolver_options = Gfn2EigensolverOptions{}) {
     HostSccCaseOptions options;
     constexpr std::array<SmallSystemKind, 4> pattern{SmallSystemKind::kH2, SmallSystemKind::kHe,
                                                      SmallSystemKind::kLiH, SmallSystemKind::kCH2};
@@ -369,7 +372,7 @@ struct ProductionFixture {
     if (!Gfn2SccSetupEigensolver::create(
              topology, host.overlap().data(), static_cast<std::int64_t>(host.overlap().size()),
              kGeneration, kPlanToken, handles.solver, handles.parameters, handles.blas,
-             gpuxtb::detail::cuda::Gfn2EigensolverOptions{}, setup)
+             eigensolver_options, setup)
              .success()) {
       return false;
     }
@@ -477,6 +480,15 @@ int test_four_system_provider_and_cache() {
   CHECK(first.provider.host_workspace == second.provider.host_workspace);
   CHECK(first.overlap_input == second.overlap_input);
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+  return 0;
+}
+
+int test_forced_tridiagonal_strategy_is_valid() {
+  Gfn2EigensolverOptions options{};
+  options.strategy = Gfn2EigensolverStrategy::kTridiagonalBisection;
+  ProductionFixture fixture;
+  CHECK(fixture.create(4, options));
+  CHECK(fixture.setup.valid());
   return 0;
 }
 
@@ -935,6 +947,10 @@ int main() {
     return status;
   }
   status = test_bad_overlap_preserves_factor_and_reports_failure();
+  if (status != 0) {
+    return status;
+  }
+  status = test_forced_tridiagonal_strategy_is_valid();
   if (status != 0) {
     return status;
   }

@@ -25,6 +25,8 @@ using gpuxtb::detail::cuda::capture_gfn2_eigensolver_capacity_cuda;
 using gpuxtb::detail::cuda::compact_gfn2_solve_bucket_counts_cuda;
 using gpuxtb::detail::cuda::compact_gfn2_successful_eigenpair_counts_cuda;
 using gpuxtb::detail::cuda::factor_gfn2_overlap_cuda;
+using gpuxtb::detail::cuda::gfn2_eigensolver_uses_jacobi;
+using gpuxtb::detail::cuda::gfn2_eigensolver_uses_tridiagonal;
 using gpuxtb::detail::cuda::Gfn2EigensolverBucket;
 using gpuxtb::detail::cuda::Gfn2EigensolverBucketActivity;
 using gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph;
@@ -36,12 +38,15 @@ using gpuxtb::detail::cuda::Gfn2EigensolverLaunchResult;
 using gpuxtb::detail::cuda::Gfn2EigensolverLaunchStatus;
 using gpuxtb::detail::cuda::Gfn2EigensolverOptions;
 using gpuxtb::detail::cuda::Gfn2EigensolverOverlapCache;
+using gpuxtb::detail::cuda::Gfn2EigensolverStrategy;
 using gpuxtb::detail::cuda::Gfn2EigensolverWorkspaceRequirements;
 using gpuxtb::detail::cuda::Gfn2GeometryEpochDevice;
 using gpuxtb::detail::cuda::prepare_and_compact_gfn2_solve_buckets_cuda;
 using gpuxtb::detail::cuda::prepare_gfn2_eigensolver_launch_sequence_cuda;
 using gpuxtb::detail::cuda::query_gfn2_eigensolver_bucket_workspace_cuda;
+using gpuxtb::detail::cuda::query_gfn2_jacobi_bucket_workspace_cuda;
 using gpuxtb::detail::cuda::query_gfn2_spin_eigensolver_bucket_workspace_cuda;
+using gpuxtb::detail::cuda::query_gfn2_tridiagonal_bucket_workspace_cuda;
 using gpuxtb::detail::cuda::reset_gfn2_eigensolver_device_errors_cuda;
 using gpuxtb::detail::cuda::solve_gfn2_eigensystems_cuda;
 using gpuxtb::detail::cuda::solve_gfn2_spin_eigensystems_cuda;
@@ -169,6 +174,7 @@ class PinnedBuffer {
 struct ProviderHandles {
   cusolverDnHandle_t solver = nullptr;
   cusolverDnParams_t parameters = nullptr;
+  syevjInfo_t jacobi = nullptr;
   cublasHandle_t blas = nullptr;
   cudaStream_t stream = nullptr;
 
@@ -182,6 +188,9 @@ struct ProviderHandles {
     if (parameters != nullptr) {
       (void)cusolverDnDestroyParams(parameters);
     }
+    if (jacobi != nullptr) {
+      (void)cusolverDnDestroySyevjInfo(jacobi);
+    }
     if (solver != nullptr) {
       (void)cusolverDnDestroy(solver);
     }
@@ -194,9 +203,23 @@ struct ProviderHandles {
     return cuda_ok(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "cudaStreamCreate") &&
            solver_ok(cusolverDnCreate(&solver), "cusolverDnCreate") &&
            solver_ok(cusolverDnCreateParams(&parameters), "cusolverDnCreateParams") &&
+           solver_ok(cusolverDnCreateSyevjInfo(&jacobi), "cusolverDnCreateSyevjInfo") &&
+           solver_ok(cusolverDnXsyevjSetTolerance(jacobi, std::numeric_limits<double>::epsilon()),
+                     "cusolverDnXsyevjSetTolerance") &&
+           solver_ok(cusolverDnXsyevjSetMaxSweeps(jacobi, 100), "cusolverDnXsyevjSetMaxSweeps") &&
+           solver_ok(cusolverDnXsyevjSetSortEig(jacobi, 1), "cusolverDnXsyevjSetSortEig") &&
            blas_ok(cublasCreate(&blas), "cublasCreate");
   }
 };
+
+Gfn2EigensolverOptions eigensolver_options(
+    const ProviderHandles& providers,
+    Gfn2EigensolverStrategy strategy = Gfn2EigensolverStrategy::kAuto) {
+  Gfn2EigensolverOptions options{};
+  options.strategy = strategy;
+  options.jacobi = providers.jacobi;
+  return options;
+}
 
 struct TestBatch {
   std::int64_t batch_size = 0;
@@ -429,6 +452,21 @@ struct DeviceFixture {
         std::cerr << "workspace query failed: " << static_cast<unsigned int>(query.status) << '\n';
         return false;
       }
+      const auto jacobi_query = query_gfn2_jacobi_bucket_workspace_cuda(
+          providers.solver, providers.jacobi, bucket, matrix_b.get(), eigen_scratch.get(),
+          requirements);
+      if (!jacobi_query.success()) {
+        std::cerr << "Jacobi workspace query failed: "
+                  << static_cast<unsigned int>(jacobi_query.status) << '\n';
+        return false;
+      }
+      const auto tridiagonal_query = query_gfn2_tridiagonal_bucket_workspace_cuda(
+          providers.solver, bucket, matrix_b.get(), eigen_scratch.get(), requirements);
+      if (!tridiagonal_query.success()) {
+        std::cerr << "tridiagonal workspace query failed: "
+                  << static_cast<unsigned int>(tridiagonal_query.status) << '\n';
+        return false;
+      }
     }
     const std::size_t device_elements =
         (requirements.solver_device_workspace_bytes + sizeof(std::byte) - 1u) / sizeof(std::byte);
@@ -487,7 +525,8 @@ struct DeviceFixture {
   }
 };
 
-bool factor(DeviceFixture& fixture, std::uint64_t generation) {
+bool factor(DeviceFixture& fixture, std::uint64_t generation,
+            const Gfn2EigensolverOptions& options = Gfn2EigensolverOptions{}) {
   if (!cuda_ok(reset_gfn2_eigensolver_device_errors_cuda(
                    fixture.host.batch_size, fixture.system_errors.get(), fixture.device_error.get(),
                    fixture.providers.stream),
@@ -497,8 +536,8 @@ bool factor(DeviceFixture& fixture, std::uint64_t generation) {
   const auto launch = factor_gfn2_overlap_cuda(
       fixture.batch, fixture.host.buckets.data(),
       static_cast<std::int64_t>(fixture.host.buckets.size()), fixture.overlap.get(), generation,
-      Gfn2EigensolverOptions{}, fixture.providers.solver, fixture.providers.parameters,
-      fixture.workspace, fixture.cache, fixture.system_errors.get(), fixture.device_error.get(),
+      options, fixture.providers.solver, fixture.providers.parameters, fixture.workspace,
+      fixture.cache, fixture.system_errors.get(), fixture.device_error.get(),
       fixture.providers.stream);
   if (!launch.success()) {
     std::cerr << "factor launch failed: " << static_cast<unsigned int>(launch.status) << '\n';
@@ -507,7 +546,8 @@ bool factor(DeviceFixture& fixture, std::uint64_t generation) {
   return cuda_ok(cudaStreamSynchronize(fixture.providers.stream), "factor synchronize");
 }
 
-bool solve(DeviceFixture& fixture, std::uint64_t generation, bool reset_errors = true) {
+bool solve(DeviceFixture& fixture, std::uint64_t generation, bool reset_errors = true,
+           const Gfn2EigensolverOptions& options = Gfn2EigensolverOptions{}) {
   if (reset_errors && !cuda_ok(reset_gfn2_eigensolver_device_errors_cuda(
                                    fixture.host.batch_size, fixture.system_errors.get(),
                                    fixture.device_error.get(), fixture.providers.stream),
@@ -517,9 +557,9 @@ bool solve(DeviceFixture& fixture, std::uint64_t generation, bool reset_errors =
   const auto launch = solve_gfn2_eigensystems_cuda(
       fixture.batch, fixture.host.buckets.data(),
       static_cast<std::int64_t>(fixture.host.buckets.size()), fixture.cache, generation,
-      fixture.hamiltonian.get(), Gfn2EigensolverOptions{}, fixture.providers.solver,
-      fixture.providers.parameters, fixture.providers.blas, fixture.workspace, fixture.results,
-      fixture.system_errors.get(), fixture.device_error.get(), fixture.providers.stream);
+      fixture.hamiltonian.get(), options, fixture.providers.solver, fixture.providers.parameters,
+      fixture.providers.blas, fixture.workspace, fixture.results, fixture.system_errors.get(),
+      fixture.device_error.get(), fixture.providers.stream);
   if (!launch.success()) {
     std::cerr << "solve launch failed: " << static_cast<unsigned int>(launch.status) << '\n';
     return false;
@@ -556,7 +596,8 @@ struct SpinSolveFixture {
   Gfn2EigensolverDeviceWorkspace workspace{};
   Gfn2EigensolverDeviceResults results{};
 
-  bool create(DeviceFixture& physical) {
+  bool create(DeviceFixture& physical,
+              const Gfn2EigensolverOptions& options = Gfn2EigensolverOptions{}) {
     const TestBatch& host = physical.host;
     spin_channels.resize(static_cast<std::size_t>(host.batch_size));
     spin_channel_offsets.assign(static_cast<std::size_t>(host.batch_size + 1), 0);
@@ -651,6 +692,13 @@ struct SpinSolveFixture {
       if (!query.success()) {
         return false;
       }
+      if (gfn2_eigensolver_uses_tridiagonal(options, bucket)) {
+        const auto tridiagonal_query = query_gfn2_tridiagonal_bucket_workspace_cuda(
+            physical.providers.solver, bucket, matrix_b.get(), eigen_scratch.get(), requirements);
+        if (!tridiagonal_query.success()) {
+          return false;
+        }
+      }
     }
     if (!solver_device_workspace.allocate(requirements.solver_device_workspace_bytes) ||
         !solver_host_workspace.allocate(requirements.solver_host_workspace_bytes)) {
@@ -736,7 +784,8 @@ bool validate_spin_system(const DeviceFixture& physical, const SpinSolveFixture&
   return true;
 }
 
-bool solve_spin(DeviceFixture& physical, SpinSolveFixture& spin, std::uint64_t generation) {
+bool solve_spin(DeviceFixture& physical, SpinSolveFixture& spin, std::uint64_t generation,
+                const Gfn2EigensolverOptions& options = Gfn2EigensolverOptions{}) {
   if (!cuda_ok(reset_gfn2_eigensolver_device_errors_cuda(
                    physical.host.batch_size, physical.system_errors.get(),
                    physical.device_error.get(), physical.providers.stream),
@@ -746,11 +795,42 @@ bool solve_spin(DeviceFixture& physical, SpinSolveFixture& spin, std::uint64_t g
   const auto launch = solve_gfn2_spin_eigensystems_cuda(
       physical.batch, spin.layout, spin.buckets.data(),
       static_cast<std::int64_t>(spin.buckets.size()), physical.cache, generation,
-      spin.device_hamiltonian.get(), Gfn2EigensolverOptions{}, physical.providers.solver,
+      spin.device_hamiltonian.get(), options, physical.providers.solver,
       physical.providers.parameters, physical.providers.blas, spin.workspace, spin.results,
       physical.system_errors.get(), physical.device_error.get(), physical.providers.stream);
   return launch.success() &&
          cuda_ok(cudaStreamSynchronize(physical.providers.stream), "spin solve synchronize");
+}
+
+/* A physical singleton expands to two unrestricted provider submissions. The
+ * large-singleton provider must reuse its setup-owned arena sequentially and
+ * preserve the physical-system transaction boundary across both spin solves. */
+bool test_spin_eigensolver_tridiagonal_singleton() {
+  constexpr std::int32_t kOrbitals = gpuxtb::detail::cuda::kGfn2TridiagonalMinimumOrbitals;
+  DeviceFixture physical;
+  if (!physical.create(make_batch(1, false, -1, kOrbitals)) || !factor(physical, 54u)) {
+    return false;
+  }
+  const Gfn2EigensolverOptions options =
+      eigensolver_options(physical.providers, Gfn2EigensolverStrategy::kTridiagonalBisection);
+  SpinSolveFixture spin;
+  if (!spin.create(physical, options) || spin.buckets.size() != 1u ||
+      spin.buckets[0].solve_count != 2 || !solve_spin(physical, spin, 54u, options)) {
+    return false;
+  }
+  std::vector<std::uint32_t> errors;
+  std::vector<double> eigenvalues;
+  std::vector<double> coefficients;
+  if (!physical.system_errors.download(errors) || !spin.eigenvalues.download(eigenvalues) ||
+      !spin.coefficients.download(coefficients) || errors != std::vector<std::uint32_t>{0u}) {
+    return false;
+  }
+  for (std::int32_t channel = 0; channel < 2; ++channel) {
+    if (!validate_spin_system(physical, spin, 0, channel, eigenvalues, coefficients)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool test_spin_eigensolver_mixed_batches_and_transaction() {
@@ -1045,6 +1125,272 @@ bool test_compacted_graph_batch(std::int64_t batch_size, bool mixed_buckets) {
          launch_compacted(fixture, graph) && validate_compacted_launch(fixture);
 }
 
+/* Exercise the production crossover rather than only the benchmark override.
+ * AO=14 must auto-select Jacobi; eigenvalues remain consistent with the legacy
+ * divide-and-conquer provider while residual and S-orthonormality checks cover
+ * the algorithm-dependent eigenvectors at the release batch sizes. */
+bool test_small_ao_auto_dispatch_parity() {
+  Gfn2EigensolverOptions no_provider{};
+  if (gfn2_eigensolver_uses_jacobi(no_provider, 14)) {
+    return false;
+  }
+  for (const std::int64_t batch_size : {1, 8, 128}) {
+    DeviceFixture fixture;
+    if (!fixture.create(make_batch(batch_size, false, -1, 14))) {
+      return false;
+    }
+    const Gfn2EigensolverOptions automatic = eigensolver_options(fixture.providers);
+    const Gfn2EigensolverOptions baseline =
+        eigensolver_options(fixture.providers, Gfn2EigensolverStrategy::kBatchedDivideAndConquer);
+    if (!gfn2_eigensolver_uses_jacobi(automatic, 12) ||
+        !gfn2_eigensolver_uses_jacobi(automatic, 16) ||
+        gfn2_eigensolver_uses_jacobi(automatic, 11) ||
+        gfn2_eigensolver_uses_jacobi(automatic, 17) || gfn2_eigensolver_uses_jacobi(baseline, 14) ||
+        !factor(fixture, 71u, automatic) || !fixture.fill_outputs(kSentinel) ||
+        !solve(fixture, 71u, true, baseline)) {
+      return false;
+    }
+    std::vector<double> baseline_eigenvalues;
+    if (!fixture.eigenvalues.download(baseline_eigenvalues) || !fixture.fill_outputs(kSentinel) ||
+        !solve(fixture, 71u, true, automatic)) {
+      return false;
+    }
+    std::vector<std::uint32_t> errors;
+    std::vector<double> automatic_eigenvalues;
+    std::vector<double> automatic_coefficients;
+    if (!fixture.system_errors.download(errors) ||
+        !fixture.eigenvalues.download(automatic_eigenvalues) ||
+        !fixture.coefficients.download(automatic_coefficients) ||
+        errors.size() != static_cast<std::size_t>(batch_size) ||
+        baseline_eigenvalues.size() != automatic_eigenvalues.size()) {
+      return false;
+    }
+    for (std::size_t index = 0; index < automatic_eigenvalues.size(); ++index) {
+      if (!near(baseline_eigenvalues[index], automatic_eigenvalues[index], 1.0e-11)) {
+        std::cerr << "small-AO auto dispatch eigenvalue mismatch at batch=" << batch_size
+                  << " index=" << index << '\n';
+        return false;
+      }
+    }
+    for (std::int64_t system = 0; system < batch_size; ++system) {
+      if (errors[static_cast<std::size_t>(system)] != 0u ||
+          !validate_system(fixture.host, system, automatic_eigenvalues, automatic_coefficients)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/* The large-singleton provider changes the standard symmetric algorithm, so
+ * qualify it independently of the SCC loop. A distinct-spectrum generalized
+ * problem is compared with the legacy provider, exact degeneracy proves the
+ * cluster policy, and a symmetric 2x2 block exercises the zero-pivot Sturm
+ * recurrence that otherwise can silently miscount its positive eigenvalue. */
+bool test_tridiagonal_provider_parity_and_degeneracy() {
+  Gfn2EigensolverOptions automatic{};
+  Gfn2EigensolverBucket policy{512, 1, 0, 0, 0};
+  if (gfn2_eigensolver_uses_tridiagonal(automatic, policy)) return false;
+  policy.orbital_count = 513;
+  if (!gfn2_eigensolver_uses_tridiagonal(automatic, policy)) return false;
+  policy.system_count = 2;
+  if (gfn2_eigensolver_uses_tridiagonal(automatic, policy)) return false;
+  policy = {64, 8, 0, 0, 0};
+  Gfn2EigensolverOptions forced{};
+  forced.strategy = Gfn2EigensolverStrategy::kTridiagonalBisection;
+  if (!gfn2_eigensolver_uses_tridiagonal(forced, policy)) return false;
+  policy.orbital_count = gpuxtb::detail::cuda::kGfn2TridiagonalMaximumOrbitals + 1;
+  if (gfn2_eigensolver_uses_tridiagonal(forced, policy)) return false;
+
+  DeviceFixture distinct;
+  if (!distinct.create(make_batch(1, false, -1, 64)) || !factor(distinct, 81u)) return false;
+  const Gfn2EigensolverOptions baseline =
+      eigensolver_options(distinct.providers, Gfn2EigensolverStrategy::kBatchedDivideAndConquer);
+  const Gfn2EigensolverOptions tridiagonal =
+      eigensolver_options(distinct.providers, Gfn2EigensolverStrategy::kTridiagonalBisection);
+  if (!distinct.fill_outputs(kSentinel) || !solve(distinct, 81u, true, baseline)) return false;
+  std::vector<double> baseline_eigenvalues;
+  if (!distinct.eigenvalues.download(baseline_eigenvalues) || !distinct.fill_outputs(kSentinel) ||
+      !solve(distinct, 81u, true, tridiagonal)) {
+    return false;
+  }
+  std::vector<std::uint32_t> errors;
+  std::vector<double> eigenvalues;
+  std::vector<double> coefficients;
+  if (!distinct.system_errors.download(errors) || !distinct.eigenvalues.download(eigenvalues) ||
+      !distinct.coefficients.download(coefficients) || errors != std::vector<std::uint32_t>{0u} ||
+      baseline_eigenvalues.size() != eigenvalues.size() ||
+      !validate_system(distinct.host, 0, eigenvalues, coefficients)) {
+    return false;
+  }
+  for (std::size_t index = 0; index < eigenvalues.size(); ++index) {
+    if (!near(baseline_eigenvalues[index], eigenvalues[index], 2.0e-12)) {
+      std::cerr << "tridiagonal provider eigenvalue mismatch at index " << index << '\n';
+      return false;
+    }
+  }
+
+  TestBatch exact = make_batch(1, false, -1, 64);
+  std::fill(exact.overlap.begin(), exact.overlap.end(), 0.0);
+  std::fill(exact.hamiltonian.begin(), exact.hamiltonian.end(), 0.0);
+  for (std::int32_t orbital = 0; orbital < 64; ++orbital) {
+    exact.overlap[static_cast<std::size_t>(orbital * 64 + orbital)] = 1.0;
+    exact.hamiltonian[static_cast<std::size_t>(orbital * 64 + orbital)] =
+        -4.0 + 0.25 * static_cast<double>(orbital / 4);
+  }
+  DeviceFixture degenerate;
+  if (!degenerate.create(std::move(exact)) || !factor(degenerate, 82u) ||
+      !degenerate.fill_outputs(kSentinel) || !solve(degenerate, 82u, true, tridiagonal) ||
+      !degenerate.system_errors.download(errors) || !degenerate.eigenvalues.download(eigenvalues) ||
+      !degenerate.coefficients.download(coefficients) || errors != std::vector<std::uint32_t>{0u} ||
+      !validate_system(degenerate.host, 0, eigenvalues, coefficients)) {
+    return false;
+  }
+  for (std::int32_t orbital = 0; orbital < 64; ++orbital) {
+    const double expected = -4.0 + 0.25 * static_cast<double>(orbital / 4);
+    if (!near(eigenvalues[static_cast<std::size_t>(orbital)], expected, 2.0e-12)) return false;
+  }
+
+  TestBatch zero_pivot = make_batch(1, false, -1, 2);
+  zero_pivot.overlap = {1.0, 0.0, 0.0, 1.0};
+  zero_pivot.hamiltonian = {0.0, 1.0, 1.0, 0.0};
+  DeviceFixture irreducible;
+  if (!irreducible.create(std::move(zero_pivot)) || !factor(irreducible, 83u) ||
+      !irreducible.fill_outputs(kSentinel) || !solve(irreducible, 83u, true, tridiagonal) ||
+      !irreducible.system_errors.download(errors) ||
+      !irreducible.eigenvalues.download(eigenvalues) ||
+      !irreducible.coefficients.download(coefficients) ||
+      errors != std::vector<std::uint32_t>{0u} || eigenvalues.size() != 2u ||
+      !near(eigenvalues[0], -1.0, 2.0e-12) || !near(eigenvalues[1], 1.0, 2.0e-12) ||
+      !validate_system(irreducible.host, 0, eigenvalues, coefficients)) {
+    return false;
+  }
+  return true;
+}
+
+/* A diagonal matrix supplies exact eigenpairs and tridiagonal splits while two
+ * launches prove that the complete generalized solve is device-launchable. */
+bool test_tridiagonal_device_launch(std::int32_t kOrbitals, bool check_upper_bound) {
+  if (kOrbitals <= 0) return false;
+  Gfn2EigensolverOptions options{};
+  Gfn2EigensolverBucket policy{kOrbitals, 1, 0, 0, 0};
+  if (!gfn2_eigensolver_uses_tridiagonal(options, policy)) return false;
+  if (check_upper_bound) {
+    if (kOrbitals != gpuxtb::detail::cuda::kGfn2TridiagonalMaximumOrbitals) return false;
+    ++policy.orbital_count;
+    if (gfn2_eigensolver_uses_tridiagonal(options, policy)) return false;
+  }
+
+  TestBatch exact = make_batch(1, false, -1, kOrbitals);
+  std::fill(exact.overlap.begin(), exact.overlap.end(), 0.0);
+  std::fill(exact.hamiltonian.begin(), exact.hamiltonian.end(), 0.0);
+  for (std::int32_t orbital = 0; orbital < kOrbitals; ++orbital) {
+    const std::size_t diagonal = static_cast<std::size_t>(orbital) * kOrbitals + orbital;
+    exact.overlap[diagonal] = 1.0;
+    exact.hamiltonian[diagonal] = -5.0 + 0.01 * static_cast<double>(orbital);
+  }
+  DeviceFixture fixture;
+  if (!fixture.create(std::move(exact)) || !factor(fixture, 84u) ||
+      !fixture.fill_outputs(kSentinel)) {
+    return false;
+  }
+  options = eigensolver_options(fixture.providers);
+  if (!gfn2_eigensolver_uses_tridiagonal(options, fixture.host.buckets[0]) ||
+      !cuda_ok(cudaStreamBeginCapture(fixture.providers.stream, cudaStreamCaptureModeThreadLocal),
+               "upper-bound cudaStreamBeginCapture")) {
+    return false;
+  }
+  const cudaError_t reset_status = reset_gfn2_eigensolver_device_errors_cuda(
+      fixture.host.batch_size, fixture.system_errors.get(), fixture.device_error.get(),
+      fixture.providers.stream);
+  const auto solve_launch = solve_gfn2_eigensystems_cuda(
+      fixture.batch, fixture.host.buckets.data(),
+      static_cast<std::int64_t>(fixture.host.buckets.size()), fixture.cache, 84u,
+      fixture.hamiltonian.get(), options, fixture.providers.solver, fixture.providers.parameters,
+      fixture.providers.blas, fixture.workspace, fixture.results, fixture.system_errors.get(),
+      fixture.device_error.get(), fixture.providers.stream);
+  cudaGraph_t graph = nullptr;
+  const cudaError_t capture_status = cudaStreamEndCapture(fixture.providers.stream, &graph);
+  if (reset_status != cudaSuccess || !solve_launch.success() || capture_status != cudaSuccess ||
+      graph == nullptr) {
+    if (graph != nullptr) (void)cudaGraphDestroy(graph);
+    return false;
+  }
+  cudaGraphExec_t executable = nullptr;
+  const cudaError_t instantiate_status =
+      cudaGraphInstantiate(&executable, graph, cudaGraphInstantiateFlagDeviceLaunch);
+  if (instantiate_status != cudaSuccess ||
+      !cuda_ok(cudaGraphLaunch(executable, fixture.providers.stream),
+               "upper-bound cudaGraphLaunch") ||
+      !cuda_ok(cudaStreamSynchronize(fixture.providers.stream), "upper-bound graph synchronize")) {
+    if (executable != nullptr) (void)cudaGraphExecDestroy(executable);
+    (void)cudaGraphDestroy(graph);
+    return false;
+  }
+  std::vector<double> first_eigenvalues;
+  if (!fixture.eigenvalues.download(first_eigenvalues) ||
+      !cuda_ok(cudaGraphLaunch(executable, fixture.providers.stream),
+               "upper-bound cudaGraphLaunch replay") ||
+      !cuda_ok(cudaStreamSynchronize(fixture.providers.stream), "upper-bound replay synchronize")) {
+    (void)cudaGraphExecDestroy(executable);
+    (void)cudaGraphDestroy(graph);
+    return false;
+  }
+  std::vector<std::uint32_t> errors;
+  std::vector<double> eigenvalues;
+  std::vector<double> coefficients;
+  const bool downloaded = fixture.system_errors.download(errors) &&
+                          fixture.eigenvalues.download(eigenvalues) &&
+                          fixture.coefficients.download(coefficients);
+  (void)cudaGraphExecDestroy(executable);
+  (void)cudaGraphDestroy(graph);
+  if (!downloaded || errors != std::vector<std::uint32_t>{0u} || first_eigenvalues != eigenvalues) {
+    return false;
+  }
+  for (std::int32_t orbital = 0; orbital < kOrbitals; ++orbital) {
+    const double expected = -5.0 + 0.01 * static_cast<double>(orbital);
+    if (!near(eigenvalues[static_cast<std::size_t>(orbital)], expected, 5.0e-10)) return false;
+    for (std::int32_t row = 0; row < kOrbitals; ++row) {
+      const double coefficient = coefficients[static_cast<std::size_t>(row) * kOrbitals + orbital];
+      if ((row == orbital && !near(std::abs(coefficient), 1.0, 5.0e-9)) ||
+          (row != orbital && std::abs(coefficient) > 5.0e-8)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/* Qualify the advertised automatic upper bound independently of the alkane
+ * sweep. The adjacent 1025 policy point must remain rejected. */
+bool test_tridiagonal_upper_bound_device_launch() {
+  return test_tridiagonal_device_launch(gpuxtb::detail::cuda::kGfn2TridiagonalMaximumOrbitals,
+                                        true);
+}
+
+/* Compute Sanitizer 12.9's synccheck reports the pre-existing solve-preflight
+ * block barrier when it is replayed as a Graph child. Exercise the complete
+ * new provider directly at a bounded size here. The ordinary suite separately
+ * proves automatic Graph capture/replay at 542 and 1024 orbitals, while the
+ * 513-orbital tests cover the policy boundary and forced two-spin provider. */
+bool test_tridiagonal_sanitizer_direct() {
+  constexpr std::int32_t kOrbitals = 64;
+  DeviceFixture fixture;
+  if (!fixture.create(make_batch(1, false, -1, kOrbitals)) || !factor(fixture, 85u) ||
+      !fixture.fill_outputs(kSentinel)) {
+    return false;
+  }
+  const Gfn2EigensolverOptions options =
+      eigensolver_options(fixture.providers, Gfn2EigensolverStrategy::kTridiagonalBisection);
+  if (!solve(fixture, 85u, true, options)) return false;
+  std::vector<std::uint32_t> errors;
+  std::vector<double> eigenvalues;
+  std::vector<double> coefficients;
+  return fixture.system_errors.download(errors) && fixture.eigenvalues.download(eigenvalues) &&
+         fixture.coefficients.download(coefficients) && errors == std::vector<std::uint32_t>{0u} &&
+         validate_system(fixture.host, 0, eigenvalues, coefficients);
+}
+
 /* Focused leaf coverage for the production exact-capacity dispatch primitives:
  * the no-conditional compaction kernels and the exact-capacity eigensolver /
  * backtransform capture entry points that the production SCC loop chain builds
@@ -1053,9 +1399,14 @@ bool test_compacted_graph_batch(std::int64_t batch_size, bool mixed_buckets) {
  * zero-capacity no-op boundary, without depending on the full loop owner. */
 bool test_exact_capacity_leaf_primitives() {
   constexpr std::int64_t batch_size = 8;
+  constexpr std::int32_t orbital_count = 14;
   constexpr std::uint64_t generation = 31u;
   DeviceFixture fixture;
-  if (!fixture.create(make_batch(batch_size, false)) || !factor(fixture, generation)) {
+  if (!fixture.create(make_batch(batch_size, false, -1, orbital_count))) {
+    return false;
+  }
+  const Gfn2EigensolverOptions options = eigensolver_options(fixture.providers);
+  if (!factor(fixture, generation, options)) {
     return false;
   }
   const std::int64_t bucket_count = static_cast<std::int64_t>(fixture.host.buckets.size());
@@ -1098,8 +1449,8 @@ bool test_exact_capacity_leaf_primitives() {
     }
     Gfn2EigensolverLaunchResult compact = prepare_and_compact_gfn2_solve_buckets_cuda(
         fixture.batch, fixture.host.buckets.data(), bucket_count, fixture.cache, generation,
-        fixture.hamiltonian.get(), Gfn2EigensolverOptions{}, fixture.workspace,
-        fixture.system_errors.get(), fixture.device_error.get(), fixture.providers.stream);
+        fixture.hamiltonian.get(), options, fixture.workspace, fixture.system_errors.get(),
+        fixture.device_error.get(), fixture.providers.stream);
     if (!compact.success()) {
       return false;
     }
@@ -1125,12 +1476,14 @@ bool test_exact_capacity_leaf_primitives() {
           eig_graph, fixture.providers.stream, static_cast<std::uint32_t>(active_capacity),
           fixture.batch, bucket, 0, fixture.cache, fixture.hamiltonian.get(),
           fixture.providers.solver, fixture.providers.parameters, fixture.providers.blas,
-          fixture.workspace, fixture.system_errors.get(), fixture.device_error.get(), false);
+          fixture.workspace, fixture.system_errors.get(), fixture.device_error.get(), options);
       cudaGraphExec_t eig_exec = nullptr;
       const bool eig_ok =
           eig.success() &&
-          cuda_ok(cudaGraphInstantiate(&eig_exec, eig_graph, nullptr, nullptr, 0u),
-                  "exact-capacity eig instantiate") &&
+          cuda_ok(cudaGraphInstantiate(&eig_exec, eig_graph, cudaGraphInstantiateFlagDeviceLaunch),
+                  "exact-capacity device-launch eig instantiate") &&
+          cuda_ok(cudaGraphUpload(eig_exec, fixture.providers.stream),
+                  "exact-capacity eig upload") &&
           cuda_ok(cudaGraphLaunch(eig_exec, fixture.providers.stream), "exact-capacity eig launch");
       if (eig_exec != nullptr) {
         (void)cudaGraphExecDestroy(eig_exec);
@@ -1154,12 +1507,14 @@ bool test_exact_capacity_leaf_primitives() {
           fixture.batch, bucket, 0, fixture.providers.blas, fixture.workspace, fixture.results,
           fixture.system_errors.get(), fixture.device_error.get(), false);
       cudaGraphExec_t back_exec = nullptr;
-      const bool back_ok =
-          back.success() &&
-          cuda_ok(cudaGraphInstantiate(&back_exec, back_graph, nullptr, nullptr, 0u),
-                  "exact-capacity backtransform instantiate") &&
-          cuda_ok(cudaGraphLaunch(back_exec, fixture.providers.stream),
-                  "exact-capacity backtransform launch");
+      const bool back_ok = back.success() &&
+                           cuda_ok(cudaGraphInstantiate(&back_exec, back_graph,
+                                                        cudaGraphInstantiateFlagDeviceLaunch),
+                                   "exact-capacity device-launch backtransform instantiate") &&
+                           cuda_ok(cudaGraphUpload(back_exec, fixture.providers.stream),
+                                   "exact-capacity backtransform upload") &&
+                           cuda_ok(cudaGraphLaunch(back_exec, fixture.providers.stream),
+                                   "exact-capacity backtransform launch");
       if (back_exec != nullptr) {
         (void)cudaGraphExecDestroy(back_exec);
       }
@@ -1253,16 +1608,20 @@ bool test_exact_capacity_leaf_primitives() {
 bool test_compacted_graph_filters_failed_peer() {
   constexpr std::int64_t kFailedSystem = 3;
   DeviceFixture fixture;
-  if (!fixture.create(make_batch(8, false)) || !factor(fixture, 37u)) {
+  if (!fixture.create(make_batch(8, false, -1, 14))) {
+    return false;
+  }
+  const Gfn2EigensolverOptions options = eigensolver_options(fixture.providers);
+  if (!factor(fixture, 37u, options)) {
     return false;
   }
   Gfn2EigensolverCompactedSolveGraph graph;
   const auto build = build_gfn2_compacted_eigensolver_graph_cuda(
       fixture.batch, fixture.host.buckets.data(),
       static_cast<std::int64_t>(fixture.host.buckets.size()), fixture.cache, 37u,
-      fixture.hamiltonian.get(), Gfn2EigensolverOptions{}, fixture.providers.solver,
-      fixture.providers.parameters, fixture.providers.blas, fixture.workspace, fixture.results,
-      fixture.system_errors.get(), fixture.device_error.get(), graph);
+      fixture.hamiltonian.get(), options, fixture.providers.solver, fixture.providers.parameters,
+      fixture.providers.blas, fixture.workspace, fixture.results, fixture.system_errors.get(),
+      fixture.device_error.get(), graph);
   if (!build.success()) {
     return false;
   }
@@ -1606,7 +1965,11 @@ bool test_active_offset_and_singular_failures() {
 bool test_ill_conditioned_peer_isolation() {
   constexpr std::int64_t kFailedSystem = 3;
   DeviceFixture fixture;
-  if (!fixture.create(make_batch(8, false, kFailedSystem)) || !factor(fixture, 11u)) {
+  if (!fixture.create(make_batch(8, false, kFailedSystem, 14))) {
+    return false;
+  }
+  const Gfn2EigensolverOptions options = eigensolver_options(fixture.providers);
+  if (!factor(fixture, 11u, options)) {
     return false;
   }
   std::vector<std::uint32_t> factor_errors;
@@ -1623,7 +1986,7 @@ bool test_ill_conditioned_peer_isolation() {
       return false;
     }
   }
-  if (!fixture.fill_outputs(kSentinel) || !solve(fixture, 11u)) {
+  if (!fixture.fill_outputs(kSentinel) || !solve(fixture, 11u, true, options)) {
     return false;
   }
   std::vector<std::uint32_t> solve_errors;
@@ -2117,6 +2480,114 @@ void print_latency_stats(const char* key, const LatencyStats& stats) {
   std::printf("]}");
 }
 
+int run_dispatch_policy_report() {
+  ProviderHandles providers;
+  if (!providers.create()) return 1;
+  const Gfn2EigensolverOptions options = eigensolver_options(providers);
+  std::printf(
+      "{\"record_type\":\"protocol\",\"benchmark\":\"eigensolver_dispatch_policy\","
+      "\"policy\":\"production kAuto homogeneous bucket\"}\n");
+  for (const std::int32_t orbital_count : {8, 12, 16, 17, 512, 513, 542, 722, 1024, 1025}) {
+    for (const std::int32_t batch_size : {1, 8, 32, 128}) {
+      const Gfn2EigensolverBucket bucket{orbital_count, batch_size, 0, 0, 0};
+      const char* provider = "xsyev_batched";
+      if (gfn2_eigensolver_uses_tridiagonal(options, bucket)) {
+        provider = "sytrd_bisection_inverse_iteration";
+      } else if (gfn2_eigensolver_uses_jacobi(options, orbital_count)) {
+        provider = "syevj_batched";
+      }
+      std::printf(
+          "{\"record_type\":\"dispatch_policy\",\"n\":%d,\"batch\":%d,"
+          "\"provider\":\"%s\"}\n",
+          orbital_count, batch_size, provider);
+    }
+  }
+  return 0;
+}
+
+int run_dispatch_benchmark(std::int32_t orbital_count, std::int64_t batch_size, int warmups,
+                           int samples) {
+  if (orbital_count <= 0 || orbital_count > 32 || batch_size <= 0 || warmups < 0 || samples <= 0) {
+    return 1;
+  }
+  DeviceFixture fixture;
+  if (!fixture.create(make_batch(batch_size, false, -1, orbital_count)) || !factor(fixture, 73u)) {
+    return 1;
+  }
+  const Gfn2EigensolverOptions batched_options =
+      eigensolver_options(fixture.providers, Gfn2EigensolverStrategy::kBatchedDivideAndConquer);
+  const Gfn2EigensolverOptions jacobi_options =
+      eigensolver_options(fixture.providers, Gfn2EigensolverStrategy::kBatchedJacobi);
+  Gfn2EigensolverCompactedSolveGraph batched_graph;
+  Gfn2EigensolverCompactedSolveGraph jacobi_graph;
+  const auto build = [&](const Gfn2EigensolverOptions& options,
+                         Gfn2EigensolverCompactedSolveGraph& graph) {
+    return build_gfn2_compacted_eigensolver_graph_cuda(
+        fixture.batch, fixture.host.buckets.data(),
+        static_cast<std::int64_t>(fixture.host.buckets.size()), fixture.cache, 73u,
+        fixture.hamiltonian.get(), options, fixture.providers.solver, fixture.providers.parameters,
+        fixture.providers.blas, fixture.workspace, fixture.results, fixture.system_errors.get(),
+        fixture.device_error.get(), graph);
+  };
+  const Gfn2EigensolverLaunchResult batched_build = build(batched_options, batched_graph);
+  const Gfn2EigensolverLaunchResult jacobi_build = build(jacobi_options, jacobi_graph);
+  if (!batched_build.success() || !jacobi_build.success() || !batched_graph.valid() ||
+      !jacobi_graph.valid()) {
+    std::cerr << "dispatch benchmark graph build failed\n";
+    return 1;
+  }
+
+  if (!fixture.fill_outputs(kSentinel) || !launch_compacted(fixture, batched_graph) ||
+      !validate_compacted_launch(fixture)) {
+    return 1;
+  }
+  std::vector<double> batched_eigenvalues;
+  if (!fixture.eigenvalues.download(batched_eigenvalues) || !fixture.fill_outputs(kSentinel) ||
+      !launch_compacted(fixture, jacobi_graph) || !validate_compacted_launch(fixture)) {
+    return 1;
+  }
+  std::vector<double> jacobi_eigenvalues;
+  std::vector<double> jacobi_coefficients;
+  if (!fixture.eigenvalues.download(jacobi_eigenvalues) ||
+      !fixture.coefficients.download(jacobi_coefficients)) {
+    return 1;
+  }
+  for (std::size_t index = 0; index < batched_eigenvalues.size(); ++index) {
+    if (!near(batched_eigenvalues[index], jacobi_eigenvalues[index], 1.0e-11)) {
+      std::cerr << "dispatch benchmark eigenvalue mismatch at " << index << '\n';
+      return 1;
+    }
+  }
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    if (!validate_system(fixture.host, system, jacobi_eigenvalues, jacobi_coefficients)) {
+      return 1;
+    }
+  }
+
+  const auto prepare = [&]() {
+    return cuda_ok(reset_gfn2_eigensolver_device_errors_cuda(
+                       fixture.host.batch_size, fixture.system_errors.get(),
+                       fixture.device_error.get(), fixture.providers.stream),
+                   "reset dispatch timing errors");
+  };
+  LatencyStats batched;
+  LatencyStats jacobi;
+  if (!measure_launch_latency(
+          fixture, warmups, samples, prepare,
+          [&]() { return enqueue_compacted(fixture, batched_graph); }, batched) ||
+      !measure_launch_latency(
+          fixture, warmups, samples, prepare,
+          [&]() { return enqueue_compacted(fixture, jacobi_graph); }, jacobi)) {
+    return 1;
+  }
+  std::printf("{\"record_type\":\"dispatch\",\"n\":%d,\"batch\":%lld", orbital_count,
+              static_cast<long long>(batch_size));
+  print_latency_stats("xsyev_batched", batched);
+  print_latency_stats("syevj_batched", jacobi);
+  std::printf(",\"p50_speedup\":%.6f,\"match\":true}\n", batched.p50_us / jacobi.p50_us);
+  return 0;
+}
+
 int run_compaction_benchmark() {
   constexpr int kWarmup = 5;
   constexpr int kSamples = 50;
@@ -2462,6 +2933,35 @@ int main(int argc, char** argv) {
     }
     return run_compaction_benchmark();
   }
+  if (argc >= 2 && std::strcmp(argv[1], "--dispatch-benchmark") == 0) {
+    if (argc != 6) {
+      std::cerr << "usage: --dispatch-benchmark <ao> <batch> <warmups> <samples>\n";
+      return 1;
+    }
+    std::int32_t orbital_count = 0;
+    std::int64_t batch = 0;
+    int warmups = 0;
+    int samples = 0;
+    if (!parse_integer(argv[2], orbital_count) || !parse_integer(argv[3], batch) ||
+        !parse_integer(argv[4], warmups) || !parse_integer(argv[5], samples)) {
+      return 1;
+    }
+    return run_dispatch_benchmark(orbital_count, batch, warmups, samples);
+  }
+  if (argc >= 2 && std::strcmp(argv[1], "--dispatch-policy") == 0) {
+    if (argc != 2) {
+      std::cerr << "usage: --dispatch-policy\n";
+      return 1;
+    }
+    return run_dispatch_policy_report();
+  }
+  if (argc >= 2 && std::strcmp(argv[1], "--tridiagonal-provider-sanitizer") == 0) {
+    if (argc != 2) {
+      std::cerr << "usage: --tridiagonal-provider-sanitizer\n";
+      return 1;
+    }
+    return test_tridiagonal_sanitizer_direct() ? 0 : 1;
+  }
   if (argc >= 2 && std::strcmp(argv[1], "--compaction-profile") == 0) {
     if (argc != 6) {
       std::cerr << "usage: --compaction-profile <batch> <heterogeneous 0/1> <active> <loops>\n";
@@ -2503,6 +3003,22 @@ int main(int argc, char** argv) {
   }
   if (!test_spin_eigensolver_mixed_batches_and_transaction()) {
     std::cerr << "spin eigensolver batch/transaction test failed\n";
+    return 1;
+  }
+  if (!test_spin_eigensolver_tridiagonal_singleton()) {
+    std::cerr << "spin eigensolver tridiagonal-singleton test failed\n";
+    return 1;
+  }
+  if (!test_small_ao_auto_dispatch_parity()) {
+    std::cerr << "small-AO auto dispatch parity test failed\n";
+    return 1;
+  }
+  if (!test_tridiagonal_provider_parity_and_degeneracy()) {
+    std::cerr << "tridiagonal provider parity/degeneracy test failed\n";
+    return 1;
+  }
+  if (!test_tridiagonal_upper_bound_device_launch()) {
+    std::cerr << "tridiagonal upper-bound device-launch test failed\n";
     return 1;
   }
   if (!test_exact_capacity_leaf_primitives()) {

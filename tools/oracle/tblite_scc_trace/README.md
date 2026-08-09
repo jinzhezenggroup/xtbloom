@@ -252,25 +252,38 @@ canonical writer outputs are also checked with a Draft 7 validator.
 ## SCC trace comparator foundation
 
 `gpuxtb_scc_compare.py` validates and compares complete traces or one
-standalone iteration snapshot. It is intentionally a read-only comparison
-tool: it never generates or updates a golden file. A backend replay harness
-must separately inject the golden mixed state, execute gpuxtb, and provide the
-actual snapshot; that execution and the independent Broyden-history replay
-remain part of issue #49.
+standalone iteration snapshot.  It is intentionally a read-only comparison
+tool: it never generates or updates a golden file.  The replay harness
+(`gpuxtb_scc_trace_replay`) injects a golden mixed state, executes exactly one
+production CPU driver iteration, and emits the snapshot; the wrapper compares
+it with `compare_iteration` using the `cpu_replay_v1` profile. The replay plan
+caps the driver at that logical iteration after seeding its counter, so a
+nonconverged one-step replay reaches a real maximum-iteration terminal instead
+of acquiring terminal metadata only during serialization. The wrapper checks
+that lifecycle before extracting the standalone iteration. The
+independent mixer harness (`gpuxtb_scc_trace_mixer`) additionally replays the
+pinned golden residual sequence through the production Broyden mixer alone so
+a self-consistent flatten-order defect cannot hide behind a matching physical
+trajectory.
 
 The built-in tolerance policies have stable versioned identifiers:
 
 - `cpu_closed_loop_v1` compares complete CPU trajectories from the same
   initial guess with default `(atol=1e-8, rtol=1e-9)`, residual overrides of
   `(1e-7, 1e-7)`, and an energy override of `(1e-8, 1e-8)`;
+- `cpu_replay_v1` compares one CPU iteration executed separately from its
+  injected golden mixed state (same magnitudes as the closed-loop profile);
 - `cuda_replay_v1` compares one independently executed iteration with default
   `(atol=1e-9, rtol=1e-10)` and residual overrides of `(1e-8, 1e-8)`.
 
-These version-1 values are tuning targets until issue #48 lands the pinned
-corpus and manifest used to anchor them. Every numeric field uses
+These version-1 values are anchored by the pinned corpus and manifest.  Every
+numeric field uses
 `abs(actual - expected) <= atol + rtol * max(abs(actual), abs(expected))`.
 Dimensions, provenance pins, layouts, iteration indices/convergence flags, and
-terminal status/count metadata are exact.
+terminal status/count metadata are exact.  The documentary
+`provenance.oracle_command` string is intentionally ignored: it legitimately
+differs between the generator that produced the golden and an independent CPU
+capture of the same science.
 
 Compare two complete traces:
 
@@ -343,10 +356,36 @@ per-shell `point_charge_shell_potential` (V^PC) and `point_charge_energy`
 
 `gpuxtb_scc_cpu_trace.py` drives the production CPU GFN2 SCC driver through the
 same corpus and compares captured trace documents against the goldens with the
-comparator.  It is the executable evidence harness for issue #50: the initial
-measurement shows gpuxtb's SAD multipole seed differs from tblite's zero-charge
-first iteration, so strict closed-loop traces legitimately diverge and the
-`cpu_closed_loop_v1` profile is not yet an achievable gate.  The harness
-records the honest first-divergent field per case; it is built and its H3+
-iteration lifecycle, independent convergence flags, and terminal metadata are
-registered as a smoke gate without claiming a strict numerical comparison.
+comparator.  It is the executable evidence harness for issues #49/#50 with
+three modes:
+
+- `--capture`: one case at a time, comparing each complete closed-loop
+  trajectory against the pinned golden with `cpu_closed_loop_v1`.  The capture
+  driver includes the self-consistent D4 two-body atom potential (which is
+  nonzero even at the zero-charge first mixed state) and starts every system
+  from tblite's zero-charge perturbative q/d/Q seed;
+- `--batch-capture`: several cases in one ragged driver batch.  Every healthy
+  lane must equal its pinned sequential trajectory, systems which converge
+  early stop mutating while slower peers continue, and a controlled
+  per-system failure lane (NaN in one lane's H0) must neither corrupt nor
+  suppress the successful members;
+- `--replay`: every golden iteration is replayed from its injected mixed
+  q/d/Q state and compared with the `cpu_replay_v1` single-iteration profile.
+  A divergence is therefore assigned to the exact iteration where it first
+  appears instead of inheriting Broyden drift; an injected perturbation in a
+  later iteration is reported only at that iteration. If the eigensolver fails
+  after Hamiltonian assembly, the emitted trace retains only the failed
+  attempt's Hamiltonian and mixed q/d/Q for exact failure localization;
+- `--mixer`: `gpuxtb_scc_trace_mixer` replays the PINNED golden residual
+  sequence (raw minus mixed per iteration, in the canonical flatten order)
+  through gpuxtb's production Broyden mixer alone — no driver, no eigensolver.
+  Every state transition must reproduce the golden next mixed state, which
+  isolates the mixer's flatten order, damping, history, and transitions from
+  the physical trajectory.
+
+The native gates behind these modes are registered as CTest tests
+(`gpuxtb.gfn2.scc_trace_cpu_closed_loop`, `gpuxtb.gfn2.scc_trace_ragged_batch`,
+`gpuxtb.gfn2.scc_trace_cpu_replay`, `gpuxtb.gfn2.scc_trace_mixer_replay`, and
+`gpuxtb.gfn2.scc_trace_ragged_batch_native`) and are passing acceptance gates
+for the restricted CPU closed-loop, ragged-batch, replay, and mixer-history
+acceptance items of issue #42.
