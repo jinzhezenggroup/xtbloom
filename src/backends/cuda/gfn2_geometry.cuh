@@ -1,14 +1,14 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_GEOMETRY_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_GEOMETRY_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_GEOMETRY_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_GEOMETRY_CUH
 
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
 #include <type_traits>
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /*
  * Per unordered atom pair, in lower-triangle order, the cache stores
@@ -186,6 +186,6 @@ cudaError_t add_gfn2_coordination_vjp_cuda(
  * immutable inputs and from one another.
  */
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_GEOMETRY_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_GEOMETRY_CUH

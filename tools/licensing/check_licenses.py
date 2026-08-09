@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Validate source, installed, and archived gpuxtb legal material.
+"""Validate source, installed, and archived xtbloom legal material.
 
 The release workflows invoke this script at each distribution boundary. A
 single validator keeps the required filenames and provenance invariants from
@@ -98,40 +98,40 @@ SDIST_ARCHIVE_SUFFIXES = (
     IMPLIB_MANIFEST_PATH,
 )
 WHEEL_ARCHIVE_SUFFIXES = (
-    "share/licenses/gpuxtb/THIRD_PARTY_NOTICES.md",
-    f"share/licenses/gpuxtb/{EXCEPTION_FILE}",
-    "share/licenses/gpuxtb/provenance/manifest.json",
-    "share/licenses/gpuxtb/provenance/sto_manifest.json",
-    "share/licenses/gpuxtb/provenance/spin_manifest.json",
-    "share/licenses/gpuxtb/provenance/d4_manifest.json",
-    "share/licenses/gpuxtb/provenance/mctc_manifest.json",
-    "share/licenses/gpuxtb/provenance/implib_manifest.json",
-    "share/licenses/gpuxtb/third-party/MIT.txt",
-    "share/licenses/gpuxtb/third-party/array-api-compat-MIT.txt",
-    "share/licenses/gpuxtb/third-party/d4/d4.NOTICE",
-    "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING",
-    "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING.LESSER",
-    "share/licenses/gpuxtb/third-party/d4/mctc-lib-LICENSE",
+    "share/licenses/xtbloom/THIRD_PARTY_NOTICES.md",
+    f"share/licenses/xtbloom/{EXCEPTION_FILE}",
+    "share/licenses/xtbloom/provenance/manifest.json",
+    "share/licenses/xtbloom/provenance/sto_manifest.json",
+    "share/licenses/xtbloom/provenance/spin_manifest.json",
+    "share/licenses/xtbloom/provenance/d4_manifest.json",
+    "share/licenses/xtbloom/provenance/mctc_manifest.json",
+    "share/licenses/xtbloom/provenance/implib_manifest.json",
+    "share/licenses/xtbloom/third-party/MIT.txt",
+    "share/licenses/xtbloom/third-party/array-api-compat-MIT.txt",
+    "share/licenses/xtbloom/third-party/d4/d4.NOTICE",
+    "share/licenses/xtbloom/third-party/d4/dftd4-COPYING",
+    "share/licenses/xtbloom/third-party/d4/dftd4-COPYING.LESSER",
+    "share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE",
 )
 FORBIDDEN_ARCHIVE_PARTS = ("/build/", "/.cache/", "/.claude/", "/.ruff_cache/")
 INSTALL_FILES = (
-    "share/licenses/gpuxtb/LICENSE",
-    f"share/licenses/gpuxtb/{EXCEPTION_FILE}",
-    "share/licenses/gpuxtb/THIRD_PARTY_NOTICES.md",
-    "share/licenses/gpuxtb/third-party/LGPL-3.0-or-later.txt",
-    "share/licenses/gpuxtb/third-party/Apache-2.0.txt",
-    "share/licenses/gpuxtb/third-party/MIT.txt",
-    "share/licenses/gpuxtb/third-party/array-api-compat-MIT.txt",
-    "share/licenses/gpuxtb/provenance/manifest.json",
-    "share/licenses/gpuxtb/provenance/sto_manifest.json",
-    "share/licenses/gpuxtb/provenance/spin_manifest.json",
-    "share/licenses/gpuxtb/provenance/d4_manifest.json",
-    "share/licenses/gpuxtb/provenance/mctc_manifest.json",
-    "share/licenses/gpuxtb/provenance/implib_manifest.json",
-    "share/licenses/gpuxtb/third-party/d4/d4.NOTICE",
-    "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING",
-    "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING.LESSER",
-    "share/licenses/gpuxtb/third-party/d4/mctc-lib-LICENSE",
+    "share/licenses/xtbloom/LICENSE",
+    f"share/licenses/xtbloom/{EXCEPTION_FILE}",
+    "share/licenses/xtbloom/THIRD_PARTY_NOTICES.md",
+    "share/licenses/xtbloom/third-party/LGPL-3.0-or-later.txt",
+    "share/licenses/xtbloom/third-party/Apache-2.0.txt",
+    "share/licenses/xtbloom/third-party/MIT.txt",
+    "share/licenses/xtbloom/third-party/array-api-compat-MIT.txt",
+    "share/licenses/xtbloom/provenance/manifest.json",
+    "share/licenses/xtbloom/provenance/sto_manifest.json",
+    "share/licenses/xtbloom/provenance/spin_manifest.json",
+    "share/licenses/xtbloom/provenance/d4_manifest.json",
+    "share/licenses/xtbloom/provenance/mctc_manifest.json",
+    "share/licenses/xtbloom/provenance/implib_manifest.json",
+    "share/licenses/xtbloom/third-party/d4/d4.NOTICE",
+    "share/licenses/xtbloom/third-party/d4/dftd4-COPYING",
+    "share/licenses/xtbloom/third-party/d4/dftd4-COPYING.LESSER",
+    "share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE",
 )
 SPDX_FILES = {
     "data/parameters/gfn2.hpp": "LGPL-3.0-or-later",
@@ -183,7 +183,7 @@ EXCEPTION_TOKENS = (
     "does not apply to third-party material",
 )
 EXCEPTION_NOTICE = (
-    "gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION."
+    "xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION."
 )
 NVIDIA_DEPENDENCIES = {
     "nvidia-cublas-cu12",
@@ -230,9 +230,9 @@ WEB_SITE_RUNTIME_FILES = (
     "worker.js",
     "smiles_helpers.js",
     "smiles_worker.js",
-    "gpuxtb_web.js",
-    "gpuxtb_web.wasm",
-    "gpuxtb_web.data",
+    "xtbloom_web.js",
+    "xtbloom_web.wasm",
+    "xtbloom_web.data",
     "vendor/3Dmol-min.js",
 )
 
@@ -624,7 +624,7 @@ def check_source(root: Path) -> None:
         if (
             artifact.get("sha256") != digest
             or artifact.get("size_bytes") != size
-            or artifact.get("redistributed_by_gpuxtb") is not False
+            or artifact.get("redistributed_by_xtbloom") is not False
         ):
             raise LicenseCheckError(f"OpenChemLib manifest has unreviewed bytes: {url}")
 
@@ -775,7 +775,7 @@ def check_web_site(site: Path, source_root: Path | None = None) -> None:
     if (site / "libscipy_openblas.so").exists():
         raise LicenseCheckError(
             "web site contains the raw LAPACK side module; it must only be "
-            "conveyed inside gpuxtb_web.data"
+            "conveyed inside xtbloom_web.data"
         )
     # Pages uploads the complete site directory, so accepting arbitrary extra
     # files would allow an obsolete JS/WASM variant or unreviewed payload to be
@@ -795,8 +795,8 @@ def check_web_site(site: Path, source_root: Path | None = None) -> None:
         'href="LICENSE"',
         'href="THIRD_PARTY_NOTICES.md"',
         f'href="{EXCEPTION_FILE}"',
-        "https://jinzhezeng.group/gpuxtb/",
-        "https://github.com/jinzhezenggroup/gpuxtb",
+        "https://jinzhezeng.group/xtbloom/",
+        "https://github.com/jinzhezenggroup/xtbloom",
         'href="LICENSES/openchemlib-BSD-3-Clause.txt"',
     ):
         if token not in index:
@@ -852,7 +852,7 @@ def _find_archive_name(names: set[str], suffix: str) -> str:
 def _check_archived_implib(path: Path, names: set[str], wheel: bool) -> None:
     """Validate the installed manifest and the complete sdist vendor payload."""
     manifest_suffix = (
-        "share/licenses/gpuxtb/provenance/implib_manifest.json"
+        "share/licenses/xtbloom/provenance/implib_manifest.json"
         if wheel
         else IMPLIB_MANIFEST_PATH
     )

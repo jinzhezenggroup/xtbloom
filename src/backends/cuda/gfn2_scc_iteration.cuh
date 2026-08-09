@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_SCC_ITERATION_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_SCC_ITERATION_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_SCC_ITERATION_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_SCC_ITERATION_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -34,7 +34,7 @@
 #include "backends/cuda/gfn2_spin.cuh"
 #include "runtime/nvidia_host_api.h"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /* ABI v2 seals the complete ordered WavefunctionLayout spin packing in the
  * device plan instead of accepting aggregate extents as layout identity.  ABI
@@ -570,6 +570,6 @@ static_assert(std::is_standard_layout_v<Gfn2SccIterationBinding>);
     const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_SCC_ITERATION_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_SCC_ITERATION_CUH

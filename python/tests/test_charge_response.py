@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from gpuxtb import BatchCalculator, Calculator, ChargeResponse, Structure
-from gpuxtb.exceptions import GPUxtbRuntimeError, GPUxtbValueError
-from gpuxtb.interface import _pack_charge_responses
+from xtbloom import BatchCalculator, Calculator, ChargeResponse, Structure
+from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
+from xtbloom.interface import _pack_charge_responses
 
 H2_POSITIONS = np.array(
     [
@@ -127,21 +127,21 @@ def test_ragged_response_packing_zero_fills_only_mixed_batches(
 
 def test_charge_response_shape_validation() -> None:
     """Reject malformed response arrays and atom-count mismatches."""
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         ChargeResponse(shifts=[0.0, 0.0], matrix=[0.0, 0.0, 0.0, 0.0])
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         ChargeResponse(shifts=[0.0, 0.0], matrix=[[0.0], [0.0]])
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         ChargeResponse(shifts=[0.0, 0.0, 0.0], matrix=[[0.0, 0.0], [0.0, 0.0]])
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         ChargeResponse(shifts=[float("nan"), 0.0], matrix=[[0.0, 0.0], [0.0, 0.0]])
     calc = _h2(ChargeResponse(shifts=[0.0], matrix=[[0.0]]))
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         calc.singlepoint()
 
 
 def test_nonsymmetric_matrix_rejected_by_native() -> None:
     """Reject a nonsymmetric response matrix at the native API boundary."""
     calc = _h2(ChargeResponse(shifts=[0.0, 0.0], matrix=[[0.0, 0.001], [0.0, 0.0]]))
-    with pytest.raises(GPUxtbRuntimeError):
+    with pytest.raises(XTBloomRuntimeError):
         calc.singlepoint()

@@ -1,6 +1,6 @@
 """Tests for the packed Array API/DLPack batch entry point.
 
-:class:`gpuxtb.ArrayBatch` consumes dense eager arrays through the DLPack
+:class:`xtbloom.ArrayBatch` consumes dense eager arrays through the DLPack
 producer protocol and binds them zero-copy to the public C-ABI descriptors.
 These tests run entirely on the CPU backend with NumPy arrays (no optional
 array provider is required); the CUDA device-array coverage lives in
@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 from _cases import case_by_id, structure_inputs
 from _dlpack_fakes import FakeArray
-from gpuxtb import (
+from xtbloom import (
     ArrayBatch,
     BatchCalculator,
     Calculator,
@@ -22,10 +22,10 @@ from gpuxtb import (
     Structure,
     compute_arrays,
 )
-from gpuxtb.exceptions import (
-    GPUxtbNotSupportedError,
-    GPUxtbRuntimeError,
-    GPUxtbValueError,
+from xtbloom.exceptions import (
+    XTBloomNotSupportedError,
+    XTBloomRuntimeError,
+    XTBloomValueError,
 )
 
 H2_POSITIONS = np.array(
@@ -323,7 +323,7 @@ def test_out_readonly_rejected() -> None:
 def test_out_wrong_shape_rejected() -> None:
     """out= arrays must match the native output extents exactly."""
     water = _water()
-    with pytest.raises(GPUxtbValueError, match="shape"):
+    with pytest.raises(XTBloomValueError, match="shape"):
         ArrayBatch(**_pack_single([water]), backend="cpu").compute(
             out={"forces": np.empty((2, 3))}
         )
@@ -332,7 +332,7 @@ def test_out_wrong_shape_rejected() -> None:
 def test_out_wrong_dtype_rejected() -> None:
     """out= arrays must match the native output dtype exactly."""
     water = _water()
-    with pytest.raises(GPUxtbValueError, match="dtype"):
+    with pytest.raises(XTBloomValueError, match="dtype"):
         ArrayBatch(**_pack_single([water]), backend="cpu").compute(
             out={"energies": np.empty(1, dtype=np.float32)}
         )
@@ -341,7 +341,7 @@ def test_out_wrong_dtype_rejected() -> None:
 def test_out_unknown_name_rejected() -> None:
     """Unknown output names fail before touching anything."""
     water = _water()
-    with pytest.raises(GPUxtbValueError, match="output name"):
+    with pytest.raises(XTBloomValueError, match="output name"):
         ArrayBatch(**_pack_single([water]), backend="cpu").compute(
             out={"enthalpy": np.empty(1)}
         )
@@ -350,7 +350,7 @@ def test_out_unknown_name_rejected() -> None:
 def test_out_for_unrequested_property_is_rejected() -> None:
     """An explicit output buffer must never be accepted and then ignored."""
     packed = _pack_single([_water()])
-    with pytest.raises(GPUxtbValueError, match="not requested"):
+    with pytest.raises(XTBloomValueError, match="not requested"):
         ArrayBatch(**packed, backend="cpu").compute(
             compute_energy=False,
             out={"energies": np.empty(1)},
@@ -360,7 +360,7 @@ def test_out_for_unrequested_property_is_rejected() -> None:
 def test_out_non_dict_rejected() -> None:
     """The output policy must be a mapping."""
     water = _water()
-    with pytest.raises(GPUxtbValueError, match="mapping"):
+    with pytest.raises(XTBloomValueError, match="mapping"):
         ArrayBatch(**_pack_single([water]), backend="cpu").compute(out=[1, 2])
 
 
@@ -372,7 +372,7 @@ def test_incomplete_point_charge_group_rejected() -> None:
     water = _water()
     packed = _pack_single([water])
     packed["point_charge_offsets"] = np.asarray([0, 0], dtype=np.int64)
-    with pytest.raises(GPUxtbValueError, match="together"):
+    with pytest.raises(XTBloomValueError, match="together"):
         ArrayBatch(**packed, backend="cpu")
 
 
@@ -385,7 +385,7 @@ def test_empty_point_charge_group_is_not_silently_discarded() -> None:
         point_charge_values=np.empty(0, dtype=np.float64),
         point_charge_gammas=np.empty(0, dtype=np.float64),
     )
-    with pytest.raises(GPUxtbRuntimeError, match="point_charge_offsets"):
+    with pytest.raises(XTBloomRuntimeError, match="point_charge_offsets"):
         ArrayBatch(**packed, backend="cpu").compute()
 
 
@@ -397,7 +397,7 @@ def test_empty_charge_response_group_is_not_silently_discarded() -> None:
         charge_response_offsets=np.asarray([0, 0], dtype=np.int64),
         charge_response_matrix=np.empty(0, dtype=np.float64),
     )
-    with pytest.raises(GPUxtbRuntimeError, match="charge response"):
+    with pytest.raises(XTBloomRuntimeError, match="charge response"):
         ArrayBatch(**packed, backend="cpu").compute()
 
 
@@ -406,7 +406,7 @@ def test_dtype_mismatch_rejected() -> None:
     water = _water()
     packed = _pack_single([water])
     packed["positions"] = packed["positions"].astype(np.float32)
-    with pytest.raises(GPUxtbValueError, match="dtype"):
+    with pytest.raises(XTBloomValueError, match="dtype"):
         ArrayBatch(**packed, backend="cpu").compute()
 
 
@@ -440,7 +440,7 @@ def test_batch_count_mismatch_rejected() -> None:
     water = _water()
     packed = _pack_single([water])
     packed["molecular_charges"] = np.asarray([0.0, 1.0])
-    with pytest.raises(GPUxtbValueError, match=r"atom_offsets|shape"):
+    with pytest.raises(XTBloomValueError, match=r"atom_offsets|shape"):
         ArrayBatch(**packed, backend="cpu").compute()
 
 
@@ -449,7 +449,7 @@ def test_scalar_count_descriptor_is_rejected(name: str) -> None:
     """Count derivation reports a value error instead of leaking IndexError."""
     packed = _pack_single([_water()])
     packed[name] = np.asarray(packed[name][0])
-    with pytest.raises(GPUxtbValueError, match=name):
+    with pytest.raises(XTBloomValueError, match=name):
         ArrayBatch(**packed, backend="cpu").compute()
 
 
@@ -462,7 +462,7 @@ def test_scalar_point_charge_positions_are_rejected() -> None:
         point_charge_values=np.asarray([1.0]),
         point_charge_gammas=np.asarray([0.5]),
     )
-    with pytest.raises(GPUxtbValueError, match="point_charge_positions"):
+    with pytest.raises(XTBloomValueError, match="point_charge_positions"):
         ArrayBatch(**packed, backend="cpu").compute()
 
 
@@ -471,7 +471,7 @@ def test_cuda_fake_array_on_cpu_backend_rejected() -> None:
     water = _water()
     packed = _pack_single([water])
     packed["positions"] = FakeArray(packed["positions"], device=2)
-    with pytest.raises(GPUxtbNotSupportedError, match="CUDA backend"):
+    with pytest.raises(XTBloomNotSupportedError, match="CUDA backend"):
         ArrayBatch(**packed, backend="cpu").compute()
 
 
@@ -479,7 +479,7 @@ def test_cuda_fake_output_on_cpu_backend_rejected() -> None:
     """Output buffers follow the same backend/device contract as inputs."""
     packed = _pack_single([_water()])
     device_output = FakeArray(np.empty(1), device=2)
-    with pytest.raises(GPUxtbNotSupportedError, match="CUDA backend"):
+    with pytest.raises(XTBloomNotSupportedError, match="CUDA backend"):
         ArrayBatch(**packed, backend="cpu").compute(
             compute_forces=False,
             compute_charges=False,
@@ -516,7 +516,7 @@ def test_wrong_offsets_rejected_by_native_validation() -> None:
     water = _water()
     packed = _pack_single([water])
     packed["atom_offsets"] = np.asarray([0, 2], dtype=np.int64)
-    with pytest.raises(GPUxtbRuntimeError):
+    with pytest.raises(XTBloomRuntimeError):
         ArrayBatch(**packed, backend="cpu").compute()
 
 
@@ -545,17 +545,17 @@ def test_context_stream_property() -> None:
     assert batch.context.stream is None
     batch.close()
 
-    from gpuxtb import Context
+    from xtbloom import Context
 
-    with pytest.raises(GPUxtbValueError, match="CPU backend"):
+    with pytest.raises(XTBloomValueError, match="CPU backend"):
         Context("cpu", stream=0x1234)
-    with pytest.raises(GPUxtbValueError, match="stream"):
+    with pytest.raises(XTBloomValueError, match="stream"):
         Context("cpu", stream=0)
 
 
 def test_host_container_requires_dlpack() -> None:
     """Plain builtin containers are rejected with a clear message."""
-    with pytest.raises(GPUxtbValueError, match="__dlpack__"):
+    with pytest.raises(XTBloomValueError, match="__dlpack__"):
         ArrayBatch(
             atom_offsets=[0, 2],
             atomic_numbers=[1, 1],
@@ -577,7 +577,7 @@ def test_missing_native_outputs_are_null() -> None:
     packed = _pack_single([water])
     batch = ArrayBatch(**packed, backend="cpu")
     result = batch.compute(compute_energy=False)
-    with pytest.raises(GPUxtbValueError, match="not requested"):
+    with pytest.raises(XTBloomValueError, match="not requested"):
         _ = result.energies
     assert result.forces.shape == (3, 3)
 

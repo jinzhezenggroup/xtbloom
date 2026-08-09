@@ -1,4 +1,0 @@
-interface:
-  display_name: "Audit gpuxtb Dependency"
-  short_description: "Check provenance, licenses, and package payloads"
-  default_prompt: "Use $gpuxtb-audit-dependency to review this dependency or bundled artifact through source and package boundaries."

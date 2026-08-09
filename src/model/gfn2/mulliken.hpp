@@ -1,7 +1,7 @@
-#ifndef GPUXTB_MODEL_GFN2_MULLIKEN_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_MULLIKEN_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_MULLIKEN_HPP
+#define XTBLOOM_MODEL_GFN2_MULLIKEN_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -9,13 +9,13 @@
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/integrals.hpp"
 #include "model/gfn2/parallel_executor.hpp"
 #include "model/gfn2/wavefunction.hpp"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 struct MullikenPlanData;
 
@@ -74,9 +74,9 @@ class MullikenPlan {
 
   std::shared_ptr<const MullikenPlanData> data_;
 
-  friend gpuxtb_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& integrals,
-                                            const WavefunctionLayout& wavefunction,
-                                            MullikenPlan& plan, std::string& error);
+  friend xtbloom_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& integrals,
+                                             const WavefunctionLayout& wavefunction,
+                                             MullikenPlan& plan, std::string& error);
 };
 
 /*
@@ -166,9 +166,9 @@ struct MullikenWorkspace {
   std::int64_t elements = 0;
 };
 
-gpuxtb_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& integrals,
-                                   const WavefunctionLayout& wavefunction, MullikenPlan& plan,
-                                   std::string& error);
+xtbloom_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& integrals,
+                                    const WavefunctionLayout& wavefunction, MullikenPlan& plan,
+                                    std::string& error);
 
 /*
  * Compute q = n0 - P:S and atomic d/Q = -P:D/Q for exactly one ragged batch
@@ -182,7 +182,7 @@ gpuxtb_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& i
  * target population slices remain unchanged. The canonical caller-owned
  * workspace is used for staging, and successful calls allocate nothing.
  */
-gpuxtb_status_t evaluate_mulliken_population_system_cpu(
+xtbloom_status_t evaluate_mulliken_population_system_cpu(
     const MullikenPlan& plan, const MullikenIntegralView& integrals,
     const MullikenDensityView& density, const MullikenPopulationView& population,
     std::int64_t system, const MullikenWorkspace& workspace, std::string& error,
@@ -194,12 +194,12 @@ gpuxtb_status_t evaluate_mulliken_population_system_cpu(
  * converted to charge and magnetization, with magnetization N_beta-N_alpha.
  * All outputs are overwritten atomically; successful calls allocate nothing.
  */
-gpuxtb_status_t evaluate_mulliken_population_cpu(const MullikenPlan& plan,
-                                                 const MullikenIntegralView& integrals,
-                                                 const MullikenDensityView& density,
-                                                 const MullikenPopulationView& population,
-                                                 const MullikenWorkspace& workspace,
-                                                 std::string& error);
+xtbloom_status_t evaluate_mulliken_population_cpu(const MullikenPlan& plan,
+                                                  const MullikenIntegralView& integrals,
+                                                  const MullikenDensityView& density,
+                                                  const MullikenPopulationView& population,
+                                                  const MullikenWorkspace& workspace,
+                                                  std::string& error);
 
 /*
  * Accumulate the scalar, dipole, and quadrupole SCC potential shifts of
@@ -221,7 +221,7 @@ gpuxtb_status_t evaluate_mulliken_population_cpu(const MullikenPlan& plan,
  * target Hamiltonian slice remains unchanged. The canonical caller-owned
  * workspace is used for staging, and successful calls allocate nothing.
  */
-gpuxtb_status_t add_mulliken_hamiltonian_system_cpu(
+xtbloom_status_t add_mulliken_hamiltonian_system_cpu(
     const MullikenPlan& plan, const MullikenIntegralView& integrals,
     const MullikenPotentialView& potential, const MullikenHamiltonianView& hamiltonian,
     std::int64_t system, const MullikenWorkspace& workspace, std::string& error,
@@ -238,13 +238,13 @@ gpuxtb_status_t add_mulliken_hamiltonian_system_cpu(
  * components. Charge/magnetization potentials are converted to alpha/beta
  * before assembly. H is unchanged on any failure.
  */
-gpuxtb_status_t add_mulliken_hamiltonian_cpu(const MullikenPlan& plan,
-                                             const MullikenIntegralView& integrals,
-                                             const MullikenPotentialView& potential,
-                                             const MullikenHamiltonianView& hamiltonian,
-                                             const MullikenWorkspace& workspace,
-                                             std::string& error);
+xtbloom_status_t add_mulliken_hamiltonian_cpu(const MullikenPlan& plan,
+                                              const MullikenIntegralView& integrals,
+                                              const MullikenPotentialView& potential,
+                                              const MullikenHamiltonianView& hamiltonian,
+                                              const MullikenWorkspace& workspace,
+                                              std::string& error);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_MULLIKEN_HPP
+#endif  // XTBLOOM_MODEL_GFN2_MULLIKEN_HPP

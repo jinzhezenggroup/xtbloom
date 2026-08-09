@@ -3,13 +3,13 @@
 
 This runner measures public single-point GFN2-xTB inference latency. Context,
 calculator, and descriptor construction happen outside the timed region. For
-gpuxtb FRESH calls, state initialization occurs inside ``gpuxtb_compute``;
+xtbloom FRESH calls, state initialization occurs inside ``xtbloom_compute``;
 xTB/tblite calculator rebuilds are outside timing, while dxtb's required
 ``Calculator.reset()`` remains inside its public inference call. The timed
 boundary ends after synchronous host-visible energy and force publication:
 
-- ``gpuxtb`` CPU and CUDA through the committed ctypes conformance adapter
-  (``gpuxtb_public_api``), exactly like ``natoms_scaling.py``;
+- ``xtbloom`` CPU and CUDA through the committed ctypes conformance adapter
+  (``xtbloom_public_api``), exactly like ``natoms_scaling.py``;
 - ``xtb`` and ``tblite`` through their persistent public C API adapters;
 - ``dxtb`` through the persistent in-process PyTorch adapter.
 
@@ -25,7 +25,7 @@ inference call.
 
 An optional MD-trajectory mode measures per-frame latency over a sequence of
 nearly identical frames (positions mutated in place through the persistent
-host descriptors), exercising gpuxtb's sequential geometry path while the
+host descriptors), exercising xtbloom's sequential geometry path while the
 reference engines update their persistent structures per frame.
 
 Artifacts are two explicit JSON/CSV paths in the same style as the other
@@ -74,7 +74,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CONFORMANCE_TOOLS = REPOSITORY_ROOT / "tools" / "conformance"
 if str(CONFORMANCE_TOOLS) not in sys.path:
     sys.path.insert(0, str(CONFORMANCE_TOOLS))
-public_api = importlib.import_module("gpuxtb_public_api")
+public_api = importlib.import_module("xtbloom_public_api")
 
 try:
     from .natoms_scaling import (
@@ -116,16 +116,16 @@ SCHEMA_VERSION = 2
 DEFAULT_NATOMS = (5, 32, 122, 362, 602, 962)
 DEFAULT_BATCH_SIZES = (1, 128)
 SUPPORTED_ENGINES = (
-    "gpuxtb-cpu",
-    "gpuxtb-cuda",
+    "xtbloom-cpu",
+    "xtbloom-cuda",
     "xtb",
     "tblite",
     "dxtb-cpu",
     "dxtb-cuda",
 )
-DEFAULT_ENGINES = ("gpuxtb-cpu", "gpuxtb-cuda", "xtb", "tblite", "dxtb-cpu")
+DEFAULT_ENGINES = ("xtbloom-cpu", "xtbloom-cuda", "xtb", "tblite", "dxtb-cpu")
 # This benchmark has a deliberately broader, owner-authorized compatibility
-# gate than gpuxtb's primary conformance suite.  It decides whether one timing
+# gate than xtbloom's primary conformance suite.  It decides whether one timing
 # point may support the public cross-library performance figure; it is not a
 # scientific acceptance tolerance and must never replace the manifest gates.
 PUBLIC_BENCHMARK_ENERGY_ATOL_HARTREE = 2.0e-3
@@ -134,7 +134,7 @@ CROSS_ENGINE_ENERGY_ATOL_HARTREE = PUBLIC_BENCHMARK_ENERGY_ATOL_HARTREE
 CROSS_ENGINE_FORCE_ATOL_HARTREE_PER_BOHR = PUBLIC_BENCHMARK_FORCE_ATOL_HARTREE_PER_BOHR
 
 # Record each library through its native public convergence controls. xTB and
-# tblite document an accuracy factor of 1.0 as their default; gpuxtb exposes
+# tblite document an accuracy factor of 1.0 as their default; xtbloom exposes
 # charge/energy thresholds directly, while dxtb exposes fixed-point/function
 # residual tolerances with different stopping semantics.
 PUBLIC_BENCHMARK_SCC_CHARGE_TOLERANCE = 1.0e-4
@@ -587,10 +587,9 @@ def cmake_build_identity(library: Path) -> dict[str, Any] | None:
         "CMAKE_CUDA_FLAGS",
         "CMAKE_CUDA_FLAGS_RELEASE",
         "CMAKE_SHARED_LINKER_FLAGS",
-        "GPUXTB_ENABLE_CUDA",
-        "GPUXTB_CPU_LINALG_LIBRARY",
-        "GPUXTB_CPU_LINALG_RUNTIME",
-        "GPUXTB_MKL_RT_LIBRARY",
+        "XTBLOOM_ENABLE_CUDA",
+        "XTBLOOM_CPU_LINALG_LIBRARY",
+        "XTBLOOM_CPU_LINALG_RUNTIME",
     }
     selected: dict[str, str] = {}
     for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -604,10 +603,8 @@ def cmake_build_identity(library: Path) -> dict[str, Any] | None:
     cxx_compiler = Path(selected.get("CMAKE_CXX_COMPILER", "c++")).resolve()
     source_root_text = selected.get("CMAKE_HOME_DIRECTORY")
     source_state = git_state(Path(source_root_text)) if source_root_text else None
-    provider_text = (
-        selected.get("GPUXTB_CPU_LINALG_LIBRARY")
-        or selected.get("GPUXTB_MKL_RT_LIBRARY")
-        or selected.get("GPUXTB_CPU_LINALG_RUNTIME")
+    provider_text = selected.get("XTBLOOM_CPU_LINALG_LIBRARY") or selected.get(
+        "XTBLOOM_CPU_LINALG_RUNTIME"
     )
     provider = Path(provider_text).resolve() if provider_text else None
     return {
@@ -802,7 +799,7 @@ class ReferenceArtifact:
 
 @dataclass
 class BatchStorage:
-    """Duck-typed storage accepted by ``gpuxtb_public_api._make_batch``."""
+    """Duck-typed storage accepted by ``xtbloom_public_api._make_batch``."""
 
     atom_offsets: list[int]
     atomic_numbers: list[int]
@@ -895,15 +892,15 @@ def build_trajectory(
     return frames_out
 
 
-def configure_gpuxtb_scc(
+def configure_xtbloom_scc(
     options: Any,  # noqa: ANN401 - ctypes compute-options mirror
     charge_tolerance: float = PUBLIC_BENCHMARK_SCC_CHARGE_TOLERANCE,
     energy_tolerance: float = PUBLIC_BENCHMARK_SCC_ENERGY_TOLERANCE,
     max_iterations: int = 500,
 ) -> None:
-    """Pin the SCC convergence controls on a gpuxtb options object.
+    """Pin the SCC convergence controls on a xtbloom options object.
 
-    Publication rows align gpuxtb's direct controls with the nominal public
+    Publication rows align xtbloom's direct controls with the nominal public
     defaults used by xTB/tblite. The resulting observables must still pass the
     separately declared benchmark compatibility gate before their timings can
     support a public comparison.
@@ -923,7 +920,7 @@ def cuda_synchronize(
     control._check(status, "cudaDeviceSynchronize")
 
 
-class GpuxtbRunner:
+class XTBloomRunner:
     """Persistent public-C-ABI runner with in-place position mutation."""
 
     def __init__(
@@ -957,15 +954,15 @@ class GpuxtbRunner:
         self.options = public_api.ComputeOptions()
         public_api._call_ok(
             self.library,
-            self.library.gpuxtb_compute_options_init(
+            self.library.xtbloom_compute_options_init(
                 ctypes.byref(self.options), ctypes.sizeof(self.options)
             ),
-            "gpuxtb_compute_options_init",
+            "xtbloom_compute_options_init",
         )
-        self.options.model = public_api.GPUXTB_MODEL_GFN2_XTB
-        self.options.flags = public_api.GPUXTB_COMPUTE_ENERGY
-        self.options.flags |= public_api.GPUXTB_COMPUTE_FORCES
-        configure_gpuxtb_scc(
+        self.options.model = public_api.XTBLOOM_MODEL_GFN2_XTB
+        self.options.flags = public_api.XTBLOOM_COMPUTE_ENERGY
+        self.options.flags |= public_api.XTBLOOM_COMPUTE_FORCES
+        configure_xtbloom_scc(
             self.options,
             charge_tolerance=scc_charge_tolerance,
             energy_tolerance=scc_energy_tolerance,
@@ -981,10 +978,10 @@ class GpuxtbRunner:
         self.result = public_api.BatchResult()
         public_api._call_ok(
             self.library,
-            self.library.gpuxtb_batch_result_init(
+            self.library.xtbloom_batch_result_init(
                 ctypes.byref(self.result), ctypes.sizeof(self.result)
             ),
-            "gpuxtb_batch_result_init",
+            "xtbloom_batch_result_init",
         )
         self.result.energies = self.memory.output(self.energies, "energies")
         self.result.forces = self.memory.output(self.forces, "forces")
@@ -1010,17 +1007,17 @@ class GpuxtbRunner:
                 self._position_owner = owner
                 break
         if self._position_owner is None:
-            raise BenchmarkError("gpuxtb positions owner array is missing")
+            raise BenchmarkError("xtbloom positions owner array is missing")
         self.closed = False
 
     def set_start_mode(self, mode: str) -> None:
         """Select FRESH or WARM SCC continuation without rebuilding descriptors."""
         if mode not in ("fresh", "warm"):
-            raise BenchmarkError(f"unsupported gpuxtb start mode: {mode}")
+            raise BenchmarkError(f"unsupported xtbloom start mode: {mode}")
         self.options.scc_start_mode = (
-            public_api.GPUXTB_SCC_START_WARM
+            public_api.XTBLOOM_SCC_START_WARM
             if mode == "warm"
-            else public_api.GPUXTB_SCC_START_FRESH
+            else public_api.XTBLOOM_SCC_START_FRESH
         )
 
     def set_positions(self, positions: Sequence[float]) -> None:
@@ -1034,13 +1031,13 @@ class GpuxtbRunner:
         """Execute one synchronous public batch inference."""
         public_api._call_ok(
             self.library,
-            self.library.gpuxtb_compute(
+            self.library.xtbloom_compute(
                 self.context,
                 ctypes.byref(self.batch),
                 ctypes.byref(self.options),
                 ctypes.byref(self.result),
             ),
-            f"gpuxtb {self.backend} inference",
+            f"xtbloom {self.backend} inference",
         )
         if self.has_cuda:
             cuda_synchronize(self.cuda_control)
@@ -1065,7 +1062,7 @@ class GpuxtbRunner:
             if self.cuda_control is not None:
                 self.cuda_control.close()
         finally:
-            self.library.gpuxtb_context_destroy(self.context)
+            self.library.xtbloom_context_destroy(self.context)
 
 
 class ReferenceRunner:
@@ -1124,7 +1121,7 @@ class ReferenceRunner:
         self._dxtb_adapter = self.adapter if engine.startswith("dxtb") else None
         # dxtb invalidates its autograd graph and result cache inside every
         # measured invocation, so it has no public warm-continuation path
-        # equivalent to gpuxtb/xTB/tblite.
+        # equivalent to xtbloom/xTB/tblite.
         self.always_cold = self._dxtb_adapter is not None
         states = getattr(self.adapter, "states", ())
         if self._dxtb_adapter is not None or not states:
@@ -1179,7 +1176,7 @@ class ReferenceRunner:
         """Drop convergence state so the next sample is a genuine cold solve.
 
         Only engines whose persistent adapter can rebuild the SCC state support
-        this; the runner no-ops otherwise (gpuxtb FRESH and dxtb reset already
+        this; the runner no-ops otherwise (xtbloom FRESH and dxtb reset already
         cold-start every measured call).
         """
         restart = getattr(self.adapter, "restart_scc", None)
@@ -1274,7 +1271,7 @@ def _max_abs_delta(left: Sequence[float], right: Sequence[float]) -> float:
 
 
 def measure_cell(
-    runner: Any,  # noqa: ANN401 - gpuxtb/xtb/tblite/dxtb adapter union
+    runner: Any,  # noqa: ANN401 - xtbloom/xtb/tblite/dxtb adapter union
     protocol: tuple[int, int],
     cell: Cell,
     start_policy: str = "auto-warm",
@@ -1289,21 +1286,21 @@ def measure_cell(
 
     - ``auto-warm``: one untimed cold seed establishes state even when the
       requested warmup count is zero, then every warmup and measured sample
-      continues from that state (gpuxtb strict WARM; xTB/tblite persistent
+      continues from that state (xtbloom strict WARM; xTB/tblite persistent
       warm state). dxtb has no equivalent continuation and remains cold.
     - ``cold``: every measured call starts without reusable electronic state.
-      gpuxtb selects FRESH before timing, but its state initialization occurs
-      inside ``gpuxtb_compute``; xTB/tblite rebuild their calculator outside
+      xtbloom selects FRESH before timing, but its state initialization occurs
+      inside ``xtbloom_compute``; xTB/tblite rebuild their calculator outside
       timing; dxtb's required reset remains inside its measured public call.
     """
     warmups, repetitions = protocol
-    gpuxtb_runner = hasattr(runner, "set_start_mode")
+    xtbloom_runner = hasattr(runner, "set_start_mode")
     restart = getattr(runner, "restart_scc", None)
     always_cold = bool(getattr(runner, "always_cold", False))
 
     def cold_start() -> None:
         """Force a genuine cold start for whichever runner variant is active."""
-        if gpuxtb_runner:
+        if xtbloom_runner:
             runner.set_start_mode("fresh")
         elif restart is not None:
             restart()
@@ -1316,7 +1313,7 @@ def measure_cell(
 
     for _ in range(warmups):
         if start_policy == "auto-warm" and not always_cold:
-            if gpuxtb_runner:
+            if xtbloom_runner:
                 runner.set_start_mode("warm")
         else:
             cold_start()
@@ -1327,7 +1324,7 @@ def measure_cell(
     expected_force_count = 3 * cell.natoms * cell.batch_size
     for sample_index in range(repetitions):
         if start_policy == "auto-warm" and not always_cold:
-            if gpuxtb_runner:
+            if xtbloom_runner:
                 runner.set_start_mode("warm")
         else:
             cold_start()
@@ -1373,7 +1370,7 @@ def measure_cell(
     status_ok = status_known and all(
         sample.get("per_system_status") is None
         or all(
-            status == public_api.GPUXTB_STATUS_SUCCESS
+            status == public_api.XTBLOOM_STATUS_SUCCESS
             for status in sample["per_system_status"]
         )
         for sample in raw_samples
@@ -1427,7 +1424,7 @@ def measure_cell(
                 if start_policy == "auto-warm"
                 else (
                     "fresh_state_initialization_inside_timed_public_call"
-                    if gpuxtb_runner
+                    if xtbloom_runner
                     else "untimed_calculator_rebuild_before_each_call"
                 )
             )
@@ -1479,7 +1476,7 @@ def measure_cell(
 
 def base_row(cell: Cell) -> dict[str, Any]:
     """Create stable identity fields shared by every row type."""
-    if cell.engine == "gpuxtb-cuda":
+    if cell.engine == "xtbloom-cuda":
         input_residency = "host_descriptor_staged_by_public_api"
     elif cell.engine == "dxtb-cuda":
         input_residency = "persistent_cuda_device_tensors"
@@ -1739,9 +1736,9 @@ def run_cell(
     )
     runner: Any = None
     try:
-        if cell.engine in ("gpuxtb-cpu", "gpuxtb-cuda"):
-            backend = "cpu" if cell.engine == "gpuxtb-cpu" else "cuda"
-            runner = GpuxtbRunner(
+        if cell.engine in ("xtbloom-cpu", "xtbloom-cuda"):
+            backend = "cpu" if cell.engine == "xtbloom-cpu" else "cuda"
+            runner = XTBloomRunner(
                 library,
                 storage,
                 backend,
@@ -1872,9 +1869,9 @@ def run_trajectory(
         storage = build_batch(molecule, 1, seed)
         runner: Any = None
         try:
-            if engine in ("gpuxtb-cpu", "gpuxtb-cuda"):
-                backend = "cpu" if engine == "gpuxtb-cpu" else "cuda"
-                runner = GpuxtbRunner(
+            if engine in ("xtbloom-cpu", "xtbloom-cuda"):
+                backend = "cpu" if engine == "xtbloom-cpu" else "cuda"
+                runner = XTBloomRunner(
                     library,
                     storage,
                     backend,
@@ -1932,8 +1929,8 @@ def run_trajectory(
                     dxtb_source,
                     scc_max_iterations,
                 )
-            is_gpuxtb = engine in ("gpuxtb-cpu", "gpuxtb-cuda")
-            if is_gpuxtb:
+            is_xtbloom = engine in ("xtbloom-cpu", "xtbloom-cuda")
+            if is_xtbloom:
                 # MD-style workflow: seed SCC once on frame zero, then continue
                 # in WARM mode for every later (nearly identical) frame.
                 runner.set_start_mode("fresh")
@@ -1949,7 +1946,7 @@ def run_trajectory(
             for _ in range(repetitions):
                 for frame in frames_list:
                     runner.set_positions(frame)
-                    if is_gpuxtb:
+                    if is_xtbloom:
                         runner.set_start_mode("warm")
                     start = time.perf_counter_ns()
                     runner.invoke()
@@ -2054,12 +2051,12 @@ def environment_metadata(
         "runner": {
             "python": sys.version,
             "platform": platform.platform(),
-            "gpuxtb_library": str(args.library.resolve()),
-            "gpuxtb_library_sha256": sha256_file(args.library),
-            "gpuxtb_native_identity": native_library_identity(
+            "xtbloom_library": str(args.library.resolve()),
+            "xtbloom_library_sha256": sha256_file(args.library),
+            "xtbloom_native_identity": native_library_identity(
                 str(args.library.resolve())
             ),
-            "gpuxtb_build": cmake_build_identity(args.library),
+            "xtbloom_build": cmake_build_identity(args.library),
             "xtb_library": str(args.xtb_library.resolve())
             if args.xtb_library
             else None,
@@ -2175,7 +2172,7 @@ def environment_metadata(
             "scc_charge_tolerance": args.scc_charge_tolerance,
             "scc_energy_tolerance": args.scc_energy_tolerance,
             "convergence_contract": {
-                "gpuxtb": {
+                "xtbloom": {
                     "charge_tolerance": args.scc_charge_tolerance,
                     "energy_tolerance": args.scc_energy_tolerance,
                 },
@@ -2374,7 +2371,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "SCC restart policy for the batch matrices. auto-warm (default): "
             "one untimed cold seed, then WARM measured samples. cold: clear "
-            "electronic state before every timed inference call. gpuxtb FRESH "
+            "electronic state before every timed inference call. xtbloom FRESH "
             "initialization and dxtb reset are timed; xTB/tblite rebuild is "
             "excluded. --cold-samples is an alias."
         ),
@@ -2403,7 +2400,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=CROSS_ENGINE_ENERGY_ATOL_HARTREE,
         help=(
             "public benchmark output-compatibility gate in Hartree; this does "
-            "not replace gpuxtb conformance"
+            "not replace xtbloom conformance"
         ),
     )
     parser.add_argument(
@@ -2412,7 +2409,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=CROSS_ENGINE_FORCE_ATOL_HARTREE_PER_BOHR,
         help=(
             "public benchmark output-compatibility gate in Hartree/bohr; this "
-            "does not replace gpuxtb conformance"
+            "does not replace xtbloom conformance"
         ),
     )
     parser.add_argument(
@@ -2444,19 +2441,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--scc-charge-tolerance",
         type=float,
         default=PUBLIC_BENCHMARK_SCC_CHARGE_TOLERANCE,
-        help="gpuxtb SCC charge convergence tolerance (publication: 1e-4)",
+        help="xtbloom SCC charge convergence tolerance (publication: 1e-4)",
     )
     parser.add_argument(
         "--scc-energy-tolerance",
         type=float,
         default=PUBLIC_BENCHMARK_SCC_ENERGY_TOLERANCE,
-        help="gpuxtb SCC energy convergence tolerance (publication: 1e-6)",
+        help="xtbloom SCC energy convergence tolerance (publication: 1e-6)",
     )
     parser.add_argument(
         "--scc-max-iterations",
         type=int,
         default=500,
-        help="gpuxtb SCC iteration cap",
+        help="xtbloom SCC iteration cap",
     )
     return parser
 
@@ -2482,7 +2479,7 @@ def validate_arguments(args: argparse.Namespace) -> None:
         or args.scc_energy_tolerance != PUBLIC_BENCHMARK_SCC_ENERGY_TOLERANCE
     ):
         raise BenchmarkError(
-            "publication evidence requires the aligned gpuxtb 1e-4 charge / "
+            "publication evidence requires the aligned xtbloom 1e-4 charge / "
             "1e-6 energy convergence contract; custom settings are diagnostic only"
         )
     if args.warmups < 0 or args.repetitions <= 0:
@@ -2508,8 +2505,8 @@ def validate_arguments(args: argparse.Namespace) -> None:
         if not math.isfinite(value) or value < 0.0:
             raise BenchmarkError(f"{name} must be finite and nonnegative")
     for name, value in (
-        ("gpuxtb SCC charge tolerance", args.scc_charge_tolerance),
-        ("gpuxtb SCC energy tolerance", args.scc_energy_tolerance),
+        ("xtbloom SCC charge tolerance", args.scc_charge_tolerance),
+        ("xtbloom SCC energy tolerance", args.scc_energy_tolerance),
     ):
         if not math.isfinite(value) or value <= 0.0:
             raise BenchmarkError(f"{name} must be finite and positive")
@@ -2555,7 +2552,7 @@ def validate_publication_provenance(
     build = cmake_build_identity(args.library)
     if build is None:
         raise BenchmarkError(
-            "publication evidence requires a gpuxtb library beside a CMakeCache.txt"
+            "publication evidence requires a xtbloom library beside a CMakeCache.txt"
         )
     source_state = build.get("source_state") or {}
     if (
@@ -2563,16 +2560,16 @@ def validate_publication_provenance(
         or source_state.get("dirty") is not False
     ):
         raise BenchmarkError(
-            "gpuxtb build source does not match the current clean benchmark HEAD"
+            "xtbloom build source does not match the current clean benchmark HEAD"
         )
     if not build.get("cxx_compiler_sha256"):
-        raise BenchmarkError("gpuxtb build compiler bytes could not be identified")
-    if "gpuxtb-cpu" in args.engines and not build.get("cpu_linalg_provider"):
+        raise BenchmarkError("xtbloom build compiler bytes could not be identified")
+    if "xtbloom-cpu" in args.engines and not build.get("cpu_linalg_provider"):
         raise BenchmarkError(
-            "gpuxtb CPU evidence requires a hash-pinned LP64 provider identity"
+            "xtbloom CPU evidence requires a hash-pinned LP64 provider identity"
         )
 
-    native_inputs = [("gpuxtb", args.library)]
+    native_inputs = [("xtbloom", args.library)]
     source_inputs: list[tuple[str, Path | None]] = []
     external_builds: list[tuple[str, Path | None, Path | None]] = []
     if "xtb" in args.engines:
@@ -2731,7 +2728,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"does not match requested {expected!r}"
                     )
             expected_contract = {
-                "gpuxtb": {
+                "xtbloom": {
                     "charge_tolerance": args.scc_charge_tolerance,
                     "energy_tolerance": args.scc_energy_tolerance,
                 },

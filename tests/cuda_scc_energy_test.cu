@@ -14,15 +14,15 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2PlanMemorySpace;
-using gpuxtb::detail::Gfn2WavefunctionLayoutView;
-using gpuxtb::detail::cuda::evaluate_gfn2_scc_electronic_energy_cuda;
-using gpuxtb::detail::cuda::evaluate_gfn2_scc_electronic_energy_spin_cuda;
-using gpuxtb::detail::cuda::Gfn2SccEnergyDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2SccEnergyDeviceError;
-using gpuxtb::detail::cuda::Gfn2SccEnergyDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity;
-using gpuxtb::detail::cuda::reset_gfn2_scc_energy_device_errors_cuda;
+using xtbloom::detail::Gfn2PlanMemorySpace;
+using xtbloom::detail::Gfn2WavefunctionLayoutView;
+using xtbloom::detail::cuda::evaluate_gfn2_scc_electronic_energy_cuda;
+using xtbloom::detail::cuda::evaluate_gfn2_scc_electronic_energy_spin_cuda;
+using xtbloom::detail::cuda::Gfn2SccEnergyDeviceBatch;
+using xtbloom::detail::cuda::Gfn2SccEnergyDeviceError;
+using xtbloom::detail::cuda::Gfn2SccEnergyDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2SccIterationDeviceActivity;
+using xtbloom::detail::cuda::reset_gfn2_scc_energy_device_errors_cuda;
 
 #define CHECK(condition) \
   do {                   \

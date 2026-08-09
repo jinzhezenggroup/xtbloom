@@ -24,12 +24,12 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::Gfn2GeometryDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2GeometryDeviceCache;
-using gpuxtb::detail::cuda::Gfn2GeometryDeviceError;
-using gpuxtb::detail::cuda::Gfn2GeometryDeviceWorkspace;
-using gpuxtb::detail::cuda::kGfn2GeometryPairDataElements;
-using gpuxtb::detail::gfn2::CoordinationPlan;
+using xtbloom::detail::cuda::Gfn2GeometryDeviceBatch;
+using xtbloom::detail::cuda::Gfn2GeometryDeviceCache;
+using xtbloom::detail::cuda::Gfn2GeometryDeviceError;
+using xtbloom::detail::cuda::Gfn2GeometryDeviceWorkspace;
+using xtbloom::detail::cuda::kGfn2GeometryPairDataElements;
+using xtbloom::detail::gfn2::CoordinationPlan;
 
 constexpr std::uint64_t kPlanToken = 0xbb67ae8584caa73bULL;
 constexpr std::uint64_t kGeneration = 73u;
@@ -198,15 +198,15 @@ bool make_case(std::size_t batch_size, HostCase& host, std::string& error) {
       host.positions[static_cast<std::size_t>((end - 1) * 3)] += 30.0;
     }
   }
-  if (gpuxtb::detail::gfn2::make_coordination_plan(
+  if (xtbloom::detail::gfn2::make_coordination_plan(
           static_cast<std::int64_t>(batch_size), atoms, host.atom_offsets.data(),
-          host.atomic_numbers.data(), host.plan, error) != GPUXTB_STATUS_SUCCESS) {
+          host.atomic_numbers.data(), host.plan, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   host.expected_coordination.resize(static_cast<std::size_t>(atoms));
-  if (gpuxtb::detail::gfn2::evaluate_coordination_cpu(host.plan, host.positions.data(),
-                                                      host.expected_coordination.data(),
-                                                      error) != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::evaluate_coordination_cpu(host.plan, host.positions.data(),
+                                                       host.expected_coordination.data(),
+                                                       error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   host.adjoints.resize(static_cast<std::size_t>(atoms));
@@ -220,9 +220,9 @@ bool make_case(std::size_t batch_size, HostCase& host, std::string& error) {
     }
   }
   host.expected_gradients = host.gradient_seed;
-  if (gpuxtb::detail::gfn2::add_coordination_gradient_cpu(
+  if (xtbloom::detail::gfn2::add_coordination_gradient_cpu(
           host.plan, host.positions.data(), host.adjoints.data(), host.expected_gradients.data(),
-          error) != GPUXTB_STATUS_SUCCESS) {
+          error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   build_expected_pairs(host);
@@ -425,13 +425,13 @@ int test_cpu_parity_ragged_batches_and_custom_stream() {
     CHECK(make_case(batch_size, host, error));
     DeviceFixture device;
     CUDA_CHECK(device.initialize(host, stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
         static_cast<std::int64_t>(batch_size), device.system_errors.get(),
         device.device_error.get(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_geometry_cache_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_geometry_cache_cuda(
         device.batch(host), device.positions.get(), kGeneration, device.cache(host),
         device.workspace(), device.system_errors.get(), device.device_error.get(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_coordination_vjp_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_coordination_vjp_cuda(
         device.batch(host), device.cache(host), kGeneration, device.adjoints.get(),
         device.gradients.get(), device.workspace(), device.system_errors.get(),
         device.device_error.get(), stream));
@@ -458,9 +458,9 @@ int test_numerical_failure_and_stale_vjp_are_peer_isolated() {
   const double nan = std::numeric_limits<double>::quiet_NaN();
   CUDA_CHECK(cudaMemcpy(device.positions.get() + failed_atom * 3u, &nan, sizeof(nan),
                         cudaMemcpyHostToDevice));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
       8, device.system_errors.get(), device.device_error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_geometry_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_geometry_cache_cuda(
       device.batch(host), device.positions.get(), kGeneration, device.cache(host),
       device.workspace(), device.system_errors.get(), device.device_error.get()));
   Results results;
@@ -481,18 +481,18 @@ int test_numerical_failure_and_stale_vjp_are_peer_isolated() {
   /* Restore geometry, then make one generation stale for the VJP only. */
   CUDA_CHECK(device.positions.copy_from(host.positions.data(), host.positions.size()));
   CUDA_CHECK(device.reset_outputs(host, nullptr));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
       8, device.system_errors.get(), device.device_error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_geometry_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_geometry_cache_cuda(
       device.batch(host), device.positions.get(), kGeneration, device.cache(host),
       device.workspace(), device.system_errors.get(), device.device_error.get()));
   constexpr std::size_t stale_system = 4u;
   const std::uint64_t stale_generation = kGeneration - 1u;
   CUDA_CHECK(cudaMemcpy(device.generations.get() + stale_system, &stale_generation,
                         sizeof(stale_generation), cudaMemcpyHostToDevice));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
       8, device.system_errors.get(), device.device_error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_coordination_vjp_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_coordination_vjp_cuda(
       device.batch(host), device.cache(host), kGeneration, device.adjoints.get(),
       device.gradients.get(), device.workspace(), device.system_errors.get(),
       device.device_error.get()));
@@ -525,7 +525,7 @@ int test_extreme_device_offsets_and_sticky_error_fail_closed() {
   CHECK(make_case(8u, host, error));
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, nullptr));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
       8, device.system_errors.get(), device.device_error.get()));
 
   const std::int64_t atom_extreme = std::numeric_limits<std::int64_t>::min();
@@ -534,7 +534,7 @@ int test_extreme_device_offsets_and_sticky_error_fail_closed() {
                         cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(device.pair_offsets.get() + 5, &pair_extreme, sizeof(pair_extreme),
                         cudaMemcpyHostToDevice));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_geometry_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_geometry_cache_cuda(
       device.batch(host), device.positions.get(), kGeneration, device.cache(host),
       device.workspace(), device.system_errors.get(), device.device_error.get()));
   Results results;
@@ -557,7 +557,7 @@ int test_extreme_device_offsets_and_sticky_error_fail_closed() {
   CUDA_CHECK(cudaMemset(device.system_errors.get(), 0, host.batch_size() * sizeof(std::uint32_t)));
   CUDA_CHECK(
       cudaMemcpy(device.device_error.get(), &sticky, sizeof(sticky), cudaMemcpyHostToDevice));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_geometry_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_geometry_cache_cuda(
       device.batch(host), device.positions.get(), kGeneration, device.cache(host),
       device.workspace(), device.system_errors.get(), device.device_error.get()));
   CUDA_CHECK(copy_results(host, device, results, nullptr));
@@ -585,12 +585,12 @@ int test_cuda_graph_capture_and_replay() {
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t executable = nullptr;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
       32, device.system_errors.get(), device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_geometry_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_geometry_cache_cuda(
       device.batch(host), device.positions.get(), kGeneration, device.cache(host),
       device.workspace(), device.system_errors.get(), device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_coordination_vjp_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_coordination_vjp_cuda(
       device.batch(host), device.cache(host), kGeneration, device.adjoints.get(),
       device.gradients.get(), device.workspace(), device.system_errors.get(),
       device.device_error.get(), stream));
@@ -618,23 +618,23 @@ int test_host_argument_and_alias_validation() {
   CHECK(make_case(8u, host, error));
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, nullptr));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
       8, device.system_errors.get(), device.device_error.get()));
   Gfn2GeometryDeviceBatch batch = device.batch(host);
   Gfn2GeometryDeviceCache cache = device.cache(host);
   Gfn2GeometryDeviceWorkspace workspace = device.workspace();
   batch.coordinate_elements -= 1;
-  CHECK(gpuxtb::detail::cuda::update_gfn2_geometry_cache_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_geometry_cache_cuda(
             batch, device.positions.get(), kGeneration, cache, workspace,
             device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
   batch = device.batch(host);
   workspace.plan_token ^= 1u;
-  CHECK(gpuxtb::detail::cuda::update_gfn2_geometry_cache_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_geometry_cache_cuda(
             batch, device.positions.get(), kGeneration, cache, workspace,
             device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
   workspace = device.workspace();
   workspace.pair_scratch = cache.pair_data;
-  CHECK(gpuxtb::detail::cuda::update_gfn2_geometry_cache_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_geometry_cache_cuda(
             batch, device.positions.get(), kGeneration, cache, workspace,
             device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
 
@@ -642,13 +642,13 @@ int test_host_argument_and_alias_validation() {
   workspace = device.workspace();
   batch.atom_offsets = reinterpret_cast<const std::int64_t*>(
       reinterpret_cast<const unsigned char*>(device.atom_offsets.get()) + 1u);
-  CHECK(gpuxtb::detail::cuda::update_gfn2_geometry_cache_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_geometry_cache_cuda(
             batch, device.positions.get(), kGeneration, cache, workspace,
             device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
   batch = device.batch(host);
   batch.pair_offsets = reinterpret_cast<const std::int64_t*>(
       reinterpret_cast<const unsigned char*>(device.pair_offsets.get()) + 1u);
-  CHECK(gpuxtb::detail::cuda::update_gfn2_geometry_cache_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_geometry_cache_cuda(
             batch, device.positions.get(), kGeneration, cache, workspace,
             device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
 
@@ -662,7 +662,7 @@ int test_host_argument_and_alias_validation() {
   CHECK(std::all_of(results.generations.begin(), results.generations.end(),
                     [](std::uint64_t value) { return value == 19u; }));
 
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
+  CHECK(xtbloom::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
             8, device.system_errors.get(), device.system_errors.get()) == cudaErrorInvalidValue);
   return 0;
 }

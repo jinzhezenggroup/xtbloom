@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prove Scientific Change"
+  short_description: "Build independent GFN2 correctness evidence"
+  default_prompt: "Use $xtbloom-prove-scientific-change to design and run the scientific evidence for this GFN2 change."

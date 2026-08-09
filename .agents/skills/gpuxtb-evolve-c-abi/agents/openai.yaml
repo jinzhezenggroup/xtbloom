@@ -1,4 +1,0 @@
-interface:
-  display_name: "Evolve gpuxtb C ABI"
-  short_description: "Preserve versioned ABI layouts across all bindings"
-  default_prompt: "Use $gpuxtb-evolve-c-abi to implement and verify this public C ABI change without breaking older callers."

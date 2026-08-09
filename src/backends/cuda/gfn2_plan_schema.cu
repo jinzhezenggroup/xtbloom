@@ -1,5 +1,5 @@
 #include <array>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cstddef>
 #include <cstdint>
@@ -7,7 +7,7 @@
 
 #include "backends/cuda/gfn2_plan_schema.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr std::int64_t kInt64Maximum = 9223372036854775807LL;
@@ -857,4 +857,4 @@ cudaError_t bind_gfn2_element_identity_projection_cuda(
   return cudaSuccess;
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

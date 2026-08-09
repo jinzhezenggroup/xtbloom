@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_INFERENCE_PUBLICATION_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_INFERENCE_PUBLICATION_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_INFERENCE_PUBLICATION_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_INFERENCE_PUBLICATION_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -9,9 +9,9 @@
 #include <type_traits>
 
 #include "backends/cuda/gfn2_geometry.cuh"
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 inline constexpr std::uint32_t kGfn2InferencePublicationAbiVersion = 1u;
 
@@ -25,7 +25,7 @@ enum class Gfn2InferencePublicationPlanError : std::uint32_t {
   kEnergyForcePlanFailure = 5u,
 };
 
-/* Stable per-system reason accompanying the public gpuxtb status projection. */
+/* Stable per-system reason accompanying the public xtbloom status projection. */
 enum class Gfn2InferencePublicationSystemError : std::uint32_t {
   kSuccess = 0u,
   kIneligibleNumericalRefresh = 1u,
@@ -71,7 +71,7 @@ struct Gfn2InferencePublicationDeviceInput {
 
   const std::uint64_t* iterations = nullptr;
   const std::uint8_t* converged = nullptr;
-  const gpuxtb_status_t* system_statuses = nullptr;
+  const xtbloom_status_t* system_statuses = nullptr;
   std::int64_t scc_elements = 0;
 
   const double* energies = nullptr;
@@ -105,7 +105,7 @@ struct Gfn2InferencePublicationDeviceResults {
 
   std::int32_t* iterations = nullptr;
   std::uint8_t* converged = nullptr;
-  gpuxtb_status_t* system_statuses = nullptr;
+  xtbloom_status_t* system_statuses = nullptr;
   std::int64_t batch_elements = 0;
   std::uint64_t plan_token = 0u;
 };
@@ -157,6 +157,6 @@ cudaError_t publish_gfn2_inference_results_cuda(
     const Gfn2InferencePublicationDeviceDiagnostics& diagnostics,
     cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_INFERENCE_PUBLICATION_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_INFERENCE_PUBLICATION_CUH

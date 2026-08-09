@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-#ifndef GPUXTB_DATA_PARAMETERS_TBLITE_SPIN_HPP
-#define GPUXTB_DATA_PARAMETERS_TBLITE_SPIN_HPP
+#ifndef XTBLOOM_DATA_PARAMETERS_TBLITE_SPIN_HPP
+#define XTBLOOM_DATA_PARAMETERS_TBLITE_SPIN_HPP
 
 #include <array>
 
-namespace gpuxtb::parameters::tblite {
+namespace xtbloom::parameters::tblite {
 
 /*
  * Element spin constants (ss, sp, pp, sd, pd, dd) copied from
@@ -102,6 +102,6 @@ inline constexpr std::array<std::array<double, 6>, 86> kSpinConstants{{
     {{-0.0139000, -0.0097380, -0.0106500, -0.0028750, -0.0078120, -0.0130000}},
 }};
 
-}  // namespace gpuxtb::parameters::tblite
+}  // namespace xtbloom::parameters::tblite
 
-#endif  // GPUXTB_DATA_PARAMETERS_TBLITE_SPIN_HPP
+#endif  // XTBLOOM_DATA_PARAMETERS_TBLITE_SPIN_HPP

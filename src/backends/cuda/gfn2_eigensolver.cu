@@ -1,5 +1,5 @@
 #include <algorithm>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <array>
 #include <cmath>
@@ -12,7 +12,7 @@
 
 #include "backends/cuda/gfn2_eigensolver.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerSystem = 128;
@@ -3624,4 +3624,4 @@ Gfn2EigensolverLaunchResult solve_gfn2_spin_eigensystems_cuda(
       solver, parameters, blas, workspace, results, system_errors, device_error, stream);
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

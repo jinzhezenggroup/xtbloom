@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_INTEGRAL_FORCE_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_INTEGRAL_FORCE_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_INTEGRAL_FORCE_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_INTEGRAL_FORCE_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -11,7 +11,7 @@
 #include "backends/cuda/gfn2_force_common.cuh"
 #include "backends/cuda/gfn2_integrals.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /* Complete directed S/D/Q adjoints produced by the stationary force stages. */
 struct Gfn2IntegralForceDeviceInput {
@@ -69,6 +69,6 @@ cudaError_t add_gfn2_integral_gradient_cuda(
     const Gfn2IntegralForceDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_INTEGRAL_FORCE_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_INTEGRAL_FORCE_CUH

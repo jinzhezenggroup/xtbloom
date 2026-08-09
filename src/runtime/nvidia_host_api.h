@@ -1,10 +1,10 @@
 /*
- * gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+ * xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
  *
- * gpuxtb self-declared NVIDIA cuBLAS / cuSOLVER / CUDA-driver C ABI surface.
+ * xtbloom self-declared NVIDIA cuBLAS / cuSOLVER / CUDA-driver C ABI surface.
  *
- * This header is ORIGINAL gpuxtb code. It re-declares only the host-side C
- * entry points that gpuxtb actually calls at runtime (the same curated set
+ * This header is ORIGINAL xtbloom code. It re-declares only the host-side C
+ * entry points that xtbloom actually calls at runtime (the same curated set
  * that the runtime cohort preflight in cuda_dlopen.c and the implib symbol
  * lists require), plus the opaque handle types, enums, and constants those
  * calls need. It intentionally does not copy any NVIDIA header text,
@@ -42,8 +42,8 @@
  *     version checks above decide which route is actually exercised.
  */
 
-#ifndef GPU_XTB_NVIDIA_HOST_API_H
-#define GPU_XTB_NVIDIA_HOST_API_H
+#ifndef XTBLOOM_NVIDIA_HOST_API_H
+#define XTBLOOM_NVIDIA_HOST_API_H
 
 #include <cuda_runtime_api.h>
 #include <library_types.h>
@@ -226,7 +226,7 @@ typedef enum {
 #if defined(__LP64__)
 typedef unsigned long long CUdeviceptr;
 #else
-#error "the gpuxtb CUDA dlopen backend requires a 64-bit ELF target"
+#error "the xtbloom CUDA dlopen backend requires a 64-bit ELF target"
 #endif
 
 CUresult cuGetErrorString(CUresult error, const char** pStr);
@@ -237,4 +237,4 @@ CUresult cuMemGetAddressRange_v2(CUdeviceptr* pbase, size_t* psize, CUdeviceptr 
 } /* extern "C" */
 #endif
 
-#endif /* GPU_XTB_NVIDIA_HOST_API_H */
+#endif /* XTBLOOM_NVIDIA_HOST_API_H */

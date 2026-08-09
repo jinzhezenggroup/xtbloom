@@ -34,14 +34,14 @@ void* operator new(std::size_t size) {
 void* operator new[](std::size_t size) { return ::operator new(size); }
 
 #if defined(__GNUC__) && !defined(__clang__)
-#define GPUXTB_TEST_NOINLINE __attribute__((noinline))
+#define XTBLOOM_TEST_NOINLINE __attribute__((noinline))
 #else
-#define GPUXTB_TEST_NOINLINE
+#define XTBLOOM_TEST_NOINLINE
 #endif
 
 /* GCC 11 diagnoses the intentional malloc/free implementation as a mismatched
  * pair only after inlining this test-only allocation counter shim. */
-GPUXTB_TEST_NOINLINE void operator delete(void* pointer) noexcept { std::free(pointer); }
+XTBLOOM_TEST_NOINLINE void operator delete(void* pointer) noexcept { std::free(pointer); }
 
 void operator delete[](void* pointer) noexcept { ::operator delete(pointer); }
 
@@ -49,7 +49,7 @@ void operator delete(void* pointer, std::size_t) noexcept { ::operator delete(po
 
 void operator delete[](void* pointer, std::size_t) noexcept { ::operator delete[](pointer); }
 
-#undef GPUXTB_TEST_NOINLINE
+#undef XTBLOOM_TEST_NOINLINE
 
 #define CHECK(condition)                                                                   \
   do {                                                                                     \
@@ -61,17 +61,17 @@ void operator delete[](void* pointer, std::size_t) noexcept { ::operator delete[
 
 namespace {
 
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::IntegralPlan;
-using gpuxtb::detail::gfn2::MullikenDensityView;
-using gpuxtb::detail::gfn2::MullikenHamiltonianView;
-using gpuxtb::detail::gfn2::MullikenIntegralView;
-using gpuxtb::detail::gfn2::MullikenPlan;
-using gpuxtb::detail::gfn2::MullikenPopulationView;
-using gpuxtb::detail::gfn2::MullikenPotentialView;
-using gpuxtb::detail::gfn2::MullikenWorkspace;
-using gpuxtb::detail::gfn2::SccParallelExecutor;
-using gpuxtb::detail::gfn2::WavefunctionLayout;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::IntegralPlan;
+using xtbloom::detail::gfn2::MullikenDensityView;
+using xtbloom::detail::gfn2::MullikenHamiltonianView;
+using xtbloom::detail::gfn2::MullikenIntegralView;
+using xtbloom::detail::gfn2::MullikenPlan;
+using xtbloom::detail::gfn2::MullikenPopulationView;
+using xtbloom::detail::gfn2::MullikenPotentialView;
+using xtbloom::detail::gfn2::MullikenWorkspace;
+using xtbloom::detail::gfn2::SccParallelExecutor;
+using xtbloom::detail::gfn2::WavefunctionLayout;
 
 static_assert(std::is_trivially_copyable_v<MullikenIntegralView>);
 static_assert(std::is_trivially_copyable_v<MullikenDensityView>);
@@ -125,17 +125,17 @@ bool make_fixture(const std::vector<std::int64_t>& atom_offsets,
                   const std::vector<std::int32_t>& spin_channels, Fixture& fixture,
                   std::string& error) {
   const std::int64_t batch_size = static_cast<std::int64_t>(atom_offsets.size() - 1u);
-  if (gpuxtb::detail::gfn2::make_basis_plan(
+  if (xtbloom::detail::gfn2::make_basis_plan(
           batch_size, static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
-          atomic_numbers.data(), fixture.basis, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_integral_plan(fixture.basis, fixture.integral_plan, error) !=
-          GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_wavefunction_layout(
+          atomic_numbers.data(), fixture.basis, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_integral_plan(fixture.basis, fixture.integral_plan, error) !=
+          XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_wavefunction_layout(
           fixture.basis, atomic_numbers.data(), charges.data(), unpaired.data(),
-          spin_channels.data(), fixture.wavefunction, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_mulliken_plan(fixture.basis, fixture.integral_plan,
-                                               fixture.wavefunction, fixture.plan,
-                                               error) != GPUXTB_STATUS_SUCCESS) {
+          spin_channels.data(), fixture.wavefunction, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_mulliken_plan(fixture.basis, fixture.integral_plan,
+                                                fixture.wavefunction, fixture.plan,
+                                                error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -197,15 +197,15 @@ MullikenWorkspace workspace_view(Fixture& fixture) {
 }
 
 bool evaluate_population(Fixture& fixture, std::string& error) {
-  return gpuxtb::detail::gfn2::evaluate_mulliken_population_cpu(
+  return xtbloom::detail::gfn2::evaluate_mulliken_population_cpu(
              fixture.plan, integral_view(fixture), density_view(fixture), population_view(fixture),
-             workspace_view(fixture), error) == GPUXTB_STATUS_SUCCESS;
+             workspace_view(fixture), error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 bool assemble_hamiltonian(Fixture& fixture, std::string& error) {
-  return gpuxtb::detail::gfn2::add_mulliken_hamiltonian_cpu(
+  return xtbloom::detail::gfn2::add_mulliken_hamiltonian_cpu(
              fixture.plan, integral_view(fixture), potential_view(fixture),
-             hamiltonian_view(fixture), workspace_view(fixture), error) == GPUXTB_STATUS_SUCCESS;
+             hamiltonian_view(fixture), workspace_view(fixture), error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 template <typename T>
@@ -220,8 +220,8 @@ bool object_bytes_equal(const T& value, const std::array<std::byte, sizeof(T)>& 
   return std::memcmp(&value, expected.data(), sizeof(T)) == 0;
 }
 
-gpuxtb_status_t attempt_population_control_alias(Fixture& fixture, double* candidate,
-                                                 std::size_t buffer, std::string& error) {
+xtbloom_status_t attempt_population_control_alias(Fixture& fixture, double* candidate,
+                                                  std::size_t buffer, std::string& error) {
   std::fill(fixture.qsh.begin(), fixture.qsh.end(), 71.0);
   std::fill(fixture.qat.begin(), fixture.qat.end(), 72.0);
   std::fill(fixture.dipole.begin(), fixture.dipole.end(), 73.0);
@@ -259,17 +259,17 @@ gpuxtb_status_t attempt_population_control_alias(Fixture& fixture, double* candi
       workspace.scratch = candidate;
       break;
   }
-  const gpuxtb_status_t status = gpuxtb::detail::gfn2::evaluate_mulliken_population_cpu(
+  const xtbloom_status_t status = xtbloom::detail::gfn2::evaluate_mulliken_population_cpu(
       fixture.plan, integrals, density, population, workspace, error);
   if (!all_equal_to(fixture.qsh, 71.0) || !all_equal_to(fixture.qat, 72.0) ||
       !all_equal_to(fixture.dipole, 73.0) || !all_equal_to(fixture.quadrupole, 74.0)) {
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   return status;
 }
 
-gpuxtb_status_t attempt_hamiltonian_control_alias(Fixture& fixture, double* candidate,
-                                                  std::size_t buffer, std::string& error) {
+xtbloom_status_t attempt_hamiltonian_control_alias(Fixture& fixture, double* candidate,
+                                                   std::size_t buffer, std::string& error) {
   std::fill(fixture.hamiltonian.begin(), fixture.hamiltonian.end(), 81.0);
   MullikenIntegralView integrals = integral_view(fixture);
   MullikenPotentialView potential = potential_view(fixture);
@@ -304,17 +304,17 @@ gpuxtb_status_t attempt_hamiltonian_control_alias(Fixture& fixture, double* cand
       workspace.scratch = candidate;
       break;
   }
-  const gpuxtb_status_t status = gpuxtb::detail::gfn2::add_mulliken_hamiltonian_cpu(
+  const xtbloom_status_t status = xtbloom::detail::gfn2::add_mulliken_hamiltonian_cpu(
       fixture.plan, integrals, potential, hamiltonian, workspace, error);
   if (!all_equal_to(fixture.hamiltonian, 81.0)) {
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   return status;
 }
 
-gpuxtb_status_t attempt_population_descriptor_alias(Fixture& fixture, std::size_t control,
-                                                    std::size_t byte_offset, std::size_t buffer,
-                                                    std::string& error) {
+xtbloom_status_t attempt_population_descriptor_alias(Fixture& fixture, std::size_t control,
+                                                     std::size_t byte_offset, std::size_t buffer,
+                                                     std::string& error) {
   std::fill(fixture.qsh.begin(), fixture.qsh.end(), 91.0);
   std::fill(fixture.qat.begin(), fixture.qat.end(), 92.0);
   std::fill(fixture.dipole.begin(), fixture.dipole.end(), 93.0);
@@ -372,7 +372,7 @@ gpuxtb_status_t attempt_population_descriptor_alias(Fixture& fixture, std::size_
   const auto density_before = object_bytes(density);
   const auto population_before = object_bytes(population);
   const auto workspace_before = object_bytes(workspace);
-  const gpuxtb_status_t status = gpuxtb::detail::gfn2::evaluate_mulliken_population_cpu(
+  const xtbloom_status_t status = xtbloom::detail::gfn2::evaluate_mulliken_population_cpu(
       fixture.plan, integrals, density, population, workspace, error);
   if (!object_bytes_equal(integrals, integrals_before) ||
       !object_bytes_equal(density, density_before) ||
@@ -380,14 +380,14 @@ gpuxtb_status_t attempt_population_descriptor_alias(Fixture& fixture, std::size_
       !object_bytes_equal(workspace, workspace_before) || !all_equal_to(fixture.qsh, 91.0) ||
       !all_equal_to(fixture.qat, 92.0) || !all_equal_to(fixture.dipole, 93.0) ||
       !all_equal_to(fixture.quadrupole, 94.0)) {
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   return status;
 }
 
-gpuxtb_status_t attempt_hamiltonian_descriptor_alias(Fixture& fixture, std::size_t control,
-                                                     std::size_t byte_offset, std::size_t buffer,
-                                                     std::string& error) {
+xtbloom_status_t attempt_hamiltonian_descriptor_alias(Fixture& fixture, std::size_t control,
+                                                      std::size_t byte_offset, std::size_t buffer,
+                                                      std::string& error) {
   std::fill(fixture.hamiltonian.begin(), fixture.hamiltonian.end(), 101.0);
   MullikenIntegralView integrals = integral_view(fixture);
   MullikenPotentialView potential = potential_view(fixture);
@@ -442,14 +442,14 @@ gpuxtb_status_t attempt_hamiltonian_descriptor_alias(Fixture& fixture, std::size
   const auto potential_before = object_bytes(potential);
   const auto hamiltonian_before = object_bytes(hamiltonian);
   const auto workspace_before = object_bytes(workspace);
-  const gpuxtb_status_t status = gpuxtb::detail::gfn2::add_mulliken_hamiltonian_cpu(
+  const xtbloom_status_t status = xtbloom::detail::gfn2::add_mulliken_hamiltonian_cpu(
       fixture.plan, integrals, potential, hamiltonian, workspace, error);
   if (!object_bytes_equal(integrals, integrals_before) ||
       !object_bytes_equal(potential, potential_before) ||
       !object_bytes_equal(hamiltonian, hamiltonian_before) ||
       !object_bytes_equal(workspace, workspace_before) ||
       !all_equal_to(fixture.hamiltonian, 101.0)) {
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   return status;
 }
@@ -682,16 +682,16 @@ int test_exact_plan_relationship_and_view_identity() {
 
   WavefunctionLayout malformed_wavefunction = hydrogen.wavefunction;
   malformed_wavefunction.reference_shell_occupations[0] += 1.0;
-  CHECK(gpuxtb::detail::gfn2::make_mulliken_plan(hydrogen.basis, hydrogen.integral_plan,
-                                                 malformed_wavefunction, hydrogen.plan,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_mulliken_plan(hydrogen.basis, hydrogen.integral_plan,
+                                                  malformed_wavefunction, hydrogen.plan,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(hydrogen.plan.identity() == original_identity);
 
   malformed_wavefunction = hydrogen.wavefunction;
   malformed_wavefunction.reference_atom_occupations[1] += 0.25;
-  CHECK(gpuxtb::detail::gfn2::make_mulliken_plan(hydrogen.basis, hydrogen.integral_plan,
-                                                 malformed_wavefunction, hydrogen.plan,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_mulliken_plan(hydrogen.basis, hydrogen.integral_plan,
+                                                  malformed_wavefunction, hydrogen.plan,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(hydrogen.plan.identity() == original_identity);
 
   Fixture oxygen;
@@ -700,32 +700,32 @@ int test_exact_plan_relationship_and_view_identity() {
   /* Carbon and oxygen have the same GFN2 shell/AO topology, so counts alone
    * cannot detect this stale-layout mismatch. */
   malformed_wavefunction.atomic_numbers[0] = 6;
-  CHECK(gpuxtb::detail::gfn2::make_mulliken_plan(oxygen.basis, oxygen.integral_plan,
-                                                 malformed_wavefunction, oxygen.plan,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_mulliken_plan(oxygen.basis, oxygen.integral_plan,
+                                                  malformed_wavefunction, oxygen.plan,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   Fixture ragged;
   CHECK(make_fixture({0, 2, 3}, {1, 1, 8}, {0.0, 0.0}, {0, 2}, {1, 2}, ragged, error));
   const auto* const ragged_identity = ragged.plan.identity();
   BasisPlan malformed_basis = ragged.basis;
   malformed_basis.batch_shell_offsets[1] += 1;
-  CHECK(gpuxtb::detail::gfn2::make_mulliken_plan(malformed_basis, ragged.integral_plan,
-                                                 ragged.wavefunction, ragged.plan,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_mulliken_plan(malformed_basis, ragged.integral_plan,
+                                                  ragged.wavefunction, ragged.plan,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(ragged.plan.identity() == ragged_identity);
 
   IntegralPlan malformed_integrals = ragged.integral_plan;
   malformed_integrals.matrix_offsets[1] += 1;
-  CHECK(gpuxtb::detail::gfn2::make_mulliken_plan(ragged.basis, malformed_integrals,
-                                                 ragged.wavefunction, ragged.plan,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_mulliken_plan(ragged.basis, malformed_integrals,
+                                                  ragged.wavefunction, ragged.plan,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(ragged.plan.identity() == ragged_identity);
 
   malformed_wavefunction = ragged.wavefunction;
   malformed_wavefunction.density.system_offsets[1] += 1;
-  CHECK(gpuxtb::detail::gfn2::make_mulliken_plan(ragged.basis, ragged.integral_plan,
-                                                 malformed_wavefunction, ragged.plan,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_mulliken_plan(ragged.basis, ragged.integral_plan,
+                                                  malformed_wavefunction, ragged.plan,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(ragged.plan.identity() == ragged_identity);
 
   Fixture reverse_ragged;
@@ -736,29 +736,29 @@ int test_exact_plan_relationship_and_view_identity() {
 
   MullikenIntegralView wrong_integrals = integral_view(ragged);
   wrong_integrals.plan_identity = reverse_ragged.plan.identity();
-  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_cpu(
             ragged.plan, wrong_integrals, density_view(ragged), population_view(ragged),
-            workspace_view(ragged), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace_view(ragged), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   MullikenDensityView wrong_density = density_view(ragged);
   wrong_density.plan_identity = reverse_ragged.plan.identity();
-  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_cpu(
             ragged.plan, integral_view(ragged), wrong_density, population_view(ragged),
-            workspace_view(ragged), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace_view(ragged), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   MullikenPopulationView wrong_population = population_view(ragged);
   wrong_population.plan_identity = reverse_ragged.plan.identity();
-  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_cpu(
             ragged.plan, integral_view(ragged), density_view(ragged), wrong_population,
-            workspace_view(ragged), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace_view(ragged), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   MullikenPotentialView wrong_potential = potential_view(ragged);
   wrong_potential.plan_identity = reverse_ragged.plan.identity();
-  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_cpu(
+  CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_cpu(
             ragged.plan, integral_view(ragged), wrong_potential, hamiltonian_view(ragged),
-            workspace_view(ragged), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace_view(ragged), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   MullikenHamiltonianView wrong_hamiltonian = hamiltonian_view(ragged);
   wrong_hamiltonian.plan_identity = reverse_ragged.plan.identity();
-  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_cpu(
+  CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_cpu(
             ragged.plan, integral_view(ragged), potential_view(ragged), wrong_hamiltonian,
-            workspace_view(ragged), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace_view(ragged), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   hydrogen.plan = original_plan;
   return 0;
 }
@@ -1006,7 +1006,7 @@ int test_mixed_spin_heterogeneous_ragged_batch() {
 
     const auto copy_system_field =
         [system](const std::vector<double>& source,
-                 const gpuxtb::detail::gfn2::WavefunctionFieldLayout& source_layout,
+                 const xtbloom::detail::gfn2::WavefunctionFieldLayout& source_layout,
                  std::vector<double>& destination) {
           const std::int64_t begin = source_layout.system_offsets[system];
           std::copy_n(source.begin() + begin, static_cast<std::int64_t>(destination.size()),
@@ -1025,7 +1025,7 @@ int test_mixed_spin_heterogeneous_ragged_batch() {
 
     const auto matches_batch_field =
         [system](const std::vector<double>& expected, const std::vector<double>& actual,
-                 const gpuxtb::detail::gfn2::WavefunctionFieldLayout& batch_layout) {
+                 const xtbloom::detail::gfn2::WavefunctionFieldLayout& batch_layout) {
           const std::int64_t begin = batch_layout.system_offsets[system];
           return std::equal(expected.begin(), expected.end(), actual.begin() + begin);
         };
@@ -1091,12 +1091,12 @@ int test_one_system_population_and_hamiltonian() {
   std::fill(batch.dipole.begin(), batch.dipole.end(), 0.0);
   std::fill(batch.quadrupole.begin(), batch.quadrupole.end(), 0.0);
   for (std::int64_t system = 0; system < batch.plan.batch_size(); ++system) {
-    CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
+    CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_system_cpu(
               batch.plan, integral_view(batch), density_view(batch), population_view(batch), system,
-              workspace_view(batch), error) == GPUXTB_STATUS_SUCCESS);
+              workspace_view(batch), error) == XTBLOOM_STATUS_SUCCESS);
     const auto matches_batch_field =
         [system](const std::vector<double>& expected, const std::vector<double>& actual,
-                 const gpuxtb::detail::gfn2::WavefunctionFieldLayout& layout) {
+                 const xtbloom::detail::gfn2::WavefunctionFieldLayout& layout) {
           const std::int64_t begin = layout.system_offsets[system];
           const std::int64_t end = layout.system_offsets[system + 1u];
           return std::equal(expected.begin() + begin, expected.begin() + end,
@@ -1117,9 +1117,9 @@ int test_one_system_population_and_hamiltonian() {
     std::copy_n(initial_hamiltonian.begin() + begin,
                 batch.wavefunction.density.system_offsets[system + 1u] - begin,
                 batch.hamiltonian.begin() + begin);
-    CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+    CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
               batch.plan, integral_view(batch), potential_view(batch), hamiltonian_view(batch),
-              system, workspace_view(batch), error) == GPUXTB_STATUS_SUCCESS);
+              system, workspace_view(batch), error) == XTBLOOM_STATUS_SUCCESS);
   }
   CHECK(batch.hamiltonian == reference_hamiltonian);
 
@@ -1138,17 +1138,17 @@ int test_one_system_population_and_hamiltonian() {
   std::fill(poisoned.qat.begin(), poisoned.qat.end(), 0.0);
   std::fill(poisoned.dipole.begin(), poisoned.dipole.end(), 0.0);
   std::fill(poisoned.quadrupole.begin(), poisoned.quadrupole.end(), 0.0);
-  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_system_cpu(
             poisoned.plan, integral_view(poisoned), density_view(poisoned),
             population_view(poisoned), 0, workspace_view(poisoned),
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   for (std::size_t index = 0; index < static_cast<std::size_t>(2u * 1u * 1u); ++index) {
     CHECK(poisoned.qsh[index] == reference_qsh[index]);
   }
-  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_system_cpu(
             poisoned.plan, integral_view(poisoned), density_view(poisoned),
             population_view(poisoned), 1, workspace_view(poisoned),
-            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
 
   /* A poisoned Hamiltonian slice fails target-only and isolates peers. */
   Fixture hamiltonian_poison;
@@ -1162,7 +1162,7 @@ int test_one_system_population_and_hamiltonian() {
             hamiltonian_poison.hamiltonian.begin());
   const auto copy_potential_slice =
       [&batch](const std::vector<double>& source, std::vector<double>& destination,
-               const gpuxtb::detail::gfn2::WavefunctionFieldLayout& layout) {
+               const xtbloom::detail::gfn2::WavefunctionFieldLayout& layout) {
         const std::int64_t begin = layout.system_offsets[0];
         const std::int64_t end = layout.system_offsets[1];
         std::copy(source.begin() + begin, source.begin() + end, destination.begin() + begin);
@@ -1176,20 +1176,20 @@ int test_one_system_population_and_hamiltonian() {
   /* A NaN in the second member's Hamiltonian is invisible to member 0. */
   hamiltonian_poison.hamiltonian[batch.wavefunction.density.system_offsets[1]] =
       std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+  CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
             hamiltonian_poison.plan, integral_view(hamiltonian_poison),
             potential_view(hamiltonian_poison), hamiltonian_view(hamiltonian_poison), 0,
-            workspace_view(hamiltonian_poison), error) == GPUXTB_STATUS_SUCCESS);
+            workspace_view(hamiltonian_poison), error) == XTBLOOM_STATUS_SUCCESS);
   const std::int64_t h0 = batch.wavefunction.density.system_offsets[0];
   const std::int64_t h1 = batch.wavefunction.density.system_offsets[1];
   for (std::int64_t matrix = h0; matrix < h1; ++matrix) {
     CHECK(hamiltonian_poison.hamiltonian[static_cast<std::size_t>(matrix)] ==
           reference_hamiltonian[static_cast<std::size_t>(matrix)]);
   }
-  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+  CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
             hamiltonian_poison.plan, integral_view(hamiltonian_poison),
             potential_view(hamiltonian_poison), hamiltonian_view(hamiltonian_poison), 1,
-            workspace_view(hamiltonian_poison), error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            workspace_view(hamiltonian_poison), error) == XTBLOOM_STATUS_INTERNAL_ERROR);
 
   /* Target potentials and integrals follow the same data-level failure
    * contract, and staging keeps the Hamiltonian unchanged on either path. */
@@ -1198,10 +1198,10 @@ int test_one_system_population_and_hamiltonian() {
   const std::int64_t vsh1 = batch.wavefunction.qsh.system_offsets[1];
   hamiltonian_poison.vsh[static_cast<std::size_t>(vsh1)] = std::numeric_limits<double>::quiet_NaN();
   const std::vector<double> before_potential_failure = hamiltonian_poison.hamiltonian;
-  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+  CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
             hamiltonian_poison.plan, integral_view(hamiltonian_poison),
             potential_view(hamiltonian_poison), hamiltonian_view(hamiltonian_poison), 1,
-            workspace_view(hamiltonian_poison), error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            workspace_view(hamiltonian_poison), error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(hamiltonian_poison.hamiltonian == before_potential_failure);
 
   hamiltonian_poison.vsh[static_cast<std::size_t>(vsh1)] = 0.0;
@@ -1209,10 +1209,10 @@ int test_one_system_population_and_hamiltonian() {
   hamiltonian_poison.overlap[static_cast<std::size_t>(matrix1)] =
       std::numeric_limits<double>::quiet_NaN();
   const std::vector<double> before_integral_failure = hamiltonian_poison.hamiltonian;
-  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+  CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
             hamiltonian_poison.plan, integral_view(hamiltonian_poison),
             potential_view(hamiltonian_poison), hamiltonian_view(hamiltonian_poison), 1,
-            workspace_view(hamiltonian_poison), error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            workspace_view(hamiltonian_poison), error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(hamiltonian_poison.hamiltonian == before_integral_failure);
   return 0;
 }
@@ -1230,29 +1230,29 @@ int test_translation_invariance_with_integral_evaluator() {
   }
   std::vector<double> integral_workspace(
       (fixture.integral_plan.workspace_size_bytes + sizeof(double) - 1u) / sizeof(double));
-  CHECK(gpuxtb::detail::gfn2::evaluate_overlap_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_overlap_cpu(
             fixture.basis, fixture.integral_plan, positions.data(), fixture.overlap.data(),
             integral_workspace.data(), integral_workspace.size() * sizeof(double),
-            error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::evaluate_multipole_cpu(
+            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_multipole_cpu(
             fixture.basis, fixture.integral_plan, positions.data(), fixture.dipole_integrals.data(),
             fixture.quadrupole_integrals.data(), integral_workspace.data(),
-            integral_workspace.size() * sizeof(double), error) == GPUXTB_STATUS_SUCCESS);
+            integral_workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_SUCCESS);
   fixture.density = {0.7, 0.2, 0.2, 0.6};
   CHECK(evaluate_population(fixture, error));
   const std::vector<double> qsh = fixture.qsh;
   const std::vector<double> dipole = fixture.dipole;
   const std::vector<double> quadrupole = fixture.quadrupole;
 
-  CHECK(gpuxtb::detail::gfn2::evaluate_overlap_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_overlap_cpu(
             fixture.basis, fixture.integral_plan, translated.data(), fixture.overlap.data(),
             integral_workspace.data(), integral_workspace.size() * sizeof(double),
-            error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::evaluate_multipole_cpu(
+            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_multipole_cpu(
             fixture.basis, fixture.integral_plan, translated.data(),
             fixture.dipole_integrals.data(), fixture.quadrupole_integrals.data(),
             integral_workspace.data(), integral_workspace.size() * sizeof(double),
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(evaluate_population(fixture, error));
   for (std::size_t index = 0; index < qsh.size(); ++index) {
     CHECK(near(fixture.qsh[index], qsh[index], 5.0e-13));
@@ -1271,14 +1271,14 @@ int test_translation_invariance_with_integral_evaluator() {
     rotated[atom * 3u + 1u] = positions[atom * 3u];
     rotated[atom * 3u + 2u] = positions[atom * 3u + 2u];
   }
-  CHECK(gpuxtb::detail::gfn2::evaluate_overlap_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_overlap_cpu(
             fixture.basis, fixture.integral_plan, rotated.data(), fixture.overlap.data(),
             integral_workspace.data(), integral_workspace.size() * sizeof(double),
-            error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::evaluate_multipole_cpu(
+            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_multipole_cpu(
             fixture.basis, fixture.integral_plan, rotated.data(), fixture.dipole_integrals.data(),
             fixture.quadrupole_integrals.data(), integral_workspace.data(),
-            integral_workspace.size() * sizeof(double), error) == GPUXTB_STATUS_SUCCESS);
+            integral_workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(evaluate_population(fixture, error));
   for (std::size_t atom = 0; atom < 2u; ++atom) {
     CHECK(near(fixture.dipole[atom * 3u], -dipole[atom * 3u + 1u], 1.0e-12));
@@ -1310,24 +1310,24 @@ int test_alias_atomicity_and_zero_allocation() {
 
   MullikenPopulationView aliased = population_view(fixture);
   aliased.qat = fixture.qsh.data();
-  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_cpu(
             fixture.plan, integral_view(fixture), density_view(fixture), aliased,
-            workspace_view(fixture), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace_view(fixture), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(all_equal_to(fixture.qsh, 41.0));
   CHECK(all_equal_to(fixture.qat, 42.0));
 
   fixture.density[6] = std::numeric_limits<double>::infinity();
-  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_cpu(
             fixture.plan, integral_view(fixture), density_view(fixture), population_view(fixture),
-            workspace_view(fixture), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace_view(fixture), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(fixture.dipole.begin(), fixture.dipole.end(),
                     [](double value) { return value == 43.0; }));
   fixture.density[6] = 0.3;
   fixture.density[6] = std::numeric_limits<double>::max();
   fixture.overlap[6] = 2.0;
-  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_cpu(
             fixture.plan, integral_view(fixture), density_view(fixture), population_view(fixture),
-            workspace_view(fixture), error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            workspace_view(fixture), error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(std::all_of(fixture.quadrupole.begin(), fixture.quadrupole.end(),
                     [](double value) { return value == 44.0; }));
 
@@ -1336,18 +1336,18 @@ int test_alias_atomicity_and_zero_allocation() {
   std::fill(fixture.hamiltonian.begin(), fixture.hamiltonian.end(), 17.0);
   MullikenIntegralView h_alias = integral_view(fixture);
   h_alias.overlap = fixture.hamiltonian.data();
-  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_cpu(
+  CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_cpu(
             fixture.plan, h_alias, potential_view(fixture), hamiltonian_view(fixture),
-            workspace_view(fixture), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace_view(fixture), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(fixture.hamiltonian.begin(), fixture.hamiltonian.end(),
                     [](double value) { return value == 17.0; }));
 
   fixture.overlap[4] = 2.0;
   fixture.vat[2] = std::numeric_limits<double>::max();
-  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_cpu(
+  CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_cpu(
             fixture.plan, integral_view(fixture), potential_view(fixture),
             hamiltonian_view(fixture), workspace_view(fixture),
-            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(std::all_of(fixture.hamiltonian.begin(), fixture.hamiltonian.end(),
                     [](double value) { return value == 17.0; }));
   fixture.overlap[4] = 0.2;
@@ -1359,15 +1359,16 @@ int test_alias_atomicity_and_zero_allocation() {
   std::fill(fixture.quadrupole_potential.begin(), fixture.quadrupole_potential.end(), -0.03);
   allocation_test::count.store(0u, std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t population_status = gpuxtb::detail::gfn2::evaluate_mulliken_population_cpu(
-      fixture.plan, integral_view(fixture), density_view(fixture), population_view(fixture),
-      workspace_view(fixture), error);
-  const gpuxtb_status_t hamiltonian_status = gpuxtb::detail::gfn2::add_mulliken_hamiltonian_cpu(
+  const xtbloom_status_t population_status =
+      xtbloom::detail::gfn2::evaluate_mulliken_population_cpu(
+          fixture.plan, integral_view(fixture), density_view(fixture), population_view(fixture),
+          workspace_view(fixture), error);
+  const xtbloom_status_t hamiltonian_status = xtbloom::detail::gfn2::add_mulliken_hamiltonian_cpu(
       fixture.plan, integral_view(fixture), potential_view(fixture), hamiltonian_view(fixture),
       workspace_view(fixture), error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
-  CHECK(population_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(hamiltonian_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(population_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(hamiltonian_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
   return 0;
 }
@@ -1427,10 +1428,10 @@ int test_control_storage_alias_matrix() {
     auto* const candidate = reinterpret_cast<double*>(const_cast<std::byte*>(control));
     for (std::size_t buffer = 0; buffer < 9u; ++buffer) {
       CHECK(attempt_population_control_alias(fixture, candidate, buffer, error) ==
-            GPUXTB_STATUS_INVALID_ARGUMENT);
+            XTBLOOM_STATUS_INVALID_ARGUMENT);
       CHECK(plan_unchanged());
       CHECK(attempt_hamiltonian_control_alias(fixture, candidate, buffer, error) ==
-            GPUXTB_STATUS_INVALID_ARGUMENT);
+            XTBLOOM_STATUS_INVALID_ARGUMENT);
       CHECK(plan_unchanged());
     }
   }
@@ -1450,10 +1451,10 @@ int test_control_storage_alias_matrix() {
     auto* const candidate = reinterpret_cast<double*>(const_cast<void*>(control));
     for (std::size_t buffer = 0; buffer < 9u; ++buffer) {
       CHECK(attempt_population_control_alias(fixture, candidate, buffer, error) ==
-            GPUXTB_STATUS_INVALID_ARGUMENT);
+            XTBLOOM_STATUS_INVALID_ARGUMENT);
       CHECK(plan_unchanged());
       CHECK(attempt_hamiltonian_control_alias(fixture, candidate, buffer, error) ==
-            GPUXTB_STATUS_INVALID_ARGUMENT);
+            XTBLOOM_STATUS_INVALID_ARGUMENT);
       CHECK(plan_unchanged());
     }
   }
@@ -1462,10 +1463,10 @@ int test_control_storage_alias_matrix() {
     for (const std::size_t offset : {std::size_t{0}, sizeof(double)}) {
       for (std::size_t buffer = 0; buffer < 9u; ++buffer) {
         CHECK(attempt_population_descriptor_alias(fixture, control, offset, buffer, error) ==
-              GPUXTB_STATUS_INVALID_ARGUMENT);
+              XTBLOOM_STATUS_INVALID_ARGUMENT);
         CHECK(plan_unchanged());
         CHECK(attempt_hamiltonian_descriptor_alias(fixture, control, offset, buffer, error) ==
-              GPUXTB_STATUS_INVALID_ARGUMENT);
+              XTBLOOM_STATUS_INVALID_ARGUMENT);
         CHECK(plan_unchanged());
       }
     }
@@ -1481,16 +1482,16 @@ int test_malformed_layout_alignment_and_partial_alias() {
 
   IntegralPlan malformed_integrals = fixture.integral_plan;
   malformed_integrals.total_matrix_elements += 1;
-  CHECK(gpuxtb::detail::gfn2::make_mulliken_plan(fixture.basis, malformed_integrals,
-                                                 fixture.wavefunction, fixture.plan,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_mulliken_plan(fixture.basis, malformed_integrals,
+                                                  fixture.wavefunction, fixture.plan,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(fixture.plan.identity() == identity);
 
   WavefunctionLayout malformed_wavefunction = fixture.wavefunction;
   malformed_wavefunction.quadrupole.system_offsets.back() -= 1;
-  CHECK(gpuxtb::detail::gfn2::make_mulliken_plan(fixture.basis, fixture.integral_plan,
-                                                 malformed_wavefunction, fixture.plan,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_mulliken_plan(fixture.basis, fixture.integral_plan,
+                                                  malformed_wavefunction, fixture.plan,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(fixture.plan.identity() == identity);
 
   std::fill(fixture.overlap.begin(), fixture.overlap.end(), 0.2);
@@ -1503,9 +1504,9 @@ int test_malformed_layout_alignment_and_partial_alias() {
       reinterpret_cast<const double*>(misaligned_storage.data() + 1u),
       fixture.plan.density_elements()};
   CHECK(reinterpret_cast<std::uintptr_t>(misaligned_density.density) % alignof(double) != 0u);
-  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_cpu(
             fixture.plan, integral_view(fixture), misaligned_density, population_view(fixture),
-            workspace_view(fixture), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace_view(fixture), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(fixture.qsh.begin(), fixture.qsh.end(),
                     [](double value) { return value == 7.0; }));
 
@@ -1513,9 +1514,9 @@ int test_malformed_layout_alignment_and_partial_alias() {
   MullikenPopulationView partial_alias = population_view(fixture);
   partial_alias.qsh = partial_alias_storage.data();
   partial_alias.qat = partial_alias_storage.data() + 1u;
-  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_cpu(
             fixture.plan, integral_view(fixture), density_view(fixture), partial_alias,
-            workspace_view(fixture), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace_view(fixture), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(partial_alias_storage.begin(), partial_alias_storage.end(),
                     [](double value) { return value == 9.0; }));
 
@@ -1533,20 +1534,21 @@ int test_malformed_layout_alignment_and_partial_alias() {
         std::fill(fixture.qat.begin(), fixture.qat.end(), 112.0);
         std::fill(fixture.dipole.begin(), fixture.dipole.end(), 113.0);
         std::fill(fixture.quadrupole.begin(), fixture.quadrupole.end(), 114.0);
-        const gpuxtb_status_t status = gpuxtb::detail::gfn2::evaluate_mulliken_population_cpu(
+        const xtbloom_status_t status = xtbloom::detail::gfn2::evaluate_mulliken_population_cpu(
             fixture.plan, integrals, density, population, workspace, error);
-        return status == GPUXTB_STATUS_INVALID_ARGUMENT && all_equal_to(fixture.qsh, 111.0) &&
+        return status == XTBLOOM_STATUS_INVALID_ARGUMENT && all_equal_to(fixture.qsh, 111.0) &&
                all_equal_to(fixture.qat, 112.0) && all_equal_to(fixture.dipole, 113.0) &&
                all_equal_to(fixture.quadrupole, 114.0);
       };
-  const auto hamiltonian_invalid =
-      [&](const MullikenIntegralView& integrals, const MullikenPotentialView& potential,
-          const MullikenHamiltonianView& hamiltonian, const MullikenWorkspace& workspace) {
-        std::fill(fixture.hamiltonian.begin(), fixture.hamiltonian.end(), 121.0);
-        const gpuxtb_status_t status = gpuxtb::detail::gfn2::add_mulliken_hamiltonian_cpu(
-            fixture.plan, integrals, potential, hamiltonian, workspace, error);
-        return status == GPUXTB_STATUS_INVALID_ARGUMENT && all_equal_to(fixture.hamiltonian, 121.0);
-      };
+  const auto hamiltonian_invalid = [&](const MullikenIntegralView& integrals,
+                                       const MullikenPotentialView& potential,
+                                       const MullikenHamiltonianView& hamiltonian,
+                                       const MullikenWorkspace& workspace) {
+    std::fill(fixture.hamiltonian.begin(), fixture.hamiltonian.end(), 121.0);
+    const xtbloom_status_t status = xtbloom::detail::gfn2::add_mulliken_hamiltonian_cpu(
+        fixture.plan, integrals, potential, hamiltonian, workspace, error);
+    return status == XTBLOOM_STATUS_INVALID_ARGUMENT && all_equal_to(fixture.hamiltonian, 121.0);
+  };
 
   {
     MullikenIntegralView view = integral_view(fixture);
@@ -1769,10 +1771,10 @@ int test_parallel_path_is_bit_identical() {
     fill_fixture(parallel_fixture);
 
     /* Serial population reference. */
-    CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
+    CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_system_cpu(
               serial_fixture.plan, integral_view(serial_fixture), density_view(serial_fixture),
               population_view(serial_fixture), 0, workspace_view(serial_fixture),
-              error) == GPUXTB_STATUS_SUCCESS);
+              error) == XTBLOOM_STATUS_SUCCESS);
     const std::vector<double> ref_qsh = serial_fixture.qsh;
     const std::vector<double> ref_qat = serial_fixture.qat;
     const std::vector<double> ref_dipole = serial_fixture.dipole;
@@ -1780,10 +1782,10 @@ int test_parallel_path_is_bit_identical() {
 
     /* Parallel population must equal the serial reference bit-for-bit. */
     SccParallelExecutor parallel = test_parallel_executor();
-    CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
+    CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_system_cpu(
               parallel_fixture.plan, integral_view(parallel_fixture),
               density_view(parallel_fixture), population_view(parallel_fixture), 0,
-              workspace_view(parallel_fixture), error, &parallel) == GPUXTB_STATUS_SUCCESS);
+              workspace_view(parallel_fixture), error, &parallel) == XTBLOOM_STATUS_SUCCESS);
     CHECK(std::equal(ref_qsh.begin(), ref_qsh.end(), parallel_fixture.qsh.begin()));
     CHECK(std::equal(ref_qat.begin(), ref_qat.end(), parallel_fixture.qat.begin()));
     CHECK(std::equal(ref_dipole.begin(), ref_dipole.end(), parallel_fixture.dipole.begin()));
@@ -1791,17 +1793,17 @@ int test_parallel_path_is_bit_identical() {
                      parallel_fixture.quadrupole.begin()));
 
     /* Serial Hamiltonian reference. */
-    CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+    CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
               serial_fixture.plan, integral_view(serial_fixture), potential_view(serial_fixture),
               hamiltonian_view(serial_fixture), 0, workspace_view(serial_fixture),
-              error) == GPUXTB_STATUS_SUCCESS);
+              error) == XTBLOOM_STATUS_SUCCESS);
     const std::vector<double> ref_hamiltonian = serial_fixture.hamiltonian;
 
     /* Parallel Hamiltonian must equal the serial reference bit-for-bit. */
-    CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+    CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
               parallel_fixture.plan, integral_view(parallel_fixture),
               potential_view(parallel_fixture), hamiltonian_view(parallel_fixture), 0,
-              workspace_view(parallel_fixture), error, &parallel) == GPUXTB_STATUS_SUCCESS);
+              workspace_view(parallel_fixture), error, &parallel) == XTBLOOM_STATUS_SUCCESS);
     CHECK(std::equal(ref_hamiltonian.begin(), ref_hamiltonian.end(),
                      parallel_fixture.hamiltonian.begin()));
   }
@@ -1816,10 +1818,10 @@ int test_parallel_path_is_bit_identical() {
   SccParallelExecutor parallel = test_parallel_executor();
   std::fill(poisoned.qsh.begin(), poisoned.qsh.end(), 3.0);
   std::fill(poisoned.qat.begin(), poisoned.qat.end(), 4.0);
-  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_system_cpu(
             poisoned.plan, integral_view(poisoned), density_view(poisoned),
             population_view(poisoned), 0, workspace_view(poisoned), error,
-            &parallel) == GPUXTB_STATUS_INTERNAL_ERROR);
+            &parallel) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(std::all_of(poisoned.qsh.begin(), poisoned.qsh.end(),
                     [](double value) { return value == 3.0; }));
   CHECK(std::all_of(poisoned.qat.begin(), poisoned.qat.end(),
@@ -1830,11 +1832,11 @@ int test_parallel_path_is_bit_identical() {
   fill_fixture(poisoned_hamiltonian);
   poisoned_hamiltonian.overlap[0] = std::numeric_limits<double>::quiet_NaN();
   const std::vector<double> before_failure = poisoned_hamiltonian.hamiltonian;
-  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+  CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
             poisoned_hamiltonian.plan, integral_view(poisoned_hamiltonian),
             potential_view(poisoned_hamiltonian), hamiltonian_view(poisoned_hamiltonian), 0,
             workspace_view(poisoned_hamiltonian), error,
-            &parallel) == GPUXTB_STATUS_INTERNAL_ERROR);
+            &parallel) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(poisoned_hamiltonian.hamiltonian == before_failure);
 
   /* Multiple failing sites must report the serially-first failure
@@ -1854,10 +1856,10 @@ int test_parallel_path_is_bit_identical() {
   }
   SccParallelExecutor reverse = test_reverse_chunk_executor();
   error.clear();
-  CHECK(gpuxtb::detail::gfn2::evaluate_mulliken_population_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_system_cpu(
             multi_failure.plan, integral_view(multi_failure), density_view(multi_failure),
             population_view(multi_failure), 0, workspace_view(multi_failure), error,
-            &reverse) == GPUXTB_STATUS_INTERNAL_ERROR);
+            &reverse) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(error.find("Mulliken target density or overlap contains NaN or infinity") !=
         std::string::npos);
 
@@ -1866,10 +1868,10 @@ int test_parallel_path_is_bit_identical() {
   multi_failure.overlap[0] = std::numeric_limits<double>::quiet_NaN();
   const std::vector<double> before_multi_failure = multi_failure.hamiltonian;
   error.clear();
-  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+  CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
             multi_failure.plan, integral_view(multi_failure), potential_view(multi_failure),
             hamiltonian_view(multi_failure), 0, workspace_view(multi_failure), error,
-            &reverse) == GPUXTB_STATUS_INTERNAL_ERROR);
+            &reverse) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(error.find("Mulliken target overlap input contains NaN or infinity") != std::string::npos);
   CHECK(multi_failure.hamiltonian == before_multi_failure);
   return 0;

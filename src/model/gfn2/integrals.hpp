@@ -1,17 +1,17 @@
-#ifndef GPUXTB_MODEL_GFN2_INTEGRALS_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_INTEGRALS_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_INTEGRALS_HPP
+#define XTBLOOM_MODEL_GFN2_INTEGRALS_HPP
 
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/basis.hpp"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 /*
  * Geometry-independent layout for batched one-electron integral matrices.
@@ -40,8 +40,8 @@ inline constexpr double kDefaultIntegralCutoff = 25.0;
  * the dimensionless Gaussian-product exponent threshold used by tblite; a
  * primitive pair is skipped when ai*aj*R^2/(ai+aj) exceeds this value.
  */
-gpuxtb_status_t make_integral_plan(const BasisPlan& basis, IntegralPlan& plan, std::string& error,
-                                   double integral_cutoff = kDefaultIntegralCutoff);
+xtbloom_status_t make_integral_plan(const BasisPlan& basis, IntegralPlan& plan, std::string& error,
+                                    double integral_cutoff = kDefaultIntegralCutoff);
 
 /*
  * Evaluate all ragged-batch overlap matrices.
@@ -50,9 +50,9 @@ gpuxtb_status_t make_integral_plan(const BasisPlan& basis, IntegralPlan& plan, s
  * plan.total_matrix_elements doubles and is overwritten. workspace must be
  * aligned for double and contain at least plan.workspace_size_bytes bytes.
  */
-gpuxtb_status_t evaluate_overlap_cpu(const BasisPlan& basis, const IntegralPlan& plan,
-                                     const double* positions, double* overlap, void* workspace,
-                                     std::size_t workspace_size, std::string& error);
+xtbloom_status_t evaluate_overlap_cpu(const BasisPlan& basis, const IntegralPlan& plan,
+                                      const double* positions, double* overlap, void* workspace,
+                                      std::size_t workspace_size, std::string& error);
 
 /*
  * Evaluate GFN2 one-electron dipole and traceless quadrupole integrals.
@@ -75,10 +75,10 @@ gpuxtb_status_t evaluate_overlap_cpu(const BasisPlan& basis, const IntegralPlan&
  * least plan.workspace_size_bytes bytes. Successful steady-state calls
  * perform no dynamic allocation.
  */
-gpuxtb_status_t evaluate_multipole_cpu(const BasisPlan& basis, const IntegralPlan& plan,
-                                       const double* positions, double* dipole, double* quadrupole,
-                                       void* workspace, std::size_t workspace_size,
-                                       std::string& error);
+xtbloom_status_t evaluate_multipole_cpu(const BasisPlan& basis, const IntegralPlan& plan,
+                                        const double* positions, double* dipole, double* quadrupole,
+                                        void* workspace, std::size_t workspace_size,
+                                        std::string& error);
 
 /*
  * Apply the analytic reverse-mode derivative of evaluate_multipole_cpu.
@@ -93,11 +93,11 @@ gpuxtb_status_t evaluate_multipole_cpu(const BasisPlan& basis, const IntegralPla
  * alignment and size requirements as evaluate_multipole_cpu. Successful
  * steady-state calls allocate no dynamic memory.
  */
-gpuxtb_status_t add_multipole_gradient_cpu(const BasisPlan& basis, const IntegralPlan& plan,
-                                           const double* positions, const double* dE_ddipole,
-                                           const double* dE_dquadrupole, double* gradients,
-                                           void* workspace, std::size_t workspace_size,
-                                           std::string& error);
+xtbloom_status_t add_multipole_gradient_cpu(const BasisPlan& basis, const IntegralPlan& plan,
+                                            const double* positions, const double* dE_ddipole,
+                                            const double* dE_dquadrupole, double* gradients,
+                                            void* workspace, std::size_t workspace_size,
+                                            std::string& error);
 
 /*
  * Apply the analytic overlap reverse-mode derivative
@@ -109,11 +109,11 @@ gpuxtb_status_t add_multipole_gradient_cpu(const BasisPlan& basis, const Integra
  * respects both matrix triangles even when the caller's adjoint is not
  * symmetric, and does not materialize a four-index derivative tensor.
  */
-gpuxtb_status_t add_overlap_gradient_cpu(const BasisPlan& basis, const IntegralPlan& plan,
-                                         const double* positions, const double* dE_doverlap,
-                                         double* gradients, void* workspace,
-                                         std::size_t workspace_size, std::string& error);
+xtbloom_status_t add_overlap_gradient_cpu(const BasisPlan& basis, const IntegralPlan& plan,
+                                          const double* positions, const double* dE_doverlap,
+                                          double* gradients, void* workspace,
+                                          std::size_t workspace_size, std::string& error);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_INTEGRALS_HPP
+#endif  // XTBLOOM_MODEL_GFN2_INTEGRALS_HPP

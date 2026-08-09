@@ -1,5 +1,5 @@
 #include <array>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstddef>
@@ -9,7 +9,7 @@
 #include "backends/cuda/cuda_atomics.cuh"
 #include "backends/cuda/gfn2_d4.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
@@ -1382,7 +1382,7 @@ __global__ void atm_energy_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameter
   }
 }
 
-#if defined(GPUXTB_CUDA_TEST_HOOKS)
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
 /* White-box regression kernel for the reduction/transaction boundary shared by energy paths. */
 __global__ void atm_reduction_test_kernel(Gfn2D4DeviceBatch batch, const double* values,
                                           Gfn2D4DeviceWorkspace workspace,
@@ -2939,7 +2939,7 @@ cudaError_t add_gfn2_d4_atm_gradient_cuda(const Gfn2D4DeviceBatch& batch,
   return check_launch();
 }
 
-#if defined(GPUXTB_CUDA_TEST_HOOKS)
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
 std::int32_t test_gfn2_d4_atm_split_blocks_per_system(
     const Gfn2D4DeviceBatch& batch, const Gfn2D4DeviceWorkspace& workspace) noexcept {
   return atm_split_blocks_per_system(batch, workspace);
@@ -3034,4 +3034,4 @@ cudaError_t test_gfn2_d4_atm_addition_cuda(const Gfn2D4DeviceBatch& batch,
 }
 #endif
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

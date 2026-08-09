@@ -20,14 +20,14 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::Gfn2PeriodicEmbeddingDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2PeriodicEmbeddingDeviceError;
-using gpuxtb::detail::cuda::Gfn2PeriodicEmbeddingDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2PeriodicEmbeddingDeviceBatch;
+using xtbloom::detail::cuda::Gfn2PeriodicEmbeddingDeviceError;
+using xtbloom::detail::cuda::Gfn2PeriodicEmbeddingDeviceWorkspace;
 
 constexpr std::uint64_t kPlanToken = 0x8f51ce009fa78123ULL;
 constexpr double kPotentialSentinel = -913.25;
 constexpr double kEnergySentinel = 417.5;
-constexpr gpuxtb_status_t kStatusSentinel = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+constexpr xtbloom_status_t kStatusSentinel = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
 
 template <typename T>
 class DeviceBuffer {
@@ -198,7 +198,7 @@ struct DeviceFixture {
   DeviceBuffer<double> raw;
   DeviceBuffer<double> potentials;
   DeviceBuffer<double> energies;
-  DeviceBuffer<gpuxtb_status_t> statuses;
+  DeviceBuffer<xtbloom_status_t> statuses;
   DeviceBuffer<double> potential_scratch;
   DeviceBuffer<double> raw_response_scratch;
   DeviceBuffer<std::uint32_t> sequence_active;
@@ -207,7 +207,7 @@ struct DeviceFixture {
   cudaError_t initialize(const HostCase& host, cudaStream_t stream) {
     const std::vector<double> potential_seed(host.total_atoms(), kPotentialSentinel);
     const std::vector<double> energy_seed(host.batch_size(), kEnergySentinel);
-    const std::vector<gpuxtb_status_t> status_seed(host.batch_size(), kStatusSentinel);
+    const std::vector<xtbloom_status_t> status_seed(host.batch_size(), kStatusSentinel);
     cudaError_t status = allocate_and_copy(atom_offsets, host.atom_offsets, stream);
     if (status == cudaSuccess) {
       status = allocate_and_copy(matrix_offsets, host.matrix_offsets, stream);
@@ -277,7 +277,7 @@ struct DeviceFixture {
   cudaError_t reset_outputs(const HostCase& host, cudaStream_t stream) {
     const std::vector<double> potential_seed(host.total_atoms(), kPotentialSentinel);
     const std::vector<double> energy_seed(host.batch_size(), kEnergySentinel);
-    const std::vector<gpuxtb_status_t> status_seed(host.batch_size(), kStatusSentinel);
+    const std::vector<xtbloom_status_t> status_seed(host.batch_size(), kStatusSentinel);
     cudaError_t status = potentials.copy_from(potential_seed.data(), potential_seed.size(), stream);
     if (status == cudaSuccess) {
       status = energies.copy_from(energy_seed.data(), energy_seed.size(), stream);
@@ -291,7 +291,7 @@ struct DeviceFixture {
 struct HostResults {
   std::vector<double> potentials;
   std::vector<double> energies;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::uint32_t error = 99u;
 };
 
@@ -316,7 +316,7 @@ int compare_success(const HostCase& host, const HostResults& actual) {
   CHECK(actual.potentials == host.expected_potentials);
   CHECK(actual.energies == host.expected_energies);
   CHECK(std::all_of(actual.statuses.begin(), actual.statuses.end(),
-                    [](gpuxtb_status_t status) { return status == GPUXTB_STATUS_SUCCESS; }));
+                    [](xtbloom_status_t status) { return status == XTBLOOM_STATUS_SUCCESS; }));
   return 0;
 }
 
@@ -328,9 +328,9 @@ int test_batch_sizes_custom_stream_and_distinct_charge_semantics() {
     CHECK(host.mixed_charges != host.raw_charges);
     DeviceFixture device;
     CUDA_CHECK(device.initialize(host, stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(
         device.error.get(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
         device.batch(host), device.mixed.get(), device.raw.get(), device.potentials.get(),
         device.energies.get(), device.statuses.get(), device.workspace(host), device.error.get(),
         stream));
@@ -354,9 +354,9 @@ int test_peer_failure_isolation_and_transactional_publication() {
 
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(
       device.error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
       device.batch(host), device.mixed.get(), device.raw.get(), device.potentials.get(),
       device.energies.get(), device.statuses.get(), device.workspace(host), device.error.get(),
       stream));
@@ -373,13 +373,13 @@ int test_peer_failure_isolation_and_transactional_publication() {
     const std::size_t begin = static_cast<std::size_t>(host.atom_offsets[system]);
     const std::size_t end = static_cast<std::size_t>(host.atom_offsets[system + 1u]);
     if (system == failed_system) {
-      CHECK(actual.statuses[system] == GPUXTB_STATUS_INTERNAL_ERROR);
+      CHECK(actual.statuses[system] == XTBLOOM_STATUS_INTERNAL_ERROR);
       CHECK(actual.energies[system] == kEnergySentinel);
       for (std::size_t atom = begin; atom < end; ++atom) {
         CHECK(actual.potentials[atom] == kPotentialSentinel);
       }
     } else {
-      CHECK(actual.statuses[system] == GPUXTB_STATUS_SUCCESS);
+      CHECK(actual.statuses[system] == XTBLOOM_STATUS_SUCCESS);
       CHECK(actual.energies[system] == healthy_reference.expected_energies[system]);
       for (std::size_t atom = begin; atom < end; ++atom) {
         CHECK(actual.potentials[atom] == healthy_reference.expected_potentials[atom]);
@@ -404,9 +404,9 @@ int test_nonsymmetric_matrix_failure_is_isolated() {
 
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(
       device.error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
       device.batch(host), device.mixed.get(), device.raw.get(), device.potentials.get(),
       device.energies.get(), device.statuses.get(), device.workspace(host), device.error.get(),
       stream));
@@ -423,13 +423,13 @@ int test_nonsymmetric_matrix_failure_is_isolated() {
     const std::size_t begin = static_cast<std::size_t>(host.atom_offsets[system]);
     const std::size_t end = static_cast<std::size_t>(host.atom_offsets[system + 1u]);
     if (system == failed_system) {
-      CHECK(actual.statuses[system] == GPUXTB_STATUS_INTERNAL_ERROR);
+      CHECK(actual.statuses[system] == XTBLOOM_STATUS_INTERNAL_ERROR);
       CHECK(actual.energies[system] == kEnergySentinel);
       for (std::size_t atom = begin; atom < end; ++atom) {
         CHECK(actual.potentials[atom] == kPotentialSentinel);
       }
     } else {
-      CHECK(actual.statuses[system] == GPUXTB_STATUS_SUCCESS);
+      CHECK(actual.statuses[system] == XTBLOOM_STATUS_SUCCESS);
       CHECK(actual.energies[system] == healthy_reference.expected_energies[system]);
       for (std::size_t atom = begin; atom < end; ++atom) {
         CHECK(actual.potentials[atom] == healthy_reference.expected_potentials[atom]);
@@ -444,11 +444,11 @@ int test_all_empty_batch_accepts_null_numerical_ranges() {
   constexpr std::size_t batch_size = 8u;
   const std::vector<std::int64_t> offsets(batch_size + 1u, 0);
   std::vector<double> energy_seed(batch_size, kEnergySentinel);
-  std::vector<gpuxtb_status_t> status_seed(batch_size, kStatusSentinel);
+  std::vector<xtbloom_status_t> status_seed(batch_size, kStatusSentinel);
   DeviceBuffer<std::int64_t> atom_offsets;
   DeviceBuffer<std::int64_t> matrix_offsets;
   DeviceBuffer<double> energies;
-  DeviceBuffer<gpuxtb_status_t> statuses;
+  DeviceBuffer<xtbloom_status_t> statuses;
   DeviceBuffer<std::uint32_t> sequence_active;
   DeviceBuffer<std::uint32_t> error;
   CUDA_CHECK(atom_offsets.allocate(offsets.size()));
@@ -478,8 +478,8 @@ int test_all_empty_batch_accepts_null_numerical_ranges() {
   };
   const Gfn2PeriodicEmbeddingDeviceWorkspace workspace{nullptr, nullptr, sequence_active.get(),
                                                        0,       1,       kPlanToken};
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
       batch, nullptr, nullptr, nullptr, energies.get(), statuses.get(), workspace, error.get()));
   std::uint32_t semantic_error = 99u;
   CUDA_CHECK(energies.copy_to(energy_seed.data(), energy_seed.size()));
@@ -490,7 +490,7 @@ int test_all_empty_batch_accepts_null_numerical_ranges() {
   CHECK(std::all_of(energy_seed.begin(), energy_seed.end(),
                     [](double value) { return value == 0.0; }));
   CHECK(std::all_of(status_seed.begin(), status_seed.end(),
-                    [](gpuxtb_status_t status) { return status == GPUXTB_STATUS_SUCCESS; }));
+                    [](xtbloom_status_t status) { return status == XTBLOOM_STATUS_SUCCESS; }));
   return 0;
 }
 
@@ -505,9 +505,9 @@ int test_topology_failure_and_sticky_upstream_are_whole_call_atomic() {
   ++invalid_offsets[2];
   CUDA_CHECK(
       device.matrix_offsets.copy_from(invalid_offsets.data(), invalid_offsets.size(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(
       device.error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
       device.batch(host), device.mixed.get(), device.raw.get(), device.potentials.get(),
       device.energies.get(), device.statuses.get(), device.workspace(host), device.error.get(),
       stream));
@@ -521,7 +521,7 @@ int test_topology_failure_and_sticky_upstream_are_whole_call_atomic() {
   CHECK(std::all_of(actual.energies.begin(), actual.energies.end(),
                     [](double value) { return value == kEnergySentinel; }));
   CHECK(std::all_of(actual.statuses.begin(), actual.statuses.end(),
-                    [](gpuxtb_status_t status) { return status == kStatusSentinel; }));
+                    [](xtbloom_status_t status) { return status == kStatusSentinel; }));
 
   CUDA_CHECK(device.matrix_offsets.copy_from(host.matrix_offsets.data(), host.matrix_offsets.size(),
                                              stream));
@@ -529,9 +529,9 @@ int test_topology_failure_and_sticky_upstream_are_whole_call_atomic() {
   extreme_offsets[1] = std::numeric_limits<std::int64_t>::min();
   CUDA_CHECK(device.atom_offsets.copy_from(extreme_offsets.data(), extreme_offsets.size(), stream));
   CUDA_CHECK(device.reset_outputs(host, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(
       device.error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
       device.batch(host), device.mixed.get(), device.raw.get(), device.potentials.get(),
       device.energies.get(), device.statuses.get(), device.workspace(host), device.error.get(),
       stream));
@@ -544,7 +544,7 @@ int test_topology_failure_and_sticky_upstream_are_whole_call_atomic() {
   CHECK(std::all_of(actual.energies.begin(), actual.energies.end(),
                     [](double value) { return value == kEnergySentinel; }));
   CHECK(std::all_of(actual.statuses.begin(), actual.statuses.end(),
-                    [](gpuxtb_status_t status) { return status == kStatusSentinel; }));
+                    [](xtbloom_status_t status) { return status == kStatusSentinel; }));
 
   CUDA_CHECK(
       device.atom_offsets.copy_from(host.atom_offsets.data(), host.atom_offsets.size(), stream));
@@ -552,7 +552,7 @@ int test_topology_failure_and_sticky_upstream_are_whole_call_atomic() {
   const std::uint32_t upstream =
       static_cast<std::uint32_t>(Gfn2PeriodicEmbeddingDeviceError::kNonfiniteShift);
   CUDA_CHECK(device.error.copy_from(&upstream, 1u, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
       device.batch(host), device.mixed.get(), device.raw.get(), device.potentials.get(),
       device.energies.get(), device.statuses.get(), device.workspace(host), device.error.get(),
       stream));
@@ -564,7 +564,7 @@ int test_topology_failure_and_sticky_upstream_are_whole_call_atomic() {
   CHECK(std::all_of(actual.energies.begin(), actual.energies.end(),
                     [](double value) { return value == kEnergySentinel; }));
   CHECK(std::all_of(actual.statuses.begin(), actual.statuses.end(),
-                    [](gpuxtb_status_t status) { return status == kStatusSentinel; }));
+                    [](xtbloom_status_t status) { return status == kStatusSentinel; }));
   CUDA_CHECK(cudaStreamDestroy(stream));
   return 0;
 }
@@ -577,21 +577,21 @@ int test_host_validation_and_caller_owned_workspace() {
   Gfn2PeriodicEmbeddingDeviceWorkspace workspace = device.workspace(host);
 
   --workspace.atom_elements;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
             batch, device.mixed.get(), device.raw.get(), device.potentials.get(),
             device.energies.get(), device.statuses.get(), workspace,
             device.error.get()) == cudaErrorInvalidValue);
   workspace = device.workspace(host);
   ++workspace.plan_token;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
             batch, device.mixed.get(), device.raw.get(), device.potentials.get(),
             device.energies.get(), device.statuses.get(), workspace,
             device.error.get()) == cudaErrorInvalidValue);
   workspace = device.workspace(host);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
             batch, device.mixed.get(), device.raw.get(), device.mixed.get(), device.energies.get(),
             device.statuses.get(), workspace, device.error.get()) == cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(nullptr) ==
+  CHECK(xtbloom::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(nullptr) ==
         cudaErrorInvalidValue);
   return 0;
 }
@@ -607,9 +607,9 @@ int test_cuda_graph_capture_and_replay() {
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t graph_exec = nullptr;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_periodic_embedding_device_error_cuda(
       device.error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_cuda(
       device.batch(host), device.mixed.get(), device.raw.get(), device.potentials.get(),
       device.energies.get(), device.statuses.get(), device.workspace(host), device.error.get(),
       stream));

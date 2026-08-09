@@ -1,12 +1,12 @@
-# gpuxtb documentation
+# xTBloom documentation
 
-gpuxtb exposes GFN2-xTB single-point inference through one stable C ABI and
+xTBloom exposes GFN2-xTB single-point inference through one stable C ABI and
 Python interfaces built on that ABI. Start with the guide for your role.
 
 ## Browser demo
 
 The experimental browser build is available at
-<https://jinzhezeng.group/gpuxtb/>. It runs the CPU backend entirely on the
+<https://jinzhezeng.group/xtbloom/>. It runs the CPU backend entirely on the
 client as wasm32 without requiring Memory64, targeting modern iOS Safari,
 Safari, Chrome, and Firefox with WebAssembly and module Worker support. It
 includes an adapter-local L-BFGS geometry optimizer for interactive
@@ -17,7 +17,7 @@ pre-relaxation, and populates the existing XYZ and formal-charge inputs without
 blocking ordinary XYZ use if the optional CDN dependency is unavailable.
 
 The query parameter `?smiles=CCO` preloads the SMILES and, after both workers
-are ready, automatically runs the gpuxtb geometry optimizer and writes the
+are ready, automatically runs the xTBloom geometry optimizer and writes the
 final angstrom coordinates back to the XYZ editor. URL syntax requires a
 literal `+` in a charged SMILES to be encoded as `%2B`, for example
 `?smiles=%5BNH4%2B%5D`. The SMILES/conformer workflow and optimizer are browser
@@ -36,7 +36,7 @@ installation, units, backend selection, and runtime behavior.
   explicit point charges, periodic response, ASE, and dpdata.
 - [C and C++ API](user-guide/c-api.md): native installation, a complete C
   example, descriptor ownership, CUDA memory, and error handling.
-- [QM/MM usage](user-guide/qmmm.md): what gpuxtb computes and what the caller
+- [QM/MM usage](user-guide/qmmm.md): what xTBloom computes and what the caller
   must provide.
 
 ## Theory guide
@@ -58,7 +58,7 @@ remain true when changing the implementation.
 
 Repository contributors and coding agents must also follow
 [`AGENTS.md`](../AGENTS.md). The installed public contract is
-[`include/gpuxtb/gpuxtb.h`](../include/gpuxtb/gpuxtb.h).
+[`include/xtbloom/xtbloom.h`](../include/xtbloom/xtbloom.h).
 
 ## Current support
 

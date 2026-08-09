@@ -176,7 +176,7 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
     if sha256(source_path) != expected_source:
         raise EvidenceError("evidence generator SHA-256 does not match the manifest")
     if generator.get("command") != (
-        "gpuxtb_scc_temperature_continuation_test --write-evidence "
+        "xtbloom_scc_temperature_continuation_test --write-evidence "
         "data/conformance/evidence/tmacl-temperature-continuation"
     ):
         raise EvidenceError("evidence generator command is not canonical")
@@ -236,7 +236,7 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
 
     distribution = manifest.get("distribution")
     expected_distribution = {
-        "classification": "copied test fixture and gpuxtb-generated test diagnostics",
+        "classification": "copied test fixture and xtbloom-generated test diagnostics",
         "source_distribution": True,
         "native_install": False,
         "wheel": False,

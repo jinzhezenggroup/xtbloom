@@ -1,8 +1,8 @@
-// End-to-end CUDA test for gpuxtb-owned device result arenas and their DLPack
+// End-to-end CUDA test for xtbloom-owned device result arenas and their DLPack
 // export.
 //
-// This test allocates a gpuxtb_result_owner_t CUDA arena, binds its slices as
-// the device result buffers of a real gpuxtb_compute call, exports the
+// This test allocates a xtbloom_result_owner_t CUDA arena, binds its slices as
+// the device result buffers of a real xtbloom_compute call, exports the
 // finished slices as DLPack managed tensors, consumes them through their
 // native deleters, and verifies the device bytes equal a host-computed
 // reference. It also proves the arena outlives the compute context (compute
@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
 // Byte-exact DLPack 1.0 managed-tensor mirrors (see
 // src/runtime/dlpack_layout.hpp; DLPack spec, Apache-2.0).
@@ -86,7 +86,7 @@ struct DeviceSlice {
 
 // Allocate one packed arena and bind per-output slices.
 struct ArenaBinding {
-  gpuxtb_result_owner_t* owner = nullptr;
+  xtbloom_result_owner_t* owner = nullptr;
   void* base = nullptr;
   std::size_t total_bytes = 0;
   DeviceSlice energies;
@@ -121,16 +121,17 @@ struct ArenaBinding {
     (void)points;
     total_bytes = offset;
 
-    gpuxtb_result_owner_options_t options;
-    CHECK(gpuxtb_result_owner_options_init(&options, sizeof(options)) == GPUXTB_STATUS_SUCCESS);
-    options.memory_space = GPUXTB_MEMORY_CUDA_DEVICE;
+    xtbloom_result_owner_options_t options;
+    CHECK(xtbloom_result_owner_options_init(&options, sizeof(options)) == XTBLOOM_STATUS_SUCCESS);
+    options.memory_space = XTBLOOM_MEMORY_CUDA_DEVICE;
     options.device_id = device;
     options.size_bytes = total_bytes;
-    if (gpuxtb_result_owner_create(&options, &owner) != GPUXTB_STATUS_SUCCESS || owner == nullptr) {
+    if (xtbloom_result_owner_create(&options, &owner) != XTBLOOM_STATUS_SUCCESS ||
+        owner == nullptr) {
       return 1;
     }
-    gpuxtb_buffer_t buffer;
-    if (gpuxtb_result_owner_buffer(owner, &buffer) != GPUXTB_STATUS_SUCCESS) {
+    xtbloom_buffer_t buffer;
+    if (xtbloom_result_owner_buffer(owner, &buffer) != XTBLOOM_STATUS_SUCCESS) {
       return 2;
     }
     base = buffer.data;
@@ -146,14 +147,14 @@ struct ArenaBinding {
 
   void release() {
     if (owner != nullptr) {
-      gpuxtb_result_owner_release(owner);
+      xtbloom_result_owner_release(owner);
       owner = nullptr;
     }
   }
 };
 
-gpuxtb_buffer_t device_output(void* data, std::size_t bytes) {
-  return {data, bytes, GPUXTB_MEMORY_CUDA_DEVICE, 0u};
+xtbloom_buffer_t device_output(void* data, std::size_t bytes) {
+  return {data, bytes, XTBLOOM_MEMORY_CUDA_DEVICE, 0u};
 }
 
 int test_device_arena_compute_and_export(int device, cudaStream_t stream) {
@@ -166,14 +167,14 @@ int test_device_arena_compute_and_export(int device, cudaStream_t stream) {
   const double molecular_charges[] = {0.0};
   const std::int32_t unpaired_electrons[] = {0};
 
-  gpuxtb_context_options_t context_options{};
-  CHECK(gpuxtb_context_options_init(&context_options, sizeof(context_options)) ==
-        GPUXTB_STATUS_SUCCESS);
-  context_options.backend = GPUXTB_BACKEND_CUDA;
+  xtbloom_context_options_t context_options{};
+  CHECK(xtbloom_context_options_init(&context_options, sizeof(context_options)) ==
+        XTBLOOM_STATUS_SUCCESS);
+  context_options.backend = XTBLOOM_BACKEND_CUDA;
   context_options.device_id = device;
   context_options.stream = reinterpret_cast<void*>(stream);
-  gpuxtb_context_t* context = nullptr;
-  CHECK(gpuxtb_context_create(&context_options, &context) == GPUXTB_STATUS_SUCCESS &&
+  xtbloom_context_t* context = nullptr;
+  CHECK(xtbloom_context_create(&context_options, &context) == XTBLOOM_STATUS_SUCCESS &&
         context != nullptr);
   if (context == nullptr) {
     return 1;
@@ -181,32 +182,32 @@ int test_device_arena_compute_and_export(int device, cudaStream_t stream) {
 
   ArenaBinding arena;
   if (const int status = arena.create(device, kSystems, kAtoms, 0); status != 0) {
-    gpuxtb_context_destroy(context);
+    xtbloom_context_destroy(context);
     return status;
   }
 
-  gpuxtb_batch_t batch;
-  CHECK(gpuxtb_batch_init(&batch, sizeof(batch)) == GPUXTB_STATUS_SUCCESS);
+  xtbloom_batch_t batch;
+  CHECK(xtbloom_batch_init(&batch, sizeof(batch)) == XTBLOOM_STATUS_SUCCESS);
   batch.batch_size = kSystems;
   batch.total_atoms = kAtoms;
-  batch.atom_offsets = {atom_offsets, sizeof(atom_offsets), GPUXTB_MEMORY_HOST, 0u};
-  batch.atomic_numbers = {atomic_numbers, sizeof(atomic_numbers), GPUXTB_MEMORY_HOST, 0u};
-  batch.positions = {positions, sizeof(positions), GPUXTB_MEMORY_HOST, 0u};
-  batch.molecular_charges = {molecular_charges, sizeof(molecular_charges), GPUXTB_MEMORY_HOST, 0u};
-  batch.unpaired_electrons = {unpaired_electrons, sizeof(unpaired_electrons), GPUXTB_MEMORY_HOST,
+  batch.atom_offsets = {atom_offsets, sizeof(atom_offsets), XTBLOOM_MEMORY_HOST, 0u};
+  batch.atomic_numbers = {atomic_numbers, sizeof(atomic_numbers), XTBLOOM_MEMORY_HOST, 0u};
+  batch.positions = {positions, sizeof(positions), XTBLOOM_MEMORY_HOST, 0u};
+  batch.molecular_charges = {molecular_charges, sizeof(molecular_charges), XTBLOOM_MEMORY_HOST, 0u};
+  batch.unpaired_electrons = {unpaired_electrons, sizeof(unpaired_electrons), XTBLOOM_MEMORY_HOST,
                               0u};
 
-  gpuxtb_compute_options_t options{};
-  CHECK(gpuxtb_compute_options_init(&options, sizeof(options)) == GPUXTB_STATUS_SUCCESS);
-  options.model = GPUXTB_MODEL_GFN2_XTB;
-  options.flags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
+  xtbloom_compute_options_t options{};
+  CHECK(xtbloom_compute_options_init(&options, sizeof(options)) == XTBLOOM_STATUS_SUCCESS);
+  options.model = XTBLOOM_MODEL_GFN2_XTB;
+  options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
   options.max_scc_iterations = 64;
   options.charge_tolerance = 1.0e-8;
   options.energy_tolerance = 1.0e-8;
   options.electronic_temperature = 0.0;
 
-  gpuxtb_batch_result_t result{};
-  CHECK(gpuxtb_batch_result_init(&result, sizeof(result)) == GPUXTB_STATUS_SUCCESS);
+  xtbloom_batch_result_t result{};
+  CHECK(xtbloom_batch_result_init(&result, sizeof(result)) == XTBLOOM_STATUS_SUCCESS);
   result.energies = device_output(arena.energies.pointer, arena.energies.bytes);
   result.forces = device_output(arena.forces.pointer, arena.forces.bytes);
   result.atomic_charges = device_output(arena.charges.pointer, arena.charges.bytes);
@@ -214,26 +215,26 @@ int test_device_arena_compute_and_export(int device, cudaStream_t stream) {
   result.scc_converged = device_output(arena.converged.pointer, arena.converged.bytes);
   result.per_system_status = device_output(arena.statuses.pointer, arena.statuses.bytes);
 
-  CHECK(gpuxtb_compute(context, &batch, &options, &result) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(context, &batch, &options, &result) == XTBLOOM_STATUS_SUCCESS);
 
   // Destroy the compute context; the arena must keep the bytes alive.
-  gpuxtb_context_destroy(context);
+  xtbloom_context_destroy(context);
   context = nullptr;
 
   // Export the finished energy slice as a versioned DLPack tensor.
   const std::int64_t energy_shape[1] = {kSystems};
-  gpuxtb_dlpack_view_t view;
+  xtbloom_dlpack_view_t view;
   std::memset(&view, 0, sizeof(view));
   view.struct_size = sizeof(view);
-  view.api_version = GPUXTB_API_VERSION;
+  view.api_version = XTBLOOM_API_VERSION;
   view.dtype_code = 2; /* float */
   view.dtype_bits = 64;
   view.dtype_lanes = 1;
   view.ndim = 1;
   view.shape = energy_shape;
   void* managed_bytes = nullptr;
-  CHECK((gpuxtb_result_owner_export_dltensor(arena.owner, &view, 1, &managed_bytes) ==
-         GPUXTB_STATUS_SUCCESS) &&
+  CHECK((xtbloom_result_owner_export_dltensor(arena.owner, &view, 1, &managed_bytes) ==
+         XTBLOOM_STATUS_SUCCESS) &&
         managed_bytes != nullptr);
   if (managed_bytes == nullptr) {
     arena.release();
@@ -261,8 +262,8 @@ int test_device_arena_compute_and_export(int device, cudaStream_t stream) {
 
   // Second export must produce an independent managed tensor.
   void* managed2_bytes = nullptr;
-  CHECK((gpuxtb_result_owner_export_dltensor(arena.owner, &view, 1, &managed2_bytes) ==
-         GPUXTB_STATUS_SUCCESS) &&
+  CHECK((xtbloom_result_owner_export_dltensor(arena.owner, &view, 1, &managed2_bytes) ==
+         XTBLOOM_STATUS_SUCCESS) &&
         managed2_bytes != nullptr);
   DtManagedTensorVersioned* managed2 = static_cast<DtManagedTensorVersioned*>(managed2_bytes);
   CHECK(managed2->dl_tensor.data == arena.energies.pointer);

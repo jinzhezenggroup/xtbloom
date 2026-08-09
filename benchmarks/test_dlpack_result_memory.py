@@ -48,7 +48,7 @@ class DlpackResultMemoryProtocolTest(unittest.TestCase):
                     [
                         "dlpack_result_memory.py",
                         "--library",
-                        str(Path(tmp) / "libgpuxtb.so"),
+                        str(Path(tmp) / "libxtbloom.so"),
                         "--output",
                         str(output),
                     ],
@@ -72,12 +72,12 @@ class DlpackResultMemoryProtocolTest(unittest.TestCase):
 
     def test_requires_gpu_raises_when_backend_absent(self) -> None:
         """The production probe translates an unavailable native context."""
-        from gpuxtb.exceptions import GPUxtbRuntimeError
+        from xtbloom.exceptions import XTBloomRuntimeError
 
         with (
             mock.patch(
-                "gpuxtb.interface.Context",
-                side_effect=GPUxtbRuntimeError("injected unavailable backend"),
+                "xtbloom.interface.Context",
+                side_effect=XTBloomRuntimeError("injected unavailable backend"),
             ),
             self.assertRaisesRegex(SystemExit, "CUDA backend is not usable"),
         ):
@@ -107,7 +107,7 @@ class DlpackResultMemoryProtocolTest(unittest.TestCase):
                     [
                         "dlpack_result_memory.py",
                         "--library",
-                        str(Path(tmp) / "libgpuxtb.so"),
+                        str(Path(tmp) / "libxtbloom.so"),
                         "--output",
                         str(output),
                     ],
@@ -126,13 +126,13 @@ class DlpackResultMemoryProtocolTest(unittest.TestCase):
 
     def test_library_identity_requires_clean_matching_cmake_source(self) -> None:
         """Final evidence ties the selected library to this clean revision."""
-        from gpuxtb import library as gpuxtb_library
+        from xtbloom import library as xtbloom_library
 
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "source"
             build = source / "build"
             build.mkdir(parents=True)
-            native = build / "libgpuxtb.so"
+            native = build / "libxtbloom.so"
             native.write_bytes(b"test library")
             compiler = Path("/bin/true").resolve()
             (build / "CMakeCache.txt").write_text(
@@ -149,7 +149,7 @@ class DlpackResultMemoryProtocolTest(unittest.TestCase):
                         "CMAKE_CUDA_ARCHITECTURES:STRING=120",
                         "CMAKE_GENERATOR:INTERNAL=Ninja",
                         f"CMAKE_HOME_DIRECTORY:INTERNAL={source}",
-                        "GPUXTB_ENABLE_CUDA:STRING=ON",
+                        "XTBLOOM_ENABLE_CUDA:STRING=ON",
                     )
                 )
                 + "\n",
@@ -162,7 +162,7 @@ class DlpackResultMemoryProtocolTest(unittest.TestCase):
                 "dirty": False,
             }
             with (
-                mock.patch.object(gpuxtb_library, "library_path", return_value=native),
+                mock.patch.object(xtbloom_library, "library_path", return_value=native),
                 mock.patch.object(benchmark, "REPOSITORY_ROOT", source),
                 mock.patch.object(benchmark, "_git_state", return_value=clean_state),
             ):
@@ -183,7 +183,7 @@ class DlpackResultMemoryProtocolTest(unittest.TestCase):
             ):
                 with (
                     mock.patch.object(
-                        gpuxtb_library, "library_path", return_value=native
+                        xtbloom_library, "library_path", return_value=native
                     ),
                     mock.patch.object(benchmark, "REPOSITORY_ROOT", source),
                     mock.patch.object(
@@ -196,7 +196,7 @@ class DlpackResultMemoryProtocolTest(unittest.TestCase):
     def test_profile_mode_validates_library_provenance(self) -> None:
         """Profiler captures cannot bypass selected-library provenance gates."""
         with tempfile.TemporaryDirectory() as tmp:
-            native = Path(tmp) / "libgpuxtb.so"
+            native = Path(tmp) / "libxtbloom.so"
             native.write_bytes(b"test library")
             with (
                 mock.patch(
@@ -236,7 +236,7 @@ class DlpackResultMemoryProtocolTest(unittest.TestCase):
                 [
                     "dlpack_result_memory.py",
                     "--library",
-                    "/tmp/libgpuxtb.so",
+                    "/tmp/libxtbloom.so",
                     "--output",
                     "/tmp/unused-evidence.json",
                     "--repetitions",

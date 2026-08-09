@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_PERIODIC_EMBEDDING_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_PERIODIC_EMBEDDING_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_PERIODIC_EMBEDDING_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_PERIODIC_EMBEDDING_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -9,9 +9,9 @@
 #include <type_traits>
 
 #include "backends/cuda/gfn2_scc_iteration_control.cuh"
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /* First asynchronous semantic failure recorded by a periodic embedding call. */
 enum class Gfn2PeriodicEmbeddingDeviceError : std::uint32_t {
@@ -86,7 +86,7 @@ cudaError_t reset_gfn2_periodic_embedding_device_error_cuda(std::uint32_t* devic
  * Potentials and energies are overwritten. Each dense A must be finite and
  * exactly symmetric as doubles; +0.0 and -0.0 compare equal and are accepted.
  * A numerical failure leaves that member's V and E unchanged, publishes
- * GPUXTB_STATUS_INTERNAL_ERROR only to its status, and does not prevent
+ * XTBLOOM_STATUS_INTERNAL_ERROR only to its status, and does not prevent
  * healthy peers from committing. A topology failure is whole-call atomic.
  * This kernel intentionally provides V and E only. Cartesian derivatives of
  * caller-supplied b or A remain the caller's responsibility; a CUDA force
@@ -101,7 +101,7 @@ cudaError_t reset_gfn2_periodic_embedding_device_error_cuda(std::uint32_t* devic
 cudaError_t evaluate_gfn2_periodic_embedding_cuda(
     const Gfn2PeriodicEmbeddingDeviceBatch& batch, const double* mixed_atomic_charges,
     const double* raw_atomic_charges, double* atomic_potentials, double* energies,
-    gpuxtb_status_t* system_statuses, const Gfn2PeriodicEmbeddingDeviceWorkspace& workspace,
+    xtbloom_status_t* system_statuses, const Gfn2PeriodicEmbeddingDeviceWorkspace& workspace,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
 /* Clear SCC split-stage peer diagnostics and the plan-only first error. */
@@ -137,6 +137,6 @@ cudaError_t evaluate_gfn2_periodic_embedding_scc_energy_cuda(
     std::uint32_t* system_errors, std::uint32_t* device_error,
     cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_PERIODIC_EMBEDDING_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_PERIODIC_EMBEDDING_CUH

@@ -1,5 +1,5 @@
 #include "model/gfn2/wavefunction.hpp"
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <algorithm>
 #include <array>
@@ -13,7 +13,7 @@
 
 #include "data/parameters/gfn2.hpp"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 namespace {
 
 constexpr std::size_t kDoubleBytes = sizeof(double);
@@ -73,7 +73,7 @@ const parameters::gfn2::ShellParameters* element_shells(
   return parameters::gfn2::kShells.data() + begin;
 }
 
-gpuxtb_status_t validate_basis_shape(const BasisPlan& basis, std::string& error) {
+xtbloom_status_t validate_basis_shape(const BasisPlan& basis, std::string& error) {
   if (basis.batch_size <= 0 || basis.total_atoms <= 0 || basis.total_shells <= 0 ||
       basis.total_orbitals <= 0 ||
       !count_fits_vector(basis.batch_size, sizeof(std::int64_t), true) ||
@@ -81,7 +81,7 @@ gpuxtb_status_t validate_basis_shape(const BasisPlan& basis, std::string& error)
       !count_fits_vector(basis.total_shells, sizeof(std::int64_t), true) ||
       !count_fits_vector(basis.total_orbitals, sizeof(double))) {
     error = "wavefunction layout requires representable positive basis dimensions";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const std::size_t batch_count = static_cast<std::size_t>(basis.batch_size);
@@ -108,7 +108,7 @@ gpuxtb_status_t validate_basis_shape(const BasisPlan& basis, std::string& error)
       basis.shell_orbital_offsets.front() != 0 ||
       basis.shell_orbital_offsets.back() != basis.total_orbitals) {
     error = "wavefunction layout received an incomplete or inconsistent basis plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   for (std::size_t system = 0; system < batch_count; ++system) {
@@ -126,10 +126,10 @@ gpuxtb_status_t validate_basis_shape(const BasisPlan& basis, std::string& error)
         orbital_begin != basis.atom_orbital_offsets[static_cast<std::size_t>(atom_begin)] ||
         orbital_end != basis.atom_orbital_offsets[static_cast<std::size_t>(atom_end)]) {
       error = "wavefunction basis offsets are not valid ragged partitions";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 bool append_field_count(WavefunctionFieldLayout& field, std::size_t system, std::int64_t count) {
@@ -187,7 +187,7 @@ bool valid_nonempty_partition(const std::vector<std::int64_t>& offsets, std::siz
   return true;
 }
 
-gpuxtb_status_t validate_layout_metadata(const WavefunctionLayout& layout, std::string& error) {
+xtbloom_status_t validate_layout_metadata(const WavefunctionLayout& layout, std::string& error) {
   if (layout.batch_size <= 0 || layout.total_atoms <= 0 || layout.total_shells <= 0 ||
       layout.total_orbitals <= 0 ||
       !count_fits_vector(layout.batch_size, sizeof(std::int64_t), true) ||
@@ -195,7 +195,7 @@ gpuxtb_status_t validate_layout_metadata(const WavefunctionLayout& layout, std::
       !count_fits_vector(layout.total_shells, sizeof(double)) ||
       !count_fits_vector(layout.total_orbitals, sizeof(double))) {
     error = "wavefunction layout metadata is incomplete";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::size_t batch_count = static_cast<std::size_t>(layout.batch_size);
   const std::size_t atom_count = static_cast<std::size_t>(layout.total_atoms);
@@ -214,14 +214,14 @@ gpuxtb_status_t validate_layout_metadata(const WavefunctionLayout& layout, std::
       layout.beta_electron_counts.size() != batch_count || layout.workspace_size_bytes == 0u ||
       layout.workspace_size_bytes % kWavefunctionWorkspaceAlignment != 0u) {
     error = "wavefunction layout metadata sizes are inconsistent";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   if (!valid_nonempty_partition(layout.atom_offsets, batch_count, layout.total_atoms) ||
       !valid_nonempty_partition(layout.batch_shell_offsets, batch_count, layout.total_shells) ||
       !valid_nonempty_partition(layout.batch_orbital_offsets, batch_count, layout.total_orbitals)) {
     error = "wavefunction batch offsets must be nonempty monotone ragged partitions";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   std::size_t previous_end = 0u;
@@ -229,7 +229,7 @@ gpuxtb_status_t validate_layout_metadata(const WavefunctionLayout& layout, std::
     std::size_t expected_offset = 0u;
     if (!align_up(previous_end, kWavefunctionWorkspaceAlignment, expected_offset)) {
       error = "wavefunction field alignment overflows size_t";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     if (field->element_count < 0 || field->system_offsets.size() != batch_count + 1u ||
         field->system_offsets.front() != 0 ||
@@ -241,13 +241,13 @@ gpuxtb_status_t validate_layout_metadata(const WavefunctionLayout& layout, std::
         field->offset_bytes > layout.workspace_size_bytes ||
         field->size_bytes > layout.workspace_size_bytes - field->offset_bytes) {
       error = "wavefunction field layout is invalid or overlapping";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     for (std::size_t system = 0; system < batch_count; ++system) {
       if (field->system_offsets[system] < 0 ||
           field->system_offsets[system] > field->system_offsets[system + 1u]) {
         error = "wavefunction field system offsets are not monotone";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     }
     previous_end = field->offset_bytes + field->size_bytes;
@@ -257,7 +257,7 @@ gpuxtb_status_t validate_layout_metadata(const WavefunctionLayout& layout, std::
   if (!align_up(previous_end, kWavefunctionWorkspaceAlignment, expected_workspace_size) ||
       expected_workspace_size != layout.workspace_size_bytes) {
     error = "wavefunction workspace size is not the canonical packed size";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const auto fields = field_layouts(layout);
@@ -276,7 +276,7 @@ gpuxtb_status_t validate_layout_metadata(const WavefunctionLayout& layout, std::
     const double charge = layout.molecular_charges[system];
     if (!std::isfinite(charge) || unpaired < 0 || (nspin != 1 && nspin != 2)) {
       error = "wavefunction charge, unpaired-electron, or spin-channel metadata is invalid";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
     std::int64_t expected_shell = shell_begin;
@@ -289,13 +289,13 @@ gpuxtb_status_t validate_layout_metadata(const WavefunctionLayout& layout, std::
           parameters::gfn2::find_element(static_cast<std::uint32_t>(atomic_number));
       if (element == nullptr || element->atomic_number != atomic_number) {
         error = "wavefunction layout contains an unsupported atomic number";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       const auto* element_shell_data = element_shells(*element);
       if (element_shell_data == nullptr || element->shell_count == 0u ||
           static_cast<std::int64_t>(element->shell_count) > shell_end - expected_shell) {
         error = "wavefunction shell partition does not match its element list";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
 
       double atom_reference = 0.0;
@@ -307,35 +307,35 @@ gpuxtb_status_t validate_layout_metadata(const WavefunctionLayout& layout, std::
             layout.reference_shell_occupations[shell_index] !=
                 shell_parameters.reference_occupation) {
           error = "wavefunction reference shell occupations do not match GFN2 parameters";
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
         }
         atom_reference += shell_parameters.reference_occupation;
         const std::int64_t shell_orbitals =
             2 * static_cast<std::int64_t>(shell_parameters.angular_momentum) + 1;
         if (!checked_add(shell_orbitals, expected_orbitals)) {
           error = "wavefunction orbital metadata overflows the supported index range";
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
         }
         ++expected_shell;
       }
       if (!(atom_reference > 0.0) || !std::isfinite(atom_reference) ||
           layout.reference_atom_occupations[atom_index] != atom_reference) {
         error = "wavefunction reference atom occupations do not match GFN2 parameters";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       reference_electrons += atom_reference;
     }
     if (expected_shell != shell_end || expected_orbitals != orbitals ||
         !std::isfinite(reference_electrons)) {
       error = "wavefunction shell or orbital counts do not match its element list";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
     const double electrons = reference_electrons - charge;
     if (!std::isfinite(electrons) || electrons < 0.0 ||
         electrons > static_cast<double>(std::numeric_limits<std::int64_t>::max() - 2048)) {
       error = "wavefunction electron-count metadata is invalid";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     const auto integral_electrons = static_cast<std::int64_t>(std::round(electrons));
     const double alpha = 0.5 * (electrons + static_cast<double>(unpaired));
@@ -347,7 +347,7 @@ gpuxtb_status_t validate_layout_metadata(const WavefunctionLayout& layout, std::
         layout.alpha_electron_counts[system] != alpha ||
         layout.beta_electron_counts[system] != beta) {
       error = "wavefunction spin-resolved electron metadata is inconsistent";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
     std::int64_t matrix_elements = 0;
@@ -367,7 +367,7 @@ gpuxtb_status_t validate_layout_metadata(const WavefunctionLayout& layout, std::
         !checked_product({spin_atoms, 3}, dipole_elements) ||
         !checked_product({spin_atoms, kWavefunctionQuadrupoleComponents}, quadrupole_elements)) {
       error = "wavefunction field dimensions overflow the supported index range";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     const std::array<std::int64_t, 9> expected_counts{
         {spin_matrix_elements, spin_orbitals, occupation_elements, spin_matrix_elements,
@@ -377,23 +377,23 @@ gpuxtb_status_t validate_layout_metadata(const WavefunctionLayout& layout, std::
       if (field->system_offsets[system + 1u] - field->system_offsets[system] !=
           expected_counts[field_index]) {
         error = "wavefunction field system offsets do not match its ragged dimensions";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 template <typename View>
-gpuxtb_status_t validate_bound_view(const WavefunctionLayout& layout, const View& view,
-                                    std::string& error) {
+xtbloom_status_t validate_bound_view(const WavefunctionLayout& layout, const View& view,
+                                     std::string& error) {
   if (view.workspace_base == nullptr ||
       reinterpret_cast<std::uintptr_t>(view.workspace_base) % kWavefunctionWorkspaceAlignment !=
           0u ||
       view.workspace_size_bytes < layout.workspace_size_bytes ||
       !address_range_fits(view.workspace_base, view.workspace_size_bytes)) {
     error = "wavefunction view workspace binding is NULL, truncated, misaligned, or overflowing";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(view.workspace_base);
@@ -403,24 +403,24 @@ gpuxtb_status_t validate_bound_view(const WavefunctionLayout& layout, const View
     if (pointers[field] == nullptr ||
         reinterpret_cast<std::uintptr_t>(pointers[field]) != base + layouts[field]->offset_bytes) {
       error = "wavefunction view fields do not match the canonical workspace binding";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 template <typename Byte, typename View>
-gpuxtb_status_t bind_view_impl(const WavefunctionLayout& layout, Byte* workspace,
-                               std::size_t workspace_size, View& view, std::string& error) {
-  gpuxtb_status_t status = validate_layout_metadata(layout, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t bind_view_impl(const WavefunctionLayout& layout, Byte* workspace,
+                                std::size_t workspace_size, View& view, std::string& error) {
+  xtbloom_status_t status = validate_layout_metadata(layout, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (workspace == nullptr || workspace_size < layout.workspace_size_bytes ||
       reinterpret_cast<std::uintptr_t>(workspace) % kWavefunctionWorkspaceAlignment != 0u ||
       !address_range_fits(workspace, workspace_size)) {
     error = "wavefunction workspace is NULL, too small, misaligned, or has an overflowing range";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(workspace);
@@ -443,23 +443,23 @@ gpuxtb_status_t bind_view_impl(const WavefunctionLayout& layout, Byte* workspace
       base + layout.energy_weighted_density.offset_bytes);
   view = created;
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 template <typename BatchView, typename SystemView>
-gpuxtb_status_t make_system_view_impl(const WavefunctionLayout& layout, const BatchView& batch_view,
-                                      std::int64_t system, SystemView& system_view,
-                                      std::string& error) {
-  const gpuxtb_status_t layout_status = validate_layout_metadata(layout, error);
-  if (layout_status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t make_system_view_impl(const WavefunctionLayout& layout,
+                                       const BatchView& batch_view, std::int64_t system,
+                                       SystemView& system_view, std::string& error) {
+  const xtbloom_status_t layout_status = validate_layout_metadata(layout, error);
+  if (layout_status != XTBLOOM_STATUS_SUCCESS) {
     return layout_status;
   }
   if (system < 0 || system >= layout.batch_size) {
     error = "wavefunction system view requires a valid system index";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  const gpuxtb_status_t view_status = validate_bound_view(layout, batch_view, error);
-  if (view_status != GPUXTB_STATUS_SUCCESS) {
+  const xtbloom_status_t view_status = validate_bound_view(layout, batch_view, error);
+  if (view_status != XTBLOOM_STATUS_SUCCESS) {
     return view_status;
   }
   const std::size_t index = static_cast<std::size_t>(system);
@@ -484,24 +484,25 @@ gpuxtb_status_t make_system_view_impl(const WavefunctionLayout& layout, const Ba
       batch_view.energy_weighted_density + layout.energy_weighted_density.system_offsets[index];
   system_view = created;
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 }  // namespace
 
-gpuxtb_status_t make_wavefunction_layout(const BasisPlan& basis, const std::int32_t* atomic_numbers,
-                                         const double* molecular_charges,
-                                         const std::int32_t* unpaired_electrons,
-                                         const std::int32_t* spin_channels,
-                                         WavefunctionLayout& layout, std::string& error) {
-  gpuxtb_status_t status = validate_basis_shape(basis, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t make_wavefunction_layout(const BasisPlan& basis,
+                                          const std::int32_t* atomic_numbers,
+                                          const double* molecular_charges,
+                                          const std::int32_t* unpaired_electrons,
+                                          const std::int32_t* spin_channels,
+                                          WavefunctionLayout& layout, std::string& error) {
+  xtbloom_status_t status = validate_basis_shape(basis, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (atomic_numbers == nullptr || molecular_charges == nullptr || unpaired_electrons == nullptr ||
       spin_channels == nullptr) {
     error = "wavefunction layout electronic inputs must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const std::size_t batch_count = static_cast<std::size_t>(basis.batch_size);
@@ -540,7 +541,7 @@ gpuxtb_status_t make_wavefunction_layout(const BasisPlan& basis, const std::int3
           parameters::gfn2::find_element(static_cast<std::uint32_t>(atomic_number));
       if (element == nullptr || element->atomic_number != atomic_number) {
         error = "wavefunction layout contains an unsupported atomic number";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       const auto* shells = element_shells(*element);
       const std::int64_t shell_begin = basis.atom_shell_offsets[atom_index];
@@ -548,7 +549,7 @@ gpuxtb_status_t make_wavefunction_layout(const BasisPlan& basis, const std::int3
       if (shells == nullptr || shell_begin < 0 || shell_begin > shell_end ||
           shell_end > basis.total_shells || shell_end - shell_begin != element->shell_count) {
         error = "wavefunction basis shell layout does not match the element list";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       const std::int64_t atom_orbital_begin = basis.atom_orbital_offsets[atom_index];
       const std::int64_t atom_orbital_end = basis.atom_orbital_offsets[atom_index + 1u];
@@ -558,7 +559,7 @@ gpuxtb_status_t make_wavefunction_layout(const BasisPlan& basis, const std::int3
               basis.shell_orbital_offsets[static_cast<std::size_t>(shell_begin)] ||
           atom_orbital_end != basis.shell_orbital_offsets[static_cast<std::size_t>(shell_end)]) {
         error = "wavefunction atom orbital offsets do not match its shell range";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
 
       double atom_reference = 0.0;
@@ -578,14 +579,14 @@ gpuxtb_status_t make_wavefunction_layout(const BasisPlan& basis, const std::int3
             orbital_count != expected_orbitals || !(shell_parameters.reference_occupation >= 0.0) ||
             !std::isfinite(shell_parameters.reference_occupation)) {
           error = "wavefunction basis shell metadata does not match GFN2 parameters";
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
         }
         created.reference_shell_occupations[shell_index] = shell_parameters.reference_occupation;
         atom_reference += shell_parameters.reference_occupation;
       }
       if (!std::isfinite(atom_reference)) {
         error = "wavefunction reference atom occupation is not finite";
-        return GPUXTB_STATUS_INTERNAL_ERROR;
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
       }
       created.atomic_numbers[atom_index] = atomic_number;
       created.reference_atom_occupations[atom_index] = atom_reference;
@@ -608,7 +609,7 @@ gpuxtb_status_t make_wavefunction_layout(const BasisPlan& basis, const std::int3
         error =
             "molecular charges must be finite, unpaired-electron counts nonnegative, and spin "
             "channels one or two";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
 
       double reference_electrons = 0.0;
@@ -619,20 +620,20 @@ gpuxtb_status_t make_wavefunction_layout(const BasisPlan& basis, const std::int3
       if (!std::isfinite(electrons) || electrons < 0.0 ||
           electrons > static_cast<double>(std::numeric_limits<std::int64_t>::max() - 2048)) {
         error = "molecular charge produces an invalid or unrepresentable electron count";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       const double rounded_electrons = std::round(electrons);
       const auto integral_electrons = static_cast<std::int64_t>(rounded_electrons);
       if ((integral_electrons & 1) != (static_cast<std::int64_t>(unpaired) & 1)) {
         error = "total electron count and unpaired-electron count have incompatible parity";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       const double alpha = 0.5 * (electrons + static_cast<double>(unpaired));
       const double beta = 0.5 * (electrons - static_cast<double>(unpaired));
       if (!std::isfinite(alpha) || !std::isfinite(beta) || beta < 0.0 ||
           alpha > static_cast<double>(orbitals) || beta > static_cast<double>(orbitals)) {
         error = "alpha or beta electron count cannot be represented by the system orbital space";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
 
       std::int64_t matrix_elements = 0;
@@ -661,7 +662,7 @@ gpuxtb_status_t make_wavefunction_layout(const BasisPlan& basis, const std::int3
           !append_field_count(created.quadrupole, system, quadrupole_elements) ||
           !append_field_count(created.energy_weighted_density, system, spin_matrix_elements)) {
         error = "wavefunction field dimensions overflow the supported index range";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
 
       created.molecular_charges[system] = charge == 0.0 ? 0.0 : charge;
@@ -684,59 +685,59 @@ gpuxtb_status_t make_wavefunction_layout(const BasisPlan& basis, const std::int3
         !finish_field(created.energy_weighted_density, batch_count, cursor) ||
         !align_up(cursor, kWavefunctionWorkspaceAlignment, created.workspace_size_bytes)) {
       error = "wavefunction workspace byte size overflows size_t";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
     status = validate_layout_metadata(created, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
     layout = std::move(created);
     error.clear();
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
     error = "failed to allocate GFN2 wavefunction layout metadata";
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
-gpuxtb_status_t bind_wavefunction_view(const WavefunctionLayout& layout, void* workspace,
-                                       std::size_t workspace_size, WavefunctionView& view,
-                                       std::string& error) {
+xtbloom_status_t bind_wavefunction_view(const WavefunctionLayout& layout, void* workspace,
+                                        std::size_t workspace_size, WavefunctionView& view,
+                                        std::string& error) {
   return bind_view_impl(layout, static_cast<std::byte*>(workspace), workspace_size, view, error);
 }
 
-gpuxtb_status_t bind_wavefunction_view(const WavefunctionLayout& layout, const void* workspace,
-                                       std::size_t workspace_size, ConstWavefunctionView& view,
-                                       std::string& error) {
+xtbloom_status_t bind_wavefunction_view(const WavefunctionLayout& layout, const void* workspace,
+                                        std::size_t workspace_size, ConstWavefunctionView& view,
+                                        std::string& error) {
   return bind_view_impl(layout, static_cast<const std::byte*>(workspace), workspace_size, view,
                         error);
 }
 
-gpuxtb_status_t make_wavefunction_system_view(const WavefunctionLayout& layout,
-                                              const WavefunctionView& batch_view,
-                                              std::int64_t system,
-                                              WavefunctionSystemView& system_view,
-                                              std::string& error) {
+xtbloom_status_t make_wavefunction_system_view(const WavefunctionLayout& layout,
+                                               const WavefunctionView& batch_view,
+                                               std::int64_t system,
+                                               WavefunctionSystemView& system_view,
+                                               std::string& error) {
   return make_system_view_impl(layout, batch_view, system, system_view, error);
 }
 
-gpuxtb_status_t make_wavefunction_system_view(const WavefunctionLayout& layout,
-                                              const ConstWavefunctionView& batch_view,
-                                              std::int64_t system,
-                                              ConstWavefunctionSystemView& system_view,
-                                              std::string& error) {
+xtbloom_status_t make_wavefunction_system_view(const WavefunctionLayout& layout,
+                                               const ConstWavefunctionView& batch_view,
+                                               std::int64_t system,
+                                               ConstWavefunctionSystemView& system_view,
+                                               std::string& error) {
   return make_system_view_impl(layout, batch_view, system, system_view, error);
 }
 
-gpuxtb_status_t initialize_sad_multipole_state(const WavefunctionLayout& layout,
-                                               const WavefunctionView& view, std::string& error) {
-  const gpuxtb_status_t status = validate_layout_metadata(layout, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t initialize_sad_multipole_state(const WavefunctionLayout& layout,
+                                                const WavefunctionView& view, std::string& error) {
+  const xtbloom_status_t status = validate_layout_metadata(layout, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
-  const gpuxtb_status_t view_status = validate_bound_view(layout, view, error);
-  if (view_status != GPUXTB_STATUS_SUCCESS) {
+  const xtbloom_status_t view_status = validate_bound_view(layout, view, error);
+  if (view_status != XTBLOOM_STATUS_SUCCESS) {
     return view_status;
   }
 
@@ -772,20 +773,20 @@ gpuxtb_status_t initialize_sad_multipole_state(const WavefunctionLayout& layout,
     }
   }
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t make_wavefunction_warm_start_identity(const WavefunctionLayout& layout,
-                                                      std::uint64_t geometry_cache_generation,
-                                                      WavefunctionWarmStartIdentity& identity,
-                                                      std::string& error) {
-  gpuxtb_status_t status = validate_layout_metadata(layout, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t make_wavefunction_warm_start_identity(const WavefunctionLayout& layout,
+                                                       std::uint64_t geometry_cache_generation,
+                                                       WavefunctionWarmStartIdentity& identity,
+                                                       std::string& error) {
+  xtbloom_status_t status = validate_layout_metadata(layout, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   try {
     WavefunctionWarmStartIdentity created;
-    created.model = GPUXTB_MODEL_GFN2_XTB;
+    created.model = XTBLOOM_MODEL_GFN2_XTB;
     created.geometry_cache_generation = geometry_cache_generation;
     created.batch_size = layout.batch_size;
     created.total_atoms = layout.total_atoms;
@@ -800,10 +801,10 @@ gpuxtb_status_t make_wavefunction_warm_start_identity(const WavefunctionLayout& 
     created.spin_channels = layout.spin_channels;
     identity = std::move(created);
     error.clear();
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
     error = "failed to allocate wavefunction warm-start identity metadata";
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
@@ -824,17 +825,17 @@ bool wavefunction_warm_start_matches(const WavefunctionWarmStartIdentity& expect
          expected.spin_channels == candidate.spin_channels;
 }
 
-gpuxtb_status_t validate_wavefunction_warm_start(const WavefunctionWarmStartIdentity& expected,
-                                                 const WavefunctionWarmStartIdentity& candidate,
-                                                 std::string& error) {
+xtbloom_status_t validate_wavefunction_warm_start(const WavefunctionWarmStartIdentity& expected,
+                                                  const WavefunctionWarmStartIdentity& candidate,
+                                                  std::string& error) {
   if (!wavefunction_warm_start_matches(expected, candidate)) {
     error =
         "wavefunction warm start does not match model, topology, charge, spin, or geometry "
         "generation";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2

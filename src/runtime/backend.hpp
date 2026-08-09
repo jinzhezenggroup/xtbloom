@@ -1,22 +1,22 @@
-#ifndef GPUXTB_RUNTIME_BACKEND_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_RUNTIME_BACKEND_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_RUNTIME_BACKEND_HPP
+#define XTBLOOM_RUNTIME_BACKEND_HPP
 
 #include <cstdint>
 #include <memory>
 #include <string>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail {
+namespace xtbloom::detail {
 
 class Gfn2CpuExecutionCache;
 class Gfn2CudaExecutionCache;
 
 /* Runtime state is opaque at the ABI boundary so backend internals can evolve. */
 struct Context {
-  gpuxtb_backend_t backend = GPUXTB_BACKEND_CPU;
+  xtbloom_backend_t backend = XTBLOOM_BACKEND_CPU;
   std::int32_t device_id = -1;
   std::int32_t cpu_threads = 0;
   void* stream = nullptr;
@@ -41,10 +41,10 @@ struct Context {
   std::shared_ptr<Gfn2CudaExecutionCache> gfn2_cuda_execution_cache;
 };
 
-gpuxtb_status_t create_context(const gpuxtb_context_options_t& options, Context*& context,
-                               std::string& error);
+xtbloom_status_t create_context(const xtbloom_context_options_t& options, Context*& context,
+                                std::string& error);
 
-#if defined(GPUXTB_HAS_CUDA)
+#if defined(XTBLOOM_HAS_CUDA)
 bool resolve_cuda_device(std::int32_t requested_device, std::int32_t& resolved_device,
                          std::string& error);
 
@@ -58,6 +58,6 @@ std::uint64_t cuda_gfn2_parameter_upload_count(std::int32_t device_id);
 bool cuda_gfn2_parameters_match_host(std::int32_t device_id, std::string& error);
 #endif
 
-}  // namespace gpuxtb::detail
+}  // namespace xtbloom::detail
 
-#endif  // GPUXTB_RUNTIME_BACKEND_HPP
+#endif  // XTBLOOM_RUNTIME_BACKEND_HPP

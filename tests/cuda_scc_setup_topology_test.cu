@@ -20,19 +20,19 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2PlanMemorySpace;
-using gpuxtb::detail::Gfn2PlanSchemaDiagnostic;
-using gpuxtb::detail::Gfn2PlanSchemaError;
-using gpuxtb::detail::Gfn2RaggedTopologyView;
-using gpuxtb::detail::Gfn2WavefunctionLayoutView;
-using gpuxtb::detail::cuda::Gfn2EigensolverBucket;
-using gpuxtb::detail::cuda::Gfn2SccSetupTopology;
-using gpuxtb::detail::cuda::Gfn2SccSetupTopologyError;
-using gpuxtb::detail::cuda::Gfn2SccSetupTopologyField;
-using gpuxtb::detail::cuda::validate_gfn2_topology_cuda_async;
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::IntegralPlan;
-using gpuxtb::detail::gfn2::WavefunctionLayout;
+using xtbloom::detail::Gfn2PlanMemorySpace;
+using xtbloom::detail::Gfn2PlanSchemaDiagnostic;
+using xtbloom::detail::Gfn2PlanSchemaError;
+using xtbloom::detail::Gfn2RaggedTopologyView;
+using xtbloom::detail::Gfn2WavefunctionLayoutView;
+using xtbloom::detail::cuda::Gfn2EigensolverBucket;
+using xtbloom::detail::cuda::Gfn2SccSetupTopology;
+using xtbloom::detail::cuda::Gfn2SccSetupTopologyError;
+using xtbloom::detail::cuda::Gfn2SccSetupTopologyField;
+using xtbloom::detail::cuda::validate_gfn2_topology_cuda_async;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::IntegralPlan;
+using xtbloom::detail::gfn2::WavefunctionLayout;
 
 constexpr std::uint64_t kPlanToken = 0x510e527fade682d1ULL;
 
@@ -220,7 +220,7 @@ int test_host_blueprint_and_transactional_create() {
   diagnostic = Gfn2SccSetupTopology::create(incompatible.basis, incompatible.integrals,
                                             incompatible.wavefunction, kPlanToken, rejected);
   CHECK(!diagnostic.success());
-  CHECK(diagnostic.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(diagnostic.status == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(diagnostic.field == Gfn2SccSetupTopologyField::kWavefunction);
   CHECK(diagnostic.index == 1);
   CHECK(!rejected.valid());
@@ -231,7 +231,7 @@ int test_host_blueprint_and_transactional_create() {
   diagnostic = Gfn2SccSetupTopology::create(incompatible.basis, incompatible.integrals,
                                             incompatible.wavefunction, kPlanToken, rejected);
   CHECK(!diagnostic.success());
-  CHECK(diagnostic.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(diagnostic.status == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(diagnostic.field == Gfn2SccSetupTopologyField::kWavefunction);
   CHECK(!rejected.valid());
 
@@ -240,7 +240,7 @@ int test_host_blueprint_and_transactional_create() {
   diagnostic = Gfn2SccSetupTopology::create(incompatible.basis, incompatible.integrals,
                                             incompatible.wavefunction, kPlanToken, rejected);
   CHECK(!diagnostic.success());
-  CHECK(diagnostic.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(diagnostic.status == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(diagnostic.field == Gfn2SccSetupTopologyField::kWavefunction);
   CHECK(!rejected.valid());
 
@@ -308,7 +308,7 @@ int test_device_upload_and_fail_closed_binding() {
   diagnostic = topology.bind_device_arena_and_upload_async(
       host_arena.data(), requirements.immutable_device_bytes, binding, stream);
   CHECK(diagnostic.error == Gfn2SccSetupTopologyError::kInvalidArenaMemory);
-  CHECK(diagnostic.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(diagnostic.status == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(binding.plan_token == sentinel.plan_token);
 
   /* A preceding memset on a nonblocking caller stream would race an upload

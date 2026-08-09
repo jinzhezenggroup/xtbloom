@@ -1,4 +1,4 @@
-"""Offline tests for the pinned gpuxtb-scc-trace-v1 restricted corpus.
+"""Offline tests for the pinned xtbloom-scc-trace-v1 restricted corpus.
 
 These tests run without the Fortran oracle: they check that the committed
 goldens validate against the versioned schema, match their manifest hashes,
@@ -26,11 +26,11 @@ TOOL_DIR = REPOSITORY_ROOT / "tools" / "oracle" / "tblite_scc_trace"
 CORPUS_DIR = REPOSITORY_ROOT / "data" / "conformance" / "scc-traces"
 
 SPEC = importlib.util.spec_from_file_location(
-    "gpuxtb_scc_trace", TOOL_DIR / "gpuxtb_scc_trace.py"
+    "xtbloom_scc_trace", TOOL_DIR / "xtbloom_scc_trace.py"
 )
 assert SPEC is not None and SPEC.loader is not None
 TRACE = importlib.util.module_from_spec(SPEC)
-sys.modules.setdefault("gpuxtb_scc_trace", TRACE)
+sys.modules.setdefault("xtbloom_scc_trace", TRACE)
 SPEC.loader.exec_module(TRACE)
 
 SPEC2 = importlib.util.spec_from_file_location(
@@ -42,19 +42,19 @@ sys.modules.setdefault("generate_scc_corpus", GENERATOR)
 SPEC2.loader.exec_module(GENERATOR)
 
 SPEC3 = importlib.util.spec_from_file_location(
-    "gpuxtb_scc_cpu_trace", TOOL_DIR / "gpuxtb_scc_cpu_trace.py"
+    "xtbloom_scc_cpu_trace", TOOL_DIR / "xtbloom_scc_cpu_trace.py"
 )
 assert SPEC3 is not None and SPEC3.loader is not None
 CPU_TRACE = importlib.util.module_from_spec(SPEC3)
-sys.modules.setdefault("gpuxtb_scc_cpu_trace", CPU_TRACE)
+sys.modules.setdefault("xtbloom_scc_cpu_trace", CPU_TRACE)
 SPEC3.loader.exec_module(CPU_TRACE)
 
 SPEC4 = importlib.util.spec_from_file_location(
-    "gpuxtb_scc_compare", TOOL_DIR / "gpuxtb_scc_compare.py"
+    "xtbloom_scc_compare", TOOL_DIR / "xtbloom_scc_compare.py"
 )
 assert SPEC4 is not None and SPEC4.loader is not None
 COMPARE = importlib.util.module_from_spec(SPEC4)
-sys.modules.setdefault("gpuxtb_scc_compare", COMPARE)
+sys.modules.setdefault("xtbloom_scc_compare", COMPARE)
 SPEC4.loader.exec_module(COMPARE)
 
 
@@ -123,7 +123,7 @@ class RestrictedCorpusTest(unittest.TestCase):
         manifest = json.loads(
             (CORPUS_DIR / "manifest.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(manifest["format"], "gpuxtb-scc-trace-v1")
+        self.assertEqual(manifest["format"], "xtbloom-scc-trace-v1")
         self.assertEqual(
             manifest["revision"], "e9abc395b122018ed688aecb1c3a65cecaf97beb"
         )
@@ -451,7 +451,7 @@ class RestrictedCorpusTest(unittest.TestCase):
         self,
     ) -> None:
         """Self-comparison passes and a scalar perturbation is localized."""
-        compare = TOOL_DIR / "gpuxtb_scc_compare.py"
+        compare = TOOL_DIR / "xtbloom_scc_compare.py"
         golden = CORPUS_DIR / "h3_plus.json"
         self_compare = subprocess.run(
             [
@@ -501,7 +501,7 @@ class RestrictedCorpusTest(unittest.TestCase):
         """A CPU capture (different oracle_command) compares against the golden."""
         golden = json.loads((CORPUS_DIR / "h3_plus.json").read_text(encoding="utf-8"))
         actual = copy.deepcopy(golden)
-        actual["provenance"]["oracle_command"] = "gpuxtb_scc_cpu_trace.py (capture)"
+        actual["provenance"]["oracle_command"] = "xtbloom_scc_cpu_trace.py (capture)"
         result = cpu_trace_safe_compare(actual, golden)
         self.assertTrue(result.matches, msg=result.render())
 
@@ -614,7 +614,7 @@ mixed_quadrupoles
 
     def test_mixer_wrapper_requires_mixer_cases(self) -> None:
         """Reject the mixer mode without a case list."""
-        wrapper = TOOL_DIR / "gpuxtb_scc_cpu_trace.py"
+        wrapper = TOOL_DIR / "xtbloom_scc_cpu_trace.py"
         result = subprocess.run(
             [sys.executable, str(wrapper), "--mixer", "mixer"],
             capture_output=True,
@@ -632,7 +632,7 @@ mixed_quadrupoles
         entry = manifest["cases"]["h3_plus"]
         golden_path = CORPUS_DIR / entry["path"]
         document = CPU_TRACE.load_pinned_golden(golden_path, entry)
-        self.assertEqual(document["format"], "gpuxtb-scc-trace-v1")
+        self.assertEqual(document["format"], "xtbloom-scc-trace-v1")
 
     def test_load_pinned_golden_rejects_drifted_bytes(self) -> None:
         """A drifted golden must be rejected before replay evidence is built."""
@@ -672,7 +672,7 @@ mixed_quadrupoles
 
     def test_wrapper_requires_exactly_one_mode(self) -> None:
         """Reject wrappers that select zero or multiple capture modes."""
-        wrapper = TOOL_DIR / "gpuxtb_scc_cpu_trace.py"
+        wrapper = TOOL_DIR / "xtbloom_scc_cpu_trace.py"
         without_mode = subprocess.run(
             [sys.executable, str(wrapper)], capture_output=True, text=True, check=False
         )

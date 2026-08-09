@@ -1,6 +1,6 @@
 # Architecture
 
-gpuxtb is organized around one stable C ABI and replaceable compute backends.
+xTBloom is organized around one stable C ABI and replaceable compute backends.
 The implemented physics is restricted and unrestricted GFN2-xTB energy,
 charges, and analytic forces, including external point charges and periodic
 caller-supplied response inside SCC. GFN1-xTB and ROCm remain explicit,
@@ -78,7 +78,7 @@ See issue #31 for the original representability question.
 
 The representability policy above is observable through the public API, rather
 than only through an internal occupation helper. Issue
-[#205](https://github.com/njzjz/gpuxtb/issues/205) records a cross-engine probe
+[#205](https://github.com/njzjz/xtbloom/issues/205) records a cross-engine probe
 measured on 2026-08-07 with GFN2-xTB at 300 K. The common geometry is three
 hydrogen atoms on the x axis:
 
@@ -87,15 +87,15 @@ atomic_numbers = [1, 1, 1]
 positions_bohr = [[0, 0, 0], [1e20, 0, 0], [2e20, 0, 0]]
 ```
 
-From a source checkout with a compatible CPU linear-algebra runtime, the gpuxtb
+From a source checkout with a compatible CPU linear-algebra runtime, the xTBloom
 rows are reproduced through the same installed Python package and public C ABI
 used by applications:
 
 ```console
-GPUXTB_ENABLE_CUDA=OFF uv sync --no-editable --extra test
+XTBLOOM_ENABLE_CUDA=OFF uv sync --no-editable --extra test
 uv run --no-sync python - <<'PY'
 import numpy as np
-from gpuxtb import Calculator
+from xtbloom import Calculator
 
 numbers = np.array([1, 1, 1])
 positions = np.array([[0.0, 0.0, 0.0], [1.0e20, 0.0, 0.0], [2.0e20, 0.0, 0.0]])
@@ -120,17 +120,17 @@ At this separation the three one-center orbital blocks are bitwise identical
 and the inter-center interactions safely tend to zero. This creates an exact
 three-fold degeneracy without relying on an approximate molecular symmetry.
 
-| Electron case | gpuxtb, current public CPU path | xTB 6.7.1 (`edcfbbe`) | tblite | dxtb 0.4.0 (`libcint`) |
+| Electron case | xTBloom, current public CPU path | xTB 6.7.1 (`edcfbbe`) | tblite | dxtb 0.4.0 (`libcint`) |
 | --- | --- | --- | --- | --- |
 | charge `0`, `uhf=1` | `SUCCESS`, finite energy `-1.1960140851592562 Eh` | SCC does not converge; abnormal termination with floating-point exception flags | 0.7.0 succeeds at `-1.184076585161 Eh`; 0.6.0 CLI segfaults | returns an invalid overflow-scale value near `3.46e47 Eh` |
 | charge `-3`, `uhf=0` | `SUCCESS`, finite energy `-1.8322400836158348 Eh` | Hamiltonian diagonalization fails and the process terminates abnormally | 0.7.0 raises `(sygvd) failed to solve eigenvalue problem, info=2` | raises `Fermi energy failed to converge` |
 | charge `3 - 2*nextafter(3,0)`, `uhf=0` | `SUCCESS`, finite energy `-1.8322400836158348 Eh`; each restricted spin requests exactly `nextafter(3,0)` electrons | not expressible through integer `--chrg`; no failure claim is made | 0.7.0 Python succeeds at `-1.832240082284 Eh`; the CLI expressibility difference is not treated as a failure | raises `Fermi energy failed to converge` |
 
 The comparison establishes a specific numerical advantage, not a universal
-ranking: tblite 0.7 handles two rows, while gpuxtb handles all three under one
+ranking: tblite 0.7 handles two rows, while xTBloom handles all three under one
 documented symmetric-publication rule. The fractional-charge row is included
 to exercise the exact binary64 policy and is not counted as an xTB failure
-because the xTB CLI cannot represent the input. The gpuxtb regression is
+because the xTB CLI cannot represent the input. The xTBloom regression is
 `test_degenerate_occupation_representability_is_publicly_successful` in
 [`tests/cpu_public_inference_test.cpp`](../../tests/cpu_public_inference_test.cpp).
 Issue #205 retains the reference-engine environment and summarized outcomes.
@@ -180,7 +180,7 @@ The ABI-v3 batch suffix adds a generic attachment slot — `total_interactions`,
 and self-consistent models (uniform electric field, field gradient, multipole
 point charges, ALPB/GBSA/GB/GBE/ddX solvation, D3/D4 dispersion variants,
 halogen-bond corrections) do not each regrow the batch layout. One
-`gpuxtb_interaction_t` descriptor ties a versioned payload block to one batch
+`xtbloom_interaction_t` descriptor ties a versioned payload block to one batch
 item; block contents are versioned per tag through a leading `block_version`.
 
 Reserved attachments follow a strict validate-then-refuse policy: the common
@@ -199,7 +199,7 @@ Host-resident electric-field blocks are byte-loaded and checked for version 1,
 a zero reserved field, and finite values before that gate.
 
 The CPU backend executes the released uniform electric field
-(`GPUXTB_INTERACTION_ELECTRIC_FIELD`). Each SCC iteration injects the field's
+(`XTBLOOM_INTERACTION_ELECTRIC_FIELD`). Each SCC iteration injects the field's
 per-atom scalar potential `-E . r_i` into the charge-channel atom potential and
 its per-atom dipolar potential `-E` into the charge-channel dipole potential,
 mirroring tblite `field.f90`; the energy trace adds `-sum_i q_i (E . r_i)
@@ -208,27 +208,27 @@ mirroring tblite `field.f90`; the energy trace adds `-sum_i q_i (E . r_i)
 carried through the injected SCC potentials. The field is part of the strict
 warm-start identity, and the
 `dipole_moments` outlet is published on CPU as `sum_i (r_i * q_i + d_i)` with
-`GPUXTB_RESULT_DIPOLE_MOMENTS` set. CUDA field execution, CUDA dipole
+`XTBLOOM_RESULT_DIPOLE_MOMENTS` set. CUDA field execution, CUDA dipole
 publication, and every other reserved tag remain `NOT_IMPLEMENTED` until their
 focused PRs land. The pinned tblite 0.7.0 analytic field gradient uses `+E`
 per atom and is retained only as diagnostic provenance because it is not the
-derivative of the reported partial-charge energy; gpuxtb field forces are
+derivative of the reported partial-charge energy; xTBloom field forces are
 gated against central differences of the reported energy. The ABI-v2 result
 suffix reserves the dipole-moment outlet and
-`GPUXTB_RESULT_DIPOLE_MOMENTS` publication flag alongside `quadrupole_moments`,
+`XTBLOOM_RESULT_DIPOLE_MOMENTS` publication flag alongside `quadrupole_moments`,
 `wiberg_orders`, and `spin_populations`; the latter three have no released
 shape contract, must remain NULL until published, and return `NOT_SUPPORTED`
 when supplied.
 
 ## Fixed-topology plans and workspace sizing
 
-`gpuxtb_compute` remains the convenience path: it validates the descriptor set, prepares the
+`xtbloom_compute` remains the convenience path: it validates the descriptor set, prepares the
 per-system plans, runs the batch, and publishes outputs on one context transaction. For workloads
-that reuse one ragged topology and compute policy across many geometries, `gpuxtb_plan_create`
+that reuse one ragged topology and compute policy across many geometries, `xtbloom_plan_create`
 binds the immutable topology (atom offsets, element numbers, molecular charges, unpaired electrons,
 spin channels, and point-charge/response structure) plus the model, requested properties, SCC
 tolerances, iteration limit, and electronic temperature at creation time. `FRESH` versus `WARM`
-remains a per-call choice. Geometry is not part of the plan, so repeated `gpuxtb_plan_compute`
+remains a per-call choice. Geometry is not part of the plan, so repeated `xtbloom_plan_compute`
 calls can change positions, point-charge positions and values, periodic `b/A`
 values, and CPU electric-field attachment values/presence freely on `FRESH`
 calls. Field storage is preallocated for every system, so those changes do not
@@ -236,9 +236,9 @@ rebuild the fixed plan; `WARM` still requires exact attachment presence and
 values.
 
 Plan creation is the allocation-permitted setup path: it validates the request and pre-warms the
-plan-owned backend execution cache so the first and subsequent `gpuxtb_plan_compute` calls for the
+plan-owned backend execution cache so the first and subsequent `xtbloom_plan_compute` calls for the
 same topology and policy perform zero steady-state allocations. Independent plans cannot evict one
-another through the context convenience cache. `gpuxtb_plan_query_workspace` returns the reusable
+another through the context convenience cache. `xtbloom_plan_query_workspace` returns the reusable
 host/device workspace bytes and alignment the plan keeps alive for its property set; sizes differ by backend
 (the CPU backend uses no device memory) and by requested properties (forces reserve device arenas
 and CPU output staging). CUDA accounting measures every prepared numerical, result, validation,
@@ -247,8 +247,8 @@ their layouts at the public boundary. Opaque provider and Graph bookkeeping rema
 workspace totals.
 A plan is bound to its creating context, must be destroyed before that
 context, and a batch whose immutable topology differs from the plan fails with
-`GPUXTB_STATUS_INVALID_ARGUMENT` before any caller output is modified, giving the corruption gate
-for reused handles. The plan handle and workspace query are ABI-versioned in `gpuxtb.h` and are
+`XTBLOOM_STATUS_INVALID_ARGUMENT` before any caller output is modified, giving the corruption gate
+for reused handles. The plan handle and workspace query are ABI-versioned in `xtbloom.h` and are
 mirrored by the Python `Plan` binding and the installed consumer.
 
 ## Layering
@@ -265,42 +265,42 @@ forbidden on the steady-state inference path; the context grows and reuses works
 
 ### Optional host-runtime loading
 
-libgpuxtb does not require a proprietary BLAS or CUDA host shared library merely to load. The CPU
+libxtbloom does not require a proprietary BLAS or CUDA host shared library merely to load. The CPU
 eigensolver dlopens an LP64 BLAS/LAPACK runtime (Intel MKL or OpenBLAS) by SONAME on first use
 (`src/model/gfn2/eigensolver.cpp`), so a machine without a compatible provider still loads the
 library. The MKL path is host-isolated: CMake builds a private
-`libgpuxtb_mkl_lp64_shim` with fixed `DT_NEEDED` dependencies on `libmkl_intel_lp64`,
+`libxtbloom_mkl_lp64_shim` with fixed `DT_NEEDED` dependencies on `libmkl_intel_lp64`,
 `libmkl_sequential`, and `libmkl_core`. The factory loads the adjacent shim with `RTLD_LOCAL`
 in a new glibc link-map namespace; `RTLD_LOCAL` in the base namespace would still allow a
 globally loaded host runtime to interpose on the component dependencies. The shim deliberately
 uses `DT_RPATH` rather than `DT_RUNPATH`, so `LD_LIBRARY_PATH` cannot substitute same-SONAME
 components from a different MKL installation for the configure-time cohort.
-gpuxtb never loads `libmkl_rt`, never calls `MKL_Set_Interface_Layer`, and never reads
+xTBloom never loads `libmkl_rt`, never calls `MKL_Set_Interface_Layer`, and never reads
 `MKL_INTERFACE_LAYER`, so an embedding process's MKL interface/threading state is untouched and
-LP64 gpuxtb calls stay correct even when the host uses ILP64. A shared `libgpuxtb` locates the shim
+LP64 xTBloom calls stay correct even when the host uses ILP64. A shared `libxtbloom` locates the shim
 in its own directory. Because a static archive has no runtime module directory, a static MKL
 consumer must stage the installed shim beside its final executable; a missing sibling produces a
 deterministic backend-unavailable error rather than a base-namespace or `libmkl_rt` fallback. On
 Linux the CUDA build generates
 one ELF trampoline shim per wrapped host library
-(cudart, cuBLAS, cuSOLVER, and libcuda) and compiles those shims into libgpuxtb itself
+(cudart, cuBLAS, cuSOLVER, and libcuda) and compiles those shims into libxtbloom itself
 (`src/runtime/cuda_dlopen.c`). When the build environment ships the provider
 libraries, the shims are derived from the real ELF files with the byte-pinned
 `cmake/3rdparty/implib` tool, which pins each SONAME. When they are absent,
 `tools/implib_stubgen.py` regenerates byte-identical shims from the curated
 symbol lists against the same pinned templates, with toolkit-major defaults
-and overridable cache variables (`GPUXTB_CUDA_*_SONAME`); a CUDA build then
+and overridable cache variables (`XTBLOOM_CUDA_*_SONAME`); a CUDA build then
 needs nvcc's compiler-support files and the cudart headers, but no provider
 shared libraries, because `src/runtime/nvidia_host_api.h` self-declares the
 host-facing cuBLAS/cuSOLVER/driver C ABI surface. An early ELF constructor opens the exact build-major SONAMEs and
 pre-resolves each complete symbol cohort before ordinary NVCC registration constructors run. The
 resolved tables are then immutable, avoiding races on concurrent CUDA calls. A host without the
-NVIDIA runtime can therefore load libgpuxtb and receive a backend-unavailable diagnostic instead
+NVIDIA runtime can therefore load libxtbloom and receive a backend-unavailable diagnostic instead
 of failing at the ELF loader boundary.
 
 This host-library indirection is not a GPL compatibility claim: dynamic loading can still combine
 works under copyright law. The distribution basis is instead the GPLv3 Section 7 additional
-permission in `CUDA_MKL_LINKING_EXCEPTION`. gpuxtb passes `--cudadevrt=none` at device link because
+permission in `CUDA_MKL_LINKING_EXCEPTION`. xTBloom passes `--cudadevrt=none` at device link because
 it uses no CUDA Dynamic Parallelism, but nvcc may still incorporate NVIDIA libdevice code. That
 code and every separately installed CUDA or MKL provider remain under vendor terms. The source
 provenance and packaging contract are recorded in `cmake/3rdparty/implib_manifest.json` and

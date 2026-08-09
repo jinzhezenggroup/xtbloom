@@ -3,12 +3,12 @@
 This directory carries the minimal oracle-only patch used to observe tblite's
 GFN2 SCC loop. It targets exactly
 `e9abc395b122018ed688aecb1c3a65cecaf97beb`; it is not a patch for arbitrary
-tblite releases and it is not part of gpuxtb's public C ABI.
+tblite releases and it is not part of xTBloom's public C ABI.
 
 The patch is licensed `LGPL-3.0-or-later`, matching the files it modifies in
 tblite. Verbatim GPLv3 and LGPLv3 texts from the pinned checkout are bundled as
 `LICENSES/GPL-3.0.txt` and `LICENSES/LGPL-3.0.txt`. The validation script,
-metadata, probe, and tests are original gpuxtb tooling; their repository-wide
+metadata, probe, and tests are original xTBloom tooling; their repository-wide
 license remains tracked by #19 rather than being selected implicitly here.
 
 ## Immutable inputs
@@ -17,7 +17,7 @@ license remains tracked by #19 rather than being selected implicitly here.
 - Revision: `e9abc395b122018ed688aecb1c3a65cecaf97beb`
 - Patch: `tblite-e9abc395-scc-observer.patch`
 - Patch SHA-256:
-  `d6a51afc4b3c56d6589a2b5b115ea8b4891600c1161c525939ca3cc16e2b4954`
+  `887294ffb24d24fc0fb27d6f05697e7ef498bc40f0268f34c7056ebe8dfb7928`
 
 `metadata.json` is the machine-readable source of truth. The validator rejects
 a patch whose digest or touched-file list differs from that metadata.
@@ -129,7 +129,7 @@ depend on tblite's mstore test suite. The probe checks:
 - invalid mixer selector `scf=0` produces no iteration callbacks and exactly one
   failed terminal callback at iteration zero.
 
-On the gpuxtb development host, the full command is:
+On the xTBloom development host, the full command is:
 
 ```bash
 export FC=/group/software/deepmd-kit-3.1.1/bin/x86_64-conda-linux-gnu-gfortran
@@ -150,16 +150,16 @@ The standalone probe still follows tblite's wrap files.  Corpus generation,
 described below, instead binds every fallback to a reviewed local commit and
 runs Meson with downloads disabled.
 
-## Canonical SCC trace format (`gpuxtb-scc-trace-v1`)
+## Canonical SCC trace format (`xtbloom-scc-trace-v1`)
 
-`gpuxtb_scc_trace.py` implements the versioned interchange format that the
+`xtbloom_scc_trace.py` implements the versioned interchange format that the
 observer recordings will be serialized to and that the CPU/CUDA conformance
 tests consume (issue #47). It is pure standard library; it runs before either
 Fortran reference is built.
 
-- `gpuxtb-scc-trace-v1.schema.json` — the Draft 7 machine-readable JSON
+- `xtbloom-scc-trace-v1.schema.json` — the Draft 7 machine-readable JSON
   Schema.
-- `gpuxtb_scc_trace.py` — canonical writer + structural validation:
+- `xtbloom_scc_trace.py` — canonical writer + structural validation:
   - `validate(trace)` rejects unsupported format versions, malformed
     dimensions, non-finite floats, unpinned provenance, inconsistent q/d/Q
     residuals, and terminal/iteration mismatches with actionable messages;
@@ -251,17 +251,17 @@ canonical writer outputs are also checked with a Draft 7 validator.
 
 ## SCC trace comparator foundation
 
-`gpuxtb_scc_compare.py` validates and compares complete traces or one
+`xtbloom_scc_compare.py` validates and compares complete traces or one
 standalone iteration snapshot.  It is intentionally a read-only comparison
 tool: it never generates or updates a golden file.  The replay harness
-(`gpuxtb_scc_trace_replay`) injects a golden mixed state, executes exactly one
+(`xtbloom_scc_trace_replay`) injects a golden mixed state, executes exactly one
 production CPU driver iteration, and emits the snapshot; the wrapper compares
 it with `compare_iteration` using the `cpu_replay_v1` profile. The replay plan
 caps the driver at that logical iteration after seeding its counter, so a
 nonconverged one-step replay reaches a real maximum-iteration terminal instead
 of acquiring terminal metadata only during serialization. The wrapper checks
 that lifecycle before extracting the standalone iteration. The
-independent mixer harness (`gpuxtb_scc_trace_mixer`) additionally replays the
+independent mixer harness (`xtbloom_scc_trace_mixer`) additionally replays the
 pinned golden residual sequence through the production Broyden mixer alone so
 a self-consistent flatten-order defect cannot hide behind a matching physical
 trajectory.
@@ -288,7 +288,7 @@ capture of the same science.
 Compare two complete traces:
 
 ```bash
-python tools/oracle/tblite_scc_trace/gpuxtb_scc_compare.py trace \
+python tools/oracle/tblite_scc_trace/xtbloom_scc_compare.py trace \
   actual.json golden.json \
   --profile cpu_closed_loop_v1 \
   --golden-sha256 <canonical-golden-sha256>
@@ -298,7 +298,7 @@ Compare an externally produced iteration snapshot to logical iteration 3 of a
 complete golden:
 
 ```bash
-python tools/oracle/tblite_scc_trace/gpuxtb_scc_compare.py iteration \
+python tools/oracle/tblite_scc_trace/xtbloom_scc_compare.py iteration \
   actual-iteration.json golden.json \
   --iteration 3 \
   --profile cuda_replay_v1
@@ -313,7 +313,7 @@ belong to the separate issue #48 workflow.
 
 `scc_trace_recorder.f90` + `scc_trace_main.f90` build the oracle recorder
 executable that drives the patched pinned tblite GFN2 single point through the
-observer seam and streams every `gpuxtb-scc-trace-v1` field in a fixed raw
+observer seam and streams every `xtbloom-scc-trace-v1` field in a fixed raw
 layout.  `generate_scc_corpus.py` is the reproducible corpus pipeline:
 
 1. validates the immutable observer-patch bundle and the local tblite source
@@ -325,7 +325,7 @@ layout.  `generate_scc_corpus.py` is the reproducible corpus pipeline:
    and checks Meson's recursive subproject introspection (the build includes
    the oracle-only shell-monopole PCEM container for QM/MM-like cases);
 4. runs the five restricted corpus cases and canonicalizes each raw stream
-   with `gpuxtb_scc_trace.py`, and
+   with `xtbloom_scc_trace.py`, and
 5. writes canonical JSON goldens and specs plus a `manifest.json` with their
    SHA-256 digests, every dependency revision, both Fortran source digests,
    the observer patch digest, deterministic environment, exact compiler
@@ -354,7 +354,7 @@ point-charge water cases `water_one_pc_gamma999` and
 per-shell `point_charge_shell_potential` (V^PC) and `point_charge_energy`
 (q_s V^PC) in every completed iteration (issue #46); plain cases omit them.
 
-`gpuxtb_scc_cpu_trace.py` drives the production CPU GFN2 SCC driver through the
+`xtbloom_scc_cpu_trace.py` drives the production CPU GFN2 SCC driver through the
 same corpus and compares captured trace documents against the goldens with the
 comparator.  It is the executable evidence harness for issues #49/#50 with
 three modes:
@@ -376,16 +376,16 @@ three modes:
   later iteration is reported only at that iteration. If the eigensolver fails
   after Hamiltonian assembly, the emitted trace retains only the failed
   attempt's Hamiltonian and mixed q/d/Q for exact failure localization;
-- `--mixer`: `gpuxtb_scc_trace_mixer` replays the PINNED golden residual
+- `--mixer`: `xtbloom_scc_trace_mixer` replays the PINNED golden residual
   sequence (raw minus mixed per iteration, in the canonical flatten order)
-  through gpuxtb's production Broyden mixer alone — no driver, no eigensolver.
+  through xTBloom's production Broyden mixer alone — no driver, no eigensolver.
   Every state transition must reproduce the golden next mixed state, which
   isolates the mixer's flatten order, damping, history, and transitions from
   the physical trajectory.
 
 The native gates behind these modes are registered as CTest tests
-(`gpuxtb.gfn2.scc_trace_cpu_closed_loop`, `gpuxtb.gfn2.scc_trace_ragged_batch`,
-`gpuxtb.gfn2.scc_trace_cpu_replay`, `gpuxtb.gfn2.scc_trace_mixer_replay`, and
-`gpuxtb.gfn2.scc_trace_ragged_batch_native`) and are passing acceptance gates
+(`xtbloom.gfn2.scc_trace_cpu_closed_loop`, `xtbloom.gfn2.scc_trace_ragged_batch`,
+`xtbloom.gfn2.scc_trace_cpu_replay`, `xtbloom.gfn2.scc_trace_mixer_replay`, and
+`xtbloom.gfn2.scc_trace_ragged_batch_native`) and are passing acceptance gates
 for the restricted CPU closed-loop, ragged-batch, replay, and mixer-history
 acceptance items of issue #42.

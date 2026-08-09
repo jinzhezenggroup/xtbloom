@@ -12,8 +12,8 @@
 
 namespace {
 
-using namespace gpuxtb::detail;
-using namespace gpuxtb::detail::cuda;
+using namespace xtbloom::detail;
+using namespace xtbloom::detail::cuda;
 
 #define CHECK(condition) \
   do {                   \

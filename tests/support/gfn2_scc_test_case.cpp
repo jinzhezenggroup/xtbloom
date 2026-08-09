@@ -9,10 +9,10 @@
 #include <new>
 #include <utility>
 
-namespace gpuxtb::test::gfn2 {
+namespace xtbloom::test::gfn2 {
 namespace {
 
-using namespace gpuxtb::detail::gfn2;
+using namespace xtbloom::detail::gfn2;
 
 constexpr std::size_t kHostAlignment = 64u;
 
@@ -216,13 +216,13 @@ void tiny_dgemm(int, int, int, LapackInt rows, LapackInt columns, LapackInt inne
   }
 }
 
-gpuxtb_status_t allocate(AlignedBuffer& buffer, std::size_t bytes, const char* purpose,
-                         std::string& error) {
+xtbloom_status_t allocate(AlignedBuffer& buffer, std::size_t bytes, const char* purpose,
+                          std::string& error) {
   if (buffer.allocate(bytes)) {
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   }
   error = std::string("failed to allocate host SCC fixture ") + purpose;
-  return GPUXTB_STATUS_ALLOCATION_FAILED;
+  return XTBLOOM_STATUS_ALLOCATION_FAILED;
 }
 
 std::vector<std::byte> copy_bytes(const AlignedBuffer& buffer) {
@@ -300,7 +300,7 @@ struct HostSccCase::Impl {
   SccDriverGeometryView geometry;
   CpuLinearAlgebraBackend cpu_backend;
 
-  gpuxtb_status_t build(std::string& error);
+  xtbloom_status_t build(std::string& error);
   bool append_system(SmallSystemKind kind, std::int64_t system);
 };
 
@@ -476,19 +476,19 @@ bool HostSccCase::Impl::append_system(SmallSystemKind kind, std::int64_t system)
   return true;
 }
 
-gpuxtb_status_t HostSccCase::Impl::build(std::string& error) {
+xtbloom_status_t HostSccCase::Impl::build(std::string& error) {
   error.clear();
   if (options.systems.empty()) {
     error = "host SCC fixture requires at least one system";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (options.systems.size() > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
     error = "host SCC fixture batch size exceeds int64 range";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (options.geometry_generation == 0u) {
     error = "host SCC fixture geometry generation must be nonzero";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const auto valid_optional_batch = [&](std::size_t elements) {
     return elements == 0u || elements == options.systems.size();
@@ -497,7 +497,7 @@ gpuxtb_status_t HostSccCase::Impl::build(std::string& error) {
       !valid_optional_batch(options.unpaired_electrons.size()) ||
       !valid_optional_batch(options.spin_channels.size())) {
     error = "host SCC fixture electronic vectors must be empty or match systems.size()";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   batch_size = static_cast<std::int64_t>(options.systems.size());
@@ -506,69 +506,69 @@ gpuxtb_status_t HostSccCase::Impl::build(std::string& error) {
   for (std::size_t system = 0; system < options.systems.size(); ++system) {
     if (!append_system(options.systems[system], static_cast<std::int64_t>(system))) {
       error = "host SCC fixture contains an unknown small-system kind";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   const std::int64_t total_atoms = atom_offsets.back();
   coordination_numbers.assign(static_cast<std::size_t>(total_atoms), 0.0);
 
-  gpuxtb_status_t status = make_basis_plan(batch_size, total_atoms, atom_offsets.data(),
-                                           atomic_numbers.data(), basis, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  xtbloom_status_t status = make_basis_plan(batch_size, total_atoms, atom_offsets.data(),
+                                            atomic_numbers.data(), basis, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = make_integral_plan(basis, integrals, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = make_h0_plan(basis, integrals, atomic_numbers.data(), h0_plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = make_wavefunction_layout(basis, atomic_numbers.data(), molecular_charges.data(),
                                     unpaired_electrons.data(), spin_channels.data(),
                                     wavefunction_layout, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = make_es2_plan(basis, atomic_numbers.data(), es2_plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = make_es3_plan(basis, atomic_numbers.data(), es3_plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = make_aes2_plan(basis, atomic_numbers.data(), aes2_plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = make_mulliken_plan(basis, integrals, wavefunction_layout, mulliken_plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = make_eigensolver_plan(wavefunction_layout, eigensolver_plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = make_scc_mixer_plan(wavefunction_layout, options.mixer_history, options.mixer_damping,
                                options.residual_tolerance, options.residual_tolerance, mixer_plan,
                                error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
 
   if (options.enable_d4) {
     status = make_d4_plan(batch_size, total_atoms, atom_offsets.data(), atomic_numbers.data(),
                           d4_plan, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
   }
   if (options.enable_periodic_embedding) {
     status = make_periodic_embedding_plan(batch_size, total_atoms, atom_offsets.data(),
                                           periodic_plan, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
   }
@@ -590,7 +590,7 @@ gpuxtb_status_t HostSccCase::Impl::build(std::string& error) {
     }
     status = make_external_point_charge_plan(basis, atomic_numbers.data(), batch_size,
                                              point_charge_offsets.data(), point_charge_plan, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
   }
@@ -600,7 +600,7 @@ gpuxtb_status_t HostSccCase::Impl::build(std::string& error) {
       mixer_plan, options.enable_d4 ? &d4_plan : nullptr,
       options.enable_periodic_embedding ? &periodic_plan : nullptr, options.maximum_iterations,
       options.electronic_temperature, options.energy_tolerance, driver_plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
 
@@ -635,33 +635,33 @@ gpuxtb_status_t HostSccCase::Impl::build(std::string& error) {
   quadrupole_integrals.resize(6u * matrix_elements);
   h0.resize(matrix_elements);
   status = allocate(integral_scratch, integrals.workspace_size_bytes, "integral workspace", error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = evaluate_overlap_cpu(basis, integrals, positions.data(), overlap.data(),
                                 integral_scratch.data(), integral_scratch.size(), error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = evaluate_multipole_cpu(basis, integrals, positions.data(), dipole_integrals.data(),
                                   quadrupole_integrals.data(), integral_scratch.data(),
                                   integral_scratch.size(), error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = evaluate_h0_cpu(basis, integrals, h0_plan, positions.data(), coordination_numbers.data(),
                            overlap.data(), h0.data(), error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
 
   const std::size_t es2_elements = static_cast<std::size_t>(es2_plan.total_matrix_elements());
   status = allocate(es2_storage, es2_elements * sizeof(double), "ES2 cache", error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = allocate(es2_scratch_storage, es2_elements * sizeof(double), "ES2 scratch", error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   es2_scratch.matrix_scratch = static_cast<double*>(es2_scratch_storage.data());
@@ -669,17 +669,17 @@ gpuxtb_status_t HostSccCase::Impl::build(std::string& error) {
   status = update_es2_geometry_cache_cpu(es2_plan, positions.data(), options.geometry_generation,
                                          static_cast<double*>(es2_storage.data()), es2_elements,
                                          es2_scratch, es2_cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
 
   const std::size_t aes2_elements = static_cast<std::size_t>(aes2_plan.pair_data_elements());
   status = allocate(aes2_storage, aes2_elements * sizeof(double), "AES2 cache", error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = allocate(aes2_scratch_storage, aes2_elements * sizeof(double), "AES2 scratch", error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   aes2_scratch.pair_scratch = static_cast<double*>(aes2_scratch_storage.data());
@@ -687,7 +687,7 @@ gpuxtb_status_t HostSccCase::Impl::build(std::string& error) {
   status = update_aes2_geometry_cache_cpu(
       aes2_plan, positions.data(), coordination_numbers.data(), options.geometry_generation,
       static_cast<double*>(aes2_storage.data()), aes2_elements, aes2_scratch, aes2_cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
 
@@ -698,88 +698,88 @@ gpuxtb_status_t HostSccCase::Impl::build(std::string& error) {
         point_charge_plan, positions.data(), point_charge_positions.data(),
         point_charge_charges.data(), point_charge_hardnesses.data(),
         explicit_point_charge_shell_potential.data(), error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
   }
 
   status = make_internal_test_lp64_backend(&tiny_dpotrf, &tiny_dpocon, &tiny_dsyevd, &tiny_dtrsm,
                                            &tiny_dgemm, nullptr, cpu_backend, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = allocate(wavefunction_storage, wavefunction_layout.workspace_size_bytes, "wavefunction",
                     error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = allocate(overlap_cache_storage, eigensolver_plan.overlap_cache_size_bytes(),
                     "overlap cache", error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = allocate(eigensolver_scratch_storage, eigensolver_plan.workspace_size_bytes(),
                     "eigensolver workspace", error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = allocate(mixer_state_storage, mixer_plan.state_size_bytes(), "mixer state", error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = allocate(driver_state_storage, driver_plan.state_size_bytes(), "driver state", error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = allocate(driver_workspace_storage, driver_plan.workspace_size_bytes(),
                     "driver workspace", error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
 
   status = bind_wavefunction_view(wavefunction_layout, wavefunction_storage.data(),
                                   wavefunction_storage.size(), wavefunction, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = initialize_sad_multipole_state(wavefunction_layout, wavefunction, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = bind_eigensolver_overlap_cache(eigensolver_plan, overlap_cache_storage.data(),
                                           overlap_cache_storage.size(), overlap_cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status =
       bind_eigensolver_workspace(eigensolver_plan, eigensolver_scratch_storage.data(),
                                  eigensolver_scratch_storage.size(), eigensolver_scratch, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = factor_overlap_cpu(eigensolver_plan, overlap.data(), options.geometry_generation,
                               cpu_backend, eigensolver_scratch, overlap_cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = bind_scc_mixer_state(mixer_plan, mixer_state_storage.data(), mixer_state_storage.size(),
                                 mixer_state, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = bind_scc_driver_state(driver_plan, driver_state_storage.data(),
                                  driver_state_storage.size(), driver_state, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = bind_scc_driver_workspace(driver_plan, driver_workspace_storage.data(),
                                      driver_workspace_storage.size(), driver_workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status =
       initialize_scc_driver_state_cpu(driver_plan, wavefunction, mixer_state, driver_state, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
 
@@ -804,7 +804,7 @@ gpuxtb_status_t HostSccCase::Impl::build(std::string& error) {
                                           d4_pair_data.data(), d4_pair_data.size(),
                                           d4_coordination.data(), d4_coordination.size(),
                                           driver_workspace.d4_workspace, d4_cache, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
     geometry.d4_cache = d4_cache;
@@ -817,7 +817,7 @@ gpuxtb_status_t HostSccCase::Impl::build(std::string& error) {
     geometry.periodic_embedding_generation = options.geometry_generation;
     geometry.periodic_plan_identity = periodic_plan.identity();
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 HostSccCase::HostSccCase() noexcept = default;
@@ -825,29 +825,29 @@ HostSccCase::~HostSccCase() = default;
 HostSccCase::HostSccCase(HostSccCase&&) noexcept = default;
 HostSccCase& HostSccCase::operator=(HostSccCase&&) noexcept = default;
 
-gpuxtb_status_t HostSccCase::create(const HostSccCaseOptions& options, HostSccCase& output,
-                                    std::string& error) {
+xtbloom_status_t HostSccCase::create(const HostSccCaseOptions& options, HostSccCase& output,
+                                     std::string& error) {
   try {
     auto candidate = std::make_unique<Impl>();
     candidate->options = options;
-    const gpuxtb_status_t status = candidate->build(error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    const xtbloom_status_t status = candidate->build(error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
     output.impl_ = std::move(candidate);
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
     error = "failed to allocate host SCC fixture metadata";
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
 bool HostSccCase::valid() const noexcept { return impl_ != nullptr; }
 
-gpuxtb_status_t HostSccCase::run_one_iteration(std::string& error) {
+xtbloom_status_t HostSccCase::run_one_iteration(std::string& error) {
   if (!valid()) {
     error = "host SCC fixture is not initialized";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   return iterate_scc_driver_batch_cpu(impl_->driver_plan, impl_->geometry, impl_->cpu_backend,
                                       impl_->overlap_cache, impl_->wavefunction, impl_->mixer_state,
@@ -866,17 +866,17 @@ HostSccCheckpoint HostSccCase::checkpoint() const {
   return result;
 }
 
-gpuxtb_status_t HostSccCase::restore(const HostSccCheckpoint& checkpoint, std::string& error) {
+xtbloom_status_t HostSccCase::restore(const HostSccCheckpoint& checkpoint, std::string& error) {
   if (!valid()) {
     error = "host SCC fixture is not initialized";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (checkpoint.wavefunction.size() != impl_->wavefunction_storage.size() ||
       checkpoint.mixer_state.size() != impl_->mixer_state_storage.size() ||
       checkpoint.driver_state.size() != impl_->driver_state_storage.size() ||
       checkpoint.driver_workspace.size() != impl_->driver_workspace_storage.size()) {
     error = "host SCC checkpoint extents do not match this fixture";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   /* Extents are validated as one transaction before any destination changes. */
@@ -889,7 +889,7 @@ gpuxtb_status_t HostSccCase::restore(const HostSccCheckpoint& checkpoint, std::s
   std::memcpy(impl_->driver_workspace_storage.data(), checkpoint.driver_workspace.data(),
               checkpoint.driver_workspace.size());
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 const HostSccCaseOptions& HostSccCase::options() const noexcept { return impl_->options; }
@@ -1010,4 +1010,4 @@ const CpuLinearAlgebraBackend& HostSccCase::cpu_backend() const noexcept {
   return impl_->cpu_backend;
 }
 
-}  // namespace gpuxtb::test::gfn2
+}  // namespace xtbloom::test::gfn2

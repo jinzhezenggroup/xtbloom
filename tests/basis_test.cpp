@@ -33,14 +33,14 @@ int test_hco_ragged_layout_and_primitives() {
    * goldens are the normalized output of tblite_basis_slater at the tblite
    * revision pinned in data/parameters/manifest.json. They were independently
    * cross-checked against the [GTO] section emitted by xtb 6.7.1 --molden and
-   * are not values recomputed from gpuxtb's implementation.
+   * are not values recomputed from xtbloom's implementation.
    */
   constexpr std::array<std::int64_t, 4> atom_offsets{0, 1, 1, 3};
   constexpr std::array<std::int32_t, 3> atomic_numbers{1, 6, 8};
-  gpuxtb::detail::gfn2::BasisPlan plan;
+  xtbloom::detail::gfn2::BasisPlan plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(3, 3, atom_offsets.data(), atomic_numbers.data(),
-                                              plan, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(3, 3, atom_offsets.data(), atomic_numbers.data(),
+                                               plan, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(error.empty());
   CHECK(plan.batch_size == 3);
   CHECK(plan.total_atoms == 3);
@@ -112,10 +112,10 @@ int test_all_gfn2_elements_and_sixth_row_expansion() {
     atomic_numbers[static_cast<std::size_t>(atomic_number - 1)] = atomic_number;
   }
   constexpr std::array<std::int64_t, 4> atom_offsets{0, 1, 85, 86};
-  gpuxtb::detail::gfn2::BasisPlan plan;
+  xtbloom::detail::gfn2::BasisPlan plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(3, 86, atom_offsets.data(), atomic_numbers.data(),
-                                              plan, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(3, 86, atom_offsets.data(), atomic_numbers.data(),
+                                               plan, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(plan.total_shells == 237);
   CHECK(plan.total_orbitals == 671);
   CHECK(plan.total_cartesian_orbitals == 737);
@@ -148,7 +148,7 @@ int test_all_gfn2_elements_and_sixth_row_expansion() {
 }
 
 int test_validation_and_strong_failure_guarantee() {
-  gpuxtb::detail::gfn2::BasisPlan plan;
+  xtbloom::detail::gfn2::BasisPlan plan;
   plan.batch_size = 17;
   std::string error;
   constexpr std::array<std::int64_t, 2> offsets{0, 1};
@@ -158,28 +158,28 @@ int test_validation_and_strong_failure_guarantee() {
   constexpr std::array<std::int32_t, 1> unsupported_low{0};
   constexpr std::array<std::int32_t, 1> unsupported_high{87};
 
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(0, 1, offsets.data(), hydrogen.data(), plan, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(1, 1, nullptr, hydrogen.data(), plan, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(1, 1, wrong_start.data(), hydrogen.data(), plan,
-                                              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(2, 1, nonmonotone.data(), hydrogen.data(), plan,
-                                              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(1, 1, offsets.data(), unsupported_low.data(), plan,
-                                              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(1, 1, offsets.data(), unsupported_high.data(), plan,
-                                              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(0, 1, offsets.data(), hydrogen.data(), plan,
+                                               error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(1, 1, nullptr, hydrogen.data(), plan, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(1, 1, wrong_start.data(), hydrogen.data(), plan,
+                                               error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(2, 1, nonmonotone.data(), hydrogen.data(), plan,
+                                               error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(1, 1, offsets.data(), unsupported_low.data(), plan,
+                                               error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(1, 1, offsets.data(), unsupported_high.data(), plan,
+                                               error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(plan.batch_size == 17);
 
   constexpr std::array<std::int64_t, 2> huge_offsets{0, std::numeric_limits<std::int64_t>::max()};
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(1, std::numeric_limits<std::int64_t>::max(),
-                                              huge_offsets.data(), hydrogen.data(), plan,
-                                              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(1, std::numeric_limits<std::int64_t>::max(),
+                                               huge_offsets.data(), hydrogen.data(), plan,
+                                               error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(plan.batch_size == 17);
 
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(1, 1, offsets.data(), hydrogen.data(), plan, error) ==
-        GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(1, 1, offsets.data(), hydrogen.data(), plan,
+                                               error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(plan.batch_size == 1);
   CHECK(plan.total_shells == 1);
   return 0;

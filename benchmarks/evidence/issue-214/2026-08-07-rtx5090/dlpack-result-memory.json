@@ -6,9 +6,9 @@
   "source_status": "clean",
   "argv": [
     "/tmp/venv-providers/bin/python",
-    "/home/jzzeng/codes/gpuxtb3-wt214/benchmarks/dlpack_result_memory.py",
+    "/home/jzzeng/codes/xtbloom3-wt214/benchmarks/dlpack_result_memory.py",
     "--library",
-    "build/pr226-cuda/libgpuxtb.so.0.1.0",
+    "build/pr226-cuda/libxtbloom.so.0.1.0",
     "--warmup",
     "30",
     "--repetitions",
@@ -94,15 +94,15 @@
     "CUDA_VISIBLE_DEVICES": "0"
   },
   "library": {
-    "library_path": "/home/jzzeng/codes/gpuxtb3-wt214/build/pr226-cuda/libgpuxtb.so.0.1.0",
+    "library_path": "/home/jzzeng/codes/xtbloom3-wt214/build/pr226-cuda/libxtbloom.so.0.1.0",
     "library_sha256": "53ad262937f1612fceee97f9bc88e0abac2126523e54f226092de5fed12b32ce",
-    "python_package": "/home/jzzeng/codes/gpuxtb3-wt214/python/gpuxtb/__init__.py",
+    "python_package": "/home/jzzeng/codes/xtbloom3-wt214/python/xtbloom/__init__.py",
     "build": {
       "build_system": "cmake",
-      "build_directory": "/home/jzzeng/codes/gpuxtb3-wt214/build/pr226-cuda",
+      "build_directory": "/home/jzzeng/codes/xtbloom3-wt214/build/pr226-cuda",
       "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
       "cache": {
-        "path": "/home/jzzeng/codes/gpuxtb3-wt214/build/pr226-cuda/CMakeCache.txt",
+        "path": "/home/jzzeng/codes/xtbloom3-wt214/build/pr226-cuda/CMakeCache.txt",
         "is_file": true,
         "sha256": "ef75f054d2a450a8e1b066b6e6d65b65b7ab0790b44c76fd35c49b2211c5c61e"
       },
@@ -119,12 +119,12 @@
         "CMAKE_EXE_LINKER_FLAGS": "",
         "CMAKE_SHARED_LINKER_FLAGS": "",
         "CMAKE_GENERATOR": "Unix Makefiles",
-        "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/gpuxtb3-wt214",
-        "GPUXTB_ENABLE_CUDA": "ON",
-        "GPUXTB_MKL_RT_LIBRARY": ""
+        "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/xtbloom3-wt214",
+        "XTBLOOM_ENABLE_CUDA": "ON",
+        "XTBLOOM_MKL_RT_LIBRARY": ""
       },
       "source": {
-        "path": "/home/jzzeng/codes/gpuxtb3-wt214",
+        "path": "/home/jzzeng/codes/xtbloom3-wt214",
         "revision": "68ef635f1b00fab01373dad910c07164b9d0fd19",
         "dirty": false
       },

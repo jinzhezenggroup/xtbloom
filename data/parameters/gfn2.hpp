@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace gpuxtb::parameters::gfn2 {
+namespace xtbloom::parameters::gfn2 {
 
 inline constexpr std::uint32_t kSchemaVersion = 1u;
 inline constexpr char kSourceRevision[] = "fa8a4416e8fe093d0075bc10ac875494c2a449a9";
@@ -462,4 +462,4 @@ inline constexpr std::array<PairScaleOverride, 0u> kPairScaleOverrides{{
   return kGlobal.pair_scale_default;
 }
 
-}  // namespace gpuxtb::parameters::gfn2
+}  // namespace xtbloom::parameters::gfn2

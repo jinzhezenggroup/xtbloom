@@ -48,10 +48,10 @@ void operator delete[](void* pointer, std::size_t) noexcept { ::operator delete[
 
 namespace {
 
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::ES2GeometryCache;
-using gpuxtb::detail::gfn2::ES2Plan;
-using gpuxtb::detail::gfn2::ES2Workspace;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::ES2GeometryCache;
+using xtbloom::detail::gfn2::ES2Plan;
+using xtbloom::detail::gfn2::ES2Workspace;
 
 static_assert(std::is_trivially_copyable_v<ES2GeometryCache>);
 static_assert(std::is_standard_layout_v<ES2GeometryCache>);
@@ -133,13 +133,13 @@ bool make_evaluation(const std::vector<std::int64_t>& atom_offsets,
                      const std::vector<double>& positions, Evaluation& evaluation,
                      std::string& error) {
   const std::int64_t batch_size = static_cast<std::int64_t>(atom_offsets.size() - 1u);
-  if (gpuxtb::detail::gfn2::make_basis_plan(
+  if (xtbloom::detail::gfn2::make_basis_plan(
           batch_size, static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
-          atomic_numbers.data(), evaluation.basis, error) != GPUXTB_STATUS_SUCCESS) {
+          atomic_numbers.data(), evaluation.basis, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
-  if (gpuxtb::detail::gfn2::make_es2_plan(evaluation.basis, atomic_numbers.data(), evaluation.plan,
-                                          error) != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::make_es2_plan(evaluation.basis, atomic_numbers.data(), evaluation.plan,
+                                           error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   evaluation.matrix.resize(static_cast<std::size_t>(evaluation.plan.total_matrix_elements()));
@@ -154,10 +154,10 @@ bool make_evaluation(const std::vector<std::int64_t>& atom_offsets,
       evaluation.batch_scratch.data(),    evaluation.plan.batch_size(),
       evaluation.gradient_scratch.data(), evaluation.plan.total_atoms() * 3,
   };
-  return gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  return xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
              evaluation.plan, positions.data(), kGeometryGeneration, evaluation.matrix.data(),
              evaluation.matrix.size(), evaluation.workspace, evaluation.cache,
-             error) == GPUXTB_STATUS_SUCCESS;
+             error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 bool evaluate_energy(const ES2Plan& plan, const ES2GeometryCache& cache,
@@ -165,8 +165,8 @@ bool evaluate_energy(const ES2Plan& plan, const ES2GeometryCache& cache,
                      double& energy, std::string& error) {
   std::array<double, 1> result{};
   if (plan.batch_size() != 1 ||
-      gpuxtb::detail::gfn2::add_es2_energy_cpu(plan, cache, charges.data(), result.data(),
-                                               workspace, error) != GPUXTB_STATUS_SUCCESS) {
+      xtbloom::detail::gfn2::add_es2_energy_cpu(plan, cache, charges.data(), result.data(),
+                                                workspace, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   energy = result[0];
@@ -188,7 +188,7 @@ int test_tblite_component_oracle() {
   /*
    * Component oracle from tblite's LGPL-3.0-or-later
    * coulomb/charge/effective.f90 at revision e9abc395: arithmetic_average,
-   * get_amat_0d, and gexp=2. Shell parameters are from gpuxtb's separately
+   * get_amat_0d, and gexp=2. Shell parameters are from xtbloom's separately
    * pinned fa8a441 table. Layout is O(2s), O(2p), H(1s), H(1s), with
    * coordinates in bohr and Gamma in Hartree.
    */
@@ -209,9 +209,9 @@ int test_tblite_component_oracle() {
       0.3288736461866886,
   };
   std::vector<double> potential(4);
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, evaluation.cache, charges.data(), potential.data(),
-            evaluation.workspace, error) == GPUXTB_STATUS_SUCCESS);
+            evaluation.workspace, error) == XTBLOOM_STATUS_SUCCESS);
   constexpr std::array<double, 4> expected_potential{
       -0.09178427977966104,
       -0.10187092804968659,
@@ -222,14 +222,14 @@ int test_tblite_component_oracle() {
     CHECK(near(potential[shell], expected_potential[shell], 5.0e-16));
   }
   std::array<double, 1> energy{};
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
-                                                 energy.data(), evaluation.workspace,
-                                                 error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
+                                                  energy.data(), evaluation.workspace,
+                                                  error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(near(energy[0], 0.026087754741328118, 5.0e-16));
   energy[0] = 0.7;
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
-                                                 energy.data(), evaluation.workspace,
-                                                 error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
+                                                  energy.data(), evaluation.workspace,
+                                                  error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(near(energy[0], 0.7260877547413281, 8.0e-16));
   return 0;
 }
@@ -282,9 +282,9 @@ int test_energy_potential_charge_derivative() {
     charges[shell] = 0.31 * std::sin(0.73 * static_cast<double>(shell + 1u)) - 0.12;
   }
   std::vector<double> potential(charges.size());
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, evaluation.cache, charges.data(), potential.data(),
-            evaluation.workspace, error) == GPUXTB_STATUS_SUCCESS);
+            evaluation.workspace, error) == XTBLOOM_STATUS_SUCCESS);
   double energy = 0.0;
   CHECK(evaluate_energy(evaluation.plan, evaluation.cache, charges, evaluation.workspace, energy,
                         error));
@@ -328,28 +328,28 @@ int test_coordinate_vjp() {
     seeds[coordinate] = 0.002 * static_cast<double>(coordinate + 1u);
   }
   std::vector<double> gradients = seeds;
-  CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
             evaluation.plan, evaluation.cache, positions.data(), kGeometryGeneration,
             charges.data(), gradients.data(), evaluation.workspace,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
 
   constexpr double step = 2.0e-5;
   for (std::size_t coordinate = 0; coordinate < positions.size(); ++coordinate) {
     const std::uint64_t right_generation = 1000u + 2u * static_cast<std::uint64_t>(coordinate);
     positions[coordinate] += step;
-    CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+    CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
               evaluation.plan, positions.data(), right_generation, evaluation.matrix.data(),
               evaluation.matrix.size(), evaluation.workspace, evaluation.cache,
-              error) == GPUXTB_STATUS_SUCCESS);
+              error) == XTBLOOM_STATUS_SUCCESS);
     double right = 0.0;
     CHECK(evaluate_energy(evaluation.plan, evaluation.cache, charges, evaluation.workspace, right,
                           error));
 
     positions[coordinate] -= 2.0 * step;
-    CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+    CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
               evaluation.plan, positions.data(), right_generation + 1u, evaluation.matrix.data(),
               evaluation.matrix.size(), evaluation.workspace, evaluation.cache,
-              error) == GPUXTB_STATUS_SUCCESS);
+              error) == XTBLOOM_STATUS_SUCCESS);
     double left = 0.0;
     CHECK(evaluate_energy(evaluation.plan, evaluation.cache, charges, evaluation.workspace, left,
                           error));
@@ -383,23 +383,23 @@ int test_ragged_matches_sequential() {
   std::vector<double> batch_potential(charges.size());
   std::vector<double> batch_energy(4);
   std::vector<double> batch_gradient(positions.size());
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(batch.plan, batch.cache, charges.data(),
-                                                         batch_potential.data(), batch.workspace,
-                                                         error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(batch.plan, batch.cache, charges.data(),
-                                                 batch_energy.data(), batch.workspace,
-                                                 error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(batch.plan, batch.cache, charges.data(),
+                                                          batch_potential.data(), batch.workspace,
+                                                          error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(batch.plan, batch.cache, charges.data(),
+                                                  batch_energy.data(), batch.workspace,
+                                                  error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
             batch.plan, batch.cache, positions.data(), kGeometryGeneration, charges.data(),
-            batch_gradient.data(), batch.workspace, error) == GPUXTB_STATUS_SUCCESS);
+            batch_gradient.data(), batch.workspace, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(batch_energy[1] == 0.0);
 
   /* Serial one-system workers over the packed batch reproduce the batch API. */
   for (std::int64_t system = 0; system < batch.plan.batch_size(); ++system) {
     double system_energy = 0.0;
-    CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(batch.plan, batch.cache, system,
-                                                          charges.data(), system_energy,
-                                                          error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::add_es2_energy_system_cpu(batch.plan, batch.cache, system,
+                                                           charges.data(), system_energy,
+                                                           error) == XTBLOOM_STATUS_SUCCESS);
     CHECK(system_energy == batch_energy[static_cast<std::size_t>(system)]);
   }
 
@@ -423,16 +423,16 @@ int test_ragged_matches_sequential() {
     std::vector<double> sequential_potential(sequential_charges.size());
     std::array<double, 1> sequential_energy{};
     std::vector<double> sequential_gradient(sequential_positions.size());
-    CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+    CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
               sequential.plan, sequential.cache, sequential_charges.data(),
-              sequential_potential.data(), sequential.workspace, error) == GPUXTB_STATUS_SUCCESS);
-    CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(
+              sequential_potential.data(), sequential.workspace, error) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(
               sequential.plan, sequential.cache, sequential_charges.data(),
-              sequential_energy.data(), sequential.workspace, error) == GPUXTB_STATUS_SUCCESS);
-    CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+              sequential_energy.data(), sequential.workspace, error) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
               sequential.plan, sequential.cache, sequential_positions.data(), kGeometryGeneration,
               sequential_charges.data(), sequential_gradient.data(), sequential.workspace,
-              error) == GPUXTB_STATUS_SUCCESS);
+              error) == XTBLOOM_STATUS_SUCCESS);
 
     const std::int64_t matrix_begin = batch.plan.matrix_offsets()[batch_index];
     const std::int64_t matrix_end = batch.plan.matrix_offsets()[batch_index + 1u];
@@ -475,17 +475,17 @@ int test_system_energy_failure_isolation_and_binding() {
   const std::int64_t target_matrix = evaluation.plan.matrix_offsets()[target_index];
   const std::int64_t peer_matrix = evaluation.plan.matrix_offsets()[target_index + 1u];
   double expected = 0.375;
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
-                                                        charges.data(), expected,
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                         charges.data(), expected,
+                                                         error) == XTBLOOM_STATUS_SUCCESS);
 
   /* Numerical poison in another member is deliberately invisible. */
   const double saved_peer_charge = charges[static_cast<std::size_t>(peer_shell)];
   charges[static_cast<std::size_t>(peer_shell)] = std::numeric_limits<double>::quiet_NaN();
   double isolated = 0.375;
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
-                                                        charges.data(), isolated,
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                         charges.data(), isolated,
+                                                         error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(isolated == expected);
   charges[static_cast<std::size_t>(peer_shell)] = saved_peer_charge;
 
@@ -493,18 +493,18 @@ int test_system_energy_failure_isolation_and_binding() {
   evaluation.matrix[static_cast<std::size_t>(peer_matrix)] =
       std::numeric_limits<double>::quiet_NaN();
   isolated = 0.375;
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
-                                                        charges.data(), isolated,
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                         charges.data(), isolated,
+                                                         error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(isolated == expected);
   evaluation.matrix[static_cast<std::size_t>(peer_matrix)] = saved_peer_matrix;
 
   const double saved_target_charge = charges[static_cast<std::size_t>(target_shell)];
   charges[static_cast<std::size_t>(target_shell)] = std::numeric_limits<double>::infinity();
   double unchanged = -2.25;
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
-                                                        charges.data(), unchanged,
-                                                        error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                         charges.data(), unchanged,
+                                                         error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(unchanged == -2.25);
   charges[static_cast<std::size_t>(target_shell)] = saved_target_charge;
 
@@ -512,61 +512,61 @@ int test_system_energy_failure_isolation_and_binding() {
   evaluation.matrix[static_cast<std::size_t>(target_matrix)] =
       std::numeric_limits<double>::quiet_NaN();
   unchanged = -1.75;
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
-                                                        charges.data(), unchanged,
-                                                        error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                         charges.data(), unchanged,
+                                                         error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(unchanged == -1.75);
   evaluation.matrix[static_cast<std::size_t>(target_matrix)] = saved_target_matrix;
 
   unchanged = 4.5;
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, -1,
-                                                        charges.data(), unchanged,
-                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, -1,
+                                                         charges.data(), unchanged,
+                                                         error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(unchanged == 4.5);
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_system_cpu(
             evaluation.plan, evaluation.cache, evaluation.plan.batch_size(), charges.data(),
-            unchanged, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            unchanged, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(unchanged == 4.5);
 
   /* A same-shape cache from another sealed plan does not establish provenance. */
   Evaluation foreign;
   CHECK(make_evaluation(offsets, atomic_numbers, positions, foreign, error));
   CHECK(foreign.plan.identity() != evaluation.plan.identity());
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, foreign.cache, target,
-                                                        charges.data(), unchanged,
-                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, foreign.cache, target,
+                                                         charges.data(), unchanged,
+                                                         error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(unchanged == 4.5);
 
   const std::vector<double> saved_charges = charges;
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
-                                                        charges.data(), charges[0],
-                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                         charges.data(), charges[0],
+                                                         error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(charges == saved_charges);
 
   const std::vector<double> saved_matrix = evaluation.matrix;
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
-                                                        charges.data(), evaluation.matrix[0],
-                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                         charges.data(), evaluation.matrix[0],
+                                                         error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(evaluation.matrix == saved_matrix);
 
   const double saved_hardness = evaluation.plan.shell_hardness()[0];
   double& plan_alias = const_cast<double&>(evaluation.plan.shell_hardness()[0]);
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
-                                                        charges.data(), plan_alias,
-                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                         charges.data(), plan_alias,
+                                                         error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(evaluation.plan.shell_hardness()[0] == saved_hardness);
 
   const ES2GeometryCache saved_cache = evaluation.cache;
   double& cache_alias = *alias_at(&evaluation.cache);
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
-                                                        charges.data(), cache_alias,
-                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, target,
+                                                         charges.data(), cache_alias,
+                                                         error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(same_cache_descriptor(evaluation.cache, saved_cache));
 
   unchanged = 3.25;
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_system_cpu(
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_system_cpu(
             evaluation.plan, evaluation.cache, target, evaluation.plan.shell_hardness().data(),
-            unchanged, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            unchanged, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(unchanged == 3.25);
   return 0;
 }
@@ -587,18 +587,18 @@ int test_system_potential_matches_batch_and_failure_isolation() {
 
   const std::int64_t batch = evaluation.plan.batch_size();
   std::vector<double> batch_potential(charges.size());
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, evaluation.cache, charges.data(), batch_potential.data(),
-            evaluation.workspace, error) == GPUXTB_STATUS_SUCCESS);
+            evaluation.workspace, error) == XTBLOOM_STATUS_SUCCESS);
 
   /* Per-system potential reproduces the batch API's target slice. */
   std::vector<double> system_potential(charges.size(), 0.0);
   for (std::int64_t system = 0; system < batch; ++system) {
     const std::int64_t shell_begin = evaluation.plan.batch_shell_offsets()[system];
     const std::int64_t shell_end = evaluation.plan.batch_shell_offsets()[system + 1u];
-    CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+    CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_system_cpu(
               evaluation.plan, evaluation.cache, system, charges.data(), system_potential.data(),
-              error) == GPUXTB_STATUS_SUCCESS);
+              error) == XTBLOOM_STATUS_SUCCESS);
     for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
       CHECK(system_potential[static_cast<std::size_t>(shell)] ==
             batch_potential[static_cast<std::size_t>(shell)]);
@@ -616,9 +616,9 @@ int test_system_potential_matches_batch_and_failure_isolation() {
   const double saved_peer_charge = charges[static_cast<std::size_t>(peer_shell)];
   charges[static_cast<std::size_t>(peer_shell)] = std::numeric_limits<double>::quiet_NaN();
   std::fill(system_potential.begin(), system_potential.end(), 0.0);
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_system_cpu(
             evaluation.plan, evaluation.cache, target, charges.data(), system_potential.data(),
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   {
     const std::int64_t shell_begin = evaluation.plan.batch_shell_offsets()[target_index];
     const std::int64_t shell_end = evaluation.plan.batch_shell_offsets()[target_index + 1u];
@@ -633,9 +633,9 @@ int test_system_potential_matches_batch_and_failure_isolation() {
   evaluation.matrix[static_cast<std::size_t>(peer_matrix)] =
       std::numeric_limits<double>::quiet_NaN();
   std::fill(system_potential.begin(), system_potential.end(), 0.0);
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_system_cpu(
             evaluation.plan, evaluation.cache, target, charges.data(), system_potential.data(),
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   {
     const std::int64_t shell_begin = evaluation.plan.batch_shell_offsets()[target_index];
     const std::int64_t shell_end = evaluation.plan.batch_shell_offsets()[target_index + 1u];
@@ -651,48 +651,48 @@ int test_system_potential_matches_batch_and_failure_isolation() {
       charges[static_cast<std::size_t>(evaluation.plan.batch_shell_offsets()[target_index])];
   charges[static_cast<std::size_t>(evaluation.plan.batch_shell_offsets()[target_index])] =
       std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_system_cpu(
             evaluation.plan, evaluation.cache, target, charges.data(), system_potential.data(),
-            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   charges[static_cast<std::size_t>(evaluation.plan.batch_shell_offsets()[target_index])] =
       saved_target_charge;
 
   const double saved_target_matrix = evaluation.matrix[static_cast<std::size_t>(target_matrix)];
   evaluation.matrix[static_cast<std::size_t>(target_matrix)] =
       std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_system_cpu(
             evaluation.plan, evaluation.cache, target, charges.data(), system_potential.data(),
-            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   evaluation.matrix[static_cast<std::size_t>(target_matrix)] = saved_target_matrix;
 
   /* Out-of-range system and foreign cache are structural failures. */
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_system_cpu(
             evaluation.plan, evaluation.cache, -1, charges.data(), system_potential.data(),
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_system_cpu(
             evaluation.plan, evaluation.cache, batch, charges.data(), system_potential.data(),
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   Evaluation foreign;
   CHECK(make_evaluation(offsets, atomic_numbers, positions, foreign, error));
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_system_cpu(
             evaluation.plan, foreign.cache, target, charges.data(), system_potential.data(),
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   /* Output aliasing plan storage and a NULL output are rejected. */
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_system_cpu(
             evaluation.plan, evaluation.cache, target, evaluation.plan.shell_hardness().data(),
-            system_potential.data(), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+            system_potential.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_system_cpu(
             evaluation.plan, evaluation.cache, target, charges.data(), nullptr, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   /* The one-system potential allocates nothing and needs no scratch. */
   const std::size_t before = allocation_test::count.load(std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t status = gpuxtb::detail::gfn2::evaluate_es2_potential_system_cpu(
+  const xtbloom_status_t status = xtbloom::detail::gfn2::evaluate_es2_potential_system_cpu(
       evaluation.plan, evaluation.cache, target, charges.data(), system_potential.data(), error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
-  CHECK(status == GPUXTB_STATUS_SUCCESS);
+  CHECK(status == XTBLOOM_STATUS_SUCCESS);
   CHECK(allocation_test::count.load(std::memory_order_relaxed) == before);
   return 0;
 }
@@ -732,28 +732,28 @@ int test_cache_plan_identity() {
   CHECK(compatible_copy.shell_hardness().data() == pair.plan.shell_hardness().data());
   const std::array<double, 2> pair_charges{0.2, -0.3};
   std::array<double, 2> pair_potential{};
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             compatible_copy, pair.cache, pair_charges.data(), pair_potential.data(), pair.workspace,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
 
   const std::array<double, 4> isolated_charges{0.1, -0.2, 0.3, -0.4};
   std::array<double, 4> potential{9.0, 9.0, 9.0, 9.0};
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             isolated.plan, pair.cache, isolated_charges.data(), potential.data(),
-            isolated.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            isolated.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(potential.begin(), potential.end(), [](double value) { return value == 9.0; }));
 
   std::array<double, 4> energies{8.0, 8.0, 8.0, 8.0};
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(isolated.plan, pair.cache, isolated_charges.data(),
-                                                 energies.data(), isolated.workspace,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(
+            isolated.plan, pair.cache, isolated_charges.data(), energies.data(), isolated.workspace,
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(energies.begin(), energies.end(), [](double value) { return value == 8.0; }));
 
   std::vector<double> gradients(isolated_positions.size(), 7.0);
-  CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
             isolated.plan, pair.cache, isolated_positions.data(), kGeometryGeneration,
             isolated_charges.data(), gradients.data(), isolated.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(gradients.begin(), gradients.end(), [](double value) { return value == 7.0; }));
   return 0;
 }
@@ -774,9 +774,9 @@ int test_default_and_moved_from_plans_are_rejected_atomically() {
   const auto rejects_without_publication = [&](const ES2Plan& plan) {
     matrix.fill(6.0);
     cache = {};
-    if (gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+    if (xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             plan, positions.data(), kGeometryGeneration, matrix.data(), matrix.size(), workspace,
-            cache, error) != GPUXTB_STATUS_INVALID_ARGUMENT ||
+            cache, error) != XTBLOOM_STATUS_INVALID_ARGUMENT ||
         !std::all_of(matrix.begin(), matrix.end(), [](double value) { return value == 6.0; }) ||
         cache.coulomb_matrix != nullptr || cache.matrix_elements != 0 ||
         cache.geometry_generation != 0u || cache.plan_identity != nullptr) {
@@ -784,25 +784,25 @@ int test_default_and_moved_from_plans_are_rejected_atomically() {
     }
 
     std::array<double, 2> potential{7.0, 7.0};
-    if (gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(plan, cache, charges.data(),
-                                                         potential.data(), workspace,
-                                                         error) != GPUXTB_STATUS_INVALID_ARGUMENT ||
+    if (xtbloom::detail::gfn2::evaluate_es2_potential_cpu(plan, cache, charges.data(),
+                                                          potential.data(), workspace, error) !=
+            XTBLOOM_STATUS_INVALID_ARGUMENT ||
         potential[0] != 7.0 || potential[1] != 7.0) {
       return false;
     }
 
     std::array<double, 1> energy{8.0};
-    if (gpuxtb::detail::gfn2::add_es2_energy_cpu(plan, cache, charges.data(), energy.data(),
-                                                 workspace,
-                                                 error) != GPUXTB_STATUS_INVALID_ARGUMENT ||
+    if (xtbloom::detail::gfn2::add_es2_energy_cpu(plan, cache, charges.data(), energy.data(),
+                                                  workspace,
+                                                  error) != XTBLOOM_STATUS_INVALID_ARGUMENT ||
         energy[0] != 8.0) {
       return false;
     }
 
     std::array<double, 6> gradient{9.0, 9.0, 9.0, 9.0, 9.0, 9.0};
-    return gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+    return xtbloom::detail::gfn2::add_es2_gradient_cpu(
                plan, cache, positions.data(), kGeometryGeneration, charges.data(), gradient.data(),
-               workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT &&
+               workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT &&
            std::all_of(gradient.begin(), gradient.end(), [](double value) { return value == 9.0; });
   };
 
@@ -833,9 +833,9 @@ int test_default_and_moved_from_plans_are_rejected_atomically() {
   CHECK(rejects_without_publication(moved_from));
 
   std::array<double, 2> potential{};
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             live_plan, evaluation.cache, charges.data(), potential.data(), evaluation.workspace,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   return 0;
 }
 
@@ -863,29 +863,29 @@ int test_plan_storage_aliases_are_rejected_atomically() {
 
   std::vector<double> matrix_output(evaluation.matrix.size(), 6.0);
   ES2GeometryCache unpublished_cache;
-  CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             evaluation.plan, positions.data(), kGeometryGeneration + 1u, hardness,
             evaluation.matrix.size(), evaluation.workspace, unpublished_cache,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(plan_is_unchanged());
   CHECK(unpublished_cache.coulomb_matrix == nullptr && unpublished_cache.plan_identity == nullptr);
 
   ES2Workspace alias_workspace = evaluation.workspace;
   alias_workspace.matrix_scratch = hardness_partial;
-  CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             evaluation.plan, positions.data(), kGeometryGeneration + 1u, matrix_output.data(),
             matrix_output.size(), alias_workspace, unpublished_cache,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(matrix_output.begin(), matrix_output.end(),
                     [](double value) { return value == 6.0; }));
   CHECK(plan_is_unchanged());
 
   alias_workspace = evaluation.workspace;
   alias_workspace.matrix_scratch = metadata;
-  CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             evaluation.plan, positions.data(), kGeometryGeneration + 1u, matrix_output.data(),
             matrix_output.size(), alias_workspace, unpublished_cache,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(matrix_output.begin(), matrix_output.end(),
                     [](double value) { return value == 6.0; }));
   CHECK(plan_is_unchanged());
@@ -893,81 +893,81 @@ int test_plan_storage_aliases_are_rejected_atomically() {
   ES2GeometryCache forged_cache{hardness, evaluation.plan.total_matrix_elements(),
                                 kGeometryGeneration, evaluation.plan.identity()};
   const ES2GeometryCache forged_cache_before = forged_cache;
-  CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             evaluation.plan, positions.data(), kGeometryGeneration + 1u, matrix_output.data(),
             matrix_output.size(), evaluation.workspace, forged_cache,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(forged_cache.coulomb_matrix == forged_cache_before.coulomb_matrix);
   CHECK(forged_cache.matrix_elements == forged_cache_before.matrix_elements);
   CHECK(forged_cache.geometry_generation == forged_cache_before.geometry_generation);
   CHECK(forged_cache.plan_identity == forged_cache_before.plan_identity);
   CHECK(plan_is_unchanged());
 
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, evaluation.cache, charges.data(), hardness, evaluation.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(plan_is_unchanged());
 
   std::array<double, 2> potential{7.0, 7.0};
   alias_workspace = evaluation.workspace;
   alias_workspace.shell_scratch = hardness_partial;
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, evaluation.cache, charges.data(), potential.data(), alias_workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(potential[0] == 7.0 && potential[1] == 7.0);
   CHECK(plan_is_unchanged());
 
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, evaluation.cache, charges.data(), metadata, evaluation.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(plan_is_unchanged());
 
   potential = {7.0, 7.0};
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, forged_cache, charges.data(), potential.data(), evaluation.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(potential[0] == 7.0 && potential[1] == 7.0);
   CHECK(plan_is_unchanged());
 
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
-                                                 metadata, evaluation.workspace,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
+                                                  metadata, evaluation.workspace,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(plan_is_unchanged());
 
   std::array<double, 1> energy{8.0};
   alias_workspace = evaluation.workspace;
   alias_workspace.batch_scratch = hardness_partial;
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
-                                                 energy.data(), alias_workspace,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
+                                                  energy.data(), alias_workspace,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energy[0] == 8.0);
   CHECK(plan_is_unchanged());
 
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, forged_cache, charges.data(),
-                                                 energy.data(), evaluation.workspace,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, forged_cache, charges.data(),
+                                                  energy.data(), evaluation.workspace,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energy[0] == 8.0);
   CHECK(plan_is_unchanged());
 
-  CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(evaluation.plan, evaluation.cache,
-                                                   positions.data(), kGeometryGeneration,
-                                                   charges.data(), hardness, evaluation.workspace,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(evaluation.plan, evaluation.cache,
+                                                    positions.data(), kGeometryGeneration,
+                                                    charges.data(), hardness, evaluation.workspace,
+                                                    error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(plan_is_unchanged());
 
   std::array<double, 6> gradient{9.0, 9.0, 9.0, 9.0, 9.0, 9.0};
   alias_workspace = evaluation.workspace;
   alias_workspace.gradient_scratch = metadata;
-  CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(evaluation.plan, evaluation.cache,
-                                                   positions.data(), kGeometryGeneration,
-                                                   charges.data(), gradient.data(), alias_workspace,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
+            evaluation.plan, evaluation.cache, positions.data(), kGeometryGeneration,
+            charges.data(), gradient.data(), alias_workspace,
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(gradient.begin(), gradient.end(), [](double value) { return value == 9.0; }));
   CHECK(plan_is_unchanged());
 
-  CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
             evaluation.plan, forged_cache, positions.data(), kGeometryGeneration, charges.data(),
-            gradient.data(), evaluation.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            gradient.data(), evaluation.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(gradient.begin(), gradient.end(), [](double value) { return value == 9.0; }));
   CHECK(plan_is_unchanged());
   return 0;
@@ -1020,27 +1020,27 @@ int test_opaque_plan_object_aliases_and_active_cache_descriptor() {
 
   for (double* alias : plan_object_aliases) {
     ES2GeometryCache unpublished_cache;
-    CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+    CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
               evaluation.plan, positions.data(), kGeometryGeneration + 1u, alias,
               evaluation.matrix.size(), evaluation.workspace, unpublished_cache,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(cache_is_default(unpublished_cache));
     CHECK(plan_is_unchanged());
 
-    CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+    CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
               evaluation.plan, evaluation.cache, charges.data(), alias, evaluation.workspace,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(plan_is_unchanged());
 
-    CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache,
-                                                   charges.data(), alias, evaluation.workspace,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache,
+                                                    charges.data(), alias, evaluation.workspace,
+                                                    error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(plan_is_unchanged());
 
-    CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(evaluation.plan, evaluation.cache,
-                                                     positions.data(), kGeometryGeneration,
-                                                     charges.data(), alias, evaluation.workspace,
-                                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(evaluation.plan, evaluation.cache,
+                                                      positions.data(), kGeometryGeneration,
+                                                      charges.data(), alias, evaluation.workspace,
+                                                      error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(plan_is_unchanged());
   }
 
@@ -1052,10 +1052,10 @@ int test_opaque_plan_object_aliases_and_active_cache_descriptor() {
     ES2Workspace alias_workspace = evaluation.workspace;
     alias_workspace.matrix_scratch = plan_object_aliases[alias_index];
     ES2GeometryCache unpublished_cache;
-    CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+    CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
               evaluation.plan, positions.data(), kGeometryGeneration + 1u, matrix_output.data(),
               matrix_output.size(), alias_workspace, unpublished_cache,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(std::all_of(matrix_output.begin(), matrix_output.end(),
                       [](double value) { return value == 6.0; }));
     CHECK(cache_is_default(unpublished_cache));
@@ -1063,26 +1063,26 @@ int test_opaque_plan_object_aliases_and_active_cache_descriptor() {
 
     alias_workspace = evaluation.workspace;
     alias_workspace.shell_scratch = plan_object_aliases[alias_index];
-    CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+    CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
               evaluation.plan, evaluation.cache, charges.data(), potential.data(), alias_workspace,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(potential[0] == 7.0 && potential[1] == 7.0);
     CHECK(plan_is_unchanged());
 
     alias_workspace = evaluation.workspace;
     alias_workspace.batch_scratch = plan_object_aliases[alias_index];
-    CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache,
-                                                   charges.data(), energy.data(), alias_workspace,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache,
+                                                    charges.data(), energy.data(), alias_workspace,
+                                                    error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(energy[0] == 8.0);
     CHECK(plan_is_unchanged());
 
     alias_workspace = evaluation.workspace;
     alias_workspace.gradient_scratch = plan_object_aliases[alias_index];
-    CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+    CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
               evaluation.plan, evaluation.cache, positions.data(), kGeometryGeneration,
               charges.data(), gradient.data(), alias_workspace,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(std::all_of(gradient.begin(), gradient.end(), [](double value) { return value == 9.0; }));
     CHECK(plan_is_unchanged());
 
@@ -1091,10 +1091,10 @@ int test_opaque_plan_object_aliases_and_active_cache_descriptor() {
                                         kGeometryGeneration, evaluation.plan.identity()};
     ES2GeometryCache active_forged_cache = forged_cache;
     const ES2GeometryCache active_forged_before = active_forged_cache;
-    CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+    CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
               evaluation.plan, positions.data(), kGeometryGeneration + 1u, matrix_output.data(),
               matrix_output.size(), evaluation.workspace, active_forged_cache,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(std::all_of(matrix_output.begin(), matrix_output.end(),
                       [](double value) { return value == 6.0; }));
     CHECK(active_forged_cache.coulomb_matrix == active_forged_before.coulomb_matrix);
@@ -1104,9 +1104,9 @@ int test_opaque_plan_object_aliases_and_active_cache_descriptor() {
     CHECK(plan_is_unchanged());
 
     potential = {7.0, 7.0};
-    CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+    CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
               evaluation.plan, forged_cache, charges.data(), potential.data(), evaluation.workspace,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(potential[0] == 7.0 && potential[1] == 7.0);
     CHECK(plan_is_unchanged());
   }
@@ -1124,10 +1124,10 @@ int test_opaque_plan_object_aliases_and_active_cache_descriptor() {
   ES2GeometryCache corrupt_active_cache{evaluation.matrix_scratch.data(), 0, kGeometryGeneration,
                                         evaluation.plan.identity()};
   const ES2GeometryCache corrupt_before = corrupt_active_cache;
-  CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             evaluation.plan, overflowing_positions.data(), kGeometryGeneration + 1u,
             matrix_output.data(), matrix_output.size(), evaluation.workspace, corrupt_active_cache,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(evaluation.matrix_scratch.begin(), evaluation.matrix_scratch.end(),
                     [](double value) { return value == 12.0; }));
   CHECK(std::all_of(matrix_output.begin(), matrix_output.end(),
@@ -1203,22 +1203,22 @@ int test_descriptor_object_alias_matrix() {
     const std::vector<double> batch_scratch_before = evaluation.batch_scratch;
     const std::vector<double> gradient_scratch_before = evaluation.gradient_scratch;
 
-    CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+    CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
               evaluation.plan, alias, kGeometryGeneration + 1u, matrix_output.data(),
               matrix_output.size(), evaluation.workspace, evaluation.cache,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
               evaluation.plan, evaluation.cache, alias, potential.data(), evaluation.workspace,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, alias,
-                                                   energy.data(), evaluation.workspace,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, alias,
+                                                    energy.data(), evaluation.workspace,
+                                                    error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
               evaluation.plan, evaluation.cache, alias, kGeometryGeneration, charges.data(),
-              gradient.data(), evaluation.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+              gradient.data(), evaluation.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
               evaluation.plan, evaluation.cache, positions.data(), kGeometryGeneration, alias,
-              gradient.data(), evaluation.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              gradient.data(), evaluation.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
     CHECK(outputs_are_unchanged(matrix_output, potential, energy, gradient));
     CHECK(evaluation.matrix_scratch == matrix_scratch_before);
@@ -1246,55 +1246,55 @@ int test_descriptor_object_alias_matrix() {
     std::array<double, 6> gradient{9.0, 9.0, 9.0, 9.0, 9.0, 9.0};
     ES2GeometryCache descriptor_before = cache_envelope.descriptor;
 
-    CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+    CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
               evaluation.plan, positions.data(), kGeometryGeneration + 1u, cache_alias,
               evaluation.matrix.size(), local_workspace, cache_envelope.descriptor,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
               evaluation.plan, cache_envelope.descriptor, charges.data(), cache_alias,
-              local_workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, cache_envelope.descriptor,
-                                                   charges.data(), cache_alias, local_workspace,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(evaluation.plan, cache_envelope.descriptor,
-                                                     positions.data(), kGeometryGeneration,
-                                                     charges.data(), cache_alias, local_workspace,
-                                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              local_workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, cache_envelope.descriptor,
+                                                    charges.data(), cache_alias, local_workspace,
+                                                    error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(evaluation.plan, cache_envelope.descriptor,
+                                                      positions.data(), kGeometryGeneration,
+                                                      charges.data(), cache_alias, local_workspace,
+                                                      error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(same_cache_descriptor(cache_envelope.descriptor, descriptor_before));
     CHECK(tail_is(cache_envelope, kTailSentinel));
 
     local_workspace = evaluation.workspace;
     local_workspace.matrix_scratch = cache_alias;
     const ES2Workspace matrix_workspace_before = local_workspace;
-    CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+    CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
               evaluation.plan, positions.data(), kGeometryGeneration + 1u, matrix_output.data(),
               matrix_output.size(), local_workspace, cache_envelope.descriptor,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(same_workspace_descriptor(local_workspace, matrix_workspace_before));
 
     local_workspace = evaluation.workspace;
     local_workspace.shell_scratch = cache_alias;
     const ES2Workspace shell_workspace_before = local_workspace;
-    CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+    CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
               evaluation.plan, cache_envelope.descriptor, charges.data(), potential.data(),
-              local_workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              local_workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(same_workspace_descriptor(local_workspace, shell_workspace_before));
 
     local_workspace = evaluation.workspace;
     local_workspace.batch_scratch = cache_alias;
     const ES2Workspace batch_workspace_before = local_workspace;
-    CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, cache_envelope.descriptor,
-                                                   charges.data(), energy.data(), local_workspace,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, cache_envelope.descriptor,
+                                                    charges.data(), energy.data(), local_workspace,
+                                                    error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(same_workspace_descriptor(local_workspace, batch_workspace_before));
 
     local_workspace = evaluation.workspace;
     local_workspace.gradient_scratch = cache_alias;
     const ES2Workspace gradient_workspace_before = local_workspace;
-    CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+    CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
               evaluation.plan, cache_envelope.descriptor, positions.data(), kGeometryGeneration,
               charges.data(), gradient.data(), local_workspace,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(same_workspace_descriptor(local_workspace, gradient_workspace_before));
     CHECK(same_cache_descriptor(cache_envelope.descriptor, descriptor_before));
     CHECK(tail_is(cache_envelope, kTailSentinel));
@@ -1305,20 +1305,20 @@ int test_descriptor_object_alias_matrix() {
     cache_envelope.descriptor.coulomb_matrix = cache_alias;
     descriptor_before = cache_envelope.descriptor;
     local_workspace = evaluation.workspace;
-    CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+    CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
               evaluation.plan, positions.data(), kGeometryGeneration + 1u, matrix_output.data(),
               matrix_output.size(), local_workspace, cache_envelope.descriptor,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
               evaluation.plan, cache_envelope.descriptor, charges.data(), potential.data(),
-              local_workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, cache_envelope.descriptor,
-                                                   charges.data(), energy.data(), local_workspace,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+              local_workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, cache_envelope.descriptor,
+                                                    charges.data(), energy.data(), local_workspace,
+                                                    error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
               evaluation.plan, cache_envelope.descriptor, positions.data(), kGeometryGeneration,
               charges.data(), gradient.data(), local_workspace,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(same_cache_descriptor(cache_envelope.descriptor, descriptor_before));
     CHECK(tail_is(cache_envelope, kTailSentinel));
     CHECK(outputs_are_unchanged(matrix_output, potential, energy, gradient));
@@ -1332,20 +1332,20 @@ int test_descriptor_object_alias_matrix() {
     const ES2GeometryCache local_cache_before = local_cache;
     ES2Workspace descriptor_workspace_before = workspace_envelope.descriptor;
 
-    CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+    CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
               evaluation.plan, positions.data(), kGeometryGeneration + 1u, workspace_alias,
               evaluation.matrix.size(), workspace_envelope.descriptor, local_cache,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
               evaluation.plan, local_cache, charges.data(), workspace_alias,
-              workspace_envelope.descriptor, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, local_cache, charges.data(),
-                                                   workspace_alias, workspace_envelope.descriptor,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(evaluation.plan, local_cache, positions.data(),
-                                                     kGeometryGeneration, charges.data(),
-                                                     workspace_alias, workspace_envelope.descriptor,
-                                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              workspace_envelope.descriptor, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, local_cache, charges.data(),
+                                                    workspace_alias, workspace_envelope.descriptor,
+                                                    error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
+              evaluation.plan, local_cache, positions.data(), kGeometryGeneration, charges.data(),
+              workspace_alias, workspace_envelope.descriptor,
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(same_cache_descriptor(local_cache, local_cache_before));
     CHECK(same_workspace_descriptor(workspace_envelope.descriptor, descriptor_workspace_before));
     CHECK(tail_is(workspace_envelope, kTailSentinel));
@@ -1353,35 +1353,35 @@ int test_descriptor_object_alias_matrix() {
     workspace_envelope.descriptor = evaluation.workspace;
     workspace_envelope.descriptor.matrix_scratch = workspace_alias;
     descriptor_workspace_before = workspace_envelope.descriptor;
-    CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+    CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
               evaluation.plan, positions.data(), kGeometryGeneration + 1u, matrix_output.data(),
               matrix_output.size(), workspace_envelope.descriptor, local_cache,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(same_workspace_descriptor(workspace_envelope.descriptor, descriptor_workspace_before));
 
     workspace_envelope.descriptor = evaluation.workspace;
     workspace_envelope.descriptor.shell_scratch = workspace_alias;
     descriptor_workspace_before = workspace_envelope.descriptor;
-    CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+    CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
               evaluation.plan, local_cache, charges.data(), potential.data(),
-              workspace_envelope.descriptor, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              workspace_envelope.descriptor, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(same_workspace_descriptor(workspace_envelope.descriptor, descriptor_workspace_before));
 
     workspace_envelope.descriptor = evaluation.workspace;
     workspace_envelope.descriptor.batch_scratch = workspace_alias;
     descriptor_workspace_before = workspace_envelope.descriptor;
-    CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, local_cache, charges.data(),
-                                                   energy.data(), workspace_envelope.descriptor,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, local_cache, charges.data(),
+                                                    energy.data(), workspace_envelope.descriptor,
+                                                    error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(same_workspace_descriptor(workspace_envelope.descriptor, descriptor_workspace_before));
 
     workspace_envelope.descriptor = evaluation.workspace;
     workspace_envelope.descriptor.gradient_scratch = workspace_alias;
     descriptor_workspace_before = workspace_envelope.descriptor;
-    CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(evaluation.plan, local_cache, positions.data(),
-                                                     kGeometryGeneration, charges.data(),
-                                                     gradient.data(), workspace_envelope.descriptor,
-                                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
+              evaluation.plan, local_cache, positions.data(), kGeometryGeneration, charges.data(),
+              gradient.data(), workspace_envelope.descriptor,
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(same_workspace_descriptor(workspace_envelope.descriptor, descriptor_workspace_before));
     CHECK(tail_is(workspace_envelope, kTailSentinel));
     CHECK(outputs_are_unchanged(matrix_output, potential, energy, gradient));
@@ -1391,20 +1391,20 @@ int test_descriptor_object_alias_matrix() {
     forged_cache.coulomb_matrix = workspace_alias;
     const ES2GeometryCache forged_before = forged_cache;
     descriptor_workspace_before = workspace_envelope.descriptor;
-    CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+    CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
               evaluation.plan, positions.data(), kGeometryGeneration + 1u, matrix_output.data(),
               matrix_output.size(), workspace_envelope.descriptor, forged_cache,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
               evaluation.plan, forged_cache, charges.data(), potential.data(),
-              workspace_envelope.descriptor, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, forged_cache, charges.data(),
-                                                   energy.data(), workspace_envelope.descriptor,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-    CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+              workspace_envelope.descriptor, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, forged_cache, charges.data(),
+                                                    energy.data(), workspace_envelope.descriptor,
+                                                    error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
               evaluation.plan, forged_cache, positions.data(), kGeometryGeneration, charges.data(),
               gradient.data(), workspace_envelope.descriptor,
-              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(same_cache_descriptor(forged_cache, forged_before));
     CHECK(same_workspace_descriptor(workspace_envelope.descriptor, descriptor_workspace_before));
     CHECK(tail_is(workspace_envelope, kTailSentinel));
@@ -1429,9 +1429,9 @@ int test_validation_and_strong_guarantees() {
 
   const std::vector<std::int32_t> wrong_atomic_numbers{1, 8};
   ES2Plan untouched_plan = evaluation.plan;
-  CHECK(gpuxtb::detail::gfn2::make_es2_plan(evaluation.basis, wrong_atomic_numbers.data(),
-                                            evaluation.plan,
-                                            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_es2_plan(evaluation.basis, wrong_atomic_numbers.data(),
+                                             evaluation.plan,
+                                             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(evaluation.plan.total_matrix_elements() == untouched_plan.total_matrix_elements());
   evaluation.plan = untouched_plan;
 
@@ -1439,25 +1439,25 @@ int test_validation_and_strong_guarantees() {
   ES2GeometryCache old_cache = evaluation.cache;
   const double maximum = std::numeric_limits<double>::max();
   const std::vector<double> overflowing_positions{maximum, 0.0, 0.0, -maximum, 0.0, 0.0};
-  CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             evaluation.plan, overflowing_positions.data(), kGeometryGeneration + 1u, storage.data(),
             storage.size(), evaluation.workspace, evaluation.cache,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(storage.begin(), storage.end(), [](double value) { return value == 7.0; }));
   CHECK(evaluation.cache.coulomb_matrix == old_cache.coulomb_matrix);
   CHECK(evaluation.cache.matrix_elements == old_cache.matrix_elements);
   CHECK(evaluation.cache.geometry_generation == old_cache.geometry_generation);
   CHECK(evaluation.cache.plan_identity == old_cache.plan_identity);
   evaluation.cache = old_cache;
-  CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             evaluation.plan, valid_positions.data(), kGeometryGeneration + 1u, storage.data(),
             storage.size() - 1u, evaluation.workspace, evaluation.cache,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(storage.begin(), storage.end(), [](double value) { return value == 7.0; }));
-  CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             evaluation.plan, valid_positions.data(), kGeometryGeneration + 1u,
             const_cast<double*>(valid_positions.data()), evaluation.matrix.size(),
-            evaluation.workspace, evaluation.cache, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            evaluation.workspace, evaluation.cache, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   evaluation.cache = old_cache;
 
   const std::vector<double> charges{0.2, -0.3};
@@ -1465,9 +1465,9 @@ int test_validation_and_strong_guarantees() {
   ES2GeometryCache corrupt_cache = evaluation.cache;
   const double original_off_diagonal = evaluation.matrix[1];
   evaluation.matrix[1] = std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, corrupt_cache, charges.data(), potential.data(), evaluation.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(potential[0] == 9.0 && potential[1] == 9.0);
   evaluation.matrix[1] = original_off_diagonal;
 
@@ -1477,28 +1477,28 @@ int test_validation_and_strong_guarantees() {
   ES2GeometryCache overflowing_cache{overflowing_matrix.data(),
                                      evaluation.plan.total_matrix_elements(), kGeometryGeneration,
                                      evaluation.plan.identity()};
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, overflowing_cache, overflowing_charges.data(), potential.data(),
-            evaluation.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            evaluation.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(potential[0] == 9.0 && potential[1] == 9.0);
   std::array<double, 1> energy{4.0};
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(
             evaluation.plan, evaluation.cache, huge_charges.data(), energy.data(),
-            evaluation.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            evaluation.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energy[0] == 4.0);
   std::array<double, 6> gradient{3.0, 3.0, 3.0, 3.0, 3.0, 3.0};
-  CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
             evaluation.plan, evaluation.cache, valid_positions.data(), kGeometryGeneration,
             huge_charges.data(), gradient.data(), evaluation.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(gradient.begin(), gradient.end(), [](double value) { return value == 3.0; }));
 
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(evaluation.plan, evaluation.cache, nullptr,
-                                                         potential.data(), evaluation.workspace,
-                                                         error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
+            evaluation.plan, evaluation.cache, nullptr, potential.data(), evaluation.workspace,
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, evaluation.cache, charges.data(), const_cast<double*>(charges.data()),
-            evaluation.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            evaluation.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   return 0;
 }
 
@@ -1514,26 +1514,26 @@ int test_workspace_atomicity_overlap_and_generation() {
 
   const std::vector<double> regular_charges{0.1, -0.2, 0.3, -0.4};
   std::vector<double> stale_gradient(positions.size(), 5.0);
-  CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
             evaluation.plan, evaluation.cache, positions.data(), kGeometryGeneration + 1u,
             regular_charges.data(), stale_gradient.data(), evaluation.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(stale_gradient.begin(), stale_gradient.end(),
                     [](double value) { return value == 5.0; }));
 
   const std::vector<double> matrix_before = evaluation.matrix;
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, evaluation.cache, regular_charges.data(), evaluation.matrix.data() + 1,
-            evaluation.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            evaluation.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(evaluation.matrix == matrix_before);
 
   std::vector<double> partial_shell_arena(5, 6.0);
   ES2Workspace partial_shell_workspace = evaluation.workspace;
   partial_shell_workspace.shell_scratch = partial_shell_arena.data() + 1;
   partial_shell_workspace.shell_elements = evaluation.plan.total_shells();
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, evaluation.cache, regular_charges.data(), partial_shell_arena.data(),
-            partial_shell_workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            partial_shell_workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(partial_shell_arena.begin(), partial_shell_arena.end(),
                     [](double value) { return value == 6.0; }));
 
@@ -1543,11 +1543,11 @@ int test_workspace_atomicity_overlap_and_generation() {
   partial_matrix_workspace.matrix_scratch = partial_matrix_arena.data() + 1;
   partial_matrix_workspace.matrix_elements = evaluation.plan.total_matrix_elements();
   ES2GeometryCache unpublished_cache;
-  CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             evaluation.plan, positions.data(), kGeometryGeneration + 1u,
             partial_matrix_arena.data(),
             static_cast<std::size_t>(evaluation.plan.total_matrix_elements()),
-            partial_matrix_workspace, unpublished_cache, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            partial_matrix_workspace, unpublished_cache, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(partial_matrix_arena.begin(), partial_matrix_arena.end(),
                     [](double value) { return value == 7.0; }));
 
@@ -1557,10 +1557,10 @@ int test_workspace_atomicity_overlap_and_generation() {
   later_overflow_positions[9] = -maximum;
   std::vector<double> unpublished_matrix(evaluation.matrix.size(), 8.0);
   const ES2GeometryCache cache_before = evaluation.cache;
-  CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             evaluation.plan, later_overflow_positions.data(), kGeometryGeneration + 1u,
             unpublished_matrix.data(), unpublished_matrix.size(), evaluation.workspace,
-            evaluation.cache, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            evaluation.cache, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(unpublished_matrix.begin(), unpublished_matrix.end(),
                     [](double value) { return value == 8.0; }));
   CHECK(evaluation.cache.coulomb_matrix == cache_before.coulomb_matrix);
@@ -1578,24 +1578,24 @@ int test_workspace_atomicity_overlap_and_generation() {
                                         kGeometryGeneration, evaluation.plan.identity()};
   const std::vector<double> overflow_charges{0.1, -0.2, 2.0, 2.0};
   std::vector<double> potentials(4, 9.0);
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, overflow_cache, overflow_charges.data(), potentials.data(),
-            evaluation.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            evaluation.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(
       std::all_of(potentials.begin(), potentials.end(), [](double value) { return value == 9.0; }));
 
   std::array<double, 2> energies{10.0, 10.0};
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(
             evaluation.plan, overflow_cache, overflow_charges.data(), energies.data(),
-            evaluation.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            evaluation.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energies[0] == 10.0 && energies[1] == 10.0);
 
   const std::vector<double> gradient_overflow_charges{0.1, -0.2, maximum, maximum};
   std::vector<double> gradients(positions.size(), 11.0);
-  CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
             evaluation.plan, evaluation.cache, positions.data(), kGeometryGeneration,
             gradient_overflow_charges.data(), gradients.data(), evaluation.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(
       std::all_of(gradients.begin(), gradients.end(), [](double value) { return value == 11.0; }));
   return 0;
@@ -1626,10 +1626,10 @@ int test_misaligned_buffers_are_rejected_atomically() {
 
   std::vector<double> matrix_storage(matrix_count, 6.0);
   ES2GeometryCache cache_before = evaluation.cache;
-  CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             evaluation.plan, misaligned_gradient.data, kGeometryGeneration + 1u,
             matrix_storage.data(), matrix_storage.size(), evaluation.workspace, evaluation.cache,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(matrix_storage.begin(), matrix_storage.end(),
                     [](double value) { return value == 6.0; }));
   CHECK(evaluation.cache.coulomb_matrix == cache_before.coulomb_matrix);
@@ -1638,89 +1638,89 @@ int test_misaligned_buffers_are_rejected_atomically() {
   CHECK(evaluation.cache.plan_identity == cache_before.plan_identity);
 
   ES2GeometryCache unpublished_cache;
-  CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             evaluation.plan, positions.data(), kGeometryGeneration + 1u, misaligned_matrix.data,
             matrix_count, evaluation.workspace, unpublished_cache,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(misaligned_matrix.untouched());
   CHECK(unpublished_cache.coulomb_matrix == nullptr && unpublished_cache.matrix_elements == 0 &&
         unpublished_cache.geometry_generation == 0u && unpublished_cache.plan_identity == nullptr);
 
   std::array<double, 2> potential{9.0, 9.0};
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, evaluation.cache, misaligned_shell.data, potential.data(),
-            evaluation.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            evaluation.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(potential[0] == 9.0 && potential[1] == 9.0);
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, evaluation.cache, charges.data(), misaligned_shell.data,
-            evaluation.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            evaluation.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(misaligned_shell.untouched());
 
   std::array<double, 1> energy{8.0};
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(
             evaluation.plan, evaluation.cache, misaligned_shell.data, energy.data(),
-            evaluation.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            evaluation.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energy[0] == 8.0);
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
-                                                 misaligned_batch.data, evaluation.workspace,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
+                                                  misaligned_batch.data, evaluation.workspace,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(misaligned_batch.untouched());
 
   std::array<double, 6> gradient{7.0, 7.0, 7.0, 7.0, 7.0, 7.0};
-  CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
             evaluation.plan, evaluation.cache, misaligned_gradient.data, kGeometryGeneration,
             charges.data(), gradient.data(), evaluation.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(gradient.begin(), gradient.end(), [](double value) { return value == 7.0; }));
-  CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
             evaluation.plan, evaluation.cache, positions.data(), kGeometryGeneration,
             misaligned_shell.data, gradient.data(), evaluation.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(gradient.begin(), gradient.end(), [](double value) { return value == 7.0; }));
-  CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(
             evaluation.plan, evaluation.cache, positions.data(), kGeometryGeneration,
             charges.data(), misaligned_gradient.data, evaluation.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(misaligned_gradient.untouched());
 
   const ES2GeometryCache misaligned_cache{misaligned_matrix.data,
                                           evaluation.plan.total_matrix_elements(),
                                           kGeometryGeneration, evaluation.plan.identity()};
   potential = {9.0, 9.0};
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, misaligned_cache, charges.data(), potential.data(),
-            evaluation.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            evaluation.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(potential[0] == 9.0 && potential[1] == 9.0);
 
   ES2Workspace bad_workspace = evaluation.workspace;
   bad_workspace.matrix_scratch = misaligned_matrix.data;
-  CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             evaluation.plan, positions.data(), kGeometryGeneration + 1u, matrix_storage.data(),
             matrix_storage.size(), bad_workspace, unpublished_cache,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(matrix_storage.begin(), matrix_storage.end(),
                     [](double value) { return value == 6.0; }));
   bad_workspace = evaluation.workspace;
   bad_workspace.shell_scratch = misaligned_shell.data;
   potential = {9.0, 9.0};
-  CHECK(gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
             evaluation.plan, evaluation.cache, charges.data(), potential.data(), bad_workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(potential[0] == 9.0 && potential[1] == 9.0);
   bad_workspace = evaluation.workspace;
   bad_workspace.batch_scratch = misaligned_batch.data;
   energy[0] = 8.0;
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
-                                                 energy.data(), bad_workspace,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
+                                                  energy.data(), bad_workspace,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energy[0] == 8.0);
   bad_workspace = evaluation.workspace;
   bad_workspace.gradient_scratch = misaligned_gradient.data;
   gradient.fill(7.0);
-  CHECK(gpuxtb::detail::gfn2::add_es2_gradient_cpu(evaluation.plan, evaluation.cache,
-                                                   positions.data(), kGeometryGeneration,
-                                                   charges.data(), gradient.data(), bad_workspace,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_es2_gradient_cpu(evaluation.plan, evaluation.cache,
+                                                    positions.data(), kGeometryGeneration,
+                                                    charges.data(), gradient.data(), bad_workspace,
+                                                    error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(gradient.begin(), gradient.end(), [](double value) { return value == 7.0; }));
   return 0;
 }
@@ -1740,29 +1740,29 @@ int test_no_steady_state_allocations() {
 
   const std::size_t before = allocation_test::count.load(std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t cache_status = gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  const xtbloom_status_t cache_status = xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
       evaluation.plan, positions.data(), kGeometryGeneration + 1u, evaluation.matrix.data(),
       evaluation.matrix.size(), evaluation.workspace, evaluation.cache, error);
-  const gpuxtb_status_t potential_status = gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+  const xtbloom_status_t potential_status = xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
       evaluation.plan, evaluation.cache, charges.data(), potential.data(), evaluation.workspace,
       error);
-  const gpuxtb_status_t energy_status =
-      gpuxtb::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
-                                               energy.data(), evaluation.workspace, error);
+  const xtbloom_status_t energy_status =
+      xtbloom::detail::gfn2::add_es2_energy_cpu(evaluation.plan, evaluation.cache, charges.data(),
+                                                energy.data(), evaluation.workspace, error);
   double system_energy = 0.0;
-  const gpuxtb_status_t system_energy_status = gpuxtb::detail::gfn2::add_es2_energy_system_cpu(
+  const xtbloom_status_t system_energy_status = xtbloom::detail::gfn2::add_es2_energy_system_cpu(
       evaluation.plan, evaluation.cache, 0, charges.data(), system_energy, error);
-  const gpuxtb_status_t gradient_status = gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+  const xtbloom_status_t gradient_status = xtbloom::detail::gfn2::add_es2_gradient_cpu(
       evaluation.plan, evaluation.cache, positions.data(), kGeometryGeneration + 1u, charges.data(),
       gradient.data(), evaluation.workspace, error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
   const std::size_t after = allocation_test::count.load(std::memory_order_relaxed);
 
-  CHECK(cache_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(potential_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(energy_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(system_energy_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(gradient_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(cache_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(potential_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(energy_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(system_energy_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(gradient_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(after == before);
   return 0;
 }

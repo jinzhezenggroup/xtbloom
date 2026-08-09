@@ -1,5 +1,5 @@
 #include "model/gfn2/force.hpp"
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <algorithm>
 #include <array>
@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <limits>
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 namespace {
 
 bool same_offsets(const std::vector<std::int64_t>& first, const std::vector<std::int64_t>& second) {
@@ -69,7 +69,7 @@ bool ranges_overlap(const AddressRange& first, const AddressRange& second) {
          second.begin < first.end;
 }
 
-gpuxtb_status_t validate_numerical_ranges(
+xtbloom_status_t validate_numerical_ranges(
     std::int64_t batch, std::int64_t atoms, std::int64_t shells, std::int64_t matrix,
     std::int64_t points, const ES2Plan& es2, const ES2GeometryCache& es2_cache,
     const AES2Plan& aes2, const AES2GeometryCache& aes2_cache, const D4Plan* d4,
@@ -100,7 +100,7 @@ gpuxtb_status_t validate_numerical_ranges(
       !add_write(workspace.component_energy_scratch,
                  d4 == nullptr ? 0 : workspace.energy_elements)) {
     error = "restricted GFN2 energy buffers have invalid address ranges";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (force_requested) {
     if (!add_read(input.coordination_numbers, atoms) || !add_read(input.overlap, matrix) ||
@@ -152,14 +152,14 @@ gpuxtb_status_t validate_numerical_ranges(
         !add_optional_component(components.d4_atm) ||
         !add_optional_component(components.external_point_charge)) {
       error = "restricted GFN2 force buffers have invalid address ranges";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     AddressRange integral_range;
     if (!make_range(workspace.integral_workspace, workspace.integral_workspace_size,
                     integral_range) ||
         write_count == writes.size()) {
       error = "restricted GFN2 integral workspace has an invalid address range";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     writes[write_count++] = integral_range;
   }
@@ -169,7 +169,7 @@ gpuxtb_status_t validate_numerical_ranges(
                     workspace.d4_workspace.workspace_size_bytes, d4_range) ||
         write_count == writes.size()) {
       error = "restricted GFN2 D4 workspace has an invalid address range";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     writes[write_count++] = d4_range;
   }
@@ -177,17 +177,17 @@ gpuxtb_status_t validate_numerical_ranges(
     for (std::size_t second = first + 1u; second < write_count; ++second) {
       if (ranges_overlap(writes[first], writes[second])) {
         error = "restricted GFN2 outputs and workspaces must be mutually disjoint";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     }
     for (std::size_t read = 0u; read < read_count; ++read) {
       if (ranges_overlap(writes[first], reads[read])) {
         error = "restricted GFN2 outputs/workspaces must not overlap numerical inputs or caches";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 bool diagnostics_requested(const RestrictedGfn2ComponentGradients& components) {
@@ -197,7 +197,7 @@ bool diagnostics_requested(const RestrictedGfn2ComponentGradients& components) {
          components.external_point_charge != nullptr;
 }
 
-gpuxtb_status_t validate_plan_compatibility(
+xtbloom_status_t validate_plan_compatibility(
     const BasisPlan& basis, const IntegralPlan& integrals, const CoordinationPlan& coordination,
     const RepulsionPlan& repulsion, const H0Plan& h0, const MullikenPlan& mulliken,
     const ES2Plan& es2, const AES2Plan& aes2, const D4Plan* d4, const D4GeometryCache* d4_cache,
@@ -230,24 +230,24 @@ gpuxtb_status_t validate_plan_compatibility(
       same_offsets(integrals.matrix_offsets, mulliken.matrix_offsets());
   if (!base_valid) {
     error = "restricted GFN2 force plans do not describe one exact ragged topology";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int32_t spin_channels : mulliken.spin_channels()) {
     if (spin_channels != 1 && spin_channels != 2) {
       error = "GFN2 force composition requires one or two spin channels";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   if ((d4 == nullptr) != (d4_cache == nullptr)) {
     error = "D4 force plan and geometry cache must be enabled together";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (d4 != nullptr && (!d4->sealed() || d4->batch_size() != basis.batch_size ||
                         d4->total_atoms() != basis.total_atoms ||
                         !same_offsets(d4->atom_offsets(), basis.atom_offsets) ||
                         d4_cache->plan_identity != d4->identity())) {
     error = "D4 force inputs do not match the restricted GFN2 topology";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (external != nullptr &&
       (external->batch_size != basis.batch_size || external->total_atoms != basis.total_atoms ||
@@ -255,12 +255,12 @@ gpuxtb_status_t validate_plan_compatibility(
        !same_offsets(external->atom_offsets, basis.atom_offsets) ||
        !same_offsets(external->batch_shell_offsets, basis.batch_shell_offsets))) {
     error = "external point-charge force plan does not match the GFN2 topology";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t add_stationary_integral_adjoints(
+xtbloom_status_t add_stationary_integral_adjoints(
     const MullikenPlan& mulliken, const double* density, const double* scalar_shell_potentials,
     const double* dipole_potentials, const double* quadrupole_potentials, double* overlap_adjoint,
     double* dipole_adjoint, double* quadrupole_adjoint, std::string& error) {
@@ -314,9 +314,9 @@ gpuxtb_status_t add_stationary_integral_adjoints(
       !finite_array(dipole_adjoint, static_cast<std::size_t>(total_matrix) * 3u) ||
       !finite_array(quadrupole_adjoint, static_cast<std::size_t>(total_matrix) * 6u)) {
     error = "stationary Mulliken integral adjoints overflowed";
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 void add_component(const double* component, double* total, std::size_t count) {
@@ -333,7 +333,7 @@ void publish_component(const double* source, double* destination, std::size_t co
 
 }  // namespace
 
-gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
+xtbloom_status_t evaluate_restricted_gfn2_energy_forces_cpu(
     const BasisPlan& basis, const IntegralPlan& integrals, const CoordinationPlan& coordination,
     const RepulsionPlan& repulsion, const H0Plan& h0, const MullikenPlan& mulliken,
     const ES2Plan& es2, const ES2GeometryCache& es2_cache, const AES2Plan& aes2,
@@ -342,10 +342,10 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
     double* energies, double* qm_forces, double* point_forces,
     const RestrictedGfn2ComponentGradients& components,
     const RestrictedGfn2ForceWorkspace& workspace, std::string& error) {
-  gpuxtb_status_t status =
+  xtbloom_status_t status =
       validate_plan_compatibility(basis, integrals, coordination, repulsion, h0, mulliken, es2,
                                   aes2, d4, d4_cache, external, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const std::int64_t batch = basis.batch_size;
@@ -362,12 +362,12 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
        !valid_scratch(workspace.component_energy_scratch, workspace.energy_elements, batch))) {
     error =
         "restricted GFN2 energy output, positions, SCC energies, and energy scratch are required";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!finite_array(input.positions, static_cast<std::size_t>(coordinates)) ||
       !finite_array(input.scc_energies, static_cast<std::size_t>(batch))) {
     error = "restricted GFN2 positions and SCC energies must be finite";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const bool external_enabled = external != nullptr;
   const bool has_unrestricted_system =
@@ -378,7 +378,7 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
        (has_unrestricted_system && input.spin_density == nullptr) ||
        (!has_unrestricted_system && input.spin_density != nullptr))) {
     error = "spin density and magnetization shell potentials are inconsistent with the topology";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const bool point_data_required = force_requested && external_enabled && points > 0;
   if ((!external_enabled && (input.point_positions != nullptr || input.point_charges != nullptr ||
@@ -391,21 +391,21 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
         input.point_hardnesses != nullptr)) ||
       (d4 == nullptr && (components.d4_two_body != nullptr || components.d4_atm != nullptr))) {
     error = "external point-charge plan, numerical inputs, and point-force output are inconsistent";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (point_forces != nullptr &&
       !valid_scratch(workspace.point_force_scratch, workspace.point_force_elements, points * 3)) {
     error = "point-force scratch is missing or too small";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (d4 != nullptr && workspace.d4_workspace.plan_identity != d4->identity()) {
     error = "D4 force workspace is not canonically bound to the enabled plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   status = validate_numerical_ranges(batch, atoms, shells, matrix, points, es2, es2_cache, aes2,
                                      aes2_cache, d4, d4_cache, input, energies, qm_forces,
                                      point_forces, components, workspace, force_requested, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
 
@@ -416,13 +416,13 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
         !valid_scratch(workspace.component_gradient, workspace.coordinate_elements, coordinates) ||
         !valid_scratch(workspace.force_scratch, workspace.coordinate_elements, coordinates)) {
       error = "restricted GFN2 force scratch is missing or too small";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     std::fill_n(repulsion_force, static_cast<std::size_t>(coordinates), 0.0);
   }
   status = add_repulsion_cpu(repulsion, input.positions, workspace.energy_scratch, repulsion_force,
                              error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (force_requested) {
@@ -434,7 +434,7 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
   if (d4 != nullptr) {
     status = evaluate_d4_atm_cpu(*d4, *d4_cache, workspace.component_energy_scratch,
                                  workspace.d4_workspace, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
     for (std::int64_t system = 0; system < batch; ++system) {
@@ -442,7 +442,7 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
           workspace.energy_scratch[system] + workspace.component_energy_scratch[system];
       if (!std::isfinite(updated)) {
         error = "restricted GFN2 D4 ATM energy accumulation overflowed";
-        return GPUXTB_STATUS_INTERNAL_ERROR;
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
       }
       workspace.energy_scratch[system] = updated;
     }
@@ -451,11 +451,11 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
   if (!force_requested) {
     std::copy_n(workspace.energy_scratch, static_cast<std::size_t>(batch), energies);
     error.clear();
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   }
   if (qm_forces == nullptr) {
     error = "QM force output is required whenever force diagnostics or point forces are requested";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (input.coordination_numbers == nullptr || input.overlap == nullptr ||
       input.density == nullptr || input.energy_weighted_density == nullptr ||
@@ -464,7 +464,7 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
       input.scalar_shell_potentials == nullptr || input.atomic_dipole_potentials == nullptr ||
       input.atomic_quadrupole_potentials == nullptr || input.geometry_generation == 0u) {
     error = "restricted stationary force inputs are incomplete";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!valid_scratch(workspace.overlap_adjoint, workspace.overlap_adjoint_elements, matrix) ||
       !valid_scratch(workspace.dipole_adjoint, workspace.dipole_adjoint_elements, matrix * 3) ||
@@ -475,7 +475,7 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
       workspace.integral_workspace == nullptr ||
       workspace.integral_workspace_size < integrals.workspace_size_bytes) {
     error = "restricted stationary adjoint or integral scratch is missing or too small";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!finite_array(input.coordination_numbers, static_cast<std::size_t>(atoms)) ||
       !finite_array(input.overlap, static_cast<std::size_t>(matrix)) ||
@@ -492,7 +492,7 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
       !finite_array(input.atomic_dipole_potentials, static_cast<std::size_t>(atoms) * 3u) ||
       !finite_array(input.atomic_quadrupole_potentials, static_cast<std::size_t>(atoms) * 6u)) {
     error = "restricted stationary force inputs contain NaN or infinity";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   std::fill_n(workspace.total_gradient, static_cast<std::size_t>(coordinates), 0.0);
@@ -506,7 +506,7 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
   status = add_h0_vjp_cpu(basis, integrals, h0, input.positions, input.coordination_numbers,
                           input.overlap, input.density, workspace.overlap_adjoint,
                           workspace.coordination_adjoint, workspace.component_gradient, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   for (std::int64_t element = 0; element < matrix; ++element) {
@@ -516,7 +516,7 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
       mulliken, input.density, input.scalar_shell_potentials, input.atomic_dipole_potentials,
       input.atomic_quadrupole_potentials, workspace.overlap_adjoint, workspace.dipole_adjoint,
       workspace.quadrupole_adjoint, error);
-  if (status == GPUXTB_STATUS_SUCCESS && has_unrestricted_system) {
+  if (status == XTBLOOM_STATUS_SUCCESS && has_unrestricted_system) {
     /* Spin polarization is geometry independent at fixed magnetization, but
      * magnetization itself is a Mulliken overlap population. Its stationary
      * response therefore contributes through P_alpha-P_beta and v_mag. */
@@ -524,23 +524,23 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
         mulliken, input.spin_density, input.spin_scalar_shell_potentials, nullptr, nullptr,
         workspace.overlap_adjoint, workspace.dipole_adjoint, workspace.quadrupole_adjoint, error);
   }
-  if (status == GPUXTB_STATUS_SUCCESS) {
+  if (status == XTBLOOM_STATUS_SUCCESS) {
     status = add_overlap_gradient_cpu(basis, integrals, input.positions, workspace.overlap_adjoint,
                                       workspace.component_gradient, workspace.integral_workspace,
                                       workspace.integral_workspace_size, error);
   }
-  if (status == GPUXTB_STATUS_SUCCESS) {
+  if (status == XTBLOOM_STATUS_SUCCESS) {
     status = add_multipole_gradient_cpu(basis, integrals, input.positions, workspace.dipole_adjoint,
                                         workspace.quadrupole_adjoint, workspace.component_gradient,
                                         workspace.integral_workspace,
                                         workspace.integral_workspace_size, error);
   }
-  if (status == GPUXTB_STATUS_SUCCESS) {
+  if (status == XTBLOOM_STATUS_SUCCESS) {
     status =
         add_coordination_gradient_cpu(coordination, input.positions, workspace.coordination_adjoint,
                                       workspace.component_gradient, error);
   }
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   publish_component(workspace.component_gradient, components.electronic,
@@ -552,7 +552,7 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
   status = add_es2_gradient_cpu(es2, es2_cache, input.positions, input.geometry_generation,
                                 input.shell_charges, workspace.component_gradient,
                                 workspace.es2_workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   publish_component(workspace.component_gradient, components.es2,
@@ -566,12 +566,12 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
                             input.geometry_generation, input.atomic_charges, input.atomic_dipoles,
                             input.atomic_quadrupoles, workspace.component_gradient,
                             workspace.coordination_adjoint, workspace.aes2_workspace, error);
-  if (status == GPUXTB_STATUS_SUCCESS) {
+  if (status == XTBLOOM_STATUS_SUCCESS) {
     status =
         add_coordination_gradient_cpu(coordination, input.positions, workspace.coordination_adjoint,
                                       workspace.component_gradient, error);
   }
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   publish_component(workspace.component_gradient, components.aes2,
@@ -584,7 +584,7 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
     status =
         add_d4_two_body_gradient_cpu(*d4, *d4_cache, input.atomic_charges,
                                      workspace.component_gradient, workspace.d4_workspace, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
     publish_component(workspace.component_gradient, components.d4_two_body,
@@ -595,7 +595,7 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
     std::fill_n(workspace.component_gradient, static_cast<std::size_t>(coordinates), 0.0);
     status = add_d4_atm_gradient_cpu(*d4, *d4_cache, workspace.component_gradient,
                                      workspace.d4_workspace, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
     publish_component(workspace.component_gradient, components.d4_atm,
@@ -613,7 +613,7 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
         *external, input.positions, input.point_positions, input.point_charges,
         input.point_hardnesses, input.shell_charges, workspace.force_scratch,
         point_forces == nullptr ? nullptr : workspace.point_force_scratch, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
     for (std::int64_t coordinate = 0; coordinate < coordinates; ++coordinate) {
@@ -628,7 +628,7 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
   if (!finite_array(workspace.total_gradient, static_cast<std::size_t>(coordinates)) ||
       !finite_array(workspace.energy_scratch, static_cast<std::size_t>(batch))) {
     error = "restricted GFN2 total energy or gradient overflowed";
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   for (std::int64_t coordinate = 0; coordinate < coordinates; ++coordinate) {
     workspace.force_scratch[coordinate] = -workspace.total_gradient[coordinate];
@@ -639,7 +639,7 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
     std::copy_n(workspace.point_force_scratch, static_cast<std::size_t>(points) * 3u, point_forces);
   }
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2

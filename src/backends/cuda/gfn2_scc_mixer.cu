@@ -1,5 +1,5 @@
 #include <array>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstddef>
@@ -8,7 +8,7 @@
 
 #include "backends/cuda/gfn2_scc_mixer.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
@@ -216,7 +216,7 @@ __global__ void prepare_active_mixer_statuses_kernel(Gfn2SccIterationDeviceActiv
   }
   const std::uint8_t active = activity.active_mask[system];
   if (active == 1u) {
-    state.system_statuses[system] = GPUXTB_STATUS_SUCCESS;
+    state.system_statuses[system] = XTBLOOM_STATUS_SUCCESS;
   }
 }
 
@@ -344,7 +344,7 @@ __global__ void initialize_state_kernel(Gfn2SccDeviceBatch batch, Gfn2Wavefuncti
     state.residual_maximum[system] = 0.0;
     state.iterations[system] = 0u;
     state.restart_counts[system] = 0u;
-    state.system_statuses[system] = GPUXTB_STATUS_SUCCESS;
+    state.system_statuses[system] = XTBLOOM_STATUS_SUCCESS;
     state.initialized[system] = 1u;
     state.residual_converged[system] = 0u;
   }
@@ -406,7 +406,7 @@ __global__ void restart_system_kernel(Gfn2SccDeviceBatch batch, Gfn2Wavefunction
     state.residual_maximum[system] = 0.0;
     state.iterations[system] = 0u;
     ++state.restart_counts[system];
-    state.system_statuses[system] = GPUXTB_STATUS_SUCCESS;
+    state.system_statuses[system] = XTBLOOM_STATUS_SUCCESS;
     state.residual_converged[system] = 0u;
   }
 }
@@ -464,7 +464,7 @@ __device__ bool cholesky_solve(double* matrix, double* right_hand_side, std::int
 }
 
 __device__ void record_numeric_failure(Gfn2SccMixerDeviceState state, std::int64_t system) {
-  state.system_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
+  state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
 }
 
 __global__ void mix_broyden_kernel(
@@ -829,7 +829,7 @@ __global__ void mix_broyden_kernel(
     state.residual_rms[system] = system_residual_rms;
     state.residual_maximum[system] = system_residual_maximum;
     state.iterations[system] = old_iteration + 1u;
-    state.system_statuses[system] = GPUXTB_STATUS_SUCCESS;
+    state.system_statuses[system] = XTBLOOM_STATUS_SUCCESS;
     state.residual_converged[system] = system_residual_rms < policy.rms_tolerance &&
                                                system_residual_maximum < policy.maximum_tolerance
                                            ? 1u
@@ -1013,7 +1013,7 @@ bool valid_state(const Gfn2SccMixerDeviceState& state, const Gfn2SccDeviceBatch&
          is_aligned(state.residual_maximum, alignof(double)) &&
          is_aligned(state.iterations, alignof(std::uint64_t)) &&
          is_aligned(state.restart_counts, alignof(std::uint64_t)) &&
-         is_aligned(state.system_statuses, alignof(gpuxtb_status_t)) &&
+         is_aligned(state.system_statuses, alignof(xtbloom_status_t)) &&
          is_aligned(state.initialized, alignof(std::uint8_t)) &&
          is_aligned(state.residual_converged, alignof(std::uint8_t));
 }
@@ -1077,7 +1077,7 @@ bool validate_ranges(const Gfn2SccDeviceBatch& batch, const Gfn2WavefunctionLayo
       !make_address_range(state.iterations, batch.batch_size, sizeof(std::uint64_t), &writes[8]) ||
       !make_address_range(state.restart_counts, batch.batch_size, sizeof(std::uint64_t),
                           &writes[9]) ||
-      !make_address_range(state.system_statuses, batch.batch_size, sizeof(gpuxtb_status_t),
+      !make_address_range(state.system_statuses, batch.batch_size, sizeof(xtbloom_status_t),
                           &writes[10]) ||
       !make_address_range(state.initialized, batch.batch_size, sizeof(std::uint8_t), &writes[11]) ||
       !make_address_range(state.residual_converged, batch.batch_size, sizeof(std::uint8_t),
@@ -1320,4 +1320,4 @@ cudaError_t mix_gfn2_scc_broyden_cuda(
   return cudaPeekAtLastError();
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

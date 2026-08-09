@@ -8,9 +8,9 @@
 #include <vector>
 
 #include "backends/cuda/gfn2_inference_publication.cuh"
-#include "gpuxtb/gpuxtb.h"
 #include "runtime/gfn2_cuda_execution.hpp"
 #include "tests/support/gfn2_scc_test_case.hpp"
+#include "xtbloom/xtbloom.h"
 
 #define CHECK(condition)                                                                 \
   do {                                                                                   \
@@ -25,19 +25,19 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2CudaExecutionCache;
-using gpuxtb::detail::Gfn2CudaExecutionIdentity;
-using gpuxtb::detail::Gfn2CudaNumericalInputView;
-using gpuxtb::detail::Gfn2CudaSccStartMode;
-using gpuxtb::detail::cuda::Gfn2InferencePublicationPlanError;
-using gpuxtb::detail::cuda::Gfn2InferencePublicationSystemError;
-using gpuxtb::test::gfn2::HostSccCase;
-using gpuxtb::test::gfn2::HostSccCaseOptions;
-using gpuxtb::test::gfn2::SmallSystemKind;
+using xtbloom::detail::Gfn2CudaExecutionCache;
+using xtbloom::detail::Gfn2CudaExecutionIdentity;
+using xtbloom::detail::Gfn2CudaNumericalInputView;
+using xtbloom::detail::Gfn2CudaSccStartMode;
+using xtbloom::detail::cuda::Gfn2InferencePublicationPlanError;
+using xtbloom::detail::cuda::Gfn2InferencePublicationSystemError;
+using xtbloom::test::gfn2::HostSccCase;
+using xtbloom::test::gfn2::HostSccCaseOptions;
+using xtbloom::test::gfn2::SmallSystemKind;
 
 template <typename T>
-gpuxtb_const_buffer_t host_buffer(const std::vector<T>& values) noexcept {
-  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), GPUXTB_MEMORY_HOST,
+xtbloom_const_buffer_t host_buffer(const std::vector<T>& values) noexcept {
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
           0u};
 }
 
@@ -70,8 +70,8 @@ class DeviceBuffer {
                                              cudaMemcpyHostToDevice, stream);
   }
 
-  [[nodiscard]] gpuxtb_const_buffer_t view() const noexcept {
-    return {data_, elements_ * sizeof(T), GPUXTB_MEMORY_CUDA_DEVICE, 0u};
+  [[nodiscard]] xtbloom_const_buffer_t view() const noexcept {
+    return {data_, elements_ * sizeof(T), XTBLOOM_MEMORY_CUDA_DEVICE, 0u};
   }
 
  private:
@@ -112,12 +112,12 @@ struct PublicBatch {
   std::vector<double> periodic_shifts;
   std::vector<std::int64_t> response_offsets;
   std::vector<double> response_matrix;
-  gpuxtb_batch_t descriptor{};
+  xtbloom_batch_t descriptor{};
 
   void bind() noexcept {
     descriptor = {};
-    descriptor.struct_size = GPUXTB_BATCH_V1_SIZE;
-    descriptor.api_version = GPUXTB_API_VERSION;
+    descriptor.struct_size = XTBLOOM_BATCH_V1_SIZE;
+    descriptor.api_version = XTBLOOM_API_VERSION;
     descriptor.batch_size = static_cast<std::int64_t>(molecular_charges.size());
     descriptor.total_atoms = static_cast<std::int64_t>(atomic_numbers.size());
     descriptor.total_point_charges = static_cast<std::int64_t>(point_values.size());
@@ -201,7 +201,7 @@ struct Snapshot {
   std::vector<double> point_forces;
   std::vector<std::int32_t> iterations;
   std::vector<std::uint8_t> converged;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::uint64_t publication_epoch = 0u;
   std::vector<std::uint32_t> publication_errors;
   std::uint32_t publication_plan_error = 0u;
@@ -254,7 +254,7 @@ int download(const Gfn2CudaExecutionIdentity& identity, cudaStream_t stream, Sna
                              batch * sizeof(std::uint8_t), cudaMemcpyDeviceToHost, stream));
   CUDA_CHECK(cudaMemcpyAsync(snapshot.statuses.data(),
                              reinterpret_cast<const void*>(identity.inference_system_statuses),
-                             batch * sizeof(gpuxtb_status_t), cudaMemcpyDeviceToHost, stream));
+                             batch * sizeof(xtbloom_status_t), cudaMemcpyDeviceToHost, stream));
   CUDA_CHECK(
       cudaMemcpyAsync(&snapshot.publication_epoch,
                       reinterpret_cast<const void*>(identity.inference_publication_epoch_snapshot),
@@ -329,7 +329,7 @@ int check_successful_peer(const PublicBatch& batch, const Snapshot& snapshot, st
                           std::uint64_t generation) {
   CHECK(snapshot.committed[system] == generation);
   CHECK(snapshot.eligible[system] == 1u);
-  CHECK(snapshot.statuses[system] == GPUXTB_STATUS_SUCCESS);
+  CHECK(snapshot.statuses[system] == XTBLOOM_STATUS_SUCCESS);
   CHECK(snapshot.converged[system] == 1u);
   CHECK(snapshot.iterations[system] > 0);
   CHECK(std::isfinite(snapshot.energies[system]));
@@ -354,7 +354,7 @@ int check_ineligible_peer(const PublicBatch& batch, const Snapshot& snapshot, st
                           std::uint64_t retained_generation) {
   CHECK(snapshot.committed[system] == retained_generation);
   CHECK(snapshot.eligible[system] == 0u);
-  CHECK(snapshot.statuses[system] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(snapshot.statuses[system] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(snapshot.converged[system] == 0u);
   CHECK(snapshot.iterations[system] == 0);
   CHECK(std::isnan(snapshot.energies[system]));
@@ -382,13 +382,13 @@ int check_ineligible_peer(const PublicBatch& batch, const Snapshot& snapshot, st
   return 0;
 }
 
-gpuxtb_compute_options_t compute_options() noexcept {
-  gpuxtb_compute_options_t options{};
-  options.struct_size = GPUXTB_COMPUTE_OPTIONS_V1_SIZE;
-  options.api_version = GPUXTB_API_VERSION;
-  options.model = GPUXTB_MODEL_GFN2_XTB;
-  options.flags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES |
-                  GPUXTB_COMPUTE_POINT_CHARGE_FORCES;
+xtbloom_compute_options_t compute_options() noexcept {
+  xtbloom_compute_options_t options{};
+  options.struct_size = XTBLOOM_COMPUTE_OPTIONS_V1_SIZE;
+  options.api_version = XTBLOOM_API_VERSION;
+  options.model = XTBLOOM_MODEL_GFN2_XTB;
+  options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES |
+                  XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
   options.max_scc_iterations = 32;
   options.charge_tolerance = 1.0e-10;
   options.energy_tolerance = 1.0e-8;
@@ -408,7 +408,7 @@ int run_complete_graph_case(cudaStream_t stream, std::int32_t device_id, const c
 
   HostSccCase host;
   std::string error;
-  CHECK(HostSccCase::create(host_options, host, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(HostSccCase::create(host_options, host, error) == XTBLOOM_STATUS_SUCCESS);
   PublicBatch batch = PublicBatch::from_host(host);
   std::vector<std::uint8_t> requested(kBatch, 1u);
   DeviceInputs inputs;
@@ -416,15 +416,15 @@ int run_complete_graph_case(cudaStream_t stream, std::int32_t device_id, const c
   CUDA_CHECK(cudaStreamSynchronize(stream));
 
   Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
-  gpuxtb_compute_options_t options = compute_options();
+  xtbloom_compute_options_t options = compute_options();
   bool reused = true;
-  const gpuxtb_status_t prepare_status =
+  const xtbloom_status_t prepare_status =
       cache.prepare_host(batch.descriptor, options, reused, error);
-  if (prepare_status != GPUXTB_STATUS_SUCCESS) {
+  if (prepare_status != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "%s stream runtime setup failed: status=%d error=%s\n", stream_name,
                  prepare_status, error.c_str());
   }
-  CHECK(prepare_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(prepare_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(!reused);
   const Gfn2CudaExecutionIdentity stable = cache.identity();
   CHECK(stable.inference_ready == 1u);
@@ -443,13 +443,13 @@ int run_complete_graph_case(cudaStream_t stream, std::int32_t device_id, const c
    * conditional WHILE Graph verified by the runtime parity matrix. */
   GraphOwner graph;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-  const gpuxtb_status_t refresh_status = cache.refresh_numerical_async(inputs.view, error);
-  const gpuxtb_status_t inference_status =
-      refresh_status == GPUXTB_STATUS_SUCCESS
+  const xtbloom_status_t refresh_status = cache.refresh_numerical_async(inputs.view, error);
+  const xtbloom_status_t inference_status =
+      refresh_status == XTBLOOM_STATUS_SUCCESS
           ? cache.execute_inference_async(Gfn2CudaSccStartMode::kFresh, error)
           : refresh_status;
   const cudaError_t end_capture = cudaStreamEndCapture(stream, graph.graph_address());
-  if (refresh_status != GPUXTB_STATUS_SUCCESS || inference_status != GPUXTB_STATUS_SUCCESS ||
+  if (refresh_status != XTBLOOM_STATUS_SUCCESS || inference_status != XTBLOOM_STATUS_SUCCESS ||
       end_capture != cudaSuccess) {
     std::fprintf(stderr,
                  "%s stream full-pipeline capture failed: refresh=%d inference=%d end=%s "
@@ -457,8 +457,8 @@ int run_complete_graph_case(cudaStream_t stream, std::int32_t device_id, const c
                  stream_name, refresh_status, inference_status, cudaGetErrorString(end_capture),
                  error.c_str());
   }
-  CHECK(refresh_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(inference_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(refresh_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(inference_status == XTBLOOM_STATUS_SUCCESS);
   CUDA_CHECK(end_capture);
   CHECK(graph.graph() != nullptr);
   CUDA_CHECK(cudaGraphInstantiate(graph.executable_address(), graph.graph(), nullptr, nullptr, 0));
@@ -544,7 +544,7 @@ int run_maximum_iteration_termination(cudaStream_t stream, std::int32_t device_i
 
   HostSccCase host;
   std::string error;
-  CHECK(HostSccCase::create(host_options, host, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(HostSccCase::create(host_options, host, error) == XTBLOOM_STATUS_SUCCESS);
   PublicBatch batch = PublicBatch::from_host(host);
   std::vector<std::uint8_t> requested(1u, 1u);
   DeviceInputs inputs;
@@ -552,10 +552,10 @@ int run_maximum_iteration_termination(cudaStream_t stream, std::int32_t device_i
   CUDA_CHECK(cudaStreamSynchronize(stream));
 
   Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
-  gpuxtb_compute_options_t options = compute_options();
+  xtbloom_compute_options_t options = compute_options();
   options.max_scc_iterations = 1;
   bool reused = true;
-  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(!reused);
   const Gfn2CudaExecutionIdentity stable = cache.identity();
 
@@ -563,15 +563,15 @@ int run_maximum_iteration_termination(cudaStream_t stream, std::int32_t device_i
    * a host submission failure. Terminal publication must preserve its
    * provenance while withholding every requested floating-point result and
    * refusing to mint a warm checkpoint for the unconverged state. */
-  CHECK(cache.refresh_numerical_async(inputs.view, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(cache.refresh_numerical_async(inputs.view, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kFresh, error) ==
-        GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
   Snapshot snapshot;
   CHECK(download(cache.identity(), stream, snapshot) == 0);
   CHECK(snapshot.epoch == 2u);
   CHECK(snapshot.committed[0] == 2u);
   CHECK(snapshot.eligible[0] == 1u);
-  CHECK(snapshot.statuses[0] == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+  CHECK(snapshot.statuses[0] == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
   CHECK(snapshot.converged[0] == 0u);
   CHECK(snapshot.iterations[0] == 1);
   CHECK(snapshot.publication_epoch == 2u);
@@ -602,7 +602,7 @@ int run_legacy_default_submission(std::int32_t device_id) {
   host_options.enable_periodic_embedding = true;
   HostSccCase host;
   std::string error;
-  CHECK(HostSccCase::create(host_options, host, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(HostSccCase::create(host_options, host, error) == XTBLOOM_STATUS_SUCCESS);
   PublicBatch batch = PublicBatch::from_host(host);
   std::vector<std::uint8_t> requested(1u, 1u);
   DeviceInputs inputs;
@@ -610,14 +610,14 @@ int run_legacy_default_submission(std::int32_t device_id) {
   CUDA_CHECK(cudaStreamSynchronize(nullptr));
 
   Gfn2CudaExecutionCache cache(device_id, nullptr);
-  gpuxtb_compute_options_t options = compute_options();
+  xtbloom_compute_options_t options = compute_options();
   bool reused = true;
-  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(!reused);
   const Gfn2CudaExecutionIdentity stable = cache.identity();
-  CHECK(cache.refresh_numerical_async(inputs.view, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(cache.refresh_numerical_async(inputs.view, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kFresh, error) ==
-        GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
   Snapshot snapshot;
   CHECK(download(cache.identity(), nullptr, snapshot) == 0);
   CHECK(snapshot.epoch == 2u);

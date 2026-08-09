@@ -1,17 +1,17 @@
-#ifndef GPUXTB_MODEL_GFN2_WAVEFUNCTION_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_WAVEFUNCTION_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_WAVEFUNCTION_HPP
+#define XTBLOOM_MODEL_GFN2_WAVEFUNCTION_HPP
 
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/basis.hpp"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 inline constexpr std::size_t kWavefunctionWorkspaceAlignment = 64u;
 inline constexpr std::int32_t kWavefunctionQuadrupoleComponents = 6;
@@ -37,7 +37,7 @@ struct WavefunctionFieldLayout {
  * avoids accepting a stale state based only on a collision-prone hash.
  */
 struct WavefunctionWarmStartIdentity {
-  gpuxtb_model_t model = GPUXTB_MODEL_GFN2_XTB;
+  xtbloom_model_t model = XTBLOOM_MODEL_GFN2_XTB;
   std::uint64_t geometry_cache_generation = 0;
   std::int64_t batch_size = 0;
   std::int64_t total_atoms = 0;
@@ -179,40 +179,41 @@ struct ConstWavefunctionSystemView {
  * Build reference populations, validate charge/spin realizability, and pack
  * all numerical fields. Molecular charges may be fractional. Parity follows
  * tblite's nint(total_electrons) convention; unlike tblite's CLI fallback,
- * gpuxtb rejects a supplied incompatible unpaired-electron count. The number
+ * xtbloom rejects a supplied incompatible unpaired-electron count. The number
  * of spin channels is independent of the number of unpaired electrons, as in
  * tblite: one channel shares orbitals between alpha and beta occupations,
  * while two channels use separate alpha and beta orbitals.
  */
-gpuxtb_status_t make_wavefunction_layout(const BasisPlan& basis, const std::int32_t* atomic_numbers,
-                                         const double* molecular_charges,
-                                         const std::int32_t* unpaired_electrons,
-                                         const std::int32_t* spin_channels,
-                                         WavefunctionLayout& layout, std::string& error);
+xtbloom_status_t make_wavefunction_layout(const BasisPlan& basis,
+                                          const std::int32_t* atomic_numbers,
+                                          const double* molecular_charges,
+                                          const std::int32_t* unpaired_electrons,
+                                          const std::int32_t* spin_channels,
+                                          WavefunctionLayout& layout, std::string& error);
 
 /* Bind an aligned caller allocation without allocating or initializing it. */
-gpuxtb_status_t bind_wavefunction_view(const WavefunctionLayout& layout, void* workspace,
-                                       std::size_t workspace_size, WavefunctionView& view,
-                                       std::string& error);
-gpuxtb_status_t bind_wavefunction_view(const WavefunctionLayout& layout, const void* workspace,
-                                       std::size_t workspace_size, ConstWavefunctionView& view,
-                                       std::string& error);
+xtbloom_status_t bind_wavefunction_view(const WavefunctionLayout& layout, void* workspace,
+                                        std::size_t workspace_size, WavefunctionView& view,
+                                        std::string& error);
+xtbloom_status_t bind_wavefunction_view(const WavefunctionLayout& layout, const void* workspace,
+                                        std::size_t workspace_size, ConstWavefunctionView& view,
+                                        std::string& error);
 
 /*
  * Produce one system slice without allocating. batch_view must be an
  * unmodified view returned by bind_wavefunction_view for the same layout.
  * This provenance is validated before any pointer arithmetic.
  */
-gpuxtb_status_t make_wavefunction_system_view(const WavefunctionLayout& layout,
-                                              const WavefunctionView& batch_view,
-                                              std::int64_t system,
-                                              WavefunctionSystemView& system_view,
-                                              std::string& error);
-gpuxtb_status_t make_wavefunction_system_view(const WavefunctionLayout& layout,
-                                              const ConstWavefunctionView& batch_view,
-                                              std::int64_t system,
-                                              ConstWavefunctionSystemView& system_view,
-                                              std::string& error);
+xtbloom_status_t make_wavefunction_system_view(const WavefunctionLayout& layout,
+                                               const WavefunctionView& batch_view,
+                                               std::int64_t system,
+                                               WavefunctionSystemView& system_view,
+                                               std::string& error);
+xtbloom_status_t make_wavefunction_system_view(const WavefunctionLayout& layout,
+                                               const ConstWavefunctionView& batch_view,
+                                               std::int64_t system,
+                                               ConstWavefunctionSystemView& system_view,
+                                               std::string& error);
 
 /*
  * Initialize tblite-compatible superposition-of-atomic-densities multipole
@@ -222,20 +223,20 @@ gpuxtb_status_t make_wavefunction_system_view(const WavefunctionLayout& layout,
  * view must be an unmodified result of bind_wavefunction_view for layout; the
  * binding is validated before any caller-owned numerical storage is modified.
  */
-gpuxtb_status_t initialize_sad_multipole_state(const WavefunctionLayout& layout,
-                                               const WavefunctionView& view, std::string& error);
+xtbloom_status_t initialize_sad_multipole_state(const WavefunctionLayout& layout,
+                                                const WavefunctionView& view, std::string& error);
 
 /* Create and compare exact warm-start compatibility metadata. */
-gpuxtb_status_t make_wavefunction_warm_start_identity(const WavefunctionLayout& layout,
-                                                      std::uint64_t geometry_cache_generation,
-                                                      WavefunctionWarmStartIdentity& identity,
-                                                      std::string& error);
+xtbloom_status_t make_wavefunction_warm_start_identity(const WavefunctionLayout& layout,
+                                                       std::uint64_t geometry_cache_generation,
+                                                       WavefunctionWarmStartIdentity& identity,
+                                                       std::string& error);
 bool wavefunction_warm_start_matches(const WavefunctionWarmStartIdentity& expected,
                                      const WavefunctionWarmStartIdentity& candidate) noexcept;
-gpuxtb_status_t validate_wavefunction_warm_start(const WavefunctionWarmStartIdentity& expected,
-                                                 const WavefunctionWarmStartIdentity& candidate,
-                                                 std::string& error);
+xtbloom_status_t validate_wavefunction_warm_start(const WavefunctionWarmStartIdentity& expected,
+                                                  const WavefunctionWarmStartIdentity& candidate,
+                                                  std::string& error);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_WAVEFUNCTION_HPP
+#endif  // XTBLOOM_MODEL_GFN2_WAVEFUNCTION_HPP

@@ -1,4 +1,4 @@
-! Command-line driver for the gpuxtb oracle trace recorder.
+! Command-line driver for the xtbloom oracle trace recorder.
 !
 ! Reads one case.spec file with this fixed layout (one token per line):
 !   nat
@@ -17,7 +17,7 @@
 ! trace to stdout in the format parsed by generate_scc_corpus.py.
 program scc_trace_main
    use mctc_env, only : wp
-   use gpuxtb_tblite_scc_trace_recorder, only : play
+   use xtbloom_tblite_scc_trace_recorder, only : play
    implicit none
 
    integer :: nat, i, ip, npc, unpaired_electrons, mixer_memory, maximum_iterations

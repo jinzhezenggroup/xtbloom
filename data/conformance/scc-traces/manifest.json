@@ -2,31 +2,31 @@
   "cases": {
     "h3_plus": {
       "path": "h3_plus.json",
-      "sha256": "704f9411f4a74abadb252a665d8d905a4ce005607137e104d08f0a89a36e2f0f",
+      "sha256": "31a3b1c3c6aa90a9fae1870d08fcfc2e88ecac1e8eb6c4e0f108bfed984b7af2",
       "spec_path": "specs/h3_plus.spec",
       "spec_sha256": "f8163b56c9bd398b859e91019d4973feff91df96c04945a94947893f2561d952"
     },
     "ketene": {
       "path": "ketene.json",
-      "sha256": "07ee6f4dd74888b1d6230a8dcbe9afea9ad7b859d4f9a1e878252e02de89283a",
+      "sha256": "bc591e1b6d865e6d8944fbcd278d3407e2883aba803edf268e5c32f4cb5ad639",
       "spec_path": "specs/ketene.spec",
       "spec_sha256": "bde7774f7bbe3ae7d428f8c59d23d047cae710388d56980cb6e3f63cc38ff73a"
     },
     "nenacl": {
       "path": "nenacl.json",
-      "sha256": "b1fcee09047455abf1c2c05412c7dd6c4cf079f3938078b062b77523f2b7b984",
+      "sha256": "e9de43561798ff4ba054da9ae1e4959b8adea59b2e2c52d7388c14ef920d311a",
       "spec_path": "specs/nenacl.spec",
       "spec_sha256": "26d00b17eda038a0f2969c5683154b4749ee44007dd26b0c8e53f46d4a62bcbb"
     },
     "water_dimer_6pc_hardness": {
       "path": "water_dimer_6pc_hardness.json",
-      "sha256": "c6daffb02b8fdbd9fdcfc744a8f6d9b205b0b056afe4d091eaed9451f9141bf4",
+      "sha256": "4f321b3a12992e8eb8498c4c9b0524815f6691b1e1bdafb4cf95cc68d37c4de5",
       "spec_path": "specs/water_dimer_6pc_hardness.spec",
       "spec_sha256": "c24bb482f9113e097af0b204087299b5cd5980ef13746ce788d4935949294873"
     },
     "water_one_pc_gamma999": {
       "path": "water_one_pc_gamma999.json",
-      "sha256": "4cd204a7a1b87a5db6c17576cac87ccfdd4d4269d166576668407a6b0fbf968d",
+      "sha256": "dafec557110075ec45acb752fccf916a24d8c5537193866980888da8344e8c1a",
       "spec_path": "specs/water_one_pc_gamma999.spec",
       "spec_sha256": "b6ad134c318e62e73a36747649fafc5ca30ebf6aa32590a904d5470297723b9d"
     }
@@ -51,16 +51,16 @@
     "OMP_NUM_THREADS": "1",
     "OPENBLAS_NUM_THREADS": "1"
   },
-  "format": "gpuxtb-scc-trace-v1",
-  "generated_at": "2026-08-08T10:52:38.486228+00:00",
+  "format": "xtbloom-scc-trace-v1",
+  "generated_at": "2026-08-09T17:48:43.853562+00:00",
   "host": "node3",
-  "oracle_patch_sha256": "d6a51afc4b3c56d6589a2b5b115ea8b4891600c1161c525939ca3cc16e2b4954",
+  "oracle_patch_sha256": "887294ffb24d24fc0fb27d6f05697e7ef498bc40f0268f34c7056ebe8dfb7928",
   "oracle_sources": {
-    "scc_trace_main.f90": "71bef1bbcaee4e8e944bd6620c6af99b5aa322f3596f7362edd8bd8736d9bfff",
-    "scc_trace_recorder.f90": "b377affdd8821d67050f80a0868aa6fb2b262d1610b74647238b159f75be9e84"
+    "scc_trace_main.f90": "1c344d2f4a2875c3b51b7048fdb949ee19839954400bec89845f58df05eea782",
+    "scc_trace_recorder.f90": "84bc1bc2a64a93ee1ddf7cc072fc7e3b70e54df6869f4bb43c60ad013c7fd65e"
   },
   "revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb",
-  "schema": "gpuxtb-scc-trace-corpus-manifest-v1",
+  "schema": "xtbloom-scc-trace-corpus-manifest-v1",
   "toolchain": {
     "blas_lapack": {
       "libraries": [

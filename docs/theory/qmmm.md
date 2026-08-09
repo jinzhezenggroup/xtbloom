@@ -4,7 +4,7 @@ For input/output responsibilities and Python/native usage, start with the
 [QM/MM user guide](../user-guide/qmmm.md). This page records the equations,
 reference sources, and pinned numerical evidence.
 
-gpuxtb follows the external-charge model implemented by xTB 6.7.1. The
+xTBloom follows the external-charge model implemented by xTB 6.7.1. The
 reference interaction is a softened Coulomb potential acting directly on GFN2
 shell monopoles. It does not add a point-charge electric field or field
 gradient directly to the GFN2 atomic dipole or quadrupole potentials.
@@ -35,7 +35,7 @@ The converged explicit embedding energy is
 E_{\mathrm{PC}} = \sum_s q_s V_s^{\mathrm{PC}}.
 ```
 
-where $q_s$ is the net shell charge. gpuxtb does not compute point-charge to
+where $q_s$ is the net shell charge. xTBloom does not compute point-charge to
 point-charge interactions. For
 $\mathbf d_{Ap} = \mathbf R_A - \mathbf R_p$ and
 $D_{sp} = \lVert\mathbf d_{Ap}\rVert^2 + a_{sp}^2$, the coordinate gradients are
@@ -74,8 +74,8 @@ that atom. Consequently, the complete external shell shift is
 
 The caller constructs $b$ and $A$, handles periodic and classical MM-MM
 electrostatics, and adds coordinate derivatives of those arrays. When either
-array participates in a calculation, gpuxtb sets
-`GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES` because its forces
+array participates in a calculation, xTBloom sets
+`XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES` because its forces
 include only the explicit coordinate dependence known to the library.
 
 ## Pinned references and initial golden

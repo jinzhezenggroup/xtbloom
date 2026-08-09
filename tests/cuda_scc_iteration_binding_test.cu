@@ -8,8 +8,8 @@
 
 namespace {
 
-using namespace gpuxtb::detail;
-using namespace gpuxtb::detail::cuda;
+using namespace xtbloom::detail;
+using namespace xtbloom::detail::cuda;
 
 #define CHECK(condition) \
   do {                   \
@@ -151,7 +151,7 @@ struct Fixture {
     result.residual_maximum = ptr<double>(kBatch);
     result.iterations = ptr<std::uint64_t>(kBatch);
     result.restart_counts = ptr<std::uint64_t>(kBatch);
-    result.system_statuses = ptr<gpuxtb_status_t>(kBatch);
+    result.system_statuses = ptr<xtbloom_status_t>(kBatch);
     result.initialized = ptr<std::uint8_t>(kBatch);
     result.residual_converged = ptr<std::uint8_t>(kBatch);
     result.total_vector_elements = kMixerVector;
@@ -617,7 +617,7 @@ struct Fixture {
     state.scc.free_energy_changes = ptr<double>(kBatch);
     state.scc.residual_rms = ptr<double>(kBatch);
     state.scc.iterations = ptr<std::uint64_t>(kBatch);
-    state.scc.system_statuses = ptr<gpuxtb_status_t>(kBatch);
+    state.scc.system_statuses = ptr<xtbloom_status_t>(kBatch);
     state.scc.converged = ptr<std::uint8_t>(kBatch);
     state.scc.batch_elements = kBatch;
     state.scc.plan_token = kToken;
@@ -635,7 +635,7 @@ struct Fixture {
 
     workspace.plan_token = kToken;
     workspace.ledger = {ptr<std::uint8_t>(kBatch),
-                        ptr<gpuxtb_status_t>(kBatch),
+                        ptr<xtbloom_status_t>(kBatch),
                         ptr<std::uint64_t>(kBatch),
                         ptr<std::uint64_t>(1),
                         ptr<std::uint32_t>(1),
@@ -916,7 +916,7 @@ struct Fixture {
     workspace.publication_workspace.free_energy_changes = ptr<double>(kBatch);
     workspace.publication_workspace.next_iterations = ptr<std::uint64_t>(kBatch);
     workspace.publication_workspace.next_converged = ptr<std::uint8_t>(kBatch);
-    workspace.publication_workspace.next_statuses = ptr<gpuxtb_status_t>(kBatch);
+    workspace.publication_workspace.next_statuses = ptr<xtbloom_status_t>(kBatch);
     workspace.publication_workspace.batch_elements = kBatch;
     workspace.publication_workspace.plan_token = kToken;
   }
@@ -1084,17 +1084,17 @@ struct Fixture {
           break;
         case Gfn2SccStageId::kEigensolver:
           report.peer_error_mask = 0x3e06u;
-          report.peer_failure_status = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+          report.peer_failure_status = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
           report.stage_sequence_active = workspace.eigensolver_workspace.sequence_active;
           break;
         case Gfn2SccStageId::kOccupations:
           report.peer_error_mask = 0x3feu;
-          report.peer_failure_status = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+          report.peer_failure_status = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
           report.stage_sequence_active = workspace.occupations_workspace.sequence_active;
           break;
         case Gfn2SccStageId::kDensity:
           report.peer_error_mask = 0x7feu;
-          report.peer_failure_status = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+          report.peer_failure_status = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
           report.stage_sequence_active = workspace.density_workspace.sequence_active;
           break;
         case Gfn2SccStageId::kMulliken:
@@ -1146,7 +1146,7 @@ struct Fixture {
       }
     }
     if (mixer_report == nullptr || publication == nullptr) return;
-    mixer_report->system_code_format = Gfn2SccStageCodeFormat::kGpuxtbStatus;
+    mixer_report->system_code_format = Gfn2SccStageCodeFormat::kXTBloomStatus;
     mixer_report->system_codes = workspace.staged_mixer.system_statuses;
     mixer_report->device_error = nullptr;
     mixer_report->device_error_elements = 0;

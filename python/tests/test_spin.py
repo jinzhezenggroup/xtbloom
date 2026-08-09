@@ -5,8 +5,8 @@ from __future__ import annotations
 import _cases
 import numpy as np
 import pytest
-from gpuxtb import Calculator, Context, Structure, library, numbers_to_symbols
-from gpuxtb.exceptions import GPUxtbRuntimeError, GPUxtbValueError
+from xtbloom import Calculator, Context, Structure, library, numbers_to_symbols
+from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
 
 
 def test_multiplicity_maps_to_unpaired_electrons() -> None:
@@ -33,17 +33,17 @@ def test_default_spin_channels_follow_open_shell() -> None:
 
 def test_structure_rejects_invalid_inputs() -> None:
     """Reject invalid spin state and nonintegral atomic numbers."""
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         Structure(np.array([1]), np.zeros((1, 3)), spin_channels=3)
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         Structure(np.array([1]), np.zeros((1, 3)), multiplicity=0)
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         Structure(np.array([1]), np.zeros((1, 3)), uhf=1, multiplicity=1)
-    with pytest.raises(GPUxtbValueError, match="exact integers"):
+    with pytest.raises(XTBloomValueError, match="exact integers"):
         Structure(np.array([1.9]), np.zeros((1, 3)))
-    with pytest.raises(GPUxtbValueError, match="exact integers"):
+    with pytest.raises(XTBloomValueError, match="exact integers"):
         Structure(np.array([True]), np.zeros((1, 3)))
-    with pytest.raises(GPUxtbValueError, match="exact integers"):
+    with pytest.raises(XTBloomValueError, match="exact integers"):
         Structure([True, 1], np.zeros((2, 3)))
 
 
@@ -52,7 +52,7 @@ def test_numbers_to_symbols_rejects_invalid_atomic_numbers(
     numbers: list[int | float | bool],
 ) -> None:
     """Reject atomic numbers outside the exact supported integer range."""
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         numbers_to_symbols(numbers)
 
 
@@ -62,7 +62,7 @@ def _library_has_cuda() -> bool:
         with Context("cuda"):
             pass
         return True
-    except GPUxtbRuntimeError:
+    except XTBloomRuntimeError:
         return False
 
 

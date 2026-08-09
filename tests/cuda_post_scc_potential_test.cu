@@ -23,8 +23,8 @@
 
 namespace {
 
-using namespace gpuxtb::detail;
-using namespace gpuxtb::detail::cuda;
+using namespace xtbloom::detail;
+using namespace xtbloom::detail::cuda;
 
 constexpr std::uint64_t kPlanToken = 0x109109109ULL;
 constexpr std::uint64_t kGeometryGeneration = 109u;
@@ -110,7 +110,7 @@ struct Fixture {
   std::vector<double> raw_dipole;
   std::vector<double> raw_quadrupole;
   std::vector<std::uint8_t> requested;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
 
   DeviceBuffer<std::int64_t> d_atom_offsets;
   DeviceBuffer<std::int64_t> d_shell_offsets;
@@ -137,7 +137,7 @@ struct Fixture {
   DeviceBuffer<double> d_raw_dipole;
   DeviceBuffer<double> d_raw_quadrupole;
   DeviceBuffer<std::uint8_t> d_requested;
-  DeviceBuffer<gpuxtb_status_t> d_statuses;
+  DeviceBuffer<xtbloom_status_t> d_statuses;
   DeviceBuffer<std::uint64_t> d_geometry_epoch;
   DeviceBuffer<std::uint64_t> d_committed_generations;
   DeviceBuffer<std::uint8_t> d_eligible;
@@ -206,7 +206,7 @@ struct Fixture {
     raw_dipole.assign(static_cast<std::size_t>(3 * atoms), 0.0);
     raw_quadrupole.assign(static_cast<std::size_t>(6 * atoms), 0.0);
     requested.assign(static_cast<std::size_t>(count), 1u);
-    statuses.assign(static_cast<std::size_t>(count), GPUXTB_STATUS_SUCCESS);
+    statuses.assign(static_cast<std::size_t>(count), XTBLOOM_STATUS_SUCCESS);
 
     for (std::int64_t system = 0; system < count; ++system) {
       atom_offsets[static_cast<std::size_t>(system)] = 2 * system;
@@ -621,7 +621,7 @@ int run_batch(std::int64_t batch_size) {
 
   if (batch_size == 8) {
     fixture.requested[1] = 0u;
-    fixture.statuses[2] = GPUXTB_STATUS_INTERNAL_ERROR;
+    fixture.statuses[2] = XTBLOOM_STATUS_INTERNAL_ERROR;
     fixture.requested[3] = 2u;
     fixture.raw_shell[2] = std::numeric_limits<double>::quiet_NaN();
     fixture.raw_shell[4] = std::numeric_limits<double>::infinity();
@@ -746,7 +746,7 @@ int run_batch(std::int64_t batch_size) {
     CUDA_CHECK(fixture.d_qsh_offsets.overwrite(fixture.shell_offsets, stream));
 
     fixture.requested.assign(8u, 1u);
-    fixture.statuses.assign(8u, GPUXTB_STATUS_SUCCESS);
+    fixture.statuses.assign(8u, XTBLOOM_STATUS_SUCCESS);
     for (std::int64_t index = 0; index < fixture.shells; ++index) {
       fixture.raw_shell[static_cast<std::size_t>(index)] = 0.025 * static_cast<double>(index + 1);
     }

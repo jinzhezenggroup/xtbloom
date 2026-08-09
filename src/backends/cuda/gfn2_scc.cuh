@@ -1,16 +1,16 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_SCC_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_SCC_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_SCC_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_SCC_CUH
 
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
 #include <type_traits>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /* First asynchronous semantic failure recorded by the SCC state sequence. */
 enum class Gfn2SccDeviceError : std::uint32_t {
@@ -85,7 +85,7 @@ struct Gfn2SccDeviceState {
   double* free_energy_changes = nullptr;
   double* residual_rms = nullptr;
   std::uint64_t* iterations = nullptr;
-  gpuxtb_status_t* system_statuses = nullptr;
+  xtbloom_status_t* system_statuses = nullptr;
   std::uint8_t* converged = nullptr;
   std::int64_t batch_elements = 0;
   std::uint64_t plan_token = 0u;
@@ -128,9 +128,9 @@ cudaError_t reset_gfn2_scc_device_error_cuda(std::uint32_t* device_error,
  * absolute complete-free-energy change to be strictly below their tolerances.
  * Successful members increment iterations and publish raw multipoles when
  * converged, otherwise next_mixed. A last unconverged iteration publishes its
- * mixed result and records GPUXTB_STATUS_SCC_NOT_CONVERGED.
+ * mixed result and records XTBLOOM_STATUS_SCC_NOT_CONVERGED.
  *
- * A member with nonfinite numerical data records GPUXTB_STATUS_INTERNAL_ERROR,
+ * A member with nonfinite numerical data records XTBLOOM_STATUS_INTERNAL_ERROR,
  * counts the active attempt, and replaces free-energy/current-change/RMS trace
  * entries with NaN. Its public multipoles, private current inputs, and
  * convergence flag remain unchanged; healthy peers still commit. Existing
@@ -138,7 +138,7 @@ cudaError_t reset_gfn2_scc_device_error_cuda(std::uint32_t* device_error,
  * buffers. For exact CPU active-predicate parity, a SUCCESS, unconverged member
  * already at maximum_iterations is also skipped byte-for-byte; well-formed
  * state reaches that condition only after the preceding active attempt has
- * already published GPUXTB_STATUS_SCC_NOT_CONVERGED.
+ * already published XTBLOOM_STATUS_SCC_NOT_CONVERGED.
  *
  * All storage remains on device. The launcher allocates nothing, performs no
  * synchronization or transfer, supports custom streams and CUDA Graph capture,
@@ -161,6 +161,6 @@ cudaError_t update_gfn2_scc_state_cuda(
     const Gfn2SccDeviceState& state, const Gfn2SccDeviceWorkspace& workspace,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_SCC_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_SCC_CUH

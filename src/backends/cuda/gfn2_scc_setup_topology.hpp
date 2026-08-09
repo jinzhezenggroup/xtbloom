@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_SCC_SETUP_TOPOLOGY_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_SCC_SETUP_TOPOLOGY_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_SCC_SETUP_TOPOLOGY_HPP
+#define XTBLOOM_BACKENDS_CUDA_GFN2_SCC_SETUP_TOPOLOGY_HPP
 
 #include <cuda_runtime_api.h>
 
@@ -12,12 +12,12 @@
 
 #include "backends/common/gfn2_plan_schema.hpp"
 #include "backends/cuda/gfn2_eigensolver.cuh"
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/integrals.hpp"
 #include "model/gfn2/wavefunction.hpp"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /* Setup failures are synchronous; device semantic validation remains in the
  * existing common-schema diagnostic returned by bind_gfn2_topology_cuda. */
@@ -48,7 +48,7 @@ enum class Gfn2SccSetupTopologyField : std::uint32_t {
 /* Rich internal diagnostic suitable for translating into the public C status
  * plus a human-readable last-error string at the eventual API boundary. */
 struct Gfn2SccSetupTopologyDiagnostic {
-  gpuxtb_status_t status = GPUXTB_STATUS_SUCCESS;
+  xtbloom_status_t status = XTBLOOM_STATUS_SUCCESS;
   Gfn2SccSetupTopologyError error = Gfn2SccSetupTopologyError::kSuccess;
   Gfn2SccSetupTopologyField field = Gfn2SccSetupTopologyField::kNone;
   std::int64_t index = -1;
@@ -57,7 +57,7 @@ struct Gfn2SccSetupTopologyDiagnostic {
   Gfn2PlanSchemaDiagnostic schema{};
 
   [[nodiscard]] bool success() const noexcept {
-    return status == GPUXTB_STATUS_SUCCESS && error == Gfn2SccSetupTopologyError::kSuccess;
+    return status == XTBLOOM_STATUS_SUCCESS && error == Gfn2SccSetupTopologyError::kSuccess;
   }
 };
 
@@ -130,6 +130,6 @@ class Gfn2SccSetupTopology {
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_SCC_SETUP_TOPOLOGY_HPP
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_SCC_SETUP_TOPOLOGY_HPP

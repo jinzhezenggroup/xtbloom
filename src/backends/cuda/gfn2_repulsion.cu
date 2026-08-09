@@ -1,5 +1,5 @@
 #include <cmath>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cstdint>
 #include <limits>
@@ -8,7 +8,7 @@
 #include "backends/cuda/gfn2_parameters.cuh"
 #include "backends/cuda/gfn2_repulsion.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
@@ -180,4 +180,4 @@ cudaError_t add_gfn2_repulsion_cuda(const Gfn2RepulsionDeviceBatch& batch, doubl
   return cudaGetLastError();
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

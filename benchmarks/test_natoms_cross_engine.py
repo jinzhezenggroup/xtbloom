@@ -54,12 +54,12 @@ def artifact_metadata(
             "artifact_sha256": reference_sha256,
         },
         "runner": {
-            "gpuxtb_library_sha256": "g" * 64,
-            "gpuxtb_build": {
-                "source_state": {"head": "gpuxtb-head", "dirty": False},
-                "selected": {"GPUXTB_ENABLE_CUDA": "ON"},
+            "xtbloom_library_sha256": "g" * 64,
+            "xtbloom_build": {
+                "source_state": {"head": "xtbloom-head", "dirty": False},
+                "selected": {"XTBLOOM_ENABLE_CUDA": "ON"},
             },
-            "gpuxtb_native_identity": {
+            "xtbloom_native_identity": {
                 "sha256": "g" * 64,
                 "resolved_dependencies": [],
                 "unresolved_dependencies": [],
@@ -103,7 +103,7 @@ def artifact_metadata(
             "scc_charge_tolerance": 1.0e-4,
             "scc_energy_tolerance": 1.0e-6,
             "convergence_contract": {
-                "gpuxtb": {
+                "xtbloom": {
                     "charge_tolerance": 1.0e-4,
                     "energy_tolerance": 1.0e-6,
                 },
@@ -120,7 +120,7 @@ def artifact_metadata(
     }
 
 
-def qualified_correctness(engine: str = "gpuxtb-cpu") -> dict[str, object]:
+def qualified_correctness(engine: str = "xtbloom-cpu") -> dict[str, object]:
     """Return a complete correctness gate accepted by the plotter."""
     return {
         "status": "pass",
@@ -258,7 +258,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
     def test_trajectory_row_sweeps_natoms_per_engine(self) -> None:
         """The runner emits one trajectory row per (engine, natoms)."""
         base = {
-            "engine": "gpuxtb-cpu",
+            "engine": "xtbloom-cpu",
             "batch_size": 1,
             "frames": 12,
             "job": "trajectory",
@@ -269,7 +269,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
         rows = [dict(base, natoms=natoms) for natoms in (32, 62, 122)]
         rows.append(dict(base, engine="xtb", natoms=62))
         selected: dict[str, list[tuple[int, float]]] = {}
-        for engine in ("gpuxtb-cpu", "xtb"):
+        for engine in ("xtbloom-cpu", "xtb"):
             qualified = [
                 row
                 for row in rows
@@ -282,20 +282,20 @@ class NatomsCrossEngineTest(unittest.TestCase):
             selected[engine] = [
                 (row["natoms"], plotters._median_ms(row)) for row in qualified
             ]
-        self.assertEqual(selected["gpuxtb-cpu"], [(32, 0.5), (62, 0.5), (122, 0.5)])
+        self.assertEqual(selected["xtbloom-cpu"], [(32, 0.5), (62, 0.5), (122, 0.5)])
         self.assertEqual(selected["xtb"], [(62, 0.5)])
 
     def test_plot_merges_artifacts_and_draws_without_gpu(self) -> None:
         """Full plot path runs in Agg mode from synthetic artifacts."""
-        if os.environ.get("GPUXTB_RUN_PLOT_TEST") != "1":
-            self.skipTest("set GPUXTB_RUN_PLOT_TEST=1 for optional render coverage")
+        if os.environ.get("XTBLOOM_RUN_PLOT_TEST") != "1":
+            self.skipTest("set XTBLOOM_RUN_PLOT_TEST=1 for optional render coverage")
         try:
             import matplotlib  # noqa: F401
         except ImportError:
             self.skipTest("matplotlib is unavailable")
         latency_scale = {
-            "gpuxtb-cpu": 1.0,
-            "gpuxtb-cuda": 1.35,
+            "xtbloom-cpu": 1.0,
+            "xtbloom-cuda": 1.35,
             "xtb": 2.0,
             "tblite": 3.0,
             "dxtb-cpu": 6.0,
@@ -314,15 +314,15 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 ),
                 "availability": "available",
                 # Keep synthetic series visibly distinct so a rendered layout
-                # preview cannot hide reference engines under the gpuxtb line.
+                # preview cannot hide reference engines under the xtbloom line.
                 "timing": {
                     "median_ms": float(batch_size * natoms * latency_scale[engine])
                 },
                 "correctness": qualified_correctness(engine),
             }
             for engine in (
-                "gpuxtb-cpu",
-                "gpuxtb-cuda",
+                "xtbloom-cpu",
+                "xtbloom-cuda",
                 "xtb",
                 "tblite",
                 "dxtb-cpu",
@@ -461,8 +461,8 @@ class NatomsCrossEngineTest(unittest.TestCase):
             self.assertNotIn("<dc:date>", svg)
             self.assertNotIn("Glyph", completed.stderr)
             for label in (
-                "gpuxtb CPU",
-                "gpuxtb CUDA",
+                "xtbloom CPU",
+                "xtbloom CUDA",
                 "xTB",
                 "tblite",
                 "dxtb CPU",
@@ -479,7 +479,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
         ``cold`` start policy may appear in the batch=1 cold-start panel.
         """
         cold_row = {
-            "engine": "gpuxtb-cpu",
+            "engine": "xtbloom-cpu",
             "natoms": 62,
             "batch_size": 1,
             "start_policy": "cold",
@@ -542,7 +542,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
         fragment = nce.measure_cell(
             FakeRunner(),
             (0, 2),
-            nce.Cell("gpuxtb-cpu", 1, 1, 1, 0),
+            nce.Cell("xtbloom-cpu", 1, 1, 1, 0),
             "cold",
         )
         self.assertEqual(fragment["forces_hartree_per_bohr"], [0.1, -0.2, 0.3])
@@ -580,17 +580,17 @@ class NatomsCrossEngineTest(unittest.TestCase):
         fragment = nce.measure_cell(
             runner,
             (0, 1),
-            nce.Cell("gpuxtb-cpu", 1, 1, 1, 0),
+            nce.Cell("xtbloom-cpu", 1, 1, 1, 0),
             "auto-warm",
         )
         self.assertEqual(runner.invocations, 2)
         self.assertEqual(runner.modes, ["fresh", "warm"])
         self.assertEqual(fragment["effective_start_policy"], "auto-warm")
 
-    def test_cold_gpuxtb_records_fresh_initialization_inside_public_call(self) -> None:
-        """Selecting FRESH is untimed, but gpuxtb initializes it during compute."""
+    def test_cold_xtbloom_records_fresh_initialization_inside_public_call(self) -> None:
+        """Selecting FRESH is untimed, but xtbloom initializes it during compute."""
 
-        class FakeGpuxtbRunner:
+        class FakeXTBloomRunner:
             def set_start_mode(self, _mode: str) -> None:
                 return
 
@@ -607,9 +607,9 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 }
 
         fragment = nce.measure_cell(
-            FakeGpuxtbRunner(),
+            FakeXTBloomRunner(),
             (0, 1),
-            nce.Cell("gpuxtb-cpu", 1, 1, 1, 0),
+            nce.Cell("xtbloom-cpu", 1, 1, 1, 0),
             "cold",
         )
         self.assertEqual(
@@ -643,7 +643,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
         fragment = nce.measure_cell(
             RefiningWarmRunner(),
             (0, 2),
-            nce.Cell("gpuxtb-cpu", 1, 1, 1, 0),
+            nce.Cell("xtbloom-cpu", 1, 1, 1, 0),
             "auto-warm",
             repeatability_energy_atol_hartree=1.0e-10,
             repeatability_force_atol_hartree_per_bohr=1.0e-8,
@@ -659,7 +659,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
         cold = nce.measure_cell(
             RefiningWarmRunner(),
             (0, 2),
-            nce.Cell("gpuxtb-cpu", 1, 1, 1, 0),
+            nce.Cell("xtbloom-cpu", 1, 1, 1, 0),
             "cold",
             repeatability_energy_atol_hartree=1.0e-10,
             repeatability_force_atol_hartree_per_bohr=1.0e-8,
@@ -776,7 +776,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
             (-1.0, [0.1, -0.2, 0.31]),
         ):
             row = {
-                "engine": "gpuxtb-cpu",
+                "engine": "xtbloom-cpu",
                 "natoms": 1,
                 "batch_size": 1,
                 "availability": "available",
@@ -805,7 +805,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
             },
         )
         row = {
-            "engine": "gpuxtb-cpu",
+            "engine": "xtbloom-cpu",
             "natoms": 1,
             "batch_size": 1,
             "availability": "available",
@@ -835,7 +835,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
     def test_panel_protocol_filter_rejects_mislabeled_artifacts(self) -> None:
         """Each panel accepts only its named requested/effective start policy."""
         base = {
-            "engine": "gpuxtb-cpu",
+            "engine": "xtbloom-cpu",
             "job": None,
             "start_policy": "auto-warm",
             "effective_start_policy": "auto-warm",
@@ -984,7 +984,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
             nce.measure_cell(
                 MissingForceRunner(),
                 (0, 1),
-                nce.Cell("gpuxtb-cpu", 1, 1, 1, 0),
+                nce.Cell("xtbloom-cpu", 1, 1, 1, 0),
                 "cold",
             )
 
@@ -1003,7 +1003,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 "correctness": qualified_correctness(engine),
             }
             for engine, latency in (
-                ("gpuxtb-cpu", 100.0),
+                ("xtbloom-cpu", 100.0),
                 ("xtb", 1200.0),
                 ("tblite", 900.0),
             )
@@ -1142,10 +1142,10 @@ class NatomsCrossEngineTest(unittest.TestCase):
             "different-uuid"
         )
         with self.assertRaisesRegex(plotters.PlotError, "runtime-verified"):
-            plotters._engine_runtime_identity(metadata_b, "gpuxtb-cuda")
+            plotters._engine_runtime_identity(metadata_b, "xtbloom-cuda")
 
     def test_plotter_rejects_different_gpus_across_cuda_engines(self) -> None:
-        """Gpuxtb and dxtb CUDA rows must share one physical selected GPU."""
+        """XTBloom and dxtb CUDA rows must share one physical selected GPU."""
         metadata_a = artifact_metadata(designation="dependent_run")
         metadata_b = artifact_metadata(designation="dependent_run")
         selected_b = metadata_b["hardware"]["selected_cuda_device"]
@@ -1153,7 +1153,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
         selected_b["device"]["uuid"] = "other-uuid"
         rows = (
             {
-                "engine": "gpuxtb-cuda",
+                "engine": "xtbloom-cuda",
                 "natoms": 14,
                 "batch_size": 1,
                 "availability": "error",

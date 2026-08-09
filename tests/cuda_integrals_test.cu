@@ -24,13 +24,13 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::Gfn2H0DevicePlan;
-using gpuxtb::detail::cuda::Gfn2IntegralDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2IntegralDeviceError;
-using gpuxtb::detail::cuda::Gfn2IntegralDeviceWorkspace;
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::H0Plan;
-using gpuxtb::detail::gfn2::IntegralPlan;
+using xtbloom::detail::cuda::Gfn2H0DevicePlan;
+using xtbloom::detail::cuda::Gfn2IntegralDeviceBatch;
+using xtbloom::detail::cuda::Gfn2IntegralDeviceError;
+using xtbloom::detail::cuda::Gfn2IntegralDeviceWorkspace;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::H0Plan;
+using xtbloom::detail::gfn2::IntegralPlan;
 
 constexpr std::uint64_t kPlanToken = 0x62a5d31ec774b809ULL;
 constexpr double kSentinel = -917.25;
@@ -152,13 +152,14 @@ bool make_case(std::size_t batch_size, HostCase& data, std::string& error) {
     append_system(system, batch_size, atomic_numbers, data.positions);
   }
   atom_offsets[batch_size] = static_cast<std::int64_t>(atomic_numbers.size());
-  if (gpuxtb::detail::gfn2::make_basis_plan(
-          static_cast<std::int64_t>(batch_size), static_cast<std::int64_t>(atomic_numbers.size()),
-          atom_offsets.data(), atomic_numbers.data(), data.basis, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_integral_plan(data.basis, data.integrals, error) !=
-          GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_h0_plan(data.basis, data.integrals, atomic_numbers.data(), data.h0,
-                                         error) != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(batch_size),
+                                             static_cast<std::int64_t>(atomic_numbers.size()),
+                                             atom_offsets.data(), atomic_numbers.data(), data.basis,
+                                             error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_integral_plan(data.basis, data.integrals, error) !=
+          XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_h0_plan(data.basis, data.integrals, atomic_numbers.data(),
+                                          data.h0, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   data.shell_pair_offsets.resize(batch_size + 1u, 0);
@@ -184,17 +185,17 @@ bool make_case(std::size_t batch_size, HostCase& data, std::string& error) {
   data.hamiltonian.resize(matrices);
   std::vector<double> cpu_workspace((data.integrals.workspace_size_bytes + sizeof(double) - 1u) /
                                     sizeof(double));
-  return gpuxtb::detail::gfn2::evaluate_overlap_cpu(
+  return xtbloom::detail::gfn2::evaluate_overlap_cpu(
              data.basis, data.integrals, data.positions.data(), data.overlap.data(),
              cpu_workspace.data(), cpu_workspace.size() * sizeof(double),
-             error) == GPUXTB_STATUS_SUCCESS &&
-         gpuxtb::detail::gfn2::evaluate_multipole_cpu(
+             error) == XTBLOOM_STATUS_SUCCESS &&
+         xtbloom::detail::gfn2::evaluate_multipole_cpu(
              data.basis, data.integrals, data.positions.data(), data.dipole.data(),
              data.quadrupole.data(), cpu_workspace.data(), cpu_workspace.size() * sizeof(double),
-             error) == GPUXTB_STATUS_SUCCESS &&
-         gpuxtb::detail::gfn2::evaluate_h0_cpu(
+             error) == XTBLOOM_STATUS_SUCCESS &&
+         xtbloom::detail::gfn2::evaluate_h0_cpu(
              data.basis, data.integrals, data.h0, data.positions.data(), data.coordination.data(),
-             data.overlap.data(), data.hamiltonian.data(), error) == GPUXTB_STATUS_SUCCESS;
+             data.overlap.data(), data.hamiltonian.data(), error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 struct DeviceFixture {
@@ -375,15 +376,15 @@ struct DeviceFixture {
 int run_forward(DeviceFixture& device, const HostCase& host, cudaStream_t stream) {
   const Gfn2IntegralDeviceBatch batch = device.batch(host);
   const Gfn2IntegralDeviceWorkspace workspace = device.workspace(host);
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_integral_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_device_errors_cuda(
       batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_integrals_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_integrals_cuda(
       batch, device.positions.get(), device.overlap.get(), device.dipole.get(),
       device.quadrupole.get(), workspace, device.system_errors.get(), device.device_error.get(),
       stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_integral_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_device_errors_cuda(
       batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_h0_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_h0_cuda(
       batch, device.h0_plan(host), device.positions.get(), device.coordination.get(),
       device.overlap.get(), device.hamiltonian.get(), workspace, device.system_errors.get(),
       device.device_error.get(), stream));
@@ -451,15 +452,15 @@ int test_cuda_graph_replay() {
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t executable = nullptr;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_integral_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_device_errors_cuda(
       batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_integrals_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_integrals_cuda(
       batch, device.positions.get(), device.overlap.get(), device.dipole.get(),
       device.quadrupole.get(), workspace, device.system_errors.get(), device.device_error.get(),
       stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_integral_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_device_errors_cuda(
       batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_h0_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_h0_cuda(
       batch, device.h0_plan(host), device.positions.get(), device.coordination.get(),
       device.overlap.get(), device.hamiltonian.get(), workspace, device.system_errors.get(),
       device.device_error.get(), stream));
@@ -497,9 +498,9 @@ int test_peer_failure_isolation() {
                              cudaMemcpyHostToDevice, stream));
   const Gfn2IntegralDeviceBatch batch = device.batch(host);
   const Gfn2IntegralDeviceWorkspace workspace = device.workspace(host);
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_integral_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_device_errors_cuda(
       batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_integrals_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_integrals_cuda(
       batch, device.positions.get(), device.overlap.get(), device.dipole.get(),
       device.quadrupole.get(), workspace, device.system_errors.get(), device.device_error.get(),
       stream));
@@ -605,9 +606,9 @@ int test_extreme_offsets_and_sticky_error_fail_closed() {
          {std::numeric_limits<std::int64_t>::min(), std::numeric_limits<std::int64_t>::max()}) {
       CUDA_CHECK(device.seed_outputs(host, stream));
       CUDA_CHECK(mutate_offset(device, partition, extreme, stream));
-      CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_integral_device_errors_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_device_errors_cuda(
           1, device.system_errors.get(), device.device_error.get(), stream));
-      CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_integrals_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_integrals_cuda(
           batch, device.positions.get(), device.overlap.get(), device.dipole.get(),
           device.quadrupole.get(), workspace, device.system_errors.get(), device.device_error.get(),
           stream));
@@ -625,9 +626,9 @@ int test_extreme_offsets_and_sticky_error_fail_closed() {
       /* The same corrupt partition must fail closed in the standalone H0 path. */
       CUDA_CHECK(device.overlap.copy_from(host.overlap.data(), host.overlap.size(), stream));
       CUDA_CHECK(device.hamiltonian.fill(kSentinel, matrices, stream));
-      CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_integral_device_errors_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_device_errors_cuda(
           1, device.system_errors.get(), device.device_error.get(), stream));
-      CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_h0_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_h0_cuda(
           batch, device.h0_plan(host), device.positions.get(), device.coordination.get(),
           device.overlap.get(), device.hamiltonian.get(), workspace, device.system_errors.get(),
           device.device_error.get(), stream));
@@ -646,7 +647,7 @@ int test_extreme_offsets_and_sticky_error_fail_closed() {
   const std::uint32_t zero = 0u;
   CUDA_CHECK(device.system_errors.copy_from(&zero, 1u, stream));
   CUDA_CHECK(device.device_error.copy_from(&sticky, 1u, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_integrals_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_integrals_cuda(
       batch, device.positions.get(), device.overlap.get(), device.dipole.get(),
       device.quadrupole.get(), workspace, device.system_errors.get(), device.device_error.get(),
       stream));
@@ -678,20 +679,20 @@ int test_aliases_are_rejected_synchronously() {
 
   Gfn2IntegralDeviceWorkspace public_scratch_alias = workspace;
   public_scratch_alias.overlap_scratch = device.overlap.get();
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_integrals_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_integrals_cuda(
             batch, device.positions.get(), device.overlap.get(), device.dipole.get(),
             device.quadrupole.get(), public_scratch_alias, device.system_errors.get(),
             device.device_error.get(), stream) == cudaErrorInvalidValue);
 
   auto* const public_diagnostic_alias = reinterpret_cast<std::uint32_t*>(device.overlap.get());
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_integrals_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_integrals_cuda(
             batch, device.positions.get(), device.overlap.get(), device.dipole.get(),
             device.quadrupole.get(), workspace, device.system_errors.get(), public_diagnostic_alias,
             stream) == cudaErrorInvalidValue);
 
   Gfn2IntegralDeviceWorkspace h0_public_scratch_alias = workspace;
   h0_public_scratch_alias.h0_scratch = device.hamiltonian.get();
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_h0_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_h0_cuda(
             batch, device.h0_plan(host), device.positions.get(), device.coordination.get(),
             device.overlap.get(), device.hamiltonian.get(), h0_public_scratch_alias,
             device.system_errors.get(), device.device_error.get(),
@@ -719,9 +720,9 @@ int test_h0_failure_atomicity() {
                              cudaMemcpyHostToDevice, stream));
   const Gfn2IntegralDeviceBatch batch = device.batch(host);
   const Gfn2IntegralDeviceWorkspace workspace = device.workspace(host);
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_integral_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_device_errors_cuda(
       batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_h0_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_h0_cuda(
       batch, device.h0_plan(host), device.positions.get(), device.coordination.get(),
       device.overlap.get(), device.hamiltonian.get(), workspace, device.system_errors.get(),
       device.device_error.get(), stream));

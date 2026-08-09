@@ -20,9 +20,9 @@
 
 namespace {
 
-using namespace gpuxtb::detail;
-using namespace gpuxtb::detail::cuda;
-using namespace gpuxtb::detail::gfn2;
+using namespace xtbloom::detail;
+using namespace xtbloom::detail::cuda;
+using namespace xtbloom::detail::gfn2;
 
 #define CHECK(condition)                                                                         \
   do {                                                                                           \
@@ -121,11 +121,11 @@ struct TerminalHostData {
   bool initialize() {
     std::string error;
     if (make_repulsion_plan(2, 5, atom_offsets.data(), atomic_numbers.data(), repulsion, error) !=
-            GPUXTB_STATUS_SUCCESS ||
+            XTBLOOM_STATUS_SUCCESS ||
         add_repulsion_cpu(repulsion, positions.data(), expected_repulsion.data(), nullptr, error) !=
-            GPUXTB_STATUS_SUCCESS ||
+            XTBLOOM_STATUS_SUCCESS ||
         make_d4_plan(2, 5, atom_offsets.data(), atomic_numbers.data(), d4, error) !=
-            GPUXTB_STATUS_SUCCESS) {
+            XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     d4_workspace_storage.resize(d4.workspace_size_bytes() + kD4WorkspaceAlignment - 1u);
@@ -133,7 +133,7 @@ struct TerminalHostData {
     const std::uintptr_t aligned =
         (address + kD4WorkspaceAlignment - 1u) & ~(kD4WorkspaceAlignment - 1u);
     if (bind_d4_workspace(d4, reinterpret_cast<void*>(aligned), d4.workspace_size_bytes(),
-                          d4_workspace, error) != GPUXTB_STATUS_SUCCESS) {
+                          d4_workspace, error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     pair_data.resize(static_cast<std::size_t>(d4.total_pairs()) *
@@ -141,11 +141,11 @@ struct TerminalHostData {
     coordination.resize(static_cast<std::size_t>(d4.total_atoms()));
     if (update_d4_geometry_cache_cpu(d4, positions.data(), 7u, pair_data.data(), pair_data.size(),
                                      coordination.data(), coordination.size(), d4_workspace, cache,
-                                     error) != GPUXTB_STATUS_SUCCESS) {
+                                     error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     return evaluate_d4_atm_cpu(d4, cache, expected_atm.data(), d4_workspace, error) ==
-           GPUXTB_STATUS_SUCCESS;
+           XTBLOOM_STATUS_SUCCESS;
   }
 };
 
@@ -191,15 +191,15 @@ struct TerminalDeviceFixture {
 
   bool initialize(const TerminalHostData& host, cudaStream_t stream) {
     std::vector<Gfn2D4DeviceElementData> host_elements;
-    host_elements.reserve(gpuxtb::parameters::d4::kElements.size());
-    for (const auto& element : gpuxtb::parameters::d4::kElements) {
+    host_elements.reserve(xtbloom::parameters::d4::kElements.size());
+    for (const auto& element : xtbloom::parameters::d4::kElements) {
       host_elements.push_back({element.reference_offset, element.reference_count,
                                element.covalent_radius, element.electronegativity,
                                element.effective_charge, element.hardness, element.r4r2});
     }
     std::vector<Gfn2D4DeviceReferenceData> host_references;
-    host_references.reserve(gpuxtb::parameters::d4::kReferences.size());
-    for (const auto& reference : gpuxtb::parameters::d4::kReferences) {
+    host_references.reserve(xtbloom::parameters::d4::kReferences.size());
+    for (const auto& reference : xtbloom::parameters::d4::kReferences) {
       host_references.push_back(
           {reference.coordination_number, reference.charge, reference.gaussian_count});
     }
@@ -211,7 +211,7 @@ struct TerminalDeviceFixture {
         positions.allocate(TerminalHostData::positions.size()) == cudaSuccess &&
         elements.allocate(host_elements.size()) == cudaSuccess &&
         references.allocate(host_references.size()) == cudaSuccess &&
-        reference_c6.allocate(gpuxtb::parameters::d4::kReferenceC6.size()) == cudaSuccess &&
+        reference_c6.allocate(xtbloom::parameters::d4::kReferenceC6.size()) == cudaSuccess &&
         pair_data.allocate(host.pair_data.size()) == cudaSuccess &&
         coordination.allocate(host.coordination.size()) == cudaSuccess &&
         weights.allocate(weight_count) == cudaSuccess &&
@@ -244,8 +244,8 @@ struct TerminalDeviceFixture {
         positions.upload(TerminalHostData::positions, stream) != cudaSuccess ||
         elements.upload(host_elements, stream) != cudaSuccess ||
         references.upload(host_references, stream) != cudaSuccess ||
-        reference_c6.upload(gpuxtb::parameters::d4::kReferenceC6.data(),
-                            gpuxtb::parameters::d4::kReferenceC6.size(), stream) != cudaSuccess ||
+        reference_c6.upload(xtbloom::parameters::d4::kReferenceC6.data(),
+                            xtbloom::parameters::d4::kReferenceC6.size(), stream) != cudaSuccess ||
         pair_data.upload(host.pair_data, stream) != cudaSuccess ||
         coordination.upload(host.coordination, stream) != cudaSuccess ||
         epoch.upload(initial_epoch, stream) != cudaSuccess ||
@@ -266,10 +266,12 @@ struct TerminalDeviceFixture {
                      atom_offsets.get(),
                      pair_offsets.get(),
                      atomic_numbers.get()};
-    plan.d4_parameters = {
-        elements.get(),     static_cast<std::int64_t>(host_elements.size()),
-        references.get(),   static_cast<std::int64_t>(host_references.size()),
-        reference_c6.get(), static_cast<std::int64_t>(gpuxtb::parameters::d4::kReferenceC6.size())};
+    plan.d4_parameters = {elements.get(),
+                          static_cast<std::int64_t>(host_elements.size()),
+                          references.get(),
+                          static_cast<std::int64_t>(host_references.size()),
+                          reference_c6.get(),
+                          static_cast<std::int64_t>(xtbloom::parameters::d4::kReferenceC6.size())};
     plan.d4_cache = {pair_data.get(),
                      static_cast<std::int64_t>(host.pair_data.size()),
                      coordination.get(),
@@ -533,7 +535,7 @@ struct PublicationFixture {
   DeviceBuffer<std::uint8_t> eligible;
   DeviceBuffer<std::uint64_t> iterations;
   DeviceBuffer<std::uint8_t> converged;
-  DeviceBuffer<gpuxtb_status_t> statuses;
+  DeviceBuffer<xtbloom_status_t> statuses;
   DeviceBuffer<double> energies;
   DeviceBuffer<double> qm_forces;
   DeviceBuffer<double> charges;
@@ -548,7 +550,7 @@ struct PublicationFixture {
   DeviceBuffer<double> public_point_forces;
   DeviceBuffer<std::int32_t> public_iterations;
   DeviceBuffer<std::uint8_t> public_converged;
-  DeviceBuffer<gpuxtb_status_t> public_statuses;
+  DeviceBuffer<xtbloom_status_t> public_statuses;
   DeviceBuffer<std::uint64_t> epoch_snapshot;
   DeviceBuffer<std::uint32_t> system_errors;
   DeviceBuffer<std::uint32_t> plan_error;
@@ -609,9 +611,9 @@ struct PublicationFixture {
     const std::array<std::uint8_t, 6> host_eligible{1u, 1u, 1u, 0u, 1u, 1u};
     const std::array<std::uint64_t, 6> host_iterations{2u, 5u, 3u, 77u, 66u, 4u};
     const std::array<std::uint8_t, 6> host_converged{1u, 0u, 0u, 1u, 1u, 1u};
-    const std::array<gpuxtb_status_t, 6> host_statuses{
-        GPUXTB_STATUS_SUCCESS, GPUXTB_STATUS_SCC_NOT_CONVERGED, GPUXTB_STATUS_EIGENSOLVER_FAILED,
-        GPUXTB_STATUS_SUCCESS, GPUXTB_STATUS_SUCCESS,           GPUXTB_STATUS_SUCCESS};
+    const std::array<xtbloom_status_t, 6> host_statuses{
+        XTBLOOM_STATUS_SUCCESS, XTBLOOM_STATUS_SCC_NOT_CONVERGED, XTBLOOM_STATUS_EIGENSOLVER_FAILED,
+        XTBLOOM_STATUS_SUCCESS, XTBLOOM_STATUS_SUCCESS,           XTBLOOM_STATUS_SUCCESS};
     const std::array<std::uint32_t, 6> zero_system_errors{};
     const std::array<std::uint32_t, 1> zero_plan_error{};
     if (atom_offsets.upload(host_atom_offsets, stream) != cudaSuccess ||
@@ -634,8 +636,9 @@ struct PublicationFixture {
     }
 
     constexpr std::uint64_t token = 0x123125ULL;
-    plan.requested_properties = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES |
-                                GPUXTB_COMPUTE_ATOMIC_CHARGES | GPUXTB_COMPUTE_POINT_CHARGE_FORCES;
+    plan.requested_properties = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
+                                XTBLOOM_COMPUTE_ATOMIC_CHARGES |
+                                XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
     plan.plan_token = token;
     plan.maximum_iterations = 5u;
     plan.batch_size = kBatch;
@@ -693,7 +696,7 @@ struct PublicationFixture {
     if (status == cudaSuccess) status = public_iterations.fill(-73, stream);
     if (status == cudaSuccess) status = public_converged.fill(7u, stream);
     if (status == cudaSuccess)
-      status = public_statuses.fill(GPUXTB_STATUS_INVALID_ARGUMENT, stream);
+      status = public_statuses.fill(XTBLOOM_STATUS_INVALID_ARGUMENT, stream);
     return status;
   }
 };
@@ -721,7 +724,7 @@ int test_inference_publication_semantics() {
   std::vector<double> point_forces(static_cast<std::size_t>(3 * fixture.kPoints));
   std::vector<std::int32_t> iterations(static_cast<std::size_t>(fixture.kBatch));
   std::vector<std::uint8_t> converged(static_cast<std::size_t>(fixture.kBatch));
-  std::vector<gpuxtb_status_t> statuses(static_cast<std::size_t>(fixture.kBatch));
+  std::vector<xtbloom_status_t> statuses(static_cast<std::size_t>(fixture.kBatch));
   std::vector<std::uint32_t> errors(static_cast<std::size_t>(fixture.kBatch));
   CUDA_CHECK(fixture.public_energies.download(energies.data(), energies.size(), stream));
   CUDA_CHECK(fixture.public_qm_forces.download(forces.data(), forces.size(), stream));
@@ -735,25 +738,25 @@ int test_inference_publication_semantics() {
   CUDA_CHECK(cudaStreamSynchronize(stream));
 
   CHECK(energies[0] == fixture.host_energies[0]);
-  CHECK(iterations[0] == 2 && converged[0] == 1u && statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(iterations[0] == 2 && converged[0] == 1u && statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(near(forces[0], fixture.host_qm_forces[0]));
   CHECK(near(charges[0], fixture.host_charges[0]));
   CHECK(near(point_forces[0], fixture.host_point_forces[0]));
 
   CHECK(std::isnan(energies[1]) && iterations[1] == 5 && converged[1] == 0u &&
-        statuses[1] == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+        statuses[1] == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
   CHECK(std::isnan(energies[2]) && iterations[2] == 3 && converged[2] == 0u &&
-        statuses[2] == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+        statuses[2] == XTBLOOM_STATUS_EIGENSOLVER_FAILED);
   CHECK(std::isnan(energies[3]) && iterations[3] == 0 && converged[3] == 0u &&
-        statuses[3] == GPUXTB_STATUS_INTERNAL_ERROR);
+        statuses[3] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(errors[3] == static_cast<std::uint32_t>(
                          Gfn2InferencePublicationSystemError::kIneligibleNumericalRefresh));
   CHECK(std::isnan(energies[4]) && iterations[4] == 0 && converged[4] == 0u &&
-        statuses[4] == GPUXTB_STATUS_INTERNAL_ERROR);
+        statuses[4] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(errors[4] ==
         static_cast<std::uint32_t>(Gfn2InferencePublicationSystemError::kStaleGeneration));
   CHECK(std::isnan(energies[5]) && iterations[5] == 4 && converged[5] == 0u &&
-        statuses[5] == GPUXTB_STATUS_INTERNAL_ERROR);
+        statuses[5] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(errors[5] ==
         static_cast<std::uint32_t>(Gfn2InferencePublicationSystemError::kNonfiniteResult));
 
@@ -776,8 +779,8 @@ int test_inference_publication_semantics() {
   std::vector<double> before_point_forces(static_cast<std::size_t>(3 * fixture.kPoints), kSentinel);
   std::vector<std::int32_t> before_iterations(static_cast<std::size_t>(fixture.kBatch), -73);
   std::vector<std::uint8_t> before_converged(static_cast<std::size_t>(fixture.kBatch), 7u);
-  std::vector<gpuxtb_status_t> before_statuses(static_cast<std::size_t>(fixture.kBatch),
-                                               GPUXTB_STATUS_INVALID_ARGUMENT);
+  std::vector<xtbloom_status_t> before_statuses(static_cast<std::size_t>(fixture.kBatch),
+                                                XTBLOOM_STATUS_INVALID_ARGUMENT);
   CUDA_CHECK(publish_gfn2_inference_results_cuda(fixture.plan, fixture.input, fixture.results,
                                                  fixture.workspace, fixture.diagnostics, stream));
   std::uint32_t plan_error = 0u;
@@ -812,9 +815,9 @@ int test_inference_publication_graph_epoch_replay() {
   CHECK(fixture.initialize(stream));
   const std::array<std::uint8_t, 6> eligible{1u, 1u, 1u, 1u, 1u, 1u};
   const std::array<std::uint8_t, 6> converged{1u, 1u, 1u, 1u, 1u, 1u};
-  const std::array<gpuxtb_status_t, 6> statuses{GPUXTB_STATUS_SUCCESS, GPUXTB_STATUS_SUCCESS,
-                                                GPUXTB_STATUS_SUCCESS, GPUXTB_STATUS_SUCCESS,
-                                                GPUXTB_STATUS_SUCCESS, GPUXTB_STATUS_SUCCESS};
+  const std::array<xtbloom_status_t, 6> statuses{XTBLOOM_STATUS_SUCCESS, XTBLOOM_STATUS_SUCCESS,
+                                                 XTBLOOM_STATUS_SUCCESS, XTBLOOM_STATUS_SUCCESS,
+                                                 XTBLOOM_STATUS_SUCCESS, XTBLOOM_STATUS_SUCCESS};
   const std::array<std::uint64_t, 6> iterations{1u, 2u, 3u, 4u, 5u, 1u};
   const std::array<std::uint64_t, 6> generations{9u, 9u, 9u, 9u, 9u, 9u};
   std::vector<double> finite_energies{1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
@@ -889,7 +892,7 @@ int main() {
   int device = 0;
   std::string parameter_error;
   if (cudaGetDevice(&device) != cudaSuccess ||
-      !gpuxtb::detail::ensure_cuda_gfn2_parameters(device, parameter_error)) {
+      !xtbloom::detail::ensure_cuda_gfn2_parameters(device, parameter_error)) {
     std::fprintf(stderr, "GFN2 parameter upload failed: %s\n", parameter_error.c_str());
     return 78;
   }

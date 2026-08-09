@@ -1,7 +1,7 @@
 """Self-contained tests for the reference corpus tooling.
 
 These tests use only Python's standard library so they can run before the
-gpuxtb physics implementation or either Fortran reference package is built.
+xtbloom physics implementation or either Fortran reference package is built.
 """
 
 from __future__ import annotations
@@ -23,17 +23,17 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "gpuxtb_conformance.py"
-PUBLIC_API_TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "gpuxtb_public_api.py"
-INVARIANTS_TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "gpuxtb_invariants.py"
+TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "xtbloom_conformance.py"
+PUBLIC_API_TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "xtbloom_public_api.py"
+INVARIANTS_TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "xtbloom_invariants.py"
 MANIFEST = REPOSITORY_ROOT / "data" / "conformance" / "manifest.json"
-SPEC = importlib.util.spec_from_file_location("gpuxtb_conformance_tool", TOOL)
+SPEC = importlib.util.spec_from_file_location("xtbloom_conformance_tool", TOOL)
 assert SPEC is not None and SPEC.loader is not None
 CONFORMANCE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CONFORMANCE)
-sys.modules.setdefault("gpuxtb_conformance", CONFORMANCE)
+sys.modules.setdefault("xtbloom_conformance", CONFORMANCE)
 PUBLIC_SPEC = importlib.util.spec_from_file_location(
-    "gpuxtb_public_api_tool", PUBLIC_API_TOOL
+    "xtbloom_public_api_tool", PUBLIC_API_TOOL
 )
 assert PUBLIC_SPEC is not None and PUBLIC_SPEC.loader is not None
 PUBLIC_API = importlib.util.module_from_spec(PUBLIC_SPEC)
@@ -41,9 +41,9 @@ sys.modules[PUBLIC_SPEC.name] = PUBLIC_API
 PUBLIC_SPEC.loader.exec_module(PUBLIC_API)
 # The invariants tool imports the ABI mirror by its real module name; alias the
 # already-loaded module so both tools share one ctypes mirror in-process.
-sys.modules.setdefault("gpuxtb_public_api", PUBLIC_API)
+sys.modules.setdefault("xtbloom_public_api", PUBLIC_API)
 INVARIANTS_SPEC = importlib.util.spec_from_file_location(
-    "gpuxtb_invariants_tool", INVARIANTS_TOOL
+    "xtbloom_invariants_tool", INVARIANTS_TOOL
 )
 assert INVARIANTS_SPEC is not None and INVARIANTS_SPEC.loader is not None
 INVARIANTS = importlib.util.module_from_spec(INVARIANTS_SPEC)
@@ -139,7 +139,7 @@ class ConformanceToolTest(unittest.TestCase):
         self.assertEqual(storage.unpaired_electrons, [1])
         self.assertEqual(storage.spin_channels, [1])
         # The public mirror keeps the ABI-v2 spin suffix and the ABI-v3
-        # interaction suffix, matching python/gpuxtb/library.py.
+        # interaction suffix, matching python/xtbloom/library.py.
         self.assertEqual(
             [name for name, _ in PUBLIC_API.Batch._fields_[-4:]],
             [
@@ -155,7 +155,7 @@ class ConformanceToolTest(unittest.TestCase):
                 sys.executable,
                 str(PUBLIC_API_TOOL),
                 "--library",
-                "/does/not/exist/libgpuxtb.so",
+                "/does/not/exist/libxtbloom.so",
                 "--backend",
                 "cpu",
                 "--case",
@@ -200,7 +200,7 @@ class ConformanceToolTest(unittest.TestCase):
                         sys.executable,
                         str(PUBLIC_API_TOOL),
                         "--library",
-                        "/does/not/exist/libgpuxtb.so",
+                        "/does/not/exist/libxtbloom.so",
                         "--backend",
                         "cpu",
                         "--memory-mode",
@@ -240,7 +240,7 @@ class ConformanceToolTest(unittest.TestCase):
             self.assertEqual(golden["provenance"]["accuracy"], 0.0001)
             self.assertEqual(
                 golden["provenance"]["materialized_input"]["schema"],
-                "gpuxtb-xtb-pcem-cli-v1",
+                "xtbloom-xtb-pcem-cli-v1",
             )
             self.assertEqual(
                 set(golden["provenance"]["materialized_input"]["files_sha256"]),
@@ -467,10 +467,10 @@ class ConformanceToolTest(unittest.TestCase):
         cases = {case["id"]: case for case in manifest["cases"]}
         case = cases["water_efield"]
         self.assertEqual(case["efield"], [0.003, -0.004, 0.005])
-        self.assertEqual(case["gpuxtb_backends"], ["cpu"])
-        self.assertEqual(case["gpuxtb_oracle_properties"], ["energy_hartree"])
+        self.assertEqual(case["xtbloom_backends"], ["cpu"])
+        self.assertEqual(case["xtbloom_oracle_properties"], ["energy_hartree"])
         self.assertEqual(
-            case["gpuxtb_force_evidence"], "public_energy_finite_difference"
+            case["xtbloom_force_evidence"], "public_energy_finite_difference"
         )
         self.assertEqual(
             [item["id"] for item in PUBLIC_API.supported_cases(manifest, None, "cuda")],
@@ -493,7 +493,7 @@ class ConformanceToolTest(unittest.TestCase):
         descriptors, payload = PUBLIC_API.pack_efield_interactions(storage.efields)
         self.assertEqual(len(descriptors), 1)
         self.assertEqual(
-            descriptors[0].type, PUBLIC_API.GPUXTB_INTERACTION_ELECTRIC_FIELD
+            descriptors[0].type, PUBLIC_API.XTBLOOM_INTERACTION_ELECTRIC_FIELD
         )
         self.assertEqual(descriptors[0].flags, 0)
         self.assertEqual(descriptors[0].system_index, 0)
@@ -521,7 +521,7 @@ class ConformanceToolTest(unittest.TestCase):
         )
         # The pinned tblite 0.7.0 energy remains authoritative. Its analytic
         # field gradient is retained byte-for-byte for provenance diagnostics,
-        # but gpuxtb forces use public energy finite differences instead.
+        # but xtbloom forces use public energy finite differences instead.
         self.assertAlmostEqual(
             properties["energy_hartree"], -4.772344124360096, delta=5e-7
         )
@@ -557,13 +557,13 @@ class ConformanceToolTest(unittest.TestCase):
         self.assertIn("diagnostic-only", captured.getvalue())
 
         # The standalone directory comparator accepts both canonical public
-        # artifacts and its documented minimal gpuxtb result shape. Neither
+        # artifacts and its documented minimal xtbloom result shape. Neither
         # may re-enable the diagnostic tblite force comparison.
         with tempfile.TemporaryDirectory() as temporary:
             actual_dir = Path(temporary)
             public_document = {
                 "properties": actual,
-                "provenance": {"engine": "gpuxtb"},
+                "provenance": {"engine": "xtbloom"},
             }
             (actual_dir / "water_efield.json").write_text(
                 json.dumps(public_document), encoding="utf-8"
@@ -614,13 +614,15 @@ class ConformanceToolTest(unittest.TestCase):
 
         class FakeLibrary:
             @staticmethod
-            def gpuxtb_batch_init(_batch: object, _size: int) -> int:
-                return PUBLIC_API.GPUXTB_STATUS_SUCCESS
+            def xtbloom_batch_init(_batch: object, _size: int) -> int:
+                return PUBLIC_API.XTBLOOM_STATUS_SUCCESS
 
         class RejectEmptyOwnerMemory:
             @staticmethod
             def input(*_args: object) -> PUBLIC_API.ConstBuffer:
-                return PUBLIC_API.ConstBuffer(None, 0, PUBLIC_API.GPUXTB_MEMORY_HOST, 0)
+                return PUBLIC_API.ConstBuffer(
+                    None, 0, PUBLIC_API.XTBLOOM_MEMORY_HOST, 0
+                )
 
             @staticmethod
             def input_owner(*_args: object) -> PUBLIC_API.ConstBuffer:
@@ -640,7 +642,7 @@ class ConformanceToolTest(unittest.TestCase):
                 sys.executable,
                 str(PUBLIC_API_TOOL),
                 "--library",
-                "/does/not/exist/libgpuxtb.so",
+                "/does/not/exist/libxtbloom.so",
                 "--backend",
                 "cuda",
                 "--case",
@@ -1243,7 +1245,7 @@ class InvarianceToolTest(unittest.TestCase):
                         sys.executable,
                         str(INVARIANTS_TOOL),
                         "--library",
-                        "/does/not/exist/libgpuxtb.so",
+                        "/does/not/exist/libxtbloom.so",
                         "--backend",
                         "cpu",
                         "--memory-mode",
@@ -1264,7 +1266,7 @@ class InvarianceToolTest(unittest.TestCase):
                 sys.executable,
                 str(INVARIANTS_TOOL),
                 "--library",
-                "/does/not/exist/libgpuxtb.so",
+                "/does/not/exist/libxtbloom.so",
                 "--backend",
                 "cpu",
                 "--case",

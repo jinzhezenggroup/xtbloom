@@ -14,18 +14,18 @@
 #include <utility>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "tests/support/gfn2_scc_test_case.hpp"
+#include "xtbloom/xtbloom.h"
 
 /* End-to-end contract test for the public single-flight CUDA transaction. */
 namespace {
 
-using gpuxtb::test::gfn2::HostSccCase;
-using gpuxtb::test::gfn2::HostSccCaseOptions;
-using gpuxtb::test::gfn2::SmallSystemKind;
+using xtbloom::test::gfn2::HostSccCase;
+using xtbloom::test::gfn2::HostSccCaseOptions;
+using xtbloom::test::gfn2::SmallSystemKind;
 
 constexpr std::uint32_t kRequestedProperties =
-    GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
+    XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
 constexpr std::uint32_t kResultFlagsCanary = UINT32_C(0xa55a39c6);
 constexpr double kEnergyAbsoluteTolerance = 3.0e-8;
 constexpr double kEnergyRelativeTolerance = 3.0e-8;
@@ -40,7 +40,7 @@ const char* g_scenario = "uninitialized";
   do {                                                                                          \
     if (!(condition)) {                                                                         \
       std::fprintf(stderr, "public CUDA API check failed in %s at %s:%d: %s; %s\n", g_scenario, \
-                   __FILE__, __LINE__, #condition, gpuxtb_get_last_error());                    \
+                   __FILE__, __LINE__, #condition, xtbloom_get_last_error());                   \
       return __LINE__;                                                                          \
     }                                                                                           \
   } while (false)
@@ -56,10 +56,10 @@ const char* g_scenario = "uninitialized";
   } while (false)
 
 struct ContextDeleter {
-  void operator()(gpuxtb_context_t* context) const noexcept { gpuxtb_context_destroy(context); }
+  void operator()(xtbloom_context_t* context) const noexcept { xtbloom_context_destroy(context); }
 };
 
-using ContextHandle = std::unique_ptr<gpuxtb_context_t, ContextDeleter>;
+using ContextHandle = std::unique_ptr<xtbloom_context_t, ContextDeleter>;
 
 class StreamOwner {
  public:
@@ -98,8 +98,8 @@ class CurrentDeviceRestore {
 };
 
 template <typename T>
-gpuxtb_const_buffer_t host_input(const std::vector<T>& values) noexcept {
-  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), GPUXTB_MEMORY_HOST,
+xtbloom_const_buffer_t host_input(const std::vector<T>& values) noexcept {
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
           0u};
 }
 
@@ -116,10 +116,10 @@ struct PublicBatch {
   std::vector<double> atomic_potential_shifts;
   std::vector<std::int64_t> charge_response_offsets;
   std::vector<double> charge_response_matrix;
-  gpuxtb_batch_t descriptor{};
+  xtbloom_batch_t descriptor{};
 
   void bind() noexcept {
-    (void)gpuxtb_batch_init(&descriptor, sizeof(descriptor));
+    (void)xtbloom_batch_init(&descriptor, sizeof(descriptor));
     descriptor.batch_size = static_cast<std::int64_t>(molecular_charges.size());
     descriptor.total_atoms = static_cast<std::int64_t>(atomic_numbers.size());
     descriptor.total_point_charges = static_cast<std::int64_t>(point_charge_values.size());
@@ -203,10 +203,10 @@ struct PublicBatch {
   }
 };
 
-gpuxtb_compute_options_t make_compute_options() noexcept {
-  gpuxtb_compute_options_t options{};
-  (void)gpuxtb_compute_options_init(&options, sizeof(options));
-  options.model = GPUXTB_MODEL_GFN2_XTB;
+xtbloom_compute_options_t make_compute_options() noexcept {
+  xtbloom_compute_options_t options{};
+  (void)xtbloom_compute_options_init(&options, sizeof(options));
+  options.model = XTBLOOM_MODEL_GFN2_XTB;
   options.flags = kRequestedProperties;
   options.max_scc_iterations = 64;
   options.charge_tolerance = 1.0e-8;
@@ -215,16 +215,16 @@ gpuxtb_compute_options_t make_compute_options() noexcept {
   return options;
 }
 
-ContextHandle make_context(gpuxtb_backend_t backend, std::int32_t device_id, cudaStream_t stream,
-                           gpuxtb_status_t& status) {
-  gpuxtb_context_options_t options{};
-  status = gpuxtb_context_options_init(&options, sizeof(options));
-  if (status != GPUXTB_STATUS_SUCCESS) return {};
+ContextHandle make_context(xtbloom_backend_t backend, std::int32_t device_id, cudaStream_t stream,
+                           xtbloom_status_t& status) {
+  xtbloom_context_options_t options{};
+  status = xtbloom_context_options_init(&options, sizeof(options));
+  if (status != XTBLOOM_STATUS_SUCCESS) return {};
   options.backend = backend;
   options.device_id = device_id;
   options.stream = reinterpret_cast<void*>(stream);
-  gpuxtb_context_t* raw = nullptr;
-  status = gpuxtb_context_create(&options, &raw);
+  xtbloom_context_t* raw = nullptr;
+  status = xtbloom_context_create(&options, &raw);
   return ContextHandle(raw);
 }
 
@@ -288,8 +288,8 @@ class DeviceInputArray {
                : cudaMemcpy(data_, values.data(), count_ * sizeof(T), cudaMemcpyHostToDevice);
   }
 
-  [[nodiscard]] gpuxtb_const_buffer_t descriptor() const noexcept {
-    return {data_, count_ * sizeof(T), GPUXTB_MEMORY_CUDA_DEVICE, 0u};
+  [[nodiscard]] xtbloom_const_buffer_t descriptor() const noexcept {
+    return {data_, count_ * sizeof(T), XTBLOOM_MEMORY_CUDA_DEVICE, 0u};
   }
 
   [[nodiscard]] std::uintptr_t address() const noexcept {
@@ -443,11 +443,11 @@ class GuardedOutput {
     return status;
   }
 
-  [[nodiscard]] gpuxtb_buffer_t descriptor() noexcept {
+  [[nodiscard]] xtbloom_buffer_t descriptor() noexcept {
     void* payload = placement_ == Placement::kHost ? static_cast<void*>(host_.data() + 1u)
                                                    : static_cast<void*>(device_ + 1u);
     return {payload, count_ * sizeof(T),
-            placement_ == Placement::kHost ? GPUXTB_MEMORY_HOST : GPUXTB_MEMORY_CUDA_DEVICE, 0u};
+            placement_ == Placement::kHost ? XTBLOOM_MEMORY_HOST : XTBLOOM_MEMORY_CUDA_DEVICE, 0u};
   }
 
   cudaError_t read_all(std::vector<T>& values) const {
@@ -533,17 +533,17 @@ class ResultOwner {
     status = statuses_.initialize(systems, statuses_placement);
     if (status != cudaSuccess) return status;
 
-    (void)gpuxtb_batch_result_init(&descriptor, sizeof(descriptor));
+    (void)xtbloom_batch_result_init(&descriptor, sizeof(descriptor));
     descriptor.flags = kResultFlagsCanary;
     descriptor.energies =
-        (flags & GPUXTB_COMPUTE_ENERGY) != 0u ? energies_.descriptor() : gpuxtb_buffer_t{};
+        (flags & XTBLOOM_COMPUTE_ENERGY) != 0u ? energies_.descriptor() : xtbloom_buffer_t{};
     descriptor.forces =
-        (flags & GPUXTB_COMPUTE_FORCES) != 0u ? forces_.descriptor() : gpuxtb_buffer_t{};
+        (flags & XTBLOOM_COMPUTE_FORCES) != 0u ? forces_.descriptor() : xtbloom_buffer_t{};
     descriptor.atomic_charges =
-        (flags & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0u ? charges_.descriptor() : gpuxtb_buffer_t{};
-    descriptor.point_charge_forces = (flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0u
+        (flags & XTBLOOM_COMPUTE_ATOMIC_CHARGES) != 0u ? charges_.descriptor() : xtbloom_buffer_t{};
+    descriptor.point_charge_forces = (flags & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) != 0u
                                          ? point_forces_.descriptor()
-                                         : gpuxtb_buffer_t{};
+                                         : xtbloom_buffer_t{};
     descriptor.scc_iterations = iterations_.descriptor();
     descriptor.scc_converged = converged_.descriptor();
     descriptor.per_system_status = statuses_.descriptor();
@@ -622,7 +622,7 @@ class ResultOwner {
     return cudaSuccess;
   }
 
-  gpuxtb_batch_result_t descriptor{};
+  xtbloom_batch_result_t descriptor{};
 
  private:
   GuardedOutput<double> energies_;
@@ -654,7 +654,7 @@ int compare_values(const char* name, const std::vector<double>& actual,
 }
 
 int compare_result(const ResultOwner& owner, const MaterializedResult& actual,
-                   const MaterializedResult& expected, const gpuxtb_compute_options_t& options) {
+                   const MaterializedResult& expected, const xtbloom_compute_options_t& options) {
   bool guards = false;
   CUDA_CHECK(owner.guards_intact(guards));
   CHECK(guards);
@@ -663,7 +663,7 @@ int compare_result(const ResultOwner& owner, const MaterializedResult& actual,
   CHECK(actual.converged.size() == expected.converged.size());
   CHECK(actual.iterations.size() == expected.iterations.size());
   for (std::size_t system = 0; system < actual.statuses.size(); ++system) {
-    CHECK(actual.statuses[system] == GPUXTB_STATUS_SUCCESS);
+    CHECK(actual.statuses[system] == XTBLOOM_STATUS_SUCCESS);
     CHECK(actual.statuses[system] == expected.statuses[system]);
     CHECK(actual.converged[system] == 1u);
     CHECK(actual.converged[system] == expected.converged[system]);
@@ -699,8 +699,8 @@ int make_fixture_batch(std::size_t batch_size, bool enable_qmmm, PublicBatch& ba
   options.energy_tolerance = 1.0e-8;
   HostSccCase fixture;
   std::string error;
-  const gpuxtb_status_t status = HostSccCase::create(options, fixture, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  const xtbloom_status_t status = HostSccCase::create(options, fixture, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "failed to build public CUDA API fixture: %s\n", error.c_str());
     return __LINE__;
   }
@@ -727,31 +727,31 @@ PublicBatch make_representability_batch() {
   return batch;
 }
 
-int run_cpu_reference(gpuxtb_context_t* cpu_context, PublicBatch& batch,
-                      const gpuxtb_compute_options_t& options, MaterializedResult& reference) {
+int run_cpu_reference(xtbloom_context_t* cpu_context, PublicBatch& batch,
+                      const xtbloom_compute_options_t& options, MaterializedResult& reference) {
   ResultOwner result;
   bind_inputs(batch, nullptr, InputLayout::kHost);
   CUDA_CHECK(result.bind(batch, ResultLayout::kHost, options.flags));
-  CHECK(gpuxtb_compute(cpu_context, &batch.descriptor, &options, &result.descriptor) ==
-        GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(cpu_context, &batch.descriptor, &options, &result.descriptor) ==
+        XTBLOOM_STATUS_SUCCESS);
   CUDA_CHECK(result.materialize(reference));
   bool guards = false;
   CUDA_CHECK(result.guards_intact(guards));
   CHECK(guards);
   for (std::size_t system = 0; system < reference.statuses.size(); ++system) {
-    CHECK(reference.statuses[system] == GPUXTB_STATUS_SUCCESS);
+    CHECK(reference.statuses[system] == XTBLOOM_STATUS_SUCCESS);
     CHECK(reference.converged[system] == 1u);
   }
   return 0;
 }
 
-int execute_cuda_and_compare(gpuxtb_context_t* cuda_context, PublicBatch& batch,
-                             const gpuxtb_compute_options_t& options, ResultLayout layout,
+int execute_cuda_and_compare(xtbloom_context_t* cuda_context, PublicBatch& batch,
+                             const xtbloom_compute_options_t& options, ResultLayout layout,
                              const MaterializedResult& reference) {
   ResultOwner result;
   CUDA_CHECK(result.bind(batch, layout, options.flags));
-  CHECK(gpuxtb_compute(cuda_context, &batch.descriptor, &options, &result.descriptor) ==
-        GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(cuda_context, &batch.descriptor, &options, &result.descriptor) ==
+        XTBLOOM_STATUS_SUCCESS);
   MaterializedResult actual;
   CUDA_CHECK(result.materialize(actual));
   return compare_result(result, actual, reference, options);
@@ -759,12 +759,12 @@ int execute_cuda_and_compare(gpuxtb_context_t* cuda_context, PublicBatch& batch,
 
 int verify_input_layout(const PublicBatch& batch, InputLayout layout, bool qmmm);
 
-int test_public_representability_matrix(std::int32_t device, gpuxtb_context_t* cpu_context,
-                                        const gpuxtb_compute_options_t& options) {
+int test_public_representability_matrix(std::int32_t device, xtbloom_context_t* cpu_context,
+                                        const xtbloom_compute_options_t& options) {
   PublicBatch batch = make_representability_batch();
-  gpuxtb_compute_options_t finite_temperature_options = options;
-  finite_temperature_options.flags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_ATOMIC_CHARGES;
-  finite_temperature_options.electronic_temperature = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+  xtbloom_compute_options_t finite_temperature_options = options;
+  finite_temperature_options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+  finite_temperature_options.electronic_temperature = XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE;
   CHECK(finite_temperature_options.electronic_temperature > 0.0);
   const double corner_electrons = 3.0 - batch.molecular_charges[1];
   CHECK(0.5 * corner_electrons == std::nextafter(3.0, 0.0));
@@ -772,8 +772,8 @@ int test_public_representability_matrix(std::int32_t device, gpuxtb_context_t* c
   g_scenario = "representability/CPU-reference";
   CHECK(run_cpu_reference(cpu_context, batch, finite_temperature_options, reference) == 0);
   CHECK(reference.statuses.size() == 2u);
-  CHECK(reference.statuses[0] == GPUXTB_STATUS_SUCCESS);
-  CHECK(reference.statuses[1] == GPUXTB_STATUS_SUCCESS);
+  CHECK(reference.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  CHECK(reference.statuses[1] == XTBLOOM_STATUS_SUCCESS);
   CHECK(reference.converged[0] == 1u && reference.converged[1] == 1u);
   CHECK(reference.iterations[1] > 0 &&
         reference.iterations[1] <= finite_temperature_options.max_scc_iterations);
@@ -784,9 +784,9 @@ int test_public_representability_matrix(std::int32_t device, gpuxtb_context_t* c
 
   StreamOwner stream;
   CUDA_CHECK(stream.create());
-  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
-  ContextHandle context = make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), context_status);
-  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(context != nullptr);
 
   DeviceBatchInputs device_inputs;
@@ -807,13 +807,13 @@ int test_public_representability_matrix(std::int32_t device, gpuxtb_context_t* c
     }
     ResultOwner owner;
     CUDA_CHECK(owner.bind(batch, result_layout, finite_temperature_options.flags));
-    CHECK(gpuxtb_compute(context.get(), &batch.descriptor, &finite_temperature_options,
-                         &owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &finite_temperature_options,
+                          &owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
     MaterializedResult actual;
     CUDA_CHECK(owner.materialize(actual));
     CHECK(compare_result(owner, actual, reference, finite_temperature_options) == 0);
-    CHECK(actual.statuses[0] == GPUXTB_STATUS_SUCCESS);
-    CHECK(actual.statuses[1] == GPUXTB_STATUS_SUCCESS);
+    CHECK(actual.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+    CHECK(actual.statuses[1] == XTBLOOM_STATUS_SUCCESS);
     CHECK(actual.converged[0] == 1u && actual.converged[1] == 1u);
     CHECK(actual.iterations[1] > 0 &&
           actual.iterations[1] <= finite_temperature_options.max_scc_iterations);
@@ -824,13 +824,13 @@ int test_public_representability_matrix(std::int32_t device, gpuxtb_context_t* c
   return 0;
 }
 
-int expect_strict_warm_rejection(gpuxtb_context_t* context, PublicBatch& batch,
-                                 const gpuxtb_compute_options_t& options, ResultLayout layout) {
+int expect_strict_warm_rejection(xtbloom_context_t* context, PublicBatch& batch,
+                                 const xtbloom_compute_options_t& options, ResultLayout layout) {
   bind_inputs(batch, nullptr, InputLayout::kHost);
   ResultOwner result;
   CUDA_CHECK(result.bind(batch, layout, options.flags));
-  CHECK(gpuxtb_compute(context, &batch.descriptor, &options, &result.descriptor) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom_compute(context, &batch.descriptor, &options, &result.descriptor) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   bool unchanged = false;
   CUDA_CHECK(result.unchanged(unchanged));
   CHECK(unchanged);
@@ -843,22 +843,22 @@ int expect_strict_warm_rejection(gpuxtb_context_t* context, PublicBatch& batch,
 int test_public_warm_start_transactions(std::int32_t device) {
   StreamOwner stream;
   CUDA_CHECK(stream.create());
-  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
-  ContextHandle context = make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), context_status);
-  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(context != nullptr);
-  gpuxtb_status_t reference_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  xtbloom_status_t reference_status = XTBLOOM_STATUS_INTERNAL_ERROR;
   ContextHandle fresh_reference =
-      make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), reference_status);
-  CHECK(reference_status == GPUXTB_STATUS_SUCCESS);
+      make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), reference_status);
+  CHECK(reference_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(fresh_reference != nullptr);
 
   PublicBatch batch_a;
   CHECK(make_fixture_batch(1u, false, batch_a) == 0);
-  gpuxtb_compute_options_t fresh_options = make_compute_options();
-  fresh_options.scc_start_mode = GPUXTB_SCC_START_FRESH;
-  gpuxtb_compute_options_t warm_options = fresh_options;
-  warm_options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  xtbloom_compute_options_t fresh_options = make_compute_options();
+  fresh_options.scc_start_mode = XTBLOOM_SCC_START_FRESH;
+  xtbloom_compute_options_t warm_options = fresh_options;
+  warm_options.scc_start_mode = XTBLOOM_SCC_START_WARM;
 
   /* First-call WARM is rejected before any runtime or caller-output commit.
    * Exercise every public output placement because rollback is part of the ABI. */
@@ -875,28 +875,28 @@ int test_public_warm_start_transactions(std::int32_t device) {
    * must not advertise a complete batch checkpoint to the next strict WARM
    * call merely because result publication itself succeeded. */
   g_scenario = "warm/reject-after-nonconverged-fresh";
-  gpuxtb_status_t nonconverged_context_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  xtbloom_status_t nonconverged_context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
   ContextHandle nonconverged_context =
-      make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), nonconverged_context_status);
-  CHECK(nonconverged_context_status == GPUXTB_STATUS_SUCCESS);
+      make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), nonconverged_context_status);
+  CHECK(nonconverged_context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(nonconverged_context != nullptr);
   PublicBatch nonconverged_batch;
   CHECK(make_fixture_batch(1u, false, nonconverged_batch) == 0);
-  gpuxtb_compute_options_t one_iteration_fresh = fresh_options;
+  xtbloom_compute_options_t one_iteration_fresh = fresh_options;
   one_iteration_fresh.max_scc_iterations = 1;
   ResultOwner nonconverged_owner;
   CUDA_CHECK(
       nonconverged_owner.bind(nonconverged_batch, ResultLayout::kHost, one_iteration_fresh.flags));
-  CHECK(gpuxtb_compute(nonconverged_context.get(), &nonconverged_batch.descriptor,
-                       &one_iteration_fresh,
-                       &nonconverged_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(nonconverged_context.get(), &nonconverged_batch.descriptor,
+                        &one_iteration_fresh,
+                        &nonconverged_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
   MaterializedResult nonconverged;
   CUDA_CHECK(nonconverged_owner.materialize(nonconverged));
-  CHECK(nonconverged.statuses[0] == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+  CHECK(nonconverged.statuses[0] == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
   CHECK(nonconverged.converged[0] == 0u);
   CHECK(nonconverged.iterations[0] == 1);
-  gpuxtb_compute_options_t one_iteration_warm = one_iteration_fresh;
-  one_iteration_warm.scc_start_mode = GPUXTB_SCC_START_WARM;
+  xtbloom_compute_options_t one_iteration_warm = one_iteration_fresh;
+  one_iteration_warm.scc_start_mode = XTBLOOM_SCC_START_WARM;
   CHECK(expect_strict_warm_rejection(nonconverged_context.get(), nonconverged_batch,
                                      one_iteration_warm, ResultLayout::kMixed) == 0);
 
@@ -904,8 +904,8 @@ int test_public_warm_start_transactions(std::int32_t device) {
   bind_inputs(batch_a, nullptr, InputLayout::kHost);
   ResultOwner fresh_a_owner;
   CUDA_CHECK(fresh_a_owner.bind(batch_a, ResultLayout::kHost, fresh_options.flags));
-  CHECK(gpuxtb_compute(context.get(), &batch_a.descriptor, &fresh_options,
-                       &fresh_a_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(context.get(), &batch_a.descriptor, &fresh_options,
+                        &fresh_a_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
   MaterializedResult fresh_a;
   CUDA_CHECK(fresh_a_owner.materialize(fresh_a));
   CHECK(compare_result(fresh_a_owner, fresh_a, fresh_a, fresh_options) == 0);
@@ -913,8 +913,8 @@ int test_public_warm_start_transactions(std::int32_t device) {
   g_scenario = "warm/warm-A";
   ResultOwner warm_a_owner;
   CUDA_CHECK(warm_a_owner.bind(batch_a, ResultLayout::kDevice, warm_options.flags));
-  CHECK(gpuxtb_compute(context.get(), &batch_a.descriptor, &warm_options,
-                       &warm_a_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(context.get(), &batch_a.descriptor, &warm_options,
+                        &warm_a_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
   MaterializedResult warm_a;
   CUDA_CHECK(warm_a_owner.materialize(warm_a));
   CHECK(compare_result(warm_a_owner, warm_a, fresh_a, warm_options) == 0);
@@ -928,8 +928,8 @@ int test_public_warm_start_transactions(std::int32_t device) {
   g_scenario = "warm/reseed-fresh-A-for-B";
   ResultOwner reseeded_a_owner;
   CUDA_CHECK(reseeded_a_owner.bind(batch_a, ResultLayout::kHost, fresh_options.flags));
-  CHECK(gpuxtb_compute(context.get(), &batch_a.descriptor, &fresh_options,
-                       &reseeded_a_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(context.get(), &batch_a.descriptor, &fresh_options,
+                        &reseeded_a_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
   MaterializedResult reseeded_a;
   CUDA_CHECK(reseeded_a_owner.materialize(reseeded_a));
   CHECK(compare_result(reseeded_a_owner, reseeded_a, fresh_a, fresh_options) == 0);
@@ -940,8 +940,8 @@ int test_public_warm_start_transactions(std::int32_t device) {
   bind_inputs(batch_b, nullptr, InputLayout::kHost);
   ResultOwner fresh_b_owner;
   CUDA_CHECK(fresh_b_owner.bind(batch_b, ResultLayout::kHost, fresh_options.flags));
-  CHECK(gpuxtb_compute(fresh_reference.get(), &batch_b.descriptor, &fresh_options,
-                       &fresh_b_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(fresh_reference.get(), &batch_b.descriptor, &fresh_options,
+                        &fresh_b_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
   MaterializedResult fresh_b;
   CUDA_CHECK(fresh_b_owner.materialize(fresh_b));
   CHECK(compare_result(fresh_b_owner, fresh_b, fresh_b, fresh_options) == 0);
@@ -949,8 +949,8 @@ int test_public_warm_start_transactions(std::int32_t device) {
   g_scenario = "warm/warm-B";
   ResultOwner warm_b_owner;
   CUDA_CHECK(warm_b_owner.bind(batch_b, ResultLayout::kMixed, warm_options.flags));
-  CHECK(gpuxtb_compute(context.get(), &batch_b.descriptor, &warm_options,
-                       &warm_b_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(context.get(), &batch_b.descriptor, &warm_options,
+                        &warm_b_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
   MaterializedResult warm_b;
   CUDA_CHECK(warm_b_owner.materialize(warm_b));
   CHECK(compare_result(warm_b_owner, warm_b, fresh_b, warm_options) == 0);
@@ -986,13 +986,13 @@ int test_public_warm_start_transactions(std::int32_t device) {
   CHECK(expect_strict_warm_rejection(context.get(), unpaired_changed, warm_options,
                                      ResultLayout::kMixed) == 0);
 
-  gpuxtb_compute_options_t temperature_changed = warm_options;
+  xtbloom_compute_options_t temperature_changed = warm_options;
   temperature_changed.electronic_temperature = 300.0;
   g_scenario = "warm/reject-temperature";
   CHECK(expect_strict_warm_rejection(context.get(), batch_b, temperature_changed,
                                      ResultLayout::kHost) == 0);
 
-  gpuxtb_compute_options_t policy_changed = warm_options;
+  xtbloom_compute_options_t policy_changed = warm_options;
   policy_changed.max_scc_iterations -= 1;
   g_scenario = "warm/reject-policy";
   CHECK(expect_strict_warm_rejection(context.get(), batch_b, policy_changed,
@@ -1001,8 +1001,8 @@ int test_public_warm_start_transactions(std::int32_t device) {
   g_scenario = "warm/checkpoint-survives-rejections";
   ResultOwner preserved_owner;
   CUDA_CHECK(preserved_owner.bind(batch_b, ResultLayout::kMixed, warm_options.flags));
-  CHECK(gpuxtb_compute(context.get(), &batch_b.descriptor, &warm_options,
-                       &preserved_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(context.get(), &batch_b.descriptor, &warm_options,
+                        &preserved_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
   MaterializedResult preserved;
   CUDA_CHECK(preserved_owner.materialize(preserved));
   CHECK(compare_result(preserved_owner, preserved, fresh_b, warm_options) == 0);
@@ -1013,8 +1013,8 @@ int test_public_warm_start_transactions(std::int32_t device) {
   bind_inputs(topology_changed, nullptr, InputLayout::kHost);
   ResultOwner recovered_owner;
   CUDA_CHECK(recovered_owner.bind(topology_changed, ResultLayout::kDevice, fresh_options.flags));
-  CHECK(gpuxtb_compute(context.get(), &topology_changed.descriptor, &fresh_options,
-                       &recovered_owner.descriptor) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(context.get(), &topology_changed.descriptor, &fresh_options,
+                        &recovered_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
   MaterializedResult recovered;
   CUDA_CHECK(recovered_owner.materialize(recovered));
   CHECK(compare_result(recovered_owner, recovered, recovered, fresh_options) == 0);
@@ -1022,13 +1022,13 @@ int test_public_warm_start_transactions(std::int32_t device) {
 }
 
 int test_host_device_mixed_and_streams(std::int32_t device, PublicBatch& batch,
-                                       const gpuxtb_compute_options_t& options,
+                                       const xtbloom_compute_options_t& options,
                                        const MaterializedResult& reference) {
   g_scenario = "host-output/default-stream";
-  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
   ContextHandle default_context =
-      make_context(GPUXTB_BACKEND_CUDA, device, nullptr, context_status);
-  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+      make_context(XTBLOOM_BACKEND_CUDA, device, nullptr, context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(default_context != nullptr);
   CHECK(execute_cuda_and_compare(default_context.get(), batch, options, ResultLayout::kHost,
                                  reference) == 0);
@@ -1037,8 +1037,8 @@ int test_host_device_mixed_and_streams(std::int32_t device, PublicBatch& batch,
   StreamOwner stream;
   CUDA_CHECK(stream.create());
   ContextHandle custom_context =
-      make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), context_status);
-  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+      make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(custom_context != nullptr);
   CHECK(execute_cuda_and_compare(custom_context.get(), batch, options, ResultLayout::kHost,
                                  reference) == 0);
@@ -1053,42 +1053,42 @@ int test_host_device_mixed_and_streams(std::int32_t device, PublicBatch& batch,
   return 0;
 }
 
-bool is_cuda_buffer(const gpuxtb_const_buffer_t& buffer) noexcept {
-  return buffer.data != nullptr && buffer.memory_space == GPUXTB_MEMORY_CUDA_DEVICE;
+bool is_cuda_buffer(const xtbloom_const_buffer_t& buffer) noexcept {
+  return buffer.data != nullptr && buffer.memory_space == XTBLOOM_MEMORY_CUDA_DEVICE;
 }
 
-bool is_host_buffer(const gpuxtb_const_buffer_t& buffer) noexcept {
-  return buffer.data != nullptr && buffer.memory_space == GPUXTB_MEMORY_HOST;
+bool is_host_buffer(const xtbloom_const_buffer_t& buffer) noexcept {
+  return buffer.data != nullptr && buffer.memory_space == XTBLOOM_MEMORY_HOST;
 }
 
 struct PlanDeleter {
-  void operator()(gpuxtb_plan_t* plan) const noexcept { gpuxtb_plan_destroy(plan); }
+  void operator()(xtbloom_plan_t* plan) const noexcept { xtbloom_plan_destroy(plan); }
 };
 
-using PlanHandle = std::unique_ptr<gpuxtb_plan_t, PlanDeleter>;
+using PlanHandle = std::unique_ptr<xtbloom_plan_t, PlanDeleter>;
 
 /* Fixed-topology CUDA plans reuse the prepared runtime, expose host/device
  * workspace queries that differ by requested properties, and reject topology
  * mismatches before output mutation (matching the CPU plan contract). */
-int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
-                       const gpuxtb_compute_options_t& base_options) {
+int test_cuda_plan_api(std::int32_t device, xtbloom_context_t* cpu_context,
+                       const xtbloom_compute_options_t& base_options) {
   g_scenario = "plan-api";
   StreamOwner stream;
   CUDA_CHECK(stream.create());
-  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
-  ContextHandle context = make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), context_status);
-  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(context != nullptr);
 
   PublicBatch batch;
   CHECK(make_fixture_batch(4u, false, batch) == 0);
-  gpuxtb_compute_options_t options = base_options;
+  xtbloom_compute_options_t options = base_options;
 
   MaterializedResult reference;
   CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
 
   /* Plan identity is canonicalized by the CUDA owner, so a plan accepts the
-   * same all-device topology descriptors as gpuxtb_compute. */
+   * same all-device topology descriptors as xtbloom_compute. */
   DeviceBatchInputs device_inputs;
   CUDA_CHECK(device_inputs.upload_all(batch));
   bind_inputs(batch, &device_inputs, InputLayout::kDevice);
@@ -1096,42 +1096,43 @@ int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
 
   /* CUDA pointer ownership is checked before topology staging reads a buffer.
    * A device pointer tagged as HOST must fail plan creation transactionally. */
-  gpuxtb_batch_t mislabeled = batch.descriptor;
-  mislabeled.atom_offsets.memory_space = GPUXTB_MEMORY_HOST;
-  gpuxtb_plan_t* raw_mislabeled_plan = reinterpret_cast<gpuxtb_plan_t*>(UINTPTR_MAX);
-  CHECK(gpuxtb_plan_create(context.get(), &mislabeled, &options, &raw_mislabeled_plan) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  xtbloom_batch_t mislabeled = batch.descriptor;
+  mislabeled.atom_offsets.memory_space = XTBLOOM_MEMORY_HOST;
+  xtbloom_plan_t* raw_mislabeled_plan = reinterpret_cast<xtbloom_plan_t*>(UINTPTR_MAX);
+  CHECK(xtbloom_plan_create(context.get(), &mislabeled, &options, &raw_mislabeled_plan) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(raw_mislabeled_plan == nullptr);
 
-  gpuxtb_plan_t* raw_plan = nullptr;
-  CHECK(gpuxtb_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
-        GPUXTB_STATUS_SUCCESS);
+  xtbloom_plan_t* raw_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(raw_plan != nullptr);
   PlanHandle plan(raw_plan);
 
   /* Host workspace is nonzero and well-aligned; the CUDA runtime reserves
    * device workspace that grows when forces are requested. */
-  gpuxtb_workspace_query_t query{};
-  CHECK(gpuxtb_workspace_query_init(&query, sizeof(query)) == GPUXTB_STATUS_SUCCESS);
+  xtbloom_workspace_query_t query{};
+  CHECK(xtbloom_workspace_query_init(&query, sizeof(query)) == XTBLOOM_STATUS_SUCCESS);
   query.compute_flags = options.flags;
-  CHECK(gpuxtb_plan_query_workspace(plan.get(), &query) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_plan_query_workspace(plan.get(), &query) == XTBLOOM_STATUS_SUCCESS);
   CHECK(query.host_required_bytes > 0u);
   CHECK(query.host_required_alignment >= 8u);
   CHECK(query.device_required_bytes > 0u);
   CHECK(query.device_required_alignment >= 8u);
 
-  gpuxtb_compute_options_t energy_options = options;
-  energy_options.flags = GPUXTB_COMPUTE_ENERGY;
-  gpuxtb_plan_t* raw_energy_plan = nullptr;
-  CHECK(gpuxtb_plan_create(context.get(), &batch.descriptor, &energy_options, &raw_energy_plan) ==
-        GPUXTB_STATUS_SUCCESS);
+  xtbloom_compute_options_t energy_options = options;
+  energy_options.flags = XTBLOOM_COMPUTE_ENERGY;
+  xtbloom_plan_t* raw_energy_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &energy_options, &raw_energy_plan) ==
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(raw_energy_plan != nullptr);
   PlanHandle energy_plan(raw_energy_plan);
 
-  gpuxtb_workspace_query_t energy_query{};
-  CHECK(gpuxtb_workspace_query_init(&energy_query, sizeof(energy_query)) == GPUXTB_STATUS_SUCCESS);
-  energy_query.compute_flags = GPUXTB_COMPUTE_ENERGY;
-  CHECK(gpuxtb_plan_query_workspace(energy_plan.get(), &energy_query) == GPUXTB_STATUS_SUCCESS);
+  xtbloom_workspace_query_t energy_query{};
+  CHECK(xtbloom_workspace_query_init(&energy_query, sizeof(energy_query)) ==
+        XTBLOOM_STATUS_SUCCESS);
+  energy_query.compute_flags = XTBLOOM_COMPUTE_ENERGY;
+  CHECK(xtbloom_plan_query_workspace(energy_plan.get(), &energy_query) == XTBLOOM_STATUS_SUCCESS);
   CHECK(energy_query.host_required_bytes > 0u);
   CHECK(query.device_required_bytes >= energy_query.device_required_bytes);
 
@@ -1140,35 +1141,35 @@ int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
    * the property flag is the only source of the workspace-size difference. */
   PublicBatch qmmm_batch;
   CHECK(make_fixture_batch(4u, true, qmmm_batch) == 0);
-  gpuxtb_compute_options_t qmmm_energy_options = options;
-  qmmm_energy_options.flags = GPUXTB_COMPUTE_ENERGY;
-  gpuxtb_plan_t* raw_qmmm_energy_plan = nullptr;
-  CHECK(gpuxtb_plan_create(context.get(), &qmmm_batch.descriptor, &qmmm_energy_options,
-                           &raw_qmmm_energy_plan) == GPUXTB_STATUS_SUCCESS);
+  xtbloom_compute_options_t qmmm_energy_options = options;
+  qmmm_energy_options.flags = XTBLOOM_COMPUTE_ENERGY;
+  xtbloom_plan_t* raw_qmmm_energy_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &qmmm_batch.descriptor, &qmmm_energy_options,
+                            &raw_qmmm_energy_plan) == XTBLOOM_STATUS_SUCCESS);
   CHECK(raw_qmmm_energy_plan != nullptr);
   PlanHandle qmmm_energy_plan(raw_qmmm_energy_plan);
 
-  gpuxtb_workspace_query_t qmmm_energy_query{};
-  CHECK(gpuxtb_workspace_query_init(&qmmm_energy_query, sizeof(qmmm_energy_query)) ==
-        GPUXTB_STATUS_SUCCESS);
+  xtbloom_workspace_query_t qmmm_energy_query{};
+  CHECK(xtbloom_workspace_query_init(&qmmm_energy_query, sizeof(qmmm_energy_query)) ==
+        XTBLOOM_STATUS_SUCCESS);
   qmmm_energy_query.compute_flags = qmmm_energy_options.flags;
-  CHECK(gpuxtb_plan_query_workspace(qmmm_energy_plan.get(), &qmmm_energy_query) ==
-        GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_plan_query_workspace(qmmm_energy_plan.get(), &qmmm_energy_query) ==
+        XTBLOOM_STATUS_SUCCESS);
 
-  gpuxtb_compute_options_t qmmm_point_force_options = options;
-  qmmm_point_force_options.flags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_POINT_CHARGE_FORCES;
-  gpuxtb_plan_t* raw_qmmm_point_force_plan = nullptr;
-  CHECK(gpuxtb_plan_create(context.get(), &qmmm_batch.descriptor, &qmmm_point_force_options,
-                           &raw_qmmm_point_force_plan) == GPUXTB_STATUS_SUCCESS);
+  xtbloom_compute_options_t qmmm_point_force_options = options;
+  qmmm_point_force_options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
+  xtbloom_plan_t* raw_qmmm_point_force_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &qmmm_batch.descriptor, &qmmm_point_force_options,
+                            &raw_qmmm_point_force_plan) == XTBLOOM_STATUS_SUCCESS);
   CHECK(raw_qmmm_point_force_plan != nullptr);
   PlanHandle qmmm_point_force_plan(raw_qmmm_point_force_plan);
 
-  gpuxtb_workspace_query_t qmmm_point_force_query{};
-  CHECK(gpuxtb_workspace_query_init(&qmmm_point_force_query, sizeof(qmmm_point_force_query)) ==
-        GPUXTB_STATUS_SUCCESS);
+  xtbloom_workspace_query_t qmmm_point_force_query{};
+  CHECK(xtbloom_workspace_query_init(&qmmm_point_force_query, sizeof(qmmm_point_force_query)) ==
+        XTBLOOM_STATUS_SUCCESS);
   qmmm_point_force_query.compute_flags = qmmm_point_force_options.flags;
-  CHECK(gpuxtb_plan_query_workspace(qmmm_point_force_plan.get(), &qmmm_point_force_query) ==
-        GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_plan_query_workspace(qmmm_point_force_plan.get(), &qmmm_point_force_query) ==
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(qmmm_point_force_query.device_required_bytes > qmmm_energy_query.device_required_bytes);
 
   /* Plan compute equals the CPU reference on the original and a changed
@@ -1176,8 +1177,8 @@ int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
   {
     ResultOwner owner;
     CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
-    CHECK(gpuxtb_plan_compute(plan.get(), &batch.descriptor, &options, &owner.descriptor) ==
-          GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom_plan_compute(plan.get(), &batch.descriptor, &options, &owner.descriptor) ==
+          XTBLOOM_STATUS_SUCCESS);
     MaterializedResult actual;
     CUDA_CHECK(owner.materialize(actual));
     CHECK(compare_result(owner, actual, reference, options) == 0);
@@ -1191,8 +1192,8 @@ int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
   {
     ResultOwner owner;
     CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
-    CHECK(gpuxtb_plan_compute(plan.get(), &batch.descriptor, &options, &owner.descriptor) ==
-          GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom_plan_compute(plan.get(), &batch.descriptor, &options, &owner.descriptor) ==
+          XTBLOOM_STATUS_SUCCESS);
     MaterializedResult actual;
     CUDA_CHECK(owner.materialize(actual));
     CHECK(compare_result(owner, actual, changed_reference, options) == 0);
@@ -1203,10 +1204,10 @@ int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
   {
     ResultOwner owner;
     CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
-    gpuxtb_batch_t mislabeled_compute = batch.descriptor;
-    mislabeled_compute.atomic_numbers.memory_space = GPUXTB_MEMORY_HOST;
-    CHECK(gpuxtb_plan_compute(plan.get(), &mislabeled_compute, &options, &owner.descriptor) ==
-          GPUXTB_STATUS_INVALID_ARGUMENT);
+    xtbloom_batch_t mislabeled_compute = batch.descriptor;
+    mislabeled_compute.atomic_numbers.memory_space = XTBLOOM_MEMORY_HOST;
+    CHECK(xtbloom_plan_compute(plan.get(), &mislabeled_compute, &options, &owner.descriptor) ==
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
     bool unchanged = false;
     CUDA_CHECK(owner.unchanged(unchanged));
     CHECK(unchanged);
@@ -1221,8 +1222,8 @@ int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
   bind_inputs(other, &other_inputs, InputLayout::kDevice);
   ResultOwner other_result;
   CUDA_CHECK(other_result.bind(other, ResultLayout::kDevice, options.flags));
-  CHECK(gpuxtb_plan_compute(plan.get(), &other.descriptor, &options, &other_result.descriptor) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom_plan_compute(plan.get(), &other.descriptor, &options, &other_result.descriptor) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   bool unchanged = false;
   CUDA_CHECK(other_result.unchanged(unchanged));
   CHECK(unchanged);
@@ -1274,19 +1275,19 @@ int verify_input_layout(const PublicBatch& batch, InputLayout layout, bool qmmm)
  * checked against the CPU C API, then submitted as all-device and mixed
  * descriptors. A final numerical-only upload reuses every device address and
  * proves the fixed-topology direct path on a changed request. */
-int test_input_descriptor_matrix(std::int32_t device, gpuxtb_context_t* cpu_context,
-                                 const gpuxtb_compute_options_t& base_options) {
+int test_input_descriptor_matrix(std::int32_t device, xtbloom_context_t* cpu_context,
+                                 const xtbloom_compute_options_t& base_options) {
   StreamOwner stream;
   CUDA_CHECK(stream.create());
-  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
-  ContextHandle context = make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), context_status);
-  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(context != nullptr);
 
   std::string scenario;
   for (bool qmmm : {false, true}) {
-    gpuxtb_compute_options_t options = base_options;
-    if (qmmm) options.flags |= GPUXTB_COMPUTE_POINT_CHARGE_FORCES;
+    xtbloom_compute_options_t options = base_options;
+    if (qmmm) options.flags |= XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
     for (std::size_t batch_size : {1u, 8u, 32u, 128u}) {
       scenario = std::string(qmmm ? "qmmm" : "base") + "/batch-" + std::to_string(batch_size);
       g_scenario = scenario.c_str();
@@ -1333,7 +1334,7 @@ int test_input_descriptor_matrix(std::int32_t device, gpuxtb_context_t* cpu_cont
 }
 
 int test_current_device_restored(int device_count, std::int32_t context_device, PublicBatch& batch,
-                                 const gpuxtb_compute_options_t& options,
+                                 const xtbloom_compute_options_t& options,
                                  const MaterializedResult& reference) {
   if (device_count < 2) {
     std::puts("cuda_public_api_test: SKIP current-device restoration (requires two devices)");
@@ -1344,10 +1345,10 @@ int test_current_device_restored(int device_count, std::int32_t context_device, 
   CUDA_CHECK(cudaSetDevice(context_device));
   StreamOwner stream;
   CUDA_CHECK(stream.create());
-  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
   ContextHandle context =
-      make_context(GPUXTB_BACKEND_CUDA, context_device, stream.get(), context_status);
-  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+      make_context(XTBLOOM_BACKEND_CUDA, context_device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(context != nullptr);
 
   const int caller_device = context_device == 0 ? 1 : 0;
@@ -1358,8 +1359,8 @@ int test_current_device_restored(int device_count, std::int32_t context_device, 
 
   ResultOwner result;
   CUDA_CHECK(result.bind(batch, ResultLayout::kHost));
-  CHECK(gpuxtb_compute(context.get(), &batch.descriptor, &options, &result.descriptor) ==
-        GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options, &result.descriptor) ==
+        XTBLOOM_STATUS_SUCCESS);
   int after = -1;
   CUDA_CHECK(cudaGetDevice(&after));
   CHECK(after == before);
@@ -1375,7 +1376,7 @@ int test_current_device_restored(int device_count, std::int32_t context_device, 
 
 /* Wrong-device determinism at the public ABI: a live CUDA allocation that
  * belongs to a different physical device than the context must be rejected
- * with GPUXTB_STATUS_INVALID_ARGUMENT before any caller output byte is
+ * with XTBLOOM_STATUS_INVALID_ARGUMENT before any caller output byte is
  * touched, and the caller's thread-local current device must be restored.
  * Runs only when at least two GPUs are visible; on a single-GPU host the
  * mislabeled-space half of the contract (host-tagged device pointer and
@@ -1383,7 +1384,7 @@ int test_current_device_restored(int device_count, std::int32_t context_device, 
  * below, which shares this scenario code path through the same validator. */
 int test_public_wrong_device_rejection(int device_count, std::int32_t context_device,
                                        PublicBatch& batch,
-                                       const gpuxtb_compute_options_t& options) {
+                                       const xtbloom_compute_options_t& options) {
   if (device_count < 2) {
     std::puts("cuda_public_api_test: SKIP wrong-device rejection (requires two devices)");
     return 0;
@@ -1393,10 +1394,10 @@ int test_public_wrong_device_rejection(int device_count, std::int32_t context_de
   CUDA_CHECK(cudaSetDevice(context_device));
   StreamOwner stream;
   CUDA_CHECK(stream.create());
-  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
   ContextHandle context =
-      make_context(GPUXTB_BACKEND_CUDA, context_device, stream.get(), context_status);
-  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+      make_context(XTBLOOM_BACKEND_CUDA, context_device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(context != nullptr);
 
   const int foreign_device = context_device == 0 ? 1 : 0;
@@ -1414,16 +1415,16 @@ int test_public_wrong_device_rejection(int device_count, std::int32_t context_de
    * foreign allocation device on one side, exercising isolation on the way in
    * and out. */
   CUDA_CHECK(cudaSetDevice(foreign_device));
-  g_scenario = "wrong-device-rejection/gpuxtb_compute";
+  g_scenario = "wrong-device-rejection/xtbloom_compute";
   {
     PublicBatch wrong = batch;
     wrong.bind();
     wrong.descriptor.positions = {foreign_positions, wrong.positions.size() * sizeof(double),
-                                  GPUXTB_MEMORY_CUDA_DEVICE, 0u};
+                                  XTBLOOM_MEMORY_CUDA_DEVICE, 0u};
     ResultOwner result;
     CUDA_CHECK(result.bind(wrong, ResultLayout::kHost));
-    CHECK(gpuxtb_compute(context.get(), &wrong.descriptor, &options, &result.descriptor) ==
-          GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom_compute(context.get(), &wrong.descriptor, &options, &result.descriptor) ==
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
     bool unchanged = false;
     CUDA_CHECK(result.unchanged(unchanged));
     CHECK(unchanged);
@@ -1440,11 +1441,11 @@ int test_public_wrong_device_rejection(int device_count, std::int32_t context_de
     PublicBatch wrong = batch;
     wrong.bind();
     wrong.descriptor.positions = {foreign_positions, wrong.positions.size() * sizeof(double),
-                                  GPUXTB_MEMORY_CUDA_DEVICE, 0u};
-    gpuxtb_plan_t* raw_plan = reinterpret_cast<gpuxtb_plan_t*>(UINTPTR_MAX);
+                                  XTBLOOM_MEMORY_CUDA_DEVICE, 0u};
+    xtbloom_plan_t* raw_plan = reinterpret_cast<xtbloom_plan_t*>(UINTPTR_MAX);
     CUDA_CHECK(cudaSetDevice(foreign_device));
-    CHECK(gpuxtb_plan_create(context.get(), &wrong.descriptor, &options, &raw_plan) ==
-          GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom_plan_create(context.get(), &wrong.descriptor, &options, &raw_plan) ==
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(raw_plan == nullptr);
     int after = -1;
     CUDA_CHECK(cudaGetDevice(&after));
@@ -1456,21 +1457,21 @@ int test_public_wrong_device_rejection(int device_count, std::int32_t context_de
     PublicBatch wrong = batch;
     wrong.bind();
     wrong.descriptor.positions = {foreign_positions, wrong.positions.size() * sizeof(double),
-                                  GPUXTB_MEMORY_CUDA_DEVICE, 0u};
+                                  XTBLOOM_MEMORY_CUDA_DEVICE, 0u};
     ResultOwner result;
     CUDA_CHECK(result.bind(wrong, ResultLayout::kHost));
-    gpuxtb_plan_t* raw_plan = nullptr;
+    xtbloom_plan_t* raw_plan = nullptr;
     CUDA_CHECK(cudaSetDevice(foreign_device));
-    CHECK(gpuxtb_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
-          GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
+          XTBLOOM_STATUS_SUCCESS);
     CHECK(raw_plan != nullptr);
     int after_create = -1;
     CUDA_CHECK(cudaGetDevice(&after_create));
     CHECK(after_create == foreign_device);
     PlanHandle plan(raw_plan);
     CUDA_CHECK(cudaSetDevice(foreign_device));
-    CHECK(gpuxtb_plan_compute(plan.get(), &wrong.descriptor, &options, &result.descriptor) ==
-          GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom_plan_compute(plan.get(), &wrong.descriptor, &options, &result.descriptor) ==
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
     int after_compute = -1;
     CUDA_CHECK(cudaGetDevice(&after_compute));
     CHECK(after_compute == foreign_device);
@@ -1494,8 +1495,8 @@ int test_public_wrong_device_rejection(int device_count, std::int32_t context_de
     CUDA_CHECK(result.bind(valid, ResultLayout::kDevice));
 
     CUDA_CHECK(cudaSetDevice(foreign_device));
-    CHECK(gpuxtb_compute(context.get(), &valid.descriptor, &options, &result.descriptor) ==
-          GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom_compute(context.get(), &valid.descriptor, &options, &result.descriptor) ==
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
     int after = -1;
     CUDA_CHECK(cudaGetDevice(&after));
     CHECK(after == foreign_device);
@@ -1523,14 +1524,14 @@ int test_public_wrong_device_rejection(int device_count, std::int32_t context_de
  * pointers, so both halves of the wrong-device acceptance are covered on one
  * visible GPU. */
 int test_public_mislabeled_rejection(std::int32_t device, PublicBatch& batch,
-                                     const gpuxtb_compute_options_t& options,
+                                     const xtbloom_compute_options_t& options,
                                      const MaterializedResult& reference) {
   g_scenario = "mislabeled-rejection/host-tagged-device";
   StreamOwner stream;
   CUDA_CHECK(stream.create());
-  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
-  ContextHandle context = make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), context_status);
-  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(context != nullptr);
   CHECK(execute_cuda_and_compare(context.get(), batch, options, ResultLayout::kHost, reference) ==
         0);
@@ -1545,12 +1546,12 @@ int test_public_mislabeled_rejection(std::int32_t device, PublicBatch& batch,
     PublicBatch mislabeled = batch;
     mislabeled.bind();
     mislabeled.descriptor.positions = {
-        device_positions, mislabeled.positions.size() * sizeof(double), GPUXTB_MEMORY_HOST, 0u};
+        device_positions, mislabeled.positions.size() * sizeof(double), XTBLOOM_MEMORY_HOST, 0u};
     ResultOwner result;
     CUDA_CHECK(result.bind(mislabeled, ResultLayout::kDevice));
     g_scenario = "mislabeled-rejection/device-as-host";
-    CHECK(gpuxtb_compute(context.get(), &mislabeled.descriptor, &options, &result.descriptor) ==
-          GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom_compute(context.get(), &mislabeled.descriptor, &options, &result.descriptor) ==
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
     bool unchanged = false;
     CUDA_CHECK(result.unchanged(unchanged));
     CHECK(unchanged);
@@ -1567,12 +1568,12 @@ int test_public_mislabeled_rejection(std::int32_t device, PublicBatch& batch,
     mislabeled.bind();
     mislabeled.descriptor.positions = {host_positions.data(),
                                        host_positions.size() * sizeof(double),
-                                       GPUXTB_MEMORY_CUDA_DEVICE, 0u};
+                                       XTBLOOM_MEMORY_CUDA_DEVICE, 0u};
     ResultOwner result;
     CUDA_CHECK(result.bind(mislabeled, ResultLayout::kHost));
     g_scenario = "mislabeled-rejection/host-as-device";
-    CHECK(gpuxtb_compute(context.get(), &mislabeled.descriptor, &options, &result.descriptor) ==
-          GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom_compute(context.get(), &mislabeled.descriptor, &options, &result.descriptor) ==
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
     bool unchanged = false;
     CUDA_CHECK(result.unchanged(unchanged));
     CHECK(unchanged);
@@ -1587,25 +1588,25 @@ int test_public_mislabeled_rejection(std::int32_t device, PublicBatch& batch,
 }
 
 int test_stream_capture_transactionality(std::int32_t device, PublicBatch& batch,
-                                         const gpuxtb_compute_options_t& options) {
+                                         const xtbloom_compute_options_t& options) {
   g_scenario = "stream-capture-transactionality";
   StreamOwner stream;
   CUDA_CHECK(stream.create());
-  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
-  ContextHandle context = make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), context_status);
-  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(context != nullptr);
   ResultOwner result;
   CUDA_CHECK(result.bind(batch, ResultLayout::kHost));
 
   CUDA_CHECK(cudaStreamBeginCapture(stream.get(), cudaStreamCaptureModeThreadLocal));
-  const gpuxtb_status_t status =
-      gpuxtb_compute(context.get(), &batch.descriptor, &options, &result.descriptor);
+  const xtbloom_status_t status =
+      xtbloom_compute(context.get(), &batch.descriptor, &options, &result.descriptor);
   cudaGraph_t graph = nullptr;
   const cudaError_t end_status = cudaStreamEndCapture(stream.get(), &graph);
   if (graph != nullptr) (void)cudaGraphDestroy(graph);
   CUDA_CHECK(end_status);
-  CHECK(status == GPUXTB_STATUS_NOT_SUPPORTED);
+  CHECK(status == XTBLOOM_STATUS_NOT_SUPPORTED);
   bool unchanged = false;
   CUDA_CHECK(result.unchanged(unchanged));
   CHECK(unchanged);
@@ -1613,25 +1614,25 @@ int test_stream_capture_transactionality(std::int32_t device, PublicBatch& batch
 }
 
 struct ThreadCall {
-  gpuxtb_context_t* context = nullptr;
+  xtbloom_context_t* context = nullptr;
   PublicBatch* batch = nullptr;
-  const gpuxtb_compute_options_t* options = nullptr;
+  const xtbloom_compute_options_t* options = nullptr;
   ResultOwner* result = nullptr;
-  gpuxtb_status_t status = GPUXTB_STATUS_INTERNAL_ERROR;
+  xtbloom_status_t status = XTBLOOM_STATUS_INTERNAL_ERROR;
   std::string error;
 };
 
 void run_thread_call(ThreadCall& call, std::atomic<int>& ready, std::atomic<bool>& start) {
   ready.fetch_add(1, std::memory_order_release);
   while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
-  call.status =
-      gpuxtb_compute(call.context, &call.batch->descriptor, call.options, &call.result->descriptor);
-  if (call.status != GPUXTB_STATUS_SUCCESS) call.error = gpuxtb_get_last_error();
+  call.status = xtbloom_compute(call.context, &call.batch->descriptor, call.options,
+                                &call.result->descriptor);
+  if (call.status != XTBLOOM_STATUS_SUCCESS) call.error = xtbloom_get_last_error();
 }
 
 int verify_thread_call(ThreadCall& call, const MaterializedResult& reference,
-                       const gpuxtb_compute_options_t& options) {
-  if (call.status != GPUXTB_STATUS_SUCCESS) {
+                       const xtbloom_compute_options_t& options) {
+  if (call.status != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "threaded public CUDA call failed in %s: status=%d error=%s\n", g_scenario,
                  static_cast<int>(call.status), call.error.c_str());
     return __LINE__;
@@ -1641,9 +1642,9 @@ int verify_thread_call(ThreadCall& call, const MaterializedResult& reference,
   return compare_result(*call.result, actual, reference, options);
 }
 
-int test_same_context_serialization(std::int32_t device, gpuxtb_context_t* cpu_context,
+int test_same_context_serialization(std::int32_t device, xtbloom_context_t* cpu_context,
                                     const PublicBatch& seed,
-                                    const gpuxtb_compute_options_t& options) {
+                                    const xtbloom_compute_options_t& options) {
   g_scenario = "same-context/two-threads";
   PublicBatch first = seed;
   PublicBatch second = seed;
@@ -1656,9 +1657,9 @@ int test_same_context_serialization(std::int32_t device, gpuxtb_context_t* cpu_c
 
   StreamOwner stream;
   CUDA_CHECK(stream.create());
-  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
-  ContextHandle context = make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), context_status);
-  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(context != nullptr);
   ResultOwner first_result;
   ResultOwner second_result;
@@ -1666,9 +1667,9 @@ int test_same_context_serialization(std::int32_t device, gpuxtb_context_t* cpu_c
   CUDA_CHECK(second_result.bind(second, ResultLayout::kHost));
 
   ThreadCall first_call{
-      context.get(), &first, &options, &first_result, GPUXTB_STATUS_INTERNAL_ERROR, {}};
+      context.get(), &first, &options, &first_result, XTBLOOM_STATUS_INTERNAL_ERROR, {}};
   ThreadCall second_call{
-      context.get(), &second, &options, &second_result, GPUXTB_STATUS_INTERNAL_ERROR, {}};
+      context.get(), &second, &options, &second_result, XTBLOOM_STATUS_INTERNAL_ERROR, {}};
   std::atomic<int> ready{0};
   std::atomic<bool> start{false};
   std::thread first_thread(run_thread_call, std::ref(first_call), std::ref(ready), std::ref(start));
@@ -1683,8 +1684,8 @@ int test_same_context_serialization(std::int32_t device, gpuxtb_context_t* cpu_c
   return 0;
 }
 
-int test_independent_contexts(std::int32_t device, gpuxtb_context_t* cpu_context,
-                              const PublicBatch& seed, const gpuxtb_compute_options_t& options) {
+int test_independent_contexts(std::int32_t device, xtbloom_context_t* cpu_context,
+                              const PublicBatch& seed, const xtbloom_compute_options_t& options) {
   g_scenario = "independent-contexts/two-threads";
   PublicBatch first = seed;
   PublicBatch second = seed;
@@ -1699,14 +1700,14 @@ int test_independent_contexts(std::int32_t device, gpuxtb_context_t* cpu_context
   StreamOwner second_stream;
   CUDA_CHECK(first_stream.create());
   CUDA_CHECK(second_stream.create());
-  gpuxtb_status_t first_context_status = GPUXTB_STATUS_INTERNAL_ERROR;
-  gpuxtb_status_t second_context_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  xtbloom_status_t first_context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  xtbloom_status_t second_context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
   ContextHandle first_context =
-      make_context(GPUXTB_BACKEND_CUDA, device, first_stream.get(), first_context_status);
+      make_context(XTBLOOM_BACKEND_CUDA, device, first_stream.get(), first_context_status);
   ContextHandle second_context =
-      make_context(GPUXTB_BACKEND_CUDA, device, second_stream.get(), second_context_status);
-  CHECK(first_context_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(second_context_status == GPUXTB_STATUS_SUCCESS);
+      make_context(XTBLOOM_BACKEND_CUDA, device, second_stream.get(), second_context_status);
+  CHECK(first_context_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(second_context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(first_context != nullptr);
   CHECK(second_context != nullptr);
   ResultOwner first_result;
@@ -1714,10 +1715,10 @@ int test_independent_contexts(std::int32_t device, gpuxtb_context_t* cpu_context
   CUDA_CHECK(first_result.bind(first, ResultLayout::kDevice));
   CUDA_CHECK(second_result.bind(second, ResultLayout::kMixed));
 
-  ThreadCall first_call{first_context.get(),          &first, &options, &first_result,
-                        GPUXTB_STATUS_INTERNAL_ERROR, {}};
-  ThreadCall second_call{second_context.get(),         &second, &options, &second_result,
-                         GPUXTB_STATUS_INTERNAL_ERROR, {}};
+  ThreadCall first_call{first_context.get(),           &first, &options, &first_result,
+                        XTBLOOM_STATUS_INTERNAL_ERROR, {}};
+  ThreadCall second_call{second_context.get(),          &second, &options, &second_result,
+                         XTBLOOM_STATUS_INTERNAL_ERROR, {}};
   std::atomic<int> ready{0};
   std::atomic<bool> start{false};
   std::thread first_thread(run_thread_call, std::ref(first_call), std::ref(ready), std::ref(start));
@@ -1754,11 +1755,11 @@ int main() {
   PublicBatch batch;
   g_scenario = "fixture";
   if (const int line = make_fixture_batch(batch); line != 0) return line;
-  const gpuxtb_compute_options_t options = make_compute_options();
-  gpuxtb_status_t cpu_status = GPUXTB_STATUS_INTERNAL_ERROR;
-  ContextHandle cpu_context = make_context(GPUXTB_BACKEND_CPU, -1, nullptr, cpu_status);
-  if (cpu_status != GPUXTB_STATUS_SUCCESS || cpu_context == nullptr) {
-    std::fprintf(stderr, "failed to create CPU reference context: %s\n", gpuxtb_get_last_error());
+  const xtbloom_compute_options_t options = make_compute_options();
+  xtbloom_status_t cpu_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle cpu_context = make_context(XTBLOOM_BACKEND_CPU, -1, nullptr, cpu_status);
+  if (cpu_status != XTBLOOM_STATUS_SUCCESS || cpu_context == nullptr) {
+    std::fprintf(stderr, "failed to create CPU reference context: %s\n", xtbloom_get_last_error());
     return 1;
   }
   MaterializedResult reference;

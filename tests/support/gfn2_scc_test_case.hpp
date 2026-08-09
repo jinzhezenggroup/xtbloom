@@ -1,5 +1,5 @@
-#ifndef GPUXTB_TESTS_SUPPORT_GFN2_SCC_TEST_CASE_HPP
-#define GPUXTB_TESTS_SUPPORT_GFN2_SCC_TEST_CASE_HPP
+#ifndef XTBLOOM_TESTS_SUPPORT_GFN2_SCC_TEST_CASE_HPP
+#define XTBLOOM_TESTS_SUPPORT_GFN2_SCC_TEST_CASE_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -7,14 +7,14 @@
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/external_point_charges.hpp"
 #include "model/gfn2/h0.hpp"
 #include "model/gfn2/integrals.hpp"
 #include "model/gfn2/scc_driver.hpp"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::test::gfn2 {
+namespace xtbloom::test::gfn2 {
 
 /* Small system geometries supported by the reusable SCC test fixture. */
 enum class SmallSystemKind {
@@ -97,18 +97,18 @@ class HostSccCase {
    * Transactionally construct a case. output is unchanged on validation,
    * allocation, plan-construction, cache-update, or binding failure.
    */
-  static gpuxtb_status_t create(const HostSccCaseOptions& options, HostSccCase& output,
-                                std::string& error);
+  static xtbloom_status_t create(const HostSccCaseOptions& options, HostSccCase& output,
+                                 std::string& error);
 
   [[nodiscard]] bool valid() const noexcept;
 
   /* Advance the ragged batch by exactly one CPU SCC driver call. */
-  gpuxtb_status_t run_one_iteration(std::string& error);
+  xtbloom_status_t run_one_iteration(std::string& error);
 
   [[nodiscard]] HostSccCheckpoint checkpoint() const;
 
   /* Validate every checkpoint extent before modifying any live allocation. */
-  gpuxtb_status_t restore(const HostSccCheckpoint& checkpoint, std::string& error);
+  xtbloom_status_t restore(const HostSccCheckpoint& checkpoint, std::string& error);
 
   /* All accessors below require valid() == true. */
   [[nodiscard]] const HostSccCaseOptions& options() const noexcept;
@@ -186,6 +186,6 @@ class HostSccCase {
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace gpuxtb::test::gfn2
+}  // namespace xtbloom::test::gfn2
 
-#endif  // GPUXTB_TESTS_SUPPORT_GFN2_SCC_TEST_CASE_HPP
+#endif  // XTBLOOM_TESTS_SUPPORT_GFN2_SCC_TEST_CASE_HPP

@@ -18,7 +18,7 @@ from benchmarks.xtb_adapter import XtbAdapter, XtbError, XtbState
 
 
 class HarnessTest(unittest.TestCase):
-    """Exercise non-hardware protocol logic without loading gpuxtb or CUDA."""
+    """Exercise non-hardware protocol logic without loading xtbloom or CUDA."""
 
     def test_timing_summary_retains_samples_and_batch_throughput(self) -> None:
         """Retain raw samples and derive batch throughput from their median."""
@@ -53,7 +53,7 @@ class HarnessTest(unittest.TestCase):
                 self.assertEqual(controls["openmp_threads"], 16)
                 self.assertEqual(controls["blas_threads"], 1)
 
-    def test_gpuxtb_cell_matrix_contains_cpu_and_three_cuda_placements(self) -> None:
+    def test_xtbloom_cell_matrix_contains_cpu_and_three_cuda_placements(self) -> None:
         """Cover CPU host and all supported CUDA descriptor placements."""
         args = SimpleNamespace(
             backends=("cpu", "cuda"),
@@ -62,7 +62,7 @@ class HarnessTest(unittest.TestCase):
             properties=("energy", "force"),
             batch_sizes=(1, 8, 32, 128),
         )
-        cells = list(run.gpuxtb_cells(args))
+        cells = list(run.xtbloom_cells(args))
         self.assertEqual(len(cells), 64)
         placements = {(cell.backend, cell.memory_mode) for cell in cells}
         self.assertEqual(
@@ -278,7 +278,7 @@ class HarnessTest(unittest.TestCase):
             "forces_hartree_per_bohr": [0.1, 0.2, 0.3],
             "point_charge_forces_hartree_per_bohr": [-0.1, -0.2, -0.3],
         }
-        cell = run.Cell("gpuxtb", "cpu", "host", "qmmm", "force", 1)
+        cell = run.Cell("xtbloom", "cpu", "host", "qmmm", "force", 1)
         result = run.correctness(cell, storage, output, manifest)
         self.assertEqual(result["status"], "pass")
         self.assertEqual(

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-repo=/home/jzzeng/codes/gpuxtb4-pr231
+repo=/home/jzzeng/codes/xtbloom4-pr231
 out="$repo/build/benchmarks/issue-13-c9c0a43-final"
-cpu_library="$repo/build/pr231-evidence-c9c0a43-cpu/libgpuxtb.so.0.1.0"
-cuda_library="$repo/build/pr231-evidence-c9c0a43-cuda/libgpuxtb.so.0.1.0"
+cpu_library="$repo/build/pr231-evidence-c9c0a43-cpu/libxtbloom.so.0.1.0"
+cuda_library="$repo/build/pr231-evidence-c9c0a43-cuda/libxtbloom.so.0.1.0"
 xtb_library=/tmp/pr231-1fc8698-xtb-final/libxtb.so.6.7.1
 xtb_source=/home/jzzeng/codes/xtb
 dxtb_source=/home/jzzeng/codes/dxtb
@@ -46,7 +46,7 @@ common=(
 run_case() {
   local python_exe=$1
   local output_stem=$2
-  local gpuxtb_library=$3
+  local xtbloom_library=$3
   local engine=$4
   local panel=$5
   shift 5
@@ -66,7 +66,7 @@ run_case() {
   esac
 
   "$python_exe" benchmarks/natoms_cross_engine.py \
-    --library "$gpuxtb_library" \
+    --library "$xtbloom_library" \
     --engines "$engine" \
     "${panel_args[@]}" \
     "${common[@]}" \
@@ -92,9 +92,9 @@ run_and_retain_unavailable() {
 run_and_retain_unavailable "$dxtb_python" dxtb-cuda-b128 "$cuda_library" dxtb-cuda b128 \
   --dxtb-source "$dxtb_source" --reference-json "$out/ref-tblite-b128.json"
 
-run_and_retain_unavailable "$base_python" gpuxtb-cpu-b512 "$cpu_library" gpuxtb-cpu b512 \
+run_and_retain_unavailable "$base_python" xtbloom-cpu-b512 "$cpu_library" xtbloom-cpu b512 \
   --reference-json "$out/ref-tblite-b512.json"
-run_and_retain_unavailable "$base_python" gpuxtb-cuda-b512 "$cuda_library" gpuxtb-cuda b512 \
+run_and_retain_unavailable "$base_python" xtbloom-cuda-b512 "$cuda_library" xtbloom-cuda b512 \
   --reference-json "$out/ref-tblite-b512.json"
 run_and_retain_unavailable "$base_python" xtb-b512 "$cpu_library" xtb b512 \
   --xtb-library "$xtb_library" --xtb-source "$xtb_source" \

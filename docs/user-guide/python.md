@@ -1,8 +1,8 @@
 # Python API
 
-The Python package wraps the public gpuxtb C ABI with `ctypes`. There is no
+The Python package wraps the public xTBloom C ABI with `ctypes`. There is no
 separate CPython extension API, and every high-level calculation owns or shares
-a native gpuxtb context.
+a native xTBloom context.
 
 For the concise package page and install commands, see
 [`python/README.md`](../../python/README.md).
@@ -15,7 +15,7 @@ Updating only positions reuses the context and immutable topology setup.
 
 ```python
 import numpy as np
-from gpuxtb import Calculator
+from xtbloom import Calculator
 
 numbers = np.array([1, 1])
 positions = np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]])
@@ -70,7 +70,7 @@ native call.
 
 ```python
 import numpy as np
-from gpuxtb import BatchCalculator, Structure
+from xtbloom import BatchCalculator, Structure
 
 systems = [
     Structure([1, 1], np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]])),
@@ -107,12 +107,12 @@ independent checkpoint for each chunk.
 `ArrayBatch` takes the flat ragged-batch descriptor arrays directly and is
 the zero-copy entry point. Each array can come from any library implementing
 the Array API `__dlpack__`/`__dlpack_device__` producer protocols (NumPy,
-CuPy, JAX eager arrays, PyTorch tensors); gpuxtb imports none of those
+CuPy, JAX eager arrays, PyTorch tensors); xTBloom imports none of those
 libraries, consumed buffers are caller-owned, and interface devices are
 accepted without a host round trip on the CUDA backend.
 
 ```python
-from gpuxtb import ArrayBatch
+from xtbloom import ArrayBatch
 
 batch = ArrayBatch(
     atom_offsets=np.array([0, 2, 5], dtype=np.int64),
@@ -125,8 +125,8 @@ batch = ArrayBatch(
 result = batch.compute()
 ```
 
-Host arrays become `GPUXTB_MEMORY_HOST` descriptors; CUDA device arrays
-become `GPUXTB_MEMORY_CUDA_DEVICE` descriptors that skip host staging. The
+Host arrays become `XTBLOOM_MEMORY_HOST` descriptors; CUDA device arrays
+become `XTBLOOM_MEMORY_CUDA_DEVICE` descriptors that skip host staging. The
 optional `point_charge_*` group and the `atomic_potential_shifts` /
 `charge_response_offsets` / `charge_response_matrix` response group mirror
 `PointCharge`/`ChargeResponse` and must be supplied all-or-nothing.
@@ -145,21 +145,21 @@ descriptor must still use the exact dtype required by the C ABI.
 
 `ArrayBatch.compute()` supports an explicit output policy: results are
 ordinary host NumPy arrays by default, or `out=` may name writable
-NumPy/CuPy/PyTorch buffers into which gpuxtb writes directly. JAX arrays are
+NumPy/CuPy/PyTorch buffers into which xTBloom writes directly. JAX arrays are
 never mutated in place.
 
-### gpuxtb-owned device results through DLPack
+### xTBloom-owned device results through DLPack
 
 With `result_memory="cuda"`, `ArrayBatch.compute()` (and the
-`compute_arrays()` convenience alias) allocates one gpuxtb-owned CUDA device
+`compute_arrays()` convenience alias) allocates one xTBloom-owned CUDA device
 arena on the context device for the outputs *not* supplied through `out=` and
-returns each slice as a `gpuxtb.DLPackResultBuffer` DLPack producer. Such a
+returns each slice as a `xtbloom.DLPackResultBuffer` DLPack producer. Such a
 producer hands finished device bytes to importing frameworks without a host
 round trip:
 
 ```python
 import torch
-from gpuxtb import ArrayBatch
+from xtbloom import ArrayBatch
 
 result = ArrayBatch(..., backend="cuda").compute(result_memory="cuda")
 energies = torch.from_dlpack(result.energies)   # CUDA tensor, zero-copy
@@ -169,20 +169,20 @@ forces = torch.from_dlpack(result.forces)
 - `cupy.from_dlpack`, `torch.from_dlpack`, and `jax.dlpack.from_dlpack` all
   consume the same producer object; nothing is copied for the device case.
 - A supplied `out=` buffer always wins over the arena, so caller-owned and
-  gpuxtb-owned outputs can be mixed in one call.
-- Every gpuxtb-owned arena is ref-counted natively and survives the
+  xTBloom-owned outputs can be mixed in one call.
+- Every xTBloom-owned arena is ref-counted natively and survives the
   `ArrayBatch`/`Context` that filled it. Each exported capsule retains the
   arena independently; `DLPackResultBuffer.close()`/`delete()` (and the
   context manager) release only that producer's reference. A repeated
   `__dlpack__` call creates a fresh single-use capsule, so importing the same
   output more than once is safe.
-- The managed-tensor deleter is a native gpuxtb function, so an importing
+- The managed-tensor deleter is a native xTBloom function, so an importing
   framework may release the tensor from its own code long after the Python
   producer is gone; the arena is freed exactly once, when the last reference
   (producer, producer slices, or exported capsules) drops.
 - Device-resident `per_system_status`/`scc_converged` diagnostics cannot be
   inspected by `failed_indices`; that helper is a host-NumPy feature and
-  raises a precise error when the arrays are gpuxtb-owned device buffers.
+  raises a precise error when the arrays are xTBloom-owned device buffers.
 
 `result_memory` accepts only `"host"` (the historical default: fresh host
 NumPy arrays) and `"cuda"` (requires the resolved CUDA backend). The arena is
@@ -190,9 +190,9 @@ laid out at 64-byte alignment so every exported slice satisfies the alignment
 requirements of common DLPack consumers (JAX, CuPy, PyTorch).
 
 For repeated inference on the same topology, the caller-owned `out=` path
-remains the preferred steady-state zero-copy route: it allocates no gpuxtb
+remains the preferred steady-state zero-copy route: it allocates no xTBloom
 device memory per call and accepts preallocated caller buffers that the caller
-can reuse. The gpuxtb-owned `result_memory="cuda"` path is intended for
+can reuse. The xTBloom-owned `result_memory="cuda"` path is intended for
 callers that want finished device results without managing output buffers
 themselves. On the archived RTX 5090 small-molecule workload it passed the
   explicit maximum 5% mean-overhead gate (`7.530 ms` arena versus `7.834 ms`
@@ -202,7 +202,7 @@ latency evidence.
 
 ## PyTorch autograd op (positions gradient only)
 
-`gpuxtb.gpuxtb_torch` runs the packed DLPack inference on PyTorch tensors (host
+`xtbloom.xtbloom_torch` runs the packed DLPack inference on PyTorch tensors (host
 CPU or CUDA device) and returns `(energies, forces)` as float64 tensors. It is
 the only autograd entry point in the Python API, and its gradient contract is
 deliberately narrow: it supports exactly `dE/dR = -F` with respect to
@@ -210,10 +210,10 @@ deliberately narrow: it supports exactly `dE/dR = -F` with respect to
 
 ```python
 import torch
-from gpuxtb import gpuxtb_torch
+from xtbloom import xtbloom_torch
 
 positions = torch.tensor(system.positions, dtype=torch.float64, requires_grad=True)
-energies, forces = gpuxtb_torch(
+energies, forces = xtbloom_torch(
     positions,
     atomic_numbers,   # (natoms,) int32 torch or numpy
     atom_offsets,     # (nsystems + 1,) int64
@@ -226,14 +226,14 @@ loss.backward()      # positions.grad == -forces
 ```
 
 - Backpropagation through `forces` (the force Hessian `dF/dR`) raises
-  `GPUxtbNotSupportedError`.
+  `XTBloomNotSupportedError`.
 - Higher-order differentiation requests such as `create_graph=True` or
-  `torch.autograd.functional.hessian` raise `GPUxtbNotSupportedError`; gpuxtb
+  `torch.autograd.functional.hessian` raise `XTBloomNotSupportedError`; xTBloom
   never substitutes a partial or zero Hessian for the unavailable `dF/dR`.
 - Requesting autograd on any other input — `atomic_numbers`, `atom_offsets`,
   `molecular_charges`, `unpaired_electrons`, `spin_channels` — raises
-  `GPUxtbNotSupportedError` eagerly at forward time.
-- PyTorch is imported lazily only when the op is called; `import gpuxtb` never
+  `XTBloomNotSupportedError` eagerly at forward time.
+- PyTorch is imported lazily only when the op is called; `import xtbloom` never
   imports torch.
 - Non-contiguous or strided inputs are packed into a compact copy by the op;
   scalar types must still match the C ABI exactly.
@@ -269,7 +269,7 @@ CUDA.
 and `gammas` are positive screening parameters in Hartree.
 
 ```python
-from gpuxtb import PointCharge
+from xtbloom import PointCharge
 
 embedding = PointCharge(
     positions=np.array([[4.0, 0.0, 0.0]]),
@@ -279,13 +279,13 @@ embedding = PointCharge(
 embedded_system = Structure([1, 1], systems[0].positions, point_charges=embedding)
 ```
 
-When point charges are present, results include `point_charge_forces`. gpuxtb
+When point charges are present, results include `point_charge_forces`. xTBloom
 does not include point-charge/point-charge energy or force.
 
 `ChargeResponse` adds a per-atom shift `b` and symmetric response matrix `A`:
 
 ```python
-from gpuxtb import ChargeResponse
+from xtbloom import ChargeResponse
 
 response = ChargeResponse(
     shifts=np.array([0.003, -0.002]),
@@ -303,8 +303,8 @@ The caller owns coordinate derivatives of `b` and `A`. See the
 
 ## ASE and dpdata
 
-Install the corresponding extra and use `gpuxtb.ase.GPUxtb` as an ASE
-calculator or `driver="gpuxtb"` with dpdata. These integrations convert native
+Install the corresponding extra and use `xtbloom.ase.XTBloom` as an ASE
+calculator or `driver="xtbloom"` with dpdata. These integrations convert native
 atomic units to eV and Angstrom conventions. dpdata periodic systems are
 rejected because the native ABI has no lattice descriptor. The ASE calculator
 enables warm start by default (`warm_start=True`), so an ASE dynamics run
@@ -312,21 +312,21 @@ automatically seeds each step's SCC from the previous converged state and
 falls back to a fresh solve whenever the request's identity changes; pass
 `warm_start=False` for bit-reproducible independent steps.
 
-For geometry relaxation, `gpuxtb` also registers a batch minimizer under the
-`"gpuxtb"` key. It moves every frame of a dpdata system in lockstep and
+For geometry relaxation, `xtbloom` also registers a batch minimizer under the
+`"xtbloom"` key. It moves every frame of a dpdata system in lockstep and
 evaluates energies and forces for all active frames in a single ragged-batch
-`gpuxtb_compute` call per step, instead of the one-frame-at-a-time loop of the
+`xtbloom_compute` call per step, instead of the one-frame-at-a-time loop of the
 reference `ase` minimizer; converged frames are frozen and dropped from the
 batch as it shrinks:
 
 ```python
 import dpdata
-from gpuxtb.dpdata import GPUxtbDriver
+from xtbloom.dpdata import XTBloomDriver
 
 system = dpdata.System("geometry.xyz", fmt="xyz")
 labeled = system.minimize(
-    minimizer="gpuxtb",
-    driver=GPUxtbDriver(backend="cuda"),
+    minimizer="xtbloom",
+    driver=XTBloomDriver(backend="cuda"),
     fmax=5e-3,  # eV/Angstrom
     max_steps=1000,
 )
@@ -334,10 +334,10 @@ labeled = system.minimize(
 
 ## Native-library discovery
 
-Published wheels place `libgpuxtb` inside the Python package. On supported
+Published wheels place `libxtbloom` inside the Python package. On supported
 Linux platforms, the package discovers the separately installed OpenBLAS and
 optional `nvidia-*` CUDA providers without requiring `LD_LIBRARY_PATH`.
 
-`GPUXTB_LIBRARY` can override the bundled native library for development or a
+`XTBLOOM_LIBRARY` can override the bundled native library for development or a
 managed deployment. The override must be ABI-compatible with the Python
 package, and its own loader search paths remain the deployer's responsibility.

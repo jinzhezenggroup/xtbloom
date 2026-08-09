@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="240" viewBox="0 0 920 240" role="img" aria-labelledby="xtbloom-logo-title xtbloom-logo-description">
+  <title id="xtbloom-logo-title">xTBloom logo</title>
+  <desc id="xtbloom-logo-description">Three woven molecular-orbital threads form a six-petal bloom around an atomic center, beside the xTBloom wordmark.</desc>
+  <defs>
+    <style>
+      .ink { fill: #14212b; }
+      .orbit-blue { fill: none; stroke: #365fd3; }
+      .orbit-green { fill: none; stroke: #2a9d83; }
+      .orbit-amber { fill: none; stroke: #c77b16; }
+      .orbit { stroke-width: 11; stroke-linecap: round; }
+      .center-ring { stroke: #365fd3; }
+      .word-green { fill: #2a9d83; }
+      .baseline { stroke: #365fd3; }
+      .endpoint { fill: #c77b16; }
+      @media (prefers-color-scheme: dark) {
+        .ink { fill: #f1f7f5; }
+        .orbit-blue { stroke: #7698ff; }
+        .orbit-green { stroke: #58d7b8; }
+        .orbit-amber { stroke: #f0b55e; }
+        .center-ring { stroke: #f1f7f5; }
+        .word-green { fill: #58d7b8; }
+        .baseline { stroke: #7698ff; }
+        .endpoint { fill: #f0b55e; }
+      }
+    </style>
+    <radialGradient id="center-glow" cx="35%" cy="30%" r="70%">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.28" stop-color="#eef4ff"/>
+      <stop offset="1" stop-color="#365fd3"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Woven orbital threads make six petals without borrowing the old letterform. -->
+  <g transform="translate(22 22)">
+    <ellipse class="orbit orbit-blue" cx="98" cy="98" rx="78" ry="34"/>
+    <ellipse class="orbit orbit-green" cx="98" cy="98" rx="78" ry="34" transform="rotate(60 98 98)"/>
+    <ellipse class="orbit orbit-amber" cx="98" cy="98" rx="78" ry="34" transform="rotate(120 98 98)"/>
+    <circle class="center-ring" cx="98" cy="98" r="18" fill="url(#center-glow)" stroke-width="5"/>
+    <circle cx="98" cy="98" r="5" fill="#ffffff" opacity="0.9"/>
+  </g>
+
+  <g transform="translate(252 0)">
+    <text x="0" y="146" font-family="Inter, Avenir Next, Helvetica Neue, DejaVu Sans, sans-serif" font-size="104" font-weight="700" letter-spacing="-3"><tspan class="ink">xTB</tspan><tspan class="word-green">loom</tspan></text>
+    <path class="baseline" d="M5 176h444" fill="none" stroke-width="6" stroke-linecap="round"/>
+    <circle class="endpoint" cx="466" cy="176" r="6"/>
+  </g>
+</svg>

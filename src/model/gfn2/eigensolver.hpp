@@ -1,7 +1,7 @@
-#ifndef GPUXTB_MODEL_GFN2_EIGENSOLVER_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_EIGENSOLVER_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_EIGENSOLVER_HPP
+#define XTBLOOM_MODEL_GFN2_EIGENSOLVER_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -9,10 +9,10 @@
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/wavefunction.hpp"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 inline constexpr std::size_t kEigensolverWorkspaceAlignment = 64u;
 using LapackInt = std::int32_t;
@@ -44,7 +44,7 @@ using BlasSetNumThreadsLocal = int (*)(int threads);
  * factory dlopens and verifies all required symbols from the configured LP64
  * runtime (OpenBLAS is the default Linux package dependency; native users may
  * select MKL) or from common SONAMEs. A production provider must expose local
- * thread control so gpuxtb's outer batch workers can keep BLAS sequential.
+ * thread control so xtbloom's outer batch workers can keep BLAS sequential.
  *
  * The MKL path is host-isolated. CMake builds a private shim with fixed
  * DT_NEEDED dependencies on
@@ -52,7 +52,7 @@ using BlasSetNumThreadsLocal = int (*)(int threads);
  * the adjacent shim with RTLD_LOCAL in a new glibc link-map namespace. The
  * namespace is required because RTLD_LOCAL alone still permits pre-existing
  * global host symbols to interpose on new dependencies. The components are
- * intrinsically LP64 and sequential, so gpuxtb never loads libmkl_rt, calls
+ * intrinsically LP64 and sequential, so xtbloom never loads libmkl_rt, calls
  * MKL_Set_Interface_Layer, reads MKL interface-layer state, or mutates an
  * embedding process's MKL state. A missing or invalid shim fails
  * deterministically; MKL never falls back to the base namespace. Plain LP64
@@ -89,19 +89,19 @@ class CpuLinearAlgebraBackend {
   CblasDgemm dgemm_ = nullptr;
   BlasSetNumThreadsLocal set_num_threads_local_ = nullptr;
 
-  friend gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend,
-                                                  std::string& error);
-  friend gpuxtb_status_t make_internal_test_lp64_backend(
+  friend xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend,
+                                                   std::string& error);
+  friend xtbloom_status_t make_internal_test_lp64_backend(
       LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
       CblasDtrsm dtrsm, CblasDgemm dgemm, BlasSetNumThreadsLocal set_num_threads_local,
       CpuLinearAlgebraBackend& backend, std::string& error);
   friend struct CpuLinearAlgebraAccess;
 };
 
-gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::string& error);
+xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::string& error);
 
 /* Internal test-only dependency injection; production must use the runtime factory. */
-gpuxtb_status_t make_internal_test_lp64_backend(
+xtbloom_status_t make_internal_test_lp64_backend(
     LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
     CblasDtrsm dtrsm, CblasDgemm dgemm, BlasSetNumThreadsLocal set_num_threads_local,
     CpuLinearAlgebraBackend& backend, std::string& error);
@@ -144,9 +144,9 @@ class EigensolverPlan {
   explicit EigensolverPlan(std::shared_ptr<const EigensolverPlanData> data) noexcept;
   std::shared_ptr<const EigensolverPlanData> data_;
 
-  friend gpuxtb_status_t make_eigensolver_plan(const WavefunctionLayout& layout,
-                                               EigensolverPlan& plan, std::string& error,
-                                               double minimum_overlap_rcond);
+  friend xtbloom_status_t make_eigensolver_plan(const WavefunctionLayout& layout,
+                                                EigensolverPlan& plan, std::string& error,
+                                                double minimum_overlap_rcond);
 };
 
 struct EigensolverOverlapCache {
@@ -154,7 +154,7 @@ struct EigensolverOverlapCache {
   std::size_t workspace_size_bytes = 0u;
   double* cholesky_factors = nullptr;
   std::uint64_t* geometry_generations = nullptr;
-  gpuxtb_status_t* system_statuses = nullptr;
+  xtbloom_status_t* system_statuses = nullptr;
   const EigensolverPlanData* plan_identity = nullptr;
 };
 
@@ -180,14 +180,14 @@ struct EigensolverWorkspace {
 
   double* factor_staging = nullptr;
   std::uint64_t* factor_generation_staging = nullptr;
-  gpuxtb_status_t* factor_status_staging = nullptr;
+  xtbloom_status_t* factor_status_staging = nullptr;
 
   double* batch_coefficients = nullptr;
   double* batch_densities = nullptr;
   double* batch_energy_weighted_densities = nullptr;
   double* batch_eigenvalues = nullptr;
   double* batch_occupations = nullptr;
-  gpuxtb_status_t* batch_system_statuses = nullptr;
+  xtbloom_status_t* batch_system_statuses = nullptr;
   double* batch_chemical_potentials = nullptr;
   double* batch_entropies = nullptr;
   double* batch_band_energies = nullptr;
@@ -201,7 +201,7 @@ struct EigensolverWorkspace {
  * Hartree, so free_energy = band_energy - temperature*entropy is in Hartree.
  */
 struct EigensolverThermodynamicsView {
-  gpuxtb_status_t* system_statuses = nullptr;
+  xtbloom_status_t* system_statuses = nullptr;
   std::size_t system_status_capacity = 0u;
   double* chemical_potentials = nullptr;
   std::size_t chemical_potential_capacity = 0u;
@@ -213,18 +213,18 @@ struct EigensolverThermodynamicsView {
   std::size_t free_energy_capacity = 0u;
 };
 
-gpuxtb_status_t make_eigensolver_plan(const WavefunctionLayout& layout, EigensolverPlan& plan,
-                                      std::string& error, double minimum_overlap_rcond = 1.0e-12);
+xtbloom_status_t make_eigensolver_plan(const WavefunctionLayout& layout, EigensolverPlan& plan,
+                                       std::string& error, double minimum_overlap_rcond = 1.0e-12);
 
-gpuxtb_status_t bind_eigensolver_overlap_cache(const EigensolverPlan& plan, void* workspace,
-                                               std::size_t workspace_size,
-                                               EigensolverOverlapCache& cache, std::string& error);
-gpuxtb_status_t bind_eigensolver_workspace(const EigensolverPlan& plan, void* workspace,
-                                           std::size_t workspace_size, EigensolverWorkspace& view,
-                                           std::string& error);
-gpuxtb_status_t bind_eigensolver_worker_workspace(const EigensolverPlan& plan, void* workspace,
-                                                  std::size_t workspace_size,
-                                                  EigensolverWorkspace& view, std::string& error);
+xtbloom_status_t bind_eigensolver_overlap_cache(const EigensolverPlan& plan, void* workspace,
+                                                std::size_t workspace_size,
+                                                EigensolverOverlapCache& cache, std::string& error);
+xtbloom_status_t bind_eigensolver_workspace(const EigensolverPlan& plan, void* workspace,
+                                            std::size_t workspace_size, EigensolverWorkspace& view,
+                                            std::string& error);
+xtbloom_status_t bind_eigensolver_worker_workspace(const EigensolverPlan& plan, void* workspace,
+                                                   std::size_t workspace_size,
+                                                   EigensolverWorkspace& view, std::string& error);
 
 /*
  * Factor packed symmetric overlaps into persistent column-major Cholesky
@@ -232,11 +232,11 @@ gpuxtb_status_t bind_eigensolver_worker_workspace(const EigensolverPlan& plan, v
  * nothing; positive-definiteness and conditioning failures are recorded per
  * system when the complete staged batch is committed.
  */
-gpuxtb_status_t factor_overlap_cpu(const EigensolverPlan& plan, const double* overlap,
-                                   std::uint64_t geometry_generation,
-                                   const CpuLinearAlgebraBackend& backend,
-                                   const EigensolverWorkspace& workspace,
-                                   const EigensolverOverlapCache& cache, std::string& error);
+xtbloom_status_t factor_overlap_cpu(const EigensolverPlan& plan, const double* overlap,
+                                    std::uint64_t geometry_generation,
+                                    const CpuLinearAlgebraBackend& backend,
+                                    const EigensolverWorkspace& workspace,
+                                    const EigensolverOverlapCache& cache, std::string& error);
 
 /*
  * Solve all systems serially into unpublished full-batch staging after one
@@ -244,7 +244,7 @@ gpuxtb_status_t factor_overlap_cpu(const EigensolverPlan& plan, const double* ov
  * have ruled out call-level backend failures. The MKL backend temporarily
  * requests one BLAS thread, avoiding nested oversubscription.
  */
-gpuxtb_status_t solve_eigensystems_cpu(
+xtbloom_status_t solve_eigensystems_cpu(
     const EigensolverPlan& plan, const EigensolverOverlapCache& overlap_cache,
     std::uint64_t geometry_generation, const double* hamiltonians, double temperature,
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
@@ -259,7 +259,7 @@ gpuxtb_status_t solve_eigensystems_cpu(
  * slices are disjoint. Validation is O(1) plus the fixed number of output
  * fields and never scans other batch members.
  */
-gpuxtb_status_t solve_eigensystem_cpu(
+xtbloom_status_t solve_eigensystem_cpu(
     const EigensolverPlan& plan, std::int64_t system, const EigensolverOverlapCache& overlap_cache,
     std::uint64_t geometry_generation, const double* system_hamiltonians, double temperature,
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
@@ -267,11 +267,11 @@ gpuxtb_status_t solve_eigensystem_cpu(
     std::string& error);
 
 /* Standalone tblite-compatible per-spin Aufbau/Fermi filling helper. */
-gpuxtb_status_t fill_occupations_cpu(std::int64_t orbital_count, const double* eigenvalues,
-                                     double electron_count, double temperature, double* occupations,
-                                     double& chemical_potential, double& entropy,
-                                     std::string& error);
+xtbloom_status_t fill_occupations_cpu(std::int64_t orbital_count, const double* eigenvalues,
+                                      double electron_count, double temperature,
+                                      double* occupations, double& chemical_potential,
+                                      double& entropy, std::string& error);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_EIGENSOLVER_HPP
+#endif  // XTBLOOM_MODEL_GFN2_EIGENSOLVER_HPP

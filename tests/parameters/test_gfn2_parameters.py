@@ -18,7 +18,7 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 DATA_DIR = REPOSITORY / "data" / "parameters"
 GENERATOR_PATH = REPOSITORY / "tools" / "parameters" / "generate_gfn2.py"
 
-SPEC = importlib.util.spec_from_file_location("gpuxtb_generate_gfn2", GENERATOR_PATH)
+SPEC = importlib.util.spec_from_file_location("xtbloom_generate_gfn2", GENERATOR_PATH)
 assert SPEC is not None and SPEC.loader is not None
 GENERATOR = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GENERATOR)
@@ -148,7 +148,7 @@ class Gfn2ParameterTests(unittest.TestCase):
         }
         generated = GENERATOR.build_artifacts(self.raw_bytes, provenance)
         with tempfile.TemporaryDirectory(
-            prefix="gpuxtb-stale-parameter-test-"
+            prefix="xtbloom-stale-parameter-test-"
         ) as directory:
             output_dir = Path(directory)
             GENERATOR.write_or_check(output_dir, generated, check=False)
@@ -185,7 +185,7 @@ class Gfn2ParameterTests(unittest.TestCase):
             GENERATOR.normalize_export(invalid)
 
     def test_unsupported_algorithm_selector_is_rejected(self) -> None:
-        """Reject algorithm selectors unsupported by gpuxtb."""
+        """Reject algorithm selectors unsupported by xtbloom."""
         invalid = copy.deepcopy(self.raw)
         invalid["charge"]["effective"]["average"] = "geometric"
         with self.assertRaisesRegex(
@@ -198,7 +198,7 @@ class Gfn2ParameterTests(unittest.TestCase):
         compiler = shutil.which("c++")
         if compiler is None:
             self.skipTest("C++ compiler is unavailable")
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-parameter-test-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-parameter-test-") as directory:
             executable = Path(directory) / "header_test"
             subprocess.run(
                 (

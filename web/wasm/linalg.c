@@ -1,15 +1,15 @@
 /*
  * linalg.c — minimal LP64 (32-bit LapackInt) double-precision LAPACKE/CBLAS
- * subset used by the gpuxtb browser demo runtime. Here LP64 names the BLAS /
+ * subset used by the xtbloom browser demo runtime. Here LP64 names the BLAS /
  * LAPACK convention with 32-bit integers; it does not describe wasm pointers.
  *
  * This is a correctness-focused stand-in for the host OpenBLAS/MKL providers
- * that gpuxtb normally dlopens, compiled into a target-width side module for the
+ * that xtbloom normally dlopens, compiled into a target-width side module for the
  * browser demo. It implements only the symbols the CPU eigensolver requires:
  *   LAPACKE_dpotrf_work, LAPACKE_dpocon_work, LAPACKE_dsyevd_work,
  *   cblas_dgemm, cblas_dtrsm, openblas_get_config, openblas_set_num_threads_local
  * Numerical behavior was cross-checked against numpy and against native
- * gpuxtb over OpenBLAS (bit-identical energies/charges/forces for the demo
+ * xtbloom over OpenBLAS (bit-identical energies/charges/forces for the demo
  * molecules). It makes no performance claim and does not replicate LAPACK's
  * workspace codes or condition-number estimation algorithm exactly; dpocon
  * computes the exact one-norm-based reciprocal condition from the explicit
@@ -17,7 +17,7 @@
  *
  * See web/../AGENTS.md and the web build workflow for provenance.
  *
- * Build as an Emscripten side module so gpuxtb's existing dlopen fallback
+ * Build as an Emscripten side module so xtbloom's existing dlopen fallback
  * chain ("libscipy_openblas.so") finds it unchanged:
  *   emcc linalg.c -o libscipy_openblas.so -sSIDE_MODULE=2 -m32  # or -m64
  */

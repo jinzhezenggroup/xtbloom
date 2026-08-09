@@ -12,21 +12,21 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2GenerationScope;
-using gpuxtb::detail::Gfn2GeometryCacheProvenanceView;
-using gpuxtb::detail::Gfn2PlanMemorySpace;
-using gpuxtb::detail::cuda::Gfn2GeometryEpochConsumerDevice;
-using gpuxtb::detail::cuda::Gfn2GeometryEpochDevice;
-using gpuxtb::detail::cuda::Gfn2SccCacheProvenanceBinding;
-using gpuxtb::detail::cuda::Gfn2SccIterationControlCode;
-using gpuxtb::detail::cuda::Gfn2SccIterationDeviceLedger;
-using gpuxtb::detail::cuda::Gfn2SccIterationDevicePolicy;
-using gpuxtb::detail::cuda::Gfn2SccIterationDeviceProvenance;
-using gpuxtb::detail::cuda::Gfn2SccIterationDeviceStateInput;
-using gpuxtb::detail::cuda::Gfn2SccStageCodeFormat;
-using gpuxtb::detail::cuda::Gfn2SccStageDeviceCodeRole;
-using gpuxtb::detail::cuda::Gfn2SccStageDeviceReport;
-using gpuxtb::detail::cuda::Gfn2SccStageId;
+using xtbloom::detail::Gfn2GenerationScope;
+using xtbloom::detail::Gfn2GeometryCacheProvenanceView;
+using xtbloom::detail::Gfn2PlanMemorySpace;
+using xtbloom::detail::cuda::Gfn2GeometryEpochConsumerDevice;
+using xtbloom::detail::cuda::Gfn2GeometryEpochDevice;
+using xtbloom::detail::cuda::Gfn2SccCacheProvenanceBinding;
+using xtbloom::detail::cuda::Gfn2SccIterationControlCode;
+using xtbloom::detail::cuda::Gfn2SccIterationDeviceLedger;
+using xtbloom::detail::cuda::Gfn2SccIterationDevicePolicy;
+using xtbloom::detail::cuda::Gfn2SccIterationDeviceProvenance;
+using xtbloom::detail::cuda::Gfn2SccIterationDeviceStateInput;
+using xtbloom::detail::cuda::Gfn2SccStageCodeFormat;
+using xtbloom::detail::cuda::Gfn2SccStageDeviceCodeRole;
+using xtbloom::detail::cuda::Gfn2SccStageDeviceReport;
+using xtbloom::detail::cuda::Gfn2SccStageId;
 
 constexpr std::uint64_t kPlanToken = 0x87c0ffee12345678ULL;
 constexpr std::uint64_t kGeometryGeneration = 17u;
@@ -44,8 +44,9 @@ static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kExplicitPointChargeRaw
 static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kPeriodicRawEnergy) == 29u);
 static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kSpinPotential) == 30u);
 static_assert(static_cast<std::uint32_t>(Gfn2SccStageId::kSpinRawEnergy) == 31u);
-static_assert(gpuxtb::detail::cuda::gfn2_scc_stage_id_is_valid(Gfn2SccStageId::kSpinRawEnergy));
-static_assert(!gpuxtb::detail::cuda::gfn2_scc_stage_id_in_domain(static_cast<Gfn2SccStageId>(32u)));
+static_assert(xtbloom::detail::cuda::gfn2_scc_stage_id_is_valid(Gfn2SccStageId::kSpinRawEnergy));
+static_assert(
+    !xtbloom::detail::cuda::gfn2_scc_stage_id_in_domain(static_cast<Gfn2SccStageId>(32u)));
 
 #define CHECK(condition)                                                                         \
   do {                                                                                           \
@@ -131,7 +132,7 @@ class DeviceBuffer {
 
 struct Snapshot {
   std::vector<std::uint8_t> active;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<std::uint64_t> failures;
   std::uint64_t plan_failure = 0u;
   std::uint32_t sequence_active = 0u;
@@ -183,7 +184,7 @@ struct Fixture {
   }
 
   cudaError_t install_state(const std::vector<std::uint64_t>& host_iterations,
-                            const std::vector<gpuxtb_status_t>& host_statuses,
+                            const std::vector<xtbloom_status_t>& host_statuses,
                             const std::vector<std::uint8_t>& host_converged,
                             cudaStream_t stream = nullptr) const {
     cudaError_t status = iterations.copy_from(host_iterations.data(), batch_size, stream);
@@ -316,7 +317,7 @@ struct Fixture {
 
   std::size_t batch_size;
   DeviceBuffer<std::uint64_t> iterations;
-  DeviceBuffer<gpuxtb_status_t> statuses;
+  DeviceBuffer<xtbloom_status_t> statuses;
   DeviceBuffer<std::uint8_t> converged;
   DeviceBuffer<std::uint64_t> geometry_epoch;
   DeviceBuffer<std::uint64_t> geometry_generations;
@@ -324,12 +325,12 @@ struct Fixture {
   DeviceBuffer<std::uint64_t> warm_start_generations;
   DeviceBuffer<Gfn2SccCacheProvenanceBinding> cache_bindings;
   DeviceBuffer<std::uint8_t> active;
-  DeviceBuffer<gpuxtb_status_t> pending_statuses;
+  DeviceBuffer<xtbloom_status_t> pending_statuses;
   DeviceBuffer<std::uint64_t> failures;
   DeviceBuffer<std::uint64_t> plan_failure;
   DeviceBuffer<std::uint32_t> sequence_active;
   DeviceBuffer<std::uint32_t> stage_codes;
-  DeviceBuffer<gpuxtb_status_t> stage_status_codes;
+  DeviceBuffer<xtbloom_status_t> stage_status_codes;
   DeviceBuffer<std::uint32_t> device_error;
   DeviceBuffer<std::uint32_t> stage_sequence;
   Gfn2SccIterationDevicePolicy policy{};
@@ -339,11 +340,11 @@ struct Fixture {
 };
 
 std::uint64_t record(Gfn2SccStageId stage, std::uint32_t code) {
-  return gpuxtb::detail::cuda::gfn2_scc_stage_failure_record(stage, code);
+  return xtbloom::detail::cuda::gfn2_scc_stage_failure_record(stage, code);
 }
 
 int derive_and_snapshot(Fixture& fixture, Snapshot& snapshot, cudaStream_t stream = nullptr) {
-  CUDA_CHECK(gpuxtb::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
       fixture.policy, fixture.state, fixture.provenance, fixture.ledger, stream));
   CUDA_CHECK(fixture.snapshot(snapshot, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -354,7 +355,7 @@ int test_activity_for_batch(std::size_t batch_size) {
   Fixture fixture(batch_size);
   CHECK(fixture.valid());
   std::vector<std::uint64_t> iterations(batch_size, 0u);
-  std::vector<gpuxtb_status_t> statuses(batch_size, GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(batch_size, XTBLOOM_STATUS_SUCCESS);
   std::vector<std::uint8_t> converged(batch_size, 0u);
   std::vector<std::uint64_t> geometry(batch_size, kGeometryGeneration);
   std::vector<std::uint64_t> warm(batch_size, kWarmStartGeneration);
@@ -362,7 +363,7 @@ int test_activity_for_batch(std::size_t batch_size) {
     converged[1] = 1u;
   }
   if (batch_size > 2u) {
-    statuses[2] = GPUXTB_STATUS_INTERNAL_ERROR;
+    statuses[2] = XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   if (batch_size > 3u) {
     iterations[3] = fixture.policy.maximum_iterations;
@@ -392,12 +393,12 @@ int test_activity_for_batch(std::size_t batch_size) {
       CHECK(snapshot.failures[system] ==
             record(Gfn2SccStageId::kGeometry,
                    static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kStaleGeneration)));
-      CHECK(snapshot.statuses[system] == GPUXTB_STATUS_INTERNAL_ERROR);
+      CHECK(snapshot.statuses[system] == XTBLOOM_STATUS_INTERNAL_ERROR);
     } else if (system == 5u) {
       CHECK(snapshot.failures[system] ==
             record(Gfn2SccStageId::kWarmStartProvenance,
                    static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kStaleGeneration)));
-      CHECK(snapshot.statuses[system] == GPUXTB_STATUS_INTERNAL_ERROR);
+      CHECK(snapshot.statuses[system] == XTBLOOM_STATUS_INTERNAL_ERROR);
     } else {
       CHECK(snapshot.failures[system] == 0u);
     }
@@ -409,7 +410,7 @@ int test_batch_provenance_and_embedded_alias() {
   Fixture fixture(8u);
   CHECK(fixture.valid());
   std::vector<std::uint64_t> iterations(8u, 0u);
-  std::vector<gpuxtb_status_t> statuses(8u, GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(8u, XTBLOOM_STATUS_SUCCESS);
   std::vector<std::uint8_t> converged(8u, 0u);
   CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
   CUDA_CHECK(fixture.install_batch_provenance(kGeometryGeneration - 1u));
@@ -494,7 +495,7 @@ int test_peer_then_plan_and_first_record_sticky() {
   Fixture fixture(8u);
   CHECK(fixture.valid());
   std::vector<std::uint64_t> iterations(8u, 0u);
-  std::vector<gpuxtb_status_t> statuses(8u, GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(8u, XTBLOOM_STATUS_SUCCESS);
   std::vector<std::uint8_t> converged(8u, 0u);
   CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
   Snapshot initial;
@@ -513,10 +514,10 @@ int test_peer_then_plan_and_first_record_sticky() {
       fixture.stage_sequence.get(),
       1,
       std::uint64_t{1} << 5u,
-      GPUXTB_STATUS_INTERNAL_ERROR,
+      XTBLOOM_STATUS_INTERNAL_ERROR,
       kPlanToken,
   };
-  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(peer_report, fixture.ledger));
+  CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(peer_report, fixture.ledger));
   CUDA_CHECK(cudaDeviceSynchronize());
   Snapshot peer;
   CUDA_CHECK(fixture.snapshot(peer));
@@ -539,10 +540,10 @@ int test_peer_then_plan_and_first_record_sticky() {
       fixture.stage_sequence.get(),
       1,
       std::uint64_t{1} << 6u,
-      GPUXTB_STATUS_EIGENSOLVER_FAILED,
+      XTBLOOM_STATUS_EIGENSOLVER_FAILED,
       kPlanToken,
   };
-  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(plan_report, fixture.ledger));
+  CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(plan_report, fixture.ledger));
   Snapshot plan;
   CUDA_CHECK(fixture.snapshot(plan));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -554,7 +555,7 @@ int test_peer_then_plan_and_first_record_sticky() {
 
   codes.assign(8u, 77u);
   CUDA_CHECK(fixture.install_stage(codes, 77u, 1u));
-  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(peer_report, fixture.ledger));
+  CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(peer_report, fixture.ledger));
   Snapshot still_first;
   CUDA_CHECK(fixture.snapshot(still_first));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -566,7 +567,7 @@ int test_device_first_plan_precedence() {
   Fixture fixture(8u);
   CHECK(fixture.valid());
   std::vector<std::uint64_t> iterations(8u, 0u);
-  std::vector<gpuxtb_status_t> statuses(8u, GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(8u, XTBLOOM_STATUS_SUCCESS);
   std::vector<std::uint8_t> converged(8u, 0u);
   std::vector<std::uint32_t> codes(8u, 0u);
   CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
@@ -587,10 +588,10 @@ int test_device_first_plan_precedence() {
       fixture.stage_sequence.get(),
       1,
       std::uint64_t{1} << 5u,
-      GPUXTB_STATUS_EIGENSOLVER_FAILED,
+      XTBLOOM_STATUS_EIGENSOLVER_FAILED,
       kPlanToken,
   };
-  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
+  CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
   Snapshot indexed;
   CUDA_CHECK(fixture.snapshot(indexed));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -601,7 +602,7 @@ int test_device_first_plan_precedence() {
   CHECK(derive_and_snapshot(fixture, ignored) == 0);
   codes.assign(8u, 0u);
   CUDA_CHECK(fixture.install_stage(codes, 91u, 0u));
-  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
+  CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
   Snapshot latched;
   CUDA_CHECK(fixture.snapshot(latched));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -613,7 +614,7 @@ int test_device_code_roles_and_raw_energy_stages() {
   Fixture fixture(8u);
   CHECK(fixture.valid());
   std::vector<std::uint64_t> iterations(8u, 0u);
-  std::vector<gpuxtb_status_t> statuses(8u, GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(8u, XTBLOOM_STATUS_SUCCESS);
   std::vector<std::uint8_t> converged(8u, 0u);
   CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
 
@@ -646,11 +647,11 @@ int test_device_code_roles_and_raw_energy_stages() {
         fixture.stage_sequence.get(),
         1,
         std::uint64_t{1} << collision.code,
-        GPUXTB_STATUS_INTERNAL_ERROR,
+        XTBLOOM_STATUS_INTERNAL_ERROR,
         kPlanToken,
         Gfn2SccStageDeviceCodeRole::kPlanOnly,
     };
-    CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
+    CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
     Snapshot normalized;
     CUDA_CHECK(fixture.snapshot(normalized));
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -679,12 +680,12 @@ int test_device_code_roles_and_raw_energy_stages() {
       fixture.stage_sequence.get(),
       1,
       std::uint64_t{1} << 8u,
-      GPUXTB_STATUS_INTERNAL_ERROR,
+      XTBLOOM_STATUS_INTERNAL_ERROR,
       kPlanToken,
       Gfn2SccStageDeviceCodeRole::kPlanOnly,
   };
   CUDA_CHECK(
-      gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(plan_only_system_peer, fixture.ledger));
+      xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(plan_only_system_peer, fixture.ledger));
   Snapshot system_peer;
   CUDA_CHECK(fixture.snapshot(system_peer));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -709,11 +710,11 @@ int test_device_code_roles_and_raw_energy_stages() {
       fixture.stage_sequence.get(),
       1,
       std::uint64_t{1} << 5u,
-      GPUXTB_STATUS_INTERNAL_ERROR,
+      XTBLOOM_STATUS_INTERNAL_ERROR,
       kPlanToken,
       Gfn2SccStageDeviceCodeRole::kMixedFirstError,
   };
-  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(mixed_report, fixture.ledger));
+  CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(mixed_report, fixture.ledger));
   Snapshot mixed;
   CUDA_CHECK(fixture.snapshot(mixed));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -728,7 +729,7 @@ int test_unknown_unlocalized_and_inactive_poison() {
   Fixture fixture(8u);
   CHECK(fixture.valid());
   std::vector<std::uint64_t> iterations(8u, 0u);
-  std::vector<gpuxtb_status_t> statuses(8u, GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(8u, XTBLOOM_STATUS_SUCCESS);
   std::vector<std::uint8_t> converged(8u, 0u);
   CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
   Snapshot ignored;
@@ -747,10 +748,10 @@ int test_unknown_unlocalized_and_inactive_poison() {
       fixture.stage_sequence.get(),
       1,
       std::uint64_t{1} << 5u,
-      GPUXTB_STATUS_INTERNAL_ERROR,
+      XTBLOOM_STATUS_INTERNAL_ERROR,
       kPlanToken,
   };
-  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
+  CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
   Snapshot unknown;
   CUDA_CHECK(fixture.snapshot(unknown));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -760,34 +761,34 @@ int test_unknown_unlocalized_and_inactive_poison() {
   codes.assign(8u, 0u);
   codes[1] = 5u;
   CUDA_CHECK(fixture.install_stage(codes, 5u, 0u));
-  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
+  CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
   Snapshot closed_latch;
   CUDA_CHECK(fixture.snapshot(closed_latch));
   CUDA_CHECK(cudaDeviceSynchronize());
   CHECK(closed_latch.plan_failure ==
-        record(Gfn2SccStageId::kDensity, gpuxtb::detail::cuda::kGfn2SccStageSequenceClosedCode));
+        record(Gfn2SccStageId::kDensity, xtbloom::detail::cuda::kGfn2SccStageSequenceClosedCode));
 
   CHECK(derive_and_snapshot(fixture, ignored) == 0);
   codes.assign(8u, 0u);
   CUDA_CHECK(fixture.install_stage(codes, 5u, 1u));
-  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
+  CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
   Snapshot unlocalized;
   CUDA_CHECK(fixture.snapshot(unlocalized));
   CUDA_CHECK(cudaDeviceSynchronize());
   CHECK(unlocalized.plan_failure ==
-        record(Gfn2SccStageId::kDensity, gpuxtb::detail::cuda::kGfn2SccStageUnlocalizedPeerCode));
+        record(Gfn2SccStageId::kDensity, xtbloom::detail::cuda::kGfn2SccStageUnlocalizedPeerCode));
 
   CHECK(derive_and_snapshot(fixture, ignored) == 0);
   codes.assign(8u, 0u);
   codes[2] = 6u;
   CUDA_CHECK(fixture.install_stage(codes, 5u, 1u));
   report.peer_error_mask = (std::uint64_t{1} << 5u) | (std::uint64_t{1} << 6u);
-  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
+  CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
   Snapshot mismatched_peer;
   CUDA_CHECK(fixture.snapshot(mismatched_peer));
   CUDA_CHECK(cudaDeviceSynchronize());
   CHECK(mismatched_peer.plan_failure ==
-        record(Gfn2SccStageId::kDensity, gpuxtb::detail::cuda::kGfn2SccStageUnlocalizedPeerCode));
+        record(Gfn2SccStageId::kDensity, xtbloom::detail::cuda::kGfn2SccStageUnlocalizedPeerCode));
 
   converged[0] = 1u;
   CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
@@ -795,7 +796,7 @@ int test_unknown_unlocalized_and_inactive_poison() {
   codes.assign(8u, 0u);
   codes[0] = 65u;
   CUDA_CHECK(fixture.install_stage(codes, 0u, 1u));
-  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
+  CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
   Snapshot poison;
   CUDA_CHECK(fixture.snapshot(poison));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -811,7 +812,7 @@ int test_inactive_uninitialized_inputs_are_not_read() {
   Fixture fixture(8u);
   CHECK(fixture.valid());
   std::vector<std::uint64_t> iterations(8u, 0u);
-  std::vector<gpuxtb_status_t> statuses(8u, GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(8u, XTBLOOM_STATUS_SUCCESS);
   std::vector<std::uint8_t> converged(8u, 0u);
   converged[0] = 1u;
   CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
@@ -855,10 +856,10 @@ int test_inactive_uninitialized_inputs_are_not_read() {
       fixture.stage_sequence.get(),
       1,
       std::uint64_t{1} << 5u,
-      GPUXTB_STATUS_INTERNAL_ERROR,
+      XTBLOOM_STATUS_INTERNAL_ERROR,
       kPlanToken,
   };
-  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
+  CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
   Snapshot normalized;
   CUDA_CHECK(fixture.snapshot(normalized));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -872,39 +873,39 @@ int test_status_code_format() {
   Fixture fixture(8u);
   CHECK(fixture.valid());
   std::vector<std::uint64_t> iterations(8u, 0u);
-  std::vector<gpuxtb_status_t> statuses(8u, GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(8u, XTBLOOM_STATUS_SUCCESS);
   std::vector<std::uint8_t> converged(8u, 0u);
   CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
   Snapshot initial;
   CHECK(derive_and_snapshot(fixture, initial) == 0);
-  std::vector<gpuxtb_status_t> codes(8u, GPUXTB_STATUS_SUCCESS);
-  codes[3] = GPUXTB_STATUS_INTERNAL_ERROR;
+  std::vector<xtbloom_status_t> codes(8u, XTBLOOM_STATUS_SUCCESS);
+  codes[3] = XTBLOOM_STATUS_INTERNAL_ERROR;
   CUDA_CHECK(fixture.stage_status_codes.copy_from(codes.data(), codes.size()));
-  const std::uint32_t device = GPUXTB_STATUS_INTERNAL_ERROR;
+  const std::uint32_t device = XTBLOOM_STATUS_INTERNAL_ERROR;
   const std::uint32_t sequence = 1u;
   CUDA_CHECK(fixture.device_error.copy_from(&device, 1u));
   CUDA_CHECK(fixture.stage_sequence.copy_from(&sequence, 1u));
   const Gfn2SccStageDeviceReport report{
       Gfn2SccStageId::kPeriodicPotential,
-      Gfn2SccStageCodeFormat::kGpuxtbStatus,
+      Gfn2SccStageCodeFormat::kXTBloomStatus,
       fixture.stage_status_codes.get(),
       8,
       fixture.device_error.get(),
       1,
       fixture.stage_sequence.get(),
       1,
-      std::uint64_t{1} << GPUXTB_STATUS_INTERNAL_ERROR,
-      GPUXTB_STATUS_INTERNAL_ERROR,
+      std::uint64_t{1} << XTBLOOM_STATUS_INTERNAL_ERROR,
+      XTBLOOM_STATUS_INTERNAL_ERROR,
       kPlanToken,
   };
-  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
+  CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger));
   Snapshot snapshot;
   CUDA_CHECK(fixture.snapshot(snapshot));
   CUDA_CHECK(cudaDeviceSynchronize());
   CHECK(snapshot.sequence_active == 1u);
   CHECK(snapshot.active[3] == 0u);
   CHECK(snapshot.failures[3] ==
-        record(Gfn2SccStageId::kPeriodicPotential, GPUXTB_STATUS_INTERNAL_ERROR));
+        record(Gfn2SccStageId::kPeriodicPotential, XTBLOOM_STATUS_INTERNAL_ERROR));
   return 0;
 }
 
@@ -912,7 +913,7 @@ int test_graph_replay_resets_control() {
   Fixture fixture(8u);
   CHECK(fixture.valid());
   std::vector<std::uint64_t> iterations(8u, 0u);
-  std::vector<gpuxtb_status_t> statuses(8u, GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(8u, XTBLOOM_STATUS_SUCCESS);
   std::vector<std::uint8_t> converged(8u, 0u);
   std::vector<std::uint32_t> codes(8u, 0u);
   CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
@@ -928,7 +929,7 @@ int test_graph_replay_resets_control() {
       fixture.stage_sequence.get(),
       1,
       std::uint64_t{1} << 5u,
-      GPUXTB_STATUS_INTERNAL_ERROR,
+      XTBLOOM_STATUS_INTERNAL_ERROR,
       kPlanToken,
   };
 
@@ -937,9 +938,9 @@ int test_graph_replay_resets_control() {
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t executable = nullptr;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-  CUDA_CHECK(gpuxtb::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
       fixture.policy, fixture.state, fixture.provenance, fixture.ledger, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger, stream));
+  CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger, stream));
   CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
   CUDA_CHECK(cudaGraphInstantiate(&executable, graph, nullptr, nullptr, 0u));
 
@@ -995,7 +996,7 @@ int test_device_epoch_graph_replay_and_fail_closed_gates() {
   Fixture fixture(batch_size);
   CHECK(fixture.valid());
   std::vector<std::uint64_t> iterations(batch_size, 0u);
-  std::vector<gpuxtb_status_t> statuses(batch_size, GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(batch_size, XTBLOOM_STATUS_SUCCESS);
   std::vector<std::uint8_t> converged(batch_size, 0u);
   std::vector<std::uint64_t> committed(batch_size, kGeometryGeneration);
   std::vector<std::uint64_t> warm(batch_size, kWarmStartGeneration);
@@ -1009,7 +1010,7 @@ int test_device_epoch_graph_replay_and_fail_closed_gates() {
   cudaGraphExec_t executable = nullptr;
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-  CUDA_CHECK(gpuxtb::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
       fixture.policy, fixture.state, fixture.provenance, fixture.geometry_consumer(),
       fixture.ledger, stream));
   CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
@@ -1042,7 +1043,7 @@ int test_device_epoch_graph_replay_and_fail_closed_gates() {
     CHECK(mixed.failures[system] ==
           record(Gfn2SccStageId::kGeometry,
                  static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kStaleGeneration)));
-    CHECK(mixed.statuses[system] == GPUXTB_STATUS_INTERNAL_ERROR);
+    CHECK(mixed.statuses[system] == XTBLOOM_STATUS_INTERNAL_ERROR);
   }
 
   committed.assign(batch_size, next_epoch);
@@ -1062,7 +1063,7 @@ int test_device_epoch_graph_replay_and_fail_closed_gates() {
   /* Malformed eligibility is plan-wide even when every malformed byte belongs
    * to an otherwise inactive peer. */
   converged[3] = 1u;
-  statuses[4] = GPUXTB_STATUS_INTERNAL_ERROR;
+  statuses[4] = XTBLOOM_STATUS_INTERNAL_ERROR;
   eligible[3] = 2u;
   eligible[4] = 2u;
   CUDA_CHECK(fixture.install_state(iterations, statuses, converged, stream));
@@ -1093,18 +1094,18 @@ int test_device_epoch_graph_replay_and_fail_closed_gates() {
 
   Gfn2GeometryEpochConsumerDevice cross_plan = fixture.geometry_consumer();
   cross_plan.plan_token ^= 1u;
-  CHECK(gpuxtb::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
+  CHECK(xtbloom::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
             fixture.policy, fixture.state, fixture.provenance, cross_plan, fixture.ledger) ==
         cudaErrorInvalidValue);
 
   converged[3] = 0u;
-  statuses[4] = GPUXTB_STATUS_SUCCESS;
+  statuses[4] = XTBLOOM_STATUS_SUCCESS;
   CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
   CUDA_CHECK(fixture.install_geometry_transaction(next_epoch, committed, eligible));
   CUDA_CHECK(fixture.active.copy_from(eligible.data(), eligible.size()));
   Gfn2GeometryEpochConsumerDevice exact_alias = fixture.geometry_consumer();
   exact_alias.eligible_mask = fixture.active.get();
-  CUDA_CHECK(gpuxtb::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
       fixture.policy, fixture.state, fixture.provenance, exact_alias, fixture.ledger));
   Snapshot alias;
   CUDA_CHECK(fixture.snapshot(alias));
@@ -1119,7 +1120,7 @@ int test_host_validation() {
   Fixture fixture(1u);
   CHECK(fixture.valid());
   std::vector<std::uint64_t> iterations(1u, 0u);
-  std::vector<gpuxtb_status_t> statuses(1u, GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(1u, XTBLOOM_STATUS_SUCCESS);
   std::vector<std::uint8_t> converged(1u, 0u);
   CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
   statuses[0] = 99;
@@ -1130,22 +1131,22 @@ int test_host_validation() {
   CHECK(invalid_state.plan_failure ==
         record(Gfn2SccStageId::kActivity,
                static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kInvalidState)));
-  statuses[0] = GPUXTB_STATUS_SUCCESS;
+  statuses[0] = XTBLOOM_STATUS_SUCCESS;
   CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
   Snapshot sentinel_before;
   CHECK(derive_and_snapshot(fixture, sentinel_before) == 0);
   Gfn2SccIterationDeviceLedger bad_ledger = fixture.ledger;
   bad_ledger.sequence_active = reinterpret_cast<std::uint32_t*>(fixture.plan_failure.get());
-  CHECK(gpuxtb::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
+  CHECK(xtbloom::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
             fixture.policy, fixture.state, fixture.provenance, bad_ledger) ==
         cudaErrorInvalidValue);
 
   Gfn2SccStageDeviceReport bad_report{};
   bad_report.stage = Gfn2SccStageId::kDensity;
   bad_report.peer_error_mask = 1u;
-  bad_report.peer_failure_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  bad_report.peer_failure_status = XTBLOOM_STATUS_INTERNAL_ERROR;
   bad_report.plan_token = kPlanToken;
-  CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(bad_report, fixture.ledger) ==
+  CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(bad_report, fixture.ledger) ==
         cudaErrorInvalidValue);
 
   const std::vector<std::uint32_t> codes(1u, 77u);
@@ -1160,7 +1161,7 @@ int test_host_validation() {
       fixture.stage_sequence.get(),
       1,
       0u,
-      GPUXTB_STATUS_INTERNAL_ERROR,
+      XTBLOOM_STATUS_INTERNAL_ERROR,
       kPlanToken,
   };
 
@@ -1168,7 +1169,7 @@ int test_host_validation() {
   invalid_role_report.stage = Gfn2SccStageId::kES2RawEnergy;
   invalid_role_report.device_code_role =
       static_cast<Gfn2SccStageDeviceCodeRole>(std::numeric_limits<std::uint32_t>::max());
-  CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(invalid_role_report, fixture.ledger) ==
+  CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(invalid_role_report, fixture.ledger) ==
         cudaErrorInvalidValue);
 
   Gfn2SccStageDeviceReport missing_plan_scalar = invalid_stage_report;
@@ -1176,7 +1177,7 @@ int test_host_validation() {
   missing_plan_scalar.device_error = nullptr;
   missing_plan_scalar.device_error_elements = 0;
   missing_plan_scalar.device_code_role = Gfn2SccStageDeviceCodeRole::kPlanOnly;
-  CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(missing_plan_scalar, fixture.ledger) ==
+  CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(missing_plan_scalar, fixture.ledger) ==
         cudaErrorInvalidValue);
 
   // Capture makes the no-launch contract observable: rejecting a malformed
@@ -1185,8 +1186,8 @@ int test_host_validation() {
   cudaGraph_t graph = nullptr;
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-  CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(invalid_stage_report, fixture.ledger,
-                                                            stream) == cudaErrorInvalidValue);
+  CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(invalid_stage_report, fixture.ledger,
+                                                             stream) == cudaErrorInvalidValue);
   CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
   std::size_t node_count = std::numeric_limits<std::size_t>::max();
   CUDA_CHECK(cudaGraphGetNodes(graph, nullptr, &node_count));
@@ -1204,8 +1205,8 @@ int test_host_validation() {
 
   invalid_stage_report.stage =
       static_cast<Gfn2SccStageId>(std::numeric_limits<std::uint32_t>::max());
-  CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(invalid_stage_report, fixture.ledger) ==
-        cudaErrorInvalidValue);
+  CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(
+            invalid_stage_report, fixture.ledger) == cudaErrorInvalidValue);
   return 0;
 }
 

@@ -6,7 +6,7 @@
     "command": [
       "benchmarks/natoms_cross_engine.py",
       "--library",
-      "/home/jzzeng/codes/gpuxtb4-pr231/build/pr231-evidence-c9c0a43-cuda/libgpuxtb.so.0.1.0",
+      "/home/jzzeng/codes/xtbloom4-pr231/build/pr231-evidence-c9c0a43-cuda/libxtbloom.so.0.1.0",
       "--engines",
       "dxtb-cuda",
       "--natoms",
@@ -38,11 +38,11 @@
       "--dxtb-source",
       "/home/jzzeng/codes/dxtb",
       "--reference-json",
-      "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-b512.json",
+      "/home/jzzeng/codes/xtbloom4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-b512.json",
       "--output-json",
-      "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/dxtb-cuda-b512.json",
+      "/home/jzzeng/codes/xtbloom4-pr231/build/benchmarks/issue-13-c9c0a43-final/dxtb-cuda-b512.json",
       "--output-csv",
-      "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/dxtb-cuda-b512.csv"
+      "/home/jzzeng/codes/xtbloom4-pr231/build/benchmarks/issue-13-c9c0a43-final/dxtb-cuda-b512.csv"
     ],
     "commit": {
       "head": "c9c0a432947f122d25cb91d0a4624af0a3e761ad",
@@ -55,18 +55,18 @@
     "comparison_reference": {
       "designation": "dependent_run",
       "engine": "tblite",
-      "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-b512.json",
+      "artifact": "/home/jzzeng/codes/xtbloom4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-b512.json",
       "artifact_sha256": "33a344f3995660fb53f5025c7c217ac6e1e7dc4a53109759ddebda7d8dfee7e7"
     },
     "runner": {
       "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0]",
       "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.35",
-      "gpuxtb_library": "/home/jzzeng/codes/gpuxtb4-pr231/build/pr231-evidence-c9c0a43-cuda/libgpuxtb.so.0.1.0",
-      "gpuxtb_library_sha256": "d995eca4a864db2d7f5fd284e9288f6f5cdd6a1436537fb1bd4fe600dfc0c524",
-      "gpuxtb_native_identity": {
-        "path": "/home/jzzeng/codes/gpuxtb4-pr231/build/pr231-evidence-c9c0a43-cuda/libgpuxtb.so.0.1.0",
+      "xtbloom_library": "/home/jzzeng/codes/xtbloom4-pr231/build/pr231-evidence-c9c0a43-cuda/libxtbloom.so.0.1.0",
+      "xtbloom_library_sha256": "d995eca4a864db2d7f5fd284e9288f6f5cdd6a1436537fb1bd4fe600dfc0c524",
+      "xtbloom_native_identity": {
+        "path": "/home/jzzeng/codes/xtbloom4-pr231/build/pr231-evidence-c9c0a43-cuda/libxtbloom.so.0.1.0",
         "sha256": "d995eca4a864db2d7f5fd284e9288f6f5cdd6a1436537fb1bd4fe600dfc0c524",
-        "readelf_dynamic": "Dynamic section at offset 0xd55d30 contains 31 entries:\n  Tag        Type                         Name/Value\n 0x0000000000000001 (NEEDED)             Shared library: [libstdc++.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]\n 0x000000000000000e (SONAME)             Library soname: [libgpuxtb.so.0]\n 0x000000000000000c (INIT)               0x6000\n 0x000000000000000d (FINI)               0x1a8144\n 0x0000000000000019 (INIT_ARRAY)         0xd56120\n 0x000000000000001b (INIT_ARRAYSZ)       472 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0xd562f8\n 0x000000000000001c (FINI_ARRAYSZ)       8 (bytes)\n 0x000000006ffffef5 (GNU_HASH)           0x298\n 0x0000000000000005 (STRTAB)             0x1078\n 0x0000000000000006 (SYMTAB)             0x370\n 0x000000000000000a (STRSZ)              3956 (bytes)\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000003 (PLTGOT)             0xd57000\n 0x0000000000000002 (PLTRELSZ)           2232 (bytes)\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000017 (JMPREL)             0x4c40\n 0x0000000000000007 (RELA)               0x2330\n 0x0000000000000008 (RELASZ)             10512 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffffc (VERDEF)             0x2108\n 0x000000006ffffffd (VERDEFNUM)          2\n 0x000000006ffffffe (VERNEED)            0x2140\n 0x000000006fffffff (VERNEEDNUM)         5\n 0x000000006ffffff0 (VERSYM)             0x1fec\n 0x000000006ffffff9 (RELACOUNT)          404\n 0x0000000000000000 (NULL)               0x0",
+        "readelf_dynamic": "Dynamic section at offset 0xd55d30 contains 31 entries:\n  Tag        Type                         Name/Value\n 0x0000000000000001 (NEEDED)             Shared library: [libstdc++.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]\n 0x000000000000000e (SONAME)             Library soname: [libxtbloom.so.0]\n 0x000000000000000c (INIT)               0x6000\n 0x000000000000000d (FINI)               0x1a8144\n 0x0000000000000019 (INIT_ARRAY)         0xd56120\n 0x000000000000001b (INIT_ARRAYSZ)       472 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0xd562f8\n 0x000000000000001c (FINI_ARRAYSZ)       8 (bytes)\n 0x000000006ffffef5 (GNU_HASH)           0x298\n 0x0000000000000005 (STRTAB)             0x1078\n 0x0000000000000006 (SYMTAB)             0x370\n 0x000000000000000a (STRSZ)              3956 (bytes)\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000003 (PLTGOT)             0xd57000\n 0x0000000000000002 (PLTRELSZ)           2232 (bytes)\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000017 (JMPREL)             0x4c40\n 0x0000000000000007 (RELA)               0x2330\n 0x0000000000000008 (RELASZ)             10512 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffffc (VERDEF)             0x2108\n 0x000000006ffffffd (VERDEFNUM)          2\n 0x000000006ffffffe (VERNEED)            0x2140\n 0x000000006fffffff (VERNEEDNUM)         5\n 0x000000006ffffff0 (VERSYM)             0x1fec\n 0x000000006ffffff9 (RELACOUNT)          404\n 0x0000000000000000 (NULL)               0x0",
         "ldd": "linux-vdso.so.1 (0x00007ffc7e3bf000)\n\tlibstdc++.so.6 => /tmp/lammps-qmmm-xtb-env/lib/libstdc++.so.6 (0x00007f956be00000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f956c119000)\n\tlibgcc_s.so.1 => /tmp/lammps-qmmm-xtb-env/lib/libgcc_s.so.1 (0x00007f956cfe8000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f956ba00000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007f956d028000)\n\tlibdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x00007f956cfe3000)",
         "unresolved_dependencies": [],
         "resolved_dependencies": [
@@ -102,8 +102,8 @@
           }
         ]
       },
-      "gpuxtb_build": {
-        "cache_path": "/home/jzzeng/codes/gpuxtb4-pr231/build/pr231-evidence-c9c0a43-cuda/CMakeCache.txt",
+      "xtbloom_build": {
+        "cache_path": "/home/jzzeng/codes/xtbloom4-pr231/build/pr231-evidence-c9c0a43-cuda/CMakeCache.txt",
         "cache_sha256": "f28995ccd5f4b578ec64123e161b70b05324c1f49b2c25d2728c27c236f64c9c",
         "library_size": 14564320,
         "library_mtime_ns": 1786288057282371378,
@@ -117,10 +117,10 @@
           "CMAKE_CXX_FLAGS": "",
           "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
           "CMAKE_SHARED_LINKER_FLAGS": "",
-          "GPUXTB_CPU_LINALG_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so",
-          "GPUXTB_ENABLE_CUDA": "ON",
-          "GPUXTB_MKL_RT_LIBRARY": "",
-          "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/gpuxtb4-pr231"
+          "XTBLOOM_CPU_LINALG_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so",
+          "XTBLOOM_ENABLE_CUDA": "ON",
+          "XTBLOOM_MKL_RT_LIBRARY": "",
+          "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/xtbloom4-pr231"
         },
         "source_state": {
           "head": "c9c0a432947f122d25cb91d0a4624af0a3e761ad",
@@ -219,7 +219,7 @@
           }
         }
       },
-      "reference_json": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-b512.json",
+      "reference_json": "/home/jzzeng/codes/xtbloom4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-b512.json",
       "reference_json_sha256": "33a344f3995660fb53f5025c7c217ac6e1e7dc4a53109759ddebda7d8dfee7e7"
     },
     "hardware": {
@@ -300,7 +300,7 @@
         "maximum_authorized_energy_atol_hartree": 0.002,
         "maximum_authorized_force_atol_hartree_per_bohr": 0.002,
         "strict_repository_gate_not_replaced": {
-          "path": "/home/jzzeng/codes/gpuxtb4-pr231/data/conformance/manifest.json",
+          "path": "/home/jzzeng/codes/xtbloom4-pr231/data/conformance/manifest.json",
           "sha256": "b974de841726747eb6d7ff2c31b4ac0f823d4cb64e2e7d3d6269854f5ee98383",
           "json_field": "cross_engine_tolerances",
           "energy_atol_hartree": 5e-07,
@@ -315,7 +315,7 @@
       "scc_charge_tolerance": 0.0001,
       "scc_energy_tolerance": 1e-06,
       "convergence_contract": {
-        "gpuxtb": {
+        "xtbloom": {
           "charge_tolerance": 0.0001,
           "energy_tolerance": 1e-06
         },
@@ -2471,7 +2471,7 @@
         "cross_engine": {
           "status": "pass",
           "reference_engine": "tblite",
-          "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-b512.json",
+          "artifact": "/home/jzzeng/codes/xtbloom4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-b512.json",
           "artifact_sha256": "33a344f3995660fb53f5025c7c217ac6e1e7dc4a53109759ddebda7d8dfee7e7",
           "energy_atol_hartree": 0.002,
           "force_atol_hartree_per_bohr": 0.002,
@@ -4667,7 +4667,7 @@
         "cross_engine": {
           "status": "pass",
           "reference_engine": "tblite",
-          "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-b512.json",
+          "artifact": "/home/jzzeng/codes/xtbloom4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-b512.json",
           "artifact_sha256": "33a344f3995660fb53f5025c7c217ac6e1e7dc4a53109759ddebda7d8dfee7e7",
           "energy_atol_hartree": 0.002,
           "force_atol_hartree_per_bohr": 0.002,

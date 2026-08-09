@@ -48,7 +48,7 @@ void operator delete[](void* pointer, std::size_t) noexcept { ::operator delete[
 
 namespace {
 
-using namespace gpuxtb::detail::gfn2;
+using namespace xtbloom::detail::gfn2;
 
 struct AlignedBuffer {
   void* data = nullptr;
@@ -241,7 +241,7 @@ const CpuLinearAlgebraBackend& backend() {
     std::string error;
     if (make_internal_test_lp64_backend(&tiny_dpotrf, &tiny_dpocon, &tiny_dsyevd, &tiny_dtrsm,
                                         &tiny_dgemm, nullptr, result,
-                                        error) != GPUXTB_STATUS_SUCCESS) {
+                                        error) != XTBLOOM_STATUS_SUCCESS) {
       std::abort();
     }
     return result;
@@ -349,7 +349,7 @@ std::size_t expected_disabled_state_size(const Fixture& fixture) {
     cursor = append_test_segment(cursor, batch * sizeof(double), alignof(double));
   }
   cursor = append_test_segment(cursor, batch * sizeof(std::uint64_t), alignof(std::uint64_t));
-  cursor = append_test_segment(cursor, batch * sizeof(gpuxtb_status_t), alignof(gpuxtb_status_t));
+  cursor = append_test_segment(cursor, batch * sizeof(xtbloom_status_t), alignof(xtbloom_status_t));
   cursor = append_test_segment(cursor, batch * sizeof(std::uint8_t), alignof(std::uint8_t));
   cursor = append_test_segment(cursor, batch * sizeof(std::uint8_t), alignof(std::uint8_t));
   return append_test_segment(cursor, 0u, kSccDriverWorkspaceAlignment);
@@ -403,7 +403,7 @@ std::size_t expected_disabled_workspace_size(const Fixture& fixture) {
                                kSccMixerWorkspaceAlignment);
   cursor = append_test_segment(cursor, fixture.mixer_plan.workspace_size_bytes(),
                                kSccMixerWorkspaceAlignment);
-  cursor = append_test_segment(cursor, batch * sizeof(gpuxtb_status_t), alignof(gpuxtb_status_t));
+  cursor = append_test_segment(cursor, batch * sizeof(xtbloom_status_t), alignof(xtbloom_status_t));
   cursor = append_test_segment(cursor, 2u * batch * sizeof(double), alignof(double));
   for (int field = 0; field < 3; ++field) {
     cursor = append_test_segment(cursor, batch * sizeof(double), alignof(double));
@@ -424,7 +424,7 @@ struct MixerSystemSnapshot {
   double residual_maximum = 0.0;
   std::uint64_t iterations = 0u;
   std::uint64_t restart_counts = 0u;
-  gpuxtb_status_t system_status = GPUXTB_STATUS_SUCCESS;
+  xtbloom_status_t system_status = XTBLOOM_STATUS_SUCCESS;
   std::uint8_t initialized = 0u;
   std::uint8_t converged = 0u;
 };
@@ -485,24 +485,24 @@ bool make_component_plans(std::vector<std::int32_t> atomic_numbers, double molec
   plans.spin_channels = {1};
   return make_basis_plan(1, plans.atom_offsets.back(), plans.atom_offsets.data(),
                          plans.atomic_numbers.data(), plans.basis,
-                         error) == GPUXTB_STATUS_SUCCESS &&
-         make_integral_plan(plans.basis, plans.integrals, error) == GPUXTB_STATUS_SUCCESS &&
+                         error) == XTBLOOM_STATUS_SUCCESS &&
+         make_integral_plan(plans.basis, plans.integrals, error) == XTBLOOM_STATUS_SUCCESS &&
          make_wavefunction_layout(plans.basis, plans.atomic_numbers.data(),
                                   plans.molecular_charges.data(), plans.unpaired_electrons.data(),
                                   plans.spin_channels.data(), plans.wavefunction,
-                                  error) == GPUXTB_STATUS_SUCCESS &&
+                                  error) == XTBLOOM_STATUS_SUCCESS &&
          make_mulliken_plan(plans.basis, plans.integrals, plans.wavefunction, plans.mulliken,
-                            error) == GPUXTB_STATUS_SUCCESS &&
+                            error) == XTBLOOM_STATUS_SUCCESS &&
          make_es2_plan(plans.basis, plans.atomic_numbers.data(), plans.es2, error) ==
-             GPUXTB_STATUS_SUCCESS &&
+             XTBLOOM_STATUS_SUCCESS &&
          make_es3_plan(plans.basis, plans.atomic_numbers.data(), plans.es3, error) ==
-             GPUXTB_STATUS_SUCCESS &&
+             XTBLOOM_STATUS_SUCCESS &&
          make_aes2_plan(plans.basis, plans.atomic_numbers.data(), plans.aes2, error) ==
-             GPUXTB_STATUS_SUCCESS &&
+             XTBLOOM_STATUS_SUCCESS &&
          make_eigensolver_plan(plans.wavefunction, plans.eigensolver, error) ==
-             GPUXTB_STATUS_SUCCESS &&
+             XTBLOOM_STATUS_SUCCESS &&
          make_scc_mixer_plan(plans.wavefunction, 3, 0.4, 1.0e-10, 1.0e-10, plans.mixer, error) ==
-             GPUXTB_STATUS_SUCCESS;
+             XTBLOOM_STATUS_SUCCESS;
 }
 
 bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
@@ -552,38 +552,38 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
 
   if (make_basis_plan(batch_size, total_atoms, fixture.atom_offsets.data(),
                       fixture.atomic_numbers.data(), fixture.basis,
-                      error) != GPUXTB_STATUS_SUCCESS ||
-      make_integral_plan(fixture.basis, fixture.integral_plan, error) != GPUXTB_STATUS_SUCCESS ||
+                      error) != XTBLOOM_STATUS_SUCCESS ||
+      make_integral_plan(fixture.basis, fixture.integral_plan, error) != XTBLOOM_STATUS_SUCCESS ||
       make_h0_plan(fixture.basis, fixture.integral_plan, fixture.atomic_numbers.data(),
-                   fixture.h0_plan, error) != GPUXTB_STATUS_SUCCESS ||
+                   fixture.h0_plan, error) != XTBLOOM_STATUS_SUCCESS ||
       make_wavefunction_layout(fixture.basis, fixture.atomic_numbers.data(), fixture.charges.data(),
                                fixture.unpaired.data(), fixture.spins.data(),
-                               fixture.wavefunction_layout, error) != GPUXTB_STATUS_SUCCESS ||
+                               fixture.wavefunction_layout, error) != XTBLOOM_STATUS_SUCCESS ||
       make_es2_plan(fixture.basis, fixture.atomic_numbers.data(), fixture.es2_plan, error) !=
-          GPUXTB_STATUS_SUCCESS ||
+          XTBLOOM_STATUS_SUCCESS ||
       make_es3_plan(fixture.basis, fixture.atomic_numbers.data(), fixture.es3_plan, error) !=
-          GPUXTB_STATUS_SUCCESS ||
+          XTBLOOM_STATUS_SUCCESS ||
       make_aes2_plan(fixture.basis, fixture.atomic_numbers.data(), fixture.aes2_plan, error) !=
-          GPUXTB_STATUS_SUCCESS ||
+          XTBLOOM_STATUS_SUCCESS ||
       make_mulliken_plan(fixture.basis, fixture.integral_plan, fixture.wavefunction_layout,
-                         fixture.mulliken_plan, error) != GPUXTB_STATUS_SUCCESS ||
+                         fixture.mulliken_plan, error) != XTBLOOM_STATUS_SUCCESS ||
       make_eigensolver_plan(fixture.wavefunction_layout, fixture.eigensolver_plan, error) !=
-          GPUXTB_STATUS_SUCCESS ||
+          XTBLOOM_STATUS_SUCCESS ||
       make_scc_mixer_plan(fixture.wavefunction_layout, 3, 0.4, mixer_tolerance, mixer_tolerance,
-                          fixture.mixer_plan, error) != GPUXTB_STATUS_SUCCESS) {
+                          fixture.mixer_plan, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   if (enable_periodic_embedding &&
       make_periodic_embedding_plan(batch_size, total_atoms, fixture.atom_offsets.data(),
-                                   fixture.periodic_plan, error) != GPUXTB_STATUS_SUCCESS) {
+                                   fixture.periodic_plan, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   if (enable_d4 && make_d4_plan(batch_size, total_atoms, fixture.atom_offsets.data(),
                                 fixture.atomic_numbers.data(), fixture.d4_plan,
-                                error) != GPUXTB_STATUS_SUCCESS) {
+                                error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
-  gpuxtb_status_t driver_status = GPUXTB_STATUS_SUCCESS;
+  xtbloom_status_t driver_status = XTBLOOM_STATUS_SUCCESS;
   if (!use_compatibility_driver_overload) {
     driver_status = make_scc_driver_plan(
         fixture.wavefunction_layout, fixture.mulliken_plan, fixture.es2_plan, fixture.es3_plan,
@@ -609,7 +609,7 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
         fixture.aes2_plan, fixture.eigensolver_plan, fixture.mixer_plan, maximum_iterations,
         electronic_temperature, fixture.driver_plan, error);
   }
-  if (driver_status != GPUXTB_STATUS_SUCCESS) {
+  if (driver_status != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   if (enable_periodic_embedding) {
@@ -628,14 +628,14 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
       std::make_unique<AlignedBuffer>(fixture.integral_plan.workspace_size_bytes);
   if (evaluate_overlap_cpu(fixture.basis, fixture.integral_plan, fixture.positions.data(),
                            fixture.overlap.data(), fixture.integral_scratch->data,
-                           fixture.integral_scratch->size, error) != GPUXTB_STATUS_SUCCESS ||
+                           fixture.integral_scratch->size, error) != XTBLOOM_STATUS_SUCCESS ||
       evaluate_multipole_cpu(fixture.basis, fixture.integral_plan, fixture.positions.data(),
                              fixture.dipole_integrals.data(), fixture.quadrupole_integrals.data(),
                              fixture.integral_scratch->data, fixture.integral_scratch->size,
-                             error) != GPUXTB_STATUS_SUCCESS ||
+                             error) != XTBLOOM_STATUS_SUCCESS ||
       evaluate_h0_cpu(fixture.basis, fixture.integral_plan, fixture.h0_plan,
                       fixture.positions.data(), fixture.coordination.data(), fixture.overlap.data(),
-                      fixture.h0.data(), error) != GPUXTB_STATUS_SUCCESS) {
+                      fixture.h0.data(), error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -649,7 +649,7 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
           fixture.es2_plan, fixture.positions.data(), 1u,
           static_cast<double*>(fixture.es2_storage->data),
           static_cast<std::size_t>(fixture.es2_plan.total_matrix_elements()), fixture.es2_scratch,
-          fixture.es2_cache, error) != GPUXTB_STATUS_SUCCESS) {
+          fixture.es2_cache, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -663,7 +663,7 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
           fixture.aes2_plan, fixture.positions.data(), fixture.coordination.data(), 1u,
           static_cast<double*>(fixture.aes2_storage->data),
           static_cast<std::size_t>(fixture.aes2_plan.pair_data_elements()), fixture.aes2_scratch,
-          fixture.aes2_cache, error) != GPUXTB_STATUS_SUCCESS) {
+          fixture.aes2_cache, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -681,31 +681,31 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
       std::make_unique<AlignedBuffer>(fixture.driver_plan.workspace_size_bytes());
   if (bind_wavefunction_view(fixture.wavefunction_layout, fixture.wavefunction_storage->data,
                              fixture.wavefunction_storage->size, fixture.wavefunction,
-                             error) != GPUXTB_STATUS_SUCCESS ||
+                             error) != XTBLOOM_STATUS_SUCCESS ||
       initialize_sad_multipole_state(fixture.wavefunction_layout, fixture.wavefunction, error) !=
-          GPUXTB_STATUS_SUCCESS ||
+          XTBLOOM_STATUS_SUCCESS ||
       bind_eigensolver_overlap_cache(fixture.eigensolver_plan, fixture.overlap_cache_storage->data,
                                      fixture.overlap_cache_storage->size, fixture.overlap_cache,
-                                     error) != GPUXTB_STATUS_SUCCESS ||
+                                     error) != XTBLOOM_STATUS_SUCCESS ||
       bind_eigensolver_workspace(fixture.eigensolver_plan,
                                  fixture.eigensolver_scratch_storage->data,
                                  fixture.eigensolver_scratch_storage->size,
-                                 fixture.eigensolver_scratch, error) != GPUXTB_STATUS_SUCCESS ||
+                                 fixture.eigensolver_scratch, error) != XTBLOOM_STATUS_SUCCESS ||
       factor_overlap_cpu(fixture.eigensolver_plan, fixture.overlap.data(), 1u, backend(),
                          fixture.eigensolver_scratch, fixture.overlap_cache,
-                         error) != GPUXTB_STATUS_SUCCESS ||
+                         error) != XTBLOOM_STATUS_SUCCESS ||
       bind_scc_mixer_state(fixture.mixer_plan, fixture.mixer_state_storage->data,
                            fixture.mixer_state_storage->size, fixture.mixer_state,
-                           error) != GPUXTB_STATUS_SUCCESS ||
+                           error) != XTBLOOM_STATUS_SUCCESS ||
       bind_scc_driver_state(fixture.driver_plan, fixture.driver_state_storage->data,
                             fixture.driver_state_storage->size, fixture.driver_state,
-                            error) != GPUXTB_STATUS_SUCCESS ||
+                            error) != XTBLOOM_STATUS_SUCCESS ||
       bind_scc_driver_workspace(fixture.driver_plan, fixture.driver_scratch_storage->data,
                                 fixture.driver_scratch_storage->size, fixture.driver_scratch,
-                                error) != GPUXTB_STATUS_SUCCESS ||
+                                error) != XTBLOOM_STATUS_SUCCESS ||
       initialize_scc_driver_state_cpu(fixture.driver_plan, fixture.wavefunction,
                                       fixture.mixer_state, fixture.driver_state,
-                                      error) != GPUXTB_STATUS_SUCCESS) {
+                                      error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -727,7 +727,7 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
                                      fixture.d4_pair_data.data(), fixture.d4_pair_data.size(),
                                      fixture.d4_coordination.data(), fixture.d4_coordination.size(),
                                      fixture.driver_scratch.d4_workspace, fixture.d4_cache,
-                                     error) != GPUXTB_STATUS_SUCCESS) {
+                                     error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     fixture.geometry.d4_cache = fixture.d4_cache;
@@ -769,7 +769,7 @@ int test_complete_energy_components_free_energy_and_restart() {
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.converged[0] == 1u);
 
   const std::array<double, 8> components{{
@@ -830,7 +830,7 @@ int test_complete_energy_components_free_energy_and_restart() {
 
   CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 0, fixture.wavefunction,
                                       fixture.mixer_state, fixture.driver_state,
-                                      error) == GPUXTB_STATUS_SUCCESS);
+                                      error) == XTBLOOM_STATUS_SUCCESS);
   for (const double* trace :
        {fixture.driver_state.free_energies, fixture.driver_state.previous_free_energies,
         fixture.driver_state.free_energy_changes, fixture.driver_state.entropies,
@@ -854,7 +854,7 @@ int test_energy_and_residual_convergence_gates_are_independent_and_strict() {
     fixture.wavefunction.qat[0] = 0.0;
     return restart_scc_driver_system_cpu(fixture.driver_plan, 0, fixture.wavefunction,
                                          fixture.mixer_state, fixture.driver_state,
-                                         error) == GPUXTB_STATUS_SUCCESS;
+                                         error) == XTBLOOM_STATUS_SUCCESS;
   };
 
   Fixture energy_only;
@@ -863,7 +863,7 @@ int test_energy_and_residual_convergence_gates_are_independent_and_strict() {
   CHECK(iterate_scc_driver_batch_cpu(
             energy_only.driver_plan, energy_only.geometry, backend(), energy_only.overlap_cache,
             energy_only.wavefunction, energy_only.mixer_state, energy_only.driver_state,
-            energy_only.driver_scratch, error) == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+            energy_only.driver_scratch, error) == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
   CHECK(std::abs(energy_only.driver_state.free_energy_changes[0]) <
         energy_only.driver_plan.energy_tolerance());
   CHECK(energy_only.mixer_state.residual_rms[0] >= energy_only.mixer_plan.rms_tolerance());
@@ -875,7 +875,7 @@ int test_energy_and_residual_convergence_gates_are_independent_and_strict() {
                                      residual_only.overlap_cache, residual_only.wavefunction,
                                      residual_only.mixer_state, residual_only.driver_state,
                                      residual_only.driver_scratch,
-                                     error) == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+                                     error) == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
   CHECK(residual_only.mixer_state.residual_rms[0] < residual_only.mixer_plan.rms_tolerance());
   CHECK(std::abs(residual_only.driver_state.free_energy_changes[0]) >=
         residual_only.driver_plan.energy_tolerance());
@@ -885,7 +885,7 @@ int test_energy_and_residual_convergence_gates_are_independent_and_strict() {
   CHECK(prepare_nonstationary_h_plus(both));
   CHECK(iterate_scc_driver_batch_cpu(both.driver_plan, both.geometry, backend(), both.overlap_cache,
                                      both.wavefunction, both.mixer_state, both.driver_state,
-                                     both.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     both.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(both.driver_state.converged[0] == 1u);
   const double boundary = std::abs(both.driver_state.free_energy_changes[0]);
   CHECK(boundary > 0.0);
@@ -897,7 +897,7 @@ int test_energy_and_residual_convergence_gates_are_independent_and_strict() {
                                      backend(), strict_boundary.overlap_cache,
                                      strict_boundary.wavefunction, strict_boundary.mixer_state,
                                      strict_boundary.driver_state, strict_boundary.driver_scratch,
-                                     error) == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+                                     error) == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
   CHECK(std::abs(strict_boundary.driver_state.free_energy_changes[0]) == boundary);
   CHECK(strict_boundary.mixer_state.residual_rms[0] < strict_boundary.mixer_plan.rms_tolerance());
   CHECK(strict_boundary.driver_state.converged[0] == 0u);
@@ -929,12 +929,12 @@ int test_complete_energy_failure_isolated_from_ragged_peer() {
   CHECK(iterate_scc_driver_batch_cpu(
             fixture.driver_plan, fixture.geometry, backend(), fixture.overlap_cache,
             fixture.wavefunction, fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
-            error) == GPUXTB_STATUS_INTERNAL_ERROR);
-  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.iterations[0] == 1u);
   CHECK(fixture.driver_state.converged[0] == 1u);
   CHECK(std::isfinite(fixture.driver_state.internal_energies[0]));
-  CHECK(fixture.driver_state.system_statuses[1] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.driver_state.system_statuses[1] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(fixture.driver_state.iterations[1] == 1u);
   CHECK(std::isnan(fixture.driver_state.internal_energies[1]));
   CHECK(std::isnan(fixture.driver_state.free_energies[1]));
@@ -961,12 +961,12 @@ int test_preparation_numerical_failure_isolated_from_ragged_peer() {
   CHECK(iterate_scc_driver_batch_cpu(
             fixture.driver_plan, fixture.geometry, backend(), fixture.overlap_cache,
             fixture.wavefunction, fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
-            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(diagonalizations.load(std::memory_order_relaxed) == 1);
-  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.iterations[0] == 1u);
   CHECK(fixture.driver_state.converged[0] == 1u);
-  CHECK(fixture.driver_state.system_statuses[1] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.driver_state.system_statuses[1] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(fixture.driver_state.iterations[1] == 0u);
   CHECK(fixture.wavefunction
             .qsh[static_cast<std::size_t>(fixture.wavefunction_layout.qsh.system_offsets[1])] ==
@@ -983,11 +983,11 @@ int test_preparation_numerical_failure_isolated_from_ragged_peer() {
   CHECK(iterate_scc_driver_batch_cpu(
             h0_failure.driver_plan, h0_failure.geometry, backend(), h0_failure.overlap_cache,
             h0_failure.wavefunction, h0_failure.mixer_state, h0_failure.driver_state,
-            h0_failure.driver_scratch, error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            h0_failure.driver_scratch, error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(diagonalizations.load(std::memory_order_relaxed) == 1);
-  CHECK(h0_failure.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(h0_failure.driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(h0_failure.driver_state.iterations[0] == 1u);
-  CHECK(h0_failure.driver_state.system_statuses[1] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(h0_failure.driver_state.system_statuses[1] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(h0_failure.driver_state.iterations[1] == 0u);
   return 0;
 }
@@ -996,17 +996,17 @@ int test_ragged_failure_isolation_restart_and_skip() {
   Fixture fixture;
   std::string error;
   CHECK(make_fixture(2, fixture, error));
-  fixture.overlap_cache.system_statuses[1] = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+  fixture.overlap_cache.system_statuses[1] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
   diagonalizations.store(0, std::memory_order_relaxed);
   CHECK(iterate_scc_driver_batch_cpu(
             fixture.driver_plan, fixture.geometry, backend(), fixture.overlap_cache,
             fixture.wavefunction, fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
-            error) == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+            error) == XTBLOOM_STATUS_EIGENSOLVER_FAILED);
   CHECK(diagonalizations.load(std::memory_order_relaxed) == 1);
-  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.converged[0] == 1u);
   CHECK(fixture.driver_state.iterations[0] == 1u);
-  CHECK(fixture.driver_state.system_statuses[1] == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+  CHECK(fixture.driver_state.system_statuses[1] == XTBLOOM_STATUS_EIGENSOLVER_FAILED);
   CHECK(fixture.driver_state.iterations[1] == 1u);
   CHECK(std::isnan(fixture.driver_state.free_energies[1]));
 
@@ -1015,18 +1015,18 @@ int test_ragged_failure_isolation_restart_and_skip() {
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(diagonalizations.load(std::memory_order_relaxed) == calls_before_skip);
   CHECK(fixture.wavefunction.qsh[0] == first_qsh);
 
-  fixture.overlap_cache.system_statuses[1] = GPUXTB_STATUS_SUCCESS;
+  fixture.overlap_cache.system_statuses[1] = XTBLOOM_STATUS_SUCCESS;
   CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 1, fixture.wavefunction,
                                       fixture.mixer_state, fixture.driver_state,
-                                      error) == GPUXTB_STATUS_SUCCESS);
+                                      error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(diagonalizations.load(std::memory_order_relaxed) == calls_before_skip + 1);
   CHECK(fixture.driver_state.converged[0] == 1u);
   CHECK(fixture.driver_state.converged[1] == 1u);
@@ -1043,7 +1043,7 @@ int test_converged_system_skips_classical_and_mulliken_arithmetic() {
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.converged[0] == 1u);
   CHECK(fixture.driver_state.converged[1] == 1u);
 
@@ -1053,7 +1053,7 @@ int test_converged_system_skips_classical_and_mulliken_arithmetic() {
    * whole-batch gather would reject the NaN before any system ran. */
   CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 1, fixture.wavefunction,
                                       fixture.mixer_state, fixture.driver_state,
-                                      error) == GPUXTB_STATUS_SUCCESS);
+                                      error) == XTBLOOM_STATUS_SUCCESS);
   const std::int64_t qsh_begin = fixture.wavefunction_layout.qsh.system_offsets[0];
   const std::int64_t qsh_end = fixture.wavefunction_layout.qsh.system_offsets[1];
   const std::int64_t qat_begin = fixture.wavefunction_layout.qat.system_offsets[0];
@@ -1070,7 +1070,7 @@ int test_converged_system_skips_classical_and_mulliken_arithmetic() {
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(diagonalizations.load(std::memory_order_relaxed) == diagonalizations_before + 1);
   CHECK(fixture.driver_state.converged[0] == 1u);
   CHECK(fixture.driver_state.converged[1] == 1u);
@@ -1085,24 +1085,24 @@ int test_structural_failure_atomicity_and_zero_allocation() {
   error.reserve(256u);
   CHECK(make_fixture(1, fixture, error));
   const double before_qsh = fixture.wavefunction.qsh[0];
-  const gpuxtb_status_t before_status = fixture.driver_state.system_statuses[0];
+  const xtbloom_status_t before_status = fixture.driver_state.system_statuses[0];
   SccDriverGeometryView malformed = fixture.geometry;
   malformed.h0_elements = 0;
   CHECK(iterate_scc_driver_batch_cpu(
             fixture.driver_plan, malformed, backend(), fixture.overlap_cache, fixture.wavefunction,
             fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(fixture.wavefunction.qsh[0] == before_qsh);
   CHECK(fixture.driver_state.system_statuses[0] == before_status);
   CHECK(fixture.driver_state.iterations[0] == 0u);
 
   allocation_test::count.store(0u, std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t status = iterate_scc_driver_batch_cpu(
+  const xtbloom_status_t status = iterate_scc_driver_batch_cpu(
       fixture.driver_plan, fixture.geometry, backend(), fixture.overlap_cache, fixture.wavefunction,
       fixture.mixer_state, fixture.driver_state, fixture.driver_scratch, error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
-  CHECK(status == GPUXTB_STATUS_SUCCESS);
+  CHECK(status == XTBLOOM_STATUS_SUCCESS);
   CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
   CHECK(fixture.driver_state.converged[0] == 1u);
 
@@ -1112,14 +1112,14 @@ int test_structural_failure_atomicity_and_zero_allocation() {
   SccDriverState overlapping_state;
   CHECK(bind_scc_driver_state(fixture.driver_plan, fixture.mixer_state_storage->data,
                               fixture.mixer_state_storage->size, overlapping_state,
-                              error) == GPUXTB_STATUS_SUCCESS);
+                              error) == XTBLOOM_STATUS_SUCCESS);
   std::vector<unsigned char> before_overlap(fixture.mixer_state_storage->size);
   std::memcpy(before_overlap.data(), fixture.mixer_state_storage->data,
               fixture.mixer_state_storage->size);
   const double qsh_before_restart = fixture.wavefunction.qsh[0];
   CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 0, fixture.wavefunction,
                                       fixture.mixer_state, overlapping_state,
-                                      error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                      error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::memcmp(before_overlap.data(), fixture.mixer_state_storage->data,
                     fixture.mixer_state_storage->size) == 0);
   CHECK(fixture.wavefunction.qsh[0] == qsh_before_restart);
@@ -1139,14 +1139,14 @@ int test_mixed_restricted_unrestricted_hydrogen_batch() {
   fixture.wavefunction.qsh[open_shell_qsh + 1] = -1.0;
   CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 1, fixture.wavefunction,
                                       fixture.mixer_state, fixture.driver_state,
-                                      error) == GPUXTB_STATUS_SUCCESS);
+                                      error) == XTBLOOM_STATUS_SUCCESS);
 
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
-  CHECK(fixture.driver_state.system_statuses[1] == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.system_statuses[1] == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.spin_energies[0] == 0.0);
   CHECK(std::abs(fixture.driver_state.spin_energies[1] + 0.0358125) < 2.0e-14);
 
@@ -1171,15 +1171,15 @@ int test_max_iteration_status_counts_attempts() {
   fixture.wavefunction.qat[0] = 0.0;
   CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 0, fixture.wavefunction,
                                       fixture.mixer_state, fixture.driver_state,
-                                      error) == GPUXTB_STATUS_SUCCESS);
+                                      error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(iterate_scc_driver_batch_cpu(
             fixture.driver_plan, fixture.geometry, backend(), fixture.overlap_cache,
             fixture.wavefunction, fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
-            error) == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+            error) == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
   CHECK(fixture.driver_state.iterations[0] == 1u);
   CHECK(fixture.mixer_state.iterations[0] == 1u);
   CHECK(fixture.driver_state.converged[0] == 0u);
-  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+  CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
   return 0;
 }
 
@@ -1194,9 +1194,9 @@ int test_mixer_failure_preserves_public_history_and_counts_attempt() {
   CHECK(iterate_scc_driver_batch_cpu(
             fixture.driver_plan, fixture.geometry, backend(), fixture.overlap_cache,
             fixture.wavefunction, fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
-            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(fixture.driver_state.iterations[0] == 1u);
-  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(fixture.mixer_state.iterations[0] == std::numeric_limits<std::uint64_t>::max());
   CHECK(fixture.mixer_state.current_inputs[0] == current_input_before);
   CHECK(fixture.mixer_state.previous_inputs[0] == previous_input_before);
@@ -1215,13 +1215,13 @@ int test_ragged_mixer_failure_isolated_from_peer_commit() {
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.converged[0] == 1u);
   CHECK(fixture.driver_state.converged[1] == 1u);
 
   CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 1, fixture.wavefunction,
                                       fixture.mixer_state, fixture.driver_state,
-                                      error) == GPUXTB_STATUS_SUCCESS);
+                                      error) == XTBLOOM_STATUS_SUCCESS);
   const MixerSystemSnapshot peer_before = snapshot_mixer_system(fixture, 0u);
   const double peer_qsh_before = fixture.wavefunction.qsh[0];
   CHECK(fixture.driver_state.iterations[0] == 1u);
@@ -1234,10 +1234,10 @@ int test_ragged_mixer_failure_isolated_from_peer_commit() {
   CHECK(iterate_scc_driver_batch_cpu(
             fixture.driver_plan, fixture.geometry, backend(), fixture.overlap_cache,
             fixture.wavefunction, fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
-            error) == GPUXTB_STATUS_INTERNAL_ERROR);
-  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.converged[0] == 1u);
-  CHECK(fixture.driver_state.system_statuses[1] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.driver_state.system_statuses[1] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(fixture.driver_state.iterations[1] == 1u);
   CHECK(fixture.driver_state.iterations[0] == peer_driver_iterations_before);
   /* The failed system's own public history is byte-identical except for its
@@ -1256,7 +1256,7 @@ int test_ragged_mixer_failure_isolated_from_peer_commit() {
   CHECK(failed_after.residual_maximum == failed_before.residual_maximum);
   CHECK(failed_after.initialized == failed_before.initialized);
   CHECK(failed_after.converged == failed_before.converged);
-  CHECK(failed_after.system_status == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(failed_after.system_status == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(mixer_snapshots_equal(peer_before, snapshot_mixer_system(fixture, 0u)));
   CHECK(fixture.wavefunction.qsh[0] == peer_qsh_before);
 
@@ -1264,11 +1264,11 @@ int test_ragged_mixer_failure_isolated_from_peer_commit() {
    * active-only path advance it while the converged peer is skipped. */
   CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 1, fixture.wavefunction,
                                       fixture.mixer_state, fixture.driver_state,
-                                      error) == GPUXTB_STATUS_SUCCESS);
+                                      error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.iterations[1] == 1u);
   CHECK(fixture.driver_state.converged[1] == 1u);
   CHECK(mixer_snapshots_equal(peer_before, snapshot_mixer_system(fixture, 0u)));
@@ -1283,7 +1283,7 @@ int test_inactive_peer_history_untouched_by_active_only_commit() {
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.converged[0] == 1u);
   CHECK(fixture.driver_state.converged[1] == 1u);
   CHECK(fixture.driver_state.converged[2] == 1u);
@@ -1293,14 +1293,14 @@ int test_inactive_peer_history_untouched_by_active_only_commit() {
    * mixer histories (including their statuses) must remain byte-identical. */
   CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 2, fixture.wavefunction,
                                       fixture.mixer_state, fixture.driver_state,
-                                      error) == GPUXTB_STATUS_SUCCESS);
+                                      error) == XTBLOOM_STATUS_SUCCESS);
   const MixerSystemSnapshot first = snapshot_mixer_system(fixture, 0u);
   const MixerSystemSnapshot second = snapshot_mixer_system(fixture, 1u);
   const double active_qsh_before = fixture.wavefunction.qsh[0];
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(mixer_snapshots_equal(first, snapshot_mixer_system(fixture, 0u)));
   CHECK(mixer_snapshots_equal(second, snapshot_mixer_system(fixture, 1u)));
   CHECK(fixture.driver_state.converged[2] == 1u);
@@ -1323,11 +1323,11 @@ int test_energy_history_failure_isolated_from_peer_commit() {
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.iterations[0] == 1u);
   CHECK(fixture.driver_state.iterations[1] == 1u);
-  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
-  CHECK(fixture.driver_state.system_statuses[1] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.system_statuses[1] == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.converged[0] == 0u);
   CHECK(fixture.driver_state.converged[1] == 0u);
   CHECK(std::isfinite(fixture.driver_state.free_energies[0]));
@@ -1341,15 +1341,15 @@ int test_energy_history_failure_isolated_from_peer_commit() {
   CHECK(iterate_scc_driver_batch_cpu(
             fixture.driver_plan, fixture.geometry, backend(), fixture.overlap_cache,
             fixture.wavefunction, fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
-            error) == GPUXTB_STATUS_INTERNAL_ERROR);
-  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_INTERNAL_ERROR);
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(std::isnan(fixture.driver_state.free_energies[0]));
   /* The failed system's public mixer history is not advanced: the attempt was
    * counted only in the driver trace, mirroring the mix-failure contract. */
   CHECK(fixture.mixer_state.iterations[0] == 1u);
   CHECK(fixture.driver_state.iterations[0] == 2u);
   /* The peer committed normally. */
-  CHECK(fixture.driver_state.system_statuses[1] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.system_statuses[1] == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.iterations[1] == 2u);
   CHECK(fixture.mixer_state.iterations[1] == 2u);
   CHECK(std::isfinite(fixture.driver_state.free_energies[1]));
@@ -1364,11 +1364,11 @@ int test_converged_wavefunction_publishes_raw_mulliken_multipoles() {
   fixture.wavefunction.qat[0] = 0.0;
   CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 0, fixture.wavefunction,
                                       fixture.mixer_state, fixture.driver_state,
-                                      error) == GPUXTB_STATUS_SUCCESS);
+                                      error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.converged[0] == 1u);
   CHECK(std::abs(fixture.mixer_state.current_inputs[0] - 0.4) < 1.0e-14);
   CHECK(std::abs(fixture.wavefunction.qsh[0] - 1.0) < 1.0e-14);
@@ -1389,11 +1389,11 @@ int test_cached_explicit_point_charge_potential_enters_hamiltonian() {
   CHECK(iterate_scc_driver_batch_cpu(reference.driver_plan, reference.geometry, backend(),
                                      reference.overlap_cache, reference.wavefunction,
                                      reference.mixer_state, reference.driver_state,
-                                     reference.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     reference.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(iterate_scc_driver_batch_cpu(embedded.driver_plan, embedded.geometry, backend(),
                                      embedded.overlap_cache, embedded.wavefunction,
                                      embedded.mixer_state, embedded.driver_state,
-                                     embedded.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     embedded.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::abs((embedded.wavefunction.eigenvalues[0] - reference.wavefunction.eigenvalues[0]) +
                  point_charge_shell_potential[0]) < 1.0e-14);
   return 0;
@@ -1453,12 +1453,12 @@ int test_disabled_layout_and_bitwise_compatibility() {
                                      backend(), legacy_overload.overlap_cache,
                                      legacy_overload.wavefunction, legacy_overload.mixer_state,
                                      legacy_overload.driver_state, legacy_overload.driver_scratch,
-                                     error) == GPUXTB_STATUS_SUCCESS);
+                                     error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(iterate_scc_driver_batch_cpu(
             nullable_overload.driver_plan, nullable_overload.geometry, backend(),
             nullable_overload.overlap_cache, nullable_overload.wavefunction,
             nullable_overload.mixer_state, nullable_overload.driver_state,
-            nullable_overload.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+            nullable_overload.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::memcmp(legacy_overload.wavefunction_storage->data,
                     nullable_overload.wavefunction_storage->data,
                     legacy_overload.wavefunction_layout.workspace_size_bytes) == 0);
@@ -1518,26 +1518,26 @@ int test_optional_d4_potential_energy_restart_and_zero_allocation() {
   CHECK(evaluate_d4_two_body_cpu(enabled.d4_plan, enabled.d4_cache, mixed_atomic_charges.data(),
                                  expected_energy.data(), expected_potential.data(),
                                  enabled.driver_scratch.d4_workspace,
-                                 error) == GPUXTB_STATUS_SUCCESS);
+                                 error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::abs(expected_potential[0]) + std::abs(expected_potential[1]) > 1.0e-12);
 
   CHECK(iterate_scc_driver_batch_cpu(reference.driver_plan, reference.geometry, backend(),
                                      reference.overlap_cache, reference.wavefunction,
                                      reference.mixer_state, reference.driver_state,
-                                     reference.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     reference.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   allocation_test::count.store(0u, std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t enabled_status = iterate_scc_driver_batch_cpu(
+  const xtbloom_status_t enabled_status = iterate_scc_driver_batch_cpu(
       enabled.driver_plan, enabled.geometry, backend(), enabled.overlap_cache, enabled.wavefunction,
       enabled.mixer_state, enabled.driver_state, enabled.driver_scratch, error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
-  CHECK(enabled_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(enabled_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
   double expected_raw_energy = 0.0;
   CHECK(evaluate_d4_two_body_system_cpu(enabled.d4_plan, enabled.d4_cache, 0,
                                         enabled.driver_scratch.raw_qat, expected_raw_energy,
                                         nullptr, enabled.driver_scratch.d4_workspace,
-                                        error) == GPUXTB_STATUS_SUCCESS);
+                                        error) == XTBLOOM_STATUS_SUCCESS);
   /* The Hamiltonian uses the mixed input potential above, but the published
    * complete SCC energy must be evaluated from density-derived raw charges. */
   CHECK(std::abs(enabled.driver_state.d4_two_body_energies[0] - expected_raw_energy) < 1.0e-14);
@@ -1572,7 +1572,7 @@ int test_optional_d4_potential_energy_restart_and_zero_allocation() {
 
   CHECK(restart_scc_driver_system_cpu(enabled.driver_plan, 0, enabled.wavefunction,
                                       enabled.mixer_state, enabled.driver_state,
-                                      error) == GPUXTB_STATUS_SUCCESS);
+                                      error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::isnan(enabled.driver_state.d4_two_body_energies[0]));
   const double restarted_qsh = enabled.wavefunction.qsh[0];
   SccDriverGeometryView stale = enabled.geometry;
@@ -1580,20 +1580,20 @@ int test_optional_d4_potential_energy_restart_and_zero_allocation() {
   CHECK(iterate_scc_driver_batch_cpu(enabled.driver_plan, stale, backend(), enabled.overlap_cache,
                                      enabled.wavefunction, enabled.mixer_state,
                                      enabled.driver_state, enabled.driver_scratch,
-                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                     error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(enabled.driver_state.iterations[0] == 0u);
   CHECK(std::isnan(enabled.driver_state.d4_two_body_energies[0]));
   CHECK(enabled.wavefunction.qsh[0] == restarted_qsh);
 
   D4Plan same_topology_other_d4;
   CHECK(make_d4_plan(1, 2, enabled.atom_offsets.data(), enabled.atomic_numbers.data(),
-                     same_topology_other_d4, error) == GPUXTB_STATUS_SUCCESS);
+                     same_topology_other_d4, error) == XTBLOOM_STATUS_SUCCESS);
   SccDriverGeometryView wrong_identity = enabled.geometry;
   wrong_identity.d4_cache.plan_identity = same_topology_other_d4.identity();
   CHECK(iterate_scc_driver_batch_cpu(
             enabled.driver_plan, wrong_identity, backend(), enabled.overlap_cache,
             enabled.wavefunction, enabled.mixer_state, enabled.driver_state, enabled.driver_scratch,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(enabled.driver_state.iterations[0] == 0u);
   CHECK(std::isnan(enabled.driver_state.d4_two_body_energies[0]));
 
@@ -1603,7 +1603,7 @@ int test_optional_d4_potential_energy_restart_and_zero_allocation() {
   CHECK(iterate_scc_driver_batch_cpu(
             enabled.driver_plan, aliased_plan_storage, backend(), enabled.overlap_cache,
             enabled.wavefunction, enabled.mixer_state, enabled.driver_state, enabled.driver_scratch,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(enabled.driver_state.iterations[0] == 0u);
   CHECK(std::isnan(enabled.driver_state.d4_two_body_energies[0]));
 
@@ -1612,14 +1612,14 @@ int test_optional_d4_potential_energy_restart_and_zero_allocation() {
   CHECK(iterate_scc_driver_batch_cpu(enabled.driver_plan, enabled.geometry, backend(),
                                      enabled.overlap_cache, enabled.wavefunction,
                                      enabled.mixer_state, enabled.driver_state, malformed_workspace,
-                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                     error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(enabled.driver_state.iterations[0] == 0u);
   malformed_workspace = enabled.driver_scratch;
   ++malformed_workspace.d4_workspace.weights;
   CHECK(iterate_scc_driver_batch_cpu(enabled.driver_plan, enabled.geometry, backend(),
                                      enabled.overlap_cache, enabled.wavefunction,
                                      enabled.mixer_state, enabled.driver_state, malformed_workspace,
-                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                     error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(enabled.driver_state.iterations[0] == 0u);
 
   SccDriverGeometryView unexpected_d4 = reference.geometry;
@@ -1627,14 +1627,14 @@ int test_optional_d4_potential_energy_restart_and_zero_allocation() {
   CHECK(iterate_scc_driver_batch_cpu(
             reference.driver_plan, unexpected_d4, backend(), reference.overlap_cache,
             reference.wavefunction, reference.mixer_state, reference.driver_state,
-            reference.driver_scratch, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            reference.driver_scratch, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   Fixture skipped;
   CHECK(make_fixture(1, skipped, error, 5u, 1.0e-10, false, nullptr, false, true));
   CHECK(iterate_scc_driver_batch_cpu(skipped.driver_plan, skipped.geometry, backend(),
                                      skipped.overlap_cache, skipped.wavefunction,
                                      skipped.mixer_state, skipped.driver_state,
-                                     skipped.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     skipped.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(skipped.driver_state.converged[0] == 1u);
   const double converged_d4_energy = skipped.driver_state.d4_two_body_energies[0];
   skipped.driver_scratch.d4_two_body_energies[0] = 123.0;
@@ -1643,7 +1643,7 @@ int test_optional_d4_potential_energy_restart_and_zero_allocation() {
   CHECK(iterate_scc_driver_batch_cpu(skipped.driver_plan, skipped.geometry, backend(),
                                      skipped.overlap_cache, skipped.wavefunction,
                                      skipped.mixer_state, skipped.driver_state,
-                                     skipped.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     skipped.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(diagonalizations.load(std::memory_order_relaxed) == calls_before_skip);
   CHECK(skipped.driver_state.d4_two_body_energies[0] == converged_d4_energy);
   CHECK(skipped.driver_scratch.d4_two_body_energies[0] == 123.0);
@@ -1651,16 +1651,16 @@ int test_optional_d4_potential_energy_restart_and_zero_allocation() {
 
   Fixture isolated_failure;
   CHECK(make_fixture(2, isolated_failure, error, 5u, 1.0e-10, false, nullptr, false, true));
-  isolated_failure.overlap_cache.system_statuses[1] = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+  isolated_failure.overlap_cache.system_statuses[1] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
   CHECK(iterate_scc_driver_batch_cpu(isolated_failure.driver_plan, isolated_failure.geometry,
                                      backend(), isolated_failure.overlap_cache,
                                      isolated_failure.wavefunction, isolated_failure.mixer_state,
                                      isolated_failure.driver_state, isolated_failure.driver_scratch,
-                                     error) == GPUXTB_STATUS_EIGENSOLVER_FAILED);
-  CHECK(isolated_failure.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
+                                     error) == XTBLOOM_STATUS_EIGENSOLVER_FAILED);
+  CHECK(isolated_failure.driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(isolated_failure.driver_state.iterations[0] == 1u);
   CHECK(isolated_failure.driver_state.d4_two_body_energies[0] == 0.0);
-  CHECK(isolated_failure.driver_state.system_statuses[1] == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+  CHECK(isolated_failure.driver_state.system_statuses[1] == XTBLOOM_STATUS_EIGENSOLVER_FAILED);
   CHECK(isolated_failure.driver_state.iterations[1] == 1u);
   CHECK(std::isnan(isolated_failure.driver_state.d4_two_body_energies[1]));
   return 0;
@@ -1696,14 +1696,14 @@ int test_d4_system_potential_uses_full_output_layout() {
   double expected_energy = 0.0;
   CHECK(evaluate_d4_two_body_system_cpu(
             fixture.d4_plan, fixture.d4_cache, 1, mixed_charges.data(), expected_energy,
-            expected.data(), fixture.driver_scratch.d4_workspace, error) == GPUXTB_STATUS_SUCCESS);
+            expected.data(), fixture.driver_scratch.d4_workspace, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::any_of(expected.begin() + atom_begin, expected.begin() + atom_end,
                     [](double value) { return std::abs(value) > 1.0e-18; }));
 
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
     CHECK(fixture.driver_scratch.d4_atomic_potentials[static_cast<std::size_t>(atom)] ==
           expected[static_cast<std::size_t>(atom)]);
@@ -1722,17 +1722,18 @@ int test_d4_atm_is_not_part_of_scc() {
   std::array<double, 1> two_body{};
   std::array<double, 3> potential{};
   std::array<double, 1> atm{};
-  CHECK(evaluate_d4_two_body_cpu(
-            fixture.d4_plan, fixture.d4_cache, fixture.wavefunction.qat, two_body.data(),
-            potential.data(), fixture.driver_scratch.d4_workspace, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(evaluate_d4_two_body_cpu(fixture.d4_plan, fixture.d4_cache, fixture.wavefunction.qat,
+                                 two_body.data(), potential.data(),
+                                 fixture.driver_scratch.d4_workspace,
+                                 error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(evaluate_d4_atm_cpu(fixture.d4_plan, fixture.d4_cache, atm.data(),
-                            fixture.driver_scratch.d4_workspace, error) == GPUXTB_STATUS_SUCCESS);
+                            fixture.driver_scratch.d4_workspace, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::abs(atm[0]) > 1.0e-18);
 
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   const double stored = fixture.driver_state.d4_two_body_energies[0];
   CHECK(std::abs(stored - two_body[0]) < 1.0e-6 * std::abs(atm[0]));
   CHECK(std::abs(stored - (two_body[0] + atm[0])) > 0.5 * std::abs(atm[0]));
@@ -1764,15 +1765,15 @@ int test_optional_periodic_embedding_and_explicit_point_charge_composition() {
   CHECK(iterate_scc_driver_batch_cpu(reference.driver_plan, reference.geometry, backend(),
                                      reference.overlap_cache, reference.wavefunction,
                                      reference.mixer_state, reference.driver_state,
-                                     reference.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     reference.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   allocation_test::count.store(0u, std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t status = iterate_scc_driver_batch_cpu(
+  const xtbloom_status_t status = iterate_scc_driver_batch_cpu(
       embedded.driver_plan, embedded.geometry, backend(), embedded.overlap_cache,
       embedded.wavefunction, embedded.mixer_state, embedded.driver_state, embedded.driver_scratch,
       error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
-  CHECK(status == GPUXTB_STATUS_SUCCESS);
+  CHECK(status == XTBLOOM_STATUS_SUCCESS);
   CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
 
   const double periodic_potential = 0.25 + 0.5 * 1.0;
@@ -1810,7 +1811,7 @@ int test_ragged_dense_periodic_response_publishes_raw_energy() {
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
 
   /* Hamiltonian assembly consumed the initial mixed charges. The complete
    * energy pass intentionally leaves the diagnostic potential rebuilt from
@@ -1828,8 +1829,8 @@ int test_ragged_dense_periodic_response_publishes_raw_energy() {
   const double energy1 = 0.5 * (0.3 + potential2) * q2;
   CHECK(std::abs(fixture.driver_state.periodic_embedding_energies[0] - energy0) < 1.0e-14);
   CHECK(std::abs(fixture.driver_state.periodic_embedding_energies[1] - energy1) < 1.0e-14);
-  CHECK(fixture.driver_scratch.periodic_system_statuses[0] == GPUXTB_STATUS_SUCCESS);
-  CHECK(fixture.driver_scratch.periodic_system_statuses[1] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_scratch.periodic_system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  CHECK(fixture.driver_scratch.periodic_system_statuses[1] == XTBLOOM_STATUS_SUCCESS);
   return 0;
 }
 
@@ -1844,13 +1845,13 @@ int test_periodic_numerical_failure_is_isolated_before_eigensolve() {
   CHECK(iterate_scc_driver_batch_cpu(
             fixture.driver_plan, fixture.geometry, backend(), fixture.overlap_cache,
             fixture.wavefunction, fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
-            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(diagonalizations.load(std::memory_order_relaxed) == 1);
-  CHECK(fixture.driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.iterations[0] == 1u);
   CHECK(fixture.driver_state.converged[0] == 1u);
   CHECK(fixture.driver_state.periodic_embedding_energies[0] == 0.0);
-  CHECK(fixture.driver_state.system_statuses[1] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.driver_state.system_statuses[1] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(fixture.driver_state.iterations[1] == 0u);
   CHECK(std::isnan(fixture.driver_state.periodic_embedding_energies[1]));
   CHECK(fixture.wavefunction.qsh[1] == failed_qsh_before);
@@ -1858,11 +1859,11 @@ int test_periodic_numerical_failure_is_isolated_before_eigensolve() {
   fixture.periodic_shifts[1] = 0.0;
   CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 1, fixture.wavefunction,
                                       fixture.mixer_state, fixture.driver_state,
-                                      error) == GPUXTB_STATUS_SUCCESS);
+                                      error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state,
-                                     fixture.driver_scratch, error) == GPUXTB_STATUS_SUCCESS);
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(diagonalizations.load(std::memory_order_relaxed) == 2);
   CHECK(fixture.driver_state.iterations[1] == 1u);
   return 0;
@@ -1873,17 +1874,18 @@ int test_periodic_plan_geometry_workspace_provenance_and_aliases() {
   std::string error;
   CHECK(make_fixture(1, fixture, error, 5u, 1.0e-10, true));
   const double qsh_before = fixture.wavefunction.qsh[0];
-  const gpuxtb_status_t state_status_before = fixture.driver_state.system_statuses[0];
+  const xtbloom_status_t state_status_before = fixture.driver_state.system_statuses[0];
 
   PeriodicEmbeddingPlan same_topology_other_identity;
   CHECK(make_periodic_embedding_plan(1, 1, fixture.atom_offsets.data(),
-                                     same_topology_other_identity, error) == GPUXTB_STATUS_SUCCESS);
+                                     same_topology_other_identity,
+                                     error) == XTBLOOM_STATUS_SUCCESS);
   SccDriverGeometryView malformed = fixture.geometry;
   malformed.periodic_plan_identity = same_topology_other_identity.identity();
   CHECK(iterate_scc_driver_batch_cpu(
             fixture.driver_plan, malformed, backend(), fixture.overlap_cache, fixture.wavefunction,
             fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(fixture.wavefunction.qsh[0] == qsh_before);
   CHECK(fixture.driver_state.system_statuses[0] == state_status_before);
 
@@ -1892,14 +1894,14 @@ int test_periodic_plan_geometry_workspace_provenance_and_aliases() {
   CHECK(iterate_scc_driver_batch_cpu(
             fixture.driver_plan, malformed, backend(), fixture.overlap_cache, fixture.wavefunction,
             fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   malformed = fixture.geometry;
   malformed.periodic_shifts = fixture.driver_state.free_energies;
   CHECK(iterate_scc_driver_batch_cpu(
             fixture.driver_plan, malformed, backend(), fixture.overlap_cache, fixture.wavefunction,
             fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   malformed = fixture.geometry;
   malformed.periodic_shifts =
@@ -1907,7 +1909,7 @@ int test_periodic_plan_geometry_workspace_provenance_and_aliases() {
   CHECK(iterate_scc_driver_batch_cpu(
             fixture.driver_plan, malformed, backend(), fixture.overlap_cache, fixture.wavefunction,
             fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   SccDriverWorkspace malformed_workspace = fixture.driver_scratch;
   malformed_workspace.periodic_embedding_workspace.plan_identity =
@@ -1915,7 +1917,7 @@ int test_periodic_plan_geometry_workspace_provenance_and_aliases() {
   CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
                                      fixture.overlap_cache, fixture.wavefunction,
                                      fixture.mixer_state, fixture.driver_state, malformed_workspace,
-                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                     error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   Fixture disabled;
   CHECK(make_fixture(1, disabled, error));
@@ -1929,18 +1931,18 @@ int test_periodic_plan_geometry_workspace_provenance_and_aliases() {
   CHECK(iterate_scc_driver_batch_cpu(
             disabled.driver_plan, unexpected, backend(), disabled.overlap_cache,
             disabled.wavefunction, disabled.mixer_state, disabled.driver_state,
-            disabled.driver_scratch, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            disabled.driver_scratch, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   const std::array<std::int64_t, 2> empty_offsets{{0, 0}};
   PeriodicEmbeddingPlan wrong_topology;
   CHECK(make_periodic_embedding_plan(1, 0, empty_offsets.data(), wrong_topology, error) ==
-        GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
   SccDriverPlan sentinel = fixture.driver_plan;
   const SccDriverPlanData* const sentinel_identity = sentinel.identity();
   CHECK(make_scc_driver_plan(fixture.wavefunction_layout, fixture.mulliken_plan, fixture.es2_plan,
                              fixture.es3_plan, fixture.aes2_plan, fixture.eigensolver_plan,
                              fixture.mixer_plan, &wrong_topology, 5u, 0.0, sentinel,
-                             error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(sentinel.identity() == sentinel_identity);
   return 0;
 }
@@ -1958,7 +1960,7 @@ int test_component_chemistry_and_layout_mismatches_are_rejected() {
 
   SccDriverPlan sentinel;
   CHECK(make_scc_driver_plan(ch.wavefunction, ch.mulliken, ch.es2, ch.es3, ch.aes2, ch.eigensolver,
-                             ch.mixer, 5u, 0.0, sentinel, error) == GPUXTB_STATUS_SUCCESS);
+                             ch.mixer, 5u, 0.0, sentinel, error) == XTBLOOM_STATUS_SUCCESS);
   const SccDriverPlanData* const sentinel_identity = sentinel.identity();
   SccDriverPlan output = sentinel;
 
@@ -1966,36 +1968,38 @@ int test_component_chemistry_and_layout_mismatches_are_rejected() {
                                          std::numeric_limits<double>::quiet_NaN()}) {
     CHECK(make_scc_driver_plan(ch.wavefunction, ch.mulliken, ch.es2, ch.es3, ch.aes2,
                                ch.eigensolver, ch.mixer, nullptr, nullptr, 5u, 0.0,
-                               invalid_tolerance, output, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                               invalid_tolerance, output,
+                               error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(output.identity() == sentinel_identity);
   }
 
   CHECK(make_scc_driver_plan(ch.wavefunction, hc.mulliken, ch.es2, ch.es3, ch.aes2, ch.eigensolver,
-                             ch.mixer, 5u, 0.0, output, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                             ch.mixer, 5u, 0.0, output, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(output.identity() == sentinel_identity);
   CHECK(make_scc_driver_plan(ch.wavefunction, ch.mulliken, hc.es2, ch.es3, ch.aes2, ch.eigensolver,
-                             ch.mixer, 5u, 0.0, output, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                             ch.mixer, 5u, 0.0, output, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(output.identity() == sentinel_identity);
   CHECK(make_scc_driver_plan(ch.wavefunction, ch.mulliken, ch.es2, hc.es3, ch.aes2, ch.eigensolver,
-                             ch.mixer, 5u, 0.0, output, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                             ch.mixer, 5u, 0.0, output, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(output.identity() == sentinel_identity);
   CHECK(make_scc_driver_plan(ch.wavefunction, ch.mulliken, ch.es2, ch.es3, hc.aes2, ch.eigensolver,
-                             ch.mixer, 5u, 0.0, output, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                             ch.mixer, 5u, 0.0, output, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(output.identity() == sentinel_identity);
 
   D4Plan wrong_d4_chemistry;
   CHECK(make_d4_plan(1, static_cast<std::int64_t>(hc.atomic_numbers.size()), hc.atom_offsets.data(),
-                     hc.atomic_numbers.data(), wrong_d4_chemistry, error) == GPUXTB_STATUS_SUCCESS);
+                     hc.atomic_numbers.data(), wrong_d4_chemistry,
+                     error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(make_scc_driver_plan(ch.wavefunction, ch.mulliken, ch.es2, ch.es3, ch.aes2, ch.eigensolver,
                              ch.mixer, &wrong_d4_chemistry, nullptr, 5u, 0.0, output,
-                             error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(output.identity() == sentinel_identity);
 
   ES3Plan modified_es3 = ch.es3;
   modified_es3.shell_gamma3[0] += 1.0;
   CHECK(make_scc_driver_plan(ch.wavefunction, ch.mulliken, ch.es2, modified_es3, ch.aes2,
                              ch.eigensolver, ch.mixer, 5u, 0.0, output,
-                             error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(output.identity() == sentinel_identity);
 
   ComponentPlans h_plus;
@@ -2004,7 +2008,7 @@ int test_component_chemistry_and_layout_mismatches_are_rejected() {
   CHECK(make_component_plans({1}, 0.0, 1, neutral_h, error));
   CHECK(make_scc_driver_plan(h_plus.wavefunction, h_plus.mulliken, h_plus.es2, h_plus.es3,
                              h_plus.aes2, neutral_h.eigensolver, h_plus.mixer, 5u, 0.0, output,
-                             error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(output.identity() == sentinel_identity);
 
   ComponentPlans five_neon;
@@ -2015,13 +2019,13 @@ int test_component_chemistry_and_layout_mismatches_are_rejected() {
   SccDriverPlan neon_driver;
   CHECK(make_scc_driver_plan(five_neon.wavefunction, five_neon.mulliken, five_neon.es2,
                              five_neon.es3, five_neon.aes2, five_neon.eigensolver, five_neon.mixer,
-                             5u, 0.0, neon_driver, error) == GPUXTB_STATUS_SUCCESS);
+                             5u, 0.0, neon_driver, error) == XTBLOOM_STATUS_SUCCESS);
   output = neon_driver;
   const SccDriverPlanData* const neon_identity = neon_driver.identity();
   CHECK(make_scc_driver_plan(five_neon.wavefunction, five_neon.mulliken, five_neon.es2,
                              five_neon.es3, five_neon.aes2, five_neon.eigensolver,
                              six_hydrogen.mixer, 5u, 0.0, output,
-                             error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(output.identity() == neon_identity);
   return 0;
 }
@@ -2039,7 +2043,7 @@ int test_control_descriptors_cannot_alias_numerical_storage() {
     std::memcpy(state_before.data(), fixture.driver_state_storage->data, state_before.size());
     CHECK(initialize_scc_driver_state_cpu(fixture.driver_plan, fixture.wavefunction,
                                           fixture.mixer_state, *aliased_state,
-                                          error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                          error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(std::memcmp(mixer_before.data(), fixture.mixer_state_storage->data,
                       mixer_before.size()) == 0);
     CHECK(std::memcmp(state_before.data(), fixture.driver_state_storage->data,
@@ -2057,7 +2061,7 @@ int test_control_descriptors_cannot_alias_numerical_storage() {
                 wavefunction_before.size());
     CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 0, fixture.wavefunction,
                                         fixture.mixer_state, *aliased_state,
-                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                        error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(std::memcmp(mixer_before.data(), fixture.mixer_state_storage->data,
                       mixer_before.size()) == 0);
     CHECK(std::memcmp(wavefunction_before.data(), fixture.wavefunction_storage->data,
@@ -2075,7 +2079,7 @@ int test_control_descriptors_cannot_alias_numerical_storage() {
     CHECK(iterate_scc_driver_batch_cpu(
               fixture.driver_plan, fixture.geometry, backend(), fixture.overlap_cache,
               *aliased_wavefunction, fixture.mixer_state, fixture.driver_state,
-              fixture.driver_scratch, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              fixture.driver_scratch, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(std::memcmp(scratch_before.data(), fixture.driver_scratch_storage->data,
                       scratch_before.size()) == 0);
     CHECK(std::memcmp(state_before.data(), fixture.driver_state_storage->data,

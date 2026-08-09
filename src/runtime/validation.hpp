@@ -1,14 +1,14 @@
-#ifndef GPUXTB_RUNTIME_VALIDATION_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_RUNTIME_VALIDATION_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_RUNTIME_VALIDATION_HPP
+#define XTBLOOM_RUNTIME_VALIDATION_HPP
 
 #include <cstdint>
 #include <string>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail {
+namespace xtbloom::detail {
 
 /*
  * Host topology validation deliberately does not copy or dereference device
@@ -42,11 +42,11 @@ enum TopologyValidationRequirement : std::uint32_t {
 };
 
 struct DescriptorValidationResult {
-  gpuxtb_status_t status = GPUXTB_STATUS_SUCCESS;
+  xtbloom_status_t status = XTBLOOM_STATUS_SUCCESS;
   std::uint32_t pending_offset_checks = kNoOffsetValidationPending;
   std::string error;
 
-  [[nodiscard]] bool ok() const noexcept { return status == GPUXTB_STATUS_SUCCESS; }
+  [[nodiscard]] bool ok() const noexcept { return status == XTBLOOM_STATUS_SUCCESS; }
   [[nodiscard]] bool requires_backend_staging_validation() const noexcept {
     return ok() && pending_offset_checks != kNoOffsetValidationPending;
   }
@@ -55,7 +55,7 @@ struct DescriptorValidationResult {
 /*
  * Validate ABI headers, inline fields, buffer extents/tags, and address ranges
  * without reading any buffer's pointed-to storage. `backend` must be the
- * resolved context backend (CPU or CUDA), never GPUXTB_BACKEND_AUTO.
+ * resolved context backend (CPU or CUDA), never XTBLOOM_BACKEND_AUTO.
  *
  * This layer is safe for opaque pointers whose memory-space tags have not yet
  * been verified against a device runtime. In particular, it does not assume
@@ -63,8 +63,8 @@ struct DescriptorValidationResult {
  * ownership/type validation before staging or otherwise accessing such memory.
  */
 [[nodiscard]] DescriptorValidationResult validate_compute_descriptor_structure(
-    gpuxtb_backend_t backend, const gpuxtb_batch_t* batch, const gpuxtb_compute_options_t* options,
-    const gpuxtb_batch_result_t* result);
+    xtbloom_backend_t backend, const xtbloom_batch_t* batch,
+    const xtbloom_compute_options_t* options, const xtbloom_batch_result_t* result);
 
 /*
  * Validate semantic relationships that can be proven from host-resident
@@ -79,7 +79,7 @@ struct DescriptorValidationResult {
  * opaque here, including in mixed-memory requests.
  */
 [[nodiscard]] DescriptorValidationResult validate_host_topology_semantics(
-    const gpuxtb_batch_t& batch);
+    const xtbloom_batch_t& batch);
 
 /*
  * Compatibility entry point for the complete ABI-v1 validation sequence. It
@@ -89,18 +89,19 @@ struct DescriptorValidationResult {
  * verified that every HOST-tagged topology pointer is CPU-accessible.
  */
 [[nodiscard]] DescriptorValidationResult validate_compute_descriptors(
-    gpuxtb_backend_t backend, const gpuxtb_batch_t* batch, const gpuxtb_compute_options_t* options,
-    const gpuxtb_batch_result_t* result);
+    xtbloom_backend_t backend, const xtbloom_batch_t* batch,
+    const xtbloom_compute_options_t* options, const xtbloom_batch_result_t* result);
 
 /*
  * Validate batch and compute-options descriptors for fixed-topology plan
  * creation, which has no caller-owned result descriptor yet. The batch plus
  * the compute policy are checked with the same prefix, host-topology, and
- * alias rules as gpuxtb_compute; result buffers are simply not required.
+ * alias rules as xtbloom_compute; result buffers are simply not required.
  */
 [[nodiscard]] DescriptorValidationResult validate_plan_descriptor_structure(
-    gpuxtb_backend_t backend, const gpuxtb_batch_t* batch, const gpuxtb_compute_options_t* options);
+    xtbloom_backend_t backend, const xtbloom_batch_t* batch,
+    const xtbloom_compute_options_t* options);
 
-}  // namespace gpuxtb::detail
+}  // namespace xtbloom::detail
 
-#endif  // GPUXTB_RUNTIME_VALIDATION_HPP
+#endif  // XTBLOOM_RUNTIME_VALIDATION_HPP

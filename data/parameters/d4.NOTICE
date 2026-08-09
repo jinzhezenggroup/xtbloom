@@ -14,5 +14,5 @@ also follows mctc-lib revision e9de066d89f250d1cfb6de3a33f0c27c0e2f855d,
 which is licensed under Apache-2.0.
 
 The corresponding license texts are redistributed beside this notice in
-data/parameters/licenses. gpuxtb keeps the exact source revisions and a digest
+data/parameters/licenses. xtbloom keeps the exact source revisions and a digest
 of every parsed source blob in d4_manifest.json.

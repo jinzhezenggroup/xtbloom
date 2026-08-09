@@ -78,7 +78,7 @@
       "atom_count": 3,
       "description": "One water plus one explicit gamma=999 point charge is the minimal external-charge SCC and force-sign case.",
       "golden": "data/conformance/golden/water_one_pc_gamma999.json",
-      "golden_sha256": "a75c59ab4354f3d6b3105004379d3dbc2d6476ef6c8063d5108e05372ce080c7",
+      "golden_sha256": "47a1e016763425effa9e3424d8904d9d951a4833d3eabfad53eb94fe57391d6f",
       "id": "water_one_pc_gamma999",
       "input": "data/conformance/inputs/water_one_pc_gamma999.qmmm.json",
       "input_schema": "qmmm-v1",
@@ -94,7 +94,7 @@
       "atom_count": 6,
       "description": "The official xTB water-tetramer PCEM regression represented as 6 QM atoms plus 6 external charges with element hardnesses.",
       "golden": "data/conformance/golden/water_dimer_6pc_hardness.json",
-      "golden_sha256": "e1ac69bca3df14b46a09dcc6119d7207355024dd5cf21f88e8757ffacea4b9bb",
+      "golden_sha256": "4d0077d8f730e0e9987cd0ca68626849886ec061f6a1a27ca6e0442f02364e02",
       "id": "water_dimer_6pc_hardness",
       "input": "data/conformance/inputs/water_dimer_6pc_hardness.qmmm.json",
       "input_schema": "qmmm-v1",
@@ -110,7 +110,7 @@
       "atom_count": 6,
       "description": "The official xTB water-tetramer PCEM regression with every external-charge gamma set to 999 hartree.",
       "golden": "data/conformance/golden/water_dimer_6pc_gamma999.json",
-      "golden_sha256": "54460aa9219f7c7f95b2e288d7ef5609ff0539bd6973fe51a54814b7c45cdb5d",
+      "golden_sha256": "fc83d006df25754db4d8630b0102fd1bd18938c8e918a33a2885a36f1d3bd8fe",
       "id": "water_dimer_6pc_gamma999",
       "input": "data/conformance/inputs/water_dimer_6pc_gamma999.qmmm.json",
       "input_schema": "qmmm-v1",
@@ -124,7 +124,7 @@
     },
     {
       "atom_count": 3,
-      "description": "One water molecule in the uniform electric field (0.003, -0.004, 0.005) Hartree per elementary charge per bohr is the ABI-v3 electric-field interaction pilot. The pinned tblite energy remains the independent primary oracle; its analytic field gradient applies +E per atom instead of +q_i E and is retained only as diagnostic provenance, while gpuxtb forces are gated by public energy finite differences.",
+      "description": "One water molecule in the uniform electric field (0.003, -0.004, 0.005) Hartree per elementary charge per bohr is the ABI-v3 electric-field interaction pilot. The pinned tblite energy remains the independent primary oracle; its analytic field gradient applies +E per atom instead of +q_i E and is retained only as diagnostic provenance, while xtbloom forces are gated by public energy finite differences.",
       "efield": [
         0.003,
         -0.004,
@@ -132,11 +132,11 @@
       ],
       "golden": "data/conformance/golden/water_efield.json",
       "golden_sha256": "d63a1dfc900190c9aeb7508c9a3cf9ab1be9e071578cc7df54abc314a58c7035",
-      "gpuxtb_backends": [
+      "xtbloom_backends": [
         "cpu"
       ],
-      "gpuxtb_force_evidence": "public_energy_finite_difference",
-      "gpuxtb_oracle_properties": [
+      "xtbloom_force_evidence": "public_energy_finite_difference",
+      "xtbloom_oracle_properties": [
         "energy_hartree"
       ],
       "id": "water_efield",
@@ -147,7 +147,7 @@
       "reference_output_sha256": "4044828a6e7742f614fcf1256d93480eb573a18ee5c396c48216328a91edf7de",
       "unpaired_electrons": 0,
       "upstream_input_sha256": "a8d8e170921a7b79316b72495540c18bc1ee97ea502a7ba172937e05a2be17ac",
-      "upstream_validation_case": "gpuxtb efield pilot"
+      "upstream_validation_case": "xtbloom efield pilot"
     }
   ],
   "golden_schema_version": 1,
@@ -163,7 +163,7 @@
       "rtol": 0.0,
       "unit": "hartree/bohr"
     },
-    "rationale": "This separate allowance is retained only for explicit live cross-engine comparisons. Each case's primary pinned live oracle and gpuxtb remain subject to the tighter primary tolerances."
+    "rationale": "This separate allowance is retained only for explicit live cross-engine comparisons. Each case's primary pinned live oracle and xtbloom remain subject to the tighter primary tolerances."
   },
   "reference_engines": {
     "tblite": {
@@ -231,7 +231,7 @@
         "8": 0.451896
       },
       "point_charge_hardness_source": "test/unit/test_gfn2.f90 at the pinned xTB revision",
-      "qmmm_materialization_schema": "gpuxtb-xtb-pcem-cli-v1",
+      "qmmm_materialization_schema": "xtbloom-xtb-pcem-cli-v1",
       "qmmm_cli_command_template": [
         "{executable}",
         "coord",
@@ -266,25 +266,25 @@
       "atol": 5e-07,
       "rtol": 0.0,
       "unit": "hartree",
-      "justification": "Absolute total electronic Helmholtz free-energy threshold. The pinned live oracles run at --acc 0.0001; observed gpuxtb-to-oracle agreement on the committed corpus is at most about 1e-8 hartree, so 5e-7 leaves roughly two orders of magnitude of headroom for oracle SCC truncation while remaining far above chemical significance."
+      "justification": "Absolute total electronic Helmholtz free-energy threshold. The pinned live oracles run at --acc 0.0001; observed xtbloom-to-oracle agreement on the committed corpus is at most about 1e-8 hartree, so 5e-7 leaves roughly two orders of magnitude of headroom for oracle SCC truncation while remaining far above chemical significance."
     },
     "forces": {
       "atol": 5e-07,
       "rtol": 0.0,
       "unit": "hartree/bohr",
-      "justification": "Absolute analytic-force threshold. Observed gpuxtb-to-oracle agreement on the committed corpus is at most about 3e-9 hartree/bohr; 5e-7 tolerates the looser --acc 0.0001 oracle gradients without admitting meaningful force error."
+      "justification": "Absolute analytic-force threshold. Observed xtbloom-to-oracle agreement on the committed corpus is at most about 3e-9 hartree/bohr; 5e-7 tolerates the looser --acc 0.0001 oracle gradients without admitting meaningful force error."
     },
     "charges": {
       "atol": 5e-07,
       "rtol": 0.0,
       "unit": "elementary_charge",
-      "justification": "Absolute SCC atomic-charge (SCC-state) threshold. Observed gpuxtb-to-oracle charge agreement on the committed corpus is at most about 7e-9 elementary charge; 5e-7 keeps the SCC state gate strict while allowing oracle convergence noise."
+      "justification": "Absolute SCC atomic-charge (SCC-state) threshold. Observed xtbloom-to-oracle charge agreement on the committed corpus is at most about 7e-9 elementary charge; 5e-7 keeps the SCC state gate strict while allowing oracle convergence noise."
     },
     "atomic_dipoles": {
       "atol": 5e-07,
       "rtol": 0.0,
       "unit": "elementary_charge*bohr",
-      "justification": "Absolute atom-resolved dipole-moment component threshold for the SCC state stored in xtb primary goldens. The public C result ABI exposes no dipole output buffer yet, so this gates reference reproducibility rather than gpuxtb agreement; it is conservatively aligned with the charge threshold."
+      "justification": "Absolute atom-resolved dipole-moment component threshold for the SCC state stored in xtb primary goldens. The public C result ABI exposes no dipole output buffer yet, so this gates reference reproducibility rather than xtbloom agreement; it is conservatively aligned with the charge threshold."
     },
     "atomic_quadrupoles": {
       "atol": 5e-07,
@@ -296,15 +296,15 @@
       "atol": 5e-07,
       "rtol": 0.0,
       "unit": "hartree/bohr",
-      "justification": "Absolute external point-charge force threshold. Observed gpuxtb-to-oracle agreement on the committed QM/MM corpus is at most about 5e-9 hartree/bohr; 5e-7 additionally absorbs the coarse text precision of xTB's pcgrad artifact while keeping the gate meaningful."
+      "justification": "Absolute external point-charge force threshold. Observed xtbloom-to-oracle agreement on the committed QM/MM corpus is at most about 5e-9 hartree/bohr; 5e-7 additionally absorbs the coarse text precision of xTB's pcgrad artifact while keeping the gate meaningful."
     },
-    "rationale": "The primary gate applies uniformly to gpuxtb versus each case's pinned live tblite or xTB oracle. Tighter term-level and finite-difference gates can be added without weakening this check. Tolerances are absolute because the corpus mixes charged, near-zero, and large energies and gradients where a relative scale would grant unphysical slack; the SCC-state and force tolerances are deliberately identical in atomic units so no single property can pass on a weaker gate."
+    "rationale": "The primary gate applies uniformly to xtbloom versus each case's pinned live tblite or xTB oracle. Tighter term-level and finite-difference gates can be added without weakening this check. Tolerances are absolute because the corpus mixes charged, near-zero, and large energies and gradients where a relative scale would grant unphysical slack; the SCC-state and force tolerances are deliberately identical in atomic units so no single property can pass on a weaker gate."
   },
   "cpu_cuda_agreement": {
     "atol": 1e-06,
     "rtol": 0.0,
     "unit": "hartree and hartree/bohr and elementary_charge",
-    "justification": "Both backends must match the same pinned golden within the primary energy, forces, and charges tolerances (5e-7 each in atomic units), so by the triangle inequality CPU-vs-CUDA deviation on identical inputs is bounded by twice the primary tolerance (1e-6). The per-backend invariance and batch-versus-sequential gates in tools/conformance/gpuxtb_invariants.py further require each backend to reproduce its own exact symmetries, making the CPU/CUDA agreement threshold explicit and executable without a dedicated pair comparator."
+    "justification": "Both backends must match the same pinned golden within the primary energy, forces, and charges tolerances (5e-7 each in atomic units), so by the triangle inequality CPU-vs-CUDA deviation on identical inputs is bounded by twice the primary tolerance (1e-6). The per-backend invariance and batch-versus-sequential gates in tools/conformance/xtbloom_invariants.py further require each backend to reproduce its own exact symmetries, making the CPU/CUDA agreement threshold explicit and executable without a dedicated pair comparator."
   },
   "units": {
     "coordinates": "bohr",

@@ -65,13 +65,13 @@ class CudaDependencyCheckerTests(unittest.TestCase):
         """Reject public CUDA API and internal loader shim exports."""
         symbols = """
    Num:    Value          Size Type    Bind   Vis      Ndx Name
-     1: 0000000000001234    16 FUNC    GLOBAL DEFAULT   12 gpu_xtb_cuda_dlsym
+     1: 0000000000001234    16 FUNC    GLOBAL DEFAULT   12 xtbloom_cuda_dlsym
      2: 0000000000002345    16 FUNC    GLOBAL DEFAULT   12 cudaMalloc
-     3: 0000000000003456    16 FUNC    GLOBAL HIDDEN    12 gpu_xtb_cuda_bootstrap
+     3: 0000000000003456    16 FUNC    GLOBAL HIDDEN    12 xtbloom_cuda_bootstrap
 """
         unresolved, exported = CHECKER.find_cuda_symbol_leaks(symbols)
         self.assertEqual(unresolved, [])
-        self.assertEqual(exported, ["cudaMalloc", "gpu_xtb_cuda_dlsym"])
+        self.assertEqual(exported, ["cudaMalloc", "xtbloom_cuda_dlsym"])
 
     def test_rejects_embedded_cudadevrt_link_input(self) -> None:
         """Reject an ELF payload that records a cudadevrt link input."""

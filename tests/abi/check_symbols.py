@@ -1,4 +1,4 @@
-"""Verify that a shared gpuxtb library exports exactly the C ABI allowlist."""
+"""Verify that a shared xtbloom library exports exactly the C ABI allowlist."""
 
 from __future__ import annotations
 
@@ -7,29 +7,29 @@ import subprocess
 from pathlib import Path
 
 EXPECTED_SYMBOLS = {
-    "gpuxtb_batch_init",
-    "gpuxtb_batch_result_init",
-    "gpuxtb_compute",
-    "gpuxtb_compute_options_init",
-    "gpuxtb_context_create",
-    "gpuxtb_context_destroy",
-    "gpuxtb_context_get_backend",
-    "gpuxtb_context_get_device_id",
-    "gpuxtb_context_options_init",
-    "gpuxtb_get_last_error",
-    "gpuxtb_plan_compute",
-    "gpuxtb_plan_create",
-    "gpuxtb_plan_destroy",
-    "gpuxtb_plan_query_workspace",
-    "gpuxtb_result_owner_buffer",
-    "gpuxtb_result_owner_create",
-    "gpuxtb_result_owner_export_dltensor",
-    "gpuxtb_result_owner_options_init",
-    "gpuxtb_result_owner_release",
-    "gpuxtb_result_owner_retain",
-    "gpuxtb_status_string",
-    "gpuxtb_version_string",
-    "gpuxtb_workspace_query_init",
+    "xtbloom_batch_init",
+    "xtbloom_batch_result_init",
+    "xtbloom_compute",
+    "xtbloom_compute_options_init",
+    "xtbloom_context_create",
+    "xtbloom_context_destroy",
+    "xtbloom_context_get_backend",
+    "xtbloom_context_get_device_id",
+    "xtbloom_context_options_init",
+    "xtbloom_get_last_error",
+    "xtbloom_plan_compute",
+    "xtbloom_plan_create",
+    "xtbloom_plan_destroy",
+    "xtbloom_plan_query_workspace",
+    "xtbloom_result_owner_buffer",
+    "xtbloom_result_owner_create",
+    "xtbloom_result_owner_export_dltensor",
+    "xtbloom_result_owner_options_init",
+    "xtbloom_result_owner_release",
+    "xtbloom_result_owner_retain",
+    "xtbloom_status_string",
+    "xtbloom_version_string",
+    "xtbloom_workspace_query_init",
 }
 
 
@@ -54,9 +54,9 @@ def main() -> int:
         if not line:
             continue
         symbol = line.split(maxsplit=1)[0].split("@", maxsplit=1)[0]
-        if symbol.startswith("GPUXTB_"):
+        if symbol.startswith("XTBLOOM_"):
             continue  # ELF symbol-version node, not a callable API entry.
-        if symbol.startswith("gpuxtb_"):
+        if symbol.startswith("xtbloom_"):
             exported.add(symbol)
         else:
             unexpected.add(symbol)
@@ -70,7 +70,7 @@ def main() -> int:
             )
         if extra:
             print(  # noqa: T201 - CLI validation report
-                "unlisted gpuxtb symbols:", ", ".join(sorted(extra))
+                "unlisted xtbloom symbols:", ", ".join(sorted(extra))
             )
         if unexpected:
             print(  # noqa: T201 - CLI validation report

@@ -1,6 +1,6 @@
 Source commit: ed0125de9d31d7b6a1f0f231cc17443b603e1579
 Source status during measurements: clean
-Library: build/issue264-cuda-dev/libgpuxtb.so.0.1.0
+Library: build/issue264-cuda-dev/libxtbloom.so.0.1.0
 Library SHA-256: 497ddc7269835bda86ebe997101810b504d442a0bb2721a6e313536777f0d9aa
 Build type: Release
 Shared library: ON

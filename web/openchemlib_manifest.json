@@ -24,14 +24,14 @@
       "url": "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/openchemlib.js",
       "sha256": "5978967b12e938208e8d36222370f88fd615a2b5ec83f02e435caab26f3f4cb3",
       "size_bytes": 1097449,
-      "redistributed_by_gpuxtb": false
+      "redistributed_by_xtbloom": false
     },
     {
       "role": "conformer and MMFF resource registry",
       "url": "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/resources.json",
       "sha256": "d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14",
       "size_bytes": 1351963,
-      "redistributed_by_gpuxtb": false
+      "redistributed_by_xtbloom": false
     }
   ],
   "resource_payload": {
@@ -39,7 +39,7 @@
     "groups": [
       {
         "name": "COD conformer statistics",
-        "used_by_gpuxtb_web": true,
+        "used_by_xtbloom_web": true,
         "paths": [
           "/resources/cod/bondLengthData.txt",
           "/resources/cod/torsionAngle.txt",
@@ -50,7 +50,7 @@
       },
       {
         "name": "MMFF94 and MMFF94s parameter tables",
-        "used_by_gpuxtb_web": true,
+        "used_by_xtbloom_web": true,
         "paths": [
           "/resources/forcefield/mmff94/94s/outofplane.csv",
           "/resources/forcefield/mmff94/94s/torsion.csv",
@@ -73,14 +73,14 @@
       },
       {
         "name": "bundled drug-likeness predictor data",
-        "used_by_gpuxtb_web": false,
+        "used_by_xtbloom_web": false,
         "paths": [
           "/resources/druglikenessNoIndex.txt"
         ]
       },
       {
         "name": "bundled toxicity predictor data",
-        "used_by_gpuxtb_web": false,
+        "used_by_xtbloom_web": false,
         "paths": [
           "/resources/toxpredictor/i1.txt",
           "/resources/toxpredictor/i2.txt",
@@ -114,6 +114,6 @@
       "resources.json"
     ],
     "native_library_or_python_payload": false,
-    "notes": "The browser fetches the exact jsDelivr URLs at runtime. gpuxtb does not vendor these two CDN artifacts or add OpenChemLib to gpuxtb_web.wasm, native installs, sdists, or wheels."
+    "notes": "The browser fetches the exact jsDelivr URLs at runtime. xtbloom does not vendor these two CDN artifacts or add OpenChemLib to xtbloom_web.wasm, native installs, sdists, or wheels."
   }
 }

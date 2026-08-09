@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_PREPROCESSING_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_PREPROCESSING_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_PREPROCESSING_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_PREPROCESSING_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -14,7 +14,7 @@
 #include "backends/cuda/gfn2_integrals.cuh"
 #include "backends/cuda/gfn2_pairlist.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 inline constexpr std::uint32_t kGfn2PreprocessingAbiVersion = 1u;
 
@@ -326,6 +326,6 @@ static_assert(std::is_standard_layout_v<Gfn2PreprocessingLaunchDiagnostic>);
 [[nodiscard]] Gfn2PreprocessingLaunchDiagnostic gate_gfn2_sparse_coordination_cuda(
     Gfn2PreprocessingDeviceBinding& binding, cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_PREPROCESSING_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_PREPROCESSING_CUH

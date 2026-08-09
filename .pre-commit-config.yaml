@@ -17,7 +17,7 @@ repos:
         args: ["--maxkb=1024", "--enforce-all"]
         # Canonical generated or raw evidence artifacts; each exact file is
         # tracked with a committed SHA-256 manifest.
-        exclude: ^(?:data/parameters/d4\.hpp|benchmarks/evidence/issue-168/2026-08-06-epyc7k62/(?:gpuxtb-fresh|gpuxtb-warm|tblite-persistent)\.json|benchmarks/evidence/issue-256/2026-08-09-node3-stage-a/gpuxtb-warm\.json|benchmarks/evidence/issue-13/2026-08-09-node3-pr231/(?:dxtb-cpu-b512|gpuxtb-(?:cpu|cuda)-b(?:128|512)|ref-tblite-b512|xtb-b512)\.json)$
+        exclude: ^(?:data/parameters/d4\.hpp|benchmarks/evidence/issue-168/2026-08-06-epyc7k62/(?:xtbloom-fresh|xtbloom-warm|tblite-persistent)\.json|benchmarks/evidence/issue-256/2026-08-09-node3-stage-a/xtbloom-warm\.json|benchmarks/evidence/issue-13/2026-08-09-node3-pr231/(?:dxtb-cpu-b512|xtbloom-(?:cpu|cuda)-b(?:128|512)|ref-tblite-b512|xtb-b512)\.json)$
       - id: check-merge-conflict
       - id: check-symlinks
       - id: check-toml
@@ -51,6 +51,16 @@ repos:
         exclude: ^data/parameters/(?:gfn2|d4)\.hpp$
   - repo: local
     hooks:
+      - id: forbid-retired-project-name-content
+        name: Forbid the retired project name in text
+        entry: '(?i)gpu[_-]?x[t]b'
+        language: pygrep
+        types: [text]
+      - id: forbid-retired-project-name-path
+        name: Forbid the retired project name in paths
+        entry: Retired project name found in a tracked path
+        language: fail
+        files: '(?i)gpu[_-]?x[t]b'
       - id: forbid-raw-profiler-captures
         name: Forbid raw profiler captures (nsys/ncu)
         entry: >-

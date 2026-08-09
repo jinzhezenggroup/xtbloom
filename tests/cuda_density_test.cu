@@ -25,13 +25,13 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2PlanMemorySpace;
-using gpuxtb::detail::Gfn2WavefunctionLayoutView;
-using gpuxtb::detail::cuda::Gfn2DensityDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2DensityDeviceError;
-using gpuxtb::detail::cuda::Gfn2DensityDeviceInput;
-using gpuxtb::detail::cuda::Gfn2DensityDeviceResults;
-using gpuxtb::detail::cuda::Gfn2DensityDeviceWorkspace;
+using xtbloom::detail::Gfn2PlanMemorySpace;
+using xtbloom::detail::Gfn2WavefunctionLayoutView;
+using xtbloom::detail::cuda::Gfn2DensityDeviceBatch;
+using xtbloom::detail::cuda::Gfn2DensityDeviceError;
+using xtbloom::detail::cuda::Gfn2DensityDeviceInput;
+using xtbloom::detail::cuda::Gfn2DensityDeviceResults;
+using xtbloom::detail::cuda::Gfn2DensityDeviceWorkspace;
 
 constexpr std::uint64_t kPlanToken = 0xa54ff53a5f1d36f1ULL;
 constexpr double kSentinel = -663.75;
@@ -441,10 +441,10 @@ int compare_success(const HostCase& host, const Results& actual) {
 }
 
 int run(DeviceFixture& device, const HostCase& host, cudaStream_t stream) {
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_density_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_density_device_errors_cuda(
       static_cast<std::int64_t>(host.batch_size()), device.system_errors.get(),
       device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
       device.batch(host), device.input(), device.results(), device.workspace(),
       device.system_errors.get(), device.device_error.get(), stream));
   return 0;
@@ -756,7 +756,7 @@ int test_active_mask_sticky_error_and_graph_replay() {
   const std::uint32_t sticky = static_cast<std::uint32_t>(Gfn2DensityDeviceError::kNonfiniteTrace);
   CUDA_CHECK(cudaMemcpyAsync(device.device_error.get(), &sticky, sizeof(sticky),
                              cudaMemcpyHostToDevice, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
       device.batch(host), device.input(), device.results(), device.workspace(),
       device.system_errors.get(), device.device_error.get(), stream));
   Results actual;
@@ -1247,10 +1247,10 @@ cudaError_t copy_spin_results(const SpinHostCase& host, const SpinDeviceFixture&
 }
 
 int run_spin(SpinDeviceFixture& device, const SpinHostCase& host, cudaStream_t stream) {
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_density_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_density_device_errors_cuda(
       static_cast<std::int64_t>(host.batch_size()), device.system_errors.get(),
       device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_spin_density_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_spin_density_cuda(
       device.batch(host), device.layout(host), device.input(), device.results(), device.workspace(),
       device.system_errors.get(), device.device_error.get(), stream));
   return 0;
@@ -1522,7 +1522,7 @@ int test_spin_entry_requires_explicit_metadata() {
   HostCase host = make_case(1u);
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, nullptr));
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_spin_density_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_spin_density_cuda(
             device.batch(host), Gfn2WavefunctionLayoutView{}, device.input(), device.results(),
             device.workspace(), device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
@@ -1539,57 +1539,57 @@ int test_host_argument_alias_token_and_alignment_validation() {
   Gfn2DensityDeviceWorkspace workspace = device.workspace();
   batch.orbital_offsets = reinterpret_cast<const std::int64_t*>(
       reinterpret_cast<const unsigned char*>(device.orbital_offsets.get()) + 1u);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
             batch, input, results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   batch = device.batch(host);
   input.plan_token ^= 1u;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
             batch, input, results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   input = device.input();
   results.plan_token ^= 1u;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
             batch, input, results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   results = device.results();
   workspace.plan_token ^= 1u;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
             batch, input, results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   workspace = device.workspace();
   batch.plan_token = 0u;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
             batch, input, results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   batch = device.batch(host);
   batch.matrix_offsets = reinterpret_cast<const std::int64_t*>(
       reinterpret_cast<const unsigned char*>(device.matrix_offsets.get()) + 1u);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
             batch, input, results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   batch = device.batch(host);
   input.coefficients = reinterpret_cast<const double*>(
       reinterpret_cast<const unsigned char*>(device.coefficients.get()) + 1u);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
             batch, input, results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   input = device.input();
   results.density = workspace.density_scratch;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
             batch, input, results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   results = device.results();
   workspace.weights = const_cast<double*>(input.eigenvalues);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
             batch, input, results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   workspace = device.workspace();
   results.band_energies = reinterpret_cast<double*>(device.device_error.get());
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
             batch, input, results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_density_device_errors_cuda(
+  CHECK(xtbloom::detail::cuda::reset_gfn2_density_device_errors_cuda(
             8, device.system_errors.get(), device.system_errors.get()) == cudaErrorInvalidValue);
   return 0;
 }

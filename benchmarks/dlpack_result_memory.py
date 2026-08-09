@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Allocation-cost comparison for gpuxtb-owned DLPack device results.
+"""Allocation-cost comparison for xtbloom-owned DLPack device results.
 
 Issue #214 measures the steady-state cost of the two supported device-output
-paths through ``gpuxtb.ArrayBatch`` on a real NVIDIA GPU:
+paths through ``xtbloom.ArrayBatch`` on a real NVIDIA GPU:
 
 * ``arena``: ``result_memory="cuda"`` with no ``out=``.  Every call allocates
-  one packed gpuxtb-owned device arena (``cudaMalloc`` through the native
-  ``gpuxtb_result_owner_create``), computes into it, returns
+  one packed xtbloom-owned device arena (``cudaMalloc`` through the native
+  ``xtbloom_result_owner_create``), computes into it, returns
   ``DLPackResultBuffer`` producers, and frees the arena when the caller
   releases the producers.
 * ``out``: every requested output is a caller-owned writable CUDA buffer
-  supplied through ``out=``.  Steady state performs no gpuxtb allocation at
+  supplied through ``out=``.  Steady state performs no xtbloom allocation at
   all; this is the favored steady-state zero-copy path.
 
 The claim is deliberately narrow: on the recorded machine, ``result_memory=
@@ -152,12 +152,12 @@ def _git_revision() -> tuple[str, bool]:
 
 def _library_identity(expected_revision: str) -> dict[str, object]:
     """Require and report the selected library's exact clean CMake provenance."""
-    import gpuxtb
-    from gpuxtb import library
+    import xtbloom
+    from xtbloom import library
 
     path = Path(str(library.library_path())).resolve()
     if not path.is_file():
-        raise SystemExit(f"selected gpuxtb library is not a regular file: {path}")
+        raise SystemExit(f"selected xtbloom library is not a regular file: {path}")
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     cache = path.parent / "CMakeCache.txt"
     if not cache.is_file():
@@ -198,8 +198,8 @@ def _library_identity(expected_revision: str) -> dict[str, object]:
         "CMAKE_SHARED_LINKER_FLAGS",
         "CMAKE_GENERATOR",
         "CMAKE_HOME_DIRECTORY",
-        "GPUXTB_ENABLE_CUDA",
-        "GPUXTB_MKL_RT_LIBRARY",
+        "XTBLOOM_ENABLE_CUDA",
+        "XTBLOOM_CPU_LINALG_LIBRARY",
     )
     selected = {name: entries.get(name) for name in selected_names}
     compilers: dict[str, object] = {}
@@ -215,7 +215,7 @@ def _library_identity(expected_revision: str) -> dict[str, object]:
     return {
         "library_path": str(path),
         "library_sha256": digest,
-        "python_package": str(Path(gpuxtb.__file__).resolve()),
+        "python_package": str(Path(xtbloom.__file__).resolve()),
         "build": {
             "build_system": "cmake",
             "build_directory": str(path.parent),
@@ -256,13 +256,13 @@ def _packed_water() -> dict[str, np.ndarray]:
 
 def _require_gpu() -> None:
     """Assert that a CUDA device is actually usable before timing."""
-    from gpuxtb.exceptions import GPUxtbRuntimeError
-    from gpuxtb.interface import Context
+    from xtbloom.exceptions import XTBloomRuntimeError
+    from xtbloom.interface import Context
 
     try:
         with Context("cuda"):
             pass
-    except GPUxtbRuntimeError as exc:
+    except XTBloomRuntimeError as exc:
         raise SystemExit(f"CUDA backend is not usable: {exc}") from exc
 
 
@@ -271,7 +271,7 @@ def _mode_state(
 ) -> tuple[object, dict[str, object] | None]:
     """Create one persistent batch and its optional caller-owned outputs."""
     import torch
-    from gpuxtb.interface import ArrayBatch
+    from xtbloom.interface import ArrayBatch
 
     if mode not in ("arena", "out"):
         raise ValueError(f"unknown output mode {mode!r}")
@@ -390,7 +390,7 @@ def _require_cpu_reference_success(result: object) -> None:
 def _correctness(packed: dict[str, np.ndarray], mode: str) -> dict[str, object]:
     """Require finite, converged CUDA results within the explicit CPU gate."""
     import torch
-    from gpuxtb.interface import ArrayBatch, compute_arrays
+    from xtbloom.interface import ArrayBatch, compute_arrays
 
     host = compute_arrays(
         **{name: value.copy() for name, value in packed.items()}, backend="cpu"
@@ -582,8 +582,8 @@ def main() -> int:
     if not library_path.is_file():
         raise SystemExit(f"--library does not name a regular file: {library_path}")
     # The package loads lazily, so the explicit benchmark library is selected
-    # before any gpuxtb import can cache a different shared object.
-    os.environ["GPUXTB_LIBRARY"] = str(library_path)
+    # before any xtbloom import can cache a different shared object.
+    os.environ["XTBLOOM_LIBRARY"] = str(library_path)
 
     _require_gpu()
     packed = _packed_water()

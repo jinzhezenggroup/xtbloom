@@ -348,7 +348,7 @@ def render_header(
 #include <cstddef>
 #include <cstdint>
 
-namespace gpuxtb::parameters::d4 {{
+namespace xtbloom::parameters::d4 {{
 
 inline constexpr char kSourceRevision[] = "{revision}";
 inline constexpr char kSourceDigest[] = "{digest}";
@@ -384,7 +384,7 @@ inline constexpr std::array<double, kReferenceCount * kReferenceCount> kReferenc
 {format_array(c6)}
 }}}};
 
-}}  // namespace gpuxtb::parameters::d4
+}}  // namespace xtbloom::parameters::d4
 """
 
 

@@ -17,7 +17,7 @@
 namespace {
 
 __global__ void add_kernel(double* value, double increment) {
-  gpuxtb::detail::cuda::atomic_add_fp64(value, increment);
+  xtbloom::detail::cuda::atomic_add_fp64(value, increment);
 }
 
 }  // namespace

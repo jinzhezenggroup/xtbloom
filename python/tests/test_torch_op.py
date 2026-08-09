@@ -1,4 +1,4 @@
-"""Tests for the PyTorch autograd op :func:`gpuxtb.gpuxtb_torch`.
+"""Tests for the PyTorch autograd op :func:`xtbloom.xtbloom_torch`.
 
 The op runs packed inference on PyTorch tensors through the DLPack bridge and
 exposes a single analytic gradient, ``dE/dR = -F``.  These tests verify the
@@ -16,8 +16,8 @@ import itertools
 
 import numpy as np
 import pytest
-from gpuxtb import Calculator, gpuxtb_torch
-from gpuxtb.exceptions import GPUxtbNotSupportedError, GPUxtbValueError
+from xtbloom import Calculator, xtbloom_torch
+from xtbloom.exceptions import XTBloomNotSupportedError, XTBloomValueError
 
 _TORCH = importlib.util.find_spec("torch")
 
@@ -50,14 +50,14 @@ def _skip_reason() -> str | None:
 
 def _library_has_cuda() -> bool:
     """Check whether a CUDA context can actually be created on this host."""
-    from gpuxtb.exceptions import GPUxtbRuntimeError
-    from gpuxtb.interface import Context
+    from xtbloom.exceptions import XTBloomRuntimeError
+    from xtbloom.interface import Context
 
     try:
         with Context("cuda"):
             pass
         return True
-    except GPUxtbRuntimeError:
+    except XTBloomRuntimeError:
         return False
 
 
@@ -126,7 +126,7 @@ def test_forward_matches_calculator_host() -> None:
 
     positions = torch.tensor(WATER_POSITIONS.tolist(), dtype=torch.float64)
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    energies, forces = gpuxtb_torch(
+    energies, forces = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -163,7 +163,7 @@ def test_backward_grad_equals_neg_forces() -> None:
         WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
     )
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    energies, forces = gpuxtb_torch(
+    energies, forces = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -190,7 +190,7 @@ def test_energy_backward_does_not_scan_unused_force_grad(
         WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
     )
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    energies, _ = gpuxtb_torch(
+    energies, _ = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -220,7 +220,7 @@ def test_dlpack_only_offsets_survive_backward() -> None:
         WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
     )
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    energies, forces = gpuxtb_torch(
+    energies, forces = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         _DLPackOnly(arrays["atom_offsets"]),
@@ -246,7 +246,7 @@ def test_energy_gradient_finite_difference() -> None:
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
 
     def energy_at(p: torch.Tensor) -> torch.Tensor:
-        values, _ = gpuxtb_torch(
+        values, _ = xtbloom_torch(
             p,
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -288,7 +288,7 @@ def test_batch_gradient_selects_its_system() -> None:
         [WATER_POSITIONS, METHANE_POSITIONS],
         torch,
     )
-    energies, _ = gpuxtb_torch(
+    energies, _ = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -315,8 +315,8 @@ def test_nonposition_requires_grad_raises() -> None:
     arrays["molecular_charges"] = torch.zeros(
         1, dtype=torch.float64, requires_grad=True
     )
-    with pytest.raises(GPUxtbNotSupportedError, match="molecular_charges"):
-        gpuxtb_torch(
+    with pytest.raises(XTBloomNotSupportedError, match="molecular_charges"):
+        xtbloom_torch(
             positions,
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -338,7 +338,7 @@ def test_grad_through_forces_raises() -> None:
         WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
     )
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    _, forces = gpuxtb_torch(
+    _, forces = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -347,7 +347,7 @@ def test_grad_through_forces_raises() -> None:
         arrays["spin_channels"],
         backend="cpu",
     )
-    with pytest.raises(GPUxtbNotSupportedError, match="forces"):
+    with pytest.raises(XTBloomNotSupportedError, match="forces"):
         (forces**2).sum().backward()
 
 
@@ -362,7 +362,7 @@ def test_zero_grad_through_forces_raises() -> None:
         WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
     )
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    _, forces = gpuxtb_torch(
+    _, forces = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -371,7 +371,7 @@ def test_zero_grad_through_forces_raises() -> None:
         arrays["spin_channels"],
         backend="cpu",
     )
-    with pytest.raises(GPUxtbNotSupportedError, match="forces"):
+    with pytest.raises(XTBloomNotSupportedError, match="forces"):
         forces.backward(torch.zeros_like(forces))
 
 
@@ -386,7 +386,7 @@ def test_higher_order_gradient_raises() -> None:
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
 
     def total_energy(values: torch.Tensor) -> torch.Tensor:
-        energies, _ = gpuxtb_torch(
+        energies, _ = xtbloom_torch(
             values,
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -398,11 +398,11 @@ def test_higher_order_gradient_raises() -> None:
         return energies.sum()
 
     direct_positions = positions.clone().requires_grad_(True)
-    with pytest.raises(GPUxtbNotSupportedError, match="higher-order"):
+    with pytest.raises(XTBloomNotSupportedError, match="higher-order"):
         torch.autograd.grad(
             total_energy(direct_positions), direct_positions, create_graph=True
         )
-    with pytest.raises(GPUxtbNotSupportedError, match="higher-order"):
+    with pytest.raises(XTBloomNotSupportedError, match="higher-order"):
         torch.autograd.functional.hessian(total_energy, positions)
 
 
@@ -419,7 +419,7 @@ def test_noncontiguous_positions_copied() -> None:
     positions = noncontiguous.requires_grad_(True)
     transposed_geometry = noncontiguous.detach().numpy()
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    energies, forces = gpuxtb_torch(
+    energies, forces = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -449,8 +449,8 @@ def test_positions_must_be_float64() -> None:
 
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
     positions32 = torch.tensor(WATER_POSITIONS.tolist(), dtype=torch.float32)
-    with pytest.raises(GPUxtbValueError, match="float64"):
-        gpuxtb_torch(
+    with pytest.raises(XTBloomValueError, match="float64"):
+        xtbloom_torch(
             positions32,
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -476,7 +476,7 @@ def test_torch_cuda_matches_host() -> None:
         WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
     )
     host_arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    host_energies, host_forces = gpuxtb_torch(
+    host_energies, host_forces = xtbloom_torch(
         host_positions,
         host_arrays["atomic_numbers"],
         host_arrays["atom_offsets"],
@@ -493,7 +493,7 @@ def test_torch_cuda_matches_host() -> None:
         name: value.to("cuda")
         for name, value in _packed([WATER_NUMBERS], [WATER_POSITIONS], torch).items()
     }
-    cuda_energies, cuda_forces = gpuxtb_torch(
+    cuda_energies, cuda_forces = xtbloom_torch(
         cuda_positions,
         cuda_arrays["atomic_numbers"],
         cuda_arrays["atom_offsets"],

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Regression coverage for the single-system browser adapter. The production
  * source is included directly so its private JSON and L-BFGS invariants can be
- * exercised against a deterministic fake of the stable gpuxtb C ABI. */
+ * exercised against a deterministic fake of the stable xtbloom C ABI. */
 
 #include <math.h>
 #include <stdint.h>
@@ -9,8 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define main gpuxtb_web_embedded_main
-#include "../web/gpuxtb_web.c"
+#define main xtbloom_web_embedded_main
+#include "../web/xtbloom_web.c"
 #undef main
 
 #define CHECK(condition)                                                              \
@@ -32,60 +32,62 @@ static uint32_t mock_compute_flags = 0;
 static const char* mock_last_error = "";
 
 static void reset_adapter(void) {
-  g_context = (gpuxtb_context_t*)(uintptr_t)1;
+  g_context = (xtbloom_context_t*)(uintptr_t)1;
   mock_compute_mode = MOCK_COMPUTE_SUCCESS;
   mock_saw_force_buffer = 0;
   mock_compute_flags = 0;
   mock_last_error = "";
 }
 
-const char* gpuxtb_version_string(void) { return "test"; }
+const char* xtbloom_version_string(void) { return "test"; }
 
-const char* gpuxtb_status_string(gpuxtb_status_t status) {
+const char* xtbloom_status_string(xtbloom_status_t status) {
   switch (status) {
-    case GPUXTB_STATUS_SUCCESS:
+    case XTBLOOM_STATUS_SUCCESS:
       return "success";
-    case GPUXTB_STATUS_SCC_NOT_CONVERGED:
+    case XTBLOOM_STATUS_SCC_NOT_CONVERGED:
       return "SCC not converged";
-    case GPUXTB_STATUS_EIGENSOLVER_FAILED:
+    case XTBLOOM_STATUS_EIGENSOLVER_FAILED:
       return "eigensolver failed";
     default:
       return "mock failure";
   }
 }
 
-const char* gpuxtb_get_last_error(void) { return mock_last_error; }
+const char* xtbloom_get_last_error(void) { return mock_last_error; }
 
-gpuxtb_status_t gpuxtb_context_options_init(gpuxtb_context_options_t* options, size_t struct_size) {
+xtbloom_status_t xtbloom_context_options_init(xtbloom_context_options_t* options,
+                                              size_t struct_size) {
   memset(options, 0, struct_size);
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t gpuxtb_batch_init(gpuxtb_batch_t* batch, size_t struct_size) {
+xtbloom_status_t xtbloom_batch_init(xtbloom_batch_t* batch, size_t struct_size) {
   memset(batch, 0, struct_size);
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t gpuxtb_compute_options_init(gpuxtb_compute_options_t* options, size_t struct_size) {
+xtbloom_status_t xtbloom_compute_options_init(xtbloom_compute_options_t* options,
+                                              size_t struct_size) {
   memset(options, 0, struct_size);
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t gpuxtb_batch_result_init(gpuxtb_batch_result_t* result, size_t struct_size) {
+xtbloom_status_t xtbloom_batch_result_init(xtbloom_batch_result_t* result, size_t struct_size) {
   memset(result, 0, struct_size);
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t gpuxtb_context_create(const gpuxtb_context_options_t* options,
-                                      gpuxtb_context_t** context) {
+xtbloom_status_t xtbloom_context_create(const xtbloom_context_options_t* options,
+                                        xtbloom_context_t** context) {
   (void)options;
-  *context = (gpuxtb_context_t*)(uintptr_t)1;
-  return GPUXTB_STATUS_SUCCESS;
+  *context = (xtbloom_context_t*)(uintptr_t)1;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* batch,
-                               const gpuxtb_compute_options_t* options,
-                               gpuxtb_batch_result_t* result) {
+xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch_t* batch,
+                                 const xtbloom_compute_options_t* options,
+                                 xtbloom_batch_result_t* result) {
   (void)context;
   mock_compute_flags = options->flags;
   mock_saw_force_buffer = result->forces.data != NULL || result->forces.size_bytes != 0;
@@ -99,7 +101,7 @@ gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* 
 
   iterations[0] = 3;
   if (mock_compute_mode == MOCK_COMPUTE_SYSTEM_FAILURE) {
-    statuses[0] = GPUXTB_STATUS_SCC_NOT_CONVERGED;
+    statuses[0] = XTBLOOM_STATUS_SCC_NOT_CONVERGED;
     converged[0] = 0;
     energies[0] = NAN;
     for (int64_t i = 0; i < batch->total_atoms; ++i) {
@@ -110,10 +112,10 @@ gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* 
         forces[i] = NAN;
       }
     }
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   }
 
-  statuses[0] = GPUXTB_STATUS_SUCCESS;
+  statuses[0] = XTBLOOM_STATUS_SUCCESS;
   converged[0] = 1;
   energies[0] = -1.25;
   for (int64_t i = 0; i < batch->total_atoms; ++i) {
@@ -124,7 +126,7 @@ gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* 
       forces[i] = 0.0;
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 static int test_error_json_escapes_diagnostics(void) {
@@ -138,7 +140,7 @@ static int test_error_json_escapes_diagnostics(void) {
 static int test_system_failure_is_not_success(void) {
   reset_adapter();
   mock_compute_mode = MOCK_COMPUTE_SYSTEM_FAILURE;
-  const char* actual = gpuxtb_web_compute("H 0 0 0", 0.0, 0, 0.0, 1e-8, 1e-5, 1, 1);
+  const char* actual = xtbloom_web_compute("H 0 0 0", 0.0, 0, 0.0, 1e-8, 1e-5, 1, 1);
   CHECK(strstr(actual, "\"ok\":0") != NULL);
   CHECK(strstr(actual, "\"error_code\":\"err_compute\"") != NULL);
   CHECK(strstr(actual, "SCC not converged") != NULL);
@@ -148,18 +150,18 @@ static int test_system_failure_is_not_success(void) {
 
 static int test_disabled_forces_are_omitted(void) {
   reset_adapter();
-  const char* actual = gpuxtb_web_compute("H 0 0 0", 0.0, 0, 0.0, 1e-8, 1e-5, 20, 0);
+  const char* actual = xtbloom_web_compute("H 0 0 0", 0.0, 0, 0.0, 1e-8, 1e-5, 20, 0);
   CHECK(strstr(actual, "\"ok\":1") != NULL);
   CHECK(strstr(actual, "\"forces\"") == NULL);
   CHECK(mock_saw_force_buffer == 0);
-  CHECK((mock_compute_flags & GPUXTB_COMPUTE_FORCES) == 0);
+  CHECK((mock_compute_flags & XTBLOOM_COMPUTE_FORCES) == 0);
   return 0;
 }
 
 static int test_initial_optimizer_failure_is_defined(void) {
   reset_adapter();
   mock_compute_mode = MOCK_COMPUTE_SYSTEM_FAILURE;
-  const char* actual = gpuxtb_web_optimize("H 0 0 0", 0.0, 0, 0.0, 1e-8, 1e-5, 1, 2, 4.5e-4, 0.4);
+  const char* actual = xtbloom_web_optimize("H 0 0 0", 0.0, 0, 0.0, 1e-8, 1e-5, 1, 2, 4.5e-4, 0.4);
   CHECK(strstr(actual, "\"ok\":0") != NULL);
   CHECK(strstr(actual, "\"error_code\":\"err_initial_calc\"") != NULL);
   CHECK(strstr(actual, "SCC not converged") != NULL);

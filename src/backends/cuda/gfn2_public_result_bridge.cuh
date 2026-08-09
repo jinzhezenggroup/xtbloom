@@ -1,16 +1,16 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_PUBLIC_RESULT_BRIDGE_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_PUBLIC_RESULT_BRIDGE_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_PUBLIC_RESULT_BRIDGE_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_PUBLIC_RESULT_BRIDGE_CUH
 
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
 #include <type_traits>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 inline constexpr std::uint32_t kGfn2PublicResultBridgeAbiVersion = 1u;
 
@@ -66,7 +66,7 @@ struct Gfn2PublicResultBridgeDeviceInput {
 
   const std::int32_t* iterations = nullptr;
   const std::uint8_t* converged = nullptr;
-  const gpuxtb_status_t* system_statuses = nullptr;
+  const xtbloom_status_t* system_statuses = nullptr;
   std::int64_t batch_elements = 0;
 
   /* Control values produced by internal inference publication. */
@@ -94,7 +94,7 @@ struct Gfn2PublicResultBridgeDeviceStaging {
 
   std::int32_t* iterations = nullptr;
   std::uint8_t* converged = nullptr;
-  gpuxtb_status_t* system_statuses = nullptr;
+  xtbloom_status_t* system_statuses = nullptr;
   std::int64_t batch_elements = 0;
   std::uint64_t plan_token = 0u;
 };
@@ -210,6 +210,6 @@ cudaError_t commit_gfn2_public_results_cuda(
     const Gfn2PublicResultBridgeDeviceDiagnostics& diagnostics,
     cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_PUBLIC_RESULT_BRIDGE_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_PUBLIC_RESULT_BRIDGE_CUH

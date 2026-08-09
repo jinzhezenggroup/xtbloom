@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
 #if UINTPTR_MAX == UINT64_MAX
 #define EXPECTED_CONTEXT_OPTIONS_SIZE 32
@@ -44,82 +44,82 @@
 #error "c_api_test requires a 32-bit or 64-bit pointer ABI"
 #endif
 
-_Static_assert(GPUXTB_COMPUTE_OPTIONS_V1_SIZE == 48,
+_Static_assert(XTBLOOM_COMPUTE_OPTIONS_V1_SIZE == 48,
                "compute-options ABI-v1 prefix must remain 48 bytes");
-_Static_assert(GPUXTB_COMPUTE_OPTIONS_V2_SIZE == 56,
+_Static_assert(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE == 56,
                "compute-options ABI-v2 prefix must remain 56 bytes");
-_Static_assert(offsetof(gpuxtb_compute_options_t, scc_start_mode) == 48,
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_start_mode) == 48,
                "compute-options ABI-v2 mode must begin after the 48-byte prefix");
-_Static_assert(offsetof(gpuxtb_compute_options_t, reserved_v2) == 52,
+_Static_assert(offsetof(xtbloom_compute_options_t, reserved_v2) == 52,
                "compute-options ABI-v2 reserved field must follow the mode");
-_Static_assert(sizeof(gpuxtb_compute_options_t) == GPUXTB_COMPUTE_OPTIONS_V2_SIZE,
+_Static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V2_SIZE,
                "compute-options public layout must end at the ABI-v2 suffix");
-_Static_assert(sizeof(gpuxtb_result_owner_options_t) >= GPUXTB_RESULT_OWNER_OPTIONS_V1_SIZE,
+_Static_assert(sizeof(xtbloom_result_owner_options_t) >= XTBLOOM_RESULT_OWNER_OPTIONS_V1_SIZE,
                "result-owner options prefix must fit the public layout");
-_Static_assert(offsetof(gpuxtb_result_owner_options_t, memory_space) == 8,
+_Static_assert(offsetof(xtbloom_result_owner_options_t, memory_space) == 8,
                "result-owner memory-space offset must remain stable");
-_Static_assert(offsetof(gpuxtb_result_owner_options_t, size_bytes) == 16,
+_Static_assert(offsetof(xtbloom_result_owner_options_t, size_bytes) == 16,
                "result-owner size offset must remain stable");
-_Static_assert(offsetof(gpuxtb_result_owner_options_t, reserved) == 24,
+_Static_assert(offsetof(xtbloom_result_owner_options_t, reserved) == 24,
                "result-owner reserved offset must remain stable");
-_Static_assert(sizeof(gpuxtb_dlpack_view_t) == GPUXTB_DLPACK_VIEW_V1_SIZE,
+_Static_assert(sizeof(xtbloom_dlpack_view_t) == XTBLOOM_DLPACK_VIEW_V1_SIZE,
                "DLPack view public layout must end at the ABI-v1 suffix");
-_Static_assert(offsetof(gpuxtb_dlpack_view_t, byte_offset) == 8,
+_Static_assert(offsetof(xtbloom_dlpack_view_t, byte_offset) == 8,
                "DLPack view byte-offset offset must remain stable");
-_Static_assert(offsetof(gpuxtb_context_options_t, stream) == 24,
+_Static_assert(offsetof(xtbloom_context_options_t, stream) == 24,
                "context stream offset must remain stable");
-_Static_assert(sizeof(gpuxtb_context_options_t) == EXPECTED_CONTEXT_OPTIONS_SIZE,
+_Static_assert(sizeof(xtbloom_context_options_t) == EXPECTED_CONTEXT_OPTIONS_SIZE,
                "context layout must match the target pointer width");
-_Static_assert(sizeof(gpuxtb_const_buffer_t) == EXPECTED_BUFFER_SIZE,
+_Static_assert(sizeof(xtbloom_const_buffer_t) == EXPECTED_BUFFER_SIZE,
                "const-buffer layout must match the target pointer width");
-_Static_assert(sizeof(gpuxtb_buffer_t) == EXPECTED_BUFFER_SIZE,
+_Static_assert(sizeof(xtbloom_buffer_t) == EXPECTED_BUFFER_SIZE,
                "buffer layout must match the target pointer width");
-_Static_assert(offsetof(gpuxtb_const_buffer_t, size_bytes) == EXPECTED_BUFFER_SIZE_OFFSET,
+_Static_assert(offsetof(xtbloom_const_buffer_t, size_bytes) == EXPECTED_BUFFER_SIZE_OFFSET,
                "const-buffer size offset must match the target pointer width");
-_Static_assert(offsetof(gpuxtb_const_buffer_t, memory_space) == EXPECTED_BUFFER_MEMORY_OFFSET,
+_Static_assert(offsetof(xtbloom_const_buffer_t, memory_space) == EXPECTED_BUFFER_MEMORY_OFFSET,
                "const-buffer memory offset must match the target pointer width");
-_Static_assert(offsetof(gpuxtb_dlpack_view_t, shape) == EXPECTED_DLPACK_SHAPE_OFFSET,
+_Static_assert(offsetof(xtbloom_dlpack_view_t, shape) == EXPECTED_DLPACK_SHAPE_OFFSET,
                "DLPack view shape offset must match the target pointer width");
-_Static_assert(GPUXTB_BATCH_V1_SIZE == EXPECTED_BATCH_V1_SIZE,
+_Static_assert(XTBLOOM_BATCH_V1_SIZE == EXPECTED_BATCH_V1_SIZE,
                "batch ABI-v1 prefix must match the target pointer width");
-_Static_assert(GPUXTB_BATCH_V2_SIZE == EXPECTED_BATCH_V2_SIZE,
+_Static_assert(XTBLOOM_BATCH_V2_SIZE == EXPECTED_BATCH_V2_SIZE,
                "batch ABI-v2 prefix must match the target pointer width");
-_Static_assert(GPUXTB_BATCH_V3_SIZE == EXPECTED_BATCH_V3_SIZE,
+_Static_assert(XTBLOOM_BATCH_V3_SIZE == EXPECTED_BATCH_V3_SIZE,
                "batch ABI-v3 image must match the target pointer width");
-_Static_assert(offsetof(gpuxtb_batch_t, total_interactions) ==
+_Static_assert(offsetof(xtbloom_batch_t, total_interactions) ==
                    EXPECTED_BATCH_TOTAL_INTERACTIONS_OFFSET,
                "batch ABI-v3 interaction count must match the target pointer width");
-_Static_assert(offsetof(gpuxtb_batch_t, interaction_descriptors) ==
+_Static_assert(offsetof(xtbloom_batch_t, interaction_descriptors) ==
                    EXPECTED_BATCH_DESCRIPTORS_OFFSET,
                "batch ABI-v3 descriptors must follow the interaction count");
-_Static_assert(offsetof(gpuxtb_batch_t, interaction_payload) == EXPECTED_BATCH_PAYLOAD_OFFSET,
+_Static_assert(offsetof(xtbloom_batch_t, interaction_payload) == EXPECTED_BATCH_PAYLOAD_OFFSET,
                "batch ABI-v3 payload must begin after the descriptor buffers");
-_Static_assert(sizeof(gpuxtb_interaction_t) == GPUXTB_INTERACTION_V1_SIZE,
+_Static_assert(sizeof(xtbloom_interaction_t) == XTBLOOM_INTERACTION_V1_SIZE,
                "interaction descriptor public layout must end at its ABI-v1 suffix");
-_Static_assert(offsetof(gpuxtb_interaction_t, type) == 0,
+_Static_assert(offsetof(xtbloom_interaction_t, type) == 0,
                "interaction type offset must remain stable");
-_Static_assert(offsetof(gpuxtb_interaction_t, flags) == 4,
+_Static_assert(offsetof(xtbloom_interaction_t, flags) == 4,
                "interaction flags offset must remain stable");
-_Static_assert(offsetof(gpuxtb_interaction_t, system_index) == 8,
+_Static_assert(offsetof(xtbloom_interaction_t, system_index) == 8,
                "interaction system-index offset must remain stable");
-_Static_assert(offsetof(gpuxtb_interaction_t, payload_offset) == 16,
+_Static_assert(offsetof(xtbloom_interaction_t, payload_offset) == 16,
                "interaction payload-offset offset must remain stable");
-_Static_assert(offsetof(gpuxtb_interaction_t, payload_size) == 24,
+_Static_assert(offsetof(xtbloom_interaction_t, payload_size) == 24,
                "interaction payload-size offset must remain stable");
-_Static_assert(GPUXTB_BATCH_RESULT_V1_SIZE == EXPECTED_RESULT_V1_SIZE,
+_Static_assert(XTBLOOM_BATCH_RESULT_V1_SIZE == EXPECTED_RESULT_V1_SIZE,
                "batch-result ABI-v1 prefix must match the target pointer width");
-_Static_assert(GPUXTB_BATCH_RESULT_V2_SIZE == EXPECTED_RESULT_V2_SIZE,
+_Static_assert(XTBLOOM_BATCH_RESULT_V2_SIZE == EXPECTED_RESULT_V2_SIZE,
                "batch-result ABI-v2 image must match the target pointer width");
-_Static_assert(offsetof(gpuxtb_batch_result_t, dipole_moments) == EXPECTED_RESULT_DIPOLE_OFFSET,
+_Static_assert(offsetof(xtbloom_batch_result_t, dipole_moments) == EXPECTED_RESULT_DIPOLE_OFFSET,
                "batch-result ABI-v2 suffix must match the target pointer width");
-_Static_assert(offsetof(gpuxtb_batch_result_t, quadrupole_moments) ==
+_Static_assert(offsetof(xtbloom_batch_result_t, quadrupole_moments) ==
                    EXPECTED_RESULT_QUADRUPOLE_OFFSET,
                "batch-result quadrupole outlet offset must remain stable");
-_Static_assert(offsetof(gpuxtb_batch_result_t, wiberg_orders) == EXPECTED_RESULT_WIBERG_OFFSET,
+_Static_assert(offsetof(xtbloom_batch_result_t, wiberg_orders) == EXPECTED_RESULT_WIBERG_OFFSET,
                "batch-result Wiberg outlet offset must remain stable");
-_Static_assert(offsetof(gpuxtb_batch_result_t, spin_populations) == EXPECTED_RESULT_SPIN_OFFSET,
+_Static_assert(offsetof(xtbloom_batch_result_t, spin_populations) == EXPECTED_RESULT_SPIN_OFFSET,
                "batch-result spin outlet offset must remain stable");
-_Static_assert(GPUXTB_RESULT_DIPOLE_MOMENTS == (1 << 4),
+_Static_assert(XTBLOOM_RESULT_DIPOLE_MOMENTS == (1 << 4),
                "dipole publication result flag must remain at bit 4");
 
 static int check_short_compute_options_init(size_t caller_size) {
@@ -130,16 +130,16 @@ static int check_short_compute_options_init(size_t caller_size) {
   }
   memset(storage, 0xa5, caller_size + CANARY_BYTES);
 
-  gpuxtb_compute_options_t* options = (gpuxtb_compute_options_t*)storage;
-  const gpuxtb_status_t status = gpuxtb_compute_options_init(options, caller_size);
-  const int prefix_ok = status == GPUXTB_STATUS_SUCCESS && options->struct_size == caller_size &&
-                        options->api_version == GPUXTB_API_VERSION &&
-                        options->model == GPUXTB_MODEL_GFN2_XTB &&
+  xtbloom_compute_options_t* options = (xtbloom_compute_options_t*)storage;
+  const xtbloom_status_t status = xtbloom_compute_options_init(options, caller_size);
+  const int prefix_ok = status == XTBLOOM_STATUS_SUCCESS && options->struct_size == caller_size &&
+                        options->api_version == XTBLOOM_API_VERSION &&
+                        options->model == XTBLOOM_MODEL_GFN2_XTB &&
                         options->max_scc_iterations == 250 &&
-                        options->electronic_temperature == GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+                        options->electronic_temperature == XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE;
 
   int short_suffix_ok = 1;
-  for (size_t index = GPUXTB_COMPUTE_OPTIONS_V1_SIZE; index < caller_size; ++index) {
+  for (size_t index = XTBLOOM_COMPUTE_OPTIONS_V1_SIZE; index < caller_size; ++index) {
     if (storage[index] != 0) {
       short_suffix_ok = 0;
       break;
@@ -164,11 +164,11 @@ static int check_short_batch_init(size_t caller_size) {
   }
   memset(storage, 0xa5, caller_size + CANARY_BYTES);
 
-  gpuxtb_batch_t* batch = (gpuxtb_batch_t*)storage;
-  const gpuxtb_status_t status = gpuxtb_batch_init(batch, caller_size);
-  int ok = status == GPUXTB_STATUS_SUCCESS && batch->struct_size == caller_size &&
-           batch->api_version == GPUXTB_API_VERSION;
-  for (size_t index = GPUXTB_BATCH_V1_SIZE; ok && index < caller_size; ++index) {
+  xtbloom_batch_t* batch = (xtbloom_batch_t*)storage;
+  const xtbloom_status_t status = xtbloom_batch_init(batch, caller_size);
+  int ok = status == XTBLOOM_STATUS_SUCCESS && batch->struct_size == caller_size &&
+           batch->api_version == XTBLOOM_API_VERSION;
+  for (size_t index = XTBLOOM_BATCH_V1_SIZE; ok && index < caller_size; ++index) {
     ok = storage[index] == 0;
   }
   for (size_t index = caller_size; ok && index < caller_size + CANARY_BYTES; ++index) {
@@ -186,11 +186,11 @@ static int check_short_batch_result_init(size_t caller_size) {
   }
   memset(storage, 0xa5, caller_size + CANARY_BYTES);
 
-  gpuxtb_batch_result_t* result = (gpuxtb_batch_result_t*)storage;
-  const gpuxtb_status_t status = gpuxtb_batch_result_init(result, caller_size);
-  int ok = status == GPUXTB_STATUS_SUCCESS && result->struct_size == caller_size &&
-           result->api_version == GPUXTB_API_VERSION;
-  for (size_t index = GPUXTB_BATCH_RESULT_V1_SIZE; ok && index < caller_size; ++index) {
+  xtbloom_batch_result_t* result = (xtbloom_batch_result_t*)storage;
+  const xtbloom_status_t status = xtbloom_batch_result_init(result, caller_size);
+  int ok = status == XTBLOOM_STATUS_SUCCESS && result->struct_size == caller_size &&
+           result->api_version == XTBLOOM_API_VERSION;
+  for (size_t index = XTBLOOM_BATCH_RESULT_V1_SIZE; ok && index < caller_size; ++index) {
     ok = storage[index] == 0;
   }
   for (size_t index = caller_size; ok && index < caller_size + CANARY_BYTES; ++index) {
@@ -205,19 +205,19 @@ static int check_short_batch_result_init(size_t caller_size) {
  * plan tests; here we only prove the descriptor initializes and rejects short
  * structs). */
 static int check_workspace_query_init(void) {
-  gpuxtb_workspace_query_t query;
-  if (gpuxtb_workspace_query_init(&query, sizeof(query)) != GPUXTB_STATUS_SUCCESS) {
+  xtbloom_workspace_query_t query;
+  if (xtbloom_workspace_query_init(&query, sizeof(query)) != XTBLOOM_STATUS_SUCCESS) {
     return 0;
   }
-  if (query.struct_size != GPUXTB_WORKSPACE_QUERY_V1_SIZE ||
-      query.api_version != GPUXTB_API_VERSION || query.compute_flags != 0 ||
+  if (query.struct_size != XTBLOOM_WORKSPACE_QUERY_V1_SIZE ||
+      query.api_version != XTBLOOM_API_VERSION || query.compute_flags != 0 ||
       query.host_required_bytes != 0u || query.host_required_alignment != 0u ||
       query.device_required_bytes != 0u || query.device_required_alignment != 0u ||
       query.reserved != 0u || query.reserved_v2 != 0u) {
     return 0;
   }
-  if (gpuxtb_workspace_query_init(&query, GPUXTB_WORKSPACE_QUERY_V1_SIZE - 1) !=
-      GPUXTB_STATUS_INVALID_ARGUMENT) {
+  if (xtbloom_workspace_query_init(&query, XTBLOOM_WORKSPACE_QUERY_V1_SIZE - 1) !=
+      XTBLOOM_STATUS_INVALID_ARGUMENT) {
     return 0;
   }
   return 1;
@@ -228,62 +228,62 @@ static int check_workspace_query_init(void) {
  * ABI-v1 prefix must still initialize without touching caller bytes it does
  * not own. */
 static int check_batch_result_suffix_init(void) {
-  gpuxtb_batch_t batch;
-  if (gpuxtb_batch_init(&batch, sizeof(batch)) != GPUXTB_STATUS_SUCCESS) {
+  xtbloom_batch_t batch;
+  if (xtbloom_batch_init(&batch, sizeof(batch)) != XTBLOOM_STATUS_SUCCESS) {
     return 0;
   }
-  if (batch.struct_size != GPUXTB_BATCH_V3_SIZE || batch.api_version != GPUXTB_API_VERSION ||
+  if (batch.struct_size != XTBLOOM_BATCH_V3_SIZE || batch.api_version != XTBLOOM_API_VERSION ||
       batch.total_interactions != 0 || batch.interaction_descriptors.data != NULL ||
       batch.interaction_payload.data != NULL) {
     return 0;
   }
-  if (!check_short_batch_init(GPUXTB_BATCH_V1_SIZE) ||
-      !check_short_batch_init(GPUXTB_BATCH_V2_SIZE) ||
-      !check_short_batch_init(GPUXTB_BATCH_V3_SIZE - 1)) {
+  if (!check_short_batch_init(XTBLOOM_BATCH_V1_SIZE) ||
+      !check_short_batch_init(XTBLOOM_BATCH_V2_SIZE) ||
+      !check_short_batch_init(XTBLOOM_BATCH_V3_SIZE - 1)) {
     return 0;
   }
 
-  gpuxtb_batch_result_t result;
-  if (gpuxtb_batch_result_init(&result, sizeof(result)) != GPUXTB_STATUS_SUCCESS) {
+  xtbloom_batch_result_t result;
+  if (xtbloom_batch_result_init(&result, sizeof(result)) != XTBLOOM_STATUS_SUCCESS) {
     return 0;
   }
-  if (result.struct_size != GPUXTB_BATCH_RESULT_V2_SIZE ||
-      result.api_version != GPUXTB_API_VERSION || result.dipole_moments.data != NULL ||
+  if (result.struct_size != XTBLOOM_BATCH_RESULT_V2_SIZE ||
+      result.api_version != XTBLOOM_API_VERSION || result.dipole_moments.data != NULL ||
       result.quadrupole_moments.data != NULL || result.wiberg_orders.data != NULL ||
       result.spin_populations.data != NULL) {
     return 0;
   }
-  if (!check_short_batch_result_init(GPUXTB_BATCH_RESULT_V1_SIZE) ||
-      !check_short_batch_result_init(GPUXTB_BATCH_RESULT_V2_SIZE - 1)) {
+  if (!check_short_batch_result_init(XTBLOOM_BATCH_RESULT_V1_SIZE) ||
+      !check_short_batch_result_init(XTBLOOM_BATCH_RESULT_V2_SIZE - 1)) {
     return 0;
   }
   return 1;
 }
 
 int main(void) {
-  if (sizeof(gpuxtb_status_t) != sizeof(int32_t) || sizeof(gpuxtb_backend_t) != sizeof(int32_t) ||
-      sizeof(gpuxtb_memory_space_t) != sizeof(int32_t) ||
-      sizeof(gpuxtb_model_t) != sizeof(int32_t) ||
-      sizeof(gpuxtb_scc_start_mode_t) != sizeof(int32_t) ||
-      sizeof(gpuxtb_compute_flag_t) != sizeof(int32_t) ||
-      sizeof(gpuxtb_result_flag_t) != sizeof(int32_t) ||
-      sizeof(gpuxtb_interaction_type_t) != sizeof(int32_t)) {
+  if (sizeof(xtbloom_status_t) != sizeof(int32_t) || sizeof(xtbloom_backend_t) != sizeof(int32_t) ||
+      sizeof(xtbloom_memory_space_t) != sizeof(int32_t) ||
+      sizeof(xtbloom_model_t) != sizeof(int32_t) ||
+      sizeof(xtbloom_scc_start_mode_t) != sizeof(int32_t) ||
+      sizeof(xtbloom_compute_flag_t) != sizeof(int32_t) ||
+      sizeof(xtbloom_result_flag_t) != sizeof(int32_t) ||
+      sizeof(xtbloom_interaction_type_t) != sizeof(int32_t)) {
     fprintf(stderr, "public ABI tags and flags must all be 32-bit\n");
     return 1;
   }
 
-  gpuxtb_compute_options_t compute_options;
-  if (gpuxtb_compute_options_init(&compute_options, sizeof(compute_options)) !=
-          GPUXTB_STATUS_SUCCESS ||
-      compute_options.struct_size != GPUXTB_COMPUTE_OPTIONS_V2_SIZE ||
-      compute_options.electronic_temperature != GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE ||
-      compute_options.scc_start_mode != GPUXTB_SCC_START_FRESH ||
+  xtbloom_compute_options_t compute_options;
+  if (xtbloom_compute_options_init(&compute_options, sizeof(compute_options)) !=
+          XTBLOOM_STATUS_SUCCESS ||
+      compute_options.struct_size != XTBLOOM_COMPUTE_OPTIONS_V2_SIZE ||
+      compute_options.electronic_temperature != XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE ||
+      compute_options.scc_start_mode != XTBLOOM_SCC_START_FRESH ||
       compute_options.reserved_v2 != 0) {
     fprintf(stderr, "ABI-v2 compute-options defaults are incorrect\n");
     return 2;
   }
-  if (!check_short_compute_options_init(GPUXTB_COMPUTE_OPTIONS_V1_SIZE) ||
-      !check_short_compute_options_init(GPUXTB_COMPUTE_OPTIONS_V2_SIZE - 1)) {
+  if (!check_short_compute_options_init(XTBLOOM_COMPUTE_OPTIONS_V1_SIZE) ||
+      !check_short_compute_options_init(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE - 1)) {
     fprintf(stderr, "short compute-options initialization wrote beyond the caller allocation\n");
     return 3;
   }
@@ -296,33 +296,33 @@ int main(void) {
     return 5;
   }
 
-  gpuxtb_context_options_t options;
-  if (gpuxtb_context_options_init(&options, sizeof(options)) != GPUXTB_STATUS_SUCCESS) {
-    fprintf(stderr, "options initialization failed: %s\n", gpuxtb_get_last_error());
+  xtbloom_context_options_t options;
+  if (xtbloom_context_options_init(&options, sizeof(options)) != XTBLOOM_STATUS_SUCCESS) {
+    fprintf(stderr, "options initialization failed: %s\n", xtbloom_get_last_error());
     return 4;
   }
-  options.backend = GPUXTB_BACKEND_CPU;
+  options.backend = XTBLOOM_BACKEND_CPU;
 
-  gpuxtb_context_t* context = NULL;
-  gpuxtb_status_t status = gpuxtb_context_create(&options, &context);
-  if (status != GPUXTB_STATUS_SUCCESS || context == NULL) {
-    fprintf(stderr, "context creation failed: %s\n", gpuxtb_get_last_error());
+  xtbloom_context_t* context = NULL;
+  xtbloom_status_t status = xtbloom_context_create(&options, &context);
+  if (status != XTBLOOM_STATUS_SUCCESS || context == NULL) {
+    fprintf(stderr, "context creation failed: %s\n", xtbloom_get_last_error());
     return 5;
   }
-  if (gpuxtb_context_get_backend(context) != GPUXTB_BACKEND_CPU) {
+  if (xtbloom_context_get_backend(context) != XTBLOOM_BACKEND_CPU) {
     fprintf(stderr, "explicit CPU backend was not selected\n");
     return 6;
   }
-  if (strcmp(gpuxtb_version_string(), "0.1.0") != 0) {
+  if (strcmp(xtbloom_version_string(), "0.1.0") != 0) {
     fprintf(stderr, "unexpected version string\n");
     return 7;
   }
-  if (strcmp(gpuxtb_status_string(GPUXTB_STATUS_SCC_NOT_CONVERGED), "SCC not converged") != 0 ||
-      strcmp(gpuxtb_status_string(GPUXTB_STATUS_EIGENSOLVER_FAILED), "eigensolver failed") != 0) {
+  if (strcmp(xtbloom_status_string(XTBLOOM_STATUS_SCC_NOT_CONVERGED), "SCC not converged") != 0 ||
+      strcmp(xtbloom_status_string(XTBLOOM_STATUS_EIGENSOLVER_FAILED), "eigensolver failed") != 0) {
     fprintf(stderr, "per-system failure status strings are not stable\n");
     return 8;
   }
 
-  gpuxtb_context_destroy(context);
+  xtbloom_context_destroy(context);
   return 0;
 }

@@ -1,16 +1,16 @@
-#ifndef GPUXTB_RUNTIME_GFN2_CUDA_EXECUTION_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_RUNTIME_GFN2_CUDA_EXECUTION_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_RUNTIME_GFN2_CUDA_EXECUTION_HPP
+#define XTBLOOM_RUNTIME_GFN2_CUDA_EXECUTION_HPP
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail {
+namespace xtbloom::detail {
 
 /*
  * Opaque identity for one runtime-owned numerical leaf.
@@ -197,13 +197,13 @@ enum class Gfn2CudaSccStartMode : std::uint32_t {
  * factor, and committed generation.
  */
 struct Gfn2CudaNumericalInputView {
-  gpuxtb_const_buffer_t positions{};
-  gpuxtb_const_buffer_t point_charge_positions{};
-  gpuxtb_const_buffer_t point_charge_values{};
-  gpuxtb_const_buffer_t point_charge_gammas{};
-  gpuxtb_const_buffer_t atomic_potential_shifts{};
-  gpuxtb_const_buffer_t charge_response_matrix{};
-  gpuxtb_const_buffer_t requested_mask{};
+  xtbloom_const_buffer_t positions{};
+  xtbloom_const_buffer_t point_charge_positions{};
+  xtbloom_const_buffer_t point_charge_values{};
+  xtbloom_const_buffer_t point_charge_gammas{};
+  xtbloom_const_buffer_t atomic_potential_shifts{};
+  xtbloom_const_buffer_t charge_response_matrix{};
+  xtbloom_const_buffer_t requested_mask{};
 };
 
 /*
@@ -231,21 +231,21 @@ class Gfn2CudaExecutionCache {
   Gfn2CudaExecutionCache(const Gfn2CudaExecutionCache&) = delete;
   Gfn2CudaExecutionCache& operator=(const Gfn2CudaExecutionCache&) = delete;
 
-  [[nodiscard]] gpuxtb_status_t prepare_host(const gpuxtb_batch_t& batch,
-                                             const gpuxtb_compute_options_t& options, bool& reused,
-                                             std::string& error);
+  [[nodiscard]] xtbloom_status_t prepare_host(const xtbloom_batch_t& batch,
+                                              const xtbloom_compute_options_t& options,
+                                              bool& reused, std::string& error);
 
   /* Prepare a plan-owned runtime from topology metadata without reading the
    * caller's numerical buffers. This permits device-resident geometry during
    * plan creation; the first compute refreshes the prepared seed from the real
    * descriptor before executing or publishing results. */
-  [[nodiscard]] gpuxtb_status_t prepare_topology_only(const gpuxtb_batch_t& batch,
-                                                      const gpuxtb_compute_options_t& options,
-                                                      std::string& error);
+  [[nodiscard]] xtbloom_status_t prepare_topology_only(const xtbloom_batch_t& batch,
+                                                       const xtbloom_compute_options_t& options,
+                                                       std::string& error);
 
   /* Enqueue one allocation-free fixed-topology numerical transaction. */
-  [[nodiscard]] gpuxtb_status_t refresh_numerical_async(const Gfn2CudaNumericalInputView& input,
-                                                        std::string& error);
+  [[nodiscard]] xtbloom_status_t refresh_numerical_async(const Gfn2CudaNumericalInputView& input,
+                                                         std::string& error);
 
   /*
    * Enqueue SCC through internal result publication on the context stream.
@@ -256,24 +256,22 @@ class Gfn2CudaExecutionCache {
    * still resets the driver-visible terminal trace for the new inference
    * attempt.
    */
-  [[nodiscard]] gpuxtb_status_t execute_inference_async(Gfn2CudaSccStartMode mode,
-                                                        std::string& error);
+  [[nodiscard]] xtbloom_status_t execute_inference_async(Gfn2CudaSccStartMode mode,
+                                                         std::string& error);
 
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] Gfn2CudaExecutionIdentity identity() const noexcept;
 
  private:
-  friend gpuxtb_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache,
-                                                           const gpuxtb_batch_t& batch,
-                                                           const gpuxtb_compute_options_t& options,
-                                                           gpuxtb_batch_result_t& result,
-                                                           bool require_prepared_topology,
-                                                           std::string& error);
-  friend gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
-                                                      const gpuxtb_batch_t& batch,
-                                                      const gpuxtb_compute_options_t& options,
-                                                      gpuxtb_batch_result_t& result,
-                                                      std::string& error);
+  friend xtbloom_status_t execute_restricted_gfn2_cuda_impl(
+      Gfn2CudaExecutionCache& cache, const xtbloom_batch_t& batch,
+      const xtbloom_compute_options_t& options, xtbloom_batch_result_t& result,
+      bool require_prepared_topology, std::string& error);
+  friend xtbloom_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
+                                                       const xtbloom_batch_t& batch,
+                                                       const xtbloom_compute_options_t& options,
+                                                       xtbloom_batch_result_t& result,
+                                                       std::string& error);
 
   struct Impl;
   std::unique_ptr<Impl> impl_;
@@ -289,20 +287,18 @@ class Gfn2CudaExecutionCache {
  * separate exit boundary and may fail before or after output commit, as
  * documented by the public API.
  */
-[[nodiscard]] gpuxtb_status_t execute_restricted_gfn2_cuda(Gfn2CudaExecutionCache& cache,
-                                                           const gpuxtb_batch_t& batch,
-                                                           const gpuxtb_compute_options_t& options,
-                                                           gpuxtb_batch_result_t& result,
-                                                           std::string& error);
+[[nodiscard]] xtbloom_status_t execute_restricted_gfn2_cuda(
+    Gfn2CudaExecutionCache& cache, const xtbloom_batch_t& batch,
+    const xtbloom_compute_options_t& options, xtbloom_batch_result_t& result, std::string& error);
 
 /* Plan-owned variant of the public transaction. It uses the same pointer and
- * canonical topology staging as gpuxtb_compute, but rejects a topology
+ * canonical topology staging as xtbloom_compute, but rejects a topology
  * candidate before numerical refresh instead of rebuilding the prepared
  * runtime. This is the fixed-topology corruption gate for device descriptors. */
-[[nodiscard]] gpuxtb_status_t execute_restricted_gfn2_cuda_plan(
-    Gfn2CudaExecutionCache& cache, const gpuxtb_batch_t& batch,
-    const gpuxtb_compute_options_t& options, gpuxtb_batch_result_t& result, std::string& error);
+[[nodiscard]] xtbloom_status_t execute_restricted_gfn2_cuda_plan(
+    Gfn2CudaExecutionCache& cache, const xtbloom_batch_t& batch,
+    const xtbloom_compute_options_t& options, xtbloom_batch_result_t& result, std::string& error);
 
-}  // namespace gpuxtb::detail
+}  // namespace xtbloom::detail
 
-#endif  // GPUXTB_RUNTIME_GFN2_CUDA_EXECUTION_HPP
+#endif  // XTBLOOM_RUNTIME_GFN2_CUDA_EXECUTION_HPP

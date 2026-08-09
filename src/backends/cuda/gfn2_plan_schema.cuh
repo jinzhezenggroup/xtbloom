@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_PLAN_SCHEMA_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_PLAN_SCHEMA_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_PLAN_SCHEMA_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_PLAN_SCHEMA_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -9,7 +9,7 @@
 
 #include "backends/common/gfn2_plan_schema.hpp"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /*
  * Enqueue complete semantic validation of device-resident offsets and maps.
@@ -102,6 +102,6 @@ cudaError_t bind_gfn2_element_identity_projection_cuda(
     const std::int32_t* device_atomic_numbers,
     Gfn2ElementIdentityProjectionView& device_binding) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_PLAN_SCHEMA_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_PLAN_SCHEMA_CUH

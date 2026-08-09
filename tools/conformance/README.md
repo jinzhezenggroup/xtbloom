@@ -1,17 +1,17 @@
 # GFN2-xTB conformance tools
 
-The corpus is deliberately independent of the gpuxtb implementation. Four
+The corpus is deliberately independent of the xTBloom implementation. Four
 closed-shell gas-phase cases use a pinned live tblite calculation as their
 primary oracle; the open-shell OH case and three QM/MM cases use pinned xTB
 6.7.1. Both command lines explicitly set `--acc 0.0001`: the looser CLI
-defaults can leave SCC charge and force residuals larger than gpuxtb's primary
+defaults can leave SCC charge and force residuals larger than xTBloom's primary
 `5e-7` acceptance threshold. Coordinates, energies, gradients, and forces use
 atomic units; forces are stored explicitly as `-gradient`.
 
 Verify that the committed files still match the manifest:
 
 ```sh
-python3 tools/conformance/gpuxtb_conformance.py check
+python3 tools/conformance/xtbloom_conformance.py check
 ```
 
 The snapshot importer remains available to audit the historical validation
@@ -19,7 +19,7 @@ inputs at the pinned tblite source revision. Snapshot outputs are not the
 primary goldens because their original convergence setting was not recorded:
 
 ```sh
-python3 tools/conformance/gpuxtb_conformance.py import-tblite-snapshot \
+python3 tools/conformance/xtbloom_conformance.py import-tblite-snapshot \
   --source-root /path/to/tblite
 ```
 
@@ -30,9 +30,9 @@ stores the reviewed accuracy in provenance. Output goes to a separate
 directory so it cannot silently replace reviewed goldens:
 
 ```sh
-python3 tools/conformance/gpuxtb_conformance.py generate \
+python3 tools/conformance/xtbloom_conformance.py generate \
   --executable /path/to/tblite --output-dir build/conformance/tblite
-python3 tools/conformance/gpuxtb_conformance.py compare \
+python3 tools/conformance/xtbloom_conformance.py compare \
   --actual-dir build/conformance/tblite
 ```
 
@@ -49,9 +49,9 @@ the oracle pinned in the manifest. Its command and provenance use the same
 explicit `--acc 0.0001` contract as tblite:
 
 ```sh
-python3 tools/conformance/gpuxtb_conformance.py generate-xtb \
+python3 tools/conformance/xtbloom_conformance.py generate-xtb \
   --executable /path/to/xtb --output-dir build/conformance/xtb
-python3 tools/conformance/gpuxtb_conformance.py compare \
+python3 tools/conformance/xtbloom_conformance.py compare \
   --actual-dir build/conformance/xtb
 ```
 
@@ -65,7 +65,7 @@ numbers and verifies every gamma against the pinned GFN2 hardness table.
 
 The live xTB runner validates that document before materializing isolated
 `coord`, `pcharge`, and `xcontrol` files with schema
-`gpuxtb-xtb-pcem-cli-v1`. The exact command names those derived files rather
+`xtbloom-xtb-pcem-cli-v1`. The exact command names those derived files rather
 than pretending that xTB consumes the JSON directly. The machine-readable
 input is copied verbatim into its golden; the manifest protects its file hash,
 and provenance records the JSON hash plus all three materialized-file hashes.
@@ -83,7 +83,7 @@ point charges.  The latter is stored with both element-derived H/O hardnesses
 and the `gamma=999` point-charge limit.  Regenerate only these cases with:
 
 ```bash
-python3 tools/conformance/gpuxtb_conformance.py generate-xtb \
+python3 tools/conformance/xtbloom_conformance.py generate-xtb \
   --executable /path/to/xtb --output-dir build/conformance/xtb-qmmm \
   --case water_one_pc_gamma999 \
   --case water_dimer_6pc_hardness \
@@ -93,15 +93,15 @@ python3 tools/conformance/gpuxtb_conformance.py generate-xtb \
 When a generated result and committed golden explicitly identify different
 reference engines, `compare` uses the manifest's separate cross-engine force
 tolerance. This preserves the live tblite/xTB diagnostic without weakening the
-tighter primary gate applied to gpuxtb and each case's designated oracle.
+tighter primary gate applied to xTBloom and each case's designated oracle.
 Explicit `--case` selections may use a non-primary live engine for this check;
 for example, an xTB cross-check of the tblite-primary ketene case is:
 
 ```sh
-python3 tools/conformance/gpuxtb_conformance.py generate-xtb \
+python3 tools/conformance/xtbloom_conformance.py generate-xtb \
   --executable /path/to/xtb --output-dir build/conformance/xtb-cross \
   --case ketene
-python3 tools/conformance/gpuxtb_conformance.py compare \
+python3 tools/conformance/xtbloom_conformance.py compare \
   --actual-dir build/conformance/xtb-cross --case ketene
 ```
 
@@ -122,8 +122,8 @@ artifact, so the corpus validates total QM+PC force conservation at a tolerance
 consistent with that text precision.
 
 `compare` also accepts raw tblite JSON (`energy` plus `gradient`) and flat
-gpuxtb-style JSON. The latter must contain every property required by the
-selected case's gpuxtb oracle-property set; ordinary cases therefore require
+xTBloom-style JSON. The latter must contain every property required by the
+selected case's xTBloom oracle-property set; ordinary cases therefore require
 `energy_hartree` plus `forces_hartree_per_bohr`, while a documented
 diagnostic-only force may be omitted. SCC-gated cases additionally require
 `partial_charges_e`, `atomic_dipoles_e_bohr`, and
@@ -140,26 +140,26 @@ through the ABI-v2 `spin_channels` suffix:
 
 ```bash
 env LD_LIBRARY_PATH=/path/to/mkl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} \
-  python3 tools/conformance/gpuxtb_public_api.py \
-    --library build/libgpuxtb.so --backend cpu --memory-mode host \
-    --actual-dir build/conformance/gpuxtb-public
+  python3 tools/conformance/xtbloom_public_api.py \
+    --library build/libxtbloom.so --backend cpu --memory-mode host \
+    --actual-dir build/conformance/xtbloom-public
 
 srun --gres=gpu:1 env \
   LD_LIBRARY_PATH=/path/to/mkl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} \
-  python3 tools/conformance/gpuxtb_public_api.py \
-    --library build/libgpuxtb.so --backend cuda --memory-mode device \
-    --actual-dir build/conformance/gpuxtb-public
+  python3 tools/conformance/xtbloom_public_api.py \
+    --library build/libxtbloom.so --backend cuda --memory-mode device \
+    --actual-dir build/conformance/xtbloom-public
 
 srun --gres=gpu:1 env \
   LD_LIBRARY_PATH=/path/to/mkl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} \
-  python3 tools/conformance/gpuxtb_public_api.py \
-    --library build/libgpuxtb.so --backend cuda --memory-mode mixed \
-    --actual-dir build/conformance/gpuxtb-public
+  python3 tools/conformance/xtbloom_public_api.py \
+    --library build/libxtbloom.so --backend cuda --memory-mode mixed \
+    --actual-dir build/conformance/xtbloom-public
 ```
 
 Actual JSON is written before comparison. The primary manifest tolerances are
 used unchanged. Energy and QM forces are gated when named by each case's
-gpuxtb oracle-property set; QM/MM goldens also gate atomic charges and
+xTBloom oracle-property set; QM/MM goldens also gate atomic charges and
 point-charge forces. `oh_radical` uses the standard
 shared-orbital (`spin_channels=1`) xTB semantics and gates energy, force, and
 atom-resolved charges on both backends. Spin-polarized (`spin_channels=2`)
@@ -169,15 +169,15 @@ are published for requested CPU calculations but are not yet part of the
 golden comparison; atomic dipoles and quadrupoles likewise remain diagnostic
 oracle state rather than public conformance outputs.
 
-Case-level `gpuxtb_backends` metadata keeps interactions on only the released
+Case-level `xtbloom_backends` metadata keeps interactions on only the released
 public backends. The `water_efield` pilot is CPU-only until #237 P3 implements
 CUDA interaction execution, so CUDA host/device/mixed batches continue to run
 the eight previously supported cases instead of failing the whole ragged call
 with `NOT_IMPLEMENTED`. Its pinned tblite 0.7.0 energy remains an independent
 oracle. The tblite analytic field gradient uses `+E` per atom instead of the
 energy derivative `+q_i E`; that force array remains in the canonical golden
-as diagnostic provenance but is excluded from gpuxtb oracle comparison.
-`gpuxtb_invariants.py` central differences of the reported public energy are
+as diagnostic provenance but is excluded from xTBloom oracle comparison.
+`xtbloom_invariants.py` central differences of the reported public energy are
 the mandatory force evidence for this case.
 
 `--memory-mode device` places every nonempty input and output descriptor in
@@ -193,16 +193,16 @@ the entry CUDA device. CPU inference accepts only `--memory-mode host`.
 The manifest records absolute (`atol`, `rtol = 0`) tolerances for total energy,
 analytic forces, the SCC state (atomic charges, dipoles, quadrupoles), and
 external point-charge forces, each with a property-specific `justification`
-naming the observed gpuxtb-to-oracle margin on the committed corpus. The
+naming the observed xTBloom-to-oracle margin on the committed corpus. The
 thresholds are absolute rather than relative because the corpus intentionally
 mixes charged anions, tiny near-zero systems, and large energies where a
 relative scale would grant unphysical slack. Behavior gates:
 
-- Every property named by a case's gpuxtb oracle-property set must match the
+- Every property named by a case's xTBloom oracle-property set must match the
   same pinned live oracle to its own threshold; cases without that metadata
   retain the complete default property set. The cross-engine
   `cross_engine_tolerances` block is used only when both compared documents
-  explicitly identify distinct independent reference engines; gpuxtb results
+  explicitly identify distinct independent reference engines; xTBloom results
   always use the primary tolerances.
 - For cases released on both backends, CPU and CUDA must both satisfy the
   primary energy, forces, and charges thresholds (5e-7 each in atomic units),
@@ -219,7 +219,7 @@ relative scale would grant unphysical slack. Behavior gates:
 
 ## Invariance, conservation, and batch-consistency gates
 
-`gpuxtb_invariants.py` runs the committed corpus through the same public C ABI
+`xtbloom_invariants.py` runs the committed corpus through the same public C ABI
 path as the golden runner and checks the exact symmetries an isolated finite
 GFN2-xTB system must satisfy. These gates complement, and never replace, golden
 comparison: no optimized implementation is accepted solely on agreement with
@@ -231,11 +231,11 @@ orders of magnitude above the gates (for example a translation break shifts
 every force component by its full value).
 
 ```bash
-python3 tools/conformance/gpuxtb_invariants.py \
-  --library build/libgpuxtb.so --backend cpu --memory-mode host
+python3 tools/conformance/xtbloom_invariants.py \
+  --library build/libxtbloom.so --backend cpu --memory-mode host
 
-srun --gres=gpu:1 python3 tools/conformance/gpuxtb_invariants.py \
-  --library build/libgpuxtb.so --backend cuda --memory-mode device
+srun --gres=gpu:1 python3 tools/conformance/xtbloom_invariants.py \
+  --library build/libxtbloom.so --backend cuda --memory-mode device
 ```
 
 The gates cover:
@@ -277,12 +277,12 @@ makes the tool exit nonzero.
 the separated `Me4N+ / Cl-` ion pair (18 atoms), copied verbatim from
 grimme-lab/xtb issue #678. It is intentionally **not** a manifest golden: at
 300 K the default Johnson modified-Broyden policy (history 8, damping 0.4)
-does not converge under gpuxtb or upstream xTB within 250 iterations, so there
+does not converge under xTBloom or upstream xTB within 250 iterations, so there
 is no oracle golden to compare against. The file is instead a machine-readable
 fixture whose provenance, baseline status matrix, per-iteration scalar
 diagnostics, bounded/coarse path matrix, and mixer-policy sweep are pinned by
 `data/conformance/evidence/tmacl-temperature-continuation/manifest.json`.
-The native CTest gate `gpuxtb.gfn2.scc_temperature_continuation`
+The native CTest gate `xtbloom.gfn2.scc_temperature_continuation`
 (`tests/scc_temperature_continuation_test.cpp`) drives the internal CPU GFN2
 SCC driver, checks the exact baseline counts and executes the complete mixer
 policy grid, requiring reviewed 300 K policies plus terminal q/d/Q and density

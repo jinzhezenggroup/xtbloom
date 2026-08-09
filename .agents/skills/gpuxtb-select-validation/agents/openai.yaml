@@ -1,4 +1,0 @@
-interface:
-  display_name: "Select gpuxtb Validation"
-  short_description: "Choose complete tests from the changed surface"
-  default_prompt: "Use $gpuxtb-select-validation to build and run the right validation matrix for this gpuxtb change."

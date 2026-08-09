@@ -1,29 +1,29 @@
 # User guide
 
-gpuxtb is a single-point GFN2-xTB inference library. It is most useful when an
+xTBloom is a single-point GFN2-xTB inference library. It is most useful when an
 application needs many independent molecules, reusable native state, direct
 CUDA integration, or a stable C deployment boundary.
 
-## Where gpuxtb is stronger
+## Where xTBloom is stronger
 
-gpuxtb deliberately specializes in embedded, high-throughput inference. The
+xTBloom deliberately specializes in embedded, high-throughput inference. The
 following advantages are public contracts with regression or archived evidence,
 not expectations that callers must reconstruct from implementation details.
 
-| Production concern | gpuxtb contract | Comparison evidence |
+| Production concern | xTBloom contract | Comparison evidence |
 | --- | --- | --- |
-| Failure containment | A per-system SCC or eigensolver failure is local to one ragged-batch member. Healthy peers remain valid; every requested floating-point slice for the failed member is quiet NaN, with status and iteration diagnostics. | [dxtb #223](https://github.com/grimme-lab/dxtb/issues/223) shows how unconverged default SCF produced batch-dependent apparent energies until stronger settings were supplied. gpuxtb instead makes nonconvergence explicit and preserves peers in [Python](../../python/tests/test_batch.py) and [native](../../tests/cpu_public_inference_test.cpp) public-API tests. |
-| Degenerate finite-temperature occupations | Exactly degenerate orbitals receive symmetric binary64 occupations. A target between representable symmetric states uses the nearest state under a documented electron-count bound instead of failing unpredictably. | The [three-hydrogen comparison](../developer-guide/architecture.md#cross-engine-degenerate-occupation-evidence) records finite gpuxtb results alongside xTB 6.7.1, tblite 0.6/0.7, and dxtb 0.4 failures or invalid output on integer-charge variants. |
-| QM/MM embedding | Each external point charge has an explicit screening `gamma`; the interaction participates in every SCC iteration, and both QM and point-charge forces are available. A caller-supplied periodic `b + A q` response can participate in the same variational solve. | xTB [#920](https://github.com/grimme-lab/xtb/issues/920) tracks the missing point-charge-hardness setter in its C API. tblite [#22](https://github.com/tblite/tblite/issues/22) tracks external point charges and [#33](https://github.com/tblite/tblite/issues/33) tracks general C interaction bindings. See [QM/MM usage](qmmm.md) for gpuxtb's exact scope. |
-| Temperature-unit safety | The high-level Python API accepts kelvin and converts explicitly to the native `k_B T` Hartree scale. | tblite [#73](https://github.com/tblite/tblite/issues/73) records a real `temperature=300` mistake that meant `300 Eh` and changed an energy from about `-31.716 Eh` to `-31158.785 Eh`. gpuxtb keeps atomic units in the C ABI while making the Python boundary unit explicit. |
-| Reproducible work partitioning | For a fixed backend and configuration, explicit CPU thread counts, repeated fresh calls, and automatic batch slicing are tested for bit-identical results. | xTB [#999](https://github.com/grimme-lab/xtb/issues/999) records thread-count-dependent optimized structures; version 6.7.1 greatly reduced the effect but still reported small differences. gpuxtb's narrower guarantee is enforced by [native thread](../../tests/cpu_public_inference_test.cpp) and [Python batch-slicing](../../python/tests/test_auto_batch.py) tests. |
-| Strict electronic reuse | Native `WARM` consumes only a fully converged compatible checkpoint. A first call or identity mismatch fails atomically and never silently falls back to `FRESH`; high-level Python `warm_start=True` builds a transparent policy on top by retrying that rejection once with `FRESH`. | The [issue #168 evidence](../../benchmarks/evidence/issue-168/2026-08-06-epyc7k62/README.md) covers 360 correctness-qualified samples: 17-18 SCC iterations fell to 2, gpuxtb WARM was 3.09x-4.76x faster than gpuxtb FRESH and 1.09x-1.54x faster than persistent tblite on the measured 32-122 atom alkanes. |
-| Ragged batch throughput | One public call solves a whole ragged batch of distinct molecules on CPU or CUDA; per-system cost collapses well below a serial per-system loop. | The [cross-engine scaling benchmark](index.md#cross-engine-scaling-benchmark) and [issue-13 evidence](../../benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md) show gpuxtb CPU at 62 atoms running 7.6x-8.6x faster than xTB/tblite for 128 systems and 8.9x-10.7x faster for 512 systems. |
+| Failure containment | A per-system SCC or eigensolver failure is local to one ragged-batch member. Healthy peers remain valid; every requested floating-point slice for the failed member is quiet NaN, with status and iteration diagnostics. | [dxtb #223](https://github.com/grimme-lab/dxtb/issues/223) shows how unconverged default SCF produced batch-dependent apparent energies until stronger settings were supplied. xTBloom instead makes nonconvergence explicit and preserves peers in [Python](../../python/tests/test_batch.py) and [native](../../tests/cpu_public_inference_test.cpp) public-API tests. |
+| Degenerate finite-temperature occupations | Exactly degenerate orbitals receive symmetric binary64 occupations. A target between representable symmetric states uses the nearest state under a documented electron-count bound instead of failing unpredictably. | The [three-hydrogen comparison](../developer-guide/architecture.md#cross-engine-degenerate-occupation-evidence) records finite xTBloom results alongside xTB 6.7.1, tblite 0.6/0.7, and dxtb 0.4 failures or invalid output on integer-charge variants. |
+| QM/MM embedding | Each external point charge has an explicit screening `gamma`; the interaction participates in every SCC iteration, and both QM and point-charge forces are available. A caller-supplied periodic `b + A q` response can participate in the same variational solve. | xTB [#920](https://github.com/grimme-lab/xtb/issues/920) tracks the missing point-charge-hardness setter in its C API. tblite [#22](https://github.com/tblite/tblite/issues/22) tracks external point charges and [#33](https://github.com/tblite/tblite/issues/33) tracks general C interaction bindings. See [QM/MM usage](qmmm.md) for xTBloom's exact scope. |
+| Temperature-unit safety | The high-level Python API accepts kelvin and converts explicitly to the native `k_B T` Hartree scale. | tblite [#73](https://github.com/tblite/tblite/issues/73) records a real `temperature=300` mistake that meant `300 Eh` and changed an energy from about `-31.716 Eh` to `-31158.785 Eh`. xTBloom keeps atomic units in the C ABI while making the Python boundary unit explicit. |
+| Reproducible work partitioning | For a fixed backend and configuration, explicit CPU thread counts, repeated fresh calls, and automatic batch slicing are tested for bit-identical results. | xTB [#999](https://github.com/grimme-lab/xtb/issues/999) records thread-count-dependent optimized structures; version 6.7.1 greatly reduced the effect but still reported small differences. xTBloom's narrower guarantee is enforced by [native thread](../../tests/cpu_public_inference_test.cpp) and [Python batch-slicing](../../python/tests/test_auto_batch.py) tests. |
+| Strict electronic reuse | Native `WARM` consumes only a fully converged compatible checkpoint. A first call or identity mismatch fails atomically and never silently falls back to `FRESH`; high-level Python `warm_start=True` builds a transparent policy on top by retrying that rejection once with `FRESH`. | The [issue #168 evidence](../../benchmarks/evidence/issue-168/2026-08-06-epyc7k62/README.md) covers 360 correctness-qualified samples: 17-18 SCC iterations fell to 2, xTBloom WARM was 3.09x-4.76x faster than xTBloom FRESH and 1.09x-1.54x faster than persistent tblite on the measured 32-122 atom alkanes. |
+| Ragged batch throughput | One public call solves a whole ragged batch of distinct molecules on CPU or CUDA; per-system cost collapses well below a serial per-system loop. | The [cross-engine scaling benchmark](index.md#cross-engine-scaling-benchmark) and [issue-13 evidence](../../benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md) show xTBloom CPU at 62 atoms running 7.6x-8.6x faster than xTB/tblite for 128 systems and 8.9x-10.7x faster for 512 systems. |
 
-These are scoped advantages, not a claim that gpuxtb replaces every xTB-family
+These are scoped advantages, not a claim that xTBloom replaces every xTB-family
 package. xTB provides much broader end-user workflows and method coverage;
 tblite provides periodic structures and mature extensibility; dxtb provides
-PyTorch autodiff and response properties. gpuxtb is the stronger fit when the
+PyTorch autodiff and response properties. xTBloom is the stronger fit when the
 priority is a stable native ABI, ragged CPU/CUDA inference, direct device
 buffers, explicit failure semantics, and reproducible reusable state.
 
@@ -33,19 +33,19 @@ buffers, explicit failure semantics, and reproducible reusable state.
 
 The figure compares GFN2-xTB energy + analytic forces from public interfaces
 only. Every multi-system batch contains distinct seeded conformers of one
-alkane stoichiometry. At the common 62-atom coordinate, gpuxtb CPU completes
+alkane stoichiometry. At the common 62-atom coordinate, xTBloom CPU completes
 batch 128 in 182 ms versus 1555 ms for xTB and 1384 ms for tblite; at batch
-512 it takes 1.28 s versus 11.47 s and 13.70 s. gpuxtb CUDA takes 1.15 s at
-the latter coordinate and becomes 1.37x faster than gpuxtb CPU by 122 atoms.
+512 it takes 1.28 s versus 11.47 s and 13.70 s. xTBloom CUDA takes 1.15 s at
+the latter coordinate and becomes 1.37x faster than xTBloom CPU by 122 atoms.
 
-The CPU result measures gpuxtb's intended architecture: one ragged public call
+The CPU result measures xTBloom's intended architecture: one ragged public call
 uses its worker pool across systems, while the compared xTB/tblite public APIs
 are called once per structure. Batch 1 is retained as single-system latency
 context and does not support a universal performance ranking.
 
 | Library | Native convergence controls used |
 | --- | --- |
-| gpuxtb | charge `1e-4`; energy `1e-6`; maximum 500 iterations |
+| xTBloom | charge `1e-4`; energy `1e-6`; maximum 500 iterations |
 | xTB | public accuracy factor `1.0`; maximum 500 iterations |
 | tblite | public accuracy factor `1.0`; maximum 500 iterations |
 | dxtb | `x_atol=1e-4`; `x_atol_max=1e-5`; `f_atol=1e-4`; `force_convergence=true`; maximum 500 iterations |
@@ -56,15 +56,15 @@ shared SCC tolerance. In particular, tblite's default accuracy factor is
 benchmark output gate against a panel-matched clean tblite reference:
 `max_s |Delta E_s| <= 2e-3 Eh` and
 `max_i |Delta F_i| <= 2e-3 Eh/bohr`. This eligibility gate does not replace
-gpuxtb's stricter scientific conformance.
+xTBloom's stricter scientific conformance.
 
-| Panel | gpuxtb | xTB/tblite | dxtb |
+| Panel | xTBloom | xTB/tblite | dxtb |
 | --- | --- | --- | --- |
 | batch 1 | cold `FRESH`; initialization timed | cold; calculator rebuild outside timing | cold; reset timed |
 | batch 128 | WARM after untimed seed | persistent after untimed seed | cold; reset timed |
 | batch 512 | cold `FRESH`; initialization timed | cold; calculator rebuild outside timing | cold; reset timed |
 
-All rows end at host-visible energy and forces. gpuxtb CUDA uses host
+All rows end at host-visible energy and forces. xTBloom CUDA uses host
 descriptors; dxtb CUDA uses persistent device tensors, so the figure does not
 support a direct cross-library CUDA speedup claim. dxtb LU failures and CUDA
 out-of-memory coordinates remain visible as unavailable points.
@@ -79,12 +79,12 @@ for raw samples, exact commands, binary hashes, and limitations.
 
 ### Python
 
-gpuxtb is being prepared for its first PyPI release. Published releases use:
+xTBloom is being prepared for its first PyPI release. Published releases use:
 
 ```console
-python -m pip install gpuxtb
-python -m pip install "gpuxtb[ase,dpdata]"  # optional integrations
-python -m pip install "gpuxtb[cuda12]"      # optional CUDA 12 host libraries
+python -m pip install xtbloom
+python -m pip install "xtbloom[ase,dpdata]"  # optional integrations
+python -m pip install "xtbloom[cuda12]"      # optional CUDA 12 host libraries
 ```
 
 See the [Python guide](python.md) for runtime requirements and examples.
@@ -95,21 +95,21 @@ Build a shared or static native SDK with CMake 3.24 or newer:
 
 ```console
 cmake -S . -B build/release -G Ninja \
-  -DGPUXTB_ENABLE_CUDA=OFF \
+  -DXTBLOOM_ENABLE_CUDA=OFF \
   -DBUILD_SHARED_LIBS=ON \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build/release --parallel
 cmake --install build/release --prefix "$PWD/build/install"
 ```
 
-`GPUXTB_ENABLE_CUDA` accepts `OFF`, `ON`, or `AUTO`. Use `ON` when a CUDA build
+`XTBLOOM_ENABLE_CUDA` accepts `OFF`, `ON`, or `AUTO`. Use `ON` when a CUDA build
 is required; `AUTO` is convenient for local exploration but can legitimately
 produce a CPU-only build when `nvcc` is absent.
 
 CPU inference requires one monolithic LP64 LAPACKE+CBLAS runtime that can be
-opened dynamically. gpuxtb can discover a compatible system OpenBLAS or MKL,
+opened dynamically. xTBloom can discover a compatible system OpenBLAS or MKL,
 or the build can record an absolute provider with
-`GPUXTB_CPU_LINALG_LIBRARY`. The library still loads without that provider,
+`XTBLOOM_CPU_LINALG_LIBRARY`. The library still loads without that provider,
 but CPU eigensolver-backed inference then reports a diagnostic rather than
 silently using an incompatible BLAS.
 
@@ -135,9 +135,9 @@ Helmholtz free energy, including the Fermi-occupation entropy term. `forces`
 is its negative coordinate derivative. Python also exposes `gradient`, which
 is exactly `-forces`.
 
-When periodic `b` or `A` operators are supplied, gpuxtb holds them fixed while
+When periodic `b` or `A` operators are supplied, xTBloom holds them fixed while
 differentiating. The result flag
-`GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES` tells native
+`XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES` tells native
 callers that `db/dR` and `dA/dR` are not included.
 
 ## Backends and memory
@@ -158,10 +158,10 @@ asynchronous public ABI is not currently implemented.
 
 ## Failure behavior
 
-gpuxtb separates request failures from per-system numerical failures.
+xTBloom separates request failures from per-system numerical failures.
 
 - Invalid descriptors, unsupported settings, allocation failures, and other
-  call-level errors return a failing `gpuxtb_status_t`. Before caller-output
+  call-level errors return a failing `xtbloom_status_t`. Before caller-output
   commit, outputs and result flags remain unchanged.
 - SCC nonconvergence or eigensolver failure for one molecule is a data-level
   result. The call succeeds, diagnostics identify the failed molecule, and all
@@ -178,7 +178,7 @@ Only GFN2-xTB is implemented. GFN1-xTB and ROCm are reserved so the ABI can
 grow without reusing numeric tags, but requesting them returns an unsupported
 or not-implemented status.
 
-gpuxtb has no lattice input. Its periodic charge-response API accepts fields
+xTBloom has no lattice input. Its periodic charge-response API accepts fields
 computed by another electrostatics program; it does not make the QM calculation
 periodic by itself. Geometry optimization, molecular dynamics, solvation,
 vibrational analysis, and Hessians belong in calling applications or other xTB

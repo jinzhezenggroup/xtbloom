@@ -27,15 +27,15 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::compose_gfn2_total_energy_cuda;
-using gpuxtb::detail::cuda::Gfn2TotalEnergyComponent;
-using gpuxtb::detail::cuda::Gfn2TotalEnergyDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2TotalEnergyDeviceError;
-using gpuxtb::detail::cuda::Gfn2TotalEnergyDeviceInput;
-using gpuxtb::detail::cuda::Gfn2TotalEnergyDeviceResults;
-using gpuxtb::detail::cuda::Gfn2TotalEnergyDeviceSccState;
-using gpuxtb::detail::cuda::Gfn2TotalEnergyDeviceWorkspace;
-using gpuxtb::detail::cuda::reset_gfn2_total_energy_device_errors_cuda;
+using xtbloom::detail::cuda::compose_gfn2_total_energy_cuda;
+using xtbloom::detail::cuda::Gfn2TotalEnergyComponent;
+using xtbloom::detail::cuda::Gfn2TotalEnergyDeviceBatch;
+using xtbloom::detail::cuda::Gfn2TotalEnergyDeviceError;
+using xtbloom::detail::cuda::Gfn2TotalEnergyDeviceInput;
+using xtbloom::detail::cuda::Gfn2TotalEnergyDeviceResults;
+using xtbloom::detail::cuda::Gfn2TotalEnergyDeviceSccState;
+using xtbloom::detail::cuda::Gfn2TotalEnergyDeviceWorkspace;
+using xtbloom::detail::cuda::reset_gfn2_total_energy_device_errors_cuda;
 
 constexpr std::uint64_t kPlanToken = 0x67f1a1e5ULL;
 constexpr double kSentinel = 12345.5;
@@ -89,7 +89,7 @@ struct HostCase {
   std::vector<double> repulsion;
   std::vector<double> d4_atm;
   std::vector<double> expected;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<std::uint8_t> converged;
 };
 
@@ -124,55 +124,55 @@ bool make_host_case(std::size_t batch_size, bool enable_d4_atm, HostCase& result
   }
   atom_offsets[batch_size] = static_cast<std::int64_t>(total_atoms);
 
-  gpuxtb::detail::gfn2::RepulsionPlan repulsion_plan;
-  if (gpuxtb::detail::gfn2::make_repulsion_plan(static_cast<std::int64_t>(batch_size),
-                                                static_cast<std::int64_t>(total_atoms),
-                                                atom_offsets.data(), atomic_numbers.data(),
-                                                repulsion_plan, error) != GPUXTB_STATUS_SUCCESS) {
+  xtbloom::detail::gfn2::RepulsionPlan repulsion_plan;
+  if (xtbloom::detail::gfn2::make_repulsion_plan(static_cast<std::int64_t>(batch_size),
+                                                 static_cast<std::int64_t>(total_atoms),
+                                                 atom_offsets.data(), atomic_numbers.data(),
+                                                 repulsion_plan, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   result.repulsion.assign(batch_size, 0.0);
-  if (gpuxtb::detail::gfn2::add_repulsion_cpu(repulsion_plan, positions.data(),
-                                              result.repulsion.data(), nullptr,
-                                              error) != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::add_repulsion_cpu(repulsion_plan, positions.data(),
+                                               result.repulsion.data(), nullptr,
+                                               error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
   result.d4_atm.assign(batch_size, 0.0);
   if (enable_d4_atm) {
-    gpuxtb::detail::gfn2::D4Plan d4_plan;
-    if (gpuxtb::detail::gfn2::make_d4_plan(
+    xtbloom::detail::gfn2::D4Plan d4_plan;
+    if (xtbloom::detail::gfn2::make_d4_plan(
             static_cast<std::int64_t>(batch_size), static_cast<std::int64_t>(total_atoms),
-            atom_offsets.data(), atomic_numbers.data(), d4_plan, error) != GPUXTB_STATUS_SUCCESS) {
+            atom_offsets.data(), atomic_numbers.data(), d4_plan, error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     std::vector<std::byte> workspace_storage(d4_plan.workspace_size_bytes() +
-                                             gpuxtb::detail::gfn2::kD4WorkspaceAlignment - 1u);
+                                             xtbloom::detail::gfn2::kD4WorkspaceAlignment - 1u);
     const std::uintptr_t unaligned = reinterpret_cast<std::uintptr_t>(workspace_storage.data());
-    const std::uintptr_t aligned = (unaligned + gpuxtb::detail::gfn2::kD4WorkspaceAlignment - 1u) &
-                                   ~(gpuxtb::detail::gfn2::kD4WorkspaceAlignment - 1u);
-    gpuxtb::detail::gfn2::D4Workspace d4_workspace;
-    if (gpuxtb::detail::gfn2::bind_d4_workspace(d4_plan, reinterpret_cast<void*>(aligned),
-                                                d4_plan.workspace_size_bytes(), d4_workspace,
-                                                error) != GPUXTB_STATUS_SUCCESS) {
+    const std::uintptr_t aligned = (unaligned + xtbloom::detail::gfn2::kD4WorkspaceAlignment - 1u) &
+                                   ~(xtbloom::detail::gfn2::kD4WorkspaceAlignment - 1u);
+    xtbloom::detail::gfn2::D4Workspace d4_workspace;
+    if (xtbloom::detail::gfn2::bind_d4_workspace(d4_plan, reinterpret_cast<void*>(aligned),
+                                                 d4_plan.workspace_size_bytes(), d4_workspace,
+                                                 error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     std::vector<double> pair_data(static_cast<std::size_t>(d4_plan.total_pairs()) *
-                                  gpuxtb::detail::gfn2::kD4PairDataElements);
+                                  xtbloom::detail::gfn2::kD4PairDataElements);
     std::vector<double> coordination(total_atoms);
-    gpuxtb::detail::gfn2::D4GeometryCache cache;
-    if (gpuxtb::detail::gfn2::update_d4_geometry_cache_cpu(
+    xtbloom::detail::gfn2::D4GeometryCache cache;
+    if (xtbloom::detail::gfn2::update_d4_geometry_cache_cpu(
             d4_plan, positions.data(), 1u, pair_data.data(), pair_data.size(), coordination.data(),
-            coordination.size(), d4_workspace, cache, error) != GPUXTB_STATUS_SUCCESS ||
-        gpuxtb::detail::gfn2::evaluate_d4_atm_cpu(d4_plan, cache, result.d4_atm.data(),
-                                                  d4_workspace, error) != GPUXTB_STATUS_SUCCESS) {
+            coordination.size(), d4_workspace, cache, error) != XTBLOOM_STATUS_SUCCESS ||
+        xtbloom::detail::gfn2::evaluate_d4_atm_cpu(d4_plan, cache, result.d4_atm.data(),
+                                                   d4_workspace, error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
   }
 
   result.scc_free_energy.resize(batch_size);
   result.expected.resize(batch_size);
-  result.statuses.assign(batch_size, GPUXTB_STATUS_SUCCESS);
+  result.statuses.assign(batch_size, XTBLOOM_STATUS_SUCCESS);
   result.converged.assign(batch_size, 1u);
   for (std::size_t system = 0; system < batch_size; ++system) {
     result.scc_free_energy[system] =
@@ -238,7 +238,7 @@ struct DeviceCase {
   DeviceBuffer<double> scc_free_energy;
   DeviceBuffer<double> repulsion;
   DeviceBuffer<double> d4_atm;
-  DeviceBuffer<gpuxtb_status_t> statuses;
+  DeviceBuffer<xtbloom_status_t> statuses;
   DeviceBuffer<std::uint8_t> converged;
   DeviceBuffer<double> total_energy;
   DeviceBuffer<std::uint32_t> system_errors;
@@ -298,7 +298,7 @@ int test_terminal_gating_and_peer_failures() {
   host.converged[1] = 0u;
   host.scc_free_energy[1] = std::numeric_limits<double>::quiet_NaN();
   host.converged[2] = 2u;
-  host.statuses[3] = GPUXTB_STATUS_SCC_NOT_CONVERGED;
+  host.statuses[3] = XTBLOOM_STATUS_SCC_NOT_CONVERGED;
   host.scc_free_energy[4] = std::numeric_limits<double>::infinity();
   host.repulsion[5] = std::numeric_limits<double>::quiet_NaN();
   host.d4_atm[6] = -std::numeric_limits<double>::infinity();

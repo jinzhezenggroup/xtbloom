@@ -1,5 +1,5 @@
 #include "model/gfn2/repulsion.hpp"
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstddef>
@@ -9,7 +9,7 @@
 
 #include "data/parameters/gfn2.hpp"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 namespace {
 
 constexpr double kCutoffBohr = 25.0;
@@ -30,29 +30,29 @@ bool representable_geometry_size(std::int64_t atom_count) {
 
 }  // namespace
 
-gpuxtb_status_t make_repulsion_plan(std::int64_t batch_size, std::int64_t total_atoms,
-                                    const std::int64_t* atom_offsets,
-                                    const std::int32_t* atomic_numbers, RepulsionPlan& plan,
-                                    std::string& error) {
+xtbloom_status_t make_repulsion_plan(std::int64_t batch_size, std::int64_t total_atoms,
+                                     const std::int64_t* atom_offsets,
+                                     const std::int32_t* atomic_numbers, RepulsionPlan& plan,
+                                     std::string& error) {
   if (batch_size <= 0 || total_atoms <= 0 || !representable_as_size(batch_size) ||
       !representable_geometry_size(total_atoms) ||
       static_cast<std::uint64_t>(batch_size) >=
           static_cast<std::uint64_t>(std::numeric_limits<std::ptrdiff_t>::max())) {
     error = "repulsion plan requires positive, representable batch and atom counts";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (atom_offsets == nullptr || atomic_numbers == nullptr) {
     error = "repulsion plan offsets and atomic numbers must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (atom_offsets[0] != 0 || atom_offsets[batch_size] != total_atoms) {
     error = "repulsion plan offsets must start at zero and end at total_atoms";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int64_t batch = 0; batch < batch_size; ++batch) {
     if (atom_offsets[batch] > atom_offsets[batch + 1]) {
       error = "repulsion plan offsets must be monotonically nondecreasing";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
 
@@ -72,7 +72,7 @@ gpuxtb_status_t make_repulsion_plan(std::int64_t batch_size, std::int64_t total_
       if (element == nullptr || !(element->arep > 0.0) || !(element->zeff > 0.0) ||
           !std::isfinite(element->arep) || !std::isfinite(element->zeff)) {
         error = "repulsion plan contains an unsupported atomic number or invalid parameter";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
 
       const std::size_t index = static_cast<std::size_t>(atom);
@@ -83,15 +83,15 @@ gpuxtb_status_t make_repulsion_plan(std::int64_t batch_size, std::int64_t total_
 
     plan = std::move(created);
     error.clear();
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
     error = "failed to allocate the GFN2 repulsion plan";
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
-gpuxtb_status_t add_repulsion_cpu(const RepulsionPlan& plan, const double* positions,
-                                  double* energies, double* forces, std::string& error) {
+xtbloom_status_t add_repulsion_cpu(const RepulsionPlan& plan, const double* positions,
+                                   double* energies, double* forces, std::string& error) {
   const auto atom_count = static_cast<std::size_t>(plan.total_atoms);
   if (plan.batch_size <= 0 || plan.total_atoms <= 0 ||
       !representable_geometry_size(plan.total_atoms) ||
@@ -99,28 +99,28 @@ gpuxtb_status_t add_repulsion_cpu(const RepulsionPlan& plan, const double* posit
       plan.sqrt_alpha.size() != atom_count || plan.effective_charge.size() != atom_count ||
       plan.light_element.size() != atom_count) {
     error = "repulsion plan is incomplete or internally inconsistent";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (plan.atom_offsets.front() != 0 || plan.atom_offsets.back() != plan.total_atoms) {
     error = "repulsion plan offsets do not span the stored atoms";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int64_t batch = 0; batch < plan.batch_size; ++batch) {
     const std::int64_t begin = plan.atom_offsets[static_cast<std::size_t>(batch)];
     const std::int64_t end = plan.atom_offsets[static_cast<std::size_t>(batch + 1)];
     if (begin < 0 || begin > end || end > plan.total_atoms) {
       error = "repulsion plan offsets are not a valid ragged partition";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   if (positions == nullptr || energies == nullptr) {
     error = "repulsion positions and energies must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::size_t coordinate = 0; coordinate < atom_count * 3; ++coordinate) {
     if (!std::isfinite(positions[coordinate])) {
       error = "repulsion positions contain NaN or infinity";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
 
@@ -138,7 +138,7 @@ gpuxtb_status_t add_repulsion_cpu(const RepulsionPlan& plan, const double* posit
         const double distance_squared = dx * dx + dy * dy + dz * dz;
         if (distance_squared <= kMinimumDistanceSquared) {
           error = "repulsion is undefined for coincident atoms in one molecule";
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
         }
         if (distance_squared > cutoff_squared) {
           continue;
@@ -174,7 +174,7 @@ gpuxtb_status_t add_repulsion_cpu(const RepulsionPlan& plan, const double* posit
   }
 
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2

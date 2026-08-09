@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_SCC_SETUP_INPUTS_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_SCC_SETUP_INPUTS_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_SCC_SETUP_INPUTS_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_SCC_SETUP_INPUTS_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -25,7 +25,7 @@
 #include "model/gfn2/scc_mixer.hpp"
 #include "model/gfn2/wavefunction.hpp"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /* Exact host array view used at the host/CUDA setup boundary. The owner copies
  * every nonempty view into its pinned packed image during create(), so caller
@@ -147,7 +147,7 @@ enum class Gfn2SccSetupInputsField : std::uint32_t {
 };
 
 struct Gfn2SccSetupInputsDiagnostic {
-  gpuxtb_status_t status = GPUXTB_STATUS_SUCCESS;
+  xtbloom_status_t status = XTBLOOM_STATUS_SUCCESS;
   Gfn2SccSetupInputsError error = Gfn2SccSetupInputsError::kSuccess;
   Gfn2SccSetupInputsField field = Gfn2SccSetupInputsField::kNone;
   std::int64_t index = -1;
@@ -155,7 +155,7 @@ struct Gfn2SccSetupInputsDiagnostic {
   cudaError_t cuda_status = cudaSuccess;
 
   [[nodiscard]] bool success() const noexcept {
-    return status == GPUXTB_STATUS_SUCCESS && error == Gfn2SccSetupInputsError::kSuccess;
+    return status == XTBLOOM_STATUS_SUCCESS && error == Gfn2SccSetupInputsError::kSuccess;
   }
 };
 
@@ -207,6 +207,6 @@ class Gfn2SccSetupInputs {
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_SCC_SETUP_INPUTS_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_SCC_SETUP_INPUTS_CUH

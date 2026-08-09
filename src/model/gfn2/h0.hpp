@@ -1,17 +1,17 @@
-#ifndef GPUXTB_MODEL_GFN2_H0_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_H0_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_H0_HPP
+#define XTBLOOM_MODEL_GFN2_H0_HPP
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/integrals.hpp"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 /*
  * Geometry-independent data for the GFN2 extended-Hueckel core
@@ -49,8 +49,8 @@ struct H0Plan {
  * levels and coordination shifts are converted from their parameter-file eV
  * convention to Hartree while constructing the plan.
  */
-gpuxtb_status_t make_h0_plan(const BasisPlan& basis, const IntegralPlan& integrals,
-                             const std::int32_t* atomic_numbers, H0Plan& plan, std::string& error);
+xtbloom_status_t make_h0_plan(const BasisPlan& basis, const IntegralPlan& integrals,
+                              const std::int32_t* atomic_numbers, H0Plan& plan, std::string& error);
 
 /*
  * Evaluate packed ragged-batch GFN2 core Hamiltonians.
@@ -61,10 +61,10 @@ gpuxtb_status_t make_h0_plan(const BasisPlan& basis, const IntegralPlan& integra
  * arbitrary overlap matrix; using an all-ones matrix exposes the shell-pair
  * H0 scaling factors used by tblite's Hamiltonian tests.
  */
-gpuxtb_status_t evaluate_h0_cpu(const BasisPlan& basis, const IntegralPlan& integrals,
-                                const H0Plan& plan, const double* positions,
-                                const double* coordination_numbers, const double* overlap,
-                                double* hamiltonian, std::string& error);
+xtbloom_status_t evaluate_h0_cpu(const BasisPlan& basis, const IntegralPlan& integrals,
+                                 const H0Plan& plan, const double* positions,
+                                 const double* coordination_numbers, const double* overlap,
+                                 double* hamiltonian, std::string& error);
 
 /*
  * Apply the reverse-mode derivative of evaluate_h0_cpu.
@@ -79,12 +79,12 @@ gpuxtb_status_t evaluate_h0_cpu(const BasisPlan& basis, const IntegralPlan& inte
  * The caller composes dE_doverlap with add_overlap_gradient_cpu and dE_dcn
  * with add_coordination_gradient_cpu. gradients are dE/dR, not forces.
  */
-gpuxtb_status_t add_h0_vjp_cpu(const BasisPlan& basis, const IntegralPlan& integrals,
-                               const H0Plan& plan, const double* positions,
-                               const double* coordination_numbers, const double* overlap,
-                               const double* dE_dhamiltonian, double* dE_doverlap, double* dE_dcn,
-                               double* gradients, std::string& error);
+xtbloom_status_t add_h0_vjp_cpu(const BasisPlan& basis, const IntegralPlan& integrals,
+                                const H0Plan& plan, const double* positions,
+                                const double* coordination_numbers, const double* overlap,
+                                const double* dE_dhamiltonian, double* dE_doverlap, double* dE_dcn,
+                                double* gradients, std::string& error);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_H0_HPP
+#endif  // XTBLOOM_MODEL_GFN2_H0_HPP

@@ -27,27 +27,27 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2PlanMemorySpace;
-using gpuxtb::detail::Gfn2RaggedTopologyView;
-using gpuxtb::detail::cuda::Gfn2EigensolverBucket;
-using gpuxtb::detail::cuda::Gfn2EigensolverDeviceError;
-using gpuxtb::detail::cuda::Gfn2EigensolverDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2EigensolverOptions;
-using gpuxtb::detail::cuda::Gfn2EigensolverStrategy;
-using gpuxtb::detail::cuda::Gfn2GeometryEpochDevice;
-using gpuxtb::detail::cuda::Gfn2SccIterationArenaRequirements;
-using gpuxtb::detail::cuda::Gfn2SccIterationDevicePlan;
-using gpuxtb::detail::cuda::Gfn2SccIterationDeviceState;
-using gpuxtb::detail::cuda::Gfn2SccIterationDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2SccIterationReportStorage;
-using gpuxtb::detail::cuda::Gfn2SccSetupEigensolver;
-using gpuxtb::detail::cuda::Gfn2SccSetupEigensolverBinding;
-using gpuxtb::detail::cuda::Gfn2SccSetupEigensolverError;
-using gpuxtb::detail::cuda::Gfn2SccSetupEigensolverField;
-using gpuxtb::detail::cuda::Gfn2SccSetupTopology;
-using gpuxtb::test::gfn2::HostSccCase;
-using gpuxtb::test::gfn2::HostSccCaseOptions;
-using gpuxtb::test::gfn2::SmallSystemKind;
+using xtbloom::detail::Gfn2PlanMemorySpace;
+using xtbloom::detail::Gfn2RaggedTopologyView;
+using xtbloom::detail::cuda::Gfn2EigensolverBucket;
+using xtbloom::detail::cuda::Gfn2EigensolverDeviceError;
+using xtbloom::detail::cuda::Gfn2EigensolverDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2EigensolverOptions;
+using xtbloom::detail::cuda::Gfn2EigensolverStrategy;
+using xtbloom::detail::cuda::Gfn2GeometryEpochDevice;
+using xtbloom::detail::cuda::Gfn2SccIterationArenaRequirements;
+using xtbloom::detail::cuda::Gfn2SccIterationDevicePlan;
+using xtbloom::detail::cuda::Gfn2SccIterationDeviceState;
+using xtbloom::detail::cuda::Gfn2SccIterationDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2SccIterationReportStorage;
+using xtbloom::detail::cuda::Gfn2SccSetupEigensolver;
+using xtbloom::detail::cuda::Gfn2SccSetupEigensolverBinding;
+using xtbloom::detail::cuda::Gfn2SccSetupEigensolverError;
+using xtbloom::detail::cuda::Gfn2SccSetupEigensolverField;
+using xtbloom::detail::cuda::Gfn2SccSetupTopology;
+using xtbloom::test::gfn2::HostSccCase;
+using xtbloom::test::gfn2::HostSccCaseOptions;
+using xtbloom::test::gfn2::SmallSystemKind;
 
 constexpr std::uint64_t kPlanToken = 0x243f6a8885a308d3ULL;
 constexpr std::uint64_t kGeneration = 37u;
@@ -167,11 +167,11 @@ struct IterationWorkspaceFixture {
   PinnedAllocation host_workspace;
 
   bool create(const HostSccCase& host,
-              const gpuxtb::detail::Gfn2WavefunctionLayoutView& wavefunction,
-              const gpuxtb::detail::cuda::Gfn2SccSetupEigensolverRequirements& setup,
+              const xtbloom::detail::Gfn2WavefunctionLayoutView& wavefunction,
+              const xtbloom::detail::cuda::Gfn2SccSetupEigensolverRequirements& setup,
               std::int64_t bucket_count) {
-    plan.abi_version = gpuxtb::detail::cuda::kGfn2SccIterationAbiVersion;
-    plan.enabled_components = gpuxtb::detail::cuda::kGfn2SccPotentialAllComponents;
+    plan.abi_version = xtbloom::detail::cuda::kGfn2SccIterationAbiVersion;
+    plan.enabled_components = xtbloom::detail::cuda::kGfn2SccPotentialAllComponents;
     plan.plan_token = kPlanToken;
     plan.topology.plan_token = kPlanToken;
     plan.topology.batch_size = host.batch_size();
@@ -195,7 +195,7 @@ struct IterationWorkspaceFixture {
     plan.aes2_batch.total_pairs = 0;
     plan.d4_batch.total_pairs = 0;
     plan.eigensolver_provider.requirements = setup.provider;
-    if (!gpuxtb::detail::cuda::query_gfn2_scc_iteration_arena_requirements_cuda(
+    if (!xtbloom::detail::cuda::query_gfn2_scc_iteration_arena_requirements_cuda(
              plan, setup.provider, requirements)
              .success()) {
       return false;
@@ -205,7 +205,7 @@ struct IterationWorkspaceFixture {
       return false;
     }
     plan.eigensolver_provider.requirements = {};
-    return gpuxtb::detail::cuda::bind_gfn2_scc_iteration_arena_cuda(
+    return xtbloom::detail::cuda::bind_gfn2_scc_iteration_arena_cuda(
                plan, setup.provider, requirements, arena.get(), requirements.total_bytes,
                host_workspace.get(), host_workspace.bytes(), state, workspace, reports)
         .success();
@@ -353,7 +353,7 @@ struct ProductionFixture {
     }
     options.geometry_generation = kGeneration;
     std::string error;
-    if (HostSccCase::create(options, host, error) != GPUXTB_STATUS_SUCCESS || !handles.create()) {
+    if (HostSccCase::create(options, host, error) != XTBLOOM_STATUS_SUCCESS || !handles.create()) {
       return false;
     }
     if (!Gfn2SccSetupTopology::create(host.basis_plan(), host.integral_plan(),
@@ -816,7 +816,7 @@ int test_bad_overlap_preserves_factor_and_reports_failure() {
   CHECK(Gfn2SccSetupEigensolver::create(
             fixture.topology, bad_overlap.data(), static_cast<std::int64_t>(bad_overlap.size()),
             kGeneration + 1u, kPlanToken, fixture.handles.solver, fixture.handles.parameters,
-            fixture.handles.blas, gpuxtb::detail::cuda::Gfn2EigensolverOptions{}, bad)
+            fixture.handles.blas, xtbloom::detail::cuda::Gfn2EigensolverOptions{}, bad)
             .success());
   Gfn2SccSetupEigensolverBinding bad_binding{};
   CHECK(bad.bind_and_factor_overlap_async(
@@ -867,7 +867,7 @@ int test_fail_closed_plan_generation_and_provenance() {
       fixture.topology, fixture.host.overlap().data(),
       static_cast<std::int64_t>(fixture.host.overlap().size()), 0u, kPlanToken,
       fixture.handles.solver, fixture.handles.parameters, fixture.handles.blas,
-      gpuxtb::detail::cuda::Gfn2EigensolverOptions{}, preserved);
+      xtbloom::detail::cuda::Gfn2EigensolverOptions{}, preserved);
   CHECK(diagnostic.error == Gfn2SccSetupEigensolverError::kInvalidGeneration);
   CHECK(diagnostic.field == Gfn2SccSetupEigensolverField::kGeometryGeneration);
   CHECK(preserved.valid());
@@ -877,7 +877,7 @@ int test_fail_closed_plan_generation_and_provenance() {
       fixture.topology, fixture.host.overlap().data(),
       static_cast<std::int64_t>(fixture.host.overlap().size()), kGeneration, kPlanToken, nullptr,
       fixture.handles.parameters, fixture.handles.blas,
-      gpuxtb::detail::cuda::Gfn2EigensolverOptions{}, preserved);
+      xtbloom::detail::cuda::Gfn2EigensolverOptions{}, preserved);
   CHECK(diagnostic.error == Gfn2SccSetupEigensolverError::kInvalidProvider);
   CHECK(preserved.valid());
 

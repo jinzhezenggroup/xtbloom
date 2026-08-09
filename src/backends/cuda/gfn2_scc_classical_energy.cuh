@@ -1,14 +1,14 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_SCC_CLASSICAL_ENERGY_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_SCC_CLASSICAL_ENERGY_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_SCC_CLASSICAL_ENERGY_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_SCC_CLASSICAL_ENERGY_CUH
 
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
 #include <type_traits>
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 inline constexpr std::int64_t kGfn2SccClassicalInputComponents = 6;
 inline constexpr std::int64_t kGfn2SccClassicalDiagnosticComponents = 7;
@@ -165,6 +165,6 @@ cudaError_t evaluate_gfn2_scc_classical_energy_cuda(
     const Gfn2SccClassicalEnergyDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_SCC_CLASSICAL_ENERGY_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_SCC_CLASSICAL_ENERGY_CUH

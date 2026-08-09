@@ -11,7 +11,7 @@
       "energy_max_hartree": -119.30484557472732,
       "energy_min_hartree": -119.30484557472732,
       "energy_std_hartree": 0.0,
-      "engine": "gpuxtb",
+      "engine": "xtbloom",
       "mean_ms": 2023.6128039999999,
       "median_ms": 2023.6128039999999,
       "memory_mode": "host",

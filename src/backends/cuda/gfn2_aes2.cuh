@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_AES2_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_AES2_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_AES2_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_AES2_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -10,7 +10,7 @@
 
 #include "backends/cuda/gfn2_scc_iteration_control.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 inline constexpr std::int64_t kGfn2AES2PairDataElements = 5;
 inline constexpr std::int64_t kGfn2AES2PotentialElementsPerAtom = 10;
@@ -180,6 +180,6 @@ cudaError_t evaluate_gfn2_aes2_scc_energy_cuda(
  * cudaPointerGetAttributes. Writable ranges must be mutually disjoint.
  */
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_AES2_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_AES2_CUH

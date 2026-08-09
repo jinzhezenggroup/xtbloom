@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo=/home/jzzeng/codes/gpuxtb4-pr231
+repo=/home/jzzeng/codes/xtbloom4-pr231
 out="$repo/build/benchmarks/issue-13-c9c0a43-final"
-cpu_library="$repo/build/pr231-evidence-c9c0a43-cpu/libgpuxtb.so.0.1.0"
-cuda_library="$repo/build/pr231-evidence-c9c0a43-cuda/libgpuxtb.so.0.1.0"
+cpu_library="$repo/build/pr231-evidence-c9c0a43-cpu/libxtbloom.so.0.1.0"
+cuda_library="$repo/build/pr231-evidence-c9c0a43-cuda/libxtbloom.so.0.1.0"
 xtb_library=/tmp/pr231-1fc8698-xtb-final/libxtb.so.6.7.1
 tblite_library=/tmp/pr231-477d5f4-tblite-final/libtblite.so.0.7.0
 xtb_source=/home/jzzeng/codes/xtb
@@ -49,7 +49,7 @@ common=(
 run_case() {
   local python_exe=$1
   local output_stem=$2
-  local gpuxtb_library=$3
+  local xtbloom_library=$3
   local engine=$4
   local panel=$5
   shift 5
@@ -84,7 +84,7 @@ run_case() {
   esac
 
   "$python_exe" benchmarks/natoms_cross_engine.py \
-    --library "$gpuxtb_library" \
+    --library "$xtbloom_library" \
     --engines "$engine" \
     "${panel_args[@]}" \
     "${common[@]}" \
@@ -105,9 +105,9 @@ run_case "$base_python" ref-tblite-b512 "$cpu_library" tblite b512 \
 
 for panel in cold b128 b512; do
   reference="$out/ref-tblite-$panel.json"
-  run_case "$base_python" "gpuxtb-cpu-$panel" "$cpu_library" gpuxtb-cpu "$panel" \
+  run_case "$base_python" "xtbloom-cpu-$panel" "$cpu_library" xtbloom-cpu "$panel" \
     --reference-json "$reference"
-  run_case "$base_python" "gpuxtb-cuda-$panel" "$cuda_library" gpuxtb-cuda "$panel" \
+  run_case "$base_python" "xtbloom-cuda-$panel" "$cuda_library" xtbloom-cuda "$panel" \
     --reference-json "$reference"
   run_case "$base_python" "xtb-$panel" "$cpu_library" xtb "$panel" \
     --xtb-library "$xtb_library" --xtb-source "$xtb_source" \

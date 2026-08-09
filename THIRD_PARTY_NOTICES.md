@@ -1,7 +1,7 @@
 # Third-party notices and provenance
 
-gpuxtb is distributed under `GPL-3.0-or-later`; see `LICENSE`. The additional
-permission in `CUDA_MKL_LINKING_EXCEPTION` applies only to gpuxtb material
+xTBloom is distributed under `GPL-3.0-or-later`; see `LICENSE`. The additional
+permission in `CUDA_MKL_LINKING_EXCEPTION` applies only to xTBloom material
 whose copyright holder authorizes it. The following upstream material is
 retained under its own terms and is not relicensed by that permission.
 The manifests named below pin the source revisions and content digests used
@@ -13,7 +13,7 @@ Repository: <https://github.com/data-apis/array-api-compat>
 
 License: `MIT` (`LICENSES/array-api-compat-MIT.txt`; Copyright (c) 2022 Consortium for Python Data API Standards).
 
-The gpuxtb Python package depends on `array-api-compat` (a backend-neutral
+The xTBloom Python package depends on `array-api-compat` (a backend-neutral
 shim, not an array backend) to probe dense eager arrays from NumPy, CuPy,
 JAX, and PyTorch without importing those packages. Reviewed release 1.15.0,
 commit `076218e4f5aa18578418c7d04fad9ab581a16bb8`, Python `>=3.10`, with no
@@ -22,7 +22,7 @@ commit `076218e4f5aa18578418c7d04fad9ab581a16bb8`, Python `>=3.10`, with no
 `7b1b9c53269061403fd5f45a8de349f16e7887653328bfa0c5f2d45299ff0a8e`); the
 sdist is SHA-256
 `53c5f922491bf15f62847afafc4e39eedfae57d218988fefb8cce39c2a9b3dea`. It is a
-runtime Python dependency only and is not bundled in gpuxtb source archives,
+runtime Python dependency only and is not bundled in xTBloom source archives,
 native installs, or wheels; the canonical resolution is recorded in
 `pyproject.toml` and `uv.lock`.
 
@@ -32,12 +32,12 @@ Specification: <https://github.com/dmlc/dlpack>
 
 License: `Apache-2.0` (`LICENSES/Apache-2.0.txt`).
 
-No DLPack header or source is bundled, linked, or vendored. gpuxtb
+No DLPack header or source is bundled, linked, or vendored. xTBloom
 independently reimplements the *byte layout* of the DLPack 1.0 managed-tensor
 data structures (`DLDataType`, `DLDevice`, `DLTensor`, `DLManagedTensor`, and
 `DLManagedTensorVersioned`) as literal C/C++ struct mirrors in
 `src/runtime/dlpack_layout.hpp` and as matching ctypes mirrors in
-`python/gpuxtb/_dlpack.py`, with byte-exact static assertions. These layouts
+`python/xtbloom/_dlpack.py`, with byte-exact static assertions. These layouts
 are the public ABI of the DLPack specification and are used only to produce
 and consume capsules at the Python boundary; they are not a copy of the
 upstream codebase's implementation. The upstream project's Apache-2.0 license
@@ -107,17 +107,17 @@ Origin: <https://github.com/grimme-lab/xtb/issues/678>
 The test-only `data/conformance/inputs/tmacl.xyz` fixture reproduces the
 18 atom labels and Cartesian-coordinate rows posted by GitHub user
 `corinwagen` in upstream xTB issue #678. The upstream issue states no license
-for that user-provided input (`SPDX: NOASSERTION`). gpuxtb retains only these
+for that user-provided input (`SPDX: NOASSERTION`). xTBloom retains only these
 factual scientific input values, not the issue prose, xTB source, or an xTB
-binary. The fixture and gpuxtb-generated SCC diagnostics are source/test data;
+binary. The fixture and xTBloom-generated SCC diagnostics are source/test data;
 they are included in source distributions for test reproducibility, but are
 not installed by the native CMake package or bundled in wheels.
 
 The upstream issue node, timestamps, extraction description, fixture digest,
-gpuxtb evidence-generator digest, LP64 provider identities, and every generated
+xTBloom evidence-generator digest, LP64 provider identities, and every generated
 output digest are pinned in
 `data/conformance/evidence/tmacl-temperature-continuation/manifest.json`.
-Generated diagnostics are original gpuxtb outputs under the repository
+Generated diagnostics are original xTBloom outputs under the repository
 license; they are not presented as upstream xTB oracle results.
 
 ## LAMMPS documentation reference
@@ -125,7 +125,7 @@ license; they are not presented as upstream xTB oracle results.
 `docs/theory/qmmm.md` cites the LAMMPS QMMM-XTB adapter at revision
 `9ab8ca565e0f71d967587e0bca2015f7d689f19f` to document the external
 `b + A q` interface convention. No LAMMPS source code, binary, or numerical
-table is redistributed by gpuxtb.
+table is redistributed by xTBloom.
 
 ## implib.so (CUDA loader shim generator)
 
@@ -143,7 +143,7 @@ tree are recorded in `cmake/3rdparty/implib_manifest.json`.
 
 The generator runs at CMake configure time. Its generated C and assembly
 sources remain in the build tree, but their compiled trampoline and initializer
-code is embedded in the distributed `libgpuxtb` binary. Those trampolines
+code is embedded in the distributed `libxtbloom` binary. Those trampolines
 dynamically resolve the CUDA host runtime, math, and driver APIs (cudart,
 cuBLAS, cuSOLVER, and libcuda) rather than retaining ordinary shared-library
 `DT_NEEDED` entries for those host libraries. This mechanism is an engineering
@@ -175,14 +175,14 @@ Repository: <https://github.com/pytorch/pytorch>
 License: `BSD-3-Clause` (retained by the separately installed distribution).
 
 The required Python CI job installs PyTorch 2.13.0 from PyPI solely to execute
-the public `gpuxtb_torch` CPU/autograd tests. The canonical resolution and
+the public `xtbloom_torch` CPU/autograd tests. The canonical resolution and
 artifact hashes, including PyTorch's separately installed transitive
 dependencies, are recorded in `uv.lock`. PyTorch is imported lazily by the
-optional integration and is not a gpuxtb runtime dependency, project extra,
+optional integration and is not a xTBloom runtime dependency, project extra,
 source-distribution payload, native install artifact, or bundled wheel file.
 The locked Linux resolution also installs NVIDIA CUDA provider packages under
 their vendor terms; those test-environment packages are likewise not
-redistributed in gpuxtb artifacts.
+redistributed in xTBloom artifacts.
 
 ## Matplotlib publication tool
 
@@ -196,40 +196,40 @@ The benchmark figure renderer declares Matplotlib 3.10.9 through PEP 723
 inline script metadata. Its complete isolated PyPI resolution and artifact
 hashes are recorded in `benchmarks/plot_natoms_cross_engine.py.lock`.
 Matplotlib and its dependencies are publication tools only: they are not
-gpuxtb project dependencies and are not bundled in source distributions,
+xTBloom project dependencies and are not bundled in source distributions,
 native installs, or wheels.
 
 ## OpenBLAS runtime dependency
 
 Repository: <https://github.com/MacPython/openblas-libs>
 
-The separately installed `scipy-openblas32` distribution provides gpuxtb's
+The separately installed `scipy-openblas32` distribution provides xTBloom's
 default Linux LP64 LAPACKE+CBLAS runtime. Version 0.3.34.0.0 is pinned exactly:
 it is the reviewed provider ABI with the local-thread-control symbol required
-by gpuxtb, while later provider releases may change that optional symbol. Its
+by xTBloom, while later provider releases may change that optional symbol. Its
 own license payload records the MacPython wrapper under BSD-2-Clause, OpenBLAS
 and LAPACK under BSD-3-Clause terms, and its GCC runtime dependencies under
 GPL-3.0 with the GCC Runtime Library Exception. The runtime is not bundled in
-gpuxtb source archives, native installs, or wheels; its own Python distribution
+xTBloom source archives, native installs, or wheels; its own Python distribution
 retains the complete notices and license texts.
 
 ## CUDA and Intel MKL provider components
 
-CUDA host libraries, the NVIDIA driver, and Intel MKL are not part of gpuxtb
-and remain under their vendor licenses. gpuxtb artifacts must not bundle their
+CUDA host libraries, the NVIDIA driver, and Intel MKL are not part of xTBloom
+and remain under their vendor licenses. xTBloom artifacts must not bundle their
 shared or static library files. CUDA providers may be installed separately
 through the `cuda12` Python extra or supplied by the system. MKL is not a
 Python dependency; native users may explicitly select a compatible
-`libmkl_rt` through `GPUXTB_CPU_LINALG_LIBRARY`. That selection is used only to
+`libmkl_rt` through `XTBLOOM_CPU_LINALG_LIBRARY`. That selection is used only to
 validate one coherent adjacent `libmkl_intel_lp64`, `libmkl_sequential`, and
-`libmkl_core` cohort. gpuxtb's private shim loads those unbundled components in
+`libmkl_core` cohort. xTBloom's private shim loads those unbundled components in
 a separate link-map namespace and does not load the selected `libmkl_rt`.
 
 Dynamic loading does not itself resolve GPL compatibility. Jinzhe Zeng grants
 the narrowly scoped GPLv3 Section 7 permission in
 `CUDA_MKL_LINKING_EXCEPTION` for the enumerated provider interfaces and
 compiler support. Provider code remains under vendor terms, and the permission
-grants no redistribution rights beyond those terms. gpuxtb's device link
+grants no redistribution rights beyond those terms. xTBloom's device link
 passes `--cudadevrt=none`; NVIDIA libdevice code incorporated by nvcc may still
 be present and is covered expressly by the permission.
 
@@ -251,7 +251,7 @@ Build-time npm dependency (not vendored):
   `f7cc78921ae72e7623e89cdd111434f58c2efddd2ffda1cd212644b406fb8016`, with the
   upstream `/*! 3dmol v2.5.5 ... */` banner retained at the top of the file.
 
-The gpuxtb WASM web demo (`web/`) uses it only for client-side molecular
+The xTBloom WASM web demo (`web/`) uses it only for client-side molecular
 visualization of the user-supplied geometry. It is not part of the native
 library, CMake installs, source archives, or Python wheels.
 
@@ -305,16 +305,16 @@ Floating `latest` and jsDelivr `+esm` transformations are not used.
 
 OpenChemLib parses SMILES, adds explicit hydrogens during seeded 3D conformer
 generation, and applies an MMFF94 pre-relaxation before the coordinates enter
-the gpuxtb web adapter. The complete registered `resources.json` also contains
+the xTBloom web adapter. The complete registered `resources.json` also contains
 COD bond-length and torsion statistics, MMFF94/MMFF94s parameter tables, and
 bundled drug-likeness and toxicity-predictor data. The predictor data is
 registered as part of the upstream resource payload but is not called by
-gpuxtb. Exact paths, sizes, digests, source revisions, license provenance, and
+xTBloom. Exact paths, sizes, digests, source revisions, license provenance, and
 the distribution boundary are recorded in `web/openchemlib_manifest.json`.
 
 The OpenChemLib module and resource bytes are supplied by jsDelivr directly to
 the user's browser; they are not vendored into the repository, linked into
-`gpuxtb_web.wasm`, copied into the Pages artifact, installed with the native
+`xtbloom_web.wasm`, copied into the Pages artifact, installed with the native
 library, or bundled in Python wheels. The deployed site does retain the license
 text and provenance manifest next to its other legal material.
 

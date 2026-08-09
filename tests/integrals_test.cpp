@@ -25,8 +25,8 @@ bool near(double actual, double expected, double tolerance) {
 }
 
 struct Evaluation {
-  gpuxtb::detail::gfn2::BasisPlan basis;
-  gpuxtb::detail::gfn2::IntegralPlan integrals;
+  xtbloom::detail::gfn2::BasisPlan basis;
+  xtbloom::detail::gfn2::IntegralPlan integrals;
   std::vector<double> workspace;
   std::vector<double> overlap;
 };
@@ -34,22 +34,22 @@ struct Evaluation {
 bool evaluate(std::int64_t batch_size, const std::vector<std::int64_t>& atom_offsets,
               const std::vector<std::int32_t>& atomic_numbers, const std::vector<double>& positions,
               Evaluation& evaluation, std::string& error) {
-  if (gpuxtb::detail::gfn2::make_basis_plan(
+  if (xtbloom::detail::gfn2::make_basis_plan(
           batch_size, static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
-          atomic_numbers.data(), evaluation.basis, error) != GPUXTB_STATUS_SUCCESS) {
+          atomic_numbers.data(), evaluation.basis, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
-  if (gpuxtb::detail::gfn2::make_integral_plan(evaluation.basis, evaluation.integrals, error) !=
-      GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::make_integral_plan(evaluation.basis, evaluation.integrals, error) !=
+      XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   evaluation.workspace.resize((evaluation.integrals.workspace_size_bytes + sizeof(double) - 1u) /
                               sizeof(double));
   evaluation.overlap.resize(static_cast<std::size_t>(evaluation.integrals.total_matrix_elements));
-  return gpuxtb::detail::gfn2::evaluate_overlap_cpu(
+  return xtbloom::detail::gfn2::evaluate_overlap_cpu(
              evaluation.basis, evaluation.integrals, positions.data(), evaluation.overlap.data(),
              evaluation.workspace.data(), evaluation.workspace.size() * sizeof(double),
-             error) == GPUXTB_STATUS_SUCCESS;
+             error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 int test_tblite_si_reference_and_spherical_conventions() {
@@ -229,14 +229,14 @@ int test_ragged_batch_equals_sequential() {
   return 0;
 }
 
-bool weighted_overlap(const gpuxtb::detail::gfn2::BasisPlan& basis,
-                      const gpuxtb::detail::gfn2::IntegralPlan& integrals,
+bool weighted_overlap(const xtbloom::detail::gfn2::BasisPlan& basis,
+                      const xtbloom::detail::gfn2::IntegralPlan& integrals,
                       std::vector<double>& workspace, const std::vector<double>& positions,
                       const std::vector<double>& weights, double& value, std::string& error) {
   std::vector<double> overlap(static_cast<std::size_t>(integrals.total_matrix_elements));
-  if (gpuxtb::detail::gfn2::evaluate_overlap_cpu(
+  if (xtbloom::detail::gfn2::evaluate_overlap_cpu(
           basis, integrals, positions.data(), overlap.data(), workspace.data(),
-          workspace.size() * sizeof(double), error) != GPUXTB_STATUS_SUCCESS) {
+          workspace.size() * sizeof(double), error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   value = 0.0;
@@ -263,10 +263,10 @@ int test_analytic_vjp_against_finite_difference() {
   }
   constexpr double baseline = 0.125;
   std::vector<double> gradient(positions.size(), baseline);
-  CHECK(gpuxtb::detail::gfn2::add_overlap_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_overlap_gradient_cpu(
             evaluation.basis, evaluation.integrals, positions.data(), weights.data(),
             gradient.data(), evaluation.workspace.data(),
-            evaluation.workspace.size() * sizeof(double), error) == GPUXTB_STATUS_SUCCESS);
+            evaluation.workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_SUCCESS);
 
   constexpr double step = 2.0e-5;
   for (std::size_t coordinate = 0; coordinate < positions.size(); ++coordinate) {
@@ -299,38 +299,38 @@ int test_analytic_vjp_against_finite_difference() {
 int test_validation_and_strong_plan_failure_guarantee() {
   constexpr std::array<std::int64_t, 2> offsets{0, 1};
   constexpr std::array<std::int32_t, 1> atomic_numbers{14};
-  gpuxtb::detail::gfn2::BasisPlan basis;
+  xtbloom::detail::gfn2::BasisPlan basis;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(1, 1, offsets.data(), atomic_numbers.data(), basis,
-                                              error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(1, 1, offsets.data(), atomic_numbers.data(), basis,
+                                               error) == XTBLOOM_STATUS_SUCCESS);
 
-  gpuxtb::detail::gfn2::IntegralPlan plan;
+  xtbloom::detail::gfn2::IntegralPlan plan;
   plan.batch_size = 17;
-  CHECK(gpuxtb::detail::gfn2::make_integral_plan(basis, plan, error, 0.0) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_integral_plan(basis, plan, error, 0.0) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(plan.batch_size == 17);
-  CHECK(gpuxtb::detail::gfn2::make_integral_plan(basis, plan, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_integral_plan(basis, plan, error) == XTBLOOM_STATUS_SUCCESS);
 
   std::array<double, 3> positions{};
   std::vector<double> overlap(static_cast<std::size_t>(plan.total_matrix_elements), 3.0);
   std::vector<double> workspace((plan.workspace_size_bytes + sizeof(double) - 1u) / sizeof(double));
-  CHECK(gpuxtb::detail::gfn2::evaluate_overlap_cpu(basis, plan, positions.data(), overlap.data(),
-                                                   workspace.data(), plan.workspace_size_bytes - 1u,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_overlap_cpu(
+            basis, plan, positions.data(), overlap.data(), workspace.data(),
+            plan.workspace_size_bytes - 1u, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(overlap.begin(), overlap.end(), [](double value) { return value == 3.0; }));
 
   positions[1] = std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::evaluate_overlap_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_overlap_cpu(
             basis, plan, positions.data(), overlap.data(), workspace.data(),
-            workspace.size() * sizeof(double), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   positions[1] = 0.0;
 
   std::vector<double> weights(overlap.size(), 1.0);
   std::array<double, 3> gradients{};
   weights.back() = std::numeric_limits<double>::infinity();
-  CHECK(gpuxtb::detail::gfn2::add_overlap_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_overlap_gradient_cpu(
             basis, plan, positions.data(), weights.data(), gradients.data(), workspace.data(),
-            workspace.size() * sizeof(double), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK((gradients == std::array<double, 3>{}));
   return 0;
 }

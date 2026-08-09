@@ -1,6 +1,6 @@
 /* Optional SMILES/conformer work lives in its own module Worker so downloading
  * OpenChemLib and running conformer/MMFF searches never blocks the UI or the
- * independent gpuxtb WASM worker. */
+ * independent xtbloom WASM worker. */
 
 import {
   OPEN_CHEMLIB_MODULE_URL,

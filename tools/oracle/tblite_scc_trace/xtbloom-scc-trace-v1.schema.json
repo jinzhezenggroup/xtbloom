@@ -1,0 +1,357 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/jinzhezenggroup/xtbloom/schemas/xtbloom-scc-trace-v1.schema.json",
+  "title": "xtbloom-scc-trace-v1",
+  "description": "Restricted GFN2 SCC trace interchange format. Matrices use logical [spin=1][row][column] order, occupations retain alpha and beta channels, and multipoles use [spin=1][atom][component] order. Quadrupoles pack xx, xy, yy, xz, yz, zz. Runtime validation additionally enforces dynamic dimensions and finite binary64 values.",
+  "type": "object",
+  "required": [
+    "format",
+    "provenance",
+    "input",
+    "basis",
+    "statics",
+    "residual_layout",
+    "iterations",
+    "terminal"
+  ],
+  "properties": {
+    "format": {"const": "xtbloom-scc-trace-v1"},
+    "provenance": {
+      "type": "object",
+      "required": ["tblite_revision", "oracle_patch_sha256"],
+      "properties": {
+        "tblite_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "Pinned full upstream tblite commit SHA."
+        },
+        "oracle_patch_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of the observer patch used to record the trace."
+        },
+        "oracle_command": {
+          "type": "string",
+          "description": "Exact oracle command used to generate the trace, when recorded."
+        }
+      },
+      "additionalProperties": true
+    },
+    "input": {
+      "type": "object",
+      "required": [
+        "atomic_numbers",
+        "positions",
+        "molecular_charge",
+        "unpaired_electrons",
+        "spin_channels",
+        "temperature"
+      ],
+      "properties": {
+        "atomic_numbers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "integer", "minimum": 1, "maximum": 118},
+          "description": "Nuclear atomic numbers, one per atom."
+        },
+        "positions": {
+          "type": "array",
+          "items": {"type": "number"},
+          "description": "Flat atom-major Cartesian x,y,z coordinates in bohr; length 3 * n_atoms."
+        },
+        "molecular_charge": {
+          "type": "number",
+          "description": "Total molecular charge in units of the positive elementary charge."
+        },
+        "unpaired_electrons": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of unpaired electrons. Restricted shared-orbital open-shell traces keep spin_channels equal to one."
+        },
+        "spin_channels": {
+          "type": "integer",
+          "const": 1,
+          "description": "One restricted charge channel; occupations separately retain alpha and beta."
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Configured target electronic temperature in kelvin."
+        },
+        "point_charges": {
+          "type": "object",
+          "required": ["positions", "charges", "hardnesses"],
+          "properties": {
+            "positions": {
+              "type": "array",
+              "minItems": 3,
+              "items": {"type": "number"},
+              "description": "Flat point-major Cartesian x,y,z coordinates in bohr; exactly three per point."
+            },
+            "charges": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "number"},
+              "description": "External charges in units of the positive elementary charge."
+            },
+            "hardnesses": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "number", "exclusiveMinimum": 0},
+              "description": "Positive point-site gamma hardnesses in Hartree."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "basis": {
+      "type": "object",
+      "required": ["n_atoms", "n_shells", "nao", "atom_to_shell_count"],
+      "properties": {
+        "n_atoms": {"type": "integer", "minimum": 1},
+        "n_shells": {"type": "integer", "minimum": 1},
+        "nao": {"type": "integer", "minimum": 1},
+        "atom_to_shell_count": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 1},
+          "description": "Number of contiguous tblite shells contributed by each atom; length n_atoms and sum n_shells."
+        },
+        "shell_offsets": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0},
+          "description": "Optional zero-based prefix offsets into shell-indexed arrays, one per atom."
+        }
+      },
+      "additionalProperties": false
+    },
+    "statics": {
+      "type": "object",
+      "required": ["overlap", "core_hamiltonian"],
+      "properties": {
+        "overlap": {"$ref": "#/definitions/restricted_matrix"},
+        "core_hamiltonian": {"$ref": "#/definitions/restricted_matrix"}
+      },
+      "additionalProperties": false
+    },
+    "residual_layout": {
+      "type": "object",
+      "required": ["shell_charges", "atomic_dipoles", "atomic_quadrupoles"],
+      "properties": {
+        "shell_charges": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Exactly n_shells restricted shell-charge elements."
+        },
+        "atomic_dipoles": {
+          "type": "integer",
+          "minimum": 3,
+          "description": "Exactly 3 * n_atoms atomic-dipole elements."
+        },
+        "atomic_quadrupoles": {
+          "type": "integer",
+          "minimum": 6,
+          "description": "Exactly 6 * n_atoms atomic-quadrupole elements."
+        }
+      },
+      "additionalProperties": false
+    },
+    "iterations": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/completed_iteration"},
+      "description": "Attempts that reached after_iteration. May be empty for setup or first-solve failure."
+    },
+    "failed_attempt": {
+      "$ref": "#/definitions/pre_solve_attempt"
+    },
+    "terminal": {
+      "type": "object",
+      "required": ["status", "converged", "iterations"],
+      "properties": {
+        "status": {
+          "type": "integer",
+          "enum": [1, 2, 3],
+          "description": "finished status: 1 converged, 2 max iterations, 3 failed."
+        },
+        "converged": {
+          "type": "boolean",
+          "description": "True exactly when status is 1."
+        },
+        "iterations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Attempt count reported by finished; completed count plus one exactly when failed_attempt exists."
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": 1}}},
+          "then": {"properties": {"converged": {"const": true}}},
+          "else": {"properties": {"converged": {"const": false}}}
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "restricted_matrix": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "array",
+          "items": {"type": "number"}
+        }
+      },
+      "description": "Restricted matrix in logical [spin=1][row][column] order."
+    },
+    "restricted_spectrum": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "array",
+        "items": {"type": "number"}
+      },
+      "description": "Restricted vector in logical [spin=1][value] order."
+    },
+    "restricted_occupations": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "array",
+        "items": {"type": "number"}
+      },
+      "description": "tblite focc in [alpha,beta][orbital] order, in electrons."
+    },
+    "restricted_dipoles": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {"type": "number"}
+        }
+      },
+      "description": "Atomic dipoles in [spin=1][atom][x,y,z], elementary-charge bohr."
+    },
+    "restricted_quadrupoles": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "items": {"type": "number"}
+        }
+      },
+      "description": "Atomic quadrupoles in [spin=1][atom][xx,xy,yy,xz,yz,zz], elementary-charge bohr squared."
+    },
+    "pre_solve_attempt": {
+      "type": "object",
+      "required": [
+        "index",
+        "hamiltonian",
+        "mixed_qsh",
+        "mixed_qat",
+        "mixed_dipoles",
+        "mixed_quadrupoles"
+      ],
+      "properties": {
+        "index": {"type": "integer", "minimum": 1},
+        "hamiltonian": {"$ref": "#/definitions/restricted_matrix"},
+        "mixed_qsh": {"$ref": "#/definitions/restricted_spectrum"},
+        "mixed_qat": {"$ref": "#/definitions/restricted_spectrum"},
+        "mixed_dipoles": {"$ref": "#/definitions/restricted_dipoles"},
+        "mixed_quadrupoles": {"$ref": "#/definitions/restricted_quadrupoles"}
+      },
+      "additionalProperties": false,
+      "description": "before_solve payload retained when the eigensolver fails before after_iteration."
+    },
+    "convergence": {
+      "type": "object",
+      "required": ["energy", "population", "temperature", "overall"],
+      "properties": {
+        "energy": {"type": "boolean"},
+        "population": {"type": "boolean"},
+        "temperature": {"type": "boolean"},
+        "overall": {"type": "boolean"}
+      },
+      "additionalProperties": false,
+      "description": "after_iteration convergence flags; overall is their logical conjunction."
+    },
+    "completed_iteration": {
+      "type": "object",
+      "required": [
+        "index",
+        "hamiltonian",
+        "eigenvalues",
+        "occupations",
+        "density",
+        "mixed_qsh",
+        "raw_qsh",
+        "mixed_qat",
+        "raw_qat",
+        "mixed_dipoles",
+        "raw_dipoles",
+        "mixed_quadrupoles",
+        "raw_quadrupoles",
+        "residual",
+        "residual_rms",
+        "energy",
+        "energy_delta",
+        "convergence"
+      ],
+      "properties": {
+        "index": {"type": "integer", "minimum": 1},
+        "hamiltonian": {"$ref": "#/definitions/restricted_matrix"},
+        "eigenvalues": {"$ref": "#/definitions/restricted_spectrum"},
+        "occupations": {"$ref": "#/definitions/restricted_occupations"},
+        "density": {"$ref": "#/definitions/restricted_matrix"},
+        "mixed_qsh": {"$ref": "#/definitions/restricted_spectrum"},
+        "raw_qsh": {"$ref": "#/definitions/restricted_spectrum"},
+        "mixed_qat": {"$ref": "#/definitions/restricted_spectrum"},
+        "raw_qat": {"$ref": "#/definitions/restricted_spectrum"},
+        "mixed_dipoles": {"$ref": "#/definitions/restricted_dipoles"},
+        "raw_dipoles": {"$ref": "#/definitions/restricted_dipoles"},
+        "mixed_quadrupoles": {"$ref": "#/definitions/restricted_quadrupoles"},
+        "raw_quadrupoles": {"$ref": "#/definitions/restricted_quadrupoles"},
+        "point_charge_shell_potential": {"$ref": "#/definitions/restricted_spectrum"},
+        "point_charge_energy": {"$ref": "#/definitions/restricted_spectrum"},
+        "residual": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "number"},
+          "description": "raw minus mixed, flattened as qsh(:), dpat(:,:), qpat(:,:). Components have mixed units."
+        },
+        "residual_rms": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Unweighted numerical sqrt(sum(residual_i^2)/N); no single physical unit."
+        },
+        "energy": {
+          "type": "number",
+          "description": "Electronic SCC energy sum(eelec), Hartree."
+        },
+        "energy_delta": {
+          "type": "number",
+          "description": "sum(eelec) - elast, Hartree."
+        },
+        "convergence": {"$ref": "#/definitions/convergence"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Generate the pinned gpuxtb-scc-trace-v1 restricted corpus (issues #45, #48).
+"""Generate the pinned xtbloom-scc-trace-v1 restricted corpus (issues #45, #48).
 
 Consumes the immutable observer-patch bundle, builds the patched pinned tblite
 oracle (the recorder executable) in a disposable outer Meson project, runs the
 five restricted corpus cases, and serializes each raw recorder stream into the
-canonical ``gpuxtb-scc-trace-v1`` JSON document with the canonical writer.  A
+canonical ``xtbloom-scc-trace-v1`` JSON document with the canonical writer.  A
 manifest records every trace hash plus complete oracle provenance (tblite
 revision, every dependency revision, observer patch hash, recorder harness
 hash, compiler identity, BLAS/LAPACK identity, exact command line, and the
@@ -39,17 +39,17 @@ from pathlib import Path
 # Import the reusable pinned provenance/build machinery from the observer
 # patch validator so the two tools cannot drift.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import gpuxtb_scc_trace as writer
 import validate_observer_patch as validator
+import xtbloom_scc_trace as writer
 
 TOOL_DIR = Path(__file__).resolve().parent
 REPOSITORY_ROOT = TOOL_DIR.parents[2]
 RECORDER_PATH = TOOL_DIR / "scc_trace_recorder.f90"
 MAIN_PATH = TOOL_DIR / "scc_trace_main.f90"
 
-FORMAT = "gpuxtb-scc-trace-v1"
+FORMAT = "xtbloom-scc-trace-v1"
 REVISION = "e9abc395b122018ed688aecb1c3a65cecaf97beb"
-MANIFEST_SCHEMA = "gpuxtb-scc-trace-corpus-manifest-v1"
+MANIFEST_SCHEMA = "xtbloom-scc-trace-corpus-manifest-v1"
 PATCH_PATH = TOOL_DIR / "tblite-e9abc395-scc-observer.patch"
 PINNED_DEPENDENCIES = {
     "dftd4": "6e1f59c3f39d919a2dbef0601d2576727c8b30e8",
@@ -234,7 +234,7 @@ def probe_meson_project(lapack: str, custom_libraries: list[str]) -> str:
     if custom_libraries:
         custom_option = "    'custom_libraries=" + ",".join(custom_libraries) + "',\n"
     return f"""project(
-  'gpuxtb-scc-trace-oracle',
+  'xtbloom-scc-trace-oracle',
   'fortran',
   default_options: ['buildtype=release', 'default_library=static'],
 )
@@ -255,7 +255,7 @@ tblite_project = subproject(
 tblite_dep = tblite_project.get_variable('tblite_dep')
 
 scc_trace = executable(
-  'gpuxtb-tblite-scc-trace',
+  'xtbloom-tblite-scc-trace',
   'scc_trace_recorder.f90',
   'scc_trace_main.f90',
   dependencies: tblite_dep,
@@ -471,7 +471,7 @@ def build_oracle(
     """
     if wrap_mode != "nodownload":
         raise CorpusError("oracle generation requires --wrap-mode=nodownload")
-    with tempfile.TemporaryDirectory(prefix="gpuxtb-scc-trace-oracle-") as directory:
+    with tempfile.TemporaryDirectory(prefix="xtbloom-scc-trace-oracle-") as directory:
         outer = Path(directory) / "outer"
         subprojects = outer / "subprojects"
         subprojects.mkdir(parents=True)
@@ -503,11 +503,11 @@ def build_oracle(
                 f"{sorted(actual_subprojects)}, expected {sorted(expected_subprojects)}"
             )
         validator.run(
-            [*meson_command, "compile", "-C", str(build), "gpuxtb-tblite-scc-trace"],
+            [*meson_command, "compile", "-C", str(build), "xtbloom-tblite-scc-trace"],
             cwd=outer,
             env=environment,
         )
-        binary_path = build / "gpuxtb-tblite-scc-trace"
+        binary_path = build / "xtbloom-tblite-scc-trace"
         if not binary_path.is_file():
             raise CorpusError("recorder oracle executable was not produced")
         meson_version = subprocess.run(
@@ -542,9 +542,9 @@ _binary_cache: tuple[Path, Path] | None = None
 def checker_cache(path: Path) -> Path:
     """Copy the built recorder into a stable cache location and return its path."""
     global _binary_cache
-    cache_dir = Path(tempfile.gettempdir()) / "gpuxtb-scc-trace-oracle-bin"
+    cache_dir = Path(tempfile.gettempdir()) / "xtbloom-scc-trace-oracle-bin"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    target = cache_dir / "gpuxtb-tblite-scc-trace"
+    target = cache_dir / "xtbloom-tblite-scc-trace"
     shutil.copy2(path, target)
     _binary_cache = (path, target)
     return target
@@ -1052,7 +1052,7 @@ def main(argv: list[str] | None = None) -> int:
     case_dir.mkdir(parents=True, exist_ok=True)
 
     # Build the oracle once and run every case.
-    with tempfile.TemporaryDirectory(prefix="gpuxtb-scc-corpus-work-") as directory:
+    with tempfile.TemporaryDirectory(prefix="xtbloom-scc-corpus-work-") as directory:
         work = Path(directory)
         checkout = work / "checkout"
         validator.clone_and_apply(arguments.source_root, checkout, metadata)

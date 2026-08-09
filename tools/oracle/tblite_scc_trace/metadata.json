@@ -1,5 +1,5 @@
 {
-  "schema": "gpuxtb-tblite-scc-observer-patch-v1",
+  "schema": "xtbloom-tblite-scc-observer-patch-v1",
   "upstream": {
     "repository": "https://github.com/tblite/tblite.git",
     "revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb",
@@ -17,7 +17,7 @@
   ],
   "patch": {
     "file": "tblite-e9abc395-scc-observer.patch",
-    "sha256": "d6a51afc4b3c56d6589a2b5b115ea8b4891600c1161c525939ca3cc16e2b4954",
+    "sha256": "887294ffb24d24fc0fb27d6f05697e7ef498bc40f0268f34c7056ebe8dfb7928",
     "modified_paths": [
       "src/tblite/scf.f90",
       "src/tblite/scf/CMakeLists.txt",

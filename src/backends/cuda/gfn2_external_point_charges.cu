@@ -1,5 +1,5 @@
 #include <cmath>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cstddef>
 #include <cstdint>
@@ -8,7 +8,7 @@
 #include "backends/cuda/cuda_atomics.cuh"
 #include "backends/cuda/gfn2_external_point_charges.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
@@ -614,7 +614,7 @@ __device__ bool load_pc_force_gate(const Gfn2ForceDeviceActivity& activity, std:
     if (requested > 1u) {
       record_pc_force_system_error(system_errors, system, device_error,
                                    Gfn2ExternalPointChargeDeviceError::kInvalidForceRequest);
-    } else if (requested == 1u && activity.system_statuses[system] == GPUXTB_STATUS_SUCCESS) {
+    } else if (requested == 1u && activity.system_statuses[system] == XTBLOOM_STATUS_SUCCESS) {
       *selected = 1;
     }
   }
@@ -972,7 +972,7 @@ cudaError_t validate_gated_force_launcher_arguments(
       !is_aligned(batch.qm_positions, alignof(double)) ||
       !is_aligned(shell_charges, alignof(double)) ||
       !is_aligned(activity.requested_mask, alignof(std::uint8_t)) ||
-      !is_aligned(activity.system_statuses, alignof(gpuxtb_status_t)) ||
+      !is_aligned(activity.system_statuses, alignof(xtbloom_status_t)) ||
       !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||
       !is_aligned(system_errors, alignof(std::uint32_t)) ||
       !is_aligned(device_error, alignof(std::uint32_t)) ||
@@ -1271,4 +1271,4 @@ cudaError_t evaluate_gfn2_external_point_charge_scc_energy_cuda(
   return cudaPeekAtLastError();
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

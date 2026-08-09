@@ -29,7 +29,7 @@ case "$mode" in
     # not exercise the eigensolver because its BLAS runtime is loaded lazily.
     python - <<'PY'
 import numpy as np
-from gpuxtb import Calculator
+from xtbloom import Calculator
 
 calculator = Calculator(
     "GFN2-xTB",
@@ -47,11 +47,11 @@ result = calculator.singlepoint()
 assert result.scc_converged
 assert np.isfinite(result.energy)
 assert np.isfinite(result.forces).all()
-print(f"gpuxtb CPU wheel smoke energy: {result.energy:.16g}")
+print(f"xTBloom CPU wheel smoke energy: {result.energy:.16g}")
 PY
     ;;
   smoke)
-    python -c 'import gpuxtb; print(gpuxtb.library.get_version())'
+    python -c 'import xtbloom; print(xtbloom.library.get_version())'
     ;;
   *)
     echo "unknown wheel-test mode: $mode" >&2

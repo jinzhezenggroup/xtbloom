@@ -1,4 +1,4 @@
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 //
 // Focused #41 evidence: the per-iteration SCC mixer history transaction must
 // scale with the number of active systems, not the total batch history.
@@ -32,19 +32,19 @@
 #include <utility>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/scc_mixer.hpp"
 #include "model/gfn2/wavefunction.hpp"
+#include "xtbloom/xtbloom.h"
 
 namespace {
 
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::SccMixerPlan;
-using gpuxtb::detail::gfn2::SccMixerState;
-using gpuxtb::detail::gfn2::SccMixerWorkspace;
-using gpuxtb::detail::gfn2::WavefunctionLayout;
-using gpuxtb::detail::gfn2::WavefunctionView;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::SccMixerPlan;
+using xtbloom::detail::gfn2::SccMixerState;
+using xtbloom::detail::gfn2::SccMixerWorkspace;
+using xtbloom::detail::gfn2::WavefunctionLayout;
+using xtbloom::detail::gfn2::WavefunctionView;
 
 using Clock = std::chrono::steady_clock;
 
@@ -64,12 +64,12 @@ struct AlignedBuffer {
   AlignedBuffer& operator=(const AlignedBuffer&) = delete;
 };
 
-std::size_t field_begin(const gpuxtb::detail::gfn2::WavefunctionFieldLayout& field,
+std::size_t field_begin(const xtbloom::detail::gfn2::WavefunctionFieldLayout& field,
                         std::size_t system) {
   return static_cast<std::size_t>(field.system_offsets[system]);
 }
 
-std::size_t field_end(const gpuxtb::detail::gfn2::WavefunctionFieldLayout& field,
+std::size_t field_end(const xtbloom::detail::gfn2::WavefunctionFieldLayout& field,
                       std::size_t system) {
   return static_cast<std::size_t>(field.system_offsets[system + 1u]);
 }
@@ -79,7 +79,7 @@ void set_system_vector(const WavefunctionLayout& layout, WavefunctionView& wavef
   std::size_t packed = 0u;
   const std::array<double*, 3> fields{
       {wavefunction.qsh, wavefunction.dipole, wavefunction.quadrupole}};
-  const std::array<const gpuxtb::detail::gfn2::WavefunctionFieldLayout*, 3> layouts{
+  const std::array<const xtbloom::detail::gfn2::WavefunctionFieldLayout*, 3> layouts{
       {&layout.qsh, &layout.dipole, &layout.quadrupole}};
   for (std::size_t field = 0u; field < fields.size(); ++field) {
     for (std::size_t destination = field_begin(*layouts[field], system);
@@ -118,22 +118,22 @@ int main(int argc, char** argv) {
   std::vector<std::int32_t> spin_channels(batch, 1);
 
   BasisPlan basis;
-  if (gpuxtb::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(batch), total_atoms,
-                                            atom_offsets.data(), atomic_numbers.data(), basis,
-                                            error) != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(batch), total_atoms,
+                                             atom_offsets.data(), atomic_numbers.data(), basis,
+                                             error) != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "make_basis_plan: %s\n", error.c_str());
     return 1;
   }
   WavefunctionLayout layout;
-  if (gpuxtb::detail::gfn2::make_wavefunction_layout(basis, atomic_numbers.data(), charges.data(),
-                                                     unpaired.data(), spin_channels.data(), layout,
-                                                     error) != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::make_wavefunction_layout(basis, atomic_numbers.data(), charges.data(),
+                                                      unpaired.data(), spin_channels.data(), layout,
+                                                      error) != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "make_wavefunction_layout: %s\n", error.c_str());
     return 1;
   }
   SccMixerPlan plan;
-  if (gpuxtb::detail::gfn2::make_scc_mixer_plan(layout, history_size, 0.4, 1.0e-8, 1.0e-8, plan,
-                                                error) != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::make_scc_mixer_plan(layout, history_size, 0.4, 1.0e-8, 1.0e-8, plan,
+                                                 error) != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "make_scc_mixer_plan: %s\n", error.c_str());
     return 1;
   }
@@ -153,20 +153,20 @@ int main(int argc, char** argv) {
   SccMixerState state;
   SccMixerState staged;
   SccMixerWorkspace scratch;
-  if (gpuxtb::detail::gfn2::bind_wavefunction_view(layout, wavefunction_storage.data,
-                                                   wavefunction_storage.size, wavefunction,
-                                                   error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::initialize_sad_multipole_state(layout, wavefunction, error) !=
-          GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::bind_scc_mixer_state(plan, state_storage.data, state_storage.size,
-                                                 state, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::bind_scc_mixer_state(plan, staged_storage.data, staged_storage.size,
-                                                 staged, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::bind_scc_mixer_workspace(plan, scratch_storage.data,
-                                                     scratch_storage.size, scratch,
-                                                     error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(plan, wavefunction, state, error) !=
-          GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::bind_wavefunction_view(layout, wavefunction_storage.data,
+                                                    wavefunction_storage.size, wavefunction,
+                                                    error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::initialize_sad_multipole_state(layout, wavefunction, error) !=
+          XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::bind_scc_mixer_state(plan, state_storage.data, state_storage.size,
+                                                  state, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::bind_scc_mixer_state(plan, staged_storage.data, staged_storage.size,
+                                                  staged, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::bind_scc_mixer_workspace(plan, scratch_storage.data,
+                                                      scratch_storage.size, scratch,
+                                                      error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(plan, wavefunction, state, error) !=
+          XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "bind/initialize: %s\n", error.c_str());
     return 1;
   }
@@ -199,9 +199,9 @@ int main(int argc, char** argv) {
                          0.0002 * static_cast<double>(system + 1u) * static_cast<double>(iteration);
       }
       set_system_vector(layout, wavefunction, system, raw.data());
-      if (gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(plan, static_cast<std::int64_t>(system),
-                                                           wavefunction, state, scratch,
-                                                           error) != GPUXTB_STATUS_SUCCESS) {
+      if (xtbloom::detail::gfn2::mix_scc_broyden_system_cpu(plan, static_cast<std::int64_t>(system),
+                                                            wavefunction, state, scratch,
+                                                            error) != XTBLOOM_STATUS_SUCCESS) {
         std::fprintf(stderr, "warmup mix: %s\n", error.c_str());
         return 1;
       }
@@ -261,7 +261,7 @@ int main(int argc, char** argv) {
   };
 
   const std::size_t scalar_bytes = 2u * sizeof(double) + 2u * sizeof(std::uint64_t) +
-                                   sizeof(gpuxtb_status_t) + 2u * sizeof(std::uint8_t);
+                                   sizeof(xtbloom_status_t) + 2u * sizeof(std::uint8_t);
   const std::size_t per_system_copy_bytes =
       (3u * dimensions.front() + 2u * dimensions.front() * memory + memory) * sizeof(double) +
       scalar_bytes;
@@ -327,12 +327,12 @@ int main(int argc, char** argv) {
       bool copy_ok = true;
       for (std::size_t system = 0u; system < active; ++system) {
         copy_ok = copy_ok &&
-                  gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+                  xtbloom::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
                       plan, static_cast<std::int64_t>(system), state, staged, error) ==
-                      GPUXTB_STATUS_SUCCESS &&
-                  gpuxtb::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
+                      XTBLOOM_STATUS_SUCCESS &&
+                  xtbloom::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
                       plan, static_cast<std::int64_t>(system), staged, state, error) ==
-                      GPUXTB_STATUS_SUCCESS;
+                      XTBLOOM_STATUS_SUCCESS;
       }
       row.copy_samples.push_back(elapsed_us(start));
       if (!copy_ok) {
@@ -348,9 +348,9 @@ int main(int argc, char** argv) {
       start = timestamp();
       bool mix_ok = true;
       for (std::size_t system = 0u; system < active; ++system) {
-        mix_ok = mix_ok && gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+        mix_ok = mix_ok && xtbloom::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
                                plan, static_cast<std::int64_t>(system), state, staged, error) ==
-                               GPUXTB_STATUS_SUCCESS;
+                               XTBLOOM_STATUS_SUCCESS;
         const std::size_t dimension = dimensions[system];
         const std::size_t vector_offset = vector_offsets[system];
         std::vector<double>& raw = raw_scratch[system];
@@ -361,12 +361,12 @@ int main(int argc, char** argv) {
         }
         set_system_vector(layout, wavefunction, system, raw.data());
         mix_ok = mix_ok &&
-                 gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(
+                 xtbloom::detail::gfn2::mix_scc_broyden_system_cpu(
                      plan, static_cast<std::int64_t>(system), wavefunction, staged, scratch,
-                     error) == GPUXTB_STATUS_SUCCESS &&
-                 gpuxtb::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
+                     error) == XTBLOOM_STATUS_SUCCESS &&
+                 xtbloom::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
                      plan, static_cast<std::int64_t>(system), staged, state, error) ==
-                     GPUXTB_STATUS_SUCCESS;
+                     XTBLOOM_STATUS_SUCCESS;
       }
       row.mix_samples.push_back(elapsed_us(start));
       if (!mix_ok) {

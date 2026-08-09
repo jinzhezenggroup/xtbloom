@@ -30,26 +30,26 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2PlanMemorySpace;
-using gpuxtb::detail::Gfn2WavefunctionLayoutView;
-using gpuxtb::detail::cuda::Gfn2SccDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2SccDeviceConstMultipoles;
-using gpuxtb::detail::cuda::Gfn2SccDeviceMultipoles;
-using gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity;
-using gpuxtb::detail::cuda::Gfn2SccIterationDeviceLedger;
-using gpuxtb::detail::cuda::Gfn2SccMixerDeviceError;
-using gpuxtb::detail::cuda::Gfn2SccMixerDevicePolicy;
-using gpuxtb::detail::cuda::Gfn2SccMixerDeviceState;
-using gpuxtb::detail::cuda::Gfn2SccMixerDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2SccStageCodeFormat;
-using gpuxtb::detail::cuda::Gfn2SccStageDeviceReport;
-using gpuxtb::detail::cuda::Gfn2SccStageId;
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::SccMixerPlan;
-using gpuxtb::detail::gfn2::SccMixerState;
-using gpuxtb::detail::gfn2::SccMixerWorkspace;
-using gpuxtb::detail::gfn2::WavefunctionLayout;
-using gpuxtb::detail::gfn2::WavefunctionView;
+using xtbloom::detail::Gfn2PlanMemorySpace;
+using xtbloom::detail::Gfn2WavefunctionLayoutView;
+using xtbloom::detail::cuda::Gfn2SccDeviceBatch;
+using xtbloom::detail::cuda::Gfn2SccDeviceConstMultipoles;
+using xtbloom::detail::cuda::Gfn2SccDeviceMultipoles;
+using xtbloom::detail::cuda::Gfn2SccIterationDeviceActivity;
+using xtbloom::detail::cuda::Gfn2SccIterationDeviceLedger;
+using xtbloom::detail::cuda::Gfn2SccMixerDeviceError;
+using xtbloom::detail::cuda::Gfn2SccMixerDevicePolicy;
+using xtbloom::detail::cuda::Gfn2SccMixerDeviceState;
+using xtbloom::detail::cuda::Gfn2SccMixerDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2SccStageCodeFormat;
+using xtbloom::detail::cuda::Gfn2SccStageDeviceReport;
+using xtbloom::detail::cuda::Gfn2SccStageId;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::SccMixerPlan;
+using xtbloom::detail::gfn2::SccMixerState;
+using xtbloom::detail::gfn2::SccMixerWorkspace;
+using xtbloom::detail::gfn2::WavefunctionLayout;
+using xtbloom::detail::gfn2::WavefunctionView;
 
 constexpr std::uint64_t kPlanToken = 0x56b0d4e7c9012a3fULL;
 constexpr std::int64_t kHistorySize = 4;
@@ -60,7 +60,7 @@ constexpr double kMaximumTolerance = 1.0e-30;
 class AlignedBuffer {
  public:
   explicit AlignedBuffer(std::size_t bytes) : bytes_(bytes) {
-    data_ = std::aligned_alloc(gpuxtb::detail::gfn2::kSccMixerWorkspaceAlignment, bytes_);
+    data_ = std::aligned_alloc(xtbloom::detail::gfn2::kSccMixerWorkspaceAlignment, bytes_);
     if (data_ != nullptr) {
       std::memset(data_, 0, bytes_);
     }
@@ -149,16 +149,16 @@ bool make_cpu_fixture(std::size_t batch_size, CpuFixture& fixture, std::string& 
   std::vector<double> charges(batch_size, 0.0);
   std::vector<std::int32_t> unpaired(batch_size, 0);
   std::vector<std::int32_t> spin_channels(batch_size, 1);
-  if (gpuxtb::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(batch_size),
-                                            static_cast<std::int64_t>(atomic_numbers.size()),
-                                            atom_offsets.data(), atomic_numbers.data(),
-                                            fixture.basis, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_wavefunction_layout(
+  if (xtbloom::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(batch_size),
+                                             static_cast<std::int64_t>(atomic_numbers.size()),
+                                             atom_offsets.data(), atomic_numbers.data(),
+                                             fixture.basis, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_wavefunction_layout(
           fixture.basis, atomic_numbers.data(), charges.data(), unpaired.data(),
-          spin_channels.data(), fixture.layout, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_scc_mixer_plan(fixture.layout, kHistorySize, kDamping,
-                                                rms_tolerance, maximum_tolerance, fixture.plan,
-                                                error) != GPUXTB_STATUS_SUCCESS) {
+          spin_channels.data(), fixture.layout, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_scc_mixer_plan(fixture.layout, kHistorySize, kDamping,
+                                                 rms_tolerance, maximum_tolerance, fixture.plan,
+                                                 error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -171,16 +171,16 @@ bool make_cpu_fixture(std::size_t batch_size, CpuFixture& fixture, std::string& 
     error = "CPU fixture allocation failed";
     return false;
   }
-  if (gpuxtb::detail::gfn2::bind_wavefunction_view(
+  if (xtbloom::detail::gfn2::bind_wavefunction_view(
           fixture.layout, fixture.wavefunction_storage->data(),
           fixture.wavefunction_storage->size(), fixture.wavefunction,
-          error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::bind_scc_mixer_state(fixture.plan, fixture.state_storage->data(),
-                                                 fixture.state_storage->size(), fixture.state,
-                                                 error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::bind_scc_mixer_workspace(
+          error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::bind_scc_mixer_state(fixture.plan, fixture.state_storage->data(),
+                                                  fixture.state_storage->size(), fixture.state,
+                                                  error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::bind_scc_mixer_workspace(
           fixture.plan, fixture.scratch_storage->data(), fixture.scratch_storage->size(),
-          fixture.scratch, error) != GPUXTB_STATUS_SUCCESS) {
+          fixture.scratch, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -273,7 +273,7 @@ struct StateSnapshot {
   std::vector<double> maximum;
   std::vector<std::uint64_t> iterations;
   std::vector<std::uint64_t> restarts;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<std::uint8_t> initialized;
   std::vector<std::uint8_t> residual_converged;
 };
@@ -309,7 +309,7 @@ struct DeviceFixture {
   DeviceBuffer<double> maximum;
   DeviceBuffer<std::uint64_t> iterations;
   DeviceBuffer<std::uint64_t> restarts;
-  DeviceBuffer<gpuxtb_status_t> statuses;
+  DeviceBuffer<xtbloom_status_t> statuses;
   DeviceBuffer<std::uint8_t> initialized;
   DeviceBuffer<std::uint8_t> residual_converged;
   DeviceBuffer<std::uint8_t> active_mask;
@@ -737,10 +737,10 @@ bool near_arrays(const double* first, const double* second, std::size_t count,
 int initialize_device(DeviceFixture& device, cudaStream_t stream = nullptr) {
   CUDA_CHECK(device.reset_error(stream));
   const cudaError_t status = device.layout.spin_channels == nullptr
-                                 ? gpuxtb::detail::cuda::initialize_gfn2_scc_mixer_cuda(
+                                 ? xtbloom::detail::cuda::initialize_gfn2_scc_mixer_cuda(
                                        device.batch, device.policy, device.raw, device.state,
                                        device.workspace, device.error.get(), stream)
-                                 : gpuxtb::detail::cuda::initialize_gfn2_scc_mixer_cuda(
+                                 : xtbloom::detail::cuda::initialize_gfn2_scc_mixer_cuda(
                                        device.batch, device.layout, device.policy, device.raw,
                                        device.state, device.workspace, device.error.get(), stream);
   CUDA_CHECK(status);
@@ -797,8 +797,8 @@ int test_cpu_parity_for_batch(std::size_t batch_size) {
   CpuFixture cpu;
   std::string error;
   CHECK(make_cpu_fixture(batch_size, cpu, error));
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(cpu.plan, cpu.wavefunction, cpu.state,
-                                                             error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(cpu.plan, cpu.wavefunction, cpu.state,
+                                                              error) == XTBLOOM_STATUS_SUCCESS);
   DeviceFixture device;
   CUDA_CHECK(device.setup(cpu));
   CHECK(initialize_device(device) == 0);
@@ -812,10 +812,10 @@ int test_cpu_parity_for_batch(std::size_t batch_size) {
   for (std::size_t iteration = 0u; iteration < 6u; ++iteration) {
     install_raw_iteration(cpu, iteration);
     CUDA_CHECK(device.install_raw_iteration(cpu, iteration));
-    CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_batch_cpu(
-              cpu.plan, cpu.wavefunction, cpu.state, cpu.scratch, error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::mix_scc_broyden_batch_cpu(
+              cpu.plan, cpu.wavefunction, cpu.state, cpu.scratch, error) == XTBLOOM_STATUS_SUCCESS);
     CUDA_CHECK(device.reset_error());
-    CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
         device.batch, device.policy, device.activity, device.raw, device.output, device.state,
         device.workspace, device.error.get()));
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -832,8 +832,8 @@ int test_nextafter_convergence_boundaries_match_cpu() {
   CpuFixture probe;
   std::string error;
   CHECK(make_cpu_fixture(1u, probe, error));
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(
-            probe.plan, probe.wavefunction, probe.state, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(
+            probe.plan, probe.wavefunction, probe.state, error) == XTBLOOM_STATUS_SUCCESS);
   install_raw_iteration(probe, 0u);
   const std::int64_t count = dimension(probe, 0u);
   const std::int64_t begin = vector_begin(probe, 0u);
@@ -869,17 +869,17 @@ int test_nextafter_convergence_boundaries_match_cpu() {
   for (const BoundaryCase& boundary : cases) {
     CpuFixture cpu;
     CHECK(make_cpu_fixture(1u, cpu, error, boundary.rms_tolerance, boundary.maximum_tolerance));
-    CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(
-              cpu.plan, cpu.wavefunction, cpu.state, error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(
+              cpu.plan, cpu.wavefunction, cpu.state, error) == XTBLOOM_STATUS_SUCCESS);
     DeviceFixture device;
     CUDA_CHECK(device.setup(cpu));
     CHECK(initialize_device(device) == 0);
     install_raw_iteration(cpu, 0u);
     CUDA_CHECK(device.install_raw_iteration(cpu, 0u));
-    CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_batch_cpu(
-              cpu.plan, cpu.wavefunction, cpu.state, cpu.scratch, error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::mix_scc_broyden_batch_cpu(
+              cpu.plan, cpu.wavefunction, cpu.state, cpu.scratch, error) == XTBLOOM_STATUS_SUCCESS);
     CUDA_CHECK(device.reset_error());
-    CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
         device.batch, device.policy, device.activity, device.raw, device.output, device.state,
         device.workspace, device.error.get()));
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -977,7 +977,7 @@ int test_nonfinite_initialize_is_whole_call_atomic() {
       std::numeric_limits<double>::quiet_NaN();
   CUDA_CHECK(device.raw_shell.copy_from(shell.data(), shell.size()));
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::initialize_gfn2_scc_mixer_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::initialize_gfn2_scc_mixer_cuda(
       device.batch, device.policy, device.raw, device.state, device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
   StateSnapshot after;
@@ -1000,7 +1000,7 @@ int test_topology_and_canonical_sequence_gates() {
   CHECK(initialize_device(device) == 0);
   CUDA_CHECK(device.install_raw_iteration(cpu, 0u));
 
-  /* The future composer normalizes system_statuses in gpuxtb_status_t space
+  /* The future composer normalizes system_statuses in xtbloom_status_t space
    * and this sequence latch separately; the mixer enum scalar is tracing-only
    * because its numeric domain must never be compared with status codes. */
   constexpr double first_sentinel = -901.25;
@@ -1013,7 +1013,7 @@ int test_topology_and_canonical_sequence_gates() {
   invalid_offsets[4] = invalid_offsets[3] - 1;
   CUDA_CHECK(device.shell_offsets.copy_from(invalid_offsets.data(), invalid_offsets.size()));
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
       device.batch, device.policy, device.activity, device.raw, device.output, device.state,
       device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1040,7 +1040,7 @@ int test_topology_and_canonical_sequence_gates() {
       static_cast<std::uint32_t>(Gfn2SccMixerDeviceError::kNonfiniteRawMultipole);
   CUDA_CHECK(device.set_activity(std::vector<std::uint8_t>(8u, 1u), 0u));
   CUDA_CHECK(device.error.copy_from(&sticky, 1u));
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
       device.batch, device.policy, device.activity, device.raw, device.output, device.state,
       device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1060,7 +1060,7 @@ int test_topology_and_canonical_sequence_gates() {
   CUDA_CHECK(device.set_all_active());
   StateSnapshot before_reopened;
   CUDA_CHECK(device.snapshot(before_reopened));
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
       device.batch, device.policy, device.activity, device.raw, device.output, device.state,
       device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1085,7 +1085,7 @@ int test_active_topology_projection_and_normalization() {
     CUDA_CHECK(device.install_raw_iteration(cpu, 0u));
 
     constexpr std::size_t stale = 3u;
-    const gpuxtb_status_t stale_status = GPUXTB_STATUS_SCC_NOT_CONVERGED;
+    const xtbloom_status_t stale_status = XTBLOOM_STATUS_SCC_NOT_CONVERGED;
     CUDA_CHECK(cudaMemcpy(device.statuses.get() + stale, &stale_status, sizeof(stale_status),
                           cudaMemcpyHostToDevice));
     constexpr double sentinel = -906.25;
@@ -1110,7 +1110,7 @@ int test_active_topology_projection_and_normalization() {
     }
     CUDA_CHECK(device.shell_offsets.copy_from(shell_offsets.data(), shell_offsets.size()));
     CUDA_CHECK(device.reset_error());
-    CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
         device.batch, device.policy, device.activity, device.raw, device.output, device.state,
         device.workspace, device.error.get()));
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -1121,7 +1121,7 @@ int test_active_topology_projection_and_normalization() {
     CUDA_CHECK(device.snapshot_output(output_after));
     for (std::size_t system = 0u; system < 8u; ++system) {
       CHECK(equal_target_slice(before, after, cpu, system));
-      CHECK(after.statuses[system] == GPUXTB_STATUS_SUCCESS);
+      CHECK(after.statuses[system] == XTBLOOM_STATUS_SUCCESS);
     }
     CHECK(equal_multipoles(output_before, output_after));
     std::uint32_t mixer_error = 0u;
@@ -1132,7 +1132,7 @@ int test_active_topology_projection_and_normalization() {
     CHECK(mixer_error == static_cast<std::uint32_t>(Gfn2SccMixerDeviceError::kInvalidOffsets));
     CHECK(stage_sequence == 0u);
 
-    DeviceBuffer<gpuxtb_status_t> pending_statuses;
+    DeviceBuffer<xtbloom_status_t> pending_statuses;
     DeviceBuffer<std::uint64_t> system_failure_records;
     DeviceBuffer<std::uint64_t> plan_failure_record;
     CUDA_CHECK(pending_statuses.allocate(8u));
@@ -1151,7 +1151,7 @@ int test_active_topology_projection_and_normalization() {
                                            kPlanToken};
     Gfn2SccStageDeviceReport report;
     report.stage = Gfn2SccStageId::kMixer;
-    report.system_code_format = Gfn2SccStageCodeFormat::kGpuxtbStatus;
+    report.system_code_format = Gfn2SccStageCodeFormat::kXTBloomStatus;
     report.system_codes = device.statuses.get();
     report.system_code_elements = 8;
     report.device_error = nullptr;
@@ -1159,19 +1159,19 @@ int test_active_topology_projection_and_normalization() {
     report.stage_sequence_active = device.sequence.get();
     report.stage_sequence_elements = 1;
     report.peer_error_mask = std::uint64_t{1}
-                             << static_cast<std::uint32_t>(GPUXTB_STATUS_INTERNAL_ERROR);
-    report.peer_failure_status = GPUXTB_STATUS_INTERNAL_ERROR;
+                             << static_cast<std::uint32_t>(XTBLOOM_STATUS_INTERNAL_ERROR);
+    report.peer_failure_status = XTBLOOM_STATUS_INTERNAL_ERROR;
     report.plan_token = kPlanToken;
-    CUDA_CHECK(gpuxtb::detail::cuda::normalize_gfn2_scc_stage_cuda(report, ledger));
+    CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(report, ledger));
     CUDA_CHECK(cudaDeviceSynchronize());
     std::uint64_t plan_failure = 0u;
     std::vector<std::uint64_t> member_failures(8u, 1u);
     CUDA_CHECK(plan_failure_record.copy_to(&plan_failure, 1u));
     CUDA_CHECK(system_failure_records.copy_to(member_failures.data(), member_failures.size()));
     CUDA_CHECK(cudaDeviceSynchronize());
-    CHECK(gpuxtb::detail::cuda::gfn2_scc_failure_stage(plan_failure) == Gfn2SccStageId::kMixer);
-    CHECK(gpuxtb::detail::cuda::gfn2_scc_failure_code(plan_failure) ==
-          gpuxtb::detail::cuda::kGfn2SccStageSequenceClosedCode);
+    CHECK(xtbloom::detail::cuda::gfn2_scc_failure_stage(plan_failure) == Gfn2SccStageId::kMixer);
+    CHECK(xtbloom::detail::cuda::gfn2_scc_failure_code(plan_failure) ==
+          xtbloom::detail::cuda::kGfn2SccStageSequenceClosedCode);
     CHECK(std::all_of(member_failures.begin(), member_failures.end(),
                       [](std::uint64_t value) { return value == 0u; }));
   }
@@ -1198,7 +1198,7 @@ int test_active_topology_projection_and_normalization() {
   CUDA_CHECK(device.snapshot(before));
   CUDA_CHECK(device.snapshot_output(output_before));
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
       device.batch, device.policy, device.activity, device.raw, device.output, device.state,
       device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1235,7 +1235,7 @@ int test_iteration_overflow_isolated_from_healthy_peers() {
   StateSnapshot before;
   CUDA_CHECK(device.snapshot(before));
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
       device.batch, device.policy, device.activity, device.raw, device.output, device.state,
       device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1248,10 +1248,10 @@ int test_iteration_overflow_isolated_from_healthy_peers() {
   CUDA_CHECK(cudaDeviceSynchronize());
   CHECK(semantic_error == static_cast<std::uint32_t>(Gfn2SccMixerDeviceError::kIterationOverflow));
   CHECK(equal_target_slice(before, after, cpu, failed));
-  CHECK(after.statuses[failed] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(after.statuses[failed] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(target_multipoles_have_value(output, cpu, failed, sentinel));
   CHECK(after.iterations[0] == before.iterations[0] + 1u);
-  CHECK(after.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(after.statuses[0] == XTBLOOM_STATUS_SUCCESS);
   return 0;
 }
 
@@ -1266,7 +1266,7 @@ int test_corrupted_active_history_isolated_from_healthy_peers() {
     for (std::size_t iteration = 0u; iteration < 2u; ++iteration) {
       CUDA_CHECK(device.install_raw_iteration(cpu, iteration));
       CUDA_CHECK(device.reset_error());
-      CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
           device.batch, device.policy, device.activity, device.raw, device.output, device.state,
           device.workspace, device.error.get()));
       CUDA_CHECK(cudaDeviceSynchronize());
@@ -1289,7 +1289,7 @@ int test_corrupted_active_history_isolated_from_healthy_peers() {
     StateSnapshot before;
     CUDA_CHECK(device.snapshot(before));
     CUDA_CHECK(device.reset_error());
-    CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
         device.batch, device.policy, device.activity, device.raw, device.output, device.state,
         device.workspace, device.error.get()));
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -1302,10 +1302,10 @@ int test_corrupted_active_history_isolated_from_healthy_peers() {
     CUDA_CHECK(cudaDeviceSynchronize());
     CHECK(semantic_error != static_cast<std::uint32_t>(Gfn2SccMixerDeviceError::kSuccess));
     CHECK(equal_target_slice(before, after, cpu, failed));
-    CHECK(after.statuses[failed] == GPUXTB_STATUS_INTERNAL_ERROR);
+    CHECK(after.statuses[failed] == XTBLOOM_STATUS_INTERNAL_ERROR);
     CHECK(target_multipoles_have_value(output, cpu, failed, sentinel));
     CHECK(after.iterations[0] == before.iterations[0] + 1u);
-    CHECK(after.statuses[0] == GPUXTB_STATUS_SUCCESS);
+    CHECK(after.statuses[0] == XTBLOOM_STATUS_SUCCESS);
   }
   return 0;
 }
@@ -1314,15 +1314,15 @@ int test_peer_failure_and_canonical_inactive_members() {
   CpuFixture cpu;
   std::string error;
   CHECK(make_cpu_fixture(8u, cpu, error));
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(cpu.plan, cpu.wavefunction, cpu.state,
-                                                             error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(cpu.plan, cpu.wavefunction, cpu.state,
+                                                              error) == XTBLOOM_STATUS_SUCCESS);
   DeviceFixture device;
   CUDA_CHECK(device.setup(cpu));
   CHECK(initialize_device(device) == 0);
   install_raw_iteration(cpu, 0u);
   CUDA_CHECK(device.copy_raw(cpu));
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
       device.batch, device.policy, device.activity, device.raw, device.output, device.state,
       device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1357,7 +1357,7 @@ int test_peer_failure_and_canonical_inactive_members() {
   CUDA_CHECK(device.raw_shell.copy_from(raw_shell.data(), raw_shell.size()));
   CUDA_CHECK(device.raw_dipole.copy_from(raw_dipole.data(), raw_dipole.size()));
   CUDA_CHECK(device.raw_quadrupole.copy_from(raw_quadrupole.data(), raw_quadrupole.size()));
-  const gpuxtb_status_t terminal_status = GPUXTB_STATUS_SCC_NOT_CONVERGED;
+  const xtbloom_status_t terminal_status = XTBLOOM_STATUS_SCC_NOT_CONVERGED;
   const std::uint8_t poisoned_residual_diagnostic = 2u;
   const std::uint8_t residual_pass_flag = 1u;
   const std::uint64_t exhausted_iterations = std::numeric_limits<std::uint64_t>::max();
@@ -1395,7 +1395,7 @@ int test_peer_failure_and_canonical_inactive_members() {
   CUDA_CHECK(device.output_quadrupole.copy_from(sent_quadrupole.data(), sent_quadrupole.size()));
 
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
       device.batch, device.policy, device.activity, device.raw, device.output, device.state,
       device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1406,13 +1406,13 @@ int test_peer_failure_and_canonical_inactive_members() {
   CHECK(semantic_error ==
         static_cast<std::uint32_t>(Gfn2SccMixerDeviceError::kNonfiniteRawMultipole));
   CHECK(equal_target_slice(before, after, cpu, failed));
-  CHECK(after.statuses[failed] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(after.statuses[failed] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(equal_target_slice(before, after, cpu, terminal));
   CHECK(after.statuses[terminal] == terminal_status);
   CHECK(equal_complete_system(before, after, cpu, residual_pass));
   CHECK(equal_complete_system(before, after, cpu, maximum_iteration));
   CHECK(after.iterations[stale_mixer_status] == before.iterations[stale_mixer_status] + 1u);
-  CHECK(after.statuses[stale_mixer_status] == GPUXTB_STATUS_SUCCESS);
+  CHECK(after.statuses[stale_mixer_status] == XTBLOOM_STATUS_SUCCESS);
   CHECK(after.residual_converged[stale_mixer_status] == 0u);
   CHECK(after.iterations[0] == before.iterations[0] + 1u);
   std::vector<double> output_shell(device.output_shell.size());
@@ -1442,15 +1442,15 @@ int test_restart_atomicity_and_private_mixed_semantics() {
   CpuFixture cpu;
   std::string error;
   CHECK(make_cpu_fixture(8u, cpu, error));
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(cpu.plan, cpu.wavefunction, cpu.state,
-                                                             error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(cpu.plan, cpu.wavefunction, cpu.state,
+                                                              error) == XTBLOOM_STATUS_SUCCESS);
   DeviceFixture device;
   CUDA_CHECK(device.setup(cpu));
   CHECK(initialize_device(device) == 0);
   install_raw_iteration(cpu, 0u);
   CUDA_CHECK(device.copy_raw(cpu));
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
       device.batch, device.policy, device.activity, device.raw, device.output, device.state,
       device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1465,7 +1465,7 @@ int test_restart_atomicity_and_private_mixed_semantics() {
   StateSnapshot before;
   CUDA_CHECK(device.snapshot(before));
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::restart_gfn2_scc_mixer_system_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::restart_gfn2_scc_mixer_system_cuda(
       device.batch, device.policy, static_cast<std::int64_t>(target), device.raw, device.state,
       device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1475,7 +1475,7 @@ int test_restart_atomicity_and_private_mixed_semantics() {
   const std::size_t count = static_cast<std::size_t>(dimension(cpu, target));
   CHECK(restarted.iterations[target] == 0u);
   CHECK(restarted.restarts[target] == before.restarts[target] + 1u);
-  CHECK(restarted.statuses[target] == GPUXTB_STATUS_SUCCESS);
+  CHECK(restarted.statuses[target] == XTBLOOM_STATUS_SUCCESS);
   CHECK(restarted.residual_converged[target] == 0u);
   CHECK(std::all_of(restarted.previous.begin() + begin, restarted.previous.begin() + begin + count,
                     [](double value) { return value == 0.0; }));
@@ -1498,7 +1498,7 @@ int test_restart_atomicity_and_private_mixed_semantics() {
       std::numeric_limits<double>::infinity();
   CUDA_CHECK(device.raw_shell.copy_from(public_shell.data(), public_shell.size()));
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::restart_gfn2_scc_mixer_system_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::restart_gfn2_scc_mixer_system_cuda(
       device.batch, device.policy, static_cast<std::int64_t>(target), device.raw, device.state,
       device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1517,7 +1517,7 @@ int test_restart_atomicity_and_private_mixed_semantics() {
   StateSnapshot before_overflow_restart;
   CUDA_CHECK(device.snapshot(before_overflow_restart));
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::restart_gfn2_scc_mixer_system_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::restart_gfn2_scc_mixer_system_cuda(
       device.batch, device.policy, static_cast<std::int64_t>(target), device.raw, device.state,
       device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1545,7 +1545,7 @@ int test_restart_atomicity_and_private_mixed_semantics() {
   CUDA_CHECK(device.raw_dipole.copy_from(public_dipole.data(), public_dipole.size()));
   CUDA_CHECK(device.raw_quadrupole.copy_from(public_quadrupole.data(), public_quadrupole.size()));
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
       device.batch, loose, device.activity, device.raw, device.output, device.state,
       device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1559,7 +1559,7 @@ int test_restart_atomicity_and_private_mixed_semantics() {
   CHECK(output_shell[target_shell] == mixed.current[begin]);
   CHECK(output_shell[target_shell] != public_shell[target_shell]);
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
       device.batch, loose, device.activity, device.raw, device.output, device.state,
       device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1592,10 +1592,10 @@ int test_alias_matches_distinct_ragged_batch() {
                                       kPlanToken};
   CUDA_CHECK(distinct.reset_error());
   CUDA_CHECK(aliased.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
       distinct.batch, distinct.policy, distinct.activity, distinct.raw, distinct.output,
       distinct.state, distinct.workspace, distinct.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
       aliased.batch, aliased.policy, aliased.activity, aliased.raw, in_place, aliased.state,
       aliased.workspace, aliased.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1617,8 +1617,8 @@ int test_custom_stream_and_graph_replay() {
   CpuFixture cpu;
   std::string error;
   CHECK(make_cpu_fixture(8u, cpu, error));
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(cpu.plan, cpu.wavefunction, cpu.state,
-                                                             error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(cpu.plan, cpu.wavefunction, cpu.state,
+                                                              error) == XTBLOOM_STATUS_SUCCESS);
   cudaStream_t stream = nullptr;
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   DeviceFixture device;
@@ -1632,7 +1632,7 @@ int test_custom_stream_and_graph_replay() {
   cudaGraphExec_t executable = nullptr;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
   CUDA_CHECK(device.reset_error(stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
       device.batch, device.policy, device.activity, device.raw, device.output, device.state,
       device.workspace, device.error.get(), stream));
   CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
@@ -1686,7 +1686,7 @@ int test_mixed_spin_full_vector_batches() {
     CUDA_CHECK(device.raw_quadrupole.copy_from(raw.quadrupole.data(), raw.quadrupole.size()));
     CUDA_CHECK(device.fill_output(-911.0));
     CUDA_CHECK(device.reset_error());
-    CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
         device.batch, device.layout, device.policy, device.activity, device.raw, device.output,
         device.state, device.workspace, device.error.get()));
 
@@ -1715,7 +1715,7 @@ int test_mixed_spin_full_vector_batches() {
     CHECK(std::all_of(state.iterations.begin(), state.iterations.end(),
                       [](std::uint64_t value) { return value == 1u; }));
     CHECK(std::all_of(state.statuses.begin(), state.statuses.end(),
-                      [](gpuxtb_status_t value) { return value == GPUXTB_STATUS_SUCCESS; }));
+                      [](xtbloom_status_t value) { return value == XTBLOOM_STATUS_SUCCESS; }));
   }
   return 0;
 }
@@ -1728,27 +1728,27 @@ int test_host_validation() {
   CUDA_CHECK(device.setup(cpu));
   Gfn2SccMixerDevicePolicy invalid = device.policy;
   invalid.history_size = 0;
-  CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
             device.batch, invalid, device.activity, device.raw, device.output, device.state,
             device.workspace, device.error.get()) == cudaErrorInvalidValue);
   Gfn2SccDeviceBatch wrong_token = device.batch;
   wrong_token.plan_token ^= 1u;
-  CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
             wrong_token, device.policy, device.activity, device.raw, device.output, device.state,
             device.workspace, device.error.get()) == cudaErrorInvalidValue);
   Gfn2SccIterationDeviceActivity wrong_activity = device.activity;
   wrong_activity.plan_token ^= 1u;
-  CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
             device.batch, device.policy, wrong_activity, device.raw, device.output, device.state,
             device.workspace, device.error.get()) == cudaErrorInvalidValue);
   wrong_activity = device.activity;
   wrong_activity.batch_elements = 0;
-  CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
             device.batch, device.policy, wrong_activity, device.raw, device.output, device.state,
             device.workspace, device.error.get()) == cudaErrorInvalidValue);
   Gfn2SccDeviceMultipoles aliased = device.output;
   aliased.shell_charges = device.state.current_inputs;
-  CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
             device.batch, device.policy, device.activity, device.raw, aliased, device.state,
             device.workspace, device.error.get()) == cudaErrorInvalidValue);
   Gfn2SccDeviceMultipoles in_place = {device.raw_shell.get(),
@@ -1760,7 +1760,7 @@ int test_host_validation() {
                                       kPlanToken};
   CHECK(initialize_device(device) == 0);
   CUDA_CHECK(device.reset_error());
-  CUDA_CHECK(gpuxtb::detail::cuda::mix_gfn2_scc_broyden_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::mix_gfn2_scc_broyden_cuda(
       device.batch, device.policy, device.activity, device.raw, in_place, device.state,
       device.workspace, device.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());

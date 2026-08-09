@@ -1,7 +1,7 @@
-#ifndef GPUXTB_MODEL_GFN2_AES2_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_AES2_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_AES2_HPP
+#define XTBLOOM_MODEL_GFN2_AES2_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -9,10 +9,10 @@
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/basis.hpp"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 struct AES2PlanData;
 
@@ -64,8 +64,8 @@ class AES2Plan {
 
   std::shared_ptr<const AES2PlanData> data_;
 
-  friend gpuxtb_status_t make_aes2_plan(const BasisPlan& basis, const std::int32_t* atomic_numbers,
-                                        AES2Plan& plan, std::string& error);
+  friend xtbloom_status_t make_aes2_plan(const BasisPlan& basis, const std::int32_t* atomic_numbers,
+                                         AES2Plan& plan, std::string& error);
 };
 
 /*
@@ -113,8 +113,8 @@ struct AES2Workspace {
  * shell metadata is cross-checked against the generated parameter table so a
  * same-sized but mismatched atomic-number list is rejected.
  */
-gpuxtb_status_t make_aes2_plan(const BasisPlan& basis, const std::int32_t* atomic_numbers,
-                               AES2Plan& plan, std::string& error);
+xtbloom_status_t make_aes2_plan(const BasisPlan& basis, const std::int32_t* atomic_numbers,
+                                AES2Plan& plan, std::string& error);
 
 /*
  * Build the compact pair cache for positions in bohr and externally evaluated
@@ -131,7 +131,7 @@ gpuxtb_status_t make_aes2_plan(const BasisPlan& basis, const std::int32_t* atomi
  * workspace.pair_scratch must each hold plan.pair_data_elements() doubles and
  * must be disjoint. On failure, pair_storage and cache are unchanged.
  */
-gpuxtb_status_t update_aes2_geometry_cache_cpu(
+xtbloom_status_t update_aes2_geometry_cache_cpu(
     const AES2Plan& plan, const double* positions, const double* coordination_numbers,
     std::uint64_t geometry_generation, double* pair_storage, std::size_t pair_storage_elements,
     const AES2Workspace& workspace, AES2GeometryCache& cache, std::string& error);
@@ -149,13 +149,13 @@ gpuxtb_status_t update_aes2_geometry_cache_cpu(
  * and workspace.potential_scratch must be mutually disjoint. No output is
  * modified if validation or arithmetic fails.
  */
-gpuxtb_status_t evaluate_aes2_potential_cpu(const AES2Plan& plan, const AES2GeometryCache& cache,
-                                            const double* atomic_charges,
-                                            const double* atomic_dipoles,
-                                            const double* atomic_quadrupoles,
-                                            double* charge_potentials, double* dipole_potentials,
-                                            double* quadrupole_potentials,
-                                            const AES2Workspace& workspace, std::string& error);
+xtbloom_status_t evaluate_aes2_potential_cpu(const AES2Plan& plan, const AES2GeometryCache& cache,
+                                             const double* atomic_charges,
+                                             const double* atomic_dipoles,
+                                             const double* atomic_quadrupoles,
+                                             double* charge_potentials, double* dipole_potentials,
+                                             double* quadrupole_potentials,
+                                             const AES2Workspace& workspace, std::string& error);
 
 /*
  * Overwrite the AES2 atom q/d/Q potentials of exactly one ragged batch member.
@@ -169,7 +169,7 @@ gpuxtb_status_t evaluate_aes2_potential_cpu(const AES2Plan& plan, const AES2Geom
  * potential slices remain unchanged. The canonical caller-owned scratch is
  * used for staging, and successful calls allocate nothing.
  */
-gpuxtb_status_t evaluate_aes2_potential_system_cpu(
+xtbloom_status_t evaluate_aes2_potential_system_cpu(
     const AES2Plan& plan, const AES2GeometryCache& cache, std::int64_t system,
     const double* atomic_charges, const double* atomic_dipoles, const double* atomic_quadrupoles,
     double* charge_potentials, double* dipole_potentials, double* quadrupole_potentials,
@@ -180,10 +180,10 @@ gpuxtb_status_t evaluate_aes2_potential_system_cpu(
  * be finite. workspace.batch_scratch stages every contribution before any
  * caller output is updated, preserving call-level failure atomicity.
  */
-gpuxtb_status_t add_aes2_energy_cpu(const AES2Plan& plan, const AES2GeometryCache& cache,
-                                    const double* atomic_charges, const double* atomic_dipoles,
-                                    const double* atomic_quadrupoles, double* energies,
-                                    const AES2Workspace& workspace, std::string& error);
+xtbloom_status_t add_aes2_energy_cpu(const AES2Plan& plan, const AES2GeometryCache& cache,
+                                     const double* atomic_charges, const double* atomic_dipoles,
+                                     const double* atomic_quadrupoles, double* energies,
+                                     const AES2Workspace& workspace, std::string& error);
 
 /*
  * Accumulate the AES2 energy of one ragged batch member into
@@ -197,12 +197,12 @@ gpuxtb_status_t add_aes2_energy_cpu(const AES2Plan& plan, const AES2GeometryCach
  * contribution is finite. The canonical batch scratch remains caller-owned,
  * and successful calls allocate nothing.
  */
-gpuxtb_status_t add_aes2_energy_system_cpu(const AES2Plan& plan, const AES2GeometryCache& cache,
-                                           std::int64_t system, const double* atomic_charges,
-                                           const double* atomic_dipoles,
-                                           const double* atomic_quadrupoles,
-                                           double& accumulated_energy,
-                                           const AES2Workspace& workspace, std::string& error);
+xtbloom_status_t add_aes2_energy_system_cpu(const AES2Plan& plan, const AES2GeometryCache& cache,
+                                            std::int64_t system, const double* atomic_charges,
+                                            const double* atomic_dipoles,
+                                            const double* atomic_quadrupoles,
+                                            double& accumulated_energy,
+                                            const AES2Workspace& workspace, std::string& error);
 
 /*
  * Accumulate the fixed-multipole reverse products dE_AES2/dR (Hartree/bohr)
@@ -235,13 +235,13 @@ gpuxtb_status_t add_aes2_energy_system_cpu(const AES2Plan& plan, const AES2Geome
  * storage, and scratch buffers must be mutually disjoint and must not overlap
  * plan or descriptor storage. Successful calls allocate nothing.
  */
-gpuxtb_status_t add_aes2_vjp_cpu(const AES2Plan& plan, const AES2GeometryCache& cache,
-                                 const double* positions, const double* coordination_numbers,
-                                 std::uint64_t geometry_generation, const double* atomic_charges,
-                                 const double* atomic_dipoles, const double* atomic_quadrupoles,
-                                 double* gradients, double* coordination_adjoints,
-                                 const AES2Workspace& workspace, std::string& error);
+xtbloom_status_t add_aes2_vjp_cpu(const AES2Plan& plan, const AES2GeometryCache& cache,
+                                  const double* positions, const double* coordination_numbers,
+                                  std::uint64_t geometry_generation, const double* atomic_charges,
+                                  const double* atomic_dipoles, const double* atomic_quadrupoles,
+                                  double* gradients, double* coordination_adjoints,
+                                  const AES2Workspace& workspace, std::string& error);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_AES2_HPP
+#endif  // XTBLOOM_MODEL_GFN2_AES2_HPP

@@ -26,22 +26,22 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2RaggedTopologyView;
-using gpuxtb::detail::Gfn2WavefunctionLayoutView;
-using gpuxtb::detail::cuda::Gfn2D4DeviceElementData;
-using gpuxtb::detail::cuda::Gfn2D4DeviceReferenceData;
-using gpuxtb::detail::cuda::Gfn2SccCacheProvenanceBinding;
-using gpuxtb::detail::cuda::Gfn2SccIterationDeviceInput;
-using gpuxtb::detail::cuda::Gfn2SccIterationDevicePlan;
-using gpuxtb::detail::cuda::Gfn2SccPotentialComponent;
-using gpuxtb::detail::cuda::Gfn2SccSetupHostArray;
-using gpuxtb::detail::cuda::Gfn2SccSetupInputs;
-using gpuxtb::detail::cuda::Gfn2SccSetupInputsError;
-using gpuxtb::detail::cuda::Gfn2SccSetupInputSources;
-using gpuxtb::detail::cuda::Gfn2SccSetupTopology;
-using gpuxtb::test::gfn2::HostSccCase;
-using gpuxtb::test::gfn2::HostSccCaseOptions;
-using gpuxtb::test::gfn2::SmallSystemKind;
+using xtbloom::detail::Gfn2RaggedTopologyView;
+using xtbloom::detail::Gfn2WavefunctionLayoutView;
+using xtbloom::detail::cuda::Gfn2D4DeviceElementData;
+using xtbloom::detail::cuda::Gfn2D4DeviceReferenceData;
+using xtbloom::detail::cuda::Gfn2SccCacheProvenanceBinding;
+using xtbloom::detail::cuda::Gfn2SccIterationDeviceInput;
+using xtbloom::detail::cuda::Gfn2SccIterationDevicePlan;
+using xtbloom::detail::cuda::Gfn2SccPotentialComponent;
+using xtbloom::detail::cuda::Gfn2SccSetupHostArray;
+using xtbloom::detail::cuda::Gfn2SccSetupInputs;
+using xtbloom::detail::cuda::Gfn2SccSetupInputsError;
+using xtbloom::detail::cuda::Gfn2SccSetupInputSources;
+using xtbloom::detail::cuda::Gfn2SccSetupTopology;
+using xtbloom::test::gfn2::HostSccCase;
+using xtbloom::test::gfn2::HostSccCaseOptions;
+using xtbloom::test::gfn2::SmallSystemKind;
 
 constexpr std::uint64_t kPlanToken = 0x104104104ULL;
 
@@ -81,33 +81,33 @@ class DeviceArena {
 };
 
 struct InputBacking {
-  gpuxtb::detail::gfn2::CoordinationPlan coordination_plan;
+  xtbloom::detail::gfn2::CoordinationPlan coordination_plan;
   std::vector<double> geometry_pair_data;
   std::vector<std::uint64_t> geometry_generations;
   std::vector<Gfn2D4DeviceElementData> d4_elements;
   std::vector<Gfn2D4DeviceReferenceData> d4_references;
 
   bool prepare(const HostSccCase& host, std::string& error) {
-    if (gpuxtb::detail::gfn2::make_coordination_plan(
+    if (xtbloom::detail::gfn2::make_coordination_plan(
             host.batch_size(), host.total_atoms(), host.atom_offsets().data(),
-            host.atomic_numbers().data(), coordination_plan, error) != GPUXTB_STATUS_SUCCESS) {
+            host.atomic_numbers().data(), coordination_plan, error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     geometry_pair_data.resize(static_cast<std::size_t>(host.aes2_plan().total_pairs()) *
-                              gpuxtb::detail::cuda::kGfn2GeometryPairDataElements);
+                              xtbloom::detail::cuda::kGfn2GeometryPairDataElements);
     for (std::size_t index = 0; index < geometry_pair_data.size(); ++index) {
       geometry_pair_data[index] = 0.001 * static_cast<double>(index + 1u);
     }
     geometry_generations.assign(static_cast<std::size_t>(host.batch_size()),
                                 host.options().geometry_generation);
-    d4_elements.reserve(gpuxtb::parameters::d4::kElements.size());
-    for (const auto& element : gpuxtb::parameters::d4::kElements) {
+    d4_elements.reserve(xtbloom::parameters::d4::kElements.size());
+    for (const auto& element : xtbloom::parameters::d4::kElements) {
       d4_elements.push_back({element.reference_offset, element.reference_count,
                              element.covalent_radius, element.electronegativity,
                              element.effective_charge, element.hardness, element.r4r2});
     }
-    d4_references.reserve(gpuxtb::parameters::d4::kReferences.size());
-    for (const auto& reference : gpuxtb::parameters::d4::kReferences) {
+    d4_references.reserve(xtbloom::parameters::d4::kReferences.size());
+    for (const auto& reference : xtbloom::parameters::d4::kReferences) {
       d4_references.push_back(
           {reference.coordination_number, reference.charge, reference.gaussian_count});
     }
@@ -147,8 +147,8 @@ struct InputBacking {
       result.d4.elements = view(d4_elements);
       result.d4.references = view(d4_references);
       result.d4.reference_c6 = {
-          gpuxtb::parameters::d4::kReferenceC6.data(),
-          static_cast<std::int64_t>(gpuxtb::parameters::d4::kReferenceC6.size())};
+          xtbloom::parameters::d4::kReferenceC6.data(),
+          static_cast<std::int64_t>(xtbloom::parameters::d4::kReferenceC6.size())};
       result.d4.pair_data = {host.d4_cache()->pair_data, host.d4_cache()->pair_data_elements};
       result.d4.coordination_numbers = {host.d4_cache()->coordination_numbers,
                                         host.d4_cache()->coordination_elements};
@@ -190,7 +190,7 @@ struct SetupFixture {
 
   bool initialize(const HostSccCaseOptions& options) {
     std::string error;
-    if (HostSccCase::create(options, host, error) != GPUXTB_STATUS_SUCCESS ||
+    if (HostSccCase::create(options, host, error) != XTBLOOM_STATUS_SUCCESS ||
         !backing.prepare(host, error) || cudaStreamCreate(&stream) != cudaSuccess) {
       return false;
     }
@@ -399,7 +399,7 @@ int test_same_size_optional_cross_plan_rejected_transactionally() {
                                 SmallSystemKind::kCH2};
   HostSccCase mismatched;
   std::string error;
-  CHECK(HostSccCase::create(mismatched_options, mismatched, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(HostSccCase::create(mismatched_options, mismatched, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(mismatched.batch_size() == fixture.host.batch_size());
   CHECK(mismatched.total_atoms() == fixture.host.total_atoms());
   CHECK(mismatched.basis_plan().total_shells == fixture.host.basis_plan().total_shells);

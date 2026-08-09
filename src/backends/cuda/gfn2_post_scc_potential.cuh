@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_POST_SCC_POTENTIAL_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_POST_SCC_POTENTIAL_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_POST_SCC_POTENTIAL_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_POST_SCC_POTENTIAL_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -19,7 +19,7 @@
 #include "backends/cuda/gfn2_scc_bridge.cuh"
 #include "backends/cuda/gfn2_scc_potential.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /* Stable stage identities encoded in post-SCC system/device diagnostics. */
 enum class Gfn2PostSccPotentialStage : std::uint32_t {
@@ -192,6 +192,6 @@ cudaError_t refresh_gfn2_post_scc_potentials_cuda(
     const Gfn2PostSccPotentialDeviceDiagnostics& diagnostics,
     const Gfn2GeometryEpochConsumerDevice& geometry, cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_POST_SCC_POTENTIAL_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_POST_SCC_POTENTIAL_CUH

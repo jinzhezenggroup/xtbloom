@@ -111,7 +111,7 @@ index 0000000..5e8e8ca
 +! along with tblite.  If not, see <https://www.gnu.org/licenses/>.
 +
 +!> @file tblite/scf/observer.f90
-+!> Defines the optional observer used by the gpuxtb SCC trace oracle.
++!> Defines the optional observer used by the xtbloom SCC trace oracle.
 +
 +!> Read-only callbacks around one self-consistent iteration.
 +module tblite_scf_observer

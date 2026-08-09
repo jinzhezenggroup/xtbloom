@@ -53,7 +53,7 @@ assert.equal(sha256(resourcesBytes), EXPECTED_RESOURCES_SHA256);
 const resources = JSON.parse(new TextDecoder().decode(resourcesBytes));
 assert.equal(Object.keys(resources).length, 35);
 
-const temporaryDirectory = await mkdtemp(join(tmpdir(), "gpuxtb-openchemlib-"));
+const temporaryDirectory = await mkdtemp(join(tmpdir(), "xtbloom-openchemlib-"));
 try {
   const modulePath = join(temporaryDirectory, "openchemlib.mjs");
   await writeFile(modulePath, moduleBytes);

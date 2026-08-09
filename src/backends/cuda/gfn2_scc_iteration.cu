@@ -1,5 +1,5 @@
 #include <array>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstddef>
@@ -9,7 +9,7 @@
 
 #include "backends/cuda/gfn2_scc_iteration_test.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 using BindingError = Gfn2SccIterationBindingError;
@@ -363,129 +363,129 @@ bool validate_plan_tokens(const Gfn2SccIterationDevicePlan& plan,
   if (token == 0u) {
     return validator.fail(BindingError::kInvalidPlanToken, BindingField::kPlan);
   }
-#define GPUXTB_CHECK_TOKEN(value, field) \
+#define XTBLOOM_CHECK_TOKEN(value, field) \
   if (!validator.token((value), token, (field))) return false
-  GPUXTB_CHECK_TOKEN(plan.topology.plan_token, BindingField::kTopology);
-  GPUXTB_CHECK_TOKEN(plan.wavefunction_layout.plan_token, BindingField::kSpin);
-  GPUXTB_CHECK_TOKEN(plan.activity_policy.plan_token, BindingField::kActivity);
-  GPUXTB_CHECK_TOKEN(plan.state_policy.plan_token, BindingField::kStatePublication);
-  GPUXTB_CHECK_TOKEN(plan.mixer_policy.plan_token, BindingField::kMixer);
-  GPUXTB_CHECK_TOKEN(plan.provenance.plan_token, BindingField::kActivity);
-  GPUXTB_CHECK_TOKEN(plan.geometry_batch.plan_token, BindingField::kGeometry);
-  GPUXTB_CHECK_TOKEN(plan.geometry_cache.plan_token, BindingField::kGeometry);
-  GPUXTB_CHECK_TOKEN(plan.scc_batch.plan_token, BindingField::kStatePublication);
-  GPUXTB_CHECK_TOKEN(plan.potential_batch.plan_token, BindingField::kPotential);
-  GPUXTB_CHECK_TOKEN(plan.spin_batch.plan_token, BindingField::kSpin);
-  GPUXTB_CHECK_TOKEN(plan.es2_batch.plan_token, BindingField::kES2);
-  GPUXTB_CHECK_TOKEN(plan.es2_cache.plan_token, BindingField::kES2);
-  GPUXTB_CHECK_TOKEN(plan.es3_batch.plan_token, BindingField::kES3);
-  GPUXTB_CHECK_TOKEN(plan.aes2_batch.plan_token, BindingField::kAES2);
-  GPUXTB_CHECK_TOKEN(plan.aes2_cache.plan_token, BindingField::kAES2);
+  XTBLOOM_CHECK_TOKEN(plan.topology.plan_token, BindingField::kTopology);
+  XTBLOOM_CHECK_TOKEN(plan.wavefunction_layout.plan_token, BindingField::kSpin);
+  XTBLOOM_CHECK_TOKEN(plan.activity_policy.plan_token, BindingField::kActivity);
+  XTBLOOM_CHECK_TOKEN(plan.state_policy.plan_token, BindingField::kStatePublication);
+  XTBLOOM_CHECK_TOKEN(plan.mixer_policy.plan_token, BindingField::kMixer);
+  XTBLOOM_CHECK_TOKEN(plan.provenance.plan_token, BindingField::kActivity);
+  XTBLOOM_CHECK_TOKEN(plan.geometry_batch.plan_token, BindingField::kGeometry);
+  XTBLOOM_CHECK_TOKEN(plan.geometry_cache.plan_token, BindingField::kGeometry);
+  XTBLOOM_CHECK_TOKEN(plan.scc_batch.plan_token, BindingField::kStatePublication);
+  XTBLOOM_CHECK_TOKEN(plan.potential_batch.plan_token, BindingField::kPotential);
+  XTBLOOM_CHECK_TOKEN(plan.spin_batch.plan_token, BindingField::kSpin);
+  XTBLOOM_CHECK_TOKEN(plan.es2_batch.plan_token, BindingField::kES2);
+  XTBLOOM_CHECK_TOKEN(plan.es2_cache.plan_token, BindingField::kES2);
+  XTBLOOM_CHECK_TOKEN(plan.es3_batch.plan_token, BindingField::kES3);
+  XTBLOOM_CHECK_TOKEN(plan.aes2_batch.plan_token, BindingField::kAES2);
+  XTBLOOM_CHECK_TOKEN(plan.aes2_cache.plan_token, BindingField::kAES2);
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
-    GPUXTB_CHECK_TOKEN(plan.d4_batch.plan_token, BindingField::kD4);
-    GPUXTB_CHECK_TOKEN(plan.d4_cache.plan_token, BindingField::kD4);
+    XTBLOOM_CHECK_TOKEN(plan.d4_batch.plan_token, BindingField::kD4);
+    XTBLOOM_CHECK_TOKEN(plan.d4_cache.plan_token, BindingField::kD4);
   }
   if (component_enabled(plan, Gfn2SccPotentialComponent::kExplicitPointCharge)) {
-    GPUXTB_CHECK_TOKEN(plan.explicit_point_charge_batch.plan_token,
-                       BindingField::kExplicitPointCharge);
-    GPUXTB_CHECK_TOKEN(plan.explicit_point_charge_cache.plan_token,
-                       BindingField::kExplicitPointCharge);
+    XTBLOOM_CHECK_TOKEN(plan.explicit_point_charge_batch.plan_token,
+                        BindingField::kExplicitPointCharge);
+    XTBLOOM_CHECK_TOKEN(plan.explicit_point_charge_cache.plan_token,
+                        BindingField::kExplicitPointCharge);
   }
   if (component_enabled(plan, Gfn2SccPotentialComponent::kPeriodicEmbedding)) {
-    GPUXTB_CHECK_TOKEN(plan.periodic_batch.plan_token, BindingField::kPeriodicEmbedding);
+    XTBLOOM_CHECK_TOKEN(plan.periodic_batch.plan_token, BindingField::kPeriodicEmbedding);
   }
-  GPUXTB_CHECK_TOKEN(plan.scalar_bridge_batch.topology.plan_token, BindingField::kScalarBridge);
-  GPUXTB_CHECK_TOKEN(plan.hamiltonian_batch.plan_token, BindingField::kHamiltonian);
-  GPUXTB_CHECK_TOKEN(plan.eigensolver_batch.plan_token, BindingField::kEigensolver);
-  GPUXTB_CHECK_TOKEN(plan.overlap_cache.plan_token, BindingField::kEigensolver);
-  GPUXTB_CHECK_TOKEN(plan.eigensolver_provider.plan_token, BindingField::kEigensolver);
-  GPUXTB_CHECK_TOKEN(plan.occupations_batch.plan_token, BindingField::kOccupations);
-  GPUXTB_CHECK_TOKEN(plan.density_batch.plan_token, BindingField::kDensity);
-  GPUXTB_CHECK_TOKEN(plan.mulliken_batch.plan_token, BindingField::kMulliken);
-  GPUXTB_CHECK_TOKEN(plan.electronic_energy_batch.plan_token, BindingField::kElectronicEnergy);
-  GPUXTB_CHECK_TOKEN(plan.classical_energy_batch.plan_token, BindingField::kClassicalEnergy);
-  GPUXTB_CHECK_TOKEN(plan.free_energy_batch.plan_token, BindingField::kFreeEnergy);
-  GPUXTB_CHECK_TOKEN(plan.publication_plan.plan_token, BindingField::kStatePublication);
+  XTBLOOM_CHECK_TOKEN(plan.scalar_bridge_batch.topology.plan_token, BindingField::kScalarBridge);
+  XTBLOOM_CHECK_TOKEN(plan.hamiltonian_batch.plan_token, BindingField::kHamiltonian);
+  XTBLOOM_CHECK_TOKEN(plan.eigensolver_batch.plan_token, BindingField::kEigensolver);
+  XTBLOOM_CHECK_TOKEN(plan.overlap_cache.plan_token, BindingField::kEigensolver);
+  XTBLOOM_CHECK_TOKEN(plan.eigensolver_provider.plan_token, BindingField::kEigensolver);
+  XTBLOOM_CHECK_TOKEN(plan.occupations_batch.plan_token, BindingField::kOccupations);
+  XTBLOOM_CHECK_TOKEN(plan.density_batch.plan_token, BindingField::kDensity);
+  XTBLOOM_CHECK_TOKEN(plan.mulliken_batch.plan_token, BindingField::kMulliken);
+  XTBLOOM_CHECK_TOKEN(plan.electronic_energy_batch.plan_token, BindingField::kElectronicEnergy);
+  XTBLOOM_CHECK_TOKEN(plan.classical_energy_batch.plan_token, BindingField::kClassicalEnergy);
+  XTBLOOM_CHECK_TOKEN(plan.free_energy_batch.plan_token, BindingField::kFreeEnergy);
+  XTBLOOM_CHECK_TOKEN(plan.publication_plan.plan_token, BindingField::kStatePublication);
 
-  GPUXTB_CHECK_TOKEN(input.plan_token, BindingField::kPlan);
-  GPUXTB_CHECK_TOKEN(input.activity_state.plan_token, BindingField::kActivity);
-  GPUXTB_CHECK_TOKEN(input.mixed_fields.plan_token, BindingField::kPotential);
-  GPUXTB_CHECK_TOKEN(input.mixed_spin.plan_token, BindingField::kSpin);
-  GPUXTB_CHECK_TOKEN(input.raw_spin.plan_token, BindingField::kSpin);
-  GPUXTB_CHECK_TOKEN(input.hamiltonian.plan_token, BindingField::kHamiltonian);
-  GPUXTB_CHECK_TOKEN(input.density.plan_token, BindingField::kDensity);
-  GPUXTB_CHECK_TOKEN(input.mulliken.plan_token, BindingField::kMulliken);
-  GPUXTB_CHECK_TOKEN(input.electronic_energy.plan_token, BindingField::kElectronicEnergy);
-  GPUXTB_CHECK_TOKEN(input.classical_energy.plan_token, BindingField::kClassicalEnergy);
-  GPUXTB_CHECK_TOKEN(input.free_energy.plan_token, BindingField::kFreeEnergy);
-  GPUXTB_CHECK_TOKEN(input.raw_multipoles.plan_token, BindingField::kMulliken);
+  XTBLOOM_CHECK_TOKEN(input.plan_token, BindingField::kPlan);
+  XTBLOOM_CHECK_TOKEN(input.activity_state.plan_token, BindingField::kActivity);
+  XTBLOOM_CHECK_TOKEN(input.mixed_fields.plan_token, BindingField::kPotential);
+  XTBLOOM_CHECK_TOKEN(input.mixed_spin.plan_token, BindingField::kSpin);
+  XTBLOOM_CHECK_TOKEN(input.raw_spin.plan_token, BindingField::kSpin);
+  XTBLOOM_CHECK_TOKEN(input.hamiltonian.plan_token, BindingField::kHamiltonian);
+  XTBLOOM_CHECK_TOKEN(input.density.plan_token, BindingField::kDensity);
+  XTBLOOM_CHECK_TOKEN(input.mulliken.plan_token, BindingField::kMulliken);
+  XTBLOOM_CHECK_TOKEN(input.electronic_energy.plan_token, BindingField::kElectronicEnergy);
+  XTBLOOM_CHECK_TOKEN(input.classical_energy.plan_token, BindingField::kClassicalEnergy);
+  XTBLOOM_CHECK_TOKEN(input.free_energy.plan_token, BindingField::kFreeEnergy);
+  XTBLOOM_CHECK_TOKEN(input.raw_multipoles.plan_token, BindingField::kMulliken);
 
-  GPUXTB_CHECK_TOKEN(state.plan_token, BindingField::kPlan);
-  GPUXTB_CHECK_TOKEN(state.eigenpairs.plan_token, BindingField::kEigensolver);
-  GPUXTB_CHECK_TOKEN(state.occupations.plan_token, BindingField::kOccupations);
-  GPUXTB_CHECK_TOKEN(state.density.plan_token, BindingField::kDensity);
-  GPUXTB_CHECK_TOKEN(state.raw_population.plan_token, BindingField::kMulliken);
-  GPUXTB_CHECK_TOKEN(state.classical_energy.plan_token, BindingField::kClassicalEnergy);
-  GPUXTB_CHECK_TOKEN(state.free_energy.plan_token, BindingField::kFreeEnergy);
-  GPUXTB_CHECK_TOKEN(state.mixer.plan_token, BindingField::kMixer);
-  GPUXTB_CHECK_TOKEN(state.published.plan_token, BindingField::kStatePublication);
-  GPUXTB_CHECK_TOKEN(state.scc.plan_token, BindingField::kStatePublication);
-  GPUXTB_CHECK_TOKEN(state.scc.current_inputs.plan_token, BindingField::kStatePublication);
-  GPUXTB_CHECK_TOKEN(state.publication.plan_token, BindingField::kStatePublication);
-  GPUXTB_CHECK_TOKEN(state.publication.wavefunction.plan_token, BindingField::kStatePublication);
-  GPUXTB_CHECK_TOKEN(state.publication.energy.plan_token, BindingField::kStatePublication);
+  XTBLOOM_CHECK_TOKEN(state.plan_token, BindingField::kPlan);
+  XTBLOOM_CHECK_TOKEN(state.eigenpairs.plan_token, BindingField::kEigensolver);
+  XTBLOOM_CHECK_TOKEN(state.occupations.plan_token, BindingField::kOccupations);
+  XTBLOOM_CHECK_TOKEN(state.density.plan_token, BindingField::kDensity);
+  XTBLOOM_CHECK_TOKEN(state.raw_population.plan_token, BindingField::kMulliken);
+  XTBLOOM_CHECK_TOKEN(state.classical_energy.plan_token, BindingField::kClassicalEnergy);
+  XTBLOOM_CHECK_TOKEN(state.free_energy.plan_token, BindingField::kFreeEnergy);
+  XTBLOOM_CHECK_TOKEN(state.mixer.plan_token, BindingField::kMixer);
+  XTBLOOM_CHECK_TOKEN(state.published.plan_token, BindingField::kStatePublication);
+  XTBLOOM_CHECK_TOKEN(state.scc.plan_token, BindingField::kStatePublication);
+  XTBLOOM_CHECK_TOKEN(state.scc.current_inputs.plan_token, BindingField::kStatePublication);
+  XTBLOOM_CHECK_TOKEN(state.publication.plan_token, BindingField::kStatePublication);
+  XTBLOOM_CHECK_TOKEN(state.publication.wavefunction.plan_token, BindingField::kStatePublication);
+  XTBLOOM_CHECK_TOKEN(state.publication.energy.plan_token, BindingField::kStatePublication);
 
-  GPUXTB_CHECK_TOKEN(workspace.plan_token, BindingField::kWorkspace);
-  GPUXTB_CHECK_TOKEN(workspace.ledger.plan_token, BindingField::kActivity);
-  GPUXTB_CHECK_TOKEN(workspace.activity.plan_token, BindingField::kActivity);
-  GPUXTB_CHECK_TOKEN(workspace.potential_activity.plan_token, BindingField::kPotential);
-  GPUXTB_CHECK_TOKEN(workspace.hamiltonian_activity.plan_token, BindingField::kHamiltonian);
-  GPUXTB_CHECK_TOKEN(workspace.mulliken_activity.plan_token, BindingField::kMulliken);
-  GPUXTB_CHECK_TOKEN(workspace.classical_energy_activity.plan_token,
-                     BindingField::kClassicalEnergy);
-  GPUXTB_CHECK_TOKEN(workspace.free_energy_activity.plan_token, BindingField::kFreeEnergy);
-  GPUXTB_CHECK_TOKEN(workspace.mixed_topology.plan_token, BindingField::kPotential);
-  GPUXTB_CHECK_TOKEN(workspace.physical_topology.plan_token, BindingField::kPotential);
-  GPUXTB_CHECK_TOKEN(workspace.components.plan_token, BindingField::kPotential);
-  GPUXTB_CHECK_TOKEN(workspace.potential_components.plan_token, BindingField::kPotential);
-  GPUXTB_CHECK_TOKEN(workspace.complete_potentials.plan_token, BindingField::kPotential);
-  GPUXTB_CHECK_TOKEN(workspace.scalar_bridge.plan_token, BindingField::kScalarBridge);
-  GPUXTB_CHECK_TOKEN(workspace.scalar_bridge.fields.plan_token, BindingField::kScalarBridge);
-  GPUXTB_CHECK_TOKEN(workspace.scalar_bridge.workspace.plan_token, BindingField::kScalarBridge);
-  GPUXTB_CHECK_TOKEN(workspace.hamiltonian.plan_token, BindingField::kHamiltonian);
-  GPUXTB_CHECK_TOKEN(workspace.staged_eigenpairs.plan_token, BindingField::kEigensolver);
-  GPUXTB_CHECK_TOKEN(workspace.staged_occupations.plan_token, BindingField::kOccupations);
-  GPUXTB_CHECK_TOKEN(workspace.staged_density.plan_token, BindingField::kDensity);
-  GPUXTB_CHECK_TOKEN(workspace.staged_raw_population.plan_token, BindingField::kMulliken);
-  GPUXTB_CHECK_TOKEN(workspace.staged_classical_energy.plan_token, BindingField::kClassicalEnergy);
-  GPUXTB_CHECK_TOKEN(workspace.staged_free_energy.plan_token, BindingField::kFreeEnergy);
-  GPUXTB_CHECK_TOKEN(workspace.staged_mixer.plan_token, BindingField::kMixer);
-  GPUXTB_CHECK_TOKEN(workspace.next_mixed.plan_token, BindingField::kMixer);
-  GPUXTB_CHECK_TOKEN(workspace.staged_publication.plan_token, BindingField::kStatePublication);
-  GPUXTB_CHECK_TOKEN(workspace.staged_publication.wavefunction.plan_token,
-                     BindingField::kStatePublication);
-  GPUXTB_CHECK_TOKEN(workspace.staged_publication.energy.plan_token,
-                     BindingField::kStatePublication);
-  GPUXTB_CHECK_TOKEN(workspace.geometry_workspace.plan_token, BindingField::kGeometry);
+  XTBLOOM_CHECK_TOKEN(workspace.plan_token, BindingField::kWorkspace);
+  XTBLOOM_CHECK_TOKEN(workspace.ledger.plan_token, BindingField::kActivity);
+  XTBLOOM_CHECK_TOKEN(workspace.activity.plan_token, BindingField::kActivity);
+  XTBLOOM_CHECK_TOKEN(workspace.potential_activity.plan_token, BindingField::kPotential);
+  XTBLOOM_CHECK_TOKEN(workspace.hamiltonian_activity.plan_token, BindingField::kHamiltonian);
+  XTBLOOM_CHECK_TOKEN(workspace.mulliken_activity.plan_token, BindingField::kMulliken);
+  XTBLOOM_CHECK_TOKEN(workspace.classical_energy_activity.plan_token,
+                      BindingField::kClassicalEnergy);
+  XTBLOOM_CHECK_TOKEN(workspace.free_energy_activity.plan_token, BindingField::kFreeEnergy);
+  XTBLOOM_CHECK_TOKEN(workspace.mixed_topology.plan_token, BindingField::kPotential);
+  XTBLOOM_CHECK_TOKEN(workspace.physical_topology.plan_token, BindingField::kPotential);
+  XTBLOOM_CHECK_TOKEN(workspace.components.plan_token, BindingField::kPotential);
+  XTBLOOM_CHECK_TOKEN(workspace.potential_components.plan_token, BindingField::kPotential);
+  XTBLOOM_CHECK_TOKEN(workspace.complete_potentials.plan_token, BindingField::kPotential);
+  XTBLOOM_CHECK_TOKEN(workspace.scalar_bridge.plan_token, BindingField::kScalarBridge);
+  XTBLOOM_CHECK_TOKEN(workspace.scalar_bridge.fields.plan_token, BindingField::kScalarBridge);
+  XTBLOOM_CHECK_TOKEN(workspace.scalar_bridge.workspace.plan_token, BindingField::kScalarBridge);
+  XTBLOOM_CHECK_TOKEN(workspace.hamiltonian.plan_token, BindingField::kHamiltonian);
+  XTBLOOM_CHECK_TOKEN(workspace.staged_eigenpairs.plan_token, BindingField::kEigensolver);
+  XTBLOOM_CHECK_TOKEN(workspace.staged_occupations.plan_token, BindingField::kOccupations);
+  XTBLOOM_CHECK_TOKEN(workspace.staged_density.plan_token, BindingField::kDensity);
+  XTBLOOM_CHECK_TOKEN(workspace.staged_raw_population.plan_token, BindingField::kMulliken);
+  XTBLOOM_CHECK_TOKEN(workspace.staged_classical_energy.plan_token, BindingField::kClassicalEnergy);
+  XTBLOOM_CHECK_TOKEN(workspace.staged_free_energy.plan_token, BindingField::kFreeEnergy);
+  XTBLOOM_CHECK_TOKEN(workspace.staged_mixer.plan_token, BindingField::kMixer);
+  XTBLOOM_CHECK_TOKEN(workspace.next_mixed.plan_token, BindingField::kMixer);
+  XTBLOOM_CHECK_TOKEN(workspace.staged_publication.plan_token, BindingField::kStatePublication);
+  XTBLOOM_CHECK_TOKEN(workspace.staged_publication.wavefunction.plan_token,
+                      BindingField::kStatePublication);
+  XTBLOOM_CHECK_TOKEN(workspace.staged_publication.energy.plan_token,
+                      BindingField::kStatePublication);
+  XTBLOOM_CHECK_TOKEN(workspace.geometry_workspace.plan_token, BindingField::kGeometry);
   if (component_enabled(plan, Gfn2SccPotentialComponent::kPeriodicEmbedding)) {
-    GPUXTB_CHECK_TOKEN(workspace.periodic_workspace.plan_token, BindingField::kPeriodicEmbedding);
+    XTBLOOM_CHECK_TOKEN(workspace.periodic_workspace.plan_token, BindingField::kPeriodicEmbedding);
   }
-  GPUXTB_CHECK_TOKEN(workspace.potential_workspace.plan_token, BindingField::kPotential);
-  GPUXTB_CHECK_TOKEN(workspace.hamiltonian_workspace.plan_token, BindingField::kHamiltonian);
-  GPUXTB_CHECK_TOKEN(workspace.eigensolver_workspace.plan_token, BindingField::kEigensolver);
-  GPUXTB_CHECK_TOKEN(workspace.occupations_workspace.plan_token, BindingField::kOccupations);
-  GPUXTB_CHECK_TOKEN(workspace.density_workspace.plan_token, BindingField::kDensity);
-  GPUXTB_CHECK_TOKEN(workspace.mulliken_workspace.plan_token, BindingField::kMulliken);
-  GPUXTB_CHECK_TOKEN(workspace.spin_output.plan_token, BindingField::kSpin);
-  GPUXTB_CHECK_TOKEN(workspace.spin_workspace.plan_token, BindingField::kSpin);
-  GPUXTB_CHECK_TOKEN(workspace.electronic_energy_workspace.plan_token,
-                     BindingField::kElectronicEnergy);
-  GPUXTB_CHECK_TOKEN(workspace.classical_energy_workspace.plan_token,
-                     BindingField::kClassicalEnergy);
-  GPUXTB_CHECK_TOKEN(workspace.free_energy_workspace.plan_token, BindingField::kFreeEnergy);
-  GPUXTB_CHECK_TOKEN(workspace.mixer_workspace.plan_token, BindingField::kMixer);
-  GPUXTB_CHECK_TOKEN(workspace.publication_workspace.plan_token, BindingField::kStatePublication);
-#undef GPUXTB_CHECK_TOKEN
+  XTBLOOM_CHECK_TOKEN(workspace.potential_workspace.plan_token, BindingField::kPotential);
+  XTBLOOM_CHECK_TOKEN(workspace.hamiltonian_workspace.plan_token, BindingField::kHamiltonian);
+  XTBLOOM_CHECK_TOKEN(workspace.eigensolver_workspace.plan_token, BindingField::kEigensolver);
+  XTBLOOM_CHECK_TOKEN(workspace.occupations_workspace.plan_token, BindingField::kOccupations);
+  XTBLOOM_CHECK_TOKEN(workspace.density_workspace.plan_token, BindingField::kDensity);
+  XTBLOOM_CHECK_TOKEN(workspace.mulliken_workspace.plan_token, BindingField::kMulliken);
+  XTBLOOM_CHECK_TOKEN(workspace.spin_output.plan_token, BindingField::kSpin);
+  XTBLOOM_CHECK_TOKEN(workspace.spin_workspace.plan_token, BindingField::kSpin);
+  XTBLOOM_CHECK_TOKEN(workspace.electronic_energy_workspace.plan_token,
+                      BindingField::kElectronicEnergy);
+  XTBLOOM_CHECK_TOKEN(workspace.classical_energy_workspace.plan_token,
+                      BindingField::kClassicalEnergy);
+  XTBLOOM_CHECK_TOKEN(workspace.free_energy_workspace.plan_token, BindingField::kFreeEnergy);
+  XTBLOOM_CHECK_TOKEN(workspace.mixer_workspace.plan_token, BindingField::kMixer);
+  XTBLOOM_CHECK_TOKEN(workspace.publication_workspace.plan_token, BindingField::kStatePublication);
+#undef XTBLOOM_CHECK_TOKEN
   return true;
 }
 
@@ -1381,7 +1381,7 @@ bool validate_stage_reports(const Gfn2SccIterationDevicePlan& plan,
     Gfn2SccStageCodeFormat format = Gfn2SccStageCodeFormat::kUint32Error;
     Gfn2SccStageDeviceCodeRole role = Gfn2SccStageDeviceCodeRole::kMixedFirstError;
     std::uint64_t mask = 0u;
-    gpuxtb_status_t failure = GPUXTB_STATUS_INTERNAL_ERROR;
+    xtbloom_status_t failure = XTBLOOM_STATUS_INTERNAL_ERROR;
   };
   const auto spec_for = [&](Gfn2SccStageId stage, ReportSpec& spec) {
     switch (stage) {
@@ -1426,15 +1426,15 @@ bool validate_stage_reports(const Gfn2SccIterationDevicePlan& plan,
         return true;
       case Gfn2SccStageId::kEigensolver:
         spec.mask = 0x3e06u;
-        spec.failure = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+        spec.failure = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
         return true;
       case Gfn2SccStageId::kOccupations:
         spec.mask = 0x3feu;
-        spec.failure = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+        spec.failure = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
         return true;
       case Gfn2SccStageId::kDensity:
         spec.mask = 0x7feu;
-        spec.failure = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+        spec.failure = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
         return true;
       case Gfn2SccStageId::kMulliken:
         spec.mask = 0x1feu;
@@ -1449,7 +1449,7 @@ bool validate_stage_reports(const Gfn2SccIterationDevicePlan& plan,
         spec.mask = 0x1ffeu;
         return true;
       case Gfn2SccStageId::kMixer:
-        spec.format = Gfn2SccStageCodeFormat::kGpuxtbStatus;
+        spec.format = Gfn2SccStageCodeFormat::kXTBloomStatus;
         spec.mask = 0x40u;
         return true;
       case Gfn2SccStageId::kStatePublication:
@@ -1532,7 +1532,7 @@ bool validate_stage_reports(const Gfn2SccIterationDevicePlan& plan,
     const std::size_t system_alignment =
         report.system_code_format == Gfn2SccStageCodeFormat::kUint32Error
             ? alignof(std::uint32_t)
-            : alignof(gpuxtb_status_t);
+            : alignof(xtbloom_status_t);
     if (reinterpret_cast<std::uintptr_t>(report.system_codes) % system_alignment != 0u ||
         (!mixer &&
          reinterpret_cast<std::uintptr_t>(report.device_error) % alignof(std::uint32_t) != 0u) ||
@@ -1554,8 +1554,8 @@ bool validate_stage_reports(const Gfn2SccIterationDevicePlan& plan,
   };
   const auto* mixer_report = find_report(Gfn2SccStageId::kMixer);
   if (mixer_report == nullptr ||
-      mixer_report->system_code_format != Gfn2SccStageCodeFormat::kGpuxtbStatus ||
-      !same_pointer(static_cast<const gpuxtb_status_t*>(mixer_report->system_codes),
+      mixer_report->system_code_format != Gfn2SccStageCodeFormat::kXTBloomStatus ||
+      !same_pointer(static_cast<const xtbloom_status_t*>(mixer_report->system_codes),
                     workspace.staged_mixer.system_statuses) ||
       mixer_report->device_error != nullptr || mixer_report->device_error_elements != 0) {
     /* The mixer report deliberately omits its different-domain tracing scalar. */
@@ -1889,8 +1889,8 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
   }
   if (!write(workspace.ledger.active_mask, batch, sizeof(std::uint8_t), alignof(std::uint8_t),
              BindingField::kActivity, 0) ||
-      !write(workspace.ledger.pending_statuses, batch, sizeof(gpuxtb_status_t),
-             alignof(gpuxtb_status_t), BindingField::kActivity, 1) ||
+      !write(workspace.ledger.pending_statuses, batch, sizeof(xtbloom_status_t),
+             alignof(xtbloom_status_t), BindingField::kActivity, 1) ||
       !write(workspace.ledger.system_failure_records, batch, sizeof(std::uint64_t),
              alignof(std::uint64_t), BindingField::kActivity, 2) ||
       !write(workspace.ledger.plan_failure_record, 1, sizeof(std::uint64_t), alignof(std::uint64_t),
@@ -2073,7 +2073,7 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
              BindingField::kStatePublication, 6) ||
       !write(state.scc.iterations, batch, sizeof(std::uint64_t), alignof(std::uint64_t),
              BindingField::kStatePublication, 7) ||
-      !write(state.scc.system_statuses, batch, sizeof(gpuxtb_status_t), alignof(gpuxtb_status_t),
+      !write(state.scc.system_statuses, batch, sizeof(xtbloom_status_t), alignof(xtbloom_status_t),
              BindingField::kStatePublication, 8) ||
       !write(state.scc.converged, batch, sizeof(std::uint8_t), alignof(std::uint8_t),
              BindingField::kStatePublication, 9)) {
@@ -2103,7 +2103,7 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
                  8) &&
            write(mixer.restart_counts, batch, sizeof(std::uint64_t), alignof(std::uint64_t), field,
                  9) &&
-           write(mixer.system_statuses, batch, sizeof(gpuxtb_status_t), alignof(gpuxtb_status_t),
+           write(mixer.system_statuses, batch, sizeof(xtbloom_status_t), alignof(xtbloom_status_t),
                  field, 10) &&
            write(mixer.initialized, batch, sizeof(std::uint8_t), alignof(std::uint8_t), field,
                  11) &&
@@ -2808,7 +2808,7 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
       !scratch(publication.next_converged, publication.batch_elements, batch, sizeof(std::uint8_t),
                alignof(std::uint8_t), BindingField::kStatePublication, 29) ||
       !scratch(publication.next_statuses, publication.batch_elements, batch,
-               sizeof(gpuxtb_status_t), alignof(gpuxtb_status_t), BindingField::kStatePublication,
+               sizeof(xtbloom_status_t), alignof(xtbloom_status_t), BindingField::kStatePublication,
                30)) {
     return false;
   }
@@ -2964,16 +2964,16 @@ cudaError_t normalize_stage(const Gfn2SccStageDeviceReport& report,
   return normalize_gfn2_scc_stage_cuda(report, ledger, stream);
 }
 
-#if defined(GPUXTB_CUDA_TEST_HOOKS)
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
 __global__ void inject_test_stage_fault_kernel(Gfn2SccStageDeviceReport report, std::int64_t system,
                                                std::uint32_t raw_code) {
   if (blockIdx.x != 0 || threadIdx.x != 0) {
     return;
   }
-  if (report.system_code_format == Gfn2SccStageCodeFormat::kGpuxtbStatus) {
+  if (report.system_code_format == Gfn2SccStageCodeFormat::kXTBloomStatus) {
     auto* statuses =
-        const_cast<gpuxtb_status_t*>(static_cast<const gpuxtb_status_t*>(report.system_codes));
-    statuses[system] = static_cast<gpuxtb_status_t>(raw_code);
+        const_cast<xtbloom_status_t*>(static_cast<const xtbloom_status_t*>(report.system_codes));
+    statuses[system] = static_cast<xtbloom_status_t>(raw_code);
   } else {
     auto* codes =
         const_cast<std::uint32_t*>(static_cast<const std::uint32_t*>(report.system_codes));
@@ -3056,7 +3056,7 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
       workspace.plan_token != plan.plan_token) {
     return invalid_launch_binding();
   }
-#if defined(GPUXTB_CUDA_TEST_HOOKS)
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
   if constexpr (EnableTestFault) {
     const Gfn2SccStageDeviceReport* fault_report =
         test_fault == nullptr ? nullptr : find_stage_report(plan, test_fault->stage);
@@ -3073,7 +3073,7 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
     (void)test_fault;
   }
 #else
-  static_assert(!EnableTestFault, "test-fault launchers require GPUXTB_CUDA_TEST_HOOKS");
+  static_assert(!EnableTestFault, "test-fault launchers require XTBLOOM_CUDA_TEST_HOOKS");
   (void)test_fault;
 #endif
   if (geometry != nullptr &&
@@ -3125,7 +3125,7 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
     return check_cuda(stage_report->stage, open_stage_sequence(*stage_report, stream));
   };
   const auto finish_stage = [&](const Gfn2SccStageDeviceReport& stage_report) {
-#if defined(GPUXTB_CUDA_TEST_HOOKS)
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
     if constexpr (EnableTestFault) {
       if (stage_report.stage == test_fault->stage &&
           !check_cuda(stage_report.stage,
@@ -3705,7 +3705,7 @@ Gfn2SccIterationLaunchResult launch_gfn2_scc_iteration_cuda(
   return launch_scc_iteration_impl<false>(binding, &geometry, stream, true, true);
 }
 
-#if defined(GPUXTB_CUDA_TEST_HOOKS)
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
 Gfn2SccIterationLaunchResult launch_gfn2_scc_iteration_test_fault_cuda(
     const Gfn2SccIterationBinding& binding, const Gfn2SccIterationTestFault& fault,
     cudaStream_t stream) noexcept {
@@ -3817,4 +3817,4 @@ Gfn2SccIterationLaunchResult launch_gfn2_restricted_scc_post_eigensolver_cuda(
   return launch_gfn2_scc_post_eigensolver_cuda(binding, geometry, stream);
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

@@ -1,9 +1,9 @@
 #include <cuda_runtime_api.h>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include "runtime/backend.hpp"
 
-namespace gpuxtb::detail {
+namespace xtbloom::detail {
 
 bool resolve_cuda_device(std::int32_t requested_device, std::int32_t& resolved_device,
                          std::string& error) {
@@ -37,4 +37,4 @@ bool resolve_cuda_device(std::int32_t requested_device, std::int32_t& resolved_d
   return true;
 }
 
-}  // namespace gpuxtb::detail
+}  // namespace xtbloom::detail

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Close xtbloom Issue Work"
+  short_description: "Keep issue, PR, CI, and handoff state current"
+  default_prompt: "Use $xtbloom-close-issue-work to execute this issue-backed change through review, evidence, merge, and handoff."

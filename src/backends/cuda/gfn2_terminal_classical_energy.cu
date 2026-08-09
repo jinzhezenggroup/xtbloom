@@ -1,5 +1,5 @@
 #include <cuda_runtime.h>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <array>
 #include <cmath>
@@ -9,7 +9,7 @@
 
 #include "backends/cuda/gfn2_terminal_classical_energy.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
@@ -311,4 +311,4 @@ cudaError_t evaluate_gfn2_terminal_classical_energy_cuda(
   return check_launch();
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

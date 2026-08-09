@@ -26,11 +26,11 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::Gfn2ES3DeviceBatch;
-using gpuxtb::detail::cuda::Gfn2ES3DeviceError;
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::ES3Plan;
-using gpuxtb::detail::gfn2::ES3View;
+using xtbloom::detail::cuda::Gfn2ES3DeviceBatch;
+using xtbloom::detail::cuda::Gfn2ES3DeviceError;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::ES3Plan;
+using xtbloom::detail::gfn2::ES3View;
 
 template <typename T>
 class DeviceBuffer {
@@ -94,11 +94,11 @@ bool make_plan(const std::vector<std::int64_t>& atom_offsets,
                std::string& error) {
   const std::int64_t batch_size = static_cast<std::int64_t>(atom_offsets.size() - 1u);
   const std::int64_t total_atoms = static_cast<std::int64_t>(atomic_numbers.size());
-  return gpuxtb::detail::gfn2::make_basis_plan(batch_size, total_atoms, atom_offsets.data(),
-                                               atomic_numbers.data(), basis,
-                                               error) == GPUXTB_STATUS_SUCCESS &&
-         gpuxtb::detail::gfn2::make_es3_plan(basis, atomic_numbers.data(), es3, error) ==
-             GPUXTB_STATUS_SUCCESS;
+  return xtbloom::detail::gfn2::make_basis_plan(batch_size, total_atoms, atom_offsets.data(),
+                                                atomic_numbers.data(), basis,
+                                                error) == XTBLOOM_STATUS_SUCCESS &&
+         xtbloom::detail::gfn2::make_es3_plan(basis, atomic_numbers.data(), es3, error) ==
+             XTBLOOM_STATUS_SUCCESS;
 }
 
 struct DeviceFixture {
@@ -179,11 +179,11 @@ int test_ragged_cpu_parity_custom_stream_and_graph() {
   std::vector<double> expected_potentials(charges.size(), -91.0);
   std::vector<double> energy_seeds{0.125, -0.25, 0.5, -1.0};
   std::vector<double> expected_energies = energy_seeds;
-  const ES3View cpu_view = gpuxtb::detail::gfn2::make_es3_view(plan);
-  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_cpu(
-            cpu_view, charges.data(), expected_potentials.data(), error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::add_es3_energy_cpu(cpu_view, charges.data(), expected_energies.data(),
-                                                 error) == GPUXTB_STATUS_SUCCESS);
+  const ES3View cpu_view = xtbloom::detail::gfn2::make_es3_view(plan);
+  CHECK(xtbloom::detail::gfn2::evaluate_es3_potential_cpu(
+            cpu_view, charges.data(), expected_potentials.data(), error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_es3_energy_cpu(
+            cpu_view, charges.data(), expected_energies.data(), error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(expected_energies[1] == energy_seeds[1]);
 
   cudaStream_t stream = nullptr;
@@ -193,17 +193,17 @@ int test_ragged_cpu_parity_custom_stream_and_graph() {
   std::vector<double> actual_energies = energy_seeds;
   CUDA_CHECK(fixture.allocate(plan, charges, actual_potentials, actual_energies, stream));
   const Gfn2ES3DeviceBatch batch = fixture.batch(plan);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
             batch, fixture.charges.get(), fixture.charges.get() + 1, fixture.error.get(), stream) ==
         cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es3_energy_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es3_energy_cuda(
             batch, fixture.charges.get(), fixture.charges.get() + 1, fixture.error.get(), stream) ==
         cudaErrorInvalidValue);
 
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get(), stream));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
       batch, fixture.charges.get(), fixture.potentials.get(), fixture.error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_es3_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_es3_energy_cuda(
       batch, fixture.charges.get(), fixture.energies.get(), fixture.error.get(), stream));
   std::uint32_t semantic_error = 99u;
   CUDA_CHECK(
@@ -230,10 +230,10 @@ int test_ragged_cpu_parity_custom_stream_and_graph() {
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t graph_exec = nullptr;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get(), stream));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
       batch, fixture.charges.get(), fixture.potentials.get(), fixture.error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_es3_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_es3_energy_cuda(
       batch, fixture.charges.get(), fixture.energies.get(), fixture.error.get(), stream));
   CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
   CUDA_CHECK(cudaGraphInstantiate(&graph_exec, graph, nullptr, nullptr, 0u));
@@ -266,21 +266,21 @@ int test_extreme_cpu_cuda_parity() {
   std::string error;
   CHECK(make_plan(atom_offsets, atomic_numbers, basis, plan, error));
   CHECK(plan.shell_gamma3.size() == 1u && plan.shell_gamma3[0] == 0.08);
-  const ES3View cpu_view = gpuxtb::detail::gfn2::make_es3_view(plan);
+  const ES3View cpu_view = xtbloom::detail::gfn2::make_es3_view(plan);
 
   std::vector<double> charges{2.0 * std::sqrt(std::numeric_limits<double>::max())};
   std::vector<double> expected_potential{-1.0};
   CHECK(std::isinf(charges[0] * charges[0]));
-  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_cpu(
-            cpu_view, charges.data(), expected_potential.data(), error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_es3_potential_cpu(
+            cpu_view, charges.data(), expected_potential.data(), error) == XTBLOOM_STATUS_SUCCESS);
 
   std::vector<double> potential{-1.0};
   std::vector<double> energy{0.0};
   DeviceFixture fixture;
   CUDA_CHECK(fixture.allocate(plan, charges, potential, energy));
   const Gfn2ES3DeviceBatch batch = fixture.batch(plan);
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
       batch, fixture.charges.get(), fixture.potentials.get(), fixture.error.get()));
   std::uint32_t semantic_error = 99u;
   CUDA_CHECK(fixture.potentials.copy_to(potential.data(), 1u));
@@ -292,13 +292,13 @@ int test_extreme_cpu_cuda_parity() {
   charges[0] = 1.5e103;
   std::vector<double> expected_energy{0.375};
   CHECK(std::isinf(charges[0] * charges[0] * charges[0]));
-  CHECK(gpuxtb::detail::gfn2::add_es3_energy_cpu(cpu_view, charges.data(), expected_energy.data(),
-                                                 error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_es3_energy_cpu(cpu_view, charges.data(), expected_energy.data(),
+                                                  error) == XTBLOOM_STATUS_SUCCESS);
   energy[0] = 0.375;
   CUDA_CHECK(fixture.charges.copy_from(charges.data(), 1u));
   CUDA_CHECK(fixture.energies.copy_from(energy.data(), 1u));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_es3_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_es3_energy_cuda(
       batch, fixture.charges.get(), fixture.energies.get(), fixture.error.get()));
   CUDA_CHECK(fixture.energies.copy_to(energy.data(), 1u));
   CUDA_CHECK(fixture.error.copy_to(&semantic_error, 1u));
@@ -310,16 +310,16 @@ int test_extreme_cpu_cuda_parity() {
   plan.shell_gamma3[0] = std::numeric_limits<double>::max();
   charges[0] = 1.0e-200;
   expected_potential[0] = -1.0;
-  const ES3View restored_cpu_view = gpuxtb::detail::gfn2::make_es3_view(plan);
-  CHECK(gpuxtb::detail::gfn2::evaluate_es3_potential_cpu(restored_cpu_view, charges.data(),
-                                                         expected_potential.data(),
-                                                         error) == GPUXTB_STATUS_SUCCESS);
+  const ES3View restored_cpu_view = xtbloom::detail::gfn2::make_es3_view(plan);
+  CHECK(xtbloom::detail::gfn2::evaluate_es3_potential_cpu(restored_cpu_view, charges.data(),
+                                                          expected_potential.data(),
+                                                          error) == XTBLOOM_STATUS_SUCCESS);
   potential[0] = -1.0;
   CUDA_CHECK(fixture.gamma3.copy_from(plan.shell_gamma3.data(), 1u));
   CUDA_CHECK(fixture.charges.copy_from(charges.data(), 1u));
   CUDA_CHECK(fixture.potentials.copy_from(potential.data(), 1u));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
       batch, fixture.charges.get(), fixture.potentials.get(), fixture.error.get()));
   CUDA_CHECK(fixture.potentials.copy_to(potential.data(), 1u));
   CUDA_CHECK(fixture.error.copy_to(&semantic_error, 1u));
@@ -330,14 +330,14 @@ int test_extreme_cpu_cuda_parity() {
 
   charges[0] = 1.0e-110;
   expected_energy[0] = 0.0;
-  CHECK(gpuxtb::detail::gfn2::add_es3_energy_cpu(restored_cpu_view, charges.data(),
-                                                 expected_energy.data(),
-                                                 error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_es3_energy_cpu(restored_cpu_view, charges.data(),
+                                                  expected_energy.data(),
+                                                  error) == XTBLOOM_STATUS_SUCCESS);
   energy[0] = 0.0;
   CUDA_CHECK(fixture.charges.copy_from(charges.data(), 1u));
   CUDA_CHECK(fixture.energies.copy_from(energy.data(), 1u));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_es3_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_es3_energy_cuda(
       batch, fixture.charges.get(), fixture.energies.get(), fixture.error.get()));
   CUDA_CHECK(fixture.energies.copy_to(energy.data(), 1u));
   CUDA_CHECK(fixture.error.copy_to(&semantic_error, 1u));
@@ -357,10 +357,10 @@ int test_extreme_cpu_cuda_parity() {
   CUDA_CHECK(fixture.charges.copy_from(charges.data(), 1u));
   CUDA_CHECK(fixture.potentials.copy_from(potential.data(), 1u));
   CUDA_CHECK(fixture.energies.copy_from(energy.data(), 1u));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
       batch, fixture.charges.get(), fixture.potentials.get(), fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_es3_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_es3_energy_cuda(
       batch, fixture.charges.get(), fixture.energies.get(), fixture.error.get()));
   CUDA_CHECK(fixture.potentials.copy_to(potential.data(), 1u));
   CUDA_CHECK(fixture.energies.copy_to(energy.data(), 1u));
@@ -374,16 +374,16 @@ int test_extreme_cpu_cuda_parity() {
   plan.shell_gamma3[0] = std::numeric_limits<double>::denorm_min();
   charges[0] = 1.0e108;
   expected_energy[0] = -0.25;
-  const ES3View subnormal_cpu_view = gpuxtb::detail::gfn2::make_es3_view(plan);
-  CHECK(gpuxtb::detail::gfn2::add_es3_energy_cpu(subnormal_cpu_view, charges.data(),
-                                                 expected_energy.data(),
-                                                 error) == GPUXTB_STATUS_SUCCESS);
+  const ES3View subnormal_cpu_view = xtbloom::detail::gfn2::make_es3_view(plan);
+  CHECK(xtbloom::detail::gfn2::add_es3_energy_cpu(subnormal_cpu_view, charges.data(),
+                                                  expected_energy.data(),
+                                                  error) == XTBLOOM_STATUS_SUCCESS);
   energy[0] = -0.25;
   CUDA_CHECK(fixture.gamma3.copy_from(plan.shell_gamma3.data(), 1u));
   CUDA_CHECK(fixture.charges.copy_from(charges.data(), 1u));
   CUDA_CHECK(fixture.energies.copy_from(energy.data(), 1u));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_es3_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_es3_energy_cuda(
       batch, fixture.charges.get(), fixture.energies.get(), fixture.error.get()));
   CUDA_CHECK(fixture.energies.copy_to(energy.data(), 1u));
   CUDA_CHECK(fixture.error.copy_to(&semantic_error, 1u));
@@ -418,8 +418,8 @@ int test_strided_potential_failure_atomicity() {
   DeviceFixture fixture;
   CUDA_CHECK(fixture.allocate(plan, charges, potentials, energies));
   const Gfn2ES3DeviceBatch batch = fixture.batch(plan);
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
       batch, fixture.charges.get(), fixture.potentials.get(), fixture.error.get()));
 
   std::uint32_t semantic_error = 0u;
@@ -446,33 +446,33 @@ int test_alias_overflow_atomicity_and_sticky_error() {
   CUDA_CHECK(fixture.allocate(plan, charges, potentials, energies));
   Gfn2ES3DeviceBatch batch = fixture.batch(plan);
 
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_es3_device_error_cuda(nullptr) == cudaErrorInvalidValue);
+  CHECK(xtbloom::detail::cuda::reset_gfn2_es3_device_error_cuda(nullptr) == cudaErrorInvalidValue);
   Gfn2ES3DeviceBatch invalid{};
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(invalid, nullptr, nullptr,
-                                                               nullptr) == cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es3_energy_cuda(invalid, nullptr, nullptr, nullptr) ==
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(invalid, nullptr, nullptr,
+                                                                nullptr) == cudaErrorInvalidValue);
+  CHECK(xtbloom::detail::cuda::add_gfn2_es3_energy_cuda(invalid, nullptr, nullptr, nullptr) ==
         cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
             batch, fixture.charges.get(), fixture.charges.get(), fixture.error.get()) ==
         cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
             batch, fixture.charges.get(), fixture.gamma3.get(), fixture.error.get()) ==
         cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es3_energy_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es3_energy_cuda(
             batch, fixture.charges.get(), fixture.charges.get(), fixture.error.get()) ==
         cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
             batch, fixture.charges.get(), fixture.potentials.get(),
             reinterpret_cast<std::uint32_t*>(fixture.potentials.get())) == cudaErrorInvalidValue);
   invalid = batch;
   --invalid.shell_gamma3_count;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
             invalid, fixture.charges.get(), fixture.potentials.get(), fixture.error.get()) ==
         cudaErrorInvalidValue);
   invalid = batch;
   invalid.batch_size = static_cast<std::int64_t>(std::numeric_limits<int>::max()) + 1;
   invalid.batch_shell_offset_count = invalid.batch_size + 1;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
             invalid, fixture.charges.get(), fixture.potentials.get(), fixture.error.get()) ==
         cudaErrorInvalidConfiguration);
 
@@ -482,8 +482,8 @@ int test_alias_overflow_atomicity_and_sticky_error() {
     CUDA_CHECK(fixture.gamma3.copy_from(&gamma3, 1u));
     CUDA_CHECK(fixture.charges.copy_from(&charge, 1u));
     CUDA_CHECK(fixture.potentials.copy_from(&seed, 1u));
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
-    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
+    CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
         batch, fixture.charges.get(), fixture.potentials.get(), fixture.error.get()));
     double actual = 0.0;
     std::uint32_t semantic_error = 0u;
@@ -510,10 +510,10 @@ int test_alias_overflow_atomicity_and_sticky_error() {
   CUDA_CHECK(fixture.charges.copy_from(&overflow_charge, 1u));
   CUDA_CHECK(fixture.potentials.copy_from(&potential_seed, 1u));
   CUDA_CHECK(fixture.energies.copy_from(&energy_seed, 1u));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
       batch, fixture.charges.get(), fixture.potentials.get(), fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_es3_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_es3_energy_cuda(
       batch, fixture.charges.get(), fixture.energies.get(), fixture.error.get()));
   std::uint32_t semantic_error = 0u;
   CUDA_CHECK(fixture.energies.copy_to(&energy_seed, 1u));
@@ -527,8 +527,8 @@ int test_alias_overflow_atomicity_and_sticky_error() {
                                 Gfn2ES3DeviceError expected_error) -> int {
     CUDA_CHECK(fixture.charges.copy_from(&charge, 1u));
     CUDA_CHECK(fixture.energies.copy_from(&seed, 1u));
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
-    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_es3_energy_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
+    CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_es3_energy_cuda(
         batch, fixture.charges.get(), fixture.energies.get(), fixture.error.get()));
     double actual = 0.0;
     std::uint32_t actual_error = 0u;
@@ -552,8 +552,8 @@ int test_alias_overflow_atomicity_and_sticky_error() {
   const double ordinary_charge = 0.2;
   CUDA_CHECK(fixture.charges.copy_from(&ordinary_charge, 1u));
   CUDA_CHECK(fixture.potentials.copy_from(&potential_seed, 1u));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es3_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_es3_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_es3_potential_cuda(
       batch, fixture.charges.get(), fixture.potentials.get(), fixture.error.get()));
   CUDA_CHECK(fixture.potentials.copy_to(&potential_seed, 1u));
   CUDA_CHECK(fixture.error.copy_to(&semantic_error, 1u));
@@ -569,7 +569,7 @@ int main() {
   int device_count = 0;
   const cudaError_t count_status = cudaGetDeviceCount(&device_count);
   if (count_status != cudaSuccess || device_count == 0) {
-    if (std::getenv("GPUXTB_TEST_REQUIRE_DEVICE") != nullptr) {
+    if (std::getenv("XTBLOOM_TEST_REQUIRE_DEVICE") != nullptr) {
       std::cerr << "CUDA ES3 test requires a visible device: "
                 << (count_status == cudaSuccess ? "none found" : cudaGetErrorString(count_status))
                 << '\n';

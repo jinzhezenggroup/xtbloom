@@ -1,4 +1,4 @@
-"""Offline tests for the ``gpuxtb-scc-trace-v1`` comparison foundation."""
+"""Offline tests for the ``xtbloom-scc-trace-v1`` comparison foundation."""
 
 from __future__ import annotations
 
@@ -15,12 +15,12 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = (
-    REPOSITORY_ROOT / "tools" / "oracle" / "tblite_scc_trace" / "gpuxtb_scc_compare.py"
+    REPOSITORY_ROOT / "tools" / "oracle" / "tblite_scc_trace" / "xtbloom_scc_compare.py"
 )
-SPEC = importlib.util.spec_from_file_location("gpuxtb_scc_compare", MODULE_PATH)
+SPEC = importlib.util.spec_from_file_location("xtbloom_scc_compare", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 COMPARE = importlib.util.module_from_spec(SPEC)
-sys.modules.setdefault("gpuxtb_scc_compare", COMPARE)
+sys.modules.setdefault("xtbloom_scc_compare", COMPARE)
 SPEC.loader.exec_module(COMPARE)
 
 REVISION = "e9abc395b122018ed688aecb1c3a65cecaf97beb"
@@ -293,7 +293,7 @@ class TraceCompareTest(unittest.TestCase):
         """Ignore the documentary oracle_command string in trace comparison."""
         golden = _trace(1)
         actual = deepcopy(golden)
-        actual["provenance"]["oracle_command"] = "gpuxtb_scc_cpu_trace.py (capture)"
+        actual["provenance"]["oracle_command"] = "xtbloom_scc_cpu_trace.py (capture)"
         golden["provenance"]["oracle_command"] = (
             "generate_scc_corpus.py --source-root ..."
         )
@@ -471,7 +471,7 @@ class TraceCompareTest(unittest.TestCase):
     def test_rejects_malformed_actual_trace(self) -> None:
         """Reject malformed actual traces before numerical comparison."""
         with self.assertRaises(COMPARE.TRACE.TraceError):
-            COMPARE.compare_trace({"format": "gpuxtb-scc-trace-v1"}, _trace(1))
+            COMPARE.compare_trace({"format": "xtbloom-scc-trace-v1"}, _trace(1))
 
     def test_json_roundtrip_then_compare_identical(self) -> None:
         """Preserve equality across canonical JSON serialization."""

@@ -1,10 +1,10 @@
-"""Tests for the Array-API L-BFGS stepping kernel (:mod:`gpuxtb._optimizer`)."""
+"""Tests for the Array-API L-BFGS stepping kernel (:mod:`xtbloom._optimizer`)."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
-from gpuxtb._optimizer import curvature, initial_step_size, lbfgs_direction
+from xtbloom._optimizer import curvature, initial_step_size, lbfgs_direction
 
 
 def test_lbfgs_direction_with_empty_history_is_steepest_descent() -> None:

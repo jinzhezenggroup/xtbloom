@@ -6,10 +6,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -18,10 +18,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -30,10 +30,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -42,10 +42,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -54,10 +54,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -66,10 +66,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -78,10 +78,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -90,10 +90,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -102,10 +102,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -114,10 +114,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -126,10 +126,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -138,10 +138,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -150,10 +150,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -162,10 +162,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -174,10 +174,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -186,10 +186,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -198,10 +198,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -210,10 +210,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -222,10 +222,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -234,10 +234,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -246,10 +246,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -258,10 +258,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -270,10 +270,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -282,10 +282,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -294,10 +294,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -306,10 +306,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -318,10 +318,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -330,10 +330,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -342,10 +342,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -354,10 +354,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -366,10 +366,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -378,10 +378,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -390,10 +390,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -402,10 +402,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -414,10 +414,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -426,10 +426,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -438,10 +438,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -450,10 +450,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -462,10 +462,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -474,10 +474,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -486,10 +486,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -498,10 +498,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -510,10 +510,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -522,10 +522,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -534,10 +534,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -546,10 +546,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -558,10 +558,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -570,10 +570,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -582,10 +582,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -594,10 +594,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -606,10 +606,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -618,10 +618,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -630,10 +630,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -642,10 +642,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -654,10 +654,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -666,10 +666,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -678,10 +678,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -690,10 +690,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -702,10 +702,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -714,10 +714,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -726,10 +726,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -738,10 +738,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -750,10 +750,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -762,10 +762,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -774,10 +774,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -786,10 +786,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -798,10 +798,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -810,10 +810,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -822,10 +822,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -834,10 +834,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -846,10 +846,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -858,10 +858,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -870,10 +870,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -882,10 +882,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -894,10 +894,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -906,10 +906,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -918,10 +918,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -930,10 +930,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -942,10 +942,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -954,10 +954,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -966,10 +966,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -978,10 +978,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -990,10 +990,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1002,10 +1002,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1014,10 +1014,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1026,10 +1026,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1038,10 +1038,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1050,10 +1050,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1062,10 +1062,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1074,10 +1074,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1086,10 +1086,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1098,10 +1098,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1110,10 +1110,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1122,10 +1122,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1134,10 +1134,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1146,10 +1146,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1158,10 +1158,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1170,10 +1170,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1182,10 +1182,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Barrier error detected. Divergent thread(s) in warp.
 =========     at void batch_trsm_left_kernel<double, (int)64, (int)4, (int)3, (bool)0, (bool)0, (bool)0>(cublasTrsmBatchParams2<T1>, T1, const T1 *, int)+0x510
@@ -1194,10 +1194,10 @@
 =========         Host Frame: cuGraphLaunch [0x39f98f] in libcuda.so.1
 =========         Host Frame:  [0x216ca] in libcudart.so.12
 =========         Host Frame: cudaGraphLaunch [0x7f121] in libcudart.so.12
-=========         Host Frame: gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in gpuxtb_cuda_eigensolver_test
-=========         Host Frame: main [0x8c3e] in gpuxtb_cuda_eigensolver_test
+=========         Host Frame: xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph::launch(CUstream_st*) const [0x6126a] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::enqueue_compacted((anonymous namespace)::DeviceFixture&, xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph const&) [0x16273d] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: (anonymous namespace)::run_compaction_profile(long, bool, long, int) [0x174ed2] in xtbloom_cuda_eigensolver_test
+=========         Host Frame: main [0x8c3e] in xtbloom_cuda_eigensolver_test
 =========
 ========= Error: process didn't terminate successfully
 ========= Target application returned an error

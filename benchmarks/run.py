@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reproducible end-to-end GFN2-xTB benchmark matrix.
 
-The gpuxtb adapter calls only the public C ABI through ``ctypes``.  Contexts,
+The xtbloom adapter calls only the public C ABI through ``ctypes``.  Contexts,
 ragged descriptors, and caller-owned output buffers persist across measured
 calls.  CUDA timings end with an explicit ``cudaDeviceSynchronize``; device
 outputs are copied back only after timing for correctness validation.
@@ -34,8 +34,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CONFORMANCE_TOOLS = REPOSITORY_ROOT / "tools" / "conformance"
 sys.path.insert(0, str(CONFORMANCE_TOOLS))
 
-import gpuxtb_conformance as conformance
-import gpuxtb_public_api as public_api
+import xtbloom_conformance as conformance
+import xtbloom_public_api as public_api
 
 try:
     from .xtb_adapter import XtbAdapter, XtbError
@@ -58,7 +58,7 @@ SCHEMA_VERSION = 1
 DEFAULT_BATCH_SIZES = (1, 8, 32, 128)
 DEFAULT_PROPERTIES = ("energy", "force")
 DEFAULT_WORKLOADS = ("gas", "qmmm")
-DEFAULT_REFERENCE_ENV = Path("/tmp/gpuxtb-reference-env.E0KcEA")
+DEFAULT_REFERENCE_ENV = Path("/tmp/xtbloom-reference-env.E0KcEA")
 WORKLOAD_CASES = {
     "gas": "ketene",
     "qmmm": "water_dimer_6pc_hardness",
@@ -254,7 +254,7 @@ class Cell:
     batch_size: int
 
 
-class GpuxtbAdapter:
+class XTBloomAdapter:
     """Persistent public-C-API adapter for one matrix cell."""
 
     def __init__(
@@ -298,19 +298,19 @@ class GpuxtbAdapter:
         self.options = public_api.ComputeOptions()
         public_api._call_ok(
             self.library,
-            self.library.gpuxtb_compute_options_init(
+            self.library.xtbloom_compute_options_init(
                 ctypes.byref(self.options), ctypes.sizeof(self.options)
             ),
-            "gpuxtb_compute_options_init",
+            "xtbloom_compute_options_init",
         )
-        self.options.model = public_api.GPUXTB_MODEL_GFN2_XTB
-        self.options.flags = public_api.GPUXTB_COMPUTE_ENERGY
+        self.options.model = public_api.XTBLOOM_MODEL_GFN2_XTB
+        self.options.flags = public_api.XTBLOOM_COMPUTE_ENERGY
         if cell.property == "force":
-            self.options.flags |= public_api.GPUXTB_COMPUTE_FORCES
+            self.options.flags |= public_api.XTBLOOM_COMPUTE_FORCES
             if self.storage.point_charge_values:
                 # A QM/MM force workload covers the complete public force
                 # contract: both QM atoms and caller-owned external sites.
-                self.options.flags |= public_api.GPUXTB_COMPUTE_POINT_CHARGE_FORCES
+                self.options.flags |= public_api.XTBLOOM_COMPUTE_POINT_CHARGE_FORCES
         # These public defaults are recorded in every row and match normal API use.
         self.systems = cell.batch_size
         self.atoms = len(self.storage.atomic_numbers)
@@ -329,10 +329,10 @@ class GpuxtbAdapter:
         self.result = public_api.BatchResult()
         public_api._call_ok(
             self.library,
-            self.library.gpuxtb_batch_result_init(
+            self.library.xtbloom_batch_result_init(
                 ctypes.byref(self.result), ctypes.sizeof(self.result)
             ),
-            "gpuxtb_batch_result_init",
+            "xtbloom_batch_result_init",
         )
         self.result.energies = self.memory.output(self.energies, "energies")
         if self.forces is not None:
@@ -353,13 +353,13 @@ class GpuxtbAdapter:
         """Submit one inference without allocating or publishing to Python."""
         public_api._call_ok(
             self.library,
-            self.library.gpuxtb_compute(
+            self.library.xtbloom_compute(
                 self.context,
                 ctypes.byref(self.batch),
                 ctypes.byref(self.options),
                 ctypes.byref(self.result),
             ),
-            f"gpuxtb {self.cell.backend}/{self.cell.memory_mode} inference",
+            f"xtbloom {self.cell.backend}/{self.cell.memory_mode} inference",
         )
 
     def synchronize(self) -> None:
@@ -389,7 +389,7 @@ class GpuxtbAdapter:
             f"converged={self.converged[index]}, "
             f"iterations={self.iterations[index]}"
             for index in range(self.systems)
-            if self.statuses[index] != public_api.GPUXTB_STATUS_SUCCESS
+            if self.statuses[index] != public_api.XTBLOOM_STATUS_SUCCESS
             or self.converged[index] != 1
         ]
         if failures:
@@ -415,10 +415,10 @@ class GpuxtbAdapter:
                 if self.owns_cuda_control and self.cuda_control is not None:
                     self.cuda_control.close()
             finally:
-                self.library.gpuxtb_context_destroy(self.context)
+                self.library.xtbloom_context_destroy(self.context)
 
 
-def timed_invoke(adapter: GpuxtbAdapter) -> float:
+def timed_invoke(adapter: XTBloomAdapter) -> float:
     """Measure one public inference through an explicit completion boundary."""
     start = time.perf_counter_ns()
     adapter.invoke()
@@ -492,7 +492,7 @@ def correctness(
     }
 
 
-def benchmark_gpuxtb_cell(
+def benchmark_xtbloom_cell(
     cell: Cell,
     args: argparse.Namespace,
     manifest: dict[str, Any],
@@ -500,10 +500,10 @@ def benchmark_gpuxtb_cell(
 ) -> dict[str, Any]:
     """Construct, cold-run, warm up, sample, validate, and destroy one cell."""
     setup_start = time.perf_counter_ns()
-    adapter: GpuxtbAdapter | None = None
+    adapter: XTBloomAdapter | None = None
     rss_before = current_rss_bytes()
     try:
-        adapter = GpuxtbAdapter(
+        adapter = XTBloomAdapter(
             args.library,
             args.manifest,
             manifest,
@@ -543,8 +543,8 @@ def benchmark_gpuxtb_cell(
                         "shared-library load, context create, descriptor "
                         "allocation/upload"
                     ),
-                    "cold": "first gpuxtb_compute plus explicit CUDA synchronize",
-                    "warm": "gpuxtb_compute plus explicit CUDA synchronize",
+                    "cold": "first xtbloom_compute plus explicit CUDA synchronize",
+                    "warm": "xtbloom_compute plus explicit CUDA synchronize",
                     "excluded": (
                         "post-timing device-to-host download and correctness comparison"
                     ),
@@ -1090,9 +1090,9 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "runner": {
             "python": sys.version,
             "platform": platform.platform(),
-            "gpuxtb_source": git_state(REPOSITORY_ROOT),
-            "gpuxtb_library": str(args.library.resolve()),
-            "gpuxtb_library_sha256": sha256_file(args.library),
+            "xtbloom_source": git_state(REPOSITORY_ROOT),
+            "xtbloom_library": str(args.library.resolve()),
+            "xtbloom_library_sha256": sha256_file(args.library),
         },
         "hardware": {
             "hostname": platform.node(),
@@ -1124,7 +1124,7 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def gpuxtb_cells(args: argparse.Namespace) -> Iterable[Cell]:
+def xtbloom_cells(args: argparse.Namespace) -> Iterable[Cell]:
     """Yield CPU host and CUDA host/device/mixed public-API coordinates."""
     placements = []
     if "cpu" in args.backends:
@@ -1136,7 +1136,7 @@ def gpuxtb_cells(args: argparse.Namespace) -> Iterable[Cell]:
             for batch_size in args.batch_sizes:
                 for backend, memory_mode in placements:
                     yield Cell(
-                        "gpuxtb",
+                        "xtbloom",
                         backend,
                         memory_mode,
                         workload,
@@ -1240,7 +1240,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--engines",
         type=lambda value: parse_csv_values(value),
-        default=("gpuxtb", "tblite", "xtb", "dxtb"),
+        default=("xtbloom", "tblite", "xtb", "dxtb"),
     )
     parser.add_argument(
         "--backends",
@@ -1330,7 +1330,7 @@ def build_parser() -> argparse.ArgumentParser:
 def validate_args(args: argparse.Namespace) -> None:
     """Reject typo-driven partial matrices before any expensive inference."""
     allowed = {
-        "engines": ({"gpuxtb", "tblite", "xtb", "dxtb"}, args.engines),
+        "engines": ({"xtbloom", "tblite", "xtb", "dxtb"}, args.engines),
         "backends": ({"cpu", "cuda"}, args.backends),
         "CUDA memory modes": ({"host", "device", "mixed"}, args.cuda_memory_modes),
         "workloads": (set(WORKLOAD_CASES), args.workloads),
@@ -1360,14 +1360,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         metadata = environment_metadata(args)
         rows: list[dict[str, Any]] = []
-        if "gpuxtb" in args.engines:
-            for cell in gpuxtb_cells(args):
+        if "xtbloom" in args.engines:
+            for cell in xtbloom_cells(args):
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"RUN {cell.engine} {cell.backend}/{cell.memory_mode} "
                     f"{cell.workload} {cell.property} batch={cell.batch_size}",
                     flush=True,
                 )
-                row = benchmark_gpuxtb_cell(
+                row = benchmark_xtbloom_cell(
                     cell, args, manifest, cases[WORKLOAD_CASES[cell.workload]]
                 )
                 rows.append(row)

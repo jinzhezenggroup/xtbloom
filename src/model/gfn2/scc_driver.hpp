@@ -1,14 +1,13 @@
-#ifndef GPUXTB_MODEL_GFN2_SCC_DRIVER_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_SCC_DRIVER_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_SCC_DRIVER_HPP
+#define XTBLOOM_MODEL_GFN2_SCC_DRIVER_HPP
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/d4.hpp"
 #include "model/gfn2/eigensolver.hpp"
@@ -20,8 +19,9 @@
 #include "model/gfn2/scc_mixer.hpp"
 #include "model/gfn2/spin.hpp"
 #include "model/gfn2/wavefunction.hpp"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 inline constexpr std::size_t kSccDriverWorkspaceAlignment = 64u;
 inline constexpr double kDefaultSccEnergyTolerance = 1.0e-8;
@@ -68,18 +68,18 @@ class SccDriverPlan {
   explicit SccDriverPlan(std::shared_ptr<const SccDriverPlanData> data) noexcept;
   std::shared_ptr<const SccDriverPlanData> data_;
 
-  friend gpuxtb_status_t make_scc_driver_plan(
+  friend xtbloom_status_t make_scc_driver_plan(
       const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
       const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
       const SccMixerPlan& mixer, std::uint64_t maximum_iterations, double electronic_temperature,
       SccDriverPlan& plan, std::string& error);
-  friend gpuxtb_status_t make_scc_driver_plan(
+  friend xtbloom_status_t make_scc_driver_plan(
       const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
       const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
       const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
       std::uint64_t maximum_iterations, double electronic_temperature, SccDriverPlan& plan,
       std::string& error);
-  friend gpuxtb_status_t make_scc_driver_plan(
+  friend xtbloom_status_t make_scc_driver_plan(
       const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
       const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
       const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
@@ -173,7 +173,7 @@ struct SccDriverState {
   double* periodic_embedding_energies = nullptr;
   double* internal_energies = nullptr;
   std::uint64_t* iterations = nullptr;
-  gpuxtb_status_t* system_statuses = nullptr;
+  xtbloom_status_t* system_statuses = nullptr;
   std::uint8_t* initialized = nullptr;
   std::uint8_t* converged = nullptr;
 
@@ -221,7 +221,7 @@ struct SccDriverWorkspace {
   double* free_energies = nullptr;
   double* periodic_atomic_potentials = nullptr;
   double* periodic_embedding_energies = nullptr;
-  gpuxtb_status_t* periodic_system_statuses = nullptr;
+  xtbloom_status_t* periodic_system_statuses = nullptr;
   double* d4_atomic_potentials = nullptr;
   double* d4_two_body_energies = nullptr;
   std::uint8_t* active_systems = nullptr;
@@ -248,13 +248,13 @@ struct SccDriverWorkspace {
  * production convergence gate requires both the mixer RMS residual and the
  * absolute complete SCC free-energy change to be strictly below tolerance.
  */
-gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
-                                     const MullikenPlan& mulliken, const ES2Plan& es2,
-                                     const ES3Plan& es3, const AES2Plan& aes2,
-                                     const EigensolverPlan& eigensolver, const SccMixerPlan& mixer,
-                                     std::uint64_t maximum_iterations,
-                                     double electronic_temperature, SccDriverPlan& plan,
-                                     std::string& error);
+xtbloom_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
+                                      const MullikenPlan& mulliken, const ES2Plan& es2,
+                                      const ES3Plan& es3, const AES2Plan& aes2,
+                                      const EigensolverPlan& eigensolver, const SccMixerPlan& mixer,
+                                      std::uint64_t maximum_iterations,
+                                      double electronic_temperature, SccDriverPlan& plan,
+                                      std::string& error);
 
 /*
  * Enable self-consistent D4, periodic embedding, or both. A non-null optional
@@ -262,7 +262,7 @@ gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
  * Passing nullptr for both components is equivalent to the compatibility
  * overload above.
  */
-gpuxtb_status_t make_scc_driver_plan(
+xtbloom_status_t make_scc_driver_plan(
     const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
     const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
     const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
@@ -273,7 +273,7 @@ gpuxtb_status_t make_scc_driver_plan(
  * Explicit complete-free-energy convergence policy. energy_tolerance is in
  * Hartree and must be finite and positive.
  */
-gpuxtb_status_t make_scc_driver_plan(
+xtbloom_status_t make_scc_driver_plan(
     const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
     const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
     const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
@@ -285,34 +285,34 @@ gpuxtb_status_t make_scc_driver_plan(
  * name a sealed plan with exactly the driver's ragged atom partition. Passing
  * nullptr is equivalent to the compatibility overload above.
  */
-gpuxtb_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
-                                     const MullikenPlan& mulliken, const ES2Plan& es2,
-                                     const ES3Plan& es3, const AES2Plan& aes2,
-                                     const EigensolverPlan& eigensolver, const SccMixerPlan& mixer,
-                                     const PeriodicEmbeddingPlan* periodic_embedding,
-                                     std::uint64_t maximum_iterations,
-                                     double electronic_temperature, SccDriverPlan& plan,
-                                     std::string& error);
-
-gpuxtb_status_t bind_scc_driver_state(const SccDriverPlan& plan, void* workspace,
-                                      std::size_t workspace_size, SccDriverState& state,
+xtbloom_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
+                                      const MullikenPlan& mulliken, const ES2Plan& es2,
+                                      const ES3Plan& es3, const AES2Plan& aes2,
+                                      const EigensolverPlan& eigensolver, const SccMixerPlan& mixer,
+                                      const PeriodicEmbeddingPlan* periodic_embedding,
+                                      std::uint64_t maximum_iterations,
+                                      double electronic_temperature, SccDriverPlan& plan,
                                       std::string& error);
 
-gpuxtb_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* workspace,
-                                          std::size_t workspace_size, SccDriverWorkspace& view,
-                                          std::string& error);
+xtbloom_status_t bind_scc_driver_state(const SccDriverPlan& plan, void* workspace,
+                                       std::size_t workspace_size, SccDriverState& state,
+                                       std::string& error);
+
+xtbloom_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* workspace,
+                                           std::size_t workspace_size, SccDriverWorkspace& view,
+                                           std::string& error);
 
 /* Initialize both the mixer history and driver trace as one logical action. */
-gpuxtb_status_t initialize_scc_driver_state_cpu(const SccDriverPlan& plan,
-                                                const WavefunctionView& wavefunction,
-                                                const SccMixerState& mixer_state,
-                                                const SccDriverState& state, std::string& error);
+xtbloom_status_t initialize_scc_driver_state_cpu(const SccDriverPlan& plan,
+                                                 const WavefunctionView& wavefunction,
+                                                 const SccMixerState& mixer_state,
+                                                 const SccDriverState& state, std::string& error);
 
 /* Restart one system from its current public multipoles (raw when converged). */
-gpuxtb_status_t restart_scc_driver_system_cpu(const SccDriverPlan& plan, std::int64_t system,
-                                              const WavefunctionView& wavefunction,
-                                              const SccMixerState& mixer_state,
-                                              const SccDriverState& state, std::string& error);
+xtbloom_status_t restart_scc_driver_system_cpu(const SccDriverPlan& plan, std::int64_t system,
+                                               const WavefunctionView& wavefunction,
+                                               const SccMixerState& mixer_state,
+                                               const SccDriverState& state, std::string& error);
 
 /*
  * Advance every active system by one SCC iteration.
@@ -330,13 +330,13 @@ gpuxtb_status_t restart_scc_driver_system_cpu(const SccDriverPlan& plan, std::in
  * from that public raw state. Successful steady-state calls perform no dynamic
  * allocation.
  */
-gpuxtb_status_t iterate_scc_driver_batch_cpu(
+xtbloom_status_t iterate_scc_driver_batch_cpu(
     const SccDriverPlan& plan, const SccDriverGeometryView& geometry,
     const CpuLinearAlgebraBackend& backend, const EigensolverOverlapCache& overlap_cache,
     const WavefunctionView& wavefunction, const SccMixerState& mixer_state,
     const SccDriverState& state, const SccDriverWorkspace& workspace, std::string& error,
     const SccParallelExecutor* parallel = nullptr);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_SCC_DRIVER_HPP
+#endif  // XTBLOOM_MODEL_GFN2_SCC_DRIVER_HPP

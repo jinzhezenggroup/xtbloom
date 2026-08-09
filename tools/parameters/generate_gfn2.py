@@ -4,7 +4,7 @@
 The tblite TOML export is the source of truth.  This module validates that
 export before producing a normalized JSON document and a compact C++ header.
 Keeping validation here prevents a newly added upstream field from being
-silently omitted from gpuxtb's runtime tables.
+silently omitted from xtbloom's runtime tables.
 """
 
 from __future__ import annotations
@@ -208,7 +208,7 @@ def _expect_keys(
     if unknown:
         raise ParameterError(
             f"{location} has unsupported fields: {', '.join(unknown)}; "
-            "bump the gpuxtb parameter schema before accepting them"
+            "bump the xtbloom parameter schema before accepting them"
         )
 
 
@@ -556,7 +556,7 @@ def render_header(parameters: Mapping[str, Any], source_revision: str) -> bytes:
         "#include <cstdint>",
         "#include <type_traits>",
         "",
-        "namespace gpuxtb::parameters::gfn2 {",
+        "namespace xtbloom::parameters::gfn2 {",
         "",
         f"inline constexpr std::uint32_t kSchemaVersion = {SCHEMA_VERSION}u;",
         f"inline constexpr char kSourceRevision[] = {_cpp_string(source_revision)};",
@@ -751,7 +751,7 @@ def render_header(parameters: Mapping[str, Any], source_revision: str) -> bytes:
             "  return kGlobal.pair_scale_default;",
             "}",
             "",
-            "}  // namespace gpuxtb::parameters::gfn2",
+            "}  // namespace xtbloom::parameters::gfn2",
             "",
         )
     )
@@ -830,7 +830,7 @@ def _source_provenance(source_dir: Path, revision_spec: str) -> dict[str, Any]:
 def _export_tblite(tblite: Path) -> tuple[bytes, dict[str, str]]:
     executable = tblite.resolve(strict=True)
     version = _run((str(executable), "--version"))
-    with tempfile.TemporaryDirectory(prefix="gpuxtb-gfn2-") as temporary_directory:
+    with tempfile.TemporaryDirectory(prefix="xtbloom-gfn2-") as temporary_directory:
         output = Path(temporary_directory) / RAW_FILENAME
         _run(
             (

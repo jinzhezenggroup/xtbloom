@@ -1,10 +1,10 @@
-"""CUDA device-array tests for :class:`gpuxtb.ArrayBatch`.
+"""CUDA device-array tests for :class:`xtbloom.ArrayBatch`.
 
 These tests exercise the zero-copy DLPack path with real CUDA device buffers
 from PyTorch/CuPy when both the CUDA backend and a provider library are
 available; they skip otherwise so CPU-only installations stay green.  The
 provider libraries are opt-in test dependencies and are never imported by
-gpuxtb runtime code.
+xTBloom runtime code.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ import importlib
 import numpy as np
 import pytest
 from _cases import case_by_id, structure_inputs
-from gpuxtb import ArrayBatch, Calculator
-from gpuxtb.exceptions import GPUxtbRuntimeError, GPUxtbValueError
+from xtbloom import ArrayBatch, Calculator
+from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
 
 # --- environment probes ---------------------------------------------------------
 
@@ -26,14 +26,14 @@ _JAX = importlib.util.find_spec("jax")
 
 def _library_has_cuda() -> bool:
     """Check whether a CUDA context can actually be created on this host."""
-    from gpuxtb.exceptions import GPUxtbRuntimeError
-    from gpuxtb.interface import Context
+    from xtbloom.exceptions import XTBloomRuntimeError
+    from xtbloom.interface import Context
 
     try:
         with Context("cuda"):
             pass
         return True
-    except GPUxtbRuntimeError:
+    except XTBloomRuntimeError:
         return False
 
 
@@ -237,13 +237,13 @@ def test_torch_dtype_mismatch_cuda_rejected() -> None:
 
     arrays = _water_arrays(torch)
     arrays["positions"] = arrays["positions"].float()
-    with pytest.raises(GPUxtbValueError, match="dtype"):
+    with pytest.raises(XTBloomValueError, match="dtype"):
         ArrayBatch(**arrays, backend="cuda").compute()
 
 
 @pytest.mark.cuda
 def test_requires_grad_output_rejected() -> None:
-    """Autograd leaf tensors cannot be used as gpuxtb output buffers."""
+    """Autograd leaf tensors cannot be used as xTBloom output buffers."""
     reason = _device_ready()
     if reason:
         pytest.skip(reason)
@@ -344,7 +344,7 @@ def test_cuda_validation_failure_leaves_device_output_unchanged() -> None:
     arrays["atom_offsets"] = torch.tensor([1, 3], dtype=torch.int64, device="cuda")
     sentinel = -456.25
     out_energies = torch.full((1,), sentinel, dtype=torch.float64, device="cuda")
-    with pytest.raises(GPUxtbRuntimeError, match="atom_offsets"):
+    with pytest.raises(XTBloomRuntimeError, match="atom_offsets"):
         ArrayBatch(**arrays, backend="cuda").compute(
             compute_forces=False,
             compute_charges=False,
@@ -375,7 +375,7 @@ def test_cuda_active_stream_capture_is_rejected() -> None:
     with torch.cuda.stream(stream):
         graph.capture_begin()
         try:
-            with pytest.raises(GPUxtbRuntimeError, match="capture"):
+            with pytest.raises(XTBloomRuntimeError, match="capture"):
                 batch.compute()
         finally:
             graph.capture_end()
@@ -406,7 +406,7 @@ def test_cuda_compute_restores_callers_current_device() -> None:
         )
         assert torch.cuda.current_device() == caller_device
 
-        with pytest.raises(GPUxtbRuntimeError, match="atom_offsets"):
+        with pytest.raises(XTBloomRuntimeError, match="atom_offsets"):
             ArrayBatch(**bad, backend="cuda", device_id=context_device).compute()
         assert torch.cuda.current_device() == caller_device
 

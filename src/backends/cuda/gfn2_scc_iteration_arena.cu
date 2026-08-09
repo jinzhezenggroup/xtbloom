@@ -1,12 +1,12 @@
 #include <cstddef>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cstdint>
 #include <limits>
 
 #include "backends/cuda/gfn2_scc_iteration_arena.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr std::size_t kSliceAlignment = 64u;
@@ -370,9 +370,9 @@ void project_workspace(ArenaCursor& cursor, const ArenaShape& shape,
 
 }  // namespace
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 void take_component_storage(ArenaCursor& cursor, const ArenaShape& shape,
@@ -429,7 +429,7 @@ void project_workspace_front(ArenaCursor& cursor, const ArenaShape& shape,
   workspace = {};
   workspace.plan_token = shape.plan_token;
   workspace.ledger.active_mask = cursor.take<std::uint8_t>(shape.batch);
-  workspace.ledger.pending_statuses = cursor.take<gpuxtb_status_t>(shape.batch);
+  workspace.ledger.pending_statuses = cursor.take<xtbloom_status_t>(shape.batch);
   workspace.ledger.system_failure_records = cursor.take<std::uint64_t>(shape.batch);
   workspace.ledger.plan_failure_record = cursor.take<std::uint64_t>(1);
   workspace.ledger.sequence_active = cursor.take<std::uint32_t>(1);
@@ -539,9 +539,9 @@ void project_workspace_front(ArenaCursor& cursor, const ArenaShape& shape,
 }
 
 }  // namespace
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 Gfn2SccIterationArenaDiagnostic query_gfn2_scc_iteration_arena_requirements_cuda(
     const Gfn2SccIterationDevicePlan& plan,
@@ -600,9 +600,9 @@ Gfn2SccIterationArenaDiagnostic query_gfn2_scc_iteration_arena_requirements_cuda
   return {};
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 [[nodiscard]] Gfn2EigensolverDeviceResults take_eigenpairs(ArenaCursor& cursor,
@@ -699,7 +699,7 @@ namespace {
   result.residual_maximum = cursor.take<double>(shape.batch);
   result.iterations = cursor.take<std::uint64_t>(shape.batch);
   result.restart_counts = cursor.take<std::uint64_t>(shape.batch);
-  result.system_statuses = cursor.take<gpuxtb_status_t>(shape.batch);
+  result.system_statuses = cursor.take<xtbloom_status_t>(shape.batch);
   result.initialized = cursor.take<std::uint8_t>(shape.batch);
   result.residual_converged = cursor.take<std::uint8_t>(shape.batch);
   result.total_vector_elements = shape.mixer_vector;
@@ -787,7 +787,7 @@ void project_persistent(ArenaCursor& cursor, const ArenaShape& shape,
   state.scc.free_energy_changes = cursor.take<double>(shape.batch);
   state.scc.residual_rms = cursor.take<double>(shape.batch);
   state.scc.iterations = cursor.take<std::uint64_t>(shape.batch);
-  state.scc.system_statuses = cursor.take<gpuxtb_status_t>(shape.batch);
+  state.scc.system_statuses = cursor.take<xtbloom_status_t>(shape.batch);
   state.scc.converged = cursor.take<std::uint8_t>(shape.batch);
   state.scc.batch_elements = shape.batch;
   state.scc.plan_token = shape.plan_token;
@@ -1011,7 +1011,7 @@ void project_energy_mixer_and_publication_workspace(
   publication.previous_free_energies = cursor.take<double>(shape.batch);
   publication.free_energy_changes = cursor.take<double>(shape.batch);
   publication.next_iterations = cursor.take<std::uint64_t>(shape.batch);
-  publication.next_statuses = cursor.take<gpuxtb_status_t>(shape.batch);
+  publication.next_statuses = cursor.take<xtbloom_status_t>(shape.batch);
   publication.next_converged = cursor.take<std::uint8_t>(shape.batch);
   publication.batch_elements = shape.batch;
   publication.system_errors = cursor.take<std::uint32_t>(shape.batch);
@@ -1048,9 +1048,9 @@ void project_workspace(ArenaCursor& cursor, const ArenaShape& shape,
 }
 
 }  // namespace
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 Gfn2SccIterationArenaDiagnostic bind_gfn2_scc_iteration_arena_cuda(
     Gfn2SccIterationDevicePlan& plan,
@@ -1173,4 +1173,4 @@ Gfn2SccIterationArenaDiagnostic bind_gfn2_scc_iteration_arena_cuda(
   return {};
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

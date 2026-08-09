@@ -48,8 +48,8 @@ void operator delete[](void* pointer, std::size_t) noexcept { ::operator delete[
 
 namespace {
 
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::ExternalPointChargePlan;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::ExternalPointChargePlan;
 
 bool near(double actual, double expected, double tolerance) {
   return std::abs(actual - expected) <= tolerance;
@@ -60,16 +60,16 @@ bool make_plan(const std::vector<std::int64_t>& atom_offsets,
                const std::vector<std::int64_t>* point_offsets, BasisPlan& basis,
                ExternalPointChargePlan& plan, std::string& error) {
   const std::int64_t batch_size = static_cast<std::int64_t>(atom_offsets.size() - 1u);
-  if (gpuxtb::detail::gfn2::make_basis_plan(
+  if (xtbloom::detail::gfn2::make_basis_plan(
           batch_size, static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
-          atomic_numbers.data(), basis, error) != GPUXTB_STATUS_SUCCESS) {
+          atomic_numbers.data(), basis, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   const std::int64_t point_count = point_offsets == nullptr ? 0 : point_offsets->back();
   const std::int64_t* offsets = point_offsets == nullptr ? nullptr : point_offsets->data();
-  return gpuxtb::detail::gfn2::make_external_point_charge_plan(basis, atomic_numbers.data(),
-                                                               point_count, offsets, plan,
-                                                               error) == GPUXTB_STATUS_SUCCESS;
+  return xtbloom::detail::gfn2::make_external_point_charge_plan(basis, atomic_numbers.data(),
+                                                                point_count, offsets, plan,
+                                                                error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 bool evaluate_energy(const ExternalPointChargePlan& plan, const std::vector<double>& qm_positions,
@@ -83,14 +83,14 @@ bool evaluate_energy(const ExternalPointChargePlan& plan, const std::vector<doub
   const double* point_position_data = point_positions.empty() ? nullptr : point_positions.data();
   const double* point_charge_data = point_charges.empty() ? nullptr : point_charges.data();
   const double* point_hardness_data = point_hardnesses.empty() ? nullptr : point_hardnesses.data();
-  if (gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  if (xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
           plan, qm_positions.data(), point_position_data, point_charge_data, point_hardness_data,
-          shell_potentials.data(), error) != GPUXTB_STATUS_SUCCESS) {
+          shell_potentials.data(), error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
-  return gpuxtb::detail::gfn2::add_external_point_charge_energy_cpu(
+  return xtbloom::detail::gfn2::add_external_point_charge_energy_cpu(
              plan, shell_charges.data(), shell_potentials.data(), energies.data(), error) ==
-         GPUXTB_STATUS_SUCCESS;
+         XTBLOOM_STATUS_SUCCESS;
 }
 
 double sum_values(const std::vector<double>& values) {
@@ -154,17 +154,17 @@ int test_xtb_671_water_golden() {
     CHECK(near(shell_potentials[shell], expected_potential[shell], 3.0e-16));
   }
   CHECK(near(energies[0], -0.003894135995627615, 4.0e-16));
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_energy_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_energy_cpu(
             plan, shell_charges.data(), shell_potentials.data(), energies.data(), error) ==
-        GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(near(energies[0], -0.00778827199125523, 8.0e-16));
 
   std::vector<double> qm_forces(qm_positions.size());
   std::vector<double> point_forces(point_positions.size());
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), shell_charges.data(), qm_forces.data(), point_forces.data(),
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   constexpr std::array<double, 9> expected_qm_forces{
       0.012301589617305368,   0.0, 0.0,
       -0.0058342831196417592, 0.0, 0.0025156889342053297,
@@ -179,14 +179,14 @@ int test_xtb_671_water_golden() {
 
   std::vector<double> qm_only(qm_positions.size());
   std::vector<double> point_only(point_positions.size());
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), shell_charges.data(), qm_only.data(), nullptr,
-            error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), shell_charges.data(), nullptr, point_only.data(),
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(qm_only == qm_forces);
   CHECK(point_only == point_forces);
 
@@ -231,10 +231,10 @@ int test_finite_difference_and_force_conservation() {
                         shell_charges, shell_potentials, energies, error));
   std::vector<double> qm_forces(qm_positions.size());
   std::vector<double> point_forces(point_positions.size());
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), shell_charges.data(), qm_forces.data(), point_forces.data(),
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
 
   constexpr double step = 1.0e-5;
   for (std::size_t coordinate = 0; coordinate < qm_positions.size(); ++coordinate) {
@@ -305,10 +305,10 @@ int test_ragged_matches_sequential_and_zero_point_sites() {
                         shell_charges, potentials, energies, error));
   std::vector<double> qm_forces(qm_positions.size());
   std::vector<double> point_forces(point_positions.size());
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), shell_charges.data(), qm_forces.data(), point_forces.data(),
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
 
   CHECK(energies[0] == 0.0);
   CHECK(energies[1] == 0.0);
@@ -349,11 +349,11 @@ int test_ragged_matches_sequential_and_zero_point_sites() {
                           error));
     std::vector<double> sequential_qm_forces(sequential_qm_positions.size());
     std::vector<double> sequential_point_forces(sequential_point_positions.size());
-    CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+    CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
               sequential_plan, sequential_qm_positions.data(), sequential_point_positions.data(),
               sequential_point_charges.data(), sequential_point_hardnesses.data(),
               sequential_shell_charges.data(), sequential_qm_forces.data(),
-              sequential_point_forces.data(), error) == GPUXTB_STATUS_SUCCESS);
+              sequential_point_forces.data(), error) == XTBLOOM_STATUS_SUCCESS);
 
     CHECK(sequential_energies[0] == energies[batch]);
     for (std::size_t shell = 0; shell < sequential_potentials.size(); ++shell) {
@@ -388,9 +388,9 @@ int test_coincident_and_large_hardness() {
   const std::array<double, 2> point_charges{0.6, -0.4};
   const std::array<double, 2> point_hardnesses{0.405771, 999.0};
   std::array<double, 1> potential{};
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
-            point_hardnesses.data(), potential.data(), error) == GPUXTB_STATUS_SUCCESS);
+            point_hardnesses.data(), potential.data(), error) == XTBLOOM_STATUS_SUCCESS);
   const double coincident = point_charges[0] * (plan.shell_hardness[0] + point_hardnesses[0]) / 2.0;
   const double softness = 2.0 / (plan.shell_hardness[0] + point_hardnesses[1]);
   const double large_gamma = point_charges[1] / std::sqrt(25.0 + softness * softness);
@@ -399,10 +399,10 @@ int test_coincident_and_large_hardness() {
   constexpr std::array<double, 1> shell_charges{-0.3};
   std::array<double, 3> qm_forces{};
   std::array<double, 6> point_forces{};
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), shell_charges.data(), qm_forces.data(), point_forces.data(),
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(point_forces[0] == 0.0 && point_forces[1] == 0.0 && point_forces[2] == 0.0);
   for (std::size_t axis = 0; axis < 3u; ++axis) {
     CHECK(near(qm_forces[axis] + point_forces[3u + axis], 0.0, 0.0));
@@ -425,25 +425,25 @@ int test_validation_and_strong_failure_guarantee() {
   constexpr std::array<std::int64_t, 2> bad_end{0, 0};
   constexpr std::array<std::int64_t, 2> descending{0, -1};
   constexpr std::array<std::int32_t, 1> mismatched_number{6};
-  CHECK(gpuxtb::detail::gfn2::make_external_point_charge_plan(basis, atomic_numbers.data(), 1,
-                                                              bad_start.data(), sentinel, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_external_point_charge_plan(basis, atomic_numbers.data(), 1,
+                                                               bad_start.data(), sentinel, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(sentinel.batch_size == 17);
-  CHECK(gpuxtb::detail::gfn2::make_external_point_charge_plan(basis, atomic_numbers.data(), 1,
-                                                              bad_end.data(), sentinel, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_external_point_charge_plan(basis, atomic_numbers.data(), -1,
-                                                              descending.data(), sentinel, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_external_point_charge_plan(
+  CHECK(xtbloom::detail::gfn2::make_external_point_charge_plan(basis, atomic_numbers.data(), 1,
+                                                               bad_end.data(), sentinel, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_external_point_charge_plan(
+            basis, atomic_numbers.data(), -1, descending.data(), sentinel, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_external_point_charge_plan(
             basis, mismatched_number.data(), 1, point_offsets.data(), sentinel, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_external_point_charge_plan(
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_external_point_charge_plan(
             basis, nullptr, 1, point_offsets.data(), sentinel, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_external_point_charge_plan(basis, atomic_numbers.data(), 1,
-                                                              nullptr, sentinel, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_external_point_charge_plan(basis, atomic_numbers.data(), 1,
+                                                               nullptr, sentinel, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(sentinel.batch_size == 17);
 
   const std::array<double, 3> qm_positions{0.0, 0.0, 0.0};
@@ -458,85 +458,85 @@ int test_validation_and_strong_failure_guarantee() {
 
   ExternalPointChargePlan corrupt = plan;
   corrupt.point_charge_offsets[1] = 0;
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             corrupt, qm_positions.data(), point_positions.data(), point_charges.data(),
-            point_hardnesses.data(), potentials.data(), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            point_hardnesses.data(), potentials.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(potentials[0] == 8.0 && potentials[1] == 9.0);
   corrupt = plan;
   corrupt.shell_hardness[0] = 0.0;
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             corrupt, qm_positions.data(), point_positions.data(), point_charges.data(),
-            point_hardnesses.data(), potentials.data(), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            point_hardnesses.data(), potentials.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   corrupt = plan;
   corrupt.shell_to_atom[0] = 3;
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             corrupt, qm_positions.data(), point_positions.data(), point_charges.data(),
-            point_hardnesses.data(), potentials.data(), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            point_hardnesses.data(), potentials.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             plan, nullptr, point_positions.data(), point_charges.data(), point_hardnesses.data(),
-            potentials.data(), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+            potentials.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             plan, qm_positions.data(), nullptr, point_charges.data(), point_hardnesses.data(),
-            potentials.data(), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            potentials.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   std::array<double, 3> bad_qm_positions = qm_positions;
   bad_qm_positions[1] = std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             plan, bad_qm_positions.data(), point_positions.data(), point_charges.data(),
-            point_hardnesses.data(), potentials.data(), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            point_hardnesses.data(), potentials.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   std::array<double, 3> bad_point_positions = point_positions;
   bad_point_positions[2] = std::numeric_limits<double>::infinity();
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             plan, qm_positions.data(), bad_point_positions.data(), point_charges.data(),
-            point_hardnesses.data(), potentials.data(), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            point_hardnesses.data(), potentials.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   std::array<double, 1> bad_point_charges{std::numeric_limits<double>::quiet_NaN()};
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             plan, qm_positions.data(), point_positions.data(), bad_point_charges.data(),
-            point_hardnesses.data(), potentials.data(), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            point_hardnesses.data(), potentials.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   for (double bad_hardness : {0.0, -1.0, std::numeric_limits<double>::infinity()}) {
     const std::array<double, 1> values{bad_hardness};
-    CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+    CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
               plan, qm_positions.data(), point_positions.data(), point_charges.data(),
-              values.data(), potentials.data(), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+              values.data(), potentials.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   }
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
-            point_hardnesses.data(), nullptr, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            point_hardnesses.data(), nullptr, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_energy_cpu(plan, nullptr, potentials.data(),
-                                                                   energy.data(), error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_energy_cpu(plan, shell_charges.data(),
-                                                                   nullptr, energy.data(), error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_energy_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_energy_cpu(
+            plan, nullptr, potentials.data(), energy.data(), error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_energy_cpu(
+            plan, shell_charges.data(), nullptr, energy.data(), error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_energy_cpu(
             plan, shell_charges.data(), potentials.data(), nullptr, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   std::array<double, 2> bad_shell_charges = shell_charges;
   bad_shell_charges[1] = std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_energy_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_energy_cpu(
             plan, bad_shell_charges.data(), potentials.data(), energy.data(), error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energy[0] == 11.0);
 
   const double maximum = std::numeric_limits<double>::max();
   const std::array<double, 2> overflow_shell_charges{1.0, 1.0};
   const std::array<double, 2> overflow_potentials{0.5 * maximum, 0.0};
   energy[0] = maximum;
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_energy_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_energy_cpu(
             plan, overflow_shell_charges.data(), overflow_potentials.data(), energy.data(),
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energy[0] == maximum);
   energy[0] = 11.0;
 
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), shell_charges.data(), nullptr, nullptr,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), nullptr, qm_forces.data(), point_forces.data(),
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   constexpr std::array<double, 3> expected_qm_forces{1.0, 2.0, 3.0};
   constexpr std::array<double, 3> expected_point_forces{4.0, 5.0, 6.0};
   CHECK(qm_forces == expected_qm_forces);
@@ -548,29 +548,29 @@ int test_validation_and_strong_failure_guarantee() {
   const std::array<double, 1> overflow_point_hardness{maximum};
   const std::array<double, 2> overflow_force_shell_charges{1.0, 0.0};
   qm_forces = {maximum, 0.0, 0.0};
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, overflow_qm_position.data(), overflow_point_position.data(),
             overflow_point_charge.data(), overflow_point_hardness.data(),
             overflow_force_shell_charges.data(), qm_forces.data(), nullptr,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(qm_forces[0] == maximum);
   point_forces = {-maximum, 0.0, 0.0};
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, overflow_qm_position.data(), overflow_point_position.data(),
             overflow_point_charge.data(), overflow_point_hardness.data(),
             overflow_force_shell_charges.data(), nullptr, point_forces.data(),
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(point_forces[0] == -maximum);
 
   /* Zero-PC plans synthesize an all-zero ragged partition from NULL. */
   ExternalPointChargePlan zero_plan;
-  CHECK(gpuxtb::detail::gfn2::make_external_point_charge_plan(
-            basis, atomic_numbers.data(), 0, nullptr, zero_plan, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_external_point_charge_plan(
+            basis, atomic_numbers.data(), 0, nullptr, zero_plan, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(zero_plan.point_charge_offsets == std::vector<std::int64_t>({0, 0}));
   std::array<double, 2> zero_potential{7.0, 7.0};
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             zero_plan, qm_positions.data(), nullptr, nullptr, nullptr, zero_potential.data(),
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(zero_potential[0] == 0.0 && zero_potential[1] == 0.0);
   return 0;
 }
@@ -594,34 +594,35 @@ int test_no_steady_state_allocations() {
   std::array<double, 6> point_forces{};
 
   /* Warm up any implementation-independent C++ runtime paths first. */
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
-            point_hardnesses.data(), shell_potentials.data(), error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_energy_cpu(
+            point_hardnesses.data(), shell_potentials.data(), error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_energy_cpu(
             plan, shell_charges.data(), shell_potentials.data(), energy.data(), error) ==
-        GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), shell_charges.data(), qm_forces.data(), point_forces.data(),
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
 
   const std::size_t before = allocation_test::count.load(std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t potential_status =
-      gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  const xtbloom_status_t potential_status =
+      xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
           plan, qm_positions.data(), point_positions.data(), point_charges.data(),
           point_hardnesses.data(), shell_potentials.data(), error);
-  const gpuxtb_status_t energy_status = gpuxtb::detail::gfn2::add_external_point_charge_energy_cpu(
-      plan, shell_charges.data(), shell_potentials.data(), energy.data(), error);
-  const gpuxtb_status_t force_status = gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+  const xtbloom_status_t energy_status =
+      xtbloom::detail::gfn2::add_external_point_charge_energy_cpu(
+          plan, shell_charges.data(), shell_potentials.data(), energy.data(), error);
+  const xtbloom_status_t force_status = xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
       plan, qm_positions.data(), point_positions.data(), point_charges.data(),
       point_hardnesses.data(), shell_charges.data(), qm_forces.data(), point_forces.data(), error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
   const std::size_t after = allocation_test::count.load(std::memory_order_relaxed);
 
-  CHECK(potential_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(energy_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(force_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(potential_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(energy_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(force_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(after == before);
   return 0;
 }
