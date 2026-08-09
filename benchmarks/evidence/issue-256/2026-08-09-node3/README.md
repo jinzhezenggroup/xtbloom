@@ -188,7 +188,9 @@ of the measured public path), so its rows are cold-every-call. dxtb-cuda
   because gpuxtb solves the whole ragged batch in one call across its worker
   pool while the reference adapters loop systems serially.
 - gpuxtb CUDA at batch=1 carries a fixed per-call cost (14-192 ms up to 62
-  atoms) and a slow force stage at 362 atoms (10161 ms), but amortizes at
+  atoms) and a single-system eigensolve cliff past ~272 atoms (the cuSOLVER
+  `syevd` path degenerates into thousands of tiny serial kernels; forces add
+  <1%; 362 atoms costs 10161 ms vs 1448 ms on CPU), but amortizes at
   batch=128/512: @242 x 128 it is already faster than gpuxtb CPU (2576 vs
   2761 ms), and at batch=512 @62-122 it is at or below CPU latency.
 

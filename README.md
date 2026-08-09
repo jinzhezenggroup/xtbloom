@@ -129,9 +129,12 @@ The measured pattern is what ragged high-throughput inference is for:
   a second to a few seconds where the references need tens of seconds to
   a minute and a half.
 - **gpuxtb CUDA:** at batch=1 the GPU rows carry a fixed per-call cost
-  (14-62 ms at 14-32 atoms) and a slower force stage at 362 atoms
-  (10 161 ms). At batch=128/512 the overhead amortizes and CUDA matches or
-  beats CPU (@242 x 128: 2576 ms vs CPU 2761; @122 x 512: 3797 ms vs CPU
+  (14-62 ms at 14-32 atoms) and the single-system CUDA eigensolve develops a
+  sharp efficiency cliff past ~272 atoms (the divide-and-conquer `syevd`
+  path issues thousands of tiny serial kernels; forces add <1%; at 362 atoms
+  the call costs 10 161 ms vs 1.4 s on CPU). At batch=128/512 the overhead
+  amortizes and CUDA matches or beats CPU (@242 x 128: 2576 ms vs CPU 2761;
+  @122 x 512: 3797 ms vs CPU
   4633), far ahead of the serial reference loops.
 
 Reproduce it with the committed runner, then regenerate the figure:
