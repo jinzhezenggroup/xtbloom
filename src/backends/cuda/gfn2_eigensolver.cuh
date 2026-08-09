@@ -195,6 +195,9 @@ enum class Gfn2EigensolverStrategy : std::uint32_t {
   kAuto = 0u,
   kBatchedDivideAndConquer = 1u,
   kBatchedJacobi = 2u,
+  /* Low-level symmetric reduction plus a device-resident tridiagonal solve.
+   * This avoids the CUDA 12.9 vector-capture cliff in large singleton buckets. */
+  kTridiagonalBisection = 3u,
 };
 
 struct Gfn2EigensolverOptions {
@@ -219,12 +222,30 @@ inline constexpr std::int32_t kGfn2JacobiMaximumOrbitals = 16;
  * documented small-matrix limit to keep the rejected crossover measurable. */
 inline constexpr std::int32_t kGfn2JacobiProviderMaximumOrbitals = 32;
 
+/* CUDA 12.9 changes the vector-mode XsyevBatched implementation at 513 AOs;
+ * the larger implementation is not stream-capturable. The custom path is
+ * bounded to the measured issue-264 regime so unrelated batch dispatch and
+ * very-large-system policy remain explicit. */
+inline constexpr std::int32_t kGfn2TridiagonalMinimumOrbitals = 513;
+inline constexpr std::int32_t kGfn2TridiagonalMaximumOrbitals = 1024;
+
 [[nodiscard]] inline bool gfn2_eigensolver_uses_jacobi(const Gfn2EigensolverOptions& options,
                                                        std::int32_t orbital_count) noexcept {
   return options.strategy == Gfn2EigensolverStrategy::kBatchedJacobi ||
          (options.strategy == Gfn2EigensolverStrategy::kAuto && options.jacobi != nullptr &&
           orbital_count >= kGfn2JacobiMinimumOrbitals &&
           orbital_count <= kGfn2JacobiMaximumOrbitals);
+}
+
+[[nodiscard]] inline bool gfn2_eigensolver_uses_tridiagonal(
+    const Gfn2EigensolverOptions& options, const Gfn2EigensolverBucket& policy_bucket) noexcept {
+  if (policy_bucket.orbital_count <= 0 ||
+      policy_bucket.orbital_count > kGfn2TridiagonalMaximumOrbitals) {
+    return false;
+  }
+  return options.strategy == Gfn2EigensolverStrategy::kTridiagonalBisection ||
+         (options.strategy == Gfn2EigensolverStrategy::kAuto && policy_bucket.system_count == 1 &&
+          policy_bucket.orbital_count >= kGfn2TridiagonalMinimumOrbitals);
 }
 
 /* Controls whether a failed factorization invalidates cache metadata. Initial
@@ -341,6 +362,13 @@ Gfn2EigensolverLaunchResult query_gfn2_jacobi_bucket_workspace_cuda(
     cusolverDnHandle_t solver, syevjInfo_t jacobi, const Gfn2EigensolverBucket& bucket,
     const double* device_matrix, const double* device_eigenvalues,
     Gfn2EigensolverWorkspaceRequirements& requirements) noexcept;
+
+/* Add setup-owned workspace for the Graph-capturable large-singleton provider.
+ * The same arena is reused sequentially for restricted and spin-expanded
+ * solves, so the requirement depends on AO size rather than solve count. */
+Gfn2EigensolverLaunchResult query_gfn2_tridiagonal_bucket_workspace_cuda(
+    cusolverDnHandle_t solver, const Gfn2EigensolverBucket& bucket, const double* device_matrix,
+    const double* device_eigenvalues, Gfn2EigensolverWorkspaceRequirements& requirements) noexcept;
 
 /*
  * Production exact-capacity dispatch primitives. The production device-tail

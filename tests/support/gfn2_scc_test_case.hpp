@@ -30,6 +30,10 @@ enum class SmallSystemKind {
    * crosses the sparse pair-list dense-fallback crossover so the production
    * runtime path exercises the bucketed consistency gate. */
   kC20H42,
+  /* A 272-atom C90H182 chain with 542 GFN2 orbitals. CUDA 12.9 switches the
+   * vector eigensolver to a non-capturable provider path above 512 orbitals,
+   * so this case exercises issue #264's large-singleton capture boundary. */
+  kC90H182,
 };
 
 /*
