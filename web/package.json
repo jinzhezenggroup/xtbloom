@@ -1,0 +1,12 @@
+{
+  "name": "gpuxtb-web",
+  "private": true,
+  "type": "module",
+  "description": "Build-time browser dependencies for the gpuxtb WASM web demo (GitHub Pages deployment).",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "3dmol": "2.5.5"
+  }
+}
