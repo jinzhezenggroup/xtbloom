@@ -93,27 +93,44 @@ python3 -m unittest -v benchmarks.test_dxtb_adapter
 
 ## Cross-engine natoms scaling and README figure
 
-`natoms_cross_engine.py` measures steady-state GFN2-xTB energy + analytic
-forces from public interfaces only across gpuxtb CPU/CUDA, xTB, tblite, and
-dxtb. Unlike `natoms_scaling.py`, every batch above size one is built from
-*distinct* seeded thermal-like conformers of one alkane (identical atomic
-numbers, slightly different coordinates), so no engine can win a batch row by
-reusing one geometry. An optional `--trajectory` mode streams nearly identical
-frames through persistent descriptors and runs gpuxtb with strict `WARM` SCC
-continuation; `--trajectory-natoms` accepts a comma-separated list so the
-trajectory panel can sweep molecule size (one per-frame-latency row per engine
-per size) instead of measuring a single fixed size.
+`natoms_cross_engine.py` measures GFN2-xTB energy plus analytic-force latency
+through the public interfaces of gpuxtb CPU/CUDA, xTB, tblite, and dxtb. Every
+multi-system batch contains distinct seeded conformers of one alkane
+stoichiometry, so a row cannot benefit from duplicating one geometry.
 
-`plot_natoms_cross_engine.py` merges any number of `--artifact` JSON files and
-renders the three-panel scaling + trajectory figure used in the README and
-user guide; it annotates the CPU/GPU hardware, thread count, and repository
-commit. Both scripts are exercised by `test_natoms_cross_engine.py` without a
-GPU or reference engines (matplotlib required for the plot-path test).
+The benchmark supports two explicit electronic-state policies:
 
-Typical CSV rows retain engine, natoms, batch size, total atoms in the batch,
-CPU threads, device, availability, and the full timing summary; JSON retains
-raw per-sample latencies, energies, SCC iterations, status, correctness, and
-run identity.
+- `cold`: every measured sample starts independently. gpuxtb performs `FRESH`
+  initialization inside the timed public call; xTB/tblite rebuild the
+  calculator outside timing and time the single point plus getters; dxtb times
+  reset, calculation, synchronization, and host tensor publication.
+- `auto-warm`: an untimed cold seed precedes measured strict `WARM` gpuxtb
+  calls and persistent xTB/tblite calls. dxtb has no equivalent continuation
+  path in this adapter and remains reset/cold for every measured call.
+
+Every interval ends with host-visible energy and forces. Native convergence
+controls keep their library-specific meanings: gpuxtb uses charge `1e-4` and
+energy `1e-6`; xTB/tblite use their documented public accuracy factor `1.0`;
+dxtb uses `x_atol=1e-4`, `x_atol_max=1e-5`, `f_atol=1e-4`, and
+`force_convergence=true`. For the public comparison, every timed dependent
+sample must pass the same output gate against a panel-matched independent
+xTB/tblite artifact:
+
+```text
+max_s |Delta E_s| <= 2e-3 Eh
+max_i |Delta F_i| <= 2e-3 Eh/bohr
+```
+
+This is benchmark eligibility, not a tblite default or a replacement for
+gpuxtb scientific conformance. `plot_natoms_cross_engine.py` rejects dirty or
+protocol-incompatible artifacts, preserves failed/unavailable coordinates,
+and renders the three batch-size panels used in the README and user guide. It
+declares its pinned Matplotlib dependency through PEP 723 inline metadata, so
+run it with `uv run --script benchmarks/plot_natoms_cross_engine.py ...`
+without adding plotting packages to gpuxtb's project dependencies.
+JSON retains every raw sample, complete final force vectors, convergence and
+correctness state, source/build/runtime identities, and binary hashes; CSV is
+the compact tabular view.
 
 Hardware-free self-check:
 
@@ -121,8 +138,13 @@ Hardware-free self-check:
 python3 -m unittest -v benchmarks.test_natoms_cross_engine
 ```
 
+That command runs the protocol and artifact checks while leaving the optional
+Matplotlib render test skipped. Set `GPUXTB_RUN_PLOT_TEST=1` in an environment
+that already provides Matplotlib when developing the test itself; publication
+rendering should use the inline-metadata `uv run --script` command above.
+
 See the archived evidence and reproduction commands in
-`benchmarks/evidence/issue-256/2026-08-09-node3/README.md`.
+`benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md`.
 
 ## CPU FRESH/WARM natoms evidence
 

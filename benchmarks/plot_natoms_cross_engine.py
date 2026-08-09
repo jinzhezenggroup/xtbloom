@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#   "matplotlib==3.10.9",
+# ]
+# ///
 """Render the gpuxtb cross-engine scaling figure from benchmark artifacts.
 
 The script merges every ``--output-json`` artifact produced by
 ``natoms_cross_engine.py`` (CPU and CUDA runs, one file per engine set),
 keeps only correctness-qualified ``available`` rows, and draws:
 
-1. ``batch=1``: FRESH GFN2-xTB energy+force public-call latency vs molecule
-   size (engine-specific state preparation stays explicit in the evidence);
-2. ``batch=128``: WARM latency after an untimed cold seed for 128 *distinct*
-   conformers (gpuxtb highlighted);
-3. ``batch=512``: FRESH public-call latency for 512 *distinct* conformers
-   (gpuxtb highlighted).
+1. ``batch=1``: cold GFN2-xTB energy+force public-call latency vs molecule
+   size;
+2. ``batch=128``: requested auto-warm latency after an untimed cold seed for
+   128 *distinct* conformers (gpuxtb uses strict WARM, xTB/tblite persist, and
+   dxtb resets every measured call);
+3. ``batch=512``: cold public-call latency for 512 *distinct* conformers.
 
 The figure uses the archived median and min/max range from every eligible row.
 Reference engines without a matching point are omitted from that panel; no
@@ -39,11 +45,11 @@ class PlotError(RuntimeError):
 def _engine_label(engine: str) -> str:
     labels = {
         "gpuxtb-cpu": "gpuxtb CPU",
-        "gpuxtb-cuda": "gpuxtb CUDA†",
+        "gpuxtb-cuda": "gpuxtb CUDA",
         "xtb": "xTB",
         "tblite": "tblite",
         "dxtb-cpu": "dxtb CPU",
-        "dxtb-cuda": "dxtb CUDA‡",
+        "dxtb-cuda": "dxtb CUDA",
     }
     return labels.get(engine, engine)
 
@@ -77,6 +83,11 @@ def _engine_marker(engine: str) -> str:
 def _engine_linestyle(engine: str) -> str:
     """Distinguish CUDA from CPU even when color is unavailable."""
     return "--" if engine.endswith("cuda") else "-"
+
+
+def _unavailable_y_fraction(engine: str) -> float:
+    """Separate unavailable CPU/CUDA marks that share one molecule size."""
+    return {"dxtb-cpu": 0.055, "dxtb-cuda": 0.018}.get(engine, 0.035)
 
 
 def _native_fingerprint(identity: dict[str, Any] | None) -> dict[str, Any]:
@@ -379,7 +390,13 @@ def _scientific_notation(value: float) -> str:
 
 
 def _protocol_note(metadata: dict[str, Any]) -> str:
-    """Derive concise native-control and output-gate lines from metadata."""
+    """Derive a compact figure footer from validated protocol metadata.
+
+    Native convergence controls remain fully recorded in the evidence bundle
+    and documentation.  The figure keeps only the information needed to read
+    the marks at journal width: resource budget, sample summary, and the
+    uniform output-compatibility gate.
+    """
     protocol = metadata.get("protocol") or {}
     threads = metadata.get("threads") or {}
     repetitions = protocol.get("repetitions")
@@ -403,10 +420,6 @@ def _protocol_note(metadata: dict[str, Any]) -> str:
         output_force_atol, int | float
     ):
         raise PlotError("plot artifacts have incomplete output compatibility gates")
-    gpuxtb_text = (
-        f"charge={_scientific_notation(float(charge_tolerance))}, "
-        f"energy={_scientific_notation(float(energy_tolerance))}"
-    )
     contract = protocol.get("convergence_contract") or {}
     xtb_accuracy = (contract.get("xtb") or {}).get("public_accuracy_factor")
     tblite_accuracy = (contract.get("tblite") or {}).get("public_accuracy_factor")
@@ -425,32 +438,27 @@ def _protocol_note(metadata: dict[str, Any]) -> str:
         or dxtb_contract.get("force_convergence") is not True
     ):
         raise PlotError("plot artifacts have an incomplete convergence contract")
-    if math.isclose(float(xtb_accuracy), float(tblite_accuracy)):
-        reference_text = f"xTB/tblite accuracy factor {float(xtb_accuracy):g}"
-    else:
-        reference_text = (
-            f"xTB accuracy factor {float(xtb_accuracy):g} / "
-            f"tblite accuracy factor {float(tblite_accuracy):g}"
-        )
-    dxtb_text = (
-        f"dxtb x_atol={_scientific_notation(float(dxtb_contract['x_atol']))}, "
-        "x_atol_max="
-        f"{_scientific_notation(float(dxtb_contract['x_atol_max']))}, "
-        f"f_atol={_scientific_notation(float(dxtb_contract['f_atol']))}, "
-        "force_convergence=true"
+    # Reading every native control is intentional: load_rows also binds the
+    # complete contract across artifacts, and this check prevents an identical
+    # looking figure from hiding an incomplete convergence specification.
+    _ = (
+        float(charge_tolerance),
+        float(energy_tolerance),
+        float(xtb_accuracy),
+        float(tblite_accuracy),
+        float(dxtb_contract["x_atol"]),
+        float(dxtb_contract["x_atol_max"]),
+        float(dxtb_contract["f_atol"]),
     )
     energy_gate = _scientific_notation(float(output_energy_atol))[1:-1]
     force_gate = _scientific_notation(float(output_force_atol))[1:-1]
     return (
-        "Native convergence controls (library-specific): "
-        f"gpuxtb {gpuxtb_text} · {reference_text}\n"
-        f"{dxtb_text} · maximum {max_iterations} iterations\n"
-        "Uniform output gate for every dependent timed sample (benchmark only): "
-        rf"$|\Delta E|\leq{energy_gate}$ Eh; "
+        f"CPU budget: {cpu_threads} threads · median n = {repetitions}; "
+        "whiskers show observed min\N{EN DASH}max\n"
+        "Filled points are eligible; dependent rows pass the uniform benchmark "
+        "gate versus panel-matched tblite.\n"
+        rf"$\max_s|\Delta E_s|\leq{energy_gate}$ Eh; "
         rf"$\max_i|\Delta F_i|\leq{force_gate}$ Eh bohr$^{{-1}}$"
-        "\n"
-        f"CPU budget: {cpu_threads} threads · median n={repetitions}, "
-        "observed min\N{EN DASH}max"
     )
 
 
@@ -503,7 +511,6 @@ def _scaling_panel(
     engines: list[str],
     panel_label: str,
     title: str,
-    subtitle: str,
 ) -> None:
     """Draw one publication-style panel without bridging failed coordinates."""
     from matplotlib import ticker
@@ -544,14 +551,14 @@ def _scaling_panel(
                 y_values,
                 yerr=[lower, upper],
                 marker=_engine_marker(engine),
-                markersize=(5.4 if highlight else 4.4),
-                markeredgewidth=(0.9 if highlight else 0.7),
+                markersize=(5.8 if highlight else 4.2),
+                markeredgewidth=(1.0 if highlight else 0.65),
                 markeredgecolor=("white" if highlight else _engine_color(engine)),
-                linewidth=(1.9 if highlight else 1.2),
+                linewidth=(2.6 if highlight else 1.15),
                 linestyle=_engine_linestyle(engine),
                 color=_engine_color(engine),
-                alpha=(1.0 if highlight else 0.9),
-                elinewidth=(0.95 if highlight else 0.75),
+                alpha=(1.0 if highlight else 0.84),
+                elinewidth=(1.05 if highlight else 0.7),
                 capsize=2.2,
                 capthick=0.75,
                 zorder=(5 if highlight else 2),
@@ -586,9 +593,10 @@ def _scaling_panel(
                     label=_engine_label(engine) if not labeled else None,
                 )
             else:
+                unavailable_y = _unavailable_y_fraction(engine)
                 axes.plot(
                     [natoms],
-                    [0.035],
+                    [unavailable_y],
                     transform=axes.get_xaxis_transform(),
                     linestyle="none",
                     marker="x",
@@ -598,20 +606,6 @@ def _scaling_panel(
                     clip_on=False,
                     zorder=6,
                     label=_engine_label(engine) if not labeled else None,
-                )
-                detail = str(row.get("error") or row.get("reason") or "unavailable")
-                label = "OOM" if "memory" in detail.casefold() else "unavailable"
-                axes.annotate(
-                    label,
-                    xy=(natoms, 0.035),
-                    xycoords=axes.get_xaxis_transform(),
-                    xytext=(0, 5),
-                    textcoords="offset points",
-                    ha="center",
-                    va="bottom",
-                    fontsize=6.8,
-                    color=_engine_color(engine),
-                    clip_on=False,
                 )
             labeled = True
     axes.set_xscale("log")
@@ -649,18 +643,8 @@ def _scaling_panel(
         va="bottom",
         color="#171a1f",
     )
-    axes.text(
-        0.0,
-        1.045,
-        subtitle,
-        transform=axes.transAxes,
-        fontsize=7.5,
-        va="bottom",
-        color="#626a73",
-    )
     axes.set_axisbelow(True)
     axes.grid(True, axis="y", which="major", color="#d8dce2", linewidth=0.7)
-    axes.grid(True, axis="x", which="major", color="#eef0f3", linewidth=0.45)
     for side in ("top", "right"):
         axes.spines[side].set_visible(False)
     for side in ("bottom", "left"):
@@ -723,27 +707,14 @@ def _speedup_range(
 
 
 def _format_speedup(minimum: float, maximum: float) -> str:
-    """Format ratios without hiding meaningful sub-10x differences."""
+    """Format ratios to one decimal so figure and public text agree."""
 
     def one(value: float) -> str:
-        return f"{value:.1f}" if value < 10.0 else f"{value:.0f}"
+        return f"{value:.1f}"
 
     if math.isclose(minimum, maximum, rel_tol=0.02):
         return f"{one((minimum + maximum) / 2.0)}\N{MULTIPLICATION SIGN}"
     return f"{one(minimum)}\N{EN DASH}{one(maximum)}\N{MULTIPLICATION SIGN}"
-
-
-def _annotation_alignment(
-    natoms: float, x_limits: tuple[float, float]
-) -> tuple[int, str]:
-    """Place a label toward the panel interior on a logarithmic x-axis."""
-    lower, upper = x_limits
-    if lower <= 0.0 or upper <= lower or natoms <= 0.0:
-        return 8, "left"
-    fraction = (math.log(natoms) - math.log(lower)) / (
-        math.log(upper) - math.log(lower)
-    )
-    return (-8, "right") if fraction >= 0.55 else (8, "left")
 
 
 def _annotate_speedup(
@@ -756,7 +727,7 @@ def _annotate_speedup(
     summary = _speedup_range(rows, batch_size, natoms)
     if summary is None:
         return
-    target, farthest_reference, minimum, maximum, comparison = summary
+    target, farthest_reference, minimum, maximum, _comparison = summary
     axes.annotate(
         "",
         xy=(natoms, target),
@@ -771,24 +742,16 @@ def _annotate_speedup(
         zorder=7,
     )
     speedup = _format_speedup(minimum, maximum)
-    horizontal_offset, alignment = _annotation_alignment(natoms, axes.get_xlim())
     axes.annotate(
-        f"{comparison} \N{DIVISION SIGN} gpuxtb\n{speedup} ({natoms} atoms)",
+        speedup,
         xy=(natoms, math.sqrt(target * farthest_reference)),
-        xytext=(horizontal_offset, 0),
+        xytext=(9, 4),
         textcoords="offset points",
-        ha=alignment,
-        va="center",
-        fontsize=6.7,
-        fontweight="medium",
-        color="#343a40",
-        bbox={
-            "boxstyle": "square,pad=0.18",
-            "facecolor": "white",
-            "edgecolor": "#d8dce2",
-            "linewidth": 0.65,
-            "alpha": 0.94,
-        },
+        ha="left",
+        va="bottom",
+        fontsize=6.3,
+        fontweight="bold",
+        color=_engine_color("gpuxtb-cpu"),
         zorder=8,
     )
 
@@ -888,16 +851,18 @@ def main(argv: list[str] | None = None) -> int:
             "svg.hashsalt": "gpuxtb-natoms-cross-engine-v2",
         }
     )
-    fig, axes = plt.subplots(1, 3, figsize=(7.4, 4.15), squeeze=True, sharey=True)
-    fig.subplots_adjust(left=0.082, right=0.992, bottom=0.16, top=0.64, wspace=0.2)
+    # Nature's two-column figure width is about 180 mm.  Keep the plot at that
+    # physical scale and reserve the canvas for data rather than a dashboard-
+    # style title block; the surrounding document supplies the prose caption.
+    fig, axes = plt.subplots(1, 3, figsize=(7.1, 3.05), squeeze=True, sharey=True)
+    fig.subplots_adjust(left=0.078, right=0.992, bottom=0.27, top=0.72, wspace=0.18)
     _scaling_panel(
         axes[0],
         rows,
         1,
         args.engines,
         "a",
-        "Batch 1",
-        "cold electronic state · gpuxtb FRESH",
+        "Batch = 1",
     )
     _scaling_panel(
         axes[1],
@@ -905,8 +870,7 @@ def main(argv: list[str] | None = None) -> int:
         128,
         args.engines,
         "b",
-        "Batch 128",
-        "warm continuation after seed · dxtb reset",
+        "Batch = 128",
     )
     _scaling_panel(
         axes[2],
@@ -914,8 +878,7 @@ def main(argv: list[str] | None = None) -> int:
         512,
         args.engines,
         "c",
-        "Batch 512",
-        "cold electronic state · gpuxtb FRESH",
+        "Batch = 512",
     )
     axes[0].set_ylabel("Latency per call (ms)", labelpad=7)
     for axes_item, batch_size in zip(axes[1:], (128, 512), strict=True):
@@ -951,7 +914,7 @@ def main(argv: list[str] | None = None) -> int:
             markeredgecolor="#59616b",
         )
     if any(row.get("availability") != "available" for row in panel_rows):
-        status_legend_items["x: unavailable / OOM"] = Line2D(
+        status_legend_items["unavailable / OOM"] = Line2D(
             [],
             [],
             linestyle="none",
@@ -963,24 +926,24 @@ def main(argv: list[str] | None = None) -> int:
         fig.legend(
             list(engine_legend_items.values()),
             list(engine_legend_items),
-            loc="upper left",
+            loc="upper center",
             ncol=len(engine_legend_items),
             frameon=False,
-            bbox_to_anchor=(0.078, 0.775),
+            bbox_to_anchor=(0.535, 0.985),
             borderaxespad=0.0,
             handlelength=2.0,
             handletextpad=0.42,
             columnspacing=0.9,
-            fontsize=7.0,
+            fontsize=7.2,
         )
     if status_legend_items:
         fig.legend(
             list(status_legend_items.values()),
             list(status_legend_items),
-            loc="upper right",
+            loc="upper left",
             ncol=len(status_legend_items),
             frameon=False,
-            bbox_to_anchor=(0.992, 0.775),
+            bbox_to_anchor=(0.078, 0.88),
             borderaxespad=0.0,
             handlelength=1.5,
             handletextpad=0.4,
@@ -988,34 +951,14 @@ def main(argv: list[str] | None = None) -> int:
             fontsize=6.6,
         )
     fig.text(
-        0.08,
-        0.975,
-        "GFN2-xTB energy + analytic-force latency",
-        ha="left",
-        va="top",
-        fontsize=11.5,
-        fontweight="bold",
-        color="#171a1f",
-    )
-    fig.text(
-        0.08,
-        0.92,
+        0.078,
+        0.025,
         protocol_note,
         ha="left",
-        va="top",
-        fontsize=6.7,
-        color="#59616b",
-        linespacing=1.2,
-    )
-    fig.text(
-        0.082,
-        0.035,
-        "Engine-specific state boundaries are detailed in the caption · "
-        "CUDA: † host descriptors, ‡ device tensors; not directly comparable.",
-        ha="left",
         va="bottom",
-        fontsize=6.7,
-        color="#69717b",
+        fontsize=6.3,
+        color="#59616b",
+        linespacing=1.25,
     )
     if args.output.suffix == ".svg":
         fig.savefig(
@@ -1031,8 +974,9 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             "Cross-engine GFN2-xTB energy and analytic-force latency",
             "Three log-scale panels compare batch 1, 128, and 512 systems. "
-            "Filled points pass the declared output compatibility gate; hollow "
-            "points fail it, and x marks unavailable or errored coordinates.",
+            "Filled points are eligible: dependent points pass the declared "
+            "output compatibility gate and tblite points provide its references. "
+            "Hollow points fail the gate, and x marks unavailable coordinates.",
         )
         _strip_svg_trailing_whitespace(args.output)
     else:

@@ -18,7 +18,7 @@ not expectations that callers must reconstruct from implementation details.
 | Temperature-unit safety | The high-level Python API accepts kelvin and converts explicitly to the native `k_B T` Hartree scale. | tblite [#73](https://github.com/tblite/tblite/issues/73) records a real `temperature=300` mistake that meant `300 Eh` and changed an energy from about `-31.716 Eh` to `-31158.785 Eh`. gpuxtb keeps atomic units in the C ABI while making the Python boundary unit explicit. |
 | Reproducible work partitioning | For a fixed backend and configuration, explicit CPU thread counts, repeated fresh calls, and automatic batch slicing are tested for bit-identical results. | xTB [#999](https://github.com/grimme-lab/xtb/issues/999) records thread-count-dependent optimized structures; version 6.7.1 greatly reduced the effect but still reported small differences. gpuxtb's narrower guarantee is enforced by [native thread](../../tests/cpu_public_inference_test.cpp) and [Python batch-slicing](../../python/tests/test_auto_batch.py) tests. |
 | Strict electronic reuse | Native `WARM` consumes only a fully converged compatible checkpoint. A first call or identity mismatch fails atomically and never silently falls back to `FRESH`; high-level Python `warm_start=True` builds a transparent policy on top by retrying that rejection once with `FRESH`. | The [issue #168 evidence](../../benchmarks/evidence/issue-168/2026-08-06-epyc7k62/README.md) covers 360 correctness-qualified samples: 17-18 SCC iterations fell to 2, gpuxtb WARM was 3.09x-4.76x faster than gpuxtb FRESH and 1.09x-1.54x faster than persistent tblite on the measured 32-122 atom alkanes. |
-| Ragged batch throughput | One public call solves a whole ragged batch of distinct molecules on CPU or CUDA; per-system cost collapses well below a serial per-system loop. | The [cross-engine scaling benchmark](index.md#cross-engine-scaling-benchmark) and its [archived evidence](../../benchmarks/evidence/issue-256/2026-08-09-node3/README.md) show gpuxtb CPU solving 128 distinct 62-atom systems about 12x faster than xTB, about 9x faster than tblite, and about 93x faster than dxtb CPU per call; at 512 systems the CPU speedup over xTB/tblite grows to ~23x at 62 atoms. |
+| Ragged batch throughput | One public call solves a whole ragged batch of distinct molecules on CPU or CUDA; per-system cost collapses well below a serial per-system loop. | The [cross-engine scaling benchmark](index.md#cross-engine-scaling-benchmark) and [issue-13 evidence](../../benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md) show gpuxtb CPU at 62 atoms running 7.6x-8.6x faster than xTB/tblite for 128 systems and 8.9x-10.7x faster for 512 systems. |
 
 These are scoped advantages, not a claim that gpuxtb replaces every xTB-family
 package. xTB provides much broader end-user workflows and method coverage;
@@ -32,46 +32,48 @@ buffers, explicit failure semantics, and reproducible reusable state.
 ![Cross-engine GFN2-xTB scaling benchmark](../assets/natoms_cross_engine.svg)
 
 The figure compares GFN2-xTB energy + analytic forces from public interfaces
-only: gpuxtb CPU (16 threads) and gpuxtb CUDA (RTX 5090) versus vanilla xTB,
-tblite, and dxtb CPU/CUDA, every engine with the same 16-thread budget and the
-same SCC accuracy (1e-4). Every batch is built from *distinct* thermal-like
-conformers of an alkane (identical atomic numbers, different coordinates) so
-no engine can win by reusing one geometry. Start semantics are explicit:
-batch=1 and batch=512 rows are genuine cold starts (xTB/tblite rebuild their
-calculator every sample), and batch=128 rows cold-start on the first call and
-continue warm.
+only. Every multi-system batch contains distinct seeded conformers of one
+alkane stoichiometry. At the common 62-atom coordinate, gpuxtb CPU completes
+batch 128 in 182 ms versus 1555 ms for xTB and 1384 ms for tblite; at batch
+512 it takes 1.28 s versus 11.47 s and 13.70 s. gpuxtb CUDA takes 1.15 s at
+the latter coordinate and becomes 1.37x faster than gpuxtb CPU by 122 atoms.
 
-- **batch = 1 (cold start)**: with matched 1e-4 accuracy gpuxtb CPU is
-  faster than xTB/tblite at 14-242 atoms (62: 34 ms vs xTB 52 / tblite 61;
-  242: 548 vs 651/708) and at parity at 362 (1448 vs 1406/1545). gpuxtb's
-  batch-parallel worker pool is idle for a single system, so its batch=128
-  advantage is a cross-system parallelism effect (it collapses toward parity
-  at `--cpu-threads 1`). The reference sweeps stop at 362 atoms (xTB 6.7.1
-  segfaults on the 602-atom alkane). gpuxtb CUDA at batch=1 adds a fixed
-  per-call cost (14-62 ms at 14-32 atoms) and a single-system eigensolve
-  cliff past ~272 atoms; the #263 large-singleton eigensolver cut that
-  362-atom cost ~4x (10.2 s before, 2547 ms now vs CPU 1448 ms).
-- **batch = 128 (first call cold, then WARM)**: gpuxtb CPU is about 10-12x
-  faster than xTB and tblite per call at 14-302 atoms (62 atoms: 178 ms vs
-  xTB 2113 ms / tblite 1635 ms), because gpuxtb solves the whole ragged batch
-  in one call across its worker pool while the reference adapters loop
-  systems serially. gpuxtb CUDA matches CPU once the fixed overhead amortizes
-  (@242 x 128 systems: CUDA 2576 ms vs CPU 2761 ms).
-- **batch = 512 (cold start)**: the high-throughput panel. gpuxtb CPU is
-  ~20-30x faster than xTB/tblite (62: 1139 ms vs 26471/29313; 122: 4633 vs
-  91984/99209) and gpuxtb CUDA ~10-25x faster (62: 1093 ms), so a 512-system
-  call finishes in about a second to a few seconds where the references need
-  tens of seconds to a minute and a half. dxtb rows reset per call by design.
+The CPU result measures gpuxtb's intended architecture: one ragged public call
+uses its worker pool across systems, while the compared xTB/tblite public APIs
+are called once per structure. Batch 1 is retained as single-system latency
+context and does not support a universal performance ranking.
 
-Hardware: AMD EPYC 7K62 with every engine using 16 threads per call, plus an
-NVIDIA RTX 5090 for the CUDA rows. All engines converge SCC to energy
-accuracy 1e-4 (up to 500 iterations): gpuxtb runs with
-`--scc-charge-tolerance 1e-4 --scc-energy-tolerance 1e-4` and xTB/tblite
-with their default `--acc 1e-4`, so no engine is measured under a stricter
-(or looser) tolerance. dxtb uses its recommended `tad-libcint` integral
-interface. Raw samples, revisions, and reproduction commands are
-archived under
-[`benchmarks/evidence/issue-256/2026-08-09-node3/`](../../benchmarks/evidence/issue-256/2026-08-09-node3/).
+| Library | Native convergence controls used |
+| --- | --- |
+| gpuxtb | charge `1e-4`; energy `1e-6`; maximum 500 iterations |
+| xTB | public accuracy factor `1.0`; maximum 500 iterations |
+| tblite | public accuracy factor `1.0`; maximum 500 iterations |
+| dxtb | `x_atol=1e-4`; `x_atol_max=1e-5`; `f_atol=1e-4`; `force_convergence=true`; maximum 500 iterations |
+
+These are library-native controls with different stopping semantics, not one
+shared SCC tolerance. In particular, tblite's default accuracy factor is
+`1.0`, not `2e-3`. Every dependent timed sample instead passes the same
+benchmark output gate against a panel-matched clean tblite reference:
+`max_s |Delta E_s| <= 2e-3 Eh` and
+`max_i |Delta F_i| <= 2e-3 Eh/bohr`. This eligibility gate does not replace
+gpuxtb's stricter scientific conformance.
+
+| Panel | gpuxtb | xTB/tblite | dxtb |
+| --- | --- | --- | --- |
+| batch 1 | cold `FRESH`; initialization timed | cold; calculator rebuild outside timing | cold; reset timed |
+| batch 128 | WARM after untimed seed | persistent after untimed seed | cold; reset timed |
+| batch 512 | cold `FRESH`; initialization timed | cold; calculator rebuild outside timing | cold; reset timed |
+
+All rows end at host-visible energy and forces. gpuxtb CUDA uses host
+descriptors; dxtb CUDA uses persistent device tensors, so the figure does not
+support a direct cross-library CUDA speedup claim. dxtb LU failures and CUDA
+out-of-memory coordinates remain visible as unavailable points.
+
+The measurements use an AMD EPYC 7K62, the same 16-thread budget for every CPU
+engine, and an NVIDIA RTX 5090 for CUDA. The evidence is limited to this
+alkane-conformer corpus, energy plus forces, and three samples per coordinate.
+See the [issue-13 evidence bundle](../../benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md)
+for raw samples, exact commands, binary hashes, and limitations.
 
 ## Installation paths
 

@@ -1,0 +1,1247 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "schema_version": 2,
+    "generated_at_utc": "2026-08-09T15:17:29.898401+00:00",
+    "command": [
+      "benchmarks/natoms_cross_engine.py",
+      "--library",
+      "/home/jzzeng/codes/gpuxtb4-pr231/build/pr231-evidence-c9c0a43-cpu/libgpuxtb.so.0.1.0",
+      "--engines",
+      "dxtb-cpu",
+      "--natoms",
+      "14,32,62,122,242,362",
+      "--batch-sizes",
+      "1",
+      "--start-policy",
+      "cold",
+      "--warmups",
+      "1",
+      "--repetitions",
+      "3",
+      "--cpu-threads",
+      "16",
+      "--energy-atol",
+      "2e-3",
+      "--force-atol",
+      "2e-3",
+      "--repeatability-energy-atol",
+      "1e-10",
+      "--repeatability-force-atol",
+      "1e-8",
+      "--scc-charge-tolerance",
+      "1e-4",
+      "--scc-energy-tolerance",
+      "1e-6",
+      "--scc-max-iterations",
+      "500",
+      "--dxtb-source",
+      "/home/jzzeng/codes/dxtb",
+      "--reference-json",
+      "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+      "--output-json",
+      "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/dxtb-cpu-cold.json",
+      "--output-csv",
+      "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/dxtb-cpu-cold.csv"
+    ],
+    "commit": {
+      "head": "c9c0a432947f122d25cb91d0a4624af0a3e761ad",
+      "dirty": false
+    },
+    "evidence_eligibility": {
+      "status": "eligible_clean_head",
+      "allow_dirty_evidence": false
+    },
+    "comparison_reference": {
+      "designation": "dependent_run",
+      "engine": "tblite",
+      "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+      "artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e"
+    },
+    "runner": {
+      "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0]",
+      "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.35",
+      "gpuxtb_library": "/home/jzzeng/codes/gpuxtb4-pr231/build/pr231-evidence-c9c0a43-cpu/libgpuxtb.so.0.1.0",
+      "gpuxtb_library_sha256": "eba5b40dd5cd9c156a3d4eb9a1fdb0da96e0d5beaa668bdeb51694ce67364ad2",
+      "gpuxtb_native_identity": {
+        "path": "/home/jzzeng/codes/gpuxtb4-pr231/build/pr231-evidence-c9c0a43-cpu/libgpuxtb.so.0.1.0",
+        "sha256": "eba5b40dd5cd9c156a3d4eb9a1fdb0da96e0d5beaa668bdeb51694ce67364ad2",
+        "readelf_dynamic": "Dynamic section at offset 0x12ed70 contains 31 entries:\n  Tag        Type                         Name/Value\n 0x0000000000000001 (NEEDED)             Shared library: [libstdc++.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]\n 0x000000000000000e (SONAME)             Library soname: [libgpuxtb.so.0]\n 0x000000000000000c (INIT)               0x3000\n 0x000000000000000d (FINI)               0x851dc\n 0x0000000000000019 (INIT_ARRAY)         0x12fa00\n 0x000000000000001b (INIT_ARRAYSZ)       48 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0x12fa30\n 0x000000000000001c (FINI_ARRAYSZ)       8 (bytes)\n 0x000000006ffffef5 (GNU_HASH)           0x328\n 0x0000000000000005 (STRTAB)             0xe38\n 0x0000000000000006 (SYMTAB)             0x400\n 0x000000000000000a (STRSZ)              2858 (bytes)\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000003 (PLTGOT)             0x130000\n 0x0000000000000002 (PLTRELSZ)           1656 (bytes)\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000017 (JMPREL)             0x2718\n 0x0000000000000007 (RELA)               0x1c38\n 0x0000000000000008 (RELASZ)             2784 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffffc (VERDEF)             0x1a40\n 0x000000006ffffffd (VERDEFNUM)          2\n 0x000000006ffffffe (VERNEED)            0x1a78\n 0x000000006fffffff (VERNEEDNUM)         5\n 0x000000006ffffff0 (VERSYM)             0x1962\n 0x000000006ffffff9 (RELACOUNT)          89\n 0x0000000000000000 (NULL)               0x0",
+        "ldd": "linux-vdso.so.1 (0x00007ffea3f8c000)\n\tlibstdc++.so.6 => /tmp/lammps-qmmm-xtb-env/lib/libstdc++.so.6 (0x0000771762200000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x0000771762522000)\n\tlibgcc_s.so.1 => /tmp/lammps-qmmm-xtb-env/lib/libgcc_s.so.1 (0x00007717624f4000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x0000771761e00000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000077176274c000)\n\tlibdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x00007717624ef000)",
+        "unresolved_dependencies": [],
+        "resolved_dependencies": [
+          {
+            "soname": "/lib64/ld-linux-x86-64.so.2",
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "8d06f393f4a93bcf9b81145a259524d66a95522a646bf8d7e05b6ffdf2e63dcc"
+          },
+          {
+            "soname": "libc.so.6",
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "e01b1ce7be2987f3b8560e26d0df2623f9dd5cec17be923ae28a785bc0d32d50"
+          },
+          {
+            "soname": "libdl.so.2",
+            "path": "/usr/lib/x86_64-linux-gnu/libdl.so.2",
+            "sha256": "d255ba9c9e3a7c35115e578c898147edaba1a2bcf742cc3a76995ceed9d5ac4f"
+          },
+          {
+            "soname": "libgcc_s.so.1",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libgcc_s.so.1",
+            "sha256": "518553cb760166496a9844a8fdd8acaffed9229a581992a424e0ffd36098df52"
+          },
+          {
+            "soname": "libm.so.6",
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "df621c68dbfed7e843434ef2faedb9f4d4b0543ad161e9a55eaf4d4ce2443176"
+          },
+          {
+            "soname": "libstdc++.so.6",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libstdc++.so.6.0.35",
+            "sha256": "4db7db432420e28a0c42bed38f7b33cfe1a97aa3a5ce7c92ddd2f4e5afe16ceb"
+          }
+        ]
+      },
+      "gpuxtb_build": {
+        "cache_path": "/home/jzzeng/codes/gpuxtb4-pr231/build/pr231-evidence-c9c0a43-cpu/CMakeCache.txt",
+        "cache_sha256": "ca67d1c145dadd9f8c852b2abeb03691ae0a009dc9f42f1c393221ecd54e1ebb",
+        "library_size": 1342776,
+        "library_mtime_ns": 1786287966204590190,
+        "selected": {
+          "CMAKE_BUILD_TYPE": "Release",
+          "CMAKE_CXX_COMPILER": "/usr/bin/c++",
+          "CMAKE_CXX_FLAGS": "",
+          "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+          "CMAKE_SHARED_LINKER_FLAGS": "",
+          "GPUXTB_CPU_LINALG_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so",
+          "GPUXTB_ENABLE_CUDA": "OFF",
+          "GPUXTB_MKL_RT_LIBRARY": "",
+          "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/gpuxtb4-pr231"
+        },
+        "source_state": {
+          "head": "c9c0a432947f122d25cb91d0a4624af0a3e761ad",
+          "dirty": false
+        },
+        "cxx_compiler": "/usr/bin/x86_64-linux-gnu-g++-11",
+        "cxx_compiler_sha256": "2360901d864cf10bfd6296e261cb2c14053552a80377761ab07146ec9ec9a2c0",
+        "cxx_version": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0\nCopyright (C) 2021 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+        "cuda_compiler": null,
+        "cuda_compiler_sha256": null,
+        "cuda_compiler_version": null,
+        "cpu_linalg_provider": {
+          "path": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so.2",
+          "sha256": "221e89c09644d546cdc6505fc1fdecdf6490a4c57f7da6ca3b48a1c96c4860bd",
+          "readelf_dynamic": "Dynamic section at offset 0xfd6000 contains 26 entries:\n  Tag        Type                         Name/Value\n 0x000000000000000f (RPATH)              Library rpath: [$ORIGIN/.]\n 0x0000000000000001 (NEEDED)             Shared library: [libdl.so.2]\n 0x000000000000000e (SONAME)             Library soname: [libmkl_rt.so.2]\n 0x000000000000000c (INIT)               0x34d000\n 0x000000000000000d (FINI)               0x822718\n 0x0000000000000019 (INIT_ARRAY)         0xb16238\n 0x000000000000001b (INIT_ARRAYSZ)       16 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0xb16248\n 0x000000000000001c (FINI_ARRAYSZ)       8 (bytes)\n 0x000000006ffffef5 (GNU_HASH)           0xc7e918\n 0x0000000000000005 (STRTAB)             0xb541e0\n 0x0000000000000006 (SYMTAB)             0x71550\n 0x000000000000000a (STRSZ)              1222449 (bytes)\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000003 (PLTGOT)             0xb1c000\n 0x0000000000000002 (PLTRELSZ)           1224 (bytes)\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000017 (JMPREL)             0x34c5b8\n 0x0000000000000007 (RELA)               0x343a08\n 0x0000000000000008 (RELASZ)             35760 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffffe (VERNEED)            0x3439e8\n 0x000000006fffffff (VERNEEDNUM)         1\n 0x000000006ffffff0 (VERSYM)             0x323040\n 0x000000006ffffff9 (RELACOUNT)          1477\n 0x0000000000000000 (NULL)               0x0",
+          "ldd": "linux-vdso.so.1 (0x00007ffd9b7bc000)\n\tlibdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x000070f0b6e80000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000070f0b5c00000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000070f0b6e97000)",
+          "unresolved_dependencies": [],
+          "resolved_dependencies": [
+            {
+              "soname": "/lib64/ld-linux-x86-64.so.2",
+              "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+              "sha256": "8d06f393f4a93bcf9b81145a259524d66a95522a646bf8d7e05b6ffdf2e63dcc"
+            },
+            {
+              "soname": "libc.so.6",
+              "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+              "sha256": "e01b1ce7be2987f3b8560e26d0df2623f9dd5cec17be923ae28a785bc0d32d50"
+            },
+            {
+              "soname": "libdl.so.2",
+              "path": "/usr/lib/x86_64-linux-gnu/libdl.so.2",
+              "sha256": "d255ba9c9e3a7c35115e578c898147edaba1a2bcf742cc3a76995ceed9d5ac4f"
+            }
+          ]
+        }
+      },
+      "xtb_library": null,
+      "xtb_library_sha256": null,
+      "xtb_source": null,
+      "xtb_build": null,
+      "xtb_native_identity": null,
+      "tblite_library": null,
+      "tblite_library_sha256": null,
+      "tblite_source": null,
+      "tblite_build": null,
+      "tblite_native_identity": null,
+      "dxtb_source": {
+        "head": "b529b5ddb75c0554274955082a189f9f88437cb2",
+        "dirty": false
+      },
+      "python_distributions": {
+        "dxtb": {
+          "name": "dxtb",
+          "version": "0.4.0",
+          "record_sha256": "2b9966f789030bd99317891a27141bf483a6b474ce950b41506cdf0b71361b5c",
+          "direct_url_sha256": "523b7b6d7abc937bf607347933e59b29228bbce568d3397b020a5d1ff31dcfd3",
+          "direct_url_identity": {
+            "scheme": "file",
+            "local_source_path": "/home/jzzeng/codes/dxtb",
+            "editable": true
+          },
+          "payload_verification": {
+            "status": "verified",
+            "record_entries": 11,
+            "verified_hashes": 10,
+            "payload_sha256": "91475a0ad28a9f31f326fa38fffc779e097f56bbad36b340e0ba4ee3678b1e4a",
+            "errors": []
+          }
+        },
+        "torch": {
+          "name": "torch",
+          "version": "2.13.0",
+          "record_sha256": "1ac22faeddb94048f461f2fd7fb0cce29bc6a6a394404995e589076b4e7b8591",
+          "direct_url_sha256": null,
+          "direct_url_identity": null,
+          "payload_verification": {
+            "status": "verified",
+            "record_entries": 12122,
+            "verified_hashes": 12121,
+            "payload_sha256": "16693ed4a0ef4890bb92b5bfc0cc685440ae99ccce6308bc422558b54fbeb3cb",
+            "errors": []
+          }
+        },
+        "tad-libcint": {
+          "name": "tad_libcint",
+          "version": "0.3.0",
+          "record_sha256": "51296bb30bbc48d3799cfbddf4cb7feaf4badafde3b95977bd3d027b8ad54fd0",
+          "direct_url_sha256": null,
+          "direct_url_identity": null,
+          "payload_verification": {
+            "status": "verified",
+            "record_entries": 43,
+            "verified_hashes": 42,
+            "payload_sha256": "9a9e83af64af142f8b0bffce4dfdbb71f853b2ecd2bbe3d268edf68f429094c6",
+            "errors": []
+          }
+        }
+      },
+      "reference_json": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+      "reference_json_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e"
+    },
+    "hardware": {
+      "hostname": "node3",
+      "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+      "logical_cpu_count": 48,
+      "process_rss_bytes": 4724326400,
+      "peak_process_rss_bytes": 15019298816,
+      "process_cpu_affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "nvidia_smi": "GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8)",
+      "nvidia_smi_runtime": "0, GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8, NVIDIA GeForce RTX 5090, 580.95.05, 32607 MiB, P8, 575.00 W, 180 MHz, 405 MHz",
+      "selected_cuda_device": {
+        "cuda_ordinal": 0,
+        "CUDA_VISIBLE_DEVICES": "0",
+        "CUDA_DEVICE_ORDER": null,
+        "resolved_visibility_token": "0",
+        "runtime_uuid": "GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8",
+        "device": {
+          "physical_index": "0",
+          "uuid": "GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8",
+          "name": "NVIDIA GeForce RTX 5090",
+          "driver": "580.95.05",
+          "memory_mib": "32607"
+        },
+        "inventory": [
+          {
+            "physical_index": "0",
+            "uuid": "GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8",
+            "name": "NVIDIA GeForce RTX 5090",
+            "driver": "580.95.05",
+            "memory_mib": "32607"
+          }
+        ]
+      }
+    },
+    "threads": {
+      "cpu_threads": 16,
+      "dxtb_cpu_threads": 16,
+      "reference_threads": 16,
+      "OMP_NUM_THREADS": "16",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1"
+    },
+    "environment": {
+      "CUDA_VISIBLE_DEVICES": "0",
+      "LD_LIBRARY_PATH": "/tmp/lammps-qmmm-xtb-env/lib:/group/software/deepmd-kit-3.1.1/lib:/group/software/cuda-12.9.1/targets/x86_64-linux/lib:/group/software/cuda-12.9.1/lib64",
+      "MKL_INTERFACE_LAYER": "LP64",
+      "MKL_THREADING_LAYER": "SEQUENTIAL"
+    },
+    "protocol": {
+      "warmups": 1,
+      "repetitions": 3,
+      "start_policy": "cold",
+      "cross_engine_energy_atol_hartree": 0.002,
+      "cross_engine_force_atol_hartree_per_bohr": 0.002,
+      "cross_engine_tolerance_source": {
+        "scope": "owner_authorized_public_benchmark_output_compatibility",
+        "not_primary_conformance": true,
+        "selected_energy_atol_hartree": 0.002,
+        "selected_force_atol_hartree_per_bohr": 0.002,
+        "maximum_authorized_energy_atol_hartree": 0.002,
+        "maximum_authorized_force_atol_hartree_per_bohr": 0.002,
+        "strict_repository_gate_not_replaced": {
+          "path": "/home/jzzeng/codes/gpuxtb4-pr231/data/conformance/manifest.json",
+          "sha256": "b974de841726747eb6d7ff2c31b4ac0f823d4cb64e2e7d3d6269854f5ee98383",
+          "json_field": "cross_engine_tolerances",
+          "energy_atol_hartree": 5e-07,
+          "force_atol_hartree_per_bohr": 5e-06
+        }
+      },
+      "repeatability_energy_atol_hartree": 1e-10,
+      "repeatability_force_atol_hartree_per_bohr": 1e-08,
+      "perturb_sigma_bohr": 0.02,
+      "trajectory_step_sigma_bohr": 0.01,
+      "scc_max_iterations": 500,
+      "scc_charge_tolerance": 0.0001,
+      "scc_energy_tolerance": 1e-06,
+      "convergence_contract": {
+        "gpuxtb": {
+          "charge_tolerance": 0.0001,
+          "energy_tolerance": 1e-06
+        },
+        "xtb": {
+          "public_accuracy_factor": 1.0
+        },
+        "tblite": {
+          "public_accuracy_factor": 1.0
+        },
+        "dxtb": {
+          "x_atol": 0.0001,
+          "x_atol_max": 1e-05,
+          "f_atol": 0.0001,
+          "force_convergence": true
+        }
+      }
+    }
+  },
+  "rows": [
+    {
+      "engine": "dxtb-cpu",
+      "natoms": 14,
+      "batch_size": 1,
+      "total_atoms_in_batch": 14,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "requested_properties": [
+        "energy",
+        "forces"
+      ],
+      "workload_seed": 14001,
+      "input_residency": "host",
+      "output_residency_at_timing_boundary": "host_visible",
+      "effective_start_policy": "cold",
+      "state_preparation_timing": "inside_timed_invoke",
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 150.15573999999998,
+          "energies_hartree": [
+            -13.654977979816852
+          ],
+          "force_count": 42,
+          "forces_sha256_binary64_le": "8eed89c525f565751df5196549b7cc4a95604544e0911f0f699de0547c523d52",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 146.39936699999998,
+          "energies_hartree": [
+            -13.654977979816852
+          ],
+          "force_count": 42,
+          "forces_sha256_binary64_le": "8eed89c525f565751df5196549b7cc4a95604544e0911f0f699de0547c523d52",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 147.155714,
+          "energies_hartree": [
+            -13.654977979816852
+          ],
+          "force_count": 42,
+          "forces_sha256_binary64_le": "8eed89c525f565751df5196549b7cc4a95604544e0911f0f699de0547c523d52",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          150.15573999999998,
+          146.39936699999998,
+          147.155714
+        ],
+        "count": 3,
+        "min_ms": 146.39936699999998,
+        "median_ms": 147.155714,
+        "mean_ms": 147.903607,
+        "p95_ms": 150.15573999999998,
+        "systems_per_second_at_median": 6.7955227345096505
+      },
+      "energies_hartree": [
+        -13.654977979816852
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "force_value_count": 42,
+        "scc_converged_ok": null,
+        "scc_status_ok": null,
+        "repeatability": {
+          "gate_applied": true,
+          "gate_reason": "independent_cold_or_reset_calls",
+          "energy_atol_hartree": 1e-10,
+          "max_abs_energy_drift_hartree": 0.0,
+          "force_atol_hartree_per_bohr": 1e-08,
+          "max_abs_force_drift_hartree_per_bohr": 0.0
+        },
+        "cross_engine": {
+          "status": "pass",
+          "reference_engine": "tblite",
+          "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+          "artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e",
+          "energy_atol_hartree": 0.002,
+          "force_atol_hartree_per_bohr": 0.002,
+          "max_abs_energy_delta_hartree": 4.942262492590999e-07,
+          "max_abs_force_delta_hartree_per_bohr": 1.452471581655547e-06,
+          "timed_sample_count_checked": 3,
+          "timed_sample_deltas": [
+            {
+              "sample_index": 0,
+              "max_abs_energy_delta_hartree": 4.942262492590999e-07,
+              "max_abs_force_delta_hartree_per_bohr": 1.452471581655547e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 1,
+              "max_abs_energy_delta_hartree": 4.942262492590999e-07,
+              "max_abs_force_delta_hartree_per_bohr": 1.452471581655547e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 2,
+              "max_abs_energy_delta_hartree": 4.942262492590999e-07,
+              "max_abs_force_delta_hartree_per_bohr": 1.452471581655547e-06,
+              "status": "pass"
+            }
+          ]
+        }
+      },
+      "runtime_identity": {
+        "api_version": null,
+        "version": "0.4.0",
+        "torch_version": "2.13.0+cu130",
+        "module_path": "/home/jzzeng/codes/dxtb/src/dxtb/__init__.py",
+        "module_sha256": "4ccec76da9d4e125f96692f3e3d99956ddf5b07b41055e40db29aaf2fbcf11a2",
+        "convergence_settings": {
+          "public_accuracy_or_fixed_point_tolerance": 0.0001,
+          "max_norm_tolerance": 1e-05,
+          "function_tolerance": 0.0001,
+          "force_convergence": true,
+          "max_iterations": 500
+        },
+        "thread_control": {
+          "requested_torch_threads": 16,
+          "previous_torch_threads": 1,
+          "torch_interop_threads": 48,
+          "OMP_NUM_THREADS": "16",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1"
+        }
+      },
+      "availability": "available",
+      "start_policy": "cold",
+      "forces_binary64_le_zlib_base64": {
+        "encoding": "zlib+base64",
+        "count": 42,
+        "sha256_binary64_le": "8eed89c525f565751df5196549b7cc4a95604544e0911f0f699de0547c523d52",
+        "data": "eNp7PpWj62xt0X6Bd0r9gesS7Xf9sWP6L7ZszwPGo7EFQlH7f1xZsK51Re7+B5OSlFlm5O7/ABXXuAoRl5kIFrdXcJv/g98hwb6h7Gpm0IdQ+wNTI0O1+GL2M8DEyyHiDRPB4vYNzmDx/QEFYPH9DRD19gz2EHEBqPgBiPr9CyaA3Wkf8Qzszv3nPjNO555ba9MgBHaPvcEFsHvsH/RA3Mnw5whY3OE8RLxlGsSdDkc6Hp13C7QvYs7duFmz0t6RxWt59twDNgwLrqbbJLnuXzFntnrlzv79XnpFq5Lk19gwWF8Bids/mwgWtw/1zbmq6X9yD4M82Jz9Au9zQObsl5YSdMgsOLIHAAddmFw="
+      }
+    },
+    {
+      "engine": "dxtb-cpu",
+      "natoms": 32,
+      "batch_size": 1,
+      "total_atoms_in_batch": 32,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "requested_properties": [
+        "energy",
+        "forces"
+      ],
+      "workload_seed": 32001,
+      "input_residency": "host",
+      "output_residency_at_timing_boundary": "host_visible",
+      "effective_start_policy": "cold",
+      "state_preparation_timing": "inside_timed_invoke",
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 199.96740799999998,
+          "energies_hartree": [
+            -32.63910024177971
+          ],
+          "force_count": 96,
+          "forces_sha256_binary64_le": "3e8485ca66d5a4945306124d978354f366831a68d94a5bb8f26ef09da7009c2e",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 200.72340599999998,
+          "energies_hartree": [
+            -32.63910024177971
+          ],
+          "force_count": 96,
+          "forces_sha256_binary64_le": "3e8485ca66d5a4945306124d978354f366831a68d94a5bb8f26ef09da7009c2e",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 198.425003,
+          "energies_hartree": [
+            -32.63910024177971
+          ],
+          "force_count": 96,
+          "forces_sha256_binary64_le": "3e8485ca66d5a4945306124d978354f366831a68d94a5bb8f26ef09da7009c2e",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          199.96740799999998,
+          200.72340599999998,
+          198.425003
+        ],
+        "count": 3,
+        "min_ms": 198.425003,
+        "median_ms": 199.96740799999998,
+        "mean_ms": 199.70527233333334,
+        "p95_ms": 200.72340599999998,
+        "systems_per_second_at_median": 5.0008149328014495
+      },
+      "energies_hartree": [
+        -32.63910024177971
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "force_value_count": 96,
+        "scc_converged_ok": null,
+        "scc_status_ok": null,
+        "repeatability": {
+          "gate_applied": true,
+          "gate_reason": "independent_cold_or_reset_calls",
+          "energy_atol_hartree": 1e-10,
+          "max_abs_energy_drift_hartree": 0.0,
+          "force_atol_hartree_per_bohr": 1e-08,
+          "max_abs_force_drift_hartree_per_bohr": 0.0
+        },
+        "cross_engine": {
+          "status": "pass",
+          "reference_engine": "tblite",
+          "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+          "artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e",
+          "energy_atol_hartree": 0.002,
+          "force_atol_hartree_per_bohr": 0.002,
+          "max_abs_energy_delta_hartree": 1.1807705249111677e-06,
+          "max_abs_force_delta_hartree_per_bohr": 6.179574565863023e-07,
+          "timed_sample_count_checked": 3,
+          "timed_sample_deltas": [
+            {
+              "sample_index": 0,
+              "max_abs_energy_delta_hartree": 1.1807705249111677e-06,
+              "max_abs_force_delta_hartree_per_bohr": 6.179574565863023e-07,
+              "status": "pass"
+            },
+            {
+              "sample_index": 1,
+              "max_abs_energy_delta_hartree": 1.1807705249111677e-06,
+              "max_abs_force_delta_hartree_per_bohr": 6.179574565863023e-07,
+              "status": "pass"
+            },
+            {
+              "sample_index": 2,
+              "max_abs_energy_delta_hartree": 1.1807705249111677e-06,
+              "max_abs_force_delta_hartree_per_bohr": 6.179574565863023e-07,
+              "status": "pass"
+            }
+          ]
+        }
+      },
+      "runtime_identity": {
+        "api_version": null,
+        "version": "0.4.0",
+        "torch_version": "2.13.0+cu130",
+        "module_path": "/home/jzzeng/codes/dxtb/src/dxtb/__init__.py",
+        "module_sha256": "4ccec76da9d4e125f96692f3e3d99956ddf5b07b41055e40db29aaf2fbcf11a2",
+        "convergence_settings": {
+          "public_accuracy_or_fixed_point_tolerance": 0.0001,
+          "max_norm_tolerance": 1e-05,
+          "function_tolerance": 0.0001,
+          "force_convergence": true,
+          "max_iterations": 500
+        },
+        "thread_control": {
+          "requested_torch_threads": 16,
+          "previous_torch_threads": 1,
+          "torch_interop_threads": 48,
+          "OMP_NUM_THREADS": "16",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1"
+        }
+      },
+      "availability": "available",
+      "start_policy": "cold",
+      "forces_binary64_le_zlib_base64": {
+        "encoding": "zlib+base64",
+        "count": 96,
+        "sha256_binary64_le": "3e8485ca66d5a4945306124d978354f366831a68d94a5bb8f26ef09da7009c2e",
+        "data": "eNot0W1IU2EUB/An3WSFlILGKIO59UK24JKCFdvOoiwtqKsMayJ5o8JFCKF9MOjlUlGgSFtuSZFyqUAJq2kWZZed28pSsBxOyajZ8CUtUqb1weh193n29cfD8z/n/LNHJv/UNVSjNHE1Y8WpQzDb4tIpP0rkE588A6mpZTjyQJuyobkKvecd2+4PVqF9kvkWP/M0kTrwkcp150wCGIZMzoJoGdxJ/u7RTwnIfWQuDjP3a6gDEQvGM1t+BiRXVvCXZhdK87nHW88UAVF2UBeOMY+OUUei41dFvhIUUtacNnt4EKq788zWEiR65gYNc445EKHi7eMBAtzdD7zxKI9S+aWk3vfF8Vzm7jbm/v3UkRicqmP0IHXgziY8doC6VME8VJv4x71HzQV3Ms3FUHEil2fOLWHO707MqexV97LZe1aqe4Hheh7bS9nH/E3C66iDGKN3Q66b3g353/P0buIc89BD5vYkdmclTHuEwl7aIxrTSn2vsi7KpJP2BRLSvkDysh5JB3NBYX7yGuvR0NmWm7fJAT5fc059Ty24A9rK/gXJQqZ1402PFoPelFM+c7MB7dL0vfylTTJpUIJD0k64scBnF0154V+NrSsy+lwmsUV92GeCb5vTHbbxRny3/fJT461uCyGrw4aZkO2Z9fBnZ7gRMjdubV9W+EIm5O9w3AP9y6mj6cjajNL0oIWIr3vj/+B8Ef0H6m/PlVyxBGViHlRz0T1Bc7FgzlvDBdT34lh8TrS2rlfnhPLR2Se6pJcWwtG9MNpO90LLhS/5WleX/B+ZMV+U"
+      }
+    },
+    {
+      "engine": "dxtb-cpu",
+      "natoms": 62,
+      "batch_size": 1,
+      "total_atoms_in_batch": 62,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "requested_properties": [
+        "energy",
+        "forces"
+      ],
+      "workload_seed": 62001,
+      "input_residency": "host",
+      "output_residency_at_timing_boundary": "host_visible",
+      "effective_start_policy": "cold",
+      "state_preparation_timing": "inside_timed_invoke",
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 325.892939,
+          "energies_hartree": [
+            -64.27951547678133
+          ],
+          "force_count": 186,
+          "forces_sha256_binary64_le": "e7fbc7ce3bcee0eb7c36df0b3ec26024d30f416f6bcae6e2de252d9444489436",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 335.553943,
+          "energies_hartree": [
+            -64.27951547678133
+          ],
+          "force_count": 186,
+          "forces_sha256_binary64_le": "e7fbc7ce3bcee0eb7c36df0b3ec26024d30f416f6bcae6e2de252d9444489436",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 328.365845,
+          "energies_hartree": [
+            -64.27951547678133
+          ],
+          "force_count": 186,
+          "forces_sha256_binary64_le": "e7fbc7ce3bcee0eb7c36df0b3ec26024d30f416f6bcae6e2de252d9444489436",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          325.892939,
+          335.553943,
+          328.365845
+        ],
+        "count": 3,
+        "min_ms": 325.892939,
+        "median_ms": 328.365845,
+        "mean_ms": 329.93757566666665,
+        "p95_ms": 335.553943,
+        "systems_per_second_at_median": 3.045383724363903
+      },
+      "energies_hartree": [
+        -64.27951547678133
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "force_value_count": 186,
+        "scc_converged_ok": null,
+        "scc_status_ok": null,
+        "repeatability": {
+          "gate_applied": true,
+          "gate_reason": "independent_cold_or_reset_calls",
+          "energy_atol_hartree": 1e-10,
+          "max_abs_energy_drift_hartree": 0.0,
+          "force_atol_hartree_per_bohr": 1e-08,
+          "max_abs_force_drift_hartree_per_bohr": 0.0
+        },
+        "cross_engine": {
+          "status": "pass",
+          "reference_engine": "tblite",
+          "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+          "artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e",
+          "energy_atol_hartree": 0.002,
+          "force_atol_hartree_per_bohr": 0.002,
+          "max_abs_energy_delta_hartree": 8.721584947579686e-06,
+          "max_abs_force_delta_hartree_per_bohr": 2.1736576085555626e-06,
+          "timed_sample_count_checked": 3,
+          "timed_sample_deltas": [
+            {
+              "sample_index": 0,
+              "max_abs_energy_delta_hartree": 8.721584947579686e-06,
+              "max_abs_force_delta_hartree_per_bohr": 2.1736576085555626e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 1,
+              "max_abs_energy_delta_hartree": 8.721584947579686e-06,
+              "max_abs_force_delta_hartree_per_bohr": 2.1736576085555626e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 2,
+              "max_abs_energy_delta_hartree": 8.721584947579686e-06,
+              "max_abs_force_delta_hartree_per_bohr": 2.1736576085555626e-06,
+              "status": "pass"
+            }
+          ]
+        }
+      },
+      "runtime_identity": {
+        "api_version": null,
+        "version": "0.4.0",
+        "torch_version": "2.13.0+cu130",
+        "module_path": "/home/jzzeng/codes/dxtb/src/dxtb/__init__.py",
+        "module_sha256": "4ccec76da9d4e125f96692f3e3d99956ddf5b07b41055e40db29aaf2fbcf11a2",
+        "convergence_settings": {
+          "public_accuracy_or_fixed_point_tolerance": 0.0001,
+          "max_norm_tolerance": 1e-05,
+          "function_tolerance": 0.0001,
+          "force_convergence": true,
+          "max_iterations": 500
+        },
+        "thread_control": {
+          "requested_torch_threads": 16,
+          "previous_torch_threads": 1,
+          "torch_interop_threads": 48,
+          "OMP_NUM_THREADS": "16",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1"
+        }
+      },
+      "availability": "available",
+      "start_policy": "cold",
+      "forces_binary64_le_zlib_base64": {
+        "encoding": "zlib+base64",
+        "count": 186,
+        "sha256_binary64_le": "e7fbc7ce3bcee0eb7c36df0b3ec26024d30f416f6bcae6e2de252d9444489436",
+        "data": "eNo103tQVFUYAPCT0JAJtI6EUqiLorBO2cZMtthyzy0BkYdzV/IRDM6SmjQjuIU1oIAbkoIutbhLOWi4WI1AOLOQUORyz/IMK+NGkIg8ltqMIZkYRUeedh6Xf3/zzfed8z1u2IOWhZveR/yjgA2N2anwYbz7sLKySGv48llH/zNJKGZkPvvTL9KRZ9D2nf6/pyNnBfPaAeb8SupQyBsLCwzRQ2XLhgRpKAkWtERUacb0SMpmDpqZG5lD4AwOLRqeEl3Vr/mmeW1FyvarrZtzt2FfQ91WK3s9dQQMfy2SgmZE28fP3z9YKEDzB0tmw3bvQMD+D3XlKeZ25hDwB0oM9XOczSO0sf2AgOznYs7/OKKDwLWfuuDF3FxCHQGw1HTnFUl0/RcJ1r0hQOGzu/GdWTi/EVC3PWBuL6QOASjx39HczxlfWPJ1epyAFNvvJ/ocJH6aumE984k46ji/tPdV9yWRt2xd0/Q6fv/DBj+Dkfgodb2ZuX6COs5TkHrxyDXONe1zLSFSQLwpemruKPFO6tIUc8MJ6jiPMLvy0CXR2OSR4bFFgArHun6v48TTqOsRc/1V6jjPuRnsnPKIJ3EkXA+WfZS6/TBz0Bos5/F+G9cV9XpfUhca56Pkuj3kPaJzL3PzXJT8zokU/C/OlRpD/oXMXgv/4sl/OfU7zJ2LFvqQT/omgi7aNzhRdU/uWx7zbubqr+7JfZ4+g+fC2TZHkbkgw5WFuXiSeXEGDXPzdwtzTCRzF52JKjJ3yLuj5bnrqPO7ZR+PZnsChslecZKV7hWSjsp7BQapT7B9Q+qT8h4CDdlbztgcQfYWKjW1bG/BJuYNzF0ba9meW+ldIMUqehfINiDfRTFzu4o5P8zuyHiC3ikcfbSC3CnShV2evb283QFEeo9QM0/vEfIvszsF3zPf88Rj6q4X2Z2CrJSRd0PfhAP/dp307MiCqsnrbfqRTi2Iic37uXAx7DszE+B9sRjlVb9XfaGpwwECDE8uL42Gq7KW9ZaNWuGHfopvBzMlB7B7d2lCgmHO6vLssb8tKPBsad2hxY1avD93w2P/4EojFMlrf7PApPi0sszuOuyhzzl1DVzOrqyUp25Z0M3GvooaxSB2zzI+9icufddO9foeC7TWznoVFQ84cJ6xtR/ViwUq/4CCXgvynQlyi37tOF45/taFz0VebXVbey1wT1iwKr26B8fzVl13ubjCvmmfG8ebylZrTg8O4XhwHjs39At1GAESzn4z1YLjgQvn4QoiaR4k/Rn+YJutAserx3FdriaB1oW6jtAMXf4NHF9Zjt8p5qTSd6LJxmPRs+oiHO98Gv9LTN5H/wVP1eWH+OT2YW+bxH0QeQ3tA7pj6Dse11LpAPrLv+K+oZuBtG+wofyT4v1XHFrQWUT6jAQT7TPKfwlVVWS34roZuXguaMvINJkLLClLXpo51aYFRjpHZPxBInNEG1W3ax4fu6X9H+IUnwQ="
+      }
+    },
+    {
+      "engine": "dxtb-cpu",
+      "natoms": 122,
+      "batch_size": 1,
+      "total_atoms_in_batch": 122,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "requested_properties": [
+        "energy",
+        "forces"
+      ],
+      "workload_seed": 122001,
+      "input_residency": "host",
+      "output_residency_at_timing_boundary": "host_visible",
+      "effective_start_policy": "cold",
+      "state_preparation_timing": "inside_timed_invoke",
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 751.213084,
+          "energies_hartree": [
+            -127.56035160730646
+          ],
+          "force_count": 366,
+          "forces_sha256_binary64_le": "0afcd59b433be334d3040004800d02f4ad877b4fadd2ce801aad2fbd1dd0bf95",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 737.771518,
+          "energies_hartree": [
+            -127.56035160730646
+          ],
+          "force_count": 366,
+          "forces_sha256_binary64_le": "0afcd59b433be334d3040004800d02f4ad877b4fadd2ce801aad2fbd1dd0bf95",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 750.878242,
+          "energies_hartree": [
+            -127.56035160730646
+          ],
+          "force_count": 366,
+          "forces_sha256_binary64_le": "0afcd59b433be334d3040004800d02f4ad877b4fadd2ce801aad2fbd1dd0bf95",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          751.213084,
+          737.771518,
+          750.878242
+        ],
+        "count": 3,
+        "min_ms": 737.771518,
+        "median_ms": 750.878242,
+        "mean_ms": 746.6209480000001,
+        "p95_ms": 751.213084,
+        "systems_per_second_at_median": 1.3317738403718455
+      },
+      "energies_hartree": [
+        -127.56035160730646
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "force_value_count": 366,
+        "scc_converged_ok": null,
+        "scc_status_ok": null,
+        "repeatability": {
+          "gate_applied": true,
+          "gate_reason": "independent_cold_or_reset_calls",
+          "energy_atol_hartree": 1e-10,
+          "max_abs_energy_drift_hartree": 0.0,
+          "force_atol_hartree_per_bohr": 1e-08,
+          "max_abs_force_drift_hartree_per_bohr": 0.0
+        },
+        "cross_engine": {
+          "status": "pass",
+          "reference_engine": "tblite",
+          "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+          "artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e",
+          "energy_atol_hartree": 0.002,
+          "force_atol_hartree_per_bohr": 0.002,
+          "max_abs_energy_delta_hartree": 3.239031023838379e-05,
+          "max_abs_force_delta_hartree_per_bohr": 2.102277182219805e-06,
+          "timed_sample_count_checked": 3,
+          "timed_sample_deltas": [
+            {
+              "sample_index": 0,
+              "max_abs_energy_delta_hartree": 3.239031023838379e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.102277182219805e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 1,
+              "max_abs_energy_delta_hartree": 3.239031023838379e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.102277182219805e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 2,
+              "max_abs_energy_delta_hartree": 3.239031023838379e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.102277182219805e-06,
+              "status": "pass"
+            }
+          ]
+        }
+      },
+      "runtime_identity": {
+        "api_version": null,
+        "version": "0.4.0",
+        "torch_version": "2.13.0+cu130",
+        "module_path": "/home/jzzeng/codes/dxtb/src/dxtb/__init__.py",
+        "module_sha256": "4ccec76da9d4e125f96692f3e3d99956ddf5b07b41055e40db29aaf2fbcf11a2",
+        "convergence_settings": {
+          "public_accuracy_or_fixed_point_tolerance": 0.0001,
+          "max_norm_tolerance": 1e-05,
+          "function_tolerance": 0.0001,
+          "force_convergence": true,
+          "max_iterations": 500
+        },
+        "thread_control": {
+          "requested_torch_threads": 16,
+          "previous_torch_threads": 1,
+          "torch_interop_threads": 48,
+          "OMP_NUM_THREADS": "16",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1"
+        }
+      },
+      "availability": "available",
+      "start_policy": "cold",
+      "forces_binary64_le_zlib_base64": {
+        "encoding": "zlib+base64",
+        "count": 366,
+        "sha256_binary64_le": "0afcd59b433be334d3040004800d02f4ad877b4fadd2ce801aad2fbd1dd0bf95",
+        "data": "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"
+      }
+    },
+    {
+      "engine": "dxtb-cpu",
+      "natoms": 242,
+      "batch_size": 1,
+      "total_atoms_in_batch": 242,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "requested_properties": [
+        "energy",
+        "forces"
+      ],
+      "workload_seed": 242001,
+      "input_residency": "host",
+      "output_residency_at_timing_boundary": "host_visible",
+      "effective_start_policy": "cold",
+      "state_preparation_timing": "inside_timed_invoke",
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 3474.476956,
+          "energies_hartree": [
+            -254.12202493747003
+          ],
+          "force_count": 726,
+          "forces_sha256_binary64_le": "a8d024cbfc92696a339c099f36aef586908a6647de290ce1d7a92b9716acb78d",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 3461.256042,
+          "energies_hartree": [
+            -254.12202493747003
+          ],
+          "force_count": 726,
+          "forces_sha256_binary64_le": "a8d024cbfc92696a339c099f36aef586908a6647de290ce1d7a92b9716acb78d",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 3513.226801,
+          "energies_hartree": [
+            -254.12202493747003
+          ],
+          "force_count": 726,
+          "forces_sha256_binary64_le": "a8d024cbfc92696a339c099f36aef586908a6647de290ce1d7a92b9716acb78d",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          3474.476956,
+          3461.256042,
+          3513.226801
+        ],
+        "count": 3,
+        "min_ms": 3461.256042,
+        "median_ms": 3474.476956,
+        "mean_ms": 3482.9865996666667,
+        "p95_ms": 3513.226801,
+        "systems_per_second_at_median": 0.2878131047244741
+      },
+      "energies_hartree": [
+        -254.12202493747003
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "force_value_count": 726,
+        "scc_converged_ok": null,
+        "scc_status_ok": null,
+        "repeatability": {
+          "gate_applied": true,
+          "gate_reason": "independent_cold_or_reset_calls",
+          "energy_atol_hartree": 1e-10,
+          "max_abs_energy_drift_hartree": 0.0,
+          "force_atol_hartree_per_bohr": 1e-08,
+          "max_abs_force_drift_hartree_per_bohr": 0.0
+        },
+        "cross_engine": {
+          "status": "pass",
+          "reference_engine": "tblite",
+          "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+          "artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e",
+          "energy_atol_hartree": 0.002,
+          "force_atol_hartree_per_bohr": 0.002,
+          "max_abs_energy_delta_hartree": 7.97921214825692e-05,
+          "max_abs_force_delta_hartree_per_bohr": 2.0850885654837004e-06,
+          "timed_sample_count_checked": 3,
+          "timed_sample_deltas": [
+            {
+              "sample_index": 0,
+              "max_abs_energy_delta_hartree": 7.97921214825692e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.0850885654837004e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 1,
+              "max_abs_energy_delta_hartree": 7.97921214825692e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.0850885654837004e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 2,
+              "max_abs_energy_delta_hartree": 7.97921214825692e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.0850885654837004e-06,
+              "status": "pass"
+            }
+          ]
+        }
+      },
+      "runtime_identity": {
+        "api_version": null,
+        "version": "0.4.0",
+        "torch_version": "2.13.0+cu130",
+        "module_path": "/home/jzzeng/codes/dxtb/src/dxtb/__init__.py",
+        "module_sha256": "4ccec76da9d4e125f96692f3e3d99956ddf5b07b41055e40db29aaf2fbcf11a2",
+        "convergence_settings": {
+          "public_accuracy_or_fixed_point_tolerance": 0.0001,
+          "max_norm_tolerance": 1e-05,
+          "function_tolerance": 0.0001,
+          "force_convergence": true,
+          "max_iterations": 500
+        },
+        "thread_control": {
+          "requested_torch_threads": 16,
+          "previous_torch_threads": 1,
+          "torch_interop_threads": 48,
+          "OMP_NUM_THREADS": "16",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1"
+        }
+      },
+      "availability": "available",
+      "start_policy": "cold",
+      "forces_binary64_le_zlib_base64": {
+        "encoding": "zlib+base64",
+        "count": 726,
+        "sha256_binary64_le": "a8d024cbfc92696a339c099f36aef586908a6647de290ce1d7a92b9716acb78d",
+        "data": "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"
+      }
+    },
+    {
+      "engine": "dxtb-cpu",
+      "natoms": 362,
+      "batch_size": 1,
+      "total_atoms_in_batch": 362,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "requested_properties": [
+        "energy",
+        "forces"
+      ],
+      "workload_seed": 362001,
+      "input_residency": "host",
+      "output_residency_at_timing_boundary": "host_visible",
+      "effective_start_policy": "cold",
+      "state_preparation_timing": "inside_timed_invoke",
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 8980.437829999999,
+          "energies_hartree": [
+            -380.6836985589067
+          ],
+          "force_count": 1086,
+          "forces_sha256_binary64_le": "b899a1b26d7fca25059807957590b628b553673d22670807e8d2164aed6fe893",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 8858.970609,
+          "energies_hartree": [
+            -380.6836985589067
+          ],
+          "force_count": 1086,
+          "forces_sha256_binary64_le": "b899a1b26d7fca25059807957590b628b553673d22670807e8d2164aed6fe893",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 8939.076944,
+          "energies_hartree": [
+            -380.6836985589067
+          ],
+          "force_count": 1086,
+          "forces_sha256_binary64_le": "b899a1b26d7fca25059807957590b628b553673d22670807e8d2164aed6fe893",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          8980.437829999999,
+          8858.970609,
+          8939.076944
+        ],
+        "count": 3,
+        "min_ms": 8858.970609,
+        "median_ms": 8939.076944,
+        "mean_ms": 8926.161794333333,
+        "p95_ms": 8980.437829999999,
+        "systems_per_second_at_median": 0.1118683736883158
+      },
+      "energies_hartree": [
+        -380.6836985589067
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "force_value_count": 1086,
+        "scc_converged_ok": null,
+        "scc_status_ok": null,
+        "repeatability": {
+          "gate_applied": true,
+          "gate_reason": "independent_cold_or_reset_calls",
+          "energy_atol_hartree": 1e-10,
+          "max_abs_energy_drift_hartree": 0.0,
+          "force_atol_hartree_per_bohr": 1e-08,
+          "max_abs_force_drift_hartree_per_bohr": 0.0
+        },
+        "cross_engine": {
+          "status": "pass",
+          "reference_engine": "tblite",
+          "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+          "artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e",
+          "energy_atol_hartree": 0.002,
+          "force_atol_hartree_per_bohr": 0.002,
+          "max_abs_energy_delta_hartree": 0.00012719393720317385,
+          "max_abs_force_delta_hartree_per_bohr": 2.0960605877466676e-06,
+          "timed_sample_count_checked": 3,
+          "timed_sample_deltas": [
+            {
+              "sample_index": 0,
+              "max_abs_energy_delta_hartree": 0.00012719393720317385,
+              "max_abs_force_delta_hartree_per_bohr": 2.0960605877466676e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 1,
+              "max_abs_energy_delta_hartree": 0.00012719393720317385,
+              "max_abs_force_delta_hartree_per_bohr": 2.0960605877466676e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 2,
+              "max_abs_energy_delta_hartree": 0.00012719393720317385,
+              "max_abs_force_delta_hartree_per_bohr": 2.0960605877466676e-06,
+              "status": "pass"
+            }
+          ]
+        }
+      },
+      "runtime_identity": {
+        "api_version": null,
+        "version": "0.4.0",
+        "torch_version": "2.13.0+cu130",
+        "module_path": "/home/jzzeng/codes/dxtb/src/dxtb/__init__.py",
+        "module_sha256": "4ccec76da9d4e125f96692f3e3d99956ddf5b07b41055e40db29aaf2fbcf11a2",
+        "convergence_settings": {
+          "public_accuracy_or_fixed_point_tolerance": 0.0001,
+          "max_norm_tolerance": 1e-05,
+          "function_tolerance": 0.0001,
+          "force_convergence": true,
+          "max_iterations": 500
+        },
+        "thread_control": {
+          "requested_torch_threads": 16,
+          "previous_torch_threads": 1,
+          "torch_interop_threads": 48,
+          "OMP_NUM_THREADS": "16",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1"
+        }
+      },
+      "availability": "available",
+      "start_policy": "cold",
+      "forces_binary64_le_zlib_base64": {
+        "encoding": "zlib+base64",
+        "count": 1086,
+        "sha256_binary64_le": "b899a1b26d7fca25059807957590b628b553673d22670807e8d2164aed6fe893",
+        "data": "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"
+      }
+    }
+  ]
+}

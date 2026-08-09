@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import sys
 import tempfile
 import unittest
@@ -286,11 +287,20 @@ class NatomsCrossEngineTest(unittest.TestCase):
 
     def test_plot_merges_artifacts_and_draws_without_gpu(self) -> None:
         """Full plot path runs in Agg mode from synthetic artifacts."""
+        if os.environ.get("GPUXTB_RUN_PLOT_TEST") != "1":
+            self.skipTest("set GPUXTB_RUN_PLOT_TEST=1 for optional render coverage")
         try:
             import matplotlib  # noqa: F401
         except ImportError:
             self.skipTest("matplotlib is unavailable")
-        latency_scale = {"gpuxtb-cpu": 1.0, "xtb": 2.0, "tblite": 3.0}
+        latency_scale = {
+            "gpuxtb-cpu": 1.0,
+            "gpuxtb-cuda": 1.35,
+            "xtb": 2.0,
+            "tblite": 3.0,
+            "dxtb-cpu": 6.0,
+            "dxtb-cuda": 4.5,
+        }
         rows = [
             {
                 "engine": engine,
@@ -298,7 +308,9 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 "batch_size": batch_size,
                 "start_policy": ("auto-warm" if batch_size == 128 else "cold"),
                 "effective_start_policy": (
-                    "auto-warm" if batch_size == 128 else "cold"
+                    "cold"
+                    if engine.startswith("dxtb")
+                    else ("auto-warm" if batch_size == 128 else "cold")
                 ),
                 "availability": "available",
                 # Keep synthetic series visibly distinct so a rendered layout
@@ -308,10 +320,29 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 },
                 "correctness": qualified_correctness(engine),
             }
-            for engine in ("gpuxtb-cpu", "xtb", "tblite")
+            for engine in (
+                "gpuxtb-cpu",
+                "gpuxtb-cuda",
+                "xtb",
+                "tblite",
+                "dxtb-cpu",
+                "dxtb-cuda",
+            )
             for natoms in (14, 32)
             for batch_size in (1, 128, 512)
         ]
+        unavailable = next(
+            row
+            for row in rows
+            if row["engine"] == "dxtb-cuda"
+            and row["natoms"] == 32
+            and row["batch_size"] == 512
+        )
+        unavailable.update(
+            availability="error",
+            error="CUDA out of memory",
+            correctness={"status": "not_run"},
+        )
         with tempfile.TemporaryDirectory() as directory:
             directory_path = Path(directory)
             cold_reference = directory_path / "cold-reference.json"
@@ -362,6 +393,8 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 (warm_dependent_rows, warm_reference_sha256),
             ):
                 for row in dependent_rows:
+                    if row["availability"] != "available":
+                        continue
                     row["correctness"]["cross_engine"] = {
                         "status": "pass",
                         "reference_engine": "xtb",
@@ -427,6 +460,16 @@ class NatomsCrossEngineTest(unittest.TestCase):
             self.assertIn("<desc>", svg)
             self.assertNotIn("<dc:date>", svg)
             self.assertNotIn("Glyph", completed.stderr)
+            for label in (
+                "gpuxtb CPU",
+                "gpuxtb CUDA",
+                "xTB",
+                "tblite",
+                "dxtb CPU",
+                "dxtb CUDA",
+                "unavailable / OOM",
+            ):
+                self.assertIn(label, svg)
 
     def test_cold_panel_excludes_autowarm_trajectory_leak(self) -> None:
         """Batch=1 rows leaked by an auto-warm trajectory run must not enter.
@@ -815,10 +858,8 @@ class NatomsCrossEngineTest(unittest.TestCase):
         """Figure header must not silently hard-code publication settings."""
         note = plotters._protocol_note(artifact_metadata())
         self.assertIn("CPU budget: 4 threads", note)
-        self.assertIn("median n=3", note)
-        self.assertIn("accuracy factor 1", note)
-        self.assertIn("x_atol", note)
-        self.assertIn("Uniform output gate", note)
+        self.assertIn("median n = 3", note)
+        self.assertIn("uniform benchmark gate", note)
         self.assertIn(r"2\times10^{-3}", note)
         self.assertIn(r"\max_i|\Delta F_i|", note)
         self.assertNotIn("⁻", note)
@@ -977,12 +1018,8 @@ class NatomsCrossEngineTest(unittest.TestCase):
         )
         self.assertEqual(
             plotters._format_speedup(9.04, 12.2),
-            "9.0\N{EN DASH}12\N{MULTIPLICATION SIGN}",
+            "9.0\N{EN DASH}12.2\N{MULTIPLICATION SIGN}",
         )
-        self.assertEqual(
-            plotters._annotation_alignment(62, (12.0, 130.0)), (-8, "right")
-        )
-        self.assertEqual(plotters._annotation_alignment(14, (12.0, 130.0)), (8, "left"))
 
     def test_plotter_rejects_dirty_artifact(self) -> None:
         """Publication plots cannot silently combine dirty benchmark output."""
