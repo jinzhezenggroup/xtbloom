@@ -1442,9 +1442,13 @@ int test_public_wrong_device_rejection(int device_count, std::int32_t context_de
     wrong.descriptor.positions = {foreign_positions, wrong.positions.size() * sizeof(double),
                                   GPUXTB_MEMORY_CUDA_DEVICE, 0u};
     gpuxtb_plan_t* raw_plan = reinterpret_cast<gpuxtb_plan_t*>(UINTPTR_MAX);
+    CUDA_CHECK(cudaSetDevice(foreign_device));
     CHECK(gpuxtb_plan_create(context.get(), &wrong.descriptor, &options, &raw_plan) ==
           GPUXTB_STATUS_INVALID_ARGUMENT);
     CHECK(raw_plan == nullptr);
+    int after = -1;
+    CUDA_CHECK(cudaGetDevice(&after));
+    CHECK(after == foreign_device);
   }
 
   g_scenario = "wrong-device-rejection/plan-compute";
@@ -1456,15 +1460,52 @@ int test_public_wrong_device_rejection(int device_count, std::int32_t context_de
     ResultOwner result;
     CUDA_CHECK(result.bind(wrong, ResultLayout::kHost));
     gpuxtb_plan_t* raw_plan = nullptr;
+    CUDA_CHECK(cudaSetDevice(foreign_device));
     CHECK(gpuxtb_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
           GPUXTB_STATUS_SUCCESS);
     CHECK(raw_plan != nullptr);
+    int after_create = -1;
+    CUDA_CHECK(cudaGetDevice(&after_create));
+    CHECK(after_create == foreign_device);
     PlanHandle plan(raw_plan);
+    CUDA_CHECK(cudaSetDevice(foreign_device));
     CHECK(gpuxtb_plan_compute(plan.get(), &wrong.descriptor, &options, &result.descriptor) ==
           GPUXTB_STATUS_INVALID_ARGUMENT);
+    int after_compute = -1;
+    CUDA_CHECK(cudaGetDevice(&after_compute));
+    CHECK(after_compute == foreign_device);
     bool unchanged = false;
     CUDA_CHECK(result.unchanged(unchanged));
     CHECK(unchanged);
+    bool guards = false;
+    CUDA_CHECK(result.guards_intact(guards));
+    CHECK(guards);
+  }
+
+  /* Keep every input valid so validation reaches the writable-buffer path.
+   * A requested result slice owned by another GPU must still fail before any
+   * host or device output canary, including result.flags, is published. */
+  g_scenario = "wrong-device-rejection/foreign-output";
+  {
+    PublicBatch valid = batch;
+    valid.bind();
+    ResultOwner result;
+    CUDA_CHECK(cudaSetDevice(foreign_device));
+    CUDA_CHECK(result.bind(valid, ResultLayout::kDevice));
+
+    CUDA_CHECK(cudaSetDevice(foreign_device));
+    CHECK(gpuxtb_compute(context.get(), &valid.descriptor, &options, &result.descriptor) ==
+          GPUXTB_STATUS_INVALID_ARGUMENT);
+    int after = -1;
+    CUDA_CHECK(cudaGetDevice(&after));
+    CHECK(after == foreign_device);
+    bool unchanged = false;
+    CUDA_CHECK(result.unchanged(unchanged));
+    CHECK(unchanged);
+    CHECK(result.descriptor.flags == kResultFlagsCanary);
+    bool guards = false;
+    CUDA_CHECK(result.guards_intact(guards));
+    CHECK(guards);
   }
 
   CUDA_CHECK(cudaFree(foreign_positions));
