@@ -98,6 +98,7 @@ def _fake_computed(
         forces=np.zeros((total_atoms, 3), dtype=np.float64),
         charges=np.zeros(total_atoms, dtype=np.float64),
         point_charge_forces=None,
+        dipole_moments=None,
         scc_iterations=np.ones(len(structures), dtype=np.int32),
         scc_converged=np.ones(len(structures), dtype=np.uint8),
         per_system_status=np.zeros(len(structures), dtype=np.int32),

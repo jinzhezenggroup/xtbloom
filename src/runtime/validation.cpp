@@ -920,28 +920,59 @@ DescriptorValidationResult validate_host_interaction_semantics(const gpuxtb_batc
 }
 
 DescriptorValidationResult validate_output_execution_availability(
-    const gpuxtb_compute_options_t& options) {
-  if ((options.flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0u) {
-    /* The ABI reserves the flag and result outlet, but no backend publishes
-     * dipole moments yet (see #237 P2/P3). This runs after output shape and
-     * alias validation so malformed requests still receive precise errors. */
+    const gpuxtb_compute_options_t& options, gpuxtb_backend_t backend) {
+  if ((options.flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0u && backend == GPUXTB_BACKEND_CUDA) {
+    /* The CUDA backend has not released dipole-moment publication yet (see
+     * #237 P3). This runs after output shape and alias validation so
+     * malformed requests still receive precise errors. */
     return {GPUXTB_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
-            "dipole-moment output is reserved by the ABI but is not implemented yet"};
+            "dipole-moment output is implemented by the CPU backend but is not "
+            "released on the CUDA backend yet"};
   }
   return {};
 }
 
 /*
- * No backend executes interactions yet (P1 of #237). Every well-formed
- * attachment is refused here after structural validation so a caller can
- * never believe a reserved interaction contributed to the result. P2 wires
- * the electric field and the gate below switches to per-tag dispatch.
+ * Dispatch interactions to the backend execution availability.
+ *
+ * P1 (#237) refused every well-formed attachment after structural validation so
+ * a caller could never believe a reserved interaction contributed to the
+ * result. The released uniform electric field is now implemented by the CPU
+ * backend; every other reserved tag remains refused here so a caller can never
+ * believe a reserved interaction contributed to the result.
+ *
+ * This entry point is shared by the CPU and CUDA structural validators. On the
+ * CUDA path the descriptor bytes may be device-resident and must never be
+ * dereferenced on the host: the CUDA backend refuses every interaction before
+ * staged content validation (see #237 P3), so only host-resident descriptors
+ * are read to distinguish the released electric field from reserved tags.
  */
-DescriptorValidationResult validate_interaction_execution_availability(
-    const gpuxtb_batch_t& batch) {
-  if (has_interaction_suffix(batch) && batch.total_interactions != 0) {
+DescriptorValidationResult validate_interaction_execution_availability(const gpuxtb_batch_t& batch,
+                                                                       gpuxtb_backend_t backend) {
+  if (!has_interaction_suffix(batch) || batch.total_interactions == 0) {
+    return {};
+  }
+  const BufferView descriptors = interaction_descriptor_view(batch);
+  if (backend == GPUXTB_BACKEND_CUDA) {
     return {GPUXTB_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
-            "interaction attachments are reserved by the ABI but no backend executes them yet"};
+            "interaction execution is implemented by the CPU backend but is "
+            "not released on the CUDA backend yet"};
+  }
+  if (descriptors.memory_space != GPUXTB_MEMORY_HOST) {
+    /* The CPU backend requires host-resident descriptors (validated earlier),
+     * so this branch is defensive and unreachable; refuse without reading. */
+    return {GPUXTB_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
+            "interaction execution requires host-resident descriptor storage"};
+  }
+  const std::size_t count = static_cast<std::size_t>(batch.total_interactions);
+  for (std::size_t index = 0; index < count; ++index) {
+    const InteractionView interaction =
+        load_interaction(descriptors, static_cast<std::size_t>(index));
+    if (interaction.type != GPUXTB_INTERACTION_ELECTRIC_FIELD) {
+      return {GPUXTB_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
+              "an interaction attachment uses a tag whose backend execution is "
+              "reserved but not implemented yet"};
+    }
   }
   return {};
 }
@@ -965,11 +996,12 @@ DescriptorValidationResult validate_compute_descriptor_structure(
   if (!aliases.ok()) {
     return aliases;
   }
-  DescriptorValidationResult output_availability = validate_output_execution_availability(*options);
+  DescriptorValidationResult output_availability =
+      validate_output_execution_availability(*options, backend);
   if (!output_availability.ok()) {
     return output_availability;
   }
-  return validate_interaction_execution_availability(*batch);
+  return validate_interaction_execution_availability(*batch, backend);
 }
 
 DescriptorValidationResult validate_plan_descriptor_structure(
@@ -1002,11 +1034,12 @@ DescriptorValidationResult validate_plan_descriptor_structure(
   if (!aliases.ok()) {
     return aliases;
   }
-  DescriptorValidationResult output_availability = validate_output_execution_availability(*options);
+  DescriptorValidationResult output_availability =
+      validate_output_execution_availability(*options, backend);
   if (!output_availability.ok()) {
     return output_availability;
   }
-  return validate_interaction_execution_availability(*batch);
+  return validate_interaction_execution_availability(*batch, backend);
 }
 
 DescriptorValidationResult validate_host_topology_semantics(const gpuxtb_batch_t& batch) {
@@ -1151,11 +1184,13 @@ DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend
   if (!aliases.ok()) {
     return aliases;
   }
-  DescriptorValidationResult output_availability = validate_output_execution_availability(*options);
+  DescriptorValidationResult output_availability =
+      validate_output_execution_availability(*options, backend);
   if (!output_availability.ok()) {
     return output_availability;
   }
-  DescriptorValidationResult availability = validate_interaction_execution_availability(*batch);
+  DescriptorValidationResult availability =
+      validate_interaction_execution_availability(*batch, backend);
   if (!availability.ok()) {
     return availability;
   }

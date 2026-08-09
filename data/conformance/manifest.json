@@ -121,6 +121,33 @@
       "reference_output_sha256": "41a38e31d0b288fbf585a3e41e8b5c3b18e8b4eb9983a9fd401f17f80e9c7f93",
       "scientific_source": "xTB test/unit/test_gfn2.f90 test_gfn2_pcem_api gamma=999 branch.",
       "unpaired_electrons": 0
+    },
+    {
+      "atom_count": 3,
+      "description": "One water molecule in the uniform electric field (0.003, -0.004, 0.005) Hartree per elementary charge per bohr is the ABI-v3 electric-field interaction pilot. The pinned tblite energy remains the independent primary oracle; its analytic field gradient applies +E per atom instead of +q_i E and is retained only as diagnostic provenance, while gpuxtb forces are gated by public energy finite differences.",
+      "efield": [
+        0.003,
+        -0.004,
+        0.005
+      ],
+      "golden": "data/conformance/golden/water_efield.json",
+      "golden_sha256": "d63a1dfc900190c9aeb7508c9a3cf9ab1be9e071578cc7df54abc314a58c7035",
+      "gpuxtb_backends": [
+        "cpu"
+      ],
+      "gpuxtb_force_evidence": "public_energy_finite_difference",
+      "gpuxtb_oracle_properties": [
+        "energy_hartree"
+      ],
+      "id": "water_efield",
+      "input": "data/conformance/inputs/water_efield.coord",
+      "input_sha256": "a8d8e170921a7b79316b72495540c18bc1ee97ea502a7ba172937e05a2be17ac",
+      "molecular_charge": 0,
+      "reference_engine": "tblite",
+      "reference_output_sha256": "4044828a6e7742f614fcf1256d93480eb573a18ee5c396c48216328a91edf7de",
+      "unpaired_electrons": 0,
+      "upstream_input_sha256": "a8d8e170921a7b79316b72495540c18bc1ee97ea502a7ba172937e05a2be17ac",
+      "upstream_validation_case": "gpuxtb efield pilot"
     }
   ],
   "golden_schema_version": 1,
@@ -153,6 +180,7 @@
         "{gradient_output}",
         "[--charge {signed_charge}]",
         "[--spin {unpaired_electrons}]",
+        "[--efield {efield_vperangstrom}]",
         "--json",
         "{json_output}"
       ],

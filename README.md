@@ -28,10 +28,12 @@ once per molecule.
   GFN2-xTB. The CUDA ABI accepts caller-owned host, device, or mixed buffers.
 - **Failure isolation.** SCC or eigensolver failure in one molecule publishes
   NaNs and diagnostics for that molecule without discarding successful peers.
-- **Analytic derivatives.** Energies, QM forces, atomic charges, and optional
-  point-charge forces are available through the public API.
-- **QM/MM inputs inside SCC.** Explicit point charges and caller-supplied
-  periodic charge-response operators participate in every SCC iteration.
+- **Analytic derivatives.** Energies, QM forces, atomic charges, optional
+  point-charge forces, and per-system molecular dipole moments are available
+  through the public API.
+- **QM/MM inputs inside SCC.** Explicit point charges, caller-supplied
+  periodic charge-response operators, and a uniform external electric field
+  participate in every SCC iteration.
 - **Reusable execution state.** Contexts retain CPU workers, CUDA workspaces,
   fixed-topology plans, and strict compatible electronic warm starts.
 - **One deployment boundary.** C, C++, Python, ASE, and dpdata all call the
