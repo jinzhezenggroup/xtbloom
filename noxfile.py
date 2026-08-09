@@ -11,7 +11,6 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import Any
 from xml.etree import ElementTree
 
 import nox
@@ -47,9 +46,14 @@ nox.needs_version = f"=={NOX_VERSION}"
 nox.options.sessions = ["agent"]
 
 
-def _run(session: nox.Session, *args: str, **kwargs: Any) -> str | None:
+def _run(
+    session: nox.Session,
+    *args: str,
+    env: dict[str, str] | None = None,
+    silent: bool = False,
+) -> str | None:
     """Run one repository tool without introducing a Nox virtual environment."""
-    environment = dict(kwargs.pop("env", {}) or {})
+    environment = dict(env or {})
     if args[0] in {"uv", "uvx"}:
         # Site-wide uv configuration may select a mirror.  The committed lock
         # is canonical against PyPI, so every resolving uv command must use the
@@ -61,9 +65,12 @@ def _run(session: nox.Session, *args: str, **kwargs: Any) -> str | None:
         # temporary VIRTUAL_ENV neither redirects them nor contaminates captured
         # command output with a mismatched-environment warning.
         environment.setdefault("VIRTUAL_ENV", str(ROOT / ".venv"))
-    if environment:
-        kwargs["env"] = environment
-    return session.run(*args, external=True, **kwargs)
+    return session.run(
+        *args,
+        external=True,
+        env=environment or None,
+        silent=silent,
+    )
 
 
 def _sync_python_environment(session: nox.Session, *, tests: bool) -> None:
