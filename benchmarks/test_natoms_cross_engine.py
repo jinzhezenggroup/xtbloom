@@ -884,6 +884,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
 
             def fake_run(command: tuple[str, ...], **_kwargs: object) -> str:
                 if command[:2] == ("meson", "compile"):
+                    self.assertEqual(command[-1], "xtb:shared_library")
                     new_target.write_bytes(b"new")
                     library.unlink()
                     library.symlink_to(new_target.name)
@@ -901,6 +902,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 sync = nce.synchronize_meson_target(library, source)
                 identity = nce.meson_build_identity(library, source)
         self.assertEqual(sync["library_sha256"], hashlib.sha256(b"new").hexdigest())
+        self.assertEqual(sync["target_selector"], "xtb:shared_library")
         self.assertEqual(identity["project"]["version"], "new")
         self.assertEqual(
             identity["source_target_sync"]["library_sha256"], sync["library_sha256"]

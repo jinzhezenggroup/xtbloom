@@ -415,14 +415,51 @@ def synchronize_meson_target(library: Path, source_root: Path) -> dict[str, Any]
     directories = info.get("directories") or {}
     if Path(str(directories.get("source", ""))).resolve() != source_root.resolve():
         raise BenchmarkError("Meson build tree is not bound to the requested source")
+    try:
+        targets = json.loads(
+            (info_root / "intro-targets.json").read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BenchmarkError(f"cannot read Meson target identity: {exc}") from exc
+    requested_library = library.resolve()
+    selected_target = next(
+        (
+            target
+            for target in targets
+            if any(
+                Path(str(filename)).resolve() == requested_library
+                for filename in target.get("filename", [])
+            )
+        ),
+        None,
+    )
+    if selected_target is None:
+        raise BenchmarkError("selected library is not a Meson target output")
+    target_type = str(selected_target.get("type", "")).replace(" ", "_")
+    target_name = str(selected_target.get("name", ""))
+    if not target_name or not target_type:
+        raise BenchmarkError("selected Meson target has no stable compile selector")
+    target_parent = requested_library.parent.relative_to(build_root.resolve())
+    target_prefix = "" if target_parent == Path(".") else f"{target_parent}/"
+    target_selector = f"{target_prefix}{target_name}:{target_type}"
     output = run_text(
-        ("meson", "compile", "-C", str(build_root)), required=True, allow_empty=True
+        ("meson", "compile", "-C", str(build_root), target_selector),
+        required=True,
+        allow_empty=True,
     )
     resolved_library = library.resolve()
     if not resolved_library.is_file():
         raise BenchmarkError("Meson compile did not produce the selected library")
     result = {
-        "command": ["meson", "compile", "-C", str(build_root.resolve())],
+        "command": [
+            "meson",
+            "compile",
+            "-C",
+            str(build_root.resolve()),
+            target_selector,
+        ],
+        "target_id": selected_target.get("id"),
+        "target_selector": target_selector,
         "status": "up_to_date_or_rebuilt",
         "output": output,
         "library_path": str(resolved_library),
