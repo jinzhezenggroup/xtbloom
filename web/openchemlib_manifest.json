@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "dependency": {
+    "name": "OpenChemLib JS",
+    "npm_package": "openchemlib",
+    "version": "9.21.0",
+    "classification": "runtime-provided browser dependency",
+    "usage": "SMILES parsing, explicit-hydrogen seeded 3D conformer generation, and MMFF94 pre-relaxation"
+  },
+  "source": {
+    "repository": "https://github.com/cheminfo/openchemlib-js",
+    "release_commit": "36aec7791ac38e7fdc23a37ba07e19514eb1e5c9",
+    "openchemlib_java_submodule_commit": "27d2b2fe2195ec0b159c3aa2cae3bc1464b41daf",
+    "package_metadata_url": "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/package.json",
+    "build_commands": [
+      "npm run build-java-min",
+      "npm run build-js-min",
+      "npm run build-resources"
+    ]
+  },
+  "cdn_artifacts": [
+    {
+      "role": "ES module runtime",
+      "url": "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/openchemlib.js",
+      "sha256": "5978967b12e938208e8d36222370f88fd615a2b5ec83f02e435caab26f3f4cb3",
+      "size_bytes": 1097449,
+      "redistributed_by_gpuxtb": false
+    },
+    {
+      "role": "conformer and MMFF resource registry",
+      "url": "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/resources.json",
+      "sha256": "d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14",
+      "size_bytes": 1351963,
+      "redistributed_by_gpuxtb": false
+    }
+  ],
+  "resource_payload": {
+    "entry_count": 35,
+    "groups": [
+      {
+        "name": "COD conformer statistics",
+        "used_by_gpuxtb_web": true,
+        "paths": [
+          "/resources/cod/bondLengthData.txt",
+          "/resources/cod/torsionAngle.txt",
+          "/resources/cod/torsionFrequency.txt",
+          "/resources/cod/torsionID.txt",
+          "/resources/cod/torsionRange.txt"
+        ]
+      },
+      {
+        "name": "MMFF94 and MMFF94s parameter tables",
+        "used_by_gpuxtb_web": true,
+        "paths": [
+          "/resources/forcefield/mmff94/94s/outofplane.csv",
+          "/resources/forcefield/mmff94/94s/torsion.csv",
+          "/resources/forcefield/mmff94/94s/torsionPlus.csv",
+          "/resources/forcefield/mmff94/angle.csv",
+          "/resources/forcefield/mmff94/atom.csv",
+          "/resources/forcefield/mmff94/bci.csv",
+          "/resources/forcefield/mmff94/bndk.csv",
+          "/resources/forcefield/mmff94/bond.csv",
+          "/resources/forcefield/mmff94/covrad.csv",
+          "/resources/forcefield/mmff94/def.csv",
+          "/resources/forcefield/mmff94/dfsb.csv",
+          "/resources/forcefield/mmff94/herschbachlaurie.csv",
+          "/resources/forcefield/mmff94/outofplane.csv",
+          "/resources/forcefield/mmff94/pbci.csv",
+          "/resources/forcefield/mmff94/stbn.csv",
+          "/resources/forcefield/mmff94/torsion.csv",
+          "/resources/forcefield/mmff94/vanderwaals.csv"
+        ]
+      },
+      {
+        "name": "bundled drug-likeness predictor data",
+        "used_by_gpuxtb_web": false,
+        "paths": [
+          "/resources/druglikenessNoIndex.txt"
+        ]
+      },
+      {
+        "name": "bundled toxicity predictor data",
+        "used_by_gpuxtb_web": false,
+        "paths": [
+          "/resources/toxpredictor/i1.txt",
+          "/resources/toxpredictor/i2.txt",
+          "/resources/toxpredictor/i3.txt",
+          "/resources/toxpredictor/m1.txt",
+          "/resources/toxpredictor/m2.txt",
+          "/resources/toxpredictor/m3.txt",
+          "/resources/toxpredictor/r1.txt",
+          "/resources/toxpredictor/r2.txt",
+          "/resources/toxpredictor/r3.txt",
+          "/resources/toxpredictor/t1.txt",
+          "/resources/toxpredictor/t2.txt",
+          "/resources/toxpredictor/t3.txt"
+        ]
+      }
+    ]
+  },
+  "license": {
+    "spdx": "BSD-3-Clause",
+    "upstream_url": "https://raw.githubusercontent.com/cheminfo/openchemlib-js/36aec7791ac38e7fdc23a37ba07e19514eb1e5c9/LICENSE",
+    "sha256": "38dc3aed3def8cc4dd15ac879daa4af9b0d71af86fef82611ca1752497c6f464",
+    "local_copy": "LICENSES/openchemlib-BSD-3-Clause.txt"
+  },
+  "distribution_boundary": {
+    "site_payload": [
+      "LICENSES/openchemlib-BSD-3-Clause.txt",
+      "provenance/openchemlib_manifest.json"
+    ],
+    "remote_payload": [
+      "openchemlib.js",
+      "resources.json"
+    ],
+    "native_library_or_python_payload": false,
+    "notes": "The browser fetches the exact jsDelivr URLs at runtime. gpuxtb does not vendor these two CDN artifacts or add OpenChemLib to gpuxtb_web.wasm, native installs, sdists, or wheels."
+  }
+}

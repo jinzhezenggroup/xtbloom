@@ -100,6 +100,9 @@ jobs:
       - name: Test browser helpers
         run: npm test --prefix web
 
+      - name: Verify pinned OpenChemLib CDN integration
+        run: node web/tests/openchemlib_smoke.mjs
+
       - name: Run public C ABI layout and short-initializer checks
         run: |
           emcc -m32 -std=c11 -Iinclude -c tests/c_api_test.c \

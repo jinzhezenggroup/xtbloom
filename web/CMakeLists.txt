@@ -12,6 +12,7 @@
 #   wasm/linalg.c                      (minimal LP64 LAPACKE/CBLAS side module)
 #   gpuxtb_web.c                       (XYZ/JSON C adapter + L-BFGS optimizer)
 #   index.html / style.css / app.js / app_helpers.js / worker.js
+#   smiles_helpers.js / smiles_worker.js
 # See THIRD_PARTY_NOTICES.md for provenance. Outputs under <build> are build
 # artifacts and never committed.
 
@@ -130,6 +131,8 @@ set(_gpuxtb_web_copy_deps
     "${_gpuxtb_web_src}/app.js"
     "${_gpuxtb_web_src}/app_helpers.js"
     "${_gpuxtb_web_src}/worker.js"
+    "${_gpuxtb_web_src}/smiles_helpers.js"
+    "${_gpuxtb_web_src}/smiles_worker.js"
     "${_gpuxtb_web_3dmol}")
 
 add_custom_command(
@@ -139,6 +142,8 @@ add_custom_command(
     "${_gpuxtb_web_site}/app.js"
     "${_gpuxtb_web_site}/app_helpers.js"
     "${_gpuxtb_web_site}/worker.js"
+    "${_gpuxtb_web_site}/smiles_helpers.js"
+    "${_gpuxtb_web_site}/smiles_worker.js"
     "${_gpuxtb_web_site}/vendor/3Dmol-min.js"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${_gpuxtb_web_site}"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -151,6 +156,12 @@ add_custom_command(
           "${_gpuxtb_web_src}/app_helpers.js" "${_gpuxtb_web_site}/app_helpers.js"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${_gpuxtb_web_src}/worker.js" "${_gpuxtb_web_site}/worker.js"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_gpuxtb_web_src}/smiles_helpers.js"
+          "${_gpuxtb_web_site}/smiles_helpers.js"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_gpuxtb_web_src}/smiles_worker.js"
+          "${_gpuxtb_web_site}/smiles_worker.js"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${_gpuxtb_web_site}/vendor"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${_gpuxtb_web_3dmol}" "${_gpuxtb_web_site}/vendor/3Dmol-min.js"
@@ -168,6 +179,7 @@ set(_gpuxtb_web_legal_sources
     "${CMAKE_SOURCE_DIR}/CUDA_MKL_LINKING_EXCEPTION"
     "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
     "${CMAKE_SOURCE_DIR}/LICENSES/3Dmol.js-BSD-3-Clause.txt"
+    "${CMAKE_SOURCE_DIR}/LICENSES/openchemlib-BSD-3-Clause.txt"
     "${CMAKE_SOURCE_DIR}/LICENSES/Apache-2.0.txt"
     "${CMAKE_SOURCE_DIR}/LICENSES/LGPL-3.0-or-later.txt"
     "${CMAKE_SOURCE_DIR}/LICENSES/MIT.txt"
@@ -185,13 +197,15 @@ set(_gpuxtb_web_legal_sources
     "${CMAKE_SOURCE_DIR}/data/parameters/sto_manifest.json"
     "${CMAKE_SOURCE_DIR}/data/parameters/spin_manifest.json"
     "${CMAKE_SOURCE_DIR}/data/parameters/d4_manifest.json"
-    "${CMAKE_SOURCE_DIR}/data/parameters/mctc_manifest.json")
+    "${CMAKE_SOURCE_DIR}/data/parameters/mctc_manifest.json"
+    "${_gpuxtb_web_src}/openchemlib_manifest.json")
 
 set(_gpuxtb_web_legal_outputs
     "${_gpuxtb_web_site}/LICENSE"
     "${_gpuxtb_web_site}/CUDA_MKL_LINKING_EXCEPTION"
     "${_gpuxtb_web_site}/THIRD_PARTY_NOTICES.md"
     "${_gpuxtb_web_site}/LICENSES/3Dmol.js-BSD-3-Clause.txt"
+    "${_gpuxtb_web_site}/LICENSES/openchemlib-BSD-3-Clause.txt"
     "${_gpuxtb_web_site}/LICENSES/Apache-2.0.txt"
     "${_gpuxtb_web_site}/LICENSES/LGPL-3.0-or-later.txt"
     "${_gpuxtb_web_site}/LICENSES/MIT.txt"
@@ -209,7 +223,8 @@ set(_gpuxtb_web_legal_outputs
     "${_gpuxtb_web_site}/provenance/parameters/sto_manifest.json"
     "${_gpuxtb_web_site}/provenance/parameters/spin_manifest.json"
     "${_gpuxtb_web_site}/provenance/parameters/d4_manifest.json"
-    "${_gpuxtb_web_site}/provenance/parameters/mctc_manifest.json")
+    "${_gpuxtb_web_site}/provenance/parameters/mctc_manifest.json"
+    "${_gpuxtb_web_site}/provenance/openchemlib_manifest.json")
 
 add_custom_command(
   OUTPUT ${_gpuxtb_web_legal_outputs}
@@ -239,6 +254,9 @@ add_custom_command(
           "${CMAKE_SOURCE_DIR}/data/parameters/d4_manifest.json"
           "${CMAKE_SOURCE_DIR}/data/parameters/mctc_manifest.json"
           "${_gpuxtb_web_site}/provenance/parameters"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_gpuxtb_web_src}/openchemlib_manifest.json"
+          "${_gpuxtb_web_site}/provenance/openchemlib_manifest.json"
   DEPENDS ${_gpuxtb_web_legal_sources}
   COMMENT "Staging web licenses, notices, and parameter provenance"
   VERBATIM)
@@ -257,6 +275,8 @@ add_custom_target(
     "${_gpuxtb_web_site}/app.js"
     "${_gpuxtb_web_site}/app_helpers.js"
     "${_gpuxtb_web_site}/worker.js"
+    "${_gpuxtb_web_site}/smiles_helpers.js"
+    "${_gpuxtb_web_site}/smiles_worker.js"
     "${_gpuxtb_web_site}/vendor/3Dmol-min.js"
     ${_gpuxtb_web_legal_outputs})
 

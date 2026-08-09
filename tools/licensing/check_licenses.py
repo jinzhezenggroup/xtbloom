@@ -27,8 +27,18 @@ IMPLIB_VENDOR_PATH = "cmake/3rdparty/implib"
 IMPLIB_REVISION = "6f4fc02ae058ef11848046af01a1a756f3229c29"
 IMPLIB_TREE = "5fbe7e9f2c4efe0c2be4d2eed409e81f35458ba4"
 ARRAY_API_COMPAT_LICENSE = "LICENSES/array-api-compat-MIT.txt"
+OPEN_CHEMLIB_LICENSE = "LICENSES/openchemlib-BSD-3-Clause.txt"
+OPEN_CHEMLIB_MANIFEST = "web/openchemlib_manifest.json"
+OPEN_CHEMLIB_VERSION = "9.21.0"
+OPEN_CHEMLIB_MODULE_URL = (
+    "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/openchemlib.js"
+)
+OPEN_CHEMLIB_RESOURCES_URL = (
+    "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/resources.json"
+)
 WEB_LICENSE_FILES = (
     "LICENSES/3Dmol.js-BSD-3-Clause.txt",
+    OPEN_CHEMLIB_LICENSE,
     "LICENSES/iobuffer-MIT.txt",
     "LICENSES/netcdfjs-MIT.txt",
     "LICENSES/pako-MIT.txt",
@@ -39,6 +49,7 @@ WEB_SOURCE_FILES = (
     *WEB_LICENSE_FILES,
     "web/package.json",
     "web/package-lock.json",
+    OPEN_CHEMLIB_MANIFEST,
 )
 SOURCE_FILES = (
     "LICENSE",
@@ -150,6 +161,11 @@ NOTICE_TOKENS = (
     "UPNG.js 2.1.0",
     "pako 2.2.0 and pako 1.0.11",
     "475e2213ac02fbf2d4a8c4fc287b570fc476da2fda9de3f5a72a2554b5716e71",
+    "OpenChemLib 9.21.0",
+    "36aec7791ac38e7fdc23a37ba07e19514eb1e5c9",
+    "27d2b2fe2195ec0b159c3aa2cae3bc1464b41daf",
+    "5978967b12e938208e8d36222370f88fd615a2b5ec83f02e435caab26f3f4cb3",
+    "d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14",
     EXCEPTION_FILE,
 )
 EXCEPTION_TOKENS = (
@@ -204,6 +220,7 @@ WEB_SITE_SOURCE_MAP = {
     "provenance/parameters/spin_manifest.json": "data/parameters/spin_manifest.json",
     "provenance/parameters/d4_manifest.json": "data/parameters/d4_manifest.json",
     "provenance/parameters/mctc_manifest.json": "data/parameters/mctc_manifest.json",
+    "provenance/openchemlib_manifest.json": OPEN_CHEMLIB_MANIFEST,
 }
 WEB_SITE_RUNTIME_FILES = (
     "index.html",
@@ -211,6 +228,8 @@ WEB_SITE_RUNTIME_FILES = (
     "app.js",
     "app_helpers.js",
     "worker.js",
+    "smiles_helpers.js",
+    "smiles_worker.js",
     "gpuxtb_web.js",
     "gpuxtb_web.wasm",
     "gpuxtb_web.data",
@@ -546,12 +565,105 @@ def check_source(root: Path) -> None:
             "Copyright (C) 1995-2013 Jean-loup Gailly and Mark Adler",
             "This notice may not be removed or altered",
         ),
+        OPEN_CHEMLIB_LICENSE: (
+            "Copyright (c) 2015-2017, cheminfo",
+            "Redistribution and use in source and binary forms",
+        ),
     }
     for relative, tokens in web_license_tokens.items():
         text = (root / relative).read_text(encoding="utf-8")
         for token in tokens:
             if token not in text:
                 raise LicenseCheckError(f"{relative} omits upstream text: {token}")
+
+    openchemlib = json.loads((root / OPEN_CHEMLIB_MANIFEST).read_text(encoding="utf-8"))
+    dependency = openchemlib.get("dependency", {})
+    source = openchemlib.get("source", {})
+    license_info = openchemlib.get("license", {})
+    if (
+        openchemlib.get("schema_version") != 1
+        or dependency.get("npm_package") != "openchemlib"
+        or dependency.get("version") != OPEN_CHEMLIB_VERSION
+        or dependency.get("classification") != "runtime-provided browser dependency"
+        or source.get("release_commit") != "36aec7791ac38e7fdc23a37ba07e19514eb1e5c9"
+        or source.get("openchemlib_java_submodule_commit")
+        != "27d2b2fe2195ec0b159c3aa2cae3bc1464b41daf"
+        or license_info.get("spdx") != "BSD-3-Clause"
+        or license_info.get("local_copy") != OPEN_CHEMLIB_LICENSE
+        or license_info.get("sha256")
+        != "38dc3aed3def8cc4dd15ac879daa4af9b0d71af86fef82611ca1752497c6f464"
+    ):
+        raise LicenseCheckError("OpenChemLib manifest has unreviewed provenance")
+    if (
+        hashlib.sha256((root / OPEN_CHEMLIB_LICENSE).read_bytes()).hexdigest()
+        != (license_info["sha256"])
+    ):
+        raise LicenseCheckError(
+            "OpenChemLib license differs from pinned upstream bytes"
+        )
+
+    artifacts = {
+        artifact.get("url"): artifact
+        for artifact in openchemlib.get("cdn_artifacts", [])
+        if isinstance(artifact, dict)
+    }
+    expected_artifacts = {
+        OPEN_CHEMLIB_MODULE_URL: (
+            "5978967b12e938208e8d36222370f88fd615a2b5ec83f02e435caab26f3f4cb3",
+            1097449,
+        ),
+        OPEN_CHEMLIB_RESOURCES_URL: (
+            "d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14",
+            1351963,
+        ),
+    }
+    if set(artifacts) != set(expected_artifacts):
+        raise LicenseCheckError("OpenChemLib manifest has unreviewed CDN URLs")
+    for url, (digest, size) in expected_artifacts.items():
+        artifact = artifacts[url]
+        if (
+            artifact.get("sha256") != digest
+            or artifact.get("size_bytes") != size
+            or artifact.get("redistributed_by_gpuxtb") is not False
+        ):
+            raise LicenseCheckError(f"OpenChemLib manifest has unreviewed bytes: {url}")
+
+    resource_payload = openchemlib.get("resource_payload", {})
+    groups = resource_payload.get("groups", [])
+    resource_paths = [
+        path
+        for group in groups
+        if isinstance(group, dict)
+        for path in group.get("paths", [])
+    ]
+    if (
+        resource_payload.get("entry_count") != 35
+        or len(resource_paths) != 35
+        or len(set(resource_paths)) != 35
+        or not any("toxpredictor" in path for path in resource_paths)
+        or not any("druglikeness" in path for path in resource_paths)
+        or not any("forcefield/mmff94" in path for path in resource_paths)
+        or not any("/cod/" in path for path in resource_paths)
+    ):
+        raise LicenseCheckError("OpenChemLib resource inventory is incomplete")
+
+    smiles_helpers = (root / "web/smiles_helpers.js").read_text(encoding="utf-8")
+    smiles_worker = (root / "web/smiles_worker.js").read_text(encoding="utf-8")
+    for token in (
+        OPEN_CHEMLIB_VERSION,
+        OPEN_CHEMLIB_MODULE_URL,
+        OPEN_CHEMLIB_RESOURCES_URL,
+    ):
+        if token not in smiles_helpers:
+            raise LicenseCheckError(
+                f"SMILES helper omits pinned OpenChemLib token: {token}"
+            )
+    if "Resources.registerFromUrl(OPEN_CHEMLIB_RESOURCES_URL)" not in smiles_worker:
+        raise LicenseCheckError(
+            "SMILES worker does not register the pinned resources URL"
+        )
+    if re.search(r"openchemlib@(?:latest|[^\"'`]*\+esm)", smiles_helpers):
+        raise LicenseCheckError("SMILES helper uses a floating/transformed CDN URL")
 
     array_compat_license = (root / ARRAY_API_COMPAT_LICENSE).read_text(encoding="utf-8")
     for token in (
@@ -685,6 +797,7 @@ def check_web_site(site: Path, source_root: Path | None = None) -> None:
         f'href="{EXCEPTION_FILE}"',
         "https://jinzhezeng.group/gpuxtb/",
         "https://github.com/jinzhezenggroup/gpuxtb",
+        'href="LICENSES/openchemlib-BSD-3-Clause.txt"',
     ):
         if token not in index:
             raise LicenseCheckError(f"web site index does not expose {token}")

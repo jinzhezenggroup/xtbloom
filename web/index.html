@@ -39,6 +39,25 @@
       </div>
     </div>
 
+    <div class="field smiles-field" id="smiles-field">
+      <label for="smiles" data-i18n="smiles_label">SMILES → 三维结构</label>
+      <div class="smiles-row">
+        <input
+          id="smiles"
+          type="text"
+          maxlength="2048"
+          spellcheck="false"
+          autocomplete="off"
+          data-i18n-placeholder="smiles_placeholder"
+          placeholder="例如：CCO 或 c1ccccc1">
+        <button class="btn btn-secondary smiles-button" id="smiles-generate" disabled>
+          <span class="mini-spinner" id="smiles-spinner" aria-hidden="true"></span>
+          <span id="smiles-button-text">正在下载…</span>
+        </button>
+      </div>
+      <div class="hint smiles-status" id="smiles-status" role="status" aria-live="polite"></div>
+    </div>
+
     <div class="field">
       <label for="xyz" data-i18n="xyz_label">坐标（XYZ，单位：埃 Å）</label>
       <textarea id="xyz" spellcheck="false" rows="12" data-i18n-placeholder="xyz_placeholder" placeholder="每行：元素符号 x y z&#10;O  0.00000000  0.00000000  0.00000000&#10;H  0.00000000  0.00000000  0.95720000&#10;H  0.00000000  0.75718000 -0.58552000"></textarea>
@@ -188,13 +207,13 @@
 <section class="card roadmap">
   <h2 class="panel-title" data-i18n="roadmap">路线图</h2>
   <div class="roadmap-grid">
-    <div class="roadmap-item disabled" title="">
+    <div class="roadmap-item" title="">
       <span class="rm-emoji">🧪</span>
       <div>
-        <div class="rm-title"><span data-i18n="roadmap_smiles_title">SMILES → 结构</span> <span class="tag" data-i18n="tag_pending">暂不实现</span></div>
-        <div class="rm-desc" data-i18n="roadmap_smiles_desc">输入 SMILES 自动生成三维坐标，然后直接计算。</div>
+        <div class="rm-title"><span data-i18n="roadmap_smiles_title">SMILES → 结构</span> <span class="tag tag-good" data-i18n="tag_done">已支持</span></div>
+        <div class="rm-desc" data-i18n="roadmap_smiles_desc">输入 SMILES，生成显式氢三维构象并进行 MMFF94 预优化。</div>
       </div>
-      <button class="btn" id="smiles-alert" data-i18n="btn_pending">即将推出</button>
+      <a class="btn" href="#smiles-field" data-i18n="smiles_go" style="text-align:center">去生成</a>
     </div>
     <div class="roadmap-item" title="">
       <span class="rm-emoji">🎯</span>
@@ -210,12 +229,13 @@
 <footer class="footer">
   <p data-i18n="footer">
     由 gpuxtb 驱动 —— 同一套 C ABI 的 C++17 原生库编译为不依赖 Memory64 的 wasm32，面向支持 WebAssembly 与模块 Worker 的现代浏览器。
-    BLAS/LAPACK 层为演示用最小实现，经 numpy 与原生 gpuxtb 逐位验证。仅供演示，非科学计算生产环境。
+    可选的 SMILES 三维结构由固定版本的 OpenChemLib 生成并以 MMFF94 预优化。BLAS/LAPACK 层为演示用最小实现。仅供演示，非科学计算生产环境。
   </p>
   <p class="legal-links">
     <a href="https://jinzhezeng.group/gpuxtb/">Web demo</a> ·
     <a href="LICENSE">GPL-3.0-or-later</a> ·
     <a href="THIRD_PARTY_NOTICES.md">Third-party notices</a> ·
+    <a href="LICENSES/openchemlib-BSD-3-Clause.txt">OpenChemLib license</a> ·
     <a href="CUDA_MKL_LINKING_EXCEPTION">Additional permission</a> ·
     <a href="https://github.com/jinzhezenggroup/gpuxtb">Source</a>
   </p>
