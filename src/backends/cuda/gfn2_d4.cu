@@ -2303,16 +2303,17 @@ cudaError_t check_launch() { return cudaPeekAtLastError(); }
  * Host-side gate for the D4 ATM multi-block split. The sub-kernels exist so a
  * large single system is not limited to one 256-thread block (one SM) for its
  * O(N^3) triple loop. The split is enabled only when it cannot regress the
- * existing path: a single system (or one with far fewer peers than the block
- * count we would launch) that is big enough to make the parallelism worth it.
+ * existing path: every ragged member must be big enough to make the parallelism
+ * worth it. Setup records that minimum from the canonical host topology, so the
+ * gate never needs to inspect device offsets or synchronize the stream.
  *
  * The returned value is blocks-per-system (>= 1). A value of 1 keeps the
- * historical single-block kernels byte-for-byte, which is exactly what every
- * existing high-batch-size workload observes. When blocks_per_system > 1 the
- * launchers below use the deterministic partial/reduce and atomic split
- * kernels instead. The partial buffer lives in workspace.atom_scratch, which
- * is sized to total_atoms and is otherwise unused by the ATM energy path, so
- * batch_size * blocks_per_system must never exceed atom_elements.
+ * historical single-block kernels byte-for-byte for ineligible topologies.
+ * When blocks_per_system > 1 the launchers below use the deterministic
+ * partial/reduce and atomic split kernels instead. The partial buffer lives in
+ * workspace.atom_scratch, which is sized to total_atoms and is otherwise
+ * unused by the ATM energy path, so batch_size * blocks_per_system must never
+ * exceed atom_elements.
  */
 std::int32_t atm_split_blocks_per_system(const Gfn2D4DeviceBatch& batch,
                                          const Gfn2D4DeviceWorkspace& workspace) noexcept {
@@ -2320,7 +2321,7 @@ std::int32_t atm_split_blocks_per_system(const Gfn2D4DeviceBatch& batch,
       batch.batch_size > 65535) {
     return 1;
   }
-  const std::int64_t atoms_per_system = batch.total_atoms / batch.batch_size;
+  const std::int64_t minimum_atoms_per_system = batch.minimum_atoms_per_system;
   /* A 62-atom alkane already makes the triple loop the dominant D4 kernel;
    * this threshold keeps every existing small-system path unchanged. */
   constexpr std::int64_t kMinimumAtomsPerSystem = 40;
@@ -2328,21 +2329,17 @@ std::int32_t atm_split_blocks_per_system(const Gfn2D4DeviceBatch& batch,
    * launching more than this many blocks per system adds overhead faster than
    * it recovers parallelism for GFN2-sized molecules. */
   constexpr std::int32_t kMaximumBlocksPerSystem = 64;
-  if (atoms_per_system < kMinimumAtomsPerSystem) {
+  if (minimum_atoms_per_system < kMinimumAtomsPerSystem) {
     return 1;
   }
   /* Cap so the per-system partials fit inside the caller-owned atom scratch
    * (batch_size * blocks_per_system <= total_atoms) and the launch stays in
    * the 2D grid limits. The estimate spreads ~8 atoms per extra block. */
   constexpr std::int32_t kAtomsPerBlock = 8;
-  std::int32_t requested =
-      static_cast<std::int32_t>((atoms_per_system + kAtomsPerBlock - 1) / kAtomsPerBlock);
-  if (requested < 1) {
-    requested = 1;
-  }
-  if (requested > kMaximumBlocksPerSystem) {
-    requested = kMaximumBlocksPerSystem;
-  }
+  const std::int64_t requested_blocks = minimum_atoms_per_system / kAtomsPerBlock +
+                                        (minimum_atoms_per_system % kAtomsPerBlock == 0 ? 0 : 1);
+  std::int32_t requested = static_cast<std::int32_t>(
+      requested_blocks > kMaximumBlocksPerSystem ? kMaximumBlocksPerSystem : requested_blocks);
   const std::int64_t capacity = workspace.atom_elements / batch.batch_size;
   if (requested > capacity) {
     requested = static_cast<std::int32_t>(capacity);
@@ -2943,6 +2940,11 @@ cudaError_t add_gfn2_d4_atm_gradient_cuda(const Gfn2D4DeviceBatch& batch,
 }
 
 #if defined(GPUXTB_CUDA_TEST_HOOKS)
+std::int32_t test_gfn2_d4_atm_split_blocks_per_system(
+    const Gfn2D4DeviceBatch& batch, const Gfn2D4DeviceWorkspace& workspace) noexcept {
+  return atm_split_blocks_per_system(batch, workspace);
+}
+
 cudaError_t test_gfn2_d4_atm_reduction_cuda(const Gfn2D4DeviceBatch& batch,
                                             const double* finite_values, double* energies,
                                             const Gfn2D4DeviceWorkspace& workspace,

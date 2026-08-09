@@ -24,6 +24,8 @@
 #define CUDA_CHECK(expression) CHECK((expression) == cudaSuccess)
 
 namespace gpuxtb::detail::cuda {
+std::int32_t test_gfn2_d4_atm_split_blocks_per_system(
+    const Gfn2D4DeviceBatch& batch, const Gfn2D4DeviceWorkspace& workspace) noexcept;
 cudaError_t test_gfn2_d4_atm_reduction_cuda(const Gfn2D4DeviceBatch& batch,
                                             const double* finite_values, double* energies,
                                             const Gfn2D4DeviceWorkspace& workspace,
@@ -263,6 +265,12 @@ struct DeviceFixture {
 
     const std::uint64_t token =
         static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(host_plan.identity()));
+    std::int64_t minimum_atoms = std::numeric_limits<std::int64_t>::max();
+    for (std::size_t system = 0; system < batch_count; ++system) {
+      minimum_atoms =
+          std::min(minimum_atoms, static_cast<std::int64_t>(host_atom_offsets[system + 1u]) -
+                                      static_cast<std::int64_t>(host_atom_offsets[system]));
+    }
     batch = {static_cast<std::int64_t>(batch_count),
              static_cast<std::int64_t>(atom_count),
              host_plan.total_pairs(),
@@ -271,7 +279,8 @@ struct DeviceFixture {
                  host_atomic_numbers.data(), static_cast<std::int64_t>(atom_count)),
              atom_offsets.get(),
              pair_offsets.get(),
-             atomic_numbers.get()};
+             atomic_numbers.get(),
+             minimum_atoms};
     parameters = {
         elements.get(),     static_cast<std::int64_t>(host_elements.size()),
         references.get(),   static_cast<std::int64_t>(host_references.size()),
@@ -1033,6 +1042,30 @@ int test_atm_split_path_large_single_system() {
   return 0;
 }
 
+int test_atm_split_dispatch_gate() {
+  Gfn2D4DeviceBatch batch{};
+  Gfn2D4DeviceWorkspace workspace{};
+  batch.batch_size = 1;
+  batch.total_atoms = 62;
+  batch.minimum_atoms_per_system = 62;
+  workspace.atom_elements = 62;
+  CHECK(gpuxtb::detail::cuda::test_gfn2_d4_atm_split_blocks_per_system(batch, workspace) == 8);
+
+  /* The average reaches the threshold, but one ragged peer does not. */
+  batch.batch_size = 2;
+  batch.total_atoms = 80;
+  batch.minimum_atoms_per_system = 39;
+  workspace.atom_elements = 80;
+  CHECK(gpuxtb::detail::cuda::test_gfn2_d4_atm_split_blocks_per_system(batch, workspace) == 1);
+
+  batch.minimum_atoms_per_system = 40;
+  CHECK(gpuxtb::detail::cuda::test_gfn2_d4_atm_split_blocks_per_system(batch, workspace) == 5);
+
+  batch.batch_size = 65536;
+  CHECK(gpuxtb::detail::cuda::test_gfn2_d4_atm_split_blocks_per_system(batch, workspace) == 1);
+  return 0;
+}
+
 int test_empty_and_singleton_systems() {
   constexpr std::array<std::int64_t, 5> atom_offsets{0, 0, 1, 1, 2};
   constexpr std::array<std::int32_t, 2> atomic_numbers{1, 8};
@@ -1768,6 +1801,10 @@ int main() {
   }
   if (const int status = test_atm_split_path_large_single_system(); status != 0) {
     std::cerr << "CUDA D4 ATM split-path large-system test failed at line " << status << '\n';
+    return status;
+  }
+  if (const int status = test_atm_split_dispatch_gate(); status != 0) {
+    std::cerr << "CUDA D4 ATM split dispatch-gate test failed at line " << status << '\n';
     return status;
   }
   if (const int status = test_empty_and_singleton_systems(); status != 0) {
