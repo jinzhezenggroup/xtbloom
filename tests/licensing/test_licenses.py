@@ -132,6 +132,7 @@ class WebSiteLicenseTests(unittest.TestCase):
         (root / "index.html").write_text(
             '<a href="LICENSE">license</a>\n'
             '<a href="THIRD_PARTY_NOTICES.md">notices</a>\n'
+            '<a href="LICENSES/openchemlib-BSD-3-Clause.txt">OpenChemLib</a>\n'
             '<a href="CUDA_MKL_LINKING_EXCEPTION">permission</a>\n'
             '<a href="https://jinzhezeng.group/gpuxtb/">demo</a>\n'
             '<a href="https://github.com/jinzhezenggroup/gpuxtb">source</a>\n',
@@ -161,6 +162,24 @@ class WebSiteLicenseTests(unittest.TestCase):
             self._write_valid_site(root)
             (root / "LICENSES/pako-Zlib.txt").unlink()
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "pako-Zlib"):
+                CHECKER.check_web_site(root, REPOSITORY)
+
+    def test_web_site_requires_openchemlib_license(self) -> None:
+        """Retain the BSD grant for the runtime-provided SMILES dependency."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / CHECKER.OPEN_CHEMLIB_LICENSE).unlink()
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "openchemlib"):
+                CHECKER.check_web_site(root, REPOSITORY)
+
+    def test_web_site_requires_openchemlib_provenance(self) -> None:
+        """Retain exact CDN hashes and revisions beside the deployed adapter."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / "provenance/openchemlib_manifest.json").unlink()
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "openchemlib"):
                 CHECKER.check_web_site(root, REPOSITORY)
 
     def test_web_site_rejects_raw_lapack_side_module(self) -> None:
