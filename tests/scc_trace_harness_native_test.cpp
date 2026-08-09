@@ -46,6 +46,14 @@ std::string spec_path(const char* name) {
   return std::string(GPUXTB_SCC_TRACE_SPEC_DIR) + "/" + name + ".spec";
 }
 
+CaseSpec corpus_spec(const char* name, std::string& err) {
+  CaseSpec spec;
+  if (!load_spec(spec_path(name), spec, err)) {
+    throw std::runtime_error(err);
+  }
+  return spec;
+}
+
 bool load(std::vector<CaseSpec>& specs, const std::vector<std::string>& names, std::string& err) {
   for (const std::string& name : names) {
     CaseSpec spec;
@@ -146,6 +154,44 @@ int test_early_convergence_freezes_while_peers_advance() {
   return 0;
 }
 
+int test_case_spec_iteration_cap_is_honored() {
+  std::string err;
+  CaseSpec capped = corpus_spec("h3_plus", err);
+  capped.maximum_iterations = 2;
+  TraceBatch batch;
+  batch.add_case(capped);
+  if (gpuxtb_status_t s = batch.build(err); s != GPUXTB_STATUS_SUCCESS) {
+    std::cerr << "cap build failed: " << err << "\n";
+    return 1;
+  }
+  if (gpuxtb_status_t s = batch.run(err);
+      s != GPUXTB_STATUS_SUCCESS && s != GPUXTB_STATUS_SCC_NOT_CONVERGED) {
+    std::cerr << "cap run failed: " << err << "\n";
+    return 1;
+  }
+  // A two-iteration cap must terminate h3_plus as not-converged at exactly two
+  // iterations instead of continuing to convergence.
+  CHECK(batch.system_iterations(0) == 2u);
+  CHECK(batch.system_status(0) == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+  CHECK(!batch.system_converged(0));
+  std::cout << "case-spec iteration cap honored: PASS\n";
+  return 0;
+}
+
+int test_nonhomogeneous_batch_policy_is_rejected() {
+  std::string err;
+  CaseSpec hot = corpus_spec("h3_plus", err);
+  hot.temperature_kelvin = 30000.0;
+  TraceBatch batch;
+  batch.add_case(corpus_spec("h3_plus", err));
+  batch.add_case(hot);
+  gpuxtb_status_t s = batch.build(err);
+  CHECK(s != GPUXTB_STATUS_SUCCESS);
+  CHECK(err.find("numerical policy") != std::string::npos);
+  std::cout << "nonhomogeneous batch policy rejected: PASS\n";
+  return 0;
+}
+
 int test_failure_lane_is_isolated_from_peers() {
   std::string err;
   std::vector<CaseSpec> specs;
@@ -193,6 +239,12 @@ int main() {
     return 1;
   }
   if (test_failure_lane_is_isolated_from_peers() != 0) {
+    return 1;
+  }
+  if (test_case_spec_iteration_cap_is_honored() != 0) {
+    return 1;
+  }
+  if (test_nonhomogeneous_batch_policy_is_rejected() != 0) {
     return 1;
   }
   return 0;

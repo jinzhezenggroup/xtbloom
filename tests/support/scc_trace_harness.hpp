@@ -208,6 +208,12 @@ class TraceBatch {
 
   void add_case(const CaseSpec& spec) { specs_.push_back(spec); }
 
+  // Every lane in one driver plan shares one numerical policy (temperature,
+  // mixer memory/damping, and the maximum-iteration cap).  Emitting a lane
+  // whose spec declares a different policy than the one the plan actually ran
+  // would be dishonest trace evidence, so reject such batches at build time.
+  gpuxtb_status_t validate_policy_homogeneity(std::string& err) const;
+
   gpuxtb_status_t build(std::string& err);
   // Write NaN into the H0 slice of one system so its next preparation phase
   // fails per-system without touching peers (controlled failure-isolation
@@ -544,9 +550,12 @@ gpuxtb_status_t TraceBatch::build_stage(const CaseSpec& reference, std::string& 
       make_scc_mixer_plan(g.layout, reference.mixer_memory, reference.mixer_damping,
                           kTbliteRmsTolerance, kTbliteRmsTolerance, stage->mixer_plan, err);
   if (s) return s;
+  // Honor the case-spec maximum-iteration cap exactly so a deliberately
+  // nonconverged or capped trace reaches the same terminal state as the
+  // oracle instead of silently continuing to the harness safety ceiling.
   s = make_scc_driver_plan(g.layout, g.mulliken_plan, g.es2_plan, g.es3_plan, g.aes2_plan,
                            g.eig_plan, stage->mixer_plan, &g.d4_plan, nullptr,
-                           kMaximumHarnessIterations,
+                           static_cast<std::uint64_t>(reference.maximum_iterations),
                            reference.temperature_kelvin * kKelvinToHartree, kTbliteEnergyTolerance,
                            stage->driver_plan, err);
   if (s) return s;
@@ -578,9 +587,37 @@ gpuxtb_status_t TraceBatch::build_stage(const CaseSpec& reference, std::string& 
 }
 
 gpuxtb_status_t TraceBatch::build(std::string& err) {
-  gpuxtb_status_t s = build_geometry(err);
+  gpuxtb_status_t s = validate_policy_homogeneity(err);
+  if (s != GPUXTB_STATUS_SUCCESS) {
+    return s;
+  }
+  s = build_geometry(err);
   if (s) return s;
   return build_stage(specs_.front(), err);
+}
+
+gpuxtb_status_t TraceBatch::validate_policy_homogeneity(std::string& err) const {
+  if (specs_.empty()) {
+    err = "trace harness needs at least one case";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  const CaseSpec& reference = specs_.front();
+  for (std::size_t index = 1u; index < specs_.size(); ++index) {
+    const CaseSpec& candidate = specs_[index];
+    const bool same_policy = candidate.mixer_memory == reference.mixer_memory &&
+                             candidate.mixer_damping == reference.mixer_damping &&
+                             candidate.maximum_iterations == reference.maximum_iterations &&
+                             candidate.temperature_kelvin == reference.temperature_kelvin;
+    if (!same_policy) {
+      err =
+          "ragged batch cases must share one numerical policy (temperature, "
+          "mixer memory/damping, maximum iterations); lane " +
+          std::to_string(index) + " differs";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+  }
+  err.clear();
+  return GPUXTB_STATUS_SUCCESS;
 }
 
 void TraceBatch::poison_h0(std::int64_t system) {
@@ -878,7 +915,11 @@ void TraceBatch::record_iteration_snapshots() {
       }
     }
 
-    row.energy = st.driver_state.internal_energies[system];
+    // The trace "energy" is tblite's sum(eelec), which is the electronic
+    // Helmholtz free energy (band energy plus -kT*S); record the driver's
+    // published free energy so a finite-temperature golden with fractional
+    // occupations matches.  free_energy_changes is the corresponding delta.
+    row.energy = st.driver_state.free_energies[system];
     row.energy_delta = st.driver_state.free_energy_changes[system];
     row.residual_rms = st.drv_ws.staged_mixer_state.residual_rms[system];
     row.econv = std::abs(row.energy_delta) < st.driver_plan.energy_tolerance() ? 1 : 0;
