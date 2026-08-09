@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import csv
+import ctypes
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from benchmarks import run
-from benchmarks.tblite_adapter import TbliteAdapter, TbliteState
-from benchmarks.xtb_adapter import XtbAdapter, XtbState
+from benchmarks.tblite_adapter import TbliteAdapter, TbliteError, TbliteState
+from benchmarks.xtb_adapter import XtbAdapter, XtbError, XtbState
 
 
 class HarnessTest(unittest.TestCase):
@@ -136,6 +138,88 @@ class HarnessTest(unittest.TestCase):
         self.assertEqual(output["energies_hartree"], [-3.0])
         self.assertEqual(output["forces_hartree_per_bohr"], [-1.0, 2.0, -3.0])
         self.assertEqual(output["atomic_charges_e"], [0.25, -0.25])
+
+    def test_xtb_restart_failure_clears_owned_handles(self) -> None:
+        """A failed cold rebuild must not leave double-freeable xTB handles."""
+        adapter = object.__new__(XtbAdapter)
+        adapter.accuracy = 1.0e-4
+        adapter.max_iterations = 500
+        adapter.electronic_temperature_kelvin = 300.0
+        adapter.library = SimpleNamespace(
+            xtb_delResults=mock.Mock(),
+            xtb_delCalculator=mock.Mock(),
+            xtb_delMolecule=mock.Mock(),
+            xtb_delEnvironment=mock.Mock(),
+            xtb_newCalculator=mock.Mock(return_value=101),
+            xtb_newResults=mock.Mock(return_value=0),
+        )
+        adapter.states = [
+            XtbState(
+                environment=ctypes.c_void_p(1),
+                molecule=ctypes.c_void_p(2),
+                calculator=ctypes.c_void_p(3),
+                result=ctypes.c_void_p(4),
+                positions=None,
+                energy=ctypes.c_double(),
+                gradient=None,
+                point_gradient=None,
+                has_external_charges=False,
+                point_count=None,
+                point_numbers=None,
+                point_charges=None,
+                point_positions=None,
+                keepalive=(),
+            )
+        ]
+        state = adapter.states[0]
+        with self.assertRaisesRegex(XtbError, "allocation returned NULL"):
+            adapter.restart_scc()
+        self.assertFalse(state.calculator)
+        self.assertFalse(state.result)
+        self.assertEqual(adapter.library.xtb_delCalculator.call_count, 2)
+        self.assertEqual(adapter.library.xtb_delResults.call_count, 1)
+        adapter.close()
+        self.assertEqual(adapter.library.xtb_delCalculator.call_count, 2)
+        self.assertEqual(adapter.library.xtb_delResults.call_count, 1)
+
+    def test_tblite_restart_failure_clears_owned_handles(self) -> None:
+        """A failed cold rebuild must not leave double-freeable tblite handles."""
+        adapter = object.__new__(TbliteAdapter)
+        adapter.library = SimpleNamespace(
+            tblite_delete_result=mock.Mock(),
+            tblite_delete_calculator=mock.Mock(),
+            tblite_delete_structure=mock.Mock(),
+            tblite_delete_context=mock.Mock(),
+            tblite_delete_error=mock.Mock(),
+            tblite_new_gfn2_calculator=mock.Mock(return_value=101),
+            tblite_new_result=mock.Mock(return_value=0),
+        )
+        adapter._check_context = mock.Mock()
+        adapter._configure_calculator = mock.Mock()
+        adapter.states = [
+            TbliteState(
+                error=ctypes.c_void_p(1),
+                context=ctypes.c_void_p(2),
+                structure=ctypes.c_void_p(3),
+                calculator=ctypes.c_void_p(4),
+                result=ctypes.c_void_p(5),
+                positions=None,
+                energy=ctypes.c_double(),
+                gradient=None,
+                charges=None,
+                keepalive=(),
+            )
+        ]
+        state = adapter.states[0]
+        with self.assertRaisesRegex(TbliteError, "allocation returned NULL"):
+            adapter.restart_scc()
+        self.assertFalse(state.calculator)
+        self.assertFalse(state.result)
+        self.assertEqual(adapter.library.tblite_delete_calculator.call_count, 2)
+        self.assertEqual(adapter.library.tblite_delete_result.call_count, 1)
+        adapter.close()
+        self.assertEqual(adapter.library.tblite_delete_calculator.call_count, 2)
+        self.assertEqual(adapter.library.tblite_delete_result.call_count, 1)
 
     def test_correctness_includes_qm_and_point_charge_forces(self) -> None:
         """Gate both QM and point-charge force vectors for QMMM workloads."""

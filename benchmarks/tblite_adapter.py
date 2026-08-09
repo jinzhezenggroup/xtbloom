@@ -354,18 +354,32 @@ class TbliteAdapter:
         of the warm continuation a persistent adapter would otherwise get.
         """
         for state in self.states:
-            _delete(self.library, "tblite_delete_result", state.result)
-            _delete(self.library, "tblite_delete_calculator", state.calculator)
-            calculator = ctypes.c_void_p(
-                self.library.tblite_new_gfn2_calculator(
-                    state.context, state.structure, None
+            old_result = state.result
+            old_calculator = state.calculator
+            state.result = ctypes.c_void_p()
+            state.calculator = ctypes.c_void_p()
+            _delete(self.library, "tblite_delete_result", old_result)
+            _delete(self.library, "tblite_delete_calculator", old_calculator)
+
+            calculator = ctypes.c_void_p()
+            result = ctypes.c_void_p()
+            try:
+                calculator = ctypes.c_void_p(
+                    self.library.tblite_new_gfn2_calculator(
+                        state.context, state.structure, None
+                    )
                 )
-            )
-            self._check_context(state.context, "tblite_new_gfn2_calculator")
-            self._configure_calculator(state.context, calculator)
-            result = ctypes.c_void_p(self.library.tblite_new_result())
-            if not calculator or not result:
-                raise TbliteError("tblite calculator/result allocation returned NULL")
+                self._check_context(state.context, "tblite_new_gfn2_calculator")
+                if not calculator:
+                    raise TbliteError("tblite calculator allocation returned NULL")
+                self._configure_calculator(state.context, calculator)
+                result = ctypes.c_void_p(self.library.tblite_new_result())
+                if not result:
+                    raise TbliteError("tblite result allocation returned NULL")
+            except BaseException:
+                _delete(self.library, "tblite_delete_result", result)
+                _delete(self.library, "tblite_delete_calculator", calculator)
+                raise
             state.calculator = calculator
             state.result = result
 

@@ -2,9 +2,10 @@
 """Cross-engine GFN2-xTB atom-count scaling benchmark with distinct systems.
 
 This runner measures public single-point GFN2-xTB inference latency. Context,
-calculator, descriptor, and cold-reset construction happen outside the timed
-region; the timed boundary begins immediately before the public inference call
-and ends after synchronous host-visible energy and force publication:
+calculator, and descriptor construction happen outside the timed region. For
+gpuxtb, xTB, and tblite, cold-reset/rebuild work is also outside timing; dxtb's
+required ``Calculator.reset()`` remains inside its public inference call. The
+timed boundary ends after synchronous host-visible energy and force publication:
 
 - ``gpuxtb`` CPU and CUDA through the committed ctypes conformance adapter
   (``gpuxtb_public_api``), exactly like ``natoms_scaling.py``;
@@ -15,10 +16,11 @@ For every molecule size and batch size the batch is built from *distinct*
 seeded thermal-like conformers of the same alkane stoichiometry (identical
 atomic numbers, slightly different coordinates), so an engine cannot win a
 batch row by reusing one identical geometry.  At batch size one the first slot
-keeps the clean ideal alkane geometry. The sweep therefore reports comparable
-per-call latency rather than process or calculator setup time. ``auto-warm``
-rows are WARM steady state after an untimed cold seed; ``cold`` rows clear
-electronic state before every timed inference call.
+keeps the clean ideal alkane geometry. The sweep reports per-call latency
+rather than process or calculator setup time. ``auto-warm`` rows are WARM
+steady state after an untimed cold seed for engines that expose continuation;
+dxtb remains cold. ``cold`` rows clear electronic state before every timed
+inference call.
 
 An optional MD-trajectory mode measures per-frame latency over a sequence of
 nearly identical frames (positions mutated in place through the persistent
@@ -37,20 +39,26 @@ from __future__ import annotations
 
 import argparse
 import array
+import base64
 import contextlib
 import csv
 import ctypes
 import hashlib
 import importlib
+import importlib.metadata
 import json
 import math
 import os
 import platform
 import random
+import resource
 import statistics
+import struct
 import subprocess
 import sys
+import tempfile
 import time
+import zlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -99,6 +107,8 @@ SUPPORTED_ENGINES = (
 DEFAULT_ENGINES = ("gpuxtb-cpu", "gpuxtb-cuda", "xtb", "tblite", "dxtb-cpu")
 CROSS_ENGINE_ENERGY_ATOL_HARTREE = 2.0e-3
 CROSS_ENGINE_FORCE_ATOL_HARTREE_PER_BOHR = 2.0e-3
+REPEATABILITY_ENERGY_ATOL_HARTREE = 1.0e-10
+REPEATABILITY_FORCE_ATOL_HARTREE_PER_BOHR = 1.0e-8
 PERTURB_SIGMA_BOHR = 0.02
 TRAJECTORY_STEP_SIGMA_BOHR = 0.01
 
@@ -157,6 +167,36 @@ def git_state(path: Path) -> dict[str, Any]:
     }
 
 
+def installed_distribution_identity(name: str) -> dict[str, Any] | None:
+    """Return hash-pinned metadata for one installed Python distribution.
+
+    Benchmark artifacts must remain reproducible when dxtb is consumed from
+    an installed wheel rather than a Git checkout. Hashing ``RECORD`` binds
+    the complete installed payload without copying a potentially
+    credential-bearing ``direct_url.json`` into public evidence.
+    """
+    try:
+        distribution = importlib.metadata.distribution(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    record_text = distribution.read_text("RECORD")
+    direct_url_text = distribution.read_text("direct_url.json")
+    return {
+        "name": distribution.metadata.get("Name") or name,
+        "version": distribution.version,
+        "record_sha256": (
+            hashlib.sha256(record_text.encode("utf-8")).hexdigest()
+            if record_text is not None
+            else None
+        ),
+        "direct_url_sha256": (
+            hashlib.sha256(direct_url_text.encode("utf-8")).hexdigest()
+            if direct_url_text is not None
+            else None
+        ),
+    }
+
+
 def run_text(command: Sequence[str]) -> str | None:
     """Run one diagnostic command and return stripped stdout or None."""
     try:
@@ -164,6 +204,43 @@ def run_text(command: Sequence[str]) -> str | None:
     except OSError:
         return None
     return completed.stdout.strip() or None
+
+
+def cmake_build_identity(library: Path) -> dict[str, Any] | None:
+    """Capture the selected build cache and compiler/toolkit identity."""
+    cache = library.resolve().parent / "CMakeCache.txt"
+    if not cache.is_file():
+        return None
+    selected_names = {
+        "CMAKE_BUILD_TYPE",
+        "CMAKE_CXX_COMPILER",
+        "CMAKE_CXX_FLAGS_RELEASE",
+        "CMAKE_CUDA_ARCHITECTURES",
+        "CMAKE_CUDA_COMPILER",
+        "GPUXTB_ENABLE_CUDA",
+        "GPUXTB_CPU_LINALG_LIBRARY",
+        "GPUXTB_MKL_RT_LIBRARY",
+    }
+    selected: dict[str, str] = {}
+    for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line or line.startswith(("#", "//")) or "=" not in line:
+            continue
+        key_and_type, value = line.split("=", maxsplit=1)
+        key = key_and_type.split(":", maxsplit=1)[0]
+        if key in selected_names:
+            selected[key] = value
+    cuda_compiler = selected.get("CMAKE_CUDA_COMPILER")
+    return {
+        "cache_path": str(cache),
+        "cache_sha256": sha256_file(cache),
+        "selected": selected,
+        "cxx_version": run_text(
+            (selected.get("CMAKE_CXX_COMPILER", "c++"), "--version")
+        ),
+        "cuda_compiler_version": (
+            run_text((cuda_compiler, "--version")) if cuda_compiler else None
+        ),
+    }
 
 
 def cpu_model() -> str | None:
@@ -553,6 +630,11 @@ class ReferenceRunner:
         else:
             raise BenchmarkError(f"unsupported reference engine: {engine}")
         self._dxtb_adapter = self.adapter if engine.startswith("dxtb") else None
+        # dxtb invalidates its autograd graph and result cache inside every
+        # measured invocation, so it has no public warm-continuation path
+        # equivalent to gpuxtb/xTB/tblite.
+        self.always_cold = self._dxtb_adapter is not None
+        self._published_output: dict[str, Any] | None = None
         states = getattr(self.adapter, "states", ())
         if self._dxtb_adapter is not None or not states:
             self._position_slices = []
@@ -592,9 +674,15 @@ class ReferenceRunner:
                 state.positions[index] = positions[3 * atom_begin + index]
 
     def invoke(self) -> None:
-        """Run one persistent logical batch inference."""
+        """Run through synchronous host-visible energy/force publication."""
         self.adapter.invoke()
-        if getattr(self.adapter, "backend", None) == "cuda":
+        if self._dxtb_adapter is not None:
+            # dxtb otherwise keeps outputs on the selected Torch device and
+            # would move them to host only after the timer. Include that
+            # unavoidable public-result publication to match the host-output
+            # boundary used by the other engines in this figure.
+            self._published_output = self.adapter.results()
+        elif getattr(self.adapter, "backend", None) == "cuda":
             self.adapter.synchronize()
 
     def restart_scc(self) -> None:
@@ -610,7 +698,11 @@ class ReferenceRunner:
 
     def snapshot(self) -> dict[str, Any]:
         """Normalize persistent reference results."""
-        output = self.adapter.results()
+        output = (
+            self._published_output
+            if self._published_output is not None
+            else self.adapter.results()
+        )
         return {
             "energies_hartree": list(output["energies_hartree"]),
             "forces_hartree_per_bohr": (
@@ -636,6 +728,53 @@ def _force_digest(values: Sequence[float]) -> str:
     return hashlib.sha256(packed.tobytes()).hexdigest()
 
 
+def encode_force_vector(values: Sequence[float]) -> dict[str, Any]:
+    """Encode a complete force vector as compressed portable binary64."""
+    numbers = array.array("d", (float(value) for value in values))
+    if sys.byteorder != "little":
+        numbers.byteswap()
+    raw = numbers.tobytes()
+    return {
+        "encoding": "zlib+base64",
+        "count": len(numbers),
+        "sha256_binary64_le": hashlib.sha256(raw).hexdigest(),
+        "data": base64.b64encode(zlib.compress(raw, level=9)).decode("ascii"),
+    }
+
+
+def decode_force_vector(row: dict[str, Any]) -> list[float] | None:
+    """Decode and validate a row's complete final force vector.
+
+    Plain lists remain accepted for development artifacts produced before the
+    compact schema-v2 representation was introduced.
+    """
+    plain = row.get("forces_hartree_per_bohr")
+    if isinstance(plain, list):
+        return [float(value) for value in plain]
+    encoded = row.get("forces_binary64_le_zlib_base64")
+    if not isinstance(encoded, dict) or encoded.get("encoding") != "zlib+base64":
+        return None
+    count = encoded.get("count")
+    digest = encoded.get("sha256_binary64_le")
+    data = encoded.get("data")
+    if type(count) is not int or count < 0 or not isinstance(digest, str):
+        raise BenchmarkError("encoded force vector has invalid metadata")
+    if not isinstance(data, str):
+        raise BenchmarkError("encoded force vector has no base64 payload")
+    try:
+        raw = zlib.decompress(base64.b64decode(data, validate=True))
+    except (ValueError, zlib.error) as exc:
+        raise BenchmarkError(f"encoded force vector is corrupt: {exc}") from exc
+    if len(raw) != count * struct.calcsize("<d"):
+        raise BenchmarkError("encoded force vector byte count is inconsistent")
+    if hashlib.sha256(raw).hexdigest() != digest:
+        raise BenchmarkError("encoded force vector digest mismatch")
+    values = [value[0] for value in struct.iter_unpack("<d", raw)]
+    if not all(math.isfinite(value) for value in values):
+        raise BenchmarkError("encoded force vector contains non-finite values")
+    return values
+
+
 def _max_abs_delta(left: Sequence[float], right: Sequence[float]) -> float:
     """Return the maximum absolute difference between equal-length vectors."""
     if len(left) != len(right):
@@ -652,25 +791,29 @@ def measure_cell(
     runner: Any,  # noqa: ANN401 - gpuxtb/xtb/tblite/dxtb adapter union
     protocol: tuple[int, int],
     cell: Cell,
-    energy_atol_hartree: float,
-    force_atol_hartree_per_bohr: float,
     start_policy: str = "auto-warm",
+    repeatability_energy_atol_hartree: float = REPEATABILITY_ENERGY_ATOL_HARTREE,
+    repeatability_force_atol_hartree_per_bohr: float = (
+        REPEATABILITY_FORCE_ATOL_HARTREE_PER_BOHR
+    ),
 ) -> dict[str, Any]:
     """Run warmups and measured samples and return a normalized row fragment.
 
     ``start_policy`` controls SCC restart semantics for every engine:
 
-    - ``auto-warm``: one untimed cold seed establishes state, then every timed
-      sample continues from that converged state (gpuxtb strict WARM;
-      xTB/tblite persistent warm state).
+    - ``auto-warm``: one untimed cold seed establishes state even when the
+      requested warmup count is zero, then every warmup and measured sample
+      continues from that state (gpuxtb strict WARM; xTB/tblite persistent
+      warm state). dxtb has no equivalent continuation and remains cold.
     - ``cold``: electronic state is cleared before every timed inference call
-      (gpuxtb FRESH; xTB/tblite calculator rebuild; dxtb reset). The reset or
-      rebuild itself is deliberately outside the timer, matching gpuxtb's
-      persistent-context boundary rather than claiming process/setup latency.
+      (gpuxtb FRESH; xTB/tblite calculator rebuild; dxtb reset). gpuxtb and
+      reference-C-API reset/rebuild work is outside the timer; dxtb's required
+      reset remains inside its measured public call.
     """
     warmups, repetitions = protocol
     gpuxtb_runner = hasattr(runner, "set_start_mode")
     restart = getattr(runner, "restart_scc", None)
+    always_cold = bool(getattr(runner, "always_cold", False))
 
     def cold_start() -> None:
         """Force a genuine cold start for whichever runner variant is active."""
@@ -679,10 +822,17 @@ def measure_cell(
         elif restart is not None:
             restart()
 
-    for warmup_index in range(warmups):
-        if start_policy == "auto-warm" and gpuxtb_runner:
-            runner.set_start_mode("fresh" if warmup_index == 0 else "warm")
-        elif start_policy == "cold":
+    if start_policy == "auto-warm" and not always_cold:
+        # The seed is a protocol step, not one of the optional warmups. Keep
+        # it explicit so ``--warmups 0`` still produces genuine WARM samples.
+        cold_start()
+        runner.invoke()
+
+    for _ in range(warmups):
+        if start_policy == "auto-warm" and not always_cold:
+            if gpuxtb_runner:
+                runner.set_start_mode("warm")
+        else:
             cold_start()
         runner.invoke()
     raw_samples: list[dict[str, Any]] = []
@@ -690,7 +840,7 @@ def measure_cell(
     expected_energy_count = cell.batch_size
     expected_force_count = 3 * cell.natoms * cell.batch_size
     for sample_index in range(repetitions):
-        if start_policy == "auto-warm":
+        if start_policy == "auto-warm" and not always_cold:
             if gpuxtb_runner:
                 runner.set_start_mode("warm")
         else:
@@ -731,7 +881,10 @@ def measure_cell(
                 "per_system_status": snapshot["per_system_status"],
             }
         )
-    status_ok = all(
+    status_known = all(
+        sample.get("per_system_status") is not None for sample in raw_samples
+    )
+    status_ok = status_known and all(
         sample.get("per_system_status") is None
         or all(
             status == public_api.GPUXTB_STATUS_SUCCESS
@@ -739,7 +892,10 @@ def measure_cell(
         )
         for sample in raw_samples
     )
-    converged_ok = all(
+    convergence_known = all(
+        sample.get("scc_converged") is not None for sample in raw_samples
+    )
+    converged_ok = convergence_known and all(
         sample.get("scc_converged") is None
         or all(value == 1 for value in sample["scc_converged"])
         for sample in raw_samples
@@ -754,8 +910,8 @@ def measure_cell(
         _max_abs_delta(sample, force_reference) for sample in force_samples
     )
     repeatability_ok = (
-        energy_drift <= energy_atol_hartree
-        and force_drift <= force_atol_hartree_per_bohr
+        energy_drift <= repeatability_energy_atol_hartree
+        and force_drift <= repeatability_force_atol_hartree_per_bohr
     )
     latencies = [sample["latency_ms"] for sample in raw_samples]
     iteration_min = iteration_max = None
@@ -769,6 +925,16 @@ def measure_cell(
         iteration_min = min(iterations)
         iteration_max = max(iterations)
     fragment = {
+        "effective_start_policy": "cold" if always_cold else start_policy,
+        "state_preparation_timing": (
+            "inside_timed_invoke"
+            if always_cold
+            else (
+                "untimed_cold_seed_then_persistent"
+                if start_policy == "auto-warm"
+                else "untimed_reset_before_each_call"
+            )
+        ),
         "raw_samples": raw_samples,
         "timing": timing_summary(latencies, cell.batch_size),
         "energies_hartree": raw_samples[-1]["energies_hartree"],
@@ -776,17 +942,25 @@ def measure_cell(
         "iteration_summary": {"min": iteration_min, "max": iteration_max},
         "correctness": {
             "status": (
-                "pass" if (status_ok and converged_ok and repeatability_ok) else "fail"
+                "pass"
+                if (
+                    (status_ok or not status_known)
+                    and (converged_ok or not convergence_known)
+                    and repeatability_ok
+                )
+                else "fail"
             ),
             "finite_energies": True,
             "finite_forces": True,
             "force_value_count": expected_force_count,
-            "scc_converged_ok": converged_ok,
-            "scc_status_ok": status_ok,
+            "scc_converged_ok": converged_ok if convergence_known else None,
+            "scc_status_ok": status_ok if status_known else None,
             "repeatability": {
-                "energy_atol_hartree": energy_atol_hartree,
+                "energy_atol_hartree": repeatability_energy_atol_hartree,
                 "max_abs_energy_drift_hartree": energy_drift,
-                "force_atol_hartree_per_bohr": force_atol_hartree_per_bohr,
+                "force_atol_hartree_per_bohr": (
+                    repeatability_force_atol_hartree_per_bohr
+                ),
                 "max_abs_force_drift_hartree_per_bohr": force_drift,
             },
             "cross_engine": {"status": "not_requested"},
@@ -797,6 +971,12 @@ def measure_cell(
 
 def base_row(cell: Cell) -> dict[str, Any]:
     """Create stable identity fields shared by every row type."""
+    if cell.engine == "gpuxtb-cuda":
+        input_residency = "host_descriptor_staged_by_public_api"
+    elif cell.engine == "dxtb-cuda":
+        input_residency = "persistent_cuda_device_tensors"
+    else:
+        input_residency = "host"
     return {
         "engine": cell.engine,
         "natoms": cell.natoms,
@@ -804,6 +984,10 @@ def base_row(cell: Cell) -> dict[str, Any]:
         "total_atoms_in_batch": cell.natoms * cell.batch_size,
         "cpu_threads": cell.cpu_threads,
         "device_id": cell.device_id,
+        "requested_properties": ["energy", "forces"],
+        "workload_seed": cell.natoms * 1000 + cell.batch_size,
+        "input_residency": input_residency,
+        "output_residency_at_timing_boundary": "host_visible",
     }
 
 
@@ -833,6 +1017,10 @@ def load_reference_artifact(
         raise BenchmarkError(
             f"cannot read reference artifact {resolved}: {exc}"
         ) from exc
+    if document.get("schema_version") != SCHEMA_VERSION:
+        raise BenchmarkError(
+            f"reference artifact must use schema version {SCHEMA_VERSION}"
+        )
     metadata = document.get("metadata")
     if not isinstance(metadata, dict):
         raise BenchmarkError("reference artifact has no metadata object")
@@ -861,7 +1049,7 @@ def load_reference_artifact(
         if type(natoms) is not int or type(batch_size) is not int:
             raise BenchmarkError(f"reference row {index} has invalid coordinate")
         energies = row.get("energies_hartree")
-        forces = row.get("forces_hartree_per_bohr")
+        forces = decode_force_vector(row)
         if not isinstance(energies, list) or len(energies) != batch_size:
             raise BenchmarkError(f"reference row {index} has invalid energies")
         if not isinstance(forces, list) or len(forces) != 3 * natoms * batch_size:
@@ -873,7 +1061,9 @@ def load_reference_artifact(
         key = (natoms, batch_size)
         if key in rows:
             raise BenchmarkError(f"reference artifact duplicates coordinate {key}")
-        rows[key] = row
+        normalized_row = dict(row)
+        normalized_row["forces_hartree_per_bohr"] = forces
+        rows[key] = normalized_row
     if not rows:
         raise BenchmarkError("reference artifact has no qualified available rows")
     return ReferenceArtifact(
@@ -944,9 +1134,11 @@ def run_cell(
     dxtb_source: Path | None,
     warmups: int,
     repetitions: int,
-    energy_atol_hartree: float,
-    force_atol_hartree_per_bohr: float,
     start_policy: str = "auto-warm",
+    repeatability_energy_atol_hartree: float = REPEATABILITY_ENERGY_ATOL_HARTREE,
+    repeatability_force_atol_hartree_per_bohr: float = (
+        REPEATABILITY_FORCE_ATOL_HARTREE_PER_BOHR
+    ),
     scc_charge_tolerance: float = 1.0e-10,
     scc_energy_tolerance: float = 1.0e-12,
     scc_max_iterations: int = 500,
@@ -1015,10 +1207,22 @@ def run_cell(
             runner,
             (warmups, repetitions),
             cell,
-            energy_atol_hartree,
-            force_atol_hartree_per_bohr,
             start_policy,
+            repeatability_energy_atol_hartree,
+            repeatability_force_atol_hartree_per_bohr,
         )
+        adapter = getattr(runner, "adapter", None)
+        if adapter is not None:
+            module_path_text = getattr(adapter, "module_path", None)
+            module_path = Path(module_path_text) if module_path_text else None
+            fragment["runtime_identity"] = {
+                "api_version": getattr(adapter, "api_version", None),
+                "version": getattr(adapter, "version", None),
+                "torch_version": getattr(adapter, "torch_version", None),
+                "module_path": module_path_text,
+                "module_sha256": sha256_file(module_path),
+                "thread_control": getattr(adapter, "thread_control", None),
+            }
         row = base_row(cell)
         row.update(fragment)
         row["availability"] = "available"
@@ -1225,6 +1429,7 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
             "platform": platform.platform(),
             "gpuxtb_library": str(args.library.resolve()),
             "gpuxtb_library_sha256": sha256_file(args.library),
+            "gpuxtb_build": cmake_build_identity(args.library),
             "xtb_library": str(args.xtb_library.resolve())
             if args.xtb_library
             else None,
@@ -1234,6 +1439,10 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
             else None,
             "tblite_library_sha256": sha256_file(args.tblite_library),
             "dxtb_source": git_state(args.dxtb_source) if args.dxtb_source else None,
+            "python_distributions": {
+                name: installed_distribution_identity(name)
+                for name in ("dxtb", "torch", "tad-libcint")
+            },
             "reference_json": (
                 str(args.reference_json.resolve()) if args.reference_json else None
             ),
@@ -1244,6 +1453,13 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
             "cpu_model": cpu_model(),
             "logical_cpu_count": os.cpu_count(),
             "process_rss_bytes": current_rss_bytes(),
+            "peak_process_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            * 1024,
+            "process_cpu_affinity": (
+                sorted(os.sched_getaffinity(0))
+                if hasattr(os, "sched_getaffinity")
+                else None
+            ),
             "nvidia_smi": run_text(("nvidia-smi", "-L")),
             "gpu_memory_mib": run_text(
                 (
@@ -1276,6 +1492,10 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
             "start_policy": args.start_policy,
             "cross_engine_energy_atol_hartree": args.energy_atol,
             "cross_engine_force_atol_hartree_per_bohr": args.force_atol,
+            "repeatability_energy_atol_hartree": args.repeatability_energy_atol,
+            "repeatability_force_atol_hartree_per_bohr": (
+                args.repeatability_force_atol
+            ),
             "perturb_sigma_bohr": PERTURB_SIGMA_BOHR,
             "trajectory_step_sigma_bohr": TRAJECTORY_STEP_SIGMA_BOHR,
             "scc_max_iterations": args.scc_max_iterations,
@@ -1289,9 +1509,23 @@ def write_json(
     path: Path,
     document: Any,  # noqa: ANN401 - JSON-serializable benchmark document
 ) -> None:
-    """Write one JSON artifact with a trailing newline."""
+    """Write compact JSON while retaining every final force value exactly.
+
+    Decimal force arrays dominate large-batch evidence size. Encode each final
+    vector as compressed little-endian binary64 with its count and SHA-256;
+    :func:`load_reference_artifact` validates it before comparison.
+    """
+    encoded_document = dict(document)
+    encoded_rows: list[dict[str, Any]] = []
+    for row in document.get("rows", []):
+        encoded_row = dict(row)
+        forces = encoded_row.pop("forces_hartree_per_bohr", None)
+        if forces is not None:
+            encoded_row["forces_binary64_le_zlib_base64"] = encode_force_vector(forces)
+        encoded_rows.append(encoded_row)
+    encoded_document["rows"] = encoded_rows
     with path.open("w", encoding="utf-8") as handle:
-        json.dump(document, handle, indent=2, allow_nan=False)
+        json.dump(encoded_document, handle, indent=2, allow_nan=False)
         handle.write("\n")
 
 
@@ -1349,6 +1583,47 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                 "max_abs_force_delta_hartree_per_bohr"
             )
             writer.writerow(flat)
+
+
+def publish_artifacts(
+    json_path: Path,
+    csv_path: Path,
+    document: dict[str, Any],
+    rows: Sequence[dict[str, Any]],
+) -> None:
+    """Publish a JSON/CSV pair atomically and refuse stale destinations."""
+    if json_path.parent.resolve() != csv_path.parent.resolve():
+        raise BenchmarkError("JSON and CSV outputs must share one directory")
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    for path in (json_path, csv_path):
+        if path.exists():
+            raise BenchmarkError(f"refusing to overwrite existing artifact: {path}")
+    staging: list[Path] = []
+    published: list[Path] = []
+    try:
+        for final_path in (json_path, csv_path):
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{final_path.name}.",
+                suffix=".tmp",
+                dir=final_path.parent,
+            )
+            os.close(descriptor)
+            staging.append(Path(temporary_name))
+        write_json(staging[0], document)
+        write_csv(staging[1], rows)
+        for temporary_path, final_path in zip(
+            staging, (json_path, csv_path), strict=True
+        ):
+            os.replace(temporary_path, final_path)
+            published.append(final_path)
+    except BaseException:
+        for path in staging:
+            with contextlib.suppress(FileNotFoundError):
+                path.unlink()
+        for path in published:
+            with contextlib.suppress(FileNotFoundError):
+                path.unlink()
+        raise
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1424,6 +1699,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=CROSS_ENGINE_FORCE_ATOL_HARTREE_PER_BOHR,
     )
+    parser.add_argument(
+        "--repeatability-energy-atol",
+        type=float,
+        default=REPEATABILITY_ENERGY_ATOL_HARTREE,
+        help="within-engine identical-input energy repeatability gate",
+    )
+    parser.add_argument(
+        "--repeatability-force-atol",
+        type=float,
+        default=REPEATABILITY_FORCE_ATOL_HARTREE_PER_BOHR,
+        help="within-engine identical-input force repeatability gate",
+    )
     parser.add_argument("--cpu-threads", type=int, default=1)
     parser.add_argument(
         "--dxtb-cpu-threads",
@@ -1470,8 +1757,10 @@ def validate_arguments(args: argparse.Namespace) -> None:
     ):
         raise BenchmarkError("thread counts must be positive")
     for name, value in (
-        ("energy tolerance", args.energy_atol),
-        ("force tolerance", args.force_atol),
+        ("cross-engine energy tolerance", args.energy_atol),
+        ("cross-engine force tolerance", args.force_atol),
+        ("repeatability energy tolerance", args.repeatability_energy_atol),
+        ("repeatability force tolerance", args.repeatability_force_atol),
     ):
         if not math.isfinite(value) or value < 0.0:
             raise BenchmarkError(f"{name} must be finite and nonnegative")
@@ -1488,6 +1777,11 @@ def validate_arguments(args: argparse.Namespace) -> None:
             ) from exc
     if args.output_json == args.output_csv:
         raise BenchmarkError("JSON and CSV output paths must be distinct")
+    if args.output_json.parent.resolve() != args.output_csv.parent.resolve():
+        raise BenchmarkError("JSON and CSV outputs must share one directory")
+    for path in (args.output_json, args.output_csv):
+        if path.exists():
+            raise BenchmarkError(f"refusing to overwrite existing artifact: {path}")
     for natoms in args.natoms:
         try:
             make_alkane(natoms)
@@ -1511,6 +1805,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "publication evidence requires a clean repository; use "
                 "--allow-dirty-evidence only for diagnostics"
             )
+        if args.dxtb_source is not None:
+            dxtb_source_state = git_state(args.dxtb_source)
+            if not dxtb_source_state.get("head"):
+                raise BenchmarkError("--dxtb-source must be a versioned Git checkout")
+            if dxtb_source_state.get("dirty") and not args.allow_dirty_evidence:
+                raise BenchmarkError(
+                    "publication evidence requires a clean dxtb source checkout"
+                )
         reference = (
             load_reference_artifact(args.reference_json, args.allow_dirty_evidence)
             if args.reference_json is not None
@@ -1527,6 +1829,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ("warmups", args.warmups),
                 ("repetitions", args.repetitions),
                 ("start_policy", args.start_policy),
+                (
+                    "repeatability_energy_atol_hartree",
+                    args.repeatability_energy_atol,
+                ),
+                (
+                    "repeatability_force_atol_hartree_per_bohr",
+                    args.repeatability_force_atol,
+                ),
             ):
                 if reference_protocol.get(name) != expected:
                     raise BenchmarkError(
@@ -1569,9 +1879,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.dxtb_source,
                 args.warmups,
                 args.repetitions,
-                args.energy_atol,
-                args.force_atol,
                 start_policy=args.start_policy,
+                repeatability_energy_atol_hartree=args.repeatability_energy_atol,
+                repeatability_force_atol_hartree_per_bohr=(
+                    args.repeatability_force_atol
+                ),
                 scc_charge_tolerance=args.scc_charge_tolerance,
                 scc_energy_tolerance=args.scc_energy_tolerance,
                 scc_max_iterations=args.scc_max_iterations,
@@ -1659,8 +1971,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "metadata": environment_metadata(args),
             "rows": rows,
         }
-        write_json(args.output_json, document)
-        write_csv(args.output_csv, rows)
+        publish_artifacts(args.output_json, args.output_csv, document, rows)
     except (BenchmarkError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         return 2

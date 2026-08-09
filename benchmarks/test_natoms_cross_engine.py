@@ -32,6 +32,8 @@ def artifact_metadata(start_policy: str = "cold") -> dict[str, object]:
             "start_policy": start_policy,
             "cross_engine_energy_atol_hartree": 2.0e-3,
             "cross_engine_force_atol_hartree_per_bohr": 2.0e-3,
+            "repeatability_energy_atol_hartree": 1.0e-10,
+            "repeatability_force_atol_hartree_per_bohr": 1.0e-8,
             "scc_max_iterations": 500,
             "scc_charge_tolerance": 1.0e-4,
             "scc_energy_tolerance": 1.0e-4,
@@ -160,11 +162,19 @@ class NatomsCrossEngineTest(unittest.TestCase):
 
     def test_plot_merges_artifacts_and_draws_without_gpu(self) -> None:
         """Full plot path runs in Agg mode from synthetic artifacts."""
+        try:
+            import matplotlib  # noqa: F401
+        except ImportError:
+            self.skipTest("matplotlib is unavailable")
         rows = [
             {
                 "engine": engine,
                 "natoms": natoms,
                 "batch_size": batch_size,
+                "start_policy": ("auto-warm" if batch_size == 128 else "cold"),
+                "effective_start_policy": (
+                    "auto-warm" if batch_size == 128 else "cold"
+                ),
                 "availability": "available",
                 "timing": {"median_ms": float(batch_size * natoms)},
                 "correctness": qualified_correctness(engine),
@@ -173,44 +183,27 @@ class NatomsCrossEngineTest(unittest.TestCase):
             for natoms in (14, 32)
             for batch_size in (1, 128, 512)
         ]
-        rows.append(
-            {
-                "engine": "gpuxtb-cpu",
-                "natoms": 32,
-                "batch_size": 1,
-                "job": "trajectory",
-                "availability": "available",
-                "timing": {"median_ms": 0.5},
-                "correctness": qualified_correctness(),
-            }
-        )
-        rows.append(
-            {
-                "engine": "gpuxtb-cpu",
-                "natoms": 62,
-                "batch_size": 1,
-                "job": "trajectory",
-                "availability": "available",
-                "timing": {"median_ms": 1.0},
-                "correctness": qualified_correctness(),
-            }
-        )
-        rows.append(
-            {
-                "engine": "xtb",
-                "natoms": 62,
-                "batch_size": 1,
-                "job": "trajectory",
-                "availability": "available",
-                "timing": {"median_ms": 0.8},
-                "correctness": qualified_correctness("xtb"),
-            }
-        )
-        metadata = artifact_metadata()
         with tempfile.TemporaryDirectory() as directory:
-            artifact = Path(directory) / "matrix.json"
-            artifact.write_text(
-                json.dumps({"schema_version": 2, "metadata": metadata, "rows": rows}),
+            cold_artifact = Path(directory) / "cold.json"
+            cold_artifact.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "metadata": artifact_metadata("cold"),
+                        "rows": [row for row in rows if row["batch_size"] != 128],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            warm_artifact = Path(directory) / "warm.json"
+            warm_artifact.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "metadata": artifact_metadata("auto-warm"),
+                        "rows": [row for row in rows if row["batch_size"] == 128],
+                    }
+                ),
                 encoding="utf-8",
             )
             output = Path(directory) / "figure.png"
@@ -222,7 +215,9 @@ class NatomsCrossEngineTest(unittest.TestCase):
                     "-m",
                     "benchmarks.plot_natoms_cross_engine",
                     "--artifact",
-                    str(artifact),
+                    str(cold_artifact),
+                    "--artifact",
+                    str(warm_artifact),
                     "--output",
                     str(output),
                 ],
@@ -304,7 +299,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
             )
             legacy = dict(cold_loaded)
             legacy.pop("_artifact_start_policy", None)
-            self.assertTrue(plotters._cold_batch1_row(legacy))
+            self.assertFalse(plotters._cold_batch1_row(legacy))
 
     def test_measure_cell_retains_complete_force_evidence(self) -> None:
         """Every measured repetition hashes forces and retains the final vector."""
@@ -332,8 +327,6 @@ class NatomsCrossEngineTest(unittest.TestCase):
             FakeRunner(),
             (0, 2),
             nce.Cell("gpuxtb-cpu", 1, 1, 1, 0),
-            1.0e-8,
-            1.0e-8,
             "cold",
         )
         self.assertEqual(fragment["forces_hartree_per_bohr"], [0.1, -0.2, 0.3])
@@ -343,6 +336,177 @@ class NatomsCrossEngineTest(unittest.TestCase):
         for sample in fragment["raw_samples"]:
             self.assertEqual(sample["force_count"], 3)
             self.assertEqual(len(sample["forces_sha256_binary64_le"]), 64)
+
+    def test_auto_warm_seeds_even_without_optional_warmups(self) -> None:
+        """The untimed FRESH seed is independent of ``--warmups``."""
+
+        class FakeWarmRunner:
+            def __init__(self) -> None:
+                self.invocations = 0
+                self.modes: list[str] = []
+
+            def set_start_mode(self, mode: str) -> None:
+                self.modes.append(mode)
+
+            def invoke(self) -> None:
+                self.invocations += 1
+
+            def snapshot(self) -> dict[str, object]:
+                return {
+                    "energies_hartree": [-1.0],
+                    "forces_hartree_per_bohr": [0.0, 0.0, 0.0],
+                    "scc_iterations": [2],
+                    "scc_converged": [1],
+                    "per_system_status": [0],
+                }
+
+        runner = FakeWarmRunner()
+        fragment = nce.measure_cell(
+            runner,
+            (0, 1),
+            nce.Cell("gpuxtb-cpu", 1, 1, 1, 0),
+            "auto-warm",
+        )
+        self.assertEqual(runner.invocations, 2)
+        self.assertEqual(runner.modes, ["fresh", "warm"])
+        self.assertEqual(fragment["effective_start_policy"], "auto-warm")
+
+    def test_dxtb_policy_is_recorded_as_cold(self) -> None:
+        """A requested auto-warm row must expose dxtb's actual cold behavior."""
+
+        class FakeDxtbRunner:
+            always_cold = True
+
+            def __init__(self) -> None:
+                self.invocations = 0
+
+            def invoke(self) -> None:
+                self.invocations += 1
+
+            def snapshot(self) -> dict[str, object]:
+                return {
+                    "energies_hartree": [-1.0],
+                    "forces_hartree_per_bohr": [0.0, 0.0, 0.0],
+                    "scc_iterations": None,
+                    "scc_converged": None,
+                    "per_system_status": None,
+                }
+
+        runner = FakeDxtbRunner()
+        fragment = nce.measure_cell(
+            runner,
+            (0, 1),
+            nce.Cell("dxtb-cpu", 1, 1, 1, 0),
+            "auto-warm",
+        )
+        self.assertEqual(runner.invocations, 1)
+        self.assertEqual(fragment["effective_start_policy"], "cold")
+        self.assertEqual(fragment["state_preparation_timing"], "inside_timed_invoke")
+        self.assertIsNone(fragment["correctness"]["scc_converged_ok"])
+        self.assertIsNone(fragment["correctness"]["scc_status_ok"])
+
+    def test_force_vector_encoding_round_trips_through_reference_loader(self) -> None:
+        """Compressed binary64 forces remain complete and digest-validated."""
+        row = {
+            "engine": "xtb",
+            "natoms": 1,
+            "batch_size": 1,
+            "availability": "available",
+            "energies_hartree": [-1.0],
+            "forces_hartree_per_bohr": [0.1, -0.2, 0.3],
+            "correctness": qualified_correctness("xtb"),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reference.json"
+            nce.write_json(
+                path,
+                {"schema_version": 2, "metadata": artifact_metadata(), "rows": [row]},
+            )
+            document = json.loads(path.read_text(encoding="utf-8"))
+            encoded = document["rows"][0]["forces_binary64_le_zlib_base64"]
+            self.assertEqual(encoded["count"], 3)
+            self.assertNotIn("forces_hartree_per_bohr", document["rows"][0])
+            artifact = nce.load_reference_artifact(path)
+        self.assertEqual(
+            artifact.rows[(1, 1)]["forces_hartree_per_bohr"], [0.1, -0.2, 0.3]
+        )
+
+    def test_cross_engine_gate_checks_energy_and_force_vectors(self) -> None:
+        """Either observable exceeding its gate makes a timing row ineligible."""
+        reference = nce.ReferenceArtifact(
+            path=Path("reference.json"),
+            sha256="a" * 64,
+            metadata={},
+            rows={
+                (1, 1): {
+                    "energies_hartree": [-1.0],
+                    "forces_hartree_per_bohr": [0.1, -0.2, 0.3],
+                }
+            },
+        )
+        for energy, forces in (
+            (-0.99, [0.1, -0.2, 0.3]),
+            (-1.0, [0.1, -0.2, 0.31]),
+        ):
+            row = {
+                "engine": "gpuxtb-cpu",
+                "natoms": 1,
+                "batch_size": 1,
+                "availability": "available",
+                "energies_hartree": [energy],
+                "forces_hartree_per_bohr": forces,
+                "correctness": {"status": "pass"},
+            }
+            self.assertTrue(
+                nce.apply_cross_engine_reference(row, reference, 2.0e-3, 2.0e-3)
+            )
+            self.assertEqual(row["correctness"]["status"], "fail")
+            self.assertEqual(row["correctness"]["cross_engine"]["status"], "fail")
+
+    def test_panel_protocol_filter_rejects_mislabeled_artifacts(self) -> None:
+        """Each panel accepts only its named requested/effective start policy."""
+        base = {
+            "engine": "gpuxtb-cpu",
+            "job": None,
+            "start_policy": "auto-warm",
+            "effective_start_policy": "auto-warm",
+            "_artifact_start_policy": "auto-warm",
+        }
+        self.assertTrue(plotters._matches_panel_protocol(base, 128))
+        self.assertFalse(plotters._matches_panel_protocol(base, 512))
+        cold = dict(
+            base,
+            start_policy="cold",
+            effective_start_policy="cold",
+            _artifact_start_policy="cold",
+        )
+        self.assertTrue(plotters._matches_panel_protocol(cold, 512))
+        self.assertFalse(plotters._matches_panel_protocol(cold, 128))
+        dxtb = dict(base, engine="dxtb-cpu", effective_start_policy="cold")
+        self.assertTrue(plotters._matches_panel_protocol(dxtb, 128))
+
+    def test_figure_protocol_note_is_metadata_derived(self) -> None:
+        """Figure header must not silently hard-code publication settings."""
+        note = plotters._protocol_note(artifact_metadata())
+        self.assertIn("4 CPU threads", note)
+        self.assertIn("median of 3 runs", note)
+        self.assertIn("10⁻⁴", note)
+
+    def test_artifact_pair_refuses_overwrite(self) -> None:
+        """Publication must not replace a stale JSON/CSV pair."""
+        with tempfile.TemporaryDirectory() as directory:
+            json_path = Path(directory) / "matrix.json"
+            csv_path = Path(directory) / "matrix.csv"
+            json_path.write_text("stale\n", encoding="utf-8")
+            with self.assertRaisesRegex(nce.BenchmarkError, "refusing to overwrite"):
+                nce.publish_artifacts(
+                    json_path,
+                    csv_path,
+                    {"schema_version": 2, "metadata": {}, "rows": []},
+                    [],
+                )
+            self.assertEqual(json_path.read_text(encoding="utf-8"), "stale\n")
+            self.assertFalse(csv_path.exists())
 
     def test_measure_cell_rejects_missing_requested_forces(self) -> None:
         """A force benchmark cannot pass when an adapter omits force output."""
@@ -368,8 +532,6 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 MissingForceRunner(),
                 (0, 1),
                 nce.Cell("gpuxtb-cpu", 1, 1, 1, 0),
-                1.0e-8,
-                1.0e-8,
                 "cold",
             )
 
@@ -380,6 +542,9 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 "engine": engine,
                 "natoms": 62,
                 "batch_size": 128,
+                "start_policy": "auto-warm",
+                "effective_start_policy": "auto-warm",
+                "_artifact_start_policy": "auto-warm",
                 "availability": "available",
                 "timing": {"median_ms": latency},
                 "correctness": qualified_correctness(engine),

@@ -866,6 +866,7 @@ if(GPUXTB_BUILD_TESTS)
     NAME gpuxtb.benchmarks.self_test
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
       benchmarks.test_run benchmarks.test_natoms_scaling
+      benchmarks.test_natoms_cross_engine
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
 

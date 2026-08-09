@@ -36,12 +36,12 @@ class PlotError(RuntimeError):
 
 def _engine_label(engine: str) -> str:
     labels = {
-        "gpuxtb-cpu": "gpuxtb (CPU)",
-        "gpuxtb-cuda": "gpuxtb (CUDA)",
+        "gpuxtb-cpu": "gpuxtb CPU",
+        "gpuxtb-cuda": "gpuxtb CUDA†",
         "xtb": "xTB",
         "tblite": "tblite",
-        "dxtb-cpu": "dxtb (CPU)",
-        "dxtb-cuda": "dxtb (CUDA)",
+        "dxtb-cpu": "dxtb CPU",
+        "dxtb-cuda": "dxtb CUDA‡",
     }
     return labels.get(engine, engine)
 
@@ -119,6 +119,8 @@ def load_rows(
             protocol.get("repetitions"),
             protocol.get("cross_engine_energy_atol_hartree"),
             protocol.get("cross_engine_force_atol_hartree_per_bohr"),
+            protocol.get("repeatability_energy_atol_hartree"),
+            protocol.get("repeatability_force_atol_hartree_per_bohr"),
             protocol.get("scc_max_iterations"),
             protocol.get("scc_charge_tolerance"),
             protocol.get("scc_energy_tolerance"),
@@ -213,20 +215,87 @@ def _hardware_note(metadata: dict[str, Any]) -> str:
     return "  ·  ".join(pieces)
 
 
-def _cold_batch1_row(row: dict[str, Any]) -> bool:
-    """Decide whether a batch=1 row belongs in the cold-start panel.
+def _scientific_notation(value: float) -> str:
+    """Format a positive power-of-ten tolerance with Unicode superscripts."""
+    if value <= 0.0 or not math.isfinite(value):
+        raise PlotError("plot protocol tolerance must be finite and positive")
+    exponent = math.log10(value)
+    if not math.isclose(exponent, round(exponent), abs_tol=1.0e-10):
+        return f"{value:.1e}"
+    superscripts = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
+    return "10" + str(round(exponent)).translate(superscripts)
 
-    Accept only job-less rows that were not measured under an auto-warm start
-    policy.
 
-    Trajectory-mode invocations also run a steady-state batch=1 cell with
-    ``--start-policy auto-warm`` and emit that row without a ``job`` tag; the
-    artifact-level start policy distinguishes it from a genuine cold-start
-    sample.  Legacy artifacts without a recorded policy are treated as cold.
+def _protocol_note(metadata: dict[str, Any]) -> str:
+    """Derive the figure protocol line from validated artifact metadata."""
+    protocol = metadata.get("protocol") or {}
+    threads = metadata.get("threads") or {}
+    repetitions = protocol.get("repetitions")
+    cpu_threads = threads.get("cpu_threads")
+    charge_tolerance = protocol.get("scc_charge_tolerance")
+    energy_tolerance = protocol.get("scc_energy_tolerance")
+    if type(repetitions) is not int or repetitions <= 0:
+        raise PlotError("plot artifacts have an invalid repetition count")
+    if type(cpu_threads) is not int or cpu_threads <= 0:
+        raise PlotError("plot artifacts have an invalid CPU thread count")
+    if not isinstance(charge_tolerance, (int, float)) or not isinstance(
+        energy_tolerance, (int, float)
+    ):
+        raise PlotError("plot artifacts have incomplete SCC tolerances")
+    if math.isclose(float(charge_tolerance), float(energy_tolerance)):
+        tolerance_text = _scientific_notation(float(charge_tolerance))
+    else:
+        tolerance_text = (
+            f"q {_scientific_notation(float(charge_tolerance))} / "
+            f"E {_scientific_notation(float(energy_tolerance))}"
+        )
+    return (
+        f"Matched nominal SCC tolerance {tolerance_text}  ·  "
+        f"{cpu_threads} CPU threads per engine  ·  distinct alkane conformers  ·  "
+        f"median of {repetitions} runs"
+    )
+
+
+def _matches_panel_protocol(row: dict[str, Any], batch_size: int) -> bool:
+    """Accept only rows measured with the protocol named by one panel.
+
+    dxtb has no warm-continuation public path: it is intentionally accepted in
+    panel b only when the row records that its effective policy remained cold.
     """
-    if "job" in row:
+    expected = {1: "cold", 128: "auto-warm", 512: "cold"}.get(batch_size)
+    if expected is None or row.get("job") is not None:
         return False
-    return row.get("_artifact_start_policy", "cold") != "auto-warm"
+    artifact_policy = row.get("_artifact_start_policy")
+    requested_policy = row.get("start_policy", artifact_policy)
+    if artifact_policy != expected or requested_policy != expected:
+        return False
+    effective_policy = row.get("effective_start_policy")
+    if effective_policy is None:
+        effective_policy = (
+            "cold" if str(row.get("engine", "")).startswith("dxtb") else expected
+        )
+    if str(row.get("engine", "")).startswith("dxtb"):
+        return effective_policy == "cold"
+    return effective_policy == expected
+
+
+def _validate_panel_coverage(rows: list[dict[str, Any]]) -> None:
+    """Reject figures with an empty or protocol-mismatched named panel."""
+    for batch_size in (1, 128, 512):
+        if not any(
+            _is_eligible(row)
+            and row.get("batch_size") == batch_size
+            and _matches_panel_protocol(row, batch_size)
+            for row in rows
+        ):
+            raise PlotError(
+                f"artifact set has no eligible protocol-matched batch={batch_size} row"
+            )
+
+
+def _cold_batch1_row(row: dict[str, Any]) -> bool:
+    """Compatibility wrapper for focused batch=1 selection tests."""
+    return _matches_panel_protocol(row, 1)
 
 
 def _scaling_panel(
@@ -249,7 +318,7 @@ def _scaling_panel(
             if _is_eligible(row)
             and row.get("engine") == engine
             and row.get("batch_size") == batch_size
-            and (batch_size != 1 or _cold_batch1_row(row))
+            and _matches_panel_protocol(row, batch_size)
         ]
         qualified.sort(key=lambda row: row["natoms"])
         if not qualified:
@@ -361,7 +430,7 @@ def _speedup_range(
             and row.get("batch_size") == batch_size
             and row.get("natoms") == natoms
             and _is_eligible(row)
-            and (batch_size != 1 or _cold_batch1_row(row))
+            and _matches_panel_protocol(row, batch_size)
         ):
             median = _median_ms(row)
             if median is not None:
@@ -467,6 +536,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         rows, metadata = load_rows(args.artifact)
+        _validate_panel_coverage(rows)
+        protocol_note = _protocol_note(metadata)
     except PlotError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         return 2
@@ -510,7 +581,7 @@ def main(argv: list[str] | None = None) -> int:
         args.engines,
         "b",
         "Conformer throughput",
-        "batch = 128  ·  WARM (cold seed untimed)",
+        "batch = 128  ·  WARM after seed (dxtb cold)",
     )
     _scaling_panel(
         axes[2],
@@ -553,8 +624,7 @@ def main(argv: list[str] | None = None) -> int:
     fig.text(
         0.08,
         0.895,
-        "Matched nominal SCC accuracy 10⁻⁴  ·  16 CPU threads per engine  ·  "
-        "distinct alkane conformers  ·  median of 3 runs",
+        protocol_note,
         ha="left",
         va="top",
         fontsize=6.8,
@@ -564,7 +634,8 @@ def main(argv: list[str] | None = None) -> int:
         0.08,
         0.035,
         _hardware_note(metadata)
-        + f"  ·  runner {commit[:8]}  ·  whiskers: min-max  ·  lower is better",
+        + f"  ·  runner {commit[:8]}  ·  whiskers: min-max  ·  lower is better"
+        + "  ·  † host descriptor  ·  ‡ device-resident input",
         ha="left",
         va="bottom",
         fontsize=5.8,

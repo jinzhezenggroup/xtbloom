@@ -404,34 +404,48 @@ class XtbAdapter:
         makes a ``--cold-samples`` panel-1 row the real cold-start comparison.
         """
         for state in self.states:
-            _delete(self.library, "xtb_delResults", state.result)
-            _delete(self.library, "xtb_delCalculator", state.calculator)
-            calculator = ctypes.c_void_p(self.library.xtb_newCalculator())
-            result = ctypes.c_void_p(self.library.xtb_newResults())
-            if not calculator or not result:
-                raise XtbError("xTB calculator or result allocation returned NULL")
-            self.library.xtb_loadGFN2xTB(
-                state.environment, state.molecule, calculator, None
-            )
-            self._check(state.environment, "xtb_loadGFN2xTB")
-            self.library.xtb_setAccuracy(state.environment, calculator, self.accuracy)
-            self.library.xtb_setMaxIter(
-                state.environment, calculator, self.max_iterations
-            )
-            self.library.xtb_setElectronicTemp(
-                state.environment, calculator, self.electronic_temperature_kelvin
-            )
-            self._check(state.environment, "configure xTB calculator")
-            if state.has_external_charges:
-                self.library.xtb_setExternalCharges(
-                    state.environment,
-                    calculator,
-                    ctypes.byref(state.point_count),
-                    state.point_numbers,
-                    state.point_charges,
-                    state.point_positions,
+            old_result = state.result
+            old_calculator = state.calculator
+            state.result = ctypes.c_void_p()
+            state.calculator = ctypes.c_void_p()
+            _delete(self.library, "xtb_delResults", old_result)
+            _delete(self.library, "xtb_delCalculator", old_calculator)
+
+            calculator = ctypes.c_void_p()
+            result = ctypes.c_void_p()
+            try:
+                calculator = ctypes.c_void_p(self.library.xtb_newCalculator())
+                result = ctypes.c_void_p(self.library.xtb_newResults())
+                if not calculator or not result:
+                    raise XtbError("xTB calculator or result allocation returned NULL")
+                self.library.xtb_loadGFN2xTB(
+                    state.environment, state.molecule, calculator, None
                 )
-                self._check(state.environment, "xtb_setExternalCharges")
+                self._check(state.environment, "xtb_loadGFN2xTB")
+                self.library.xtb_setAccuracy(
+                    state.environment, calculator, self.accuracy
+                )
+                self.library.xtb_setMaxIter(
+                    state.environment, calculator, self.max_iterations
+                )
+                self.library.xtb_setElectronicTemp(
+                    state.environment, calculator, self.electronic_temperature_kelvin
+                )
+                self._check(state.environment, "configure xTB calculator")
+                if state.has_external_charges:
+                    self.library.xtb_setExternalCharges(
+                        state.environment,
+                        calculator,
+                        ctypes.byref(state.point_count),
+                        state.point_numbers,
+                        state.point_charges,
+                        state.point_positions,
+                    )
+                    self._check(state.environment, "xtb_setExternalCharges")
+            except BaseException:
+                _delete(self.library, "xtb_delResults", result)
+                _delete(self.library, "xtb_delCalculator", calculator)
+                raise
             state.calculator = calculator
             state.result = result
 
@@ -512,7 +526,7 @@ class XtbAdapter:
         """Release all persistent states in reverse construction order."""
         while self.states:
             state = self.states.pop()
-            if state.has_external_charges:
+            if state.has_external_charges and state.calculator:
                 self.library.xtb_releaseExternalCharges(
                     state.environment, state.calculator
                 )

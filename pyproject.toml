@@ -96,6 +96,9 @@ sdist.include = [
   "data/parameters/manifest.json",
 ]
 sdist.exclude = [
+  # Raw performance evidence is repository-only and hash-pinned in place; it
+  # is not a runtime, build, or source-consumer input.
+  "benchmarks/evidence/**",
   "build*/**",
   ".cache/**",
   ".claude/**",
