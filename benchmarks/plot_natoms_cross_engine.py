@@ -12,9 +12,9 @@ keeps only correctness-qualified ``available`` rows, and draws:
 3. MD-trajectory: per-frame latency vs molecule size for nearly identical
    coordinate sequences (gpuxtb WARM highlighted).
 
-Every panel records the exact hardware (CPU model + worker count, GPU model)
-and the repository commit.  Reference engines without a matching point are
-omitted from that panel; no invented numbers are inserted.
+A footnote below the panels records the exact hardware (CPU model + worker
+count, GPU model) and the repository commit.  Reference engines without a
+matching point are omitted from that panel; no invented numbers are inserted.
 """
 
 from __future__ import annotations
@@ -42,10 +42,10 @@ def _engine_color(engine: str) -> str:
     colors = {
         "gpuxtb-cpu": "#d62728",
         "gpuxtb-cuda": "#ff7f0e",
-        "xtb": "#7f7f7f",
-        "tblite": "#bcbd22",
-        "dxtb-cpu": "#7b7b7b",
-        "dxtb-cuda": "#9e9e9e",
+        "xtb": "#1f77b4",
+        "tblite": "#2ca02c",
+        "dxtb-cpu": "#9467bd",
+        "dxtb-cuda": "#17becf",
     }
     return colors.get(engine, "#555555")
 
@@ -92,41 +92,26 @@ def _is_eligible(row: dict[str, Any]) -> bool:
     return not (correctness and correctness.get("status") != "pass")
 
 
-def _annotate_hardware(
-    axes: Any,  # noqa: ANN401 - matplotlib axes
-    metadata: dict[str, Any],
-    commit: str,
-) -> None:
-    """Draw the hardware + threads + commit box inside the axes."""
+def _footnote_lines(metadata: dict[str, Any], commit: str) -> list[str]:
+    """Build the shared hardware/provenance footnote drawn once below panels.
+
+    Keeping the common context (commit, hardware, threads, tolerances) in a
+    single bottom footnote instead of a per-panel box keeps every panel clean
+    and the figure uncluttered.
+    """
     hardware = metadata.get("hardware", {})
     threads = metadata.get("threads", {})
-    gpu = hardware.get("nvidia_smi")
-    lines = [f"commit {commit[:12]}"]
+    line: list[str] = [f"commit {commit[:12]}"]
     cpu_model = hardware.get("cpu_model")
     if cpu_model:
-        lines.append(f"{cpu_model}")
-        lines.append(f"CPU threads: {threads.get('cpu_threads', '?')} per engine")
+        line.append(cpu_model)
+        line.append(f"CPU threads: {threads.get('cpu_threads', '?')} per engine")
+    gpu = hardware.get("nvidia_smi")
     if gpu:
-        lines.append(gpu.replace("\n", " "))
-    lines.append("gpuxtb SCC 1e-10/1e-12; refs acc 1e-4")
-    lines.append("gpuxtb batch=1: 1 of 16 workers active (outer-batch pool idle)")
-    props = {
-        "boxstyle": "round,pad=0.4",
-        "facecolor": "white",
-        "edgecolor": "#888888",
-        "alpha": 0.95,
-    }
-    axes.text(
-        0.98,
-        0.03,
-        "\n".join(lines),
-        transform=axes.transAxes,
-        fontsize=7,
-        va="bottom",
-        ha="right",
-        family="monospace",
-        bbox=props,
-    )
+        line.append(gpu.replace("\n", " "))
+    line.append("gpuxtb SCC 1e-10/1e-12; refs acc 1e-4")
+    line.append("gpuxtb batch=1: 1 of 16 workers active (outer-batch pool idle)")
+    return line
 
 
 def _cold_batch1_row(row: dict[str, Any]) -> bool:
@@ -256,6 +241,20 @@ def _trajectory_panel(
     axes.set_yscale("log")
 
 
+def _strip_svg_trailing_whitespace(path: Path) -> None:
+    """Remove trailing whitespace from every SVG line.
+
+    matplotlib's SVG backend writes path data with a trailing space before
+    each newline; stripping it keeps the tracked artifact clean for the
+    repository's whitespace lint while remaining semantically identical SVG.
+    """
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        "\n".join(line.rstrip() for line in text.splitlines()) + "\n",
+        encoding="utf-8",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Configure the figure CLI."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -307,8 +306,6 @@ def main(argv: list[str] | None = None) -> int:
     _scaling_panel(axes_list[0, 0], rows, 1, args.engines, "log")
     _scaling_panel(axes_list[0, 1], rows, 128, args.engines, "log")
     _trajectory_panel(axes_list[0, 2], rows, args.engines)
-    for axes in axes_list[0]:
-        _annotate_hardware(axes, metadata, commit)
 
     handles, labels = axes_list[0, 0].get_legend_handles_labels()
     if handles:
@@ -326,8 +323,19 @@ def main(argv: list[str] | None = None) -> int:
         "batch) | trajectory (WARM)"
     )
     fig.suptitle(title, fontsize=13, y=1.18 if handles else 1.02)
+    fig.text(
+        0.5,
+        0.012,
+        "\n".join(_footnote_lines(metadata, commit)),
+        ha="center",
+        va="bottom",
+        fontsize=8,
+        family="monospace",
+        color="#444444",
+    )
     if args.output.suffix == ".svg":
         fig.savefig(args.output, format="svg", bbox_inches="tight")
+        _strip_svg_trailing_whitespace(args.output)
     else:
         fig.savefig(args.output, dpi=200, bbox_inches="tight")
     print(f"wrote {args.output}")  # noqa: T201 - CLI completion output

@@ -95,8 +95,8 @@ Figure: `python3 benchmarks/plot_natoms_cross_engine.py --artifact ...-cold.json
 --artifact ...-b128.json --artifact ...-traj.json --artifact final-gpuxtb-cuda-cold.json
 --artifact final-gpuxtb-cuda-b128.json --artifact final-gpuxtb-cuda-traj.json
 --artifact final-dxtb-cuda-cold.json --artifact final-dxtb-cuda-b128.json
---artifact final-dxtb-cuda-traj.json --commit <sha> --output natoms_cross_engine.png`
-(also `docs/assets/natoms_cross_engine.png`).
+--artifact final-dxtb-cuda-traj.json --commit <sha> --output natoms_cross_engine.svg`
+(also `docs/assets/natoms_cross_engine.svg`).
 
 ## Results (median energy+force latency, ms)
 
@@ -158,5 +158,5 @@ Panel 3 (trajectory, WARM continuation, ms/frame, 16 threads):
 
 - `final-<engine>-{cold,b128,traj}.json/.csv` for gpuxtb-cpu, xtb, tblite, dxtb-cpu
 - `final-{gpuxtb-cuda,dxtb-cuda}-{cold,b128,traj}.json/.csv` (re-measured 2026-08-09)
-- `natoms_cross_engine.png` (rendered figure)
+- `natoms_cross_engine.svg` (rendered figure)
 - `README.md`, `SHA256SUMS`

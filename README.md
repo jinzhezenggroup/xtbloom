@@ -84,7 +84,7 @@ win by reusing one geometry. The MD-trajectory panel streams nearly identical
 frames and runs gpuxtb with strict `WARM` SCC continuation, its documented
 massively-parallel mode.
 
-![Cross-engine GFN2-xTB scaling benchmark](docs/assets/natoms_cross_engine.png)
+![Cross-engine GFN2-xTB scaling benchmark](docs/assets/natoms_cross_engine.svg)
 
 Hardware: AMD EPYC 7K62 (48 cores; every engine uses the same 16-thread budget
 per call) and an NVIDIA RTX 5090 (32 GiB) for the CUDA rows. gpuxtb runs the
@@ -149,7 +149,7 @@ python3 benchmarks/plot_natoms_cross_engine.py \
   --artifact build/benchmarks/final/cold.json --artifact build/benchmarks/final/b128.json \
   --artifact build/benchmarks/final/traj.json \
   --commit "$(git rev-parse HEAD)" \
-  --output docs/assets/natoms_cross_engine.png
+  --output docs/assets/natoms_cross_engine.svg
 ```
 
 xTB and tblite expose the same `libtblite.so.0` SONAME but need different

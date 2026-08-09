@@ -122,7 +122,7 @@ python3 -m unittest -v benchmarks.test_natoms_cross_engine
 ```
 
 See the archived evidence and reproduction commands in
-`benchmarks/evidence/issue-13/2026-08-08-node3/README.md`.
+`benchmarks/evidence/issue-256/2026-08-09-node3/README.md`.
 
 ## CPU FRESH/WARM natoms evidence
 
