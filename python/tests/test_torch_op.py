@@ -13,6 +13,10 @@ from __future__ import annotations
 
 import importlib
 import itertools
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -40,7 +44,7 @@ class _DLPackOnly:
     def __array__(self, dtype: object = None, copy: object = None) -> np.ndarray:
         """Reject the implicit host conversion used by the original bug."""
         del dtype, copy
-        raise AssertionError("DLPack-only offsets must not be converted by NumPy")
+        raise AssertionError("DLPack-only input must not be converted by NumPy")
 
 
 def _skip_reason() -> str | None:
@@ -209,8 +213,38 @@ def test_energy_backward_does_not_scan_unused_force_grad(
     assert positions.grad is not None
 
 
-def test_dlpack_only_offsets_survive_backward() -> None:
-    """Non-Torch offsets remain DLPack-native through gradient construction."""
+def test_numpy_auxiliary_arrays_dispatch_as_tensors() -> None:
+    """Every documented NumPy auxiliary reaches the compiled Tensor schema."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+
+    positions = torch.tensor(
+        WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
+    )
+    arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
+    auxiliary = {
+        name: value.detach().cpu().numpy()
+        for name, value in arrays.items()
+        if name != "positions"
+    }
+    energies, forces = gpuxtb_torch(
+        positions,
+        auxiliary["atomic_numbers"],
+        auxiliary["atom_offsets"],
+        auxiliary["molecular_charges"],
+        auxiliary["unpaired_electrons"],
+        auxiliary["spin_channels"],
+        backend="cpu",
+    )
+    energies.sum().backward()
+    assert positions.grad is not None
+    assert torch.allclose(positions.grad, -forces, atol=0.0, rtol=0.0)
+
+
+def test_dlpack_only_auxiliaries_survive_backward() -> None:
+    """Every non-Torch DLPack auxiliary stays native through dispatch."""
     reason = _skip_reason()
     if reason:
         pytest.skip(reason)
@@ -222,16 +256,112 @@ def test_dlpack_only_offsets_survive_backward() -> None:
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
     energies, forces = gpuxtb_torch(
         positions,
-        arrays["atomic_numbers"],
+        _DLPackOnly(arrays["atomic_numbers"]),
         _DLPackOnly(arrays["atom_offsets"]),
-        arrays["molecular_charges"],
-        arrays["unpaired_electrons"],
-        arrays["spin_channels"],
+        _DLPackOnly(arrays["molecular_charges"]),
+        _DLPackOnly(arrays["unpaired_electrons"]),
+        _DLPackOnly(arrays["spin_channels"]),
         backend="cpu",
     )
     energies.sum().backward()
     assert positions.grad is not None
     assert torch.allclose(positions.grad, -forces, atol=0.0, rtol=0.0)
+
+
+def test_native_loader_honors_gpuxtb_library_override() -> None:
+    """The extension must not replace an explicit native runtime with its neighbor."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    if sys.platform != "linux":
+        pytest.skip("the vendored stable-ABI extension is currently Linux-only")
+
+    import torch
+    from gpuxtb import torch as torch_module
+
+    extension = torch_module._torch_extension_path()
+    assert extension is not None, "compiled Torch extension is missing"
+    torch_cpu = Path(torch.__file__).resolve().parent / "lib" / "libtorch_cpu.so"
+    if not torch_cpu.is_file():
+        pytest.skip("installed torch does not expose libtorch_cpu.so")
+
+    # Load the extension directly in a fresh process so both its once-only API
+    # table and torch's operator registry start clean. libtorch_cpu is a valid
+    # DSO but not a gpuxtb ABI implementation: honoring the override must fail
+    # closed instead of silently opening the extension-adjacent libgpuxtb.
+    script = """
+import sys
+import torch
+
+torch.ops.load_library(sys.argv[1])
+positions = torch.zeros((1, 3), dtype=torch.float64)
+try:
+    torch.ops.gpuxtb.gpuxtb_torch_forward(
+        positions,
+        torch.ones(1, dtype=torch.int32),
+        torch.tensor([0, 1], dtype=torch.int64),
+        torch.zeros(1, dtype=torch.float64),
+        torch.zeros(1, dtype=torch.int32),
+        torch.ones(1, dtype=torch.int32),
+        torch.empty(1, dtype=torch.float64),
+        torch.empty((1, 3), dtype=torch.float64),
+        1, -1, 0, 0, 50, 1.0e-6, 1.0e-8, 300.0,
+    )
+except RuntimeError as exc:
+    if "cannot load libgpuxtb" not in str(exc):
+        raise
+else:
+    raise AssertionError("GPUXTB_LIBRARY was ignored by the torch extension")
+"""
+    env = os.environ.copy()
+    env["GPUXTB_LIBRARY"] = str(torch_cpu)
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(extension)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_torch_entrypoint_preloads_native_runtime_providers() -> None:
+    """A fresh process may call gpuxtb_torch before any ctypes-backed API."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+
+    script = """
+import numpy as np
+import torch
+from gpuxtb import gpuxtb_torch
+
+positions = torch.tensor(
+    [[0.0, 0.0, -0.73578586109551],
+     [1.44183152868459, 0.0, 0.36789293054775],
+     [-1.44183152868459, 0.0, 0.36789293054775]],
+    dtype=torch.float64,
+)
+energies, forces = gpuxtb_torch(
+    positions,
+    np.array([8, 1, 1], dtype=np.int32),
+    np.array([0, 3], dtype=np.int64),
+    np.zeros(1, dtype=np.float64),
+    np.zeros(1, dtype=np.int32),
+    np.ones(1, dtype=np.int32),
+    backend="cpu",
+)
+assert torch.isfinite(energies).all()
+assert torch.isfinite(forces).all()
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=os.environ.copy(),
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_energy_gradient_finite_difference() -> None:
@@ -549,3 +679,105 @@ def test_torch_cuda_matches_host() -> None:
     assert torch.allclose(cuda_energies.cpu(), host_energies, atol=1.0e-9, rtol=1.0e-9)
     assert torch.allclose(cuda_forces.cpu(), host_forces, atol=1.0e-9, rtol=1.0e-9)
     assert torch.allclose(cuda_positions.grad, -cuda_forces, atol=0.0, rtol=0.0)
+
+
+@pytest.mark.cuda
+def test_torch_cuda_accepts_host_auxiliary_descriptors() -> None:
+    """CUDA positions may retain topology and charge tensors on the host."""
+    reason = _skip_reason() if _library_has_cuda() else "CUDA backend unavailable"
+    if reason:
+        pytest.skip(reason)
+    import torch
+
+    if not torch.cuda.is_available():
+        pytest.skip("torch has no usable CUDA device")
+
+    host_positions = torch.tensor(WATER_POSITIONS.tolist(), dtype=torch.float64)
+    host_arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
+    host_energies, host_forces = gpuxtb_torch(
+        host_positions,
+        host_arrays["atomic_numbers"],
+        host_arrays["atom_offsets"],
+        host_arrays["molecular_charges"],
+        host_arrays["unpaired_electrons"],
+        host_arrays["spin_channels"],
+        backend="cpu",
+    )
+
+    mixed_positions = torch.tensor(
+        WATER_POSITIONS.tolist(), dtype=torch.float64, device="cuda", requires_grad=True
+    )
+    mixed_energies, mixed_forces = gpuxtb_torch(
+        mixed_positions,
+        host_arrays["atomic_numbers"],
+        host_arrays["atom_offsets"],
+        host_arrays["molecular_charges"],
+        host_arrays["unpaired_electrons"],
+        host_arrays["spin_channels"],
+        backend="cuda",
+    )
+    mixed_energies.sum().backward()
+    assert mixed_positions.grad is not None
+    assert torch.allclose(mixed_energies.cpu(), host_energies, atol=1.0e-9, rtol=1.0e-9)
+    assert torch.allclose(mixed_forces.cpu(), host_forces, atol=1.0e-9, rtol=1.0e-9)
+    assert torch.allclose(mixed_positions.grad, -mixed_forces, atol=0.0, rtol=0.0)
+
+
+@pytest.mark.cuda
+@pytest.mark.parametrize("explicit_stream", [False, True])
+def test_torch_cuda_orders_native_stream_after_current_stream(
+    explicit_stream: bool,
+) -> None:
+    """Raw tensor pointers remain ordered after work on Torch's current stream."""
+    reason = _skip_reason() if _library_has_cuda() else "CUDA backend unavailable"
+    if reason:
+        pytest.skip(reason)
+    import torch
+
+    if not torch.cuda.is_available():
+        pytest.skip("torch has no usable CUDA device")
+    cuda_sleep = getattr(torch.cuda, "_sleep", None)
+    if cuda_sleep is None:
+        pytest.skip("torch CUDA sleep primitive is unavailable")
+
+    host_arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
+    geometry_b = WATER_POSITIONS * 1.15
+    reference_energies, _ = gpuxtb_torch(
+        torch.tensor(geometry_b.tolist(), dtype=torch.float64),
+        host_arrays["atomic_numbers"],
+        host_arrays["atom_offsets"],
+        host_arrays["molecular_charges"],
+        host_arrays["unpaired_electrons"],
+        host_arrays["spin_channels"],
+        backend="cpu",
+    )
+
+    positions = torch.tensor(
+        WATER_POSITIONS.tolist(), dtype=torch.float64, device="cuda"
+    )
+    torch.cuda.synchronize()
+    producer = torch.cuda.Stream()
+    consumer = torch.cuda.Stream()
+    native_stream = int(consumer.cuda_stream) if explicit_stream else None
+    with torch.cuda.stream(producer):
+        cuda_sleep(100_000_000)
+        positions.copy_(
+            torch.tensor(geometry_b.tolist(), dtype=torch.float64, device="cuda")
+        )
+        energies, _ = gpuxtb_torch(
+            positions,
+            host_arrays["atomic_numbers"],
+            host_arrays["atom_offsets"],
+            host_arrays["molecular_charges"],
+            host_arrays["unpaired_electrons"],
+            host_arrays["spin_channels"],
+            backend="cuda",
+            stream=native_stream,
+        )
+    producer.synchronize()
+    assert torch.allclose(
+        energies.cpu(),
+        reference_energies,
+        atol=1.0e-9,
+        rtol=1.0e-9,
+    )

@@ -1,6 +1,7 @@
 aoti_torch_abi_version
 aoti_torch_delete_library_object
 aoti_torch_delete_tensor_object
+aoti_torch_device_type_cpu
 aoti_torch_device_type_cuda
 aoti_torch_dtype_bfloat16
 aoti_torch_dtype_bool
@@ -34,7 +35,6 @@ aoti_torch_is_contiguous
 aoti_torch_is_defined
 aoti_torch_library_def
 aoti_torch_library_init_def
-aoti_torch_library_init_fragment
 aoti_torch_library_init_impl
 aoti_torch_new_tensor_handle
 torch_get_mutable_data_ptr

@@ -201,6 +201,7 @@ WEB_SITE_SOURCE_MAP = {
     EXCEPTION_FILE: EXCEPTION_FILE,
     "THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
     "LICENSES/Apache-2.0.txt": "LICENSES/Apache-2.0.txt",
+    "LICENSES/BSD-3-Clause.txt": "LICENSES/BSD-3-Clause.txt",
     "LICENSES/LGPL-3.0-or-later.txt": "LICENSES/LGPL-3.0-or-later.txt",
     "LICENSES/MIT.txt": "LICENSES/MIT.txt",
     "LICENSES/array-api-compat-MIT.txt": ARRAY_API_COMPAT_LICENSE,

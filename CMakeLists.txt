@@ -107,7 +107,10 @@ if(GPUXTB_ENABLE_TORCH_EXT)
       "${CMAKE_CURRENT_SOURCE_DIR}/include"
       "${GPUXTB_TORCH_STABLE_INCLUDE}"
     )
-    target_link_libraries(gpuxtb_torch_ext PRIVATE gpuxtb_torch_stub)
+    target_link_libraries(gpuxtb_torch_ext PRIVATE
+      gpuxtb_torch_stub
+      ${CMAKE_DL_LIBS}
+    )
     target_compile_features(gpuxtb_torch_ext PRIVATE cxx_std_17)
     target_link_options(gpuxtb_torch_ext PRIVATE "-Wl,-z,defs")
     install(TARGETS gpuxtb_torch_ext

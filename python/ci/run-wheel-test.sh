@@ -22,6 +22,7 @@ export LD_LIBRARY_PATH="$stub_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 case "$mode" in
   full)
+    python -c 'import torch; print(f"wheel test torch: {torch.__version__}")'
     python -m pytest "$project_dir/python/tests" -q
     ;;
   cpu)
@@ -29,7 +30,8 @@ case "$mode" in
     # not exercise the eigensolver because its BLAS runtime is loaded lazily.
     python - <<'PY'
 import numpy as np
-from gpuxtb import Calculator
+import torch
+from gpuxtb import Calculator, gpuxtb_torch
 
 calculator = Calculator(
     "GFN2-xTB",
@@ -48,6 +50,36 @@ assert result.scc_converged
 assert np.isfinite(result.energy)
 assert np.isfinite(result.forces).all()
 print(f"gpuxtb CPU wheel smoke energy: {result.energy:.16g}")
+
+# Exercise the repaired wheel's stable-ABI extension and its external
+# libtorch_cpu.so resolution on native aarch64 as well as x86_64.
+torch_positions = torch.tensor(
+    calculator.positions, dtype=torch.float64, requires_grad=True
+)
+torch_energies, torch_forces = gpuxtb_torch(
+    torch_positions,
+    torch.tensor(calculator.numbers, dtype=torch.int32),
+    torch.tensor([0, len(calculator.numbers)], dtype=torch.int64),
+    torch.zeros(1, dtype=torch.float64),
+    torch.zeros(1, dtype=torch.int32),
+    torch.ones(1, dtype=torch.int32),
+    backend="cpu",
+)
+torch_energies.sum().backward()
+torch.testing.assert_close(
+    torch_energies,
+    torch.tensor([result.energy], dtype=torch.float64),
+    atol=1.0e-12,
+    rtol=1.0e-12,
+)
+torch.testing.assert_close(
+    torch_forces,
+    torch.from_numpy(np.ascontiguousarray(result.forces)),
+    atol=1.0e-12,
+    rtol=1.0e-12,
+)
+torch.testing.assert_close(torch_positions.grad, -torch_forces, atol=0.0, rtol=0.0)
+print(f"gpuxtb Torch wheel smoke: torch {torch.__version__}")
 PY
     ;;
   smoke)

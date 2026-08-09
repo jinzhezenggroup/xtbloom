@@ -152,10 +152,10 @@ def _normalize_layout(value: object) -> object:
     """Return a detached, compact C-contiguous array of the same dtype.
 
     The DLPack bridge only ever exports borrowed views (torch's ``copy=True``
-    does not actually pack strided views into a contiguous copy), so the op
-    itself produces the contiguous copy for non-contiguous torch tensors and
-    numpy arrays before the native descriptors are bound.  Contiguous inputs
-    pass through without a copy; scalar types are never coerced.
+    does not actually pack strided views into a contiguous copy), so this
+    normalization step produces the compact copy before native descriptors are
+    bound. Contiguous inputs pass through without a copy; scalar types are
+    never coerced.
     """
     torch = _torch()
     if torch.is_tensor(value):
@@ -166,7 +166,7 @@ def _normalize_layout(value: object) -> object:
 
 
 def _to_tensor(value: object) -> _Tensor:
-    """Import one finished result array as a PyTorch tensor without a copy."""
+    """Import an auxiliary array or DLPack producer as a tensor without a copy."""
     torch = _torch()
     if torch.is_tensor(value):
         return cast("_Tensor", value)
@@ -224,6 +224,11 @@ def _gpuxtb_torch_op() -> Callable[..., tuple[object, object]]:
     global _TORCH_EXT_LOADED
     torch = _torch()
     if not _TORCH_EXT_LOADED:
+        # Establish the same native runtime selected by the rest of the Python
+        # package and preload optional providers such as scipy-openblas32. The
+        # compiled op intentionally resolves gpuxtb itself, but must not bypass
+        # Python's provider discovery when it is the first public API called.
+        library.load_library()
         path = _torch_extension_path()
         if path is None:
             raise GPUxtbNotSupportedError(
@@ -291,6 +296,35 @@ def _resolve_context_scalars(
                 "a native GPU stream cannot be attached to the CPU backend"
             )
     return resolved_device, resolved_threads, resolved_stream
+
+
+def _order_sync_cuda_stream(
+    torch: ModuleType, tensors: tuple[_Tensor, ...], resolved_stream: int
+) -> int:
+    """Order synchronous native CUDA work after Torch's current stream.
+
+    Importing a foreign DLPack producer into Torch establishes readiness on
+    Torch's current stream. The compiled op then binds raw tensor pointers, so
+    its native stream must either be that same stream or explicitly wait for
+    it before gpuxtb reads any descriptor.
+    """
+    cuda_tensors = [tensor for tensor in tensors if bool(tensor.is_cuda)]
+    if not cuda_tensors:
+        return resolved_stream
+    device = cuda_tensors[0].device
+    if any(tensor.device != device for tensor in cuda_tensors[1:]):
+        raise GPUxtbValueError("all CUDA tensors must be on the same device")
+
+    current_stream = torch.cuda.current_stream(device)
+    current_handle = int(current_stream.cuda_stream)
+    if resolved_stream == 0:
+        # PyTorch operators run on the current stream. Preserve that ordering
+        # instead of silently moving a raw-pointer consumer to legacy default.
+        return current_handle if current_handle > 0 else 0
+    if resolved_stream != current_handle:
+        native_stream = torch.cuda.ExternalStream(resolved_stream, device=device)
+        native_stream.wait_stream(current_stream)
+    return resolved_stream
 
 
 def _native_forward(
@@ -427,12 +461,21 @@ def _function() -> _AutogradFunction:
             # offsets through DLPack once and pass the resulting Torch tensor
             # to both native inference and backward.  In particular, CUDA
             # producers such as CuPy intentionally reject np.asarray.
+            normalized_atomic_numbers = _to_tensor(_normalize_layout(atomic_numbers))
             normalized_atom_offsets = _to_tensor(_normalize_layout(atom_offsets))
+            normalized_positions = cast("_Tensor", _normalize_layout(positions))
+            normalized_molecular_charges = _to_tensor(
+                _normalize_layout(molecular_charges)
+            )
+            normalized_unpaired_electrons = _to_tensor(
+                _normalize_layout(unpaired_electrons)
+            )
             nsystems = int(normalized_atom_offsets.shape[0]) - 1
             if spin_channels is None:
                 spin_channels = torch.ones(
                     nsystems, dtype=torch.int32, device=positions.device
                 )
+            normalized_spin_channels = _to_tensor(_normalize_layout(spin_channels))
             resolved_backend = _resolve_backend(backend)
             resolved_device, resolved_threads, resolved_stream = (
                 _resolve_context_scalars(
@@ -445,13 +488,27 @@ def _function() -> _AutogradFunction:
                 nsystems,
                 int(positions.shape[0]),
             )
+            resolved_stream = _order_sync_cuda_stream(
+                torch,
+                (
+                    normalized_positions,
+                    normalized_atomic_numbers,
+                    normalized_atom_offsets,
+                    normalized_molecular_charges,
+                    normalized_unpaired_electrons,
+                    normalized_spin_channels,
+                    out_energies,
+                    out_forces,
+                ),
+                resolved_stream,
+            )
             _native_result = _native_forward(
-                positions=_normalize_layout(positions),
-                atomic_numbers=_normalize_layout(atomic_numbers),
+                positions=normalized_positions,
+                atomic_numbers=normalized_atomic_numbers,
                 atom_offsets=normalized_atom_offsets,
-                molecular_charges=_normalize_layout(molecular_charges),
-                unpaired_electrons=_normalize_layout(unpaired_electrons),
-                spin_channels=_normalize_layout(spin_channels),
+                molecular_charges=normalized_molecular_charges,
+                unpaired_electrons=normalized_unpaired_electrons,
+                spin_channels=normalized_spin_channels,
                 out_energies=out_energies,
                 out_forces=out_forces,
                 backend=resolved_backend,
@@ -661,8 +718,10 @@ class _AsyncComputeEngine:
     def __init__(self) -> None:
         self._queue: queue.Queue[_AsyncJob | None] = queue.Queue()
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
         self._thread: threading.Thread | None = None
         self._started = False
+        self._closing = False
         self._pending_error: BaseException | None = None
 
     def submit(self, job: _AsyncJob) -> _AsyncHandle:
@@ -672,7 +731,9 @@ class _AsyncComputeEngine:
         accepting new work, so a failure an inference-only caller never
         synchronizes on still surfaces at the next async call.
         """
-        with self._lock:
+        with self._condition:
+            while self._closing:
+                self._condition.wait()
             if self._pending_error is not None:
                 error, self._pending_error = self._pending_error, None
                 raise error
@@ -682,7 +743,10 @@ class _AsyncComputeEngine:
                 )
                 self._thread.start()
                 self._started = True
-        self._queue.put(job)
+            # Serialize job insertion with close() inserting its sentinel. If
+            # a submit escaped this lock first, close could stop the worker and
+            # leave the new job permanently queued behind the sentinel.
+            self._queue.put(job)
         return _AsyncHandle(job)
 
     def _run(self) -> None:
@@ -699,15 +763,24 @@ class _AsyncComputeEngine:
 
     def close(self) -> None:
         """Drain pending jobs, stop the worker, and join it."""
-        with self._lock:
+        with self._condition:
+            while self._closing:
+                self._condition.wait()
             if not self._started:
                 return
+            self._closing = True
             self._queue.put(None)
             thread = self._thread
-            if thread is not None:
-                thread.join(timeout=120.0)
+        # A failed worker records its deferred error under this same lock. Do
+        # not hold it while joining or shutdown deadlocks. close() promises to
+        # drain accepted work, so it must not reset a still-running generation.
+        if thread is not None:
+            thread.join()
+        with self._condition:
             self._started = False
             self._thread = None
+            self._closing = False
+            self._condition.notify_all()
 
 
 _ASYNC_ENGINE: _AsyncComputeEngine | None = None
@@ -792,10 +865,14 @@ def _async_function() -> _AutogradFunction:
             # the op never participates in an outside autograd graph and the
             # strict zero-copy tensor contract is always satisfied.
             normalized_atom_offsets = _to_tensor(_normalize_layout(atom_offsets))
-            normalized_atomic_numbers = _normalize_layout(atomic_numbers)
+            normalized_atomic_numbers = _to_tensor(_normalize_layout(atomic_numbers))
             normalized_positions = _normalize_layout(positions)
-            normalized_molecular_charges = _normalize_layout(molecular_charges)
-            normalized_unpaired_electrons = _normalize_layout(unpaired_electrons)
+            normalized_molecular_charges = _to_tensor(
+                _normalize_layout(molecular_charges)
+            )
+            normalized_unpaired_electrons = _to_tensor(
+                _normalize_layout(unpaired_electrons)
+            )
             resolved_backend = _resolve_backend(backend)
             if resolved_backend == library.BACKEND_CPU:
                 raise GPUxtbNotSupportedError(
@@ -808,7 +885,7 @@ def _async_function() -> _AutogradFunction:
                     dtype=torch.int32,
                     device=device,
                 )
-            normalized_spin_channels = _normalize_layout(spin_channels)
+            normalized_spin_channels = _to_tensor(_normalize_layout(spin_channels))
 
             nsystems = int(normalized_atom_offsets.shape[0]) - 1
             natoms = int(positions.shape[0])
@@ -971,7 +1048,8 @@ def _gpuxtb_torch_impl(
     """Execute one packed gpuxtb inference (the traceable-unsafe core).
 
     Kept private so it can be exposed through a ``torch.compile``-safe wrapper:
-    Dynamo must never trace the ctypes/DLPack/worker-thread internals below.
+    Dynamo must never trace the compiled-op dispatch or worker-thread internals
+    below.
 
     The deferred-result contract of ``async_exec`` cannot be expressed inside a
     compiled graph (a fused region consumes results immediately), so an async
@@ -1022,9 +1100,8 @@ _compile_degraded_async = threading.local()
 def _disabled_torch_impl(torch: ModuleType) -> Callable[..., tuple[object, object]]:
     """Mark ``_gpuxtb_torch_impl`` as opaque so Dynamo graph-breaks on it.
 
-    Dynamo cannot trace gpuxtb's ctypes/DLPack/worker-thread internals (tracing
-    raises, e.g. an unsupported ``DLDeviceType`` constant), so the op is
-    deliberately excluded from the compiler: the recursive form of
+    Dynamo cannot trace gpuxtb's native custom-op and worker-thread boundary,
+    so the op is deliberately excluded from the compiler: the recursive form of
     ``torch._dynamo.disable`` uninstalls Dynamo's frame interception for the
     duration of the call and marks the callable opaque, so calling it inside
     ``torch.compile`` graph-breaks and executes it eagerly.  Correct results,
@@ -1072,11 +1149,11 @@ def gpuxtb_torch(
     synchronous; an experimental (internal, not public API) host-asynchronous
     CUDA variant lives at :func:`gpuxtb.torch._gpuxtb_torch_async`.
 
-    ``gpuxtb_torch`` is eager-only by design: it drives the native library
-    through ctypes/DLPack, which Dynamo cannot trace.  Calling it inside
-    ``torch.compile`` therefore inserts a graph break and executes it eagerly
-    (correct results, no compilation speedup for the gpuxtb call itself),
-    instead of failing at trace time.
+    ``gpuxtb_torch`` is eager-only by design: it dispatches a compiled custom
+    operator that calls the native library synchronously, which is kept opaque
+    to Dynamo. Calling it inside ``torch.compile`` therefore inserts a graph
+    break and executes it eagerly (correct results, no compilation speedup for
+    the gpuxtb call itself), instead of failing at trace time.
 
     Parameters
     ----------
@@ -1095,8 +1172,13 @@ def gpuxtb_torch(
     spin_channels : (nsystems,) int32, optional
         Orbital channels (1 restricted / 2 unrestricted); defaults to all
         restricted ``1``, exactly like :class:`gpuxtb.ArrayBatch`.
-    backend, device_id, cpu_threads, stream
+    backend, device_id, cpu_threads
         Same context selection as :class:`gpuxtb.ArrayBatch`.
+    stream : int, optional
+        Native CUDA stream handle. The default uses
+        ``torch.cuda.current_stream()``; an explicit stream first waits for
+        Torch's current stream so imported or newly produced tensor bytes are
+        ready before native compute.
     max_scc_iterations, charge_tolerance, energy_tolerance, electronic_temperature
         Same SCC options as :class:`gpuxtb.ArrayBatch`.  ``electronic_temperature``
         is given in kelvin.

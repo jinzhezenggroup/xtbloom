@@ -22,9 +22,11 @@
 // and links nothing but libtorch_cpu.so for its aoti_torch_* symbols.  A
 // single binary therefore works across torch 2.10+ releases without the
 // per-minor-version rebuilds that a torch/extension.h C++ extension would
-// require.  Compiling still needs a torch install for these stable headers
-// and libtorch_cpu.so; that is the upstream "stable ABI" contract (see
-// pytorch notes/libtorch_stable_abi).
+// require. The build uses a manifest-pinned vendored header closure and a
+// generated libtorch_cpu.so SONAME stub, so it does not need a Torch install;
+// the shipped extension resolves the real stable symbols from the Torch
+// runtime that the Python layer loads first (see pytorch
+// notes/libtorch_stable_abi).
 //
 // The public gpuxtb C ABI is host-synchronous; this op is a direct wrapper
 // around gpuxtb_compute, so failure semantics are inherited unchanged (per
@@ -40,6 +42,7 @@
 #include <torch/headeronly/util/Exception.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <tuple>
@@ -59,11 +62,12 @@ using torch::headeronly::ScalarType;
 using torch::stable::Tensor;
 
 // ---------------------------------------------------------------------------
-// Native library loading.  libgpuxtb is a caller-owned shared library found
-// next to this extension (both live in the wheel's gpuxtb/lib directory), with
-// a plain system-name fallback.  It is dlopen'ed rather than linked so the
-// extension never hard-codes a gpuxtb SONAME and remains usable when the host
-// process already loaded a different gpuxtb instance (e.g. through ctypes).
+// Native library loading. GPUXTB_LIBRARY is authoritative when set so the
+// torch data plane cannot silently use a different native implementation from
+// the rest of the Python package. Otherwise libgpuxtb is found next to this
+// extension (both live in the wheel's gpuxtb/lib directory), with a plain
+// system-name fallback. It is dlopen'ed rather than linked so the extension
+// never hard-codes a gpuxtb SONAME.
 // ---------------------------------------------------------------------------
 
 struct GpuxtbApi {
@@ -157,17 +161,23 @@ const GpuxtbApi& gpuxtb_api() {
   // thread-safe for separate per-call contexts, and reads of the immutable
   // table after the once-flag needs no further synchronization.
   static const GpuxtbApi* table = []() -> const GpuxtbApi* {
-    std::string directory = own_directory();
     void* handle = nullptr;
-    for (const char* name : {"libgpuxtb.so", "libgpuxtb.so.0", "libgpuxtb.dylib", "gpuxtb.dll"}) {
-      handle = open_candidate(directory, name);
-      if (handle != nullptr) {
-        break;
+    const char* override_path = std::getenv("GPUXTB_LIBRARY");
+    const bool has_override = override_path != nullptr && override_path[0] != '\0';
+    if (has_override) {
+      handle = load_shared(override_path);
+    } else {
+      std::string directory = own_directory();
+      for (const char* name : {"libgpuxtb.so", "libgpuxtb.so.0", "libgpuxtb.dylib", "gpuxtb.dll"}) {
+        handle = open_candidate(directory, name);
+        if (handle != nullptr) {
+          break;
+        }
       }
-    }
-    if (handle == nullptr) {
-      // System-lookup fallback matching ctypes' find_library("gpuxtb").
-      handle = load_shared(default_search_name());
+      if (handle == nullptr) {
+        // System-lookup fallback matching ctypes' find_library("gpuxtb").
+        handle = load_shared(default_search_name());
+      }
     }
     if (handle == nullptr) {
       return nullptr;
@@ -277,9 +287,10 @@ void check_status(int32_t status, const char* what) {
 //  - atomic_numbers (natoms,) int32, atom_offsets (nsystems + 1,) int64,
 //    molecular_charges (nsystems,) float64, unpaired_electrons (nsystems,)
 //    int32, spin_channels (nsystems,) int32;
-//  - out_energies (nsystems,) float64 and out_forces (natoms, 3) float64 may
-//    live on the host (CPU backend) or on the same CUDA device as the inputs
-//    (CUDA backend); gpuxtb writes into them in place and the op returns them.
+//  - host and CUDA descriptors may be mixed exactly as the public ABI permits;
+//    every CUDA-resident tensor must use the context's resolved device;
+//  - out_energies (nsystems,) float64 and out_forces (natoms, 3) float64 are
+//    written in place and returned by the op.
 //  - electronic_temperature is in kelvin, exactly like gpuxtb.gpuxtb_torch;
 //    it is converted to the native k_B*T Hartree scale inside the op.
 // ---------------------------------------------------------------------------
@@ -318,20 +329,26 @@ std::tuple<Tensor, Tensor> gpuxtb_torch_forward(
   STD_TORCH_CHECK(out_forces.scalar_type() == ScalarType::Double,
                   "gpuxtb_torch: out_forces must be float64");
 
-  // All inputs and outputs must agree on one device (host, or one CUDA
-  // ordinal); gpuxtb never performs an implicit cross-device copy.
-  {
-    const int64_t device_index = positions.get_device_index();
-    const bool cuda = positions.is_cuda();
-    for (const Tensor& tensor : {atomic_numbers, atom_offsets, molecular_charges,
-                                 unpaired_electrons, spin_channels, out_energies, out_forces}) {
-      STD_TORCH_CHECK(tensor.is_cuda() == cuda,
-                      "gpuxtb_torch: all inputs and outputs must be on the same device");
-      if (cuda) {
-        STD_TORCH_CHECK(tensor.get_device_index() == device_index,
-                        "gpuxtb_torch: all CUDA tensors must be on device ", device_index);
-      }
+  // The public CUDA ABI accepts mixed host/device descriptors. Ignore host
+  // tensors here, but require every CUDA tensor to use one device. Reject
+  // other accelerator types before memory_space_of could mislabel them HOST.
+  bool any_cuda = false;
+  int64_t cuda_device_index = -1;
+  for (const Tensor& tensor : {positions, atomic_numbers, atom_offsets, molecular_charges,
+                               unpaired_electrons, spin_channels, out_energies, out_forces}) {
+    STD_TORCH_CHECK(tensor.is_cpu() || tensor.is_cuda(),
+                    "gpuxtb_torch: only CPU and CUDA tensors are supported");
+    if (!tensor.is_cuda()) {
+      continue;
     }
+    const int64_t tensor_device = tensor.get_device_index();
+    if (!any_cuda) {
+      any_cuda = true;
+      cuda_device_index = tensor_device;
+      continue;
+    }
+    STD_TORCH_CHECK(tensor_device == cuda_device_index,
+                    "gpuxtb_torch: all CUDA tensors must be on device ", cuda_device_index);
   }
 
   // --- context ---------------------------------------------------------------
@@ -350,15 +367,13 @@ std::tuple<Tensor, Tensor> gpuxtb_torch_forward(
 
   // Mirror the Python layer's device-consistency gate: CUDA inputs must match
   // the device the context actually resolved.
-  bool any_cuda = positions.is_cuda();
   if (any_cuda) {
     int32_t resolved_backend = api.context_get_backend(context);
     STD_TORCH_CHECK(resolved_backend == GPUXTB_BACKEND_CUDA,
                     "gpuxtb_torch: CUDA tensors require the CUDA backend");
     int32_t resolved_device = api.context_get_device_id(context);
-    STD_TORCH_CHECK(resolved_device == positions.get_device_index(),
-                    "gpuxtb_torch: CUDA tensor on device ", positions.get_device_index(),
-                    " does not match the context device ", resolved_device);
+    STD_TORCH_CHECK(resolved_device == cuda_device_index, "gpuxtb_torch: CUDA tensor on device ",
+                    cuda_device_index, " does not match the context device ", resolved_device);
   }
 
   // --- batch -----------------------------------------------------------------

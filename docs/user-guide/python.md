@@ -238,6 +238,9 @@ loss.backward()      # positions.grad == -forces
   imports torch or the compiled torch extension.
 - Non-contiguous or strided inputs are packed into a compact copy by the op;
   scalar types must still match the C ABI exactly.
+- CUDA calls run on `torch.cuda.current_stream()` by default. An explicit
+  native `stream=` first waits for Torch's current stream, preserving producer
+  ordering before the extension binds raw tensor pointers.
 
 The op itself is a compiled extension, `libgpuxtb_torch_ext`, written against
 the LibTorch Stable ABI (torch >= 2.10). It binds tensor data pointers directly

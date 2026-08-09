@@ -184,6 +184,152 @@ def test_close_drains_and_recreates_engine(monkeypatch: pytest.MonkeyPatch) -> N
     assert handle2.await_outcome().result == "second"
 
 
+def test_submit_cannot_queue_behind_close_sentinel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A concurrent close cannot strand a newly submitted job."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    from gpuxtb import torch as torch_module
+
+    engine = torch_module._AsyncComputeEngine()
+    job_ran = threading.Event()
+    job = _make_job(
+        torch_module,
+        lambda: job_ran.set() or "done",
+        monkeypatch,
+    )
+    job_put_started = threading.Event()
+    release_job_put = threading.Event()
+    original_put = engine._queue.put
+
+    def block_job_put(item: object, *args: object, **kwargs: object) -> None:
+        if item is job:
+            job_put_started.set()
+            assert release_job_put.wait(timeout=30.0)
+        original_put(item, *args, **kwargs)
+
+    monkeypatch.setattr(engine._queue, "put", block_job_put)
+    submit_thread = threading.Thread(target=engine.submit, args=(job,))
+    submit_thread.start()
+    assert job_put_started.wait(timeout=30.0)
+
+    close_thread = threading.Thread(target=engine.close)
+    close_thread.start()
+    release_job_put.set()
+    submit_thread.join(timeout=30.0)
+    close_thread.join(timeout=30.0)
+
+    assert not submit_thread.is_alive()
+    assert not close_thread.is_alive()
+    assert job.done.wait(timeout=1.0)
+    assert job_ran.is_set()
+    assert job.outcome is not None
+    assert job.outcome.result == "done"
+
+
+def test_submit_waits_for_close_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A submit racing after the sentinel starts a fresh worker generation."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    from gpuxtb import torch as torch_module
+
+    engine = torch_module._AsyncComputeEngine()
+    first_started = threading.Event()
+    release_first = threading.Event()
+    sentinel_put = threading.Event()
+
+    def first_fn() -> object:
+        first_started.set()
+        assert release_first.wait(timeout=30.0)
+        return "first"
+
+    first = engine.submit(_make_job(torch_module, first_fn, monkeypatch))
+    assert first_started.wait(timeout=30.0)
+    original_put = engine._queue.put
+
+    def observe_sentinel(item: object, *args: object, **kwargs: object) -> None:
+        original_put(item, *args, **kwargs)
+        if item is None:
+            sentinel_put.set()
+
+    monkeypatch.setattr(engine._queue, "put", observe_sentinel)
+    close_thread = threading.Thread(target=engine.close)
+    close_thread.start()
+    assert sentinel_put.wait(timeout=30.0)
+
+    second_job = _make_job(torch_module, lambda: "second", monkeypatch)
+    second_handles: list[object] = []
+    submit_thread = threading.Thread(
+        target=lambda: second_handles.append(engine.submit(second_job))
+    )
+    submit_thread.start()
+    assert submit_thread.is_alive()
+
+    release_first.set()
+    close_thread.join(timeout=30.0)
+    submit_thread.join(timeout=30.0)
+    assert not close_thread.is_alive()
+    assert not submit_thread.is_alive()
+    assert len(second_handles) == 1
+    assert first.await_outcome().result == "first"
+    assert second_job.done.wait(timeout=30.0)
+    assert second_job.outcome is not None
+    assert second_job.outcome.result == "second"
+    engine.close()
+
+
+def test_close_releases_lock_before_failed_worker_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing worker can record its deferred error while close joins it."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    from gpuxtb import torch as torch_module
+
+    engine = torch_module._AsyncComputeEngine()
+    started = threading.Event()
+    release = threading.Event()
+    failure = RuntimeError("worker failure during close")
+
+    def fail_after_sentinel() -> object:
+        started.set()
+        assert release.wait(timeout=30.0)
+        raise failure
+
+    job = _make_job(torch_module, fail_after_sentinel, monkeypatch)
+    engine.submit(job)
+    assert started.wait(timeout=30.0)
+    thread = engine._thread
+    assert thread is not None
+
+    original_put = engine._queue.put
+
+    def put_and_release(item: object, *args: object, **kwargs: object) -> None:
+        original_put(item, *args, **kwargs)
+        if item is None:
+            release.set()
+
+    monkeypatch.setattr(engine._queue, "put", put_and_release)
+    real_join = thread.join
+    alive_after_join: list[bool] = []
+
+    def bounded_join(timeout: float | None = None) -> None:
+        del timeout
+        real_join(timeout=1.0)
+        alive_after_join.append(thread.is_alive())
+
+    monkeypatch.setattr(thread, "join", bounded_join)
+    engine.close()
+    assert alive_after_join == [False]
+    assert engine._pending_error is failure
+
+
 def test_failed_job_surfaces_at_next_submit(monkeypatch: pytest.MonkeyPatch) -> None:
     """A job failure poisons the next submission with the deferred error."""
     reason = _skip_reason()

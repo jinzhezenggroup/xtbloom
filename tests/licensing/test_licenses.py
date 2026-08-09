@@ -175,6 +175,15 @@ class WebSiteLicenseTests(unittest.TestCase):
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "pako-Zlib"):
                 CHECKER.check_web_site(root, REPOSITORY)
 
+    def test_web_site_requires_torch_bsd_license(self) -> None:
+        """Keep the vendored LibTorch headers' BSD grant in Pages payloads."""
+        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / "LICENSES/BSD-3-Clause.txt").unlink()
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "BSD-3-Clause"):
+                CHECKER.check_web_site(root, REPOSITORY)
+
     def test_web_site_rejects_raw_lapack_side_module(self) -> None:
         """Do not deploy a second untracked copy of the preloaded side module."""
         with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
