@@ -106,9 +106,10 @@ jobs:
           python-version: "3.11"
           enable-cache: true
       # --locked fails if uv.lock is stale, so an out-of-date lock shows up as
-      # a CI failure instead of drifting silently. --no-editable installs the
-      # real wheel (not an editable hook), so xtbloom.library can discover the
-      # bundled libxtbloom exactly as an installed package does.
+      # a CI failure instead of drifting silently. Install the reviewed LP64
+      # provider first so its verified absolute path can configure the ordinary
+      # non-bundled test build. It remains a CI-only dependency-group input and
+      # is never published in xtbloom's runtime metadata.
       - name: Install ccache
         run: sudo apt-get update && sudo apt-get install --yes ccache
       - name: Restore ccache
@@ -118,14 +119,27 @@ jobs:
           key: ccache-python-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'include/**', 'src/**', 'tests/**', 'pyproject.toml') }}
           restore-keys: |
             ccache-python-
-      - name: Install package with test extras
+      - name: Install CI provider and package with test extras
         env:
           XTBLOOM_ENABLE_CUDA: "OFF"
           XTBLOOM_C_COMPILER_LAUNCHER: ccache
           XTBLOOM_CXX_COMPILER_LAUNCHER: ccache
-        run: >-
-          uv sync --locked --no-editable --extra test
-          --group torch-testing
+        run: |
+          uv sync --locked --no-install-project --only-group wheel-build
+          openblas="$(
+            uv run --no-sync python python/ci/resolve-openblas-wheel.py \
+              --manifest cmake/3rdparty/scipy_openblas32_manifest.json | \
+              uv run --no-sync python -c \
+                'import json, sys; print(json.load(sys.stdin)["provider_path"])'
+          )"
+          test -f "${openblas}"
+          # The native library records this absolute path. Force a local-project
+          # rebuild because uv's wheel cache does not key builds on CMAKE_ARGS.
+          CMAKE_ARGS="-DXTBLOOM_CPU_LINALG_LIBRARY=${openblas}" \
+            uv sync --locked --no-editable --extra test \
+              --group torch-testing --group wheel-build \
+              --reinstall-package xtbloom
+          test -f "${openblas}"
       - name: Show ccache statistics
         run: ccache -s
       - name: Run Python tests with coverage
