@@ -31,3 +31,6 @@ __pycache__/
 *.sqlite.dbb
 *.csv.db
 *.prof
+
+# WASM web demo build artifacts
+/web/dist/

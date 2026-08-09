@@ -1,0 +1,92 @@
+# Builds the gpuxtb WASM web demo and publishes it to GitHub Pages.
+#
+# The artifact is a fully client-side GFN2-xTB single-point / geometry-optimize
+# page: wasm64 CPU module + a dlopen-able minimal LP64 LAPACK side module. No
+# COOP/COEP headers are needed because the build is single-threaded (no
+# SharedArrayBuffer), which GitHub Pages cannot configure anyway.
+#
+# Deploys only on pushes to main; pull requests build + smoke-test without
+# publishing.
+name: wasm-web-pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - '.github/workflows/pages.yml'
+  pull_request:
+    paths:
+      - 'web/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Emscripten toolchain (pinned review target: mymindstorm/setup-emsdk).
+      - uses: mymindstorm/setup-emsdk@v14
+
+      - name: Configure wasm64 CPU library
+        run: |
+          emcmake cmake -S . -B build/wasm-web -G Ninja \
+            -DGPUXTB_ENABLE_CUDA=OFF \
+            -DGPUXTB_BUILD_TESTS=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-m64 -fPIC" \
+            -DCMAKE_CXX_FLAGS="-m64 -fPIC"
+          cmake --build build/wasm-web --parallel 2
+
+      - name: Build web assets (main module + side module)
+        run: bash web/build.sh
+
+      - name: Smoke-test wasm in Node
+        # Nodes before 22 have no WebAssembly memory64, which the wasm64
+        # module requires; pin a modern Node for the validation step.
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run smoke test
+        working-directory: web/dist
+        env:
+          GPUXTB_WASM_LIB: ${{ github.workspace }}/build/wasm-web/libgpuxtb.a
+        run: |
+          node --input-type=module -e '
+            import m from "./gpuxtb_web.js";
+            const Mod = await m();
+            const v = Mod.ccall("gpuxtb_web_version", "string", [], []);
+            const xyz = "O 0 0 0\nH 0 0 0.9572\nH 0 0.75718 -0.58552";
+            const out = Mod.ccall("gpuxtb_web_compute", "string",
+              ["string","number","number","number","number","number","number","number"],
+              [xyz, 0, 0, 0, 1e-8, 1e-5, 250, 1]);
+            const d = JSON.parse(out);
+            if (!d.ok || !isFinite(d.energy_Eh)) {
+              console.error("compute failed:", out);
+              process.exit(1);
+            }
+            console.log("smoke ok, version", v, "energy", d.energy_Eh);
+          '
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+      - name: Deploy to GitHub Pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/deploy-pages@v4
