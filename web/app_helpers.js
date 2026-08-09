@@ -7,6 +7,50 @@ export function angstromToBohr(value) {
   return value * BOHR_PER_ANGSTROM;
 }
 
+/* Keep UI callers from ever dereferencing a null or partially initialized
+ * Worker. postMessage can itself throw (for example after termination), so the
+ * caller still owns cleanup of any request bookkeeping around this helper. */
+export function postToReadyWorker(worker, engineState, message) {
+  if (
+    engineState !== "ready" ||
+    worker === null ||
+    typeof worker !== "object" ||
+    typeof worker.postMessage !== "function"
+  ) {
+    throw new Error("engine not ready");
+  }
+  worker.postMessage(message);
+}
+
+/* Emscripten callback pointers are Numbers for wasm32 and BigInts for wasm64.
+ * Normalize only safe, aligned offsets and copy immediately so a later memory
+ * growth cannot invalidate the optimizer animation frame. */
+export function copyFloat64FromMemory(memory, pointer, length) {
+  if (!Number.isSafeInteger(length) || length < 0) {
+    throw new RangeError("invalid Float64 element count");
+  }
+  let byteOffset;
+  if (typeof pointer === "bigint") {
+    if (pointer < 0n || pointer > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new RangeError("WASM pointer is outside JavaScript's safe integer range");
+    }
+    byteOffset = Number(pointer);
+  } else {
+    byteOffset = pointer;
+  }
+  if (!Number.isSafeInteger(byteOffset) || byteOffset < 0 || byteOffset % 8 !== 0) {
+    throw new RangeError("WASM Float64 pointer is invalid or misaligned");
+  }
+  if (!memory || !(memory.buffer instanceof ArrayBuffer)) {
+    throw new TypeError("WASM memory is unavailable");
+  }
+  const byteLength = length * 8;
+  if (!Number.isSafeInteger(byteLength) || byteOffset > memory.buffer.byteLength - byteLength) {
+    throw new RangeError("WASM Float64 slice is outside memory");
+  }
+  return Array.from(new Float64Array(memory.buffer, byteOffset, length));
+}
+
 /* Transfer the downloaded main module and resolve only after the worker has
  * instantiated Emscripten, fetched its .data payload, and loaded the LAPACK
  * side module. Runtime result/step messages continue through onMessage. */

@@ -1,9 +1,10 @@
 /*
  * linalg.c — minimal LP64 (32-bit LapackInt) double-precision LAPACKE/CBLAS
- * subset used by the gpuxtb wasm64 demo runtime.
+ * subset used by the gpuxtb browser demo runtime. Here LP64 names the BLAS /
+ * LAPACK convention with 32-bit integers; it does not describe wasm pointers.
  *
  * This is a correctness-focused stand-in for the host OpenBLAS/MKL providers
- * that gpuxtb normally dlopens, compiled into a wasm64 side module for the
+ * that gpuxtb normally dlopens, compiled into a target-width side module for the
  * browser demo. It implements only the symbols the CPU eigensolver requires:
  *   LAPACKE_dpotrf_work, LAPACKE_dpocon_work, LAPACKE_dsyevd_work,
  *   cblas_dgemm, cblas_dtrsm, openblas_get_config, openblas_set_num_threads_local
@@ -18,7 +19,7 @@
  *
  * Build as an Emscripten side module so gpuxtb's existing dlopen fallback
  * chain ("libscipy_openblas.so") finds it unchanged:
- *   emcc linalg.c -o libscipy_openblas.so -sSIDE_MODULE=2 -m64
+ *   emcc linalg.c -o libscipy_openblas.so -sSIDE_MODULE=2 -m32  # or -m64
  */
 #include <float.h>
 #include <math.h>
@@ -43,7 +44,7 @@ enum {
 };
 
 const char* openblas_get_config(void) {
-  return "OpenBLAS 0.3.28 wasm64 demo (LP64, thread-local control)";
+  return "OpenBLAS 0.3.28 WebAssembly demo (32-bit BLAS integers, thread-local control)";
 }
 
 int openblas_set_num_threads_local(int num_threads) {

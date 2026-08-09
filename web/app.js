@@ -1,5 +1,5 @@
 /* gpuxtb web demo front end (bilingual zh/en).
- * Loads the wasm64 module through the Emscripten factory and wires the two
+ * Loads the wasm32 module through the Emscripten factory and wires the two
  * adapter entry points (single-point compute, L-BFGS geometry optimize) to
  * the input/output panels. All user-facing strings come from the I18N
  * dictionary below; errors arrive from wasm as stable ASCII codes. */
@@ -7,6 +7,7 @@
 import {
   angstromToBohr,
   initializeWorker,
+  postToReadyWorker,
   withTimeout,
 } from "./app_helpers.js";
 
@@ -34,7 +35,7 @@ const PRESETS = {
 
 const I18N = {
   zh: {
-    tagline: "浏览器内运行的原生 GFN2-xTB 单点能与几何优化 · C++17 WASM64 · CPU 后端",
+    tagline: "浏览器内运行的原生 GFN2-xTB 单点能与几何优化 · C++17 WASM32 · CPU 后端",
     engine_loading: "引擎加载中…",
     panel_input: "输入",
     presets_label: "模板分子",
@@ -83,7 +84,7 @@ const I18N = {
     tag_done: "已支持",
     roadmap_opt_desc: "内置 L-BFGS 优化器，使用解析力收敛到稳定结构。在左侧“优化”区配置后点击“几何优化”。",
     opt_go: "去优化",
-    footer: "由 gpuxtb 驱动 —— 同一套 C ABI 的 C++17 原生库编译为 wasm64（需要支持 WebAssembly memory64 的浏览器，如 Chrome 133+ / Firefox 128+ / Safari 18.4+）。BLAS/LAPACK 层为演示用最小实现，经 numpy 与原生 gpuxtb 逐位验证。仅供演示，非科学计算生产环境。",
+    footer: "由 gpuxtb 驱动 —— 同一套 C ABI 的 C++17 原生库编译为不依赖 Memory64 的 wasm32，面向支持 WebAssembly 与模块 Worker 的现代 iOS Safari、Safari、Chrome 和 Firefox。BLAS/LAPACK 层为演示用最小实现，经 numpy 与原生 gpuxtb 逐位验证。仅供演示，非科学计算生产环境。",
     overlay_loading: "正在加载 WASM 引擎…",
     overlay_compute: "正在计算单点能…",
     overlay_opt: "正在几何优化（逐梯度迭代，可能需要几秒）…",
@@ -97,7 +98,7 @@ const I18N = {
     smiles_msg: "SMILES → 结构暂未实现，敬请期待。",
     engine_ok: "引擎就绪",
     engine_fail: "引擎加载失败",
-    load_fail: "无法加载 WASM 引擎。本演示需要支持 WebAssembly memory64 的浏览器，例如 Chrome 133+ / Firefox 128+ / Safari 18.4+。\n详情：",
+    load_fail: "无法加载 wasm32 引擎。请使用支持 WebAssembly 和模块化 Web Worker 的现代浏览器。\n详情：",
     load_timeout: "加载超时——网络可能较慢，请重试。若持续失败请检查是否能正常访问本页面资源。",
     load_retry: "重试",
     load_downloading: "正在下载 WASM 引擎：{{pct}}%",
@@ -119,7 +120,7 @@ const I18N = {
     err_unknown: "未知错误",
   },
   en: {
-    tagline: "Native GFN2-xTB single-point + geometry optimization in your browser · C++17 WASM64 · CPU backend",
+    tagline: "Native GFN2-xTB single-point + geometry optimization in your browser · C++17 WASM32 · CPU backend",
     engine_loading: "engine loading…",
     panel_input: "Input",
     presets_label: "Preset molecules",
@@ -168,7 +169,7 @@ const I18N = {
     tag_done: "supported",
     roadmap_opt_desc: "Built-in L-BFGS optimizer using analytic forces. Configure it in the left panel, then click “Optimize geometry”.",
     opt_go: "Try it",
-    footer: "Powered by gpuxtb — the same native C ABI library compiled to wasm64 (requires a browser with WebAssembly memory64 support, e.g. Chrome 133+ / Firefox 128+ / Safari 18.4+). The BLAS/LAPACK layer is a minimal demo implementation, validated bit-for-bit against numpy and native gpuxtb. Demo only, not a production scientific environment.",
+    footer: "Powered by gpuxtb — the same native C ABI library compiled to wasm32 without requiring Memory64, targeting modern iOS Safari, Safari, Chrome, and Firefox with WebAssembly and module Worker support. The BLAS/LAPACK layer is a minimal demo implementation, validated bit-for-bit against numpy and native gpuxtb. Demo only, not a production scientific environment.",
     overlay_loading: "Loading the WASM engine…",
     overlay_compute: "Computing single point…",
     overlay_opt: "Optimizing geometry (gradient steps, may take a few seconds)…",
@@ -182,7 +183,7 @@ const I18N = {
     smiles_msg: "SMILES → structure is not implemented yet.",
     engine_ok: "engine ready",
     engine_fail: "engine failed to load",
-    load_fail: "Could not load the WASM engine. This demo requires a browser with WebAssembly memory64 support, e.g. Chrome 133+ / Firefox 128+ / Safari 18.4+.\nDetails: ",
+    load_fail: "Could not load the wasm32 engine. Use a modern browser with WebAssembly and module Worker support.\nDetails: ",
     load_timeout: "Load timed out — network may be slow. Please retry. If it keeps failing, check that the page and its assets can be reached.",
     load_retry: "Retry",
     load_downloading: "Downloading WASM engine: {{pct}}%",
@@ -258,8 +259,15 @@ $("lang-toggle").addEventListener("click", () => {
 
 let engineState = "loading"; /* loading | ready | error */
 let worker = null;
+let engineBusy = false;
 let msgSeq = 0;
 const pending = new Map();
+
+function syncEngineControls() {
+  const enabled = engineState === "ready" && worker !== null && !engineBusy;
+  $("run").disabled = !enabled;
+  $("opt-run").disabled = !enabled;
+}
 
 function refreshBadge() {
   const b = $("engine-badge");
@@ -269,14 +277,24 @@ function refreshBadge() {
     engineState === "ready" ? t("engine_ok")
     : engineState === "error" ? t("engine_fail")
     : t("engine_loading");
+  syncEngineControls();
+}
+
+function rejectPendingCalls(error) {
+  for (const entry of pending.values()) entry.reject(error);
+  pending.clear();
 }
 
 function handleWorkerMessage(m) {
   if (m.type === "error") {
+    const error = new Error(String(m.error || "worker error"));
+    if (worker) worker.terminate();
+    worker = null;
     engineState = "error";
+    rejectPendingCalls(error);
     refreshBadge();
     hideOverlay();
-    setError((t("load_fail") + String(m.error)).trim());
+    setError((t("load_fail") + error.message).trim());
     $("retry").hidden = false;
   } else if (m.type === "step") {
     handleStepMessage(m);
@@ -304,7 +322,12 @@ function callWorker(cmd, args, onStep) {
   return new Promise((resolve, reject) => {
     const id = ++msgSeq;
     pending.set(id, onStep ? { resolve, reject, onStep } : { resolve, reject });
-    worker.postMessage({ type: "call", id, cmd, args });
+    try {
+      postToReadyWorker(worker, engineState, { type: "call", id, cmd, args });
+    } catch (error) {
+      pending.delete(id);
+      reject(error);
+    }
   });
 }
 
@@ -626,15 +649,13 @@ function collectOptions() {
 }
 
 async function withPending(fn) {
-  const runBtn = $("run");
-  const optBtn = $("opt-run");
-  runBtn.disabled = true;
-  optBtn.disabled = true;
+  engineBusy = true;
+  syncEngineControls();
   try {
     await fn();
   } finally {
-    runBtn.disabled = false;
-    optBtn.disabled = false;
+    engineBusy = false;
+    syncEngineControls();
   }
 }
 
@@ -797,6 +818,7 @@ $("smiles-alert").addEventListener("click", () => {
       worker = null;
     }
     engineState = "error";
+    rejectPendingCalls(e instanceof Error ? e : new Error(String(e)));
     refreshBadge();
     hideOverlay();
     setError(String(e && e.message).includes("TIME_OUT") ? t("load_timeout") : t("load_fail") + String(e && e.message));

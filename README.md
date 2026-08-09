@@ -8,9 +8,12 @@ and CUDA backends, one stable C ABI, and Python interfaces built on that same
 ABI.
 
 Try the experimental, fully client-side browser demo at
-<https://jinzhezeng.group/gpuxtb/>. It compiles the CPU backend to wasm64 and
-adds a small Web-adapter L-BFGS optimizer; that optimizer is not part of the
-stable C ABI or the native library API.
+<https://jinzhezeng.group/gpuxtb/>. It compiles the CPU backend to wasm32
+without requiring Memory64, targeting modern iOS Safari, Safari, Chrome, and
+Firefox with WebAssembly and module Worker support. It also adds a small
+Web-adapter L-BFGS optimizer; that optimizer is not part of the stable C ABI or
+the native library API. A wasm64 build remains in CI as an ABI and numerical
+parity gate.
 
 The current pre-release implements restricted and unrestricted GFN2-xTB
 energies, analytic forces, and atomic charges. It is designed for reusable

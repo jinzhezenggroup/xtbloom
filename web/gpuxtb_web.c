@@ -1,5 +1,5 @@
 /*
- * gpuxtb_web.c — browser-facing adapter compiled into the wasm64 main module.
+ * gpuxtb_web.c — browser-facing adapter compiled into the WebAssembly main module.
  *
  * It wraps the public gpuxtb C ABI behind two tiny C entry points so the web
  * front end never has to marshal the ABI structs by hand:
