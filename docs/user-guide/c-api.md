@@ -285,6 +285,13 @@ checkpoint from the most recent fully converged compatible batch. It is strict:
 a first call, topology/policy change, or missing compatible checkpoint is an
 invalid argument and never falls back to `FRESH`.
 
+A `WARM` call restarts SCC from the checkpoint electronic state and reconverges,
+so its reported energy equals the last fully converged compatible `FRESH`
+energy within the SCC energy tolerance rather than bit-for-bit: the exact
+reconverged point can differ in the final ulp across hosts and BLAS kernels.
+Repeated identical `WARM` calls, like repeated identical `FRESH` calls, are
+bitwise deterministic for a fixed backend and configuration.
+
 Geometry may change while topology and compute policy remain identical. CPU
 restarts its mixing window from the converged electronic state; CUDA preserves
 only epoch-compatible mixer history. See

@@ -1128,7 +1128,13 @@ int test_electric_field_warm_identity_is_strict() {
   CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) == GPUXTB_STATUS_SUCCESS);
   CHECK(h2.statuses[0] == GPUXTB_STATUS_SUCCESS);
   CHECK(h2.converged[0] == 1u);
-  CHECK(field_energy == h2.energies[0]);
+  /* WARM reconverges from the checkpoint and publishes the reconverged free
+   * energy. Equivalence with the FRESH solve is numerical, to the SCC energy
+   * tolerance, not bitwise: across hosts the eigensolver/BLAS kernels can land
+   * the last ulp of the reconverged SCC point differently (issue #277). The
+   * strict WARM identity/rejection and checkpoint coverage below is unchanged
+   * and remains byte-atomic. */
+  CHECK(std::abs(h2.energies[0] - field_energy) <= h2.options.energy_tolerance);
 
   /* A WARM call with a different field is a changed compute policy: strict
    * WARM rejects it without touching any output byte. */
@@ -1164,6 +1170,82 @@ int test_electric_field_warm_identity_is_strict() {
   CHECK(gpuxtb_compute(zero_context.get(), &explicit_zero.batch, &explicit_zero.options,
                        &explicit_zero.result) == GPUXTB_STATUS_SUCCESS);
   CHECK(explicit_zero.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  return 0;
+}
+
+/* Repeated identical FRESH-then-WARM electric-field instrumentation for
+ * issue #277. The intermittency cannot be triggered on every host: the WARM
+ * reconvergence coincides with the FRESH energy bit-for-bit on hosts whose
+ * BLAS kernels reproduce the SCC fixed point exactly, and differs in the last
+ * ulp on others. The runtime contract is numerical equivalence to the SCC
+ * energy tolerance, so this stress test asserts that bound across many
+ * trials, the strict WARM iteration bound, and the bitwise self-consistency
+ * that the library does guarantee for repeated identical calls. */
+int test_electric_field_warm_repeated_reconvergence() {
+  ContextHandle context = make_cpu_context();
+  CHECK(context != nullptr);
+  const std::uint32_t flags =
+      GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
+
+  PublicBatch h2;
+  h2.atom_offsets = {0, 2};
+  h2.atomic_numbers = {1, 1};
+  h2.positions = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0};
+  h2.molecular_charges = {0.0};
+  h2.unpaired_electrons = {0};
+  h2.fields = {{0.002, 0.0, 0.0}};
+  std::vector<std::uint8_t> payload_storage;
+  std::vector<gpuxtb_interaction_t> descriptor_storage;
+
+  constexpr int kTrials = 32;
+  std::vector<double> fresh_energies;
+  std::vector<double> warm_energies;
+  std::vector<std::int32_t> fresh_iterations;
+  std::vector<std::int32_t> warm_iterations;
+
+  for (int trial = 0; trial < kTrials; ++trial) {
+    h2.bind(flags);
+    h2.bind_fields(&payload_storage, &descriptor_storage);
+    CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) ==
+          GPUXTB_STATUS_SUCCESS);
+    CHECK(h2.statuses[0] == GPUXTB_STATUS_SUCCESS);
+    CHECK(h2.converged[0] == 1u);
+    const double fresh_energy = h2.energies[0];
+    const std::int32_t fresh_iterations_count = h2.iterations[0];
+    const std::vector<double> fresh_charges = h2.atomic_charges;
+    const std::vector<double> fresh_forces = h2.forces;
+
+    /* Same-geometry WARM reconverges from the fresh checkpoint: it never does
+     * more SCC work than the fresh solve and agrees within tolerance. */
+    h2.options.scc_start_mode = GPUXTB_SCC_START_WARM;
+    CHECK(gpuxtb_compute(context.get(), &h2.batch, &h2.options, &h2.result) ==
+          GPUXTB_STATUS_SUCCESS);
+    CHECK(h2.statuses[0] == GPUXTB_STATUS_SUCCESS);
+    CHECK(h2.converged[0] == 1u);
+    CHECK(h2.iterations[0] <= fresh_iterations_count);
+    CHECK(std::abs(h2.energies[0] - fresh_energy) <= h2.options.energy_tolerance);
+    for (std::size_t atom = 0u; atom < 2u; ++atom) {
+      CHECK(near(h2.atomic_charges[atom], fresh_charges[atom], 1.0e-5));
+      for (std::size_t axis = 0u; axis < 3u; ++axis) {
+        CHECK(near(h2.forces[3u * atom + axis], fresh_forces[3u * atom + axis], 1.0e-3));
+      }
+    }
+
+    fresh_energies.push_back(fresh_energy);
+    warm_energies.push_back(h2.energies[0]);
+    fresh_iterations.push_back(fresh_iterations_count);
+    warm_iterations.push_back(h2.iterations[0]);
+  }
+
+  /* Repeated identical FRESH calls and repeated identical WARM calls are each
+   * bitwise deterministic for a fixed backend and configuration; only the
+   * FRESH-versus-WARM reconvergence comparison above is numerical. */
+  for (std::size_t trial = 1u; trial < fresh_energies.size(); ++trial) {
+    CHECK(fresh_energies[trial] == fresh_energies[0]);
+    CHECK(warm_energies[trial] == warm_energies[0]);
+    CHECK(fresh_iterations[trial] == fresh_iterations[0]);
+    CHECK(warm_iterations[trial] == warm_iterations[0]);
+  }
   return 0;
 }
 
@@ -2038,6 +2120,9 @@ int main() {
     return line;
   }
   if (const int line = test_electric_field_warm_identity_is_strict(); line != 0) {
+    return line;
+  }
+  if (const int line = test_electric_field_warm_repeated_reconvergence(); line != 0) {
     return line;
   }
   if (const int line = test_electric_field_translation_invariance(); line != 0) {
