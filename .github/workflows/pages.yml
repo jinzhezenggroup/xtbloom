@@ -15,35 +15,9 @@ name: wasm-web-pages
 on:
   push:
     branches: [main]
-    paths:
-      - 'web/**'
-      - 'include/**'
-      - 'src/**'
-      - 'data/parameters/**'
-      - 'cmake/**'
-      - '.github/workflows/pages.yml'
-      - 'CMakeLists.txt'
-      - 'LICENSE'
-      - 'CUDA_MKL_LINKING_EXCEPTION'
-      - 'THIRD_PARTY_NOTICES.md'
-      - 'LICENSES/**'
-      - 'tools/licensing/**'
-      - 'tests/licensing/**'
+  # Feature-branch pushes do not trigger a second run: each PR validates once,
+  # while the post-merge main push rebuilds the exact artifact that is deployed.
   pull_request:
-    paths:
-      - 'web/**'
-      - 'include/**'
-      - 'src/**'
-      - 'data/parameters/**'
-      - 'cmake/**'
-      - '.github/workflows/pages.yml'
-      - 'CMakeLists.txt'
-      - 'LICENSE'
-      - 'CUDA_MKL_LINKING_EXCEPTION'
-      - 'THIRD_PARTY_NOTICES.md'
-      - 'LICENSES/**'
-      - 'tools/licensing/**'
-      - 'tests/licensing/**'
   workflow_dispatch:
 
 permissions:
@@ -58,6 +32,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      CCACHE_MAXSIZE: 1G
+      # Emscripten invokes this wrapper around its internal Clang compilation,
+      # including custom web-adapter and side-module commands.
+      EM_COMPILER_WRAPPER: ccache
     steps:
       - uses: actions/checkout@v4
         with:
@@ -73,6 +52,20 @@ jobs:
         with:
           version: '6.0.6'
 
+      - name: Install ccache
+        run: sudo apt-get update && sudo apt-get install --yes ccache
+
+      - name: Restore ccache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ccache
+          # ccache validates compiler identity and flags itself. The broad
+          # restore prefix therefore safely reuses unchanged objects while a
+          # source/configuration hash creates a fresh writable cache entry.
+          key: ccache-wasm-emscripten-6.0.6-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'include/**', 'src/**', 'data/parameters/**', 'web/CMakeLists.txt', 'web/*.c', 'web/wasm/**') }}
+          restore-keys: |
+            ccache-wasm-emscripten-6.0.6-
+
       - name: Configure wasm64 build (library + web demo site)
         run: |
           emcmake cmake -S . -B build/wasm-web -G Ninja \
@@ -85,6 +78,9 @@ jobs:
 
       - name: Build
         run: cmake --build build/wasm-web --parallel 2
+
+      - name: Show ccache statistics
+        run: ccache -s
 
       - name: Test browser helpers
         run: npm test --prefix web
