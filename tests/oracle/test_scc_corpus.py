@@ -49,6 +49,20 @@ CPU_TRACE = importlib.util.module_from_spec(SPEC3)
 sys.modules.setdefault("gpuxtb_scc_cpu_trace", CPU_TRACE)
 SPEC3.loader.exec_module(CPU_TRACE)
 
+SPEC4 = importlib.util.spec_from_file_location(
+    "gpuxtb_scc_compare", TOOL_DIR / "gpuxtb_scc_compare.py"
+)
+assert SPEC4 is not None and SPEC4.loader is not None
+COMPARE = importlib.util.module_from_spec(SPEC4)
+sys.modules.setdefault("gpuxtb_scc_compare", COMPARE)
+SPEC4.loader.exec_module(COMPARE)
+
+
+def cpu_trace_safe_compare(actual: dict, golden: dict) -> object:
+    """Compare two in-memory trace documents with the shared comparator."""
+    return COMPARE.compare_trace(actual, golden)
+
+
 CASES = sorted(GENERATOR.CASES)
 
 
@@ -480,6 +494,205 @@ class RestrictedCorpusTest(unittest.TestCase):
             self.assertIn("iterations[2].energy", mismatch.stdout)
         finally:
             perturbed_path.unlink(missing_ok=True)
+
+    def test_cpu_capture_provenance_command_does_not_fail_golden_compare(
+        self,
+    ) -> None:
+        """A CPU capture (different oracle_command) compares against the golden."""
+        golden = json.loads((CORPUS_DIR / "h3_plus.json").read_text(encoding="utf-8"))
+        actual = copy.deepcopy(golden)
+        actual["provenance"]["oracle_command"] = "gpuxtb_scc_cpu_trace.py (capture)"
+        result = cpu_trace_safe_compare(actual, golden)
+        self.assertTrue(result.matches, msg=result.render())
+
+    def test_batch_lane_splitting_parses_status_and_bodies(self) -> None:
+        """Split a synthetic batch raw stream into lanes and summaries."""
+        synthetic = (
+            "batch_system 0\n"
+            "status 0 iterations 3\n"
+            "nat 3 nsh 3 nao 3 niterations 3 terminal 1\n"
+            "atomic_numbers\n1\n1\n1\n"
+            "batch_system 1\n"
+            "status -1 iterations 0\n"
+            "nat 3 nsh 3 nao 3 niterations 0 terminal 3\n"
+        )
+        lanes = CPU_TRACE.split_batch_lanes(synthetic)
+        self.assertEqual(len(lanes), 2)
+        self.assertEqual(lanes[0][0], 0)
+        self.assertEqual(CPU_TRACE.status_bits(lanes[0][1]), (0, 3))
+        self.assertEqual(CPU_TRACE.status_bits(lanes[1][1]), (-1, 0))
+        self.assertIn("niterations 0 terminal 3", lanes[1][2])
+
+    def test_cpu_raw_parser_preserves_eigensolver_failed_attempt(self) -> None:
+        """Canonicalize only the pre-solve payload of a failed eigensolve."""
+        raw = """nat 1 nsh 1 nao 1 niterations 0 terminal 3 failed_attempt 1
+atomic_numbers
+1
+positions
+0
+0
+0
+molecular_charge
+0
+unpaired_electrons
+0
+temperature
+300
+n_point_charges
+0
+atom_to_shell_count
+1
+overlap
+1
+core_hamiltonian
+-0.5
+failed_attempt
+1
+hamiltonian
+-0.4
+mixed_qsh
+0
+mixed_qat
+0
+mixed_dipoles
+0
+0
+0
+mixed_quadrupoles
+0
+0
+0
+0
+0
+0
+"""
+        trace = GENERATOR.canonicalize(raw, {}, "synthetic eigensolver failure")
+        TRACE.validate(trace)
+        self.assertEqual(trace["iterations"], [])
+        self.assertEqual(
+            trace["terminal"], {"status": 3, "converged": False, "iterations": 1}
+        )
+        attempt = trace["failed_attempt"]
+        self.assertEqual(attempt["index"], 1)
+        self.assertEqual(attempt["hamiltonian"], [[[-0.4]]])
+        for forbidden in (
+            "eigenvalues",
+            "occupations",
+            "density",
+            "raw_qsh",
+            "residual",
+            "energy",
+            "convergence",
+        ):
+            self.assertNotIn(forbidden, attempt)
+
+    def test_replay_lifecycle_metadata_is_checked_before_snapshot_compare(self) -> None:
+        """Do not discard a replay artifact's terminal lifecycle metadata."""
+        expected_iteration = {"convergence": {"overall": False}}
+        trace = {"terminal": {"status": 2, "converged": False, "iterations": 1}}
+        CPU_TRACE.validate_replay_lifecycle(trace, expected_iteration)
+        trace["terminal"] = {"status": 1, "converged": True, "iterations": 1}
+        with self.assertRaisesRegex(GENERATOR.CorpusError, "lifecycle mismatch"):
+            CPU_TRACE.validate_replay_lifecycle(trace, expected_iteration)
+
+    def test_mixer_flatten_helpers_match_residual_layout(self) -> None:
+        """Flatten mixed/raw multipoles in the canonical residual order."""
+        golden = json.loads((CORPUS_DIR / "h3_plus.json").read_text(encoding="utf-8"))
+        iteration = golden["iterations"][1]
+        flat = CPU_TRACE.flatten_multipoles(iteration)
+        expected = (
+            iteration["mixed_qsh"][0]
+            + [value for atom in iteration["mixed_dipoles"][0] for value in atom]
+            + [value for atom in iteration["mixed_quadrupoles"][0] for value in atom]
+        )
+        self.assertEqual(flat, expected)
+        self.assertEqual(
+            len(flat), golden["basis"]["n_shells"] + 9 * golden["basis"]["n_atoms"]
+        )
+        raw = CPU_TRACE.flatten_raw(iteration)
+        self.assertEqual(len(raw), len(flat))
+
+    def test_mixer_wrapper_requires_mixer_cases(self) -> None:
+        """Reject the mixer mode without a case list."""
+        wrapper = TOOL_DIR / "gpuxtb_scc_cpu_trace.py"
+        result = subprocess.run(
+            [sys.executable, str(wrapper), "--mixer", "mixer"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--mixer requires --mixer-cases", result.stdout)
+
+    def test_load_pinned_golden_accepts_manifest_matching_canonical_bytes(self) -> None:
+        """Evidence goldens must match the manifest hash and canonical bytes."""
+        manifest = json.loads(
+            (CORPUS_DIR / "manifest.json").read_text(encoding="utf-8")
+        )
+        entry = manifest["cases"]["h3_plus"]
+        golden_path = CORPUS_DIR / entry["path"]
+        document = CPU_TRACE.load_pinned_golden(golden_path, entry)
+        self.assertEqual(document["format"], "gpuxtb-scc-trace-v1")
+
+    def test_load_pinned_golden_rejects_drifted_bytes(self) -> None:
+        """A drifted golden must be rejected before replay evidence is built."""
+        manifest = json.loads(
+            (CORPUS_DIR / "manifest.json").read_text(encoding="utf-8")
+        )
+        entry = dict(manifest["cases"]["h3_plus"])
+        original = CORPUS_DIR / entry["path"]
+        with tempfile.TemporaryDirectory() as directory:
+            drifted = Path(directory) / "h3_plus.json"
+            document = json.loads(original.read_text(encoding="utf-8"))
+            document["iterations"][-1]["energy"] += 1.0e-3
+            drifted.write_text(TRACE.dumps(document), encoding="utf-8")
+            with self.assertRaises(CPU_TRACE.generator.CorpusError):
+                CPU_TRACE.load_pinned_golden(drifted, entry)
+
+    def test_load_pinned_golden_rejects_noncanonical_bytes(self) -> None:
+        """Noncanonical serialization must be rejected for evidence goldens."""
+        manifest = json.loads(
+            (CORPUS_DIR / "manifest.json").read_text(encoding="utf-8")
+        )
+        entry = dict(manifest["cases"]["h3_plus"])
+        with tempfile.TemporaryDirectory() as directory:
+            noncanonical = Path(directory) / "h3_plus.json"
+            document = json.loads(
+                (CORPUS_DIR / entry["path"]).read_text(encoding="utf-8")
+            )
+            compressed = json.dumps(document, indent=2, sort_keys=True)
+            noncanonical.write_text(compressed + "  \n", encoding="utf-8")
+            # Align the manifest pin with the changed bytes so only the
+            # canonical-serialization check can reject this file.
+            entry["sha256"] = CPU_TRACE.sha256_file(noncanonical)
+            with self.assertRaisesRegex(
+                CPU_TRACE.generator.CorpusError, "not canonical"
+            ):
+                CPU_TRACE.load_pinned_golden(noncanonical, entry)
+
+    def test_wrapper_requires_exactly_one_mode(self) -> None:
+        """Reject wrappers that select zero or multiple capture modes."""
+        wrapper = TOOL_DIR / "gpuxtb_scc_cpu_trace.py"
+        without_mode = subprocess.run(
+            [sys.executable, str(wrapper)], capture_output=True, text=True, check=False
+        )
+        self.assertNotEqual(without_mode.returncode, 0)
+        self.assertIn("exactly one of", without_mode.stdout)
+        with_mode = subprocess.run(
+            [
+                sys.executable,
+                str(wrapper),
+                "--capture",
+                "capture",
+                "--batch-capture",
+                "batch",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(with_mode.returncode, 0)
+        self.assertIn("exactly one of", with_mode.stdout)
 
 
 if __name__ == "__main__":
