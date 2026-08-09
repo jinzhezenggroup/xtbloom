@@ -58,11 +58,13 @@ jobs:
         run: cmake --build build/wasm-web --parallel 2
 
       - name: Smoke-test wasm in Node
-        # Nodes before 22 have no WebAssembly memory64, which the wasm64
-        # module requires; pin a modern Node for the validation step.
+        # The wasm64 module requires WebAssembly memory64. That proposal first
+        # shipped in V8 13.3 (Chrome 133), so Node 22 (V8 12.x) cannot parse
+        # the module ("invalid table elements limits flags"); Node 24 is the
+        # first release line with memory64 enabled by default.
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
       - name: Run smoke test
         working-directory: build/wasm-web/web/site
         run: |
