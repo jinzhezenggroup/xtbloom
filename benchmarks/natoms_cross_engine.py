@@ -3,9 +3,10 @@
 
 This runner measures public single-point GFN2-xTB inference latency. Context,
 calculator, and descriptor construction happen outside the timed region. For
-gpuxtb, xTB, and tblite, cold-reset/rebuild work is also outside timing; dxtb's
-required ``Calculator.reset()`` remains inside its public inference call. The
-timed boundary ends after synchronous host-visible energy and force publication:
+gpuxtb FRESH calls, state initialization occurs inside ``gpuxtb_compute``;
+xTB/tblite calculator rebuilds are outside timing, while dxtb's required
+``Calculator.reset()`` remains inside its public inference call. The timed
+boundary ends after synchronous host-visible energy and force publication:
 
 - ``gpuxtb`` CPU and CUDA through the committed ctypes conformance adapter
   (``gpuxtb_public_api``), exactly like ``natoms_scaling.py``;
@@ -32,7 +33,7 @@ benchmark harnesses. JSON is authoritative and retains raw timing samples,
 complete final energy/force vectors, force digests for every repetition, run
 identity, hardware, threads, correctness, and per-row diagnostics; CSV is the
 compact row summary. Final publication evidence rejects a dirty repository and
-can compare every row with a clean independent xTB reference artifact.
+can compare every row with a clean independent reference-engine artifact.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ import base64
 import contextlib
 import csv
 import ctypes
+import functools
 import hashlib
 import importlib
 import importlib.metadata
@@ -74,9 +76,23 @@ if str(CONFORMANCE_TOOLS) not in sys.path:
 public_api = importlib.import_module("gpuxtb_public_api")
 
 try:
-    from .natoms_scaling import Molecule, SystemSlice, make_alkane
+    from .natoms_scaling import (
+        CROSS_ENGINE_TOLERANCE_SOURCE,
+        DEFAULT_CROSS_ENGINE_ENERGY_ATOL,
+        DEFAULT_CROSS_ENGINE_FORCE_ATOL,
+        Molecule,
+        SystemSlice,
+        make_alkane,
+    )
 except ImportError:  # Direct ``python benchmarks/natoms_cross_engine.py`` execution.
-    from natoms_scaling import Molecule, SystemSlice, make_alkane
+    from natoms_scaling import (
+        CROSS_ENGINE_TOLERANCE_SOURCE,
+        DEFAULT_CROSS_ENGINE_ENERGY_ATOL,
+        DEFAULT_CROSS_ENGINE_FORCE_ATOL,
+        Molecule,
+        SystemSlice,
+        make_alkane,
+    )
 
 try:
     from .xtb_adapter import XtbAdapter, XtbError
@@ -105,8 +121,26 @@ SUPPORTED_ENGINES = (
     "dxtb-cuda",
 )
 DEFAULT_ENGINES = ("gpuxtb-cpu", "gpuxtb-cuda", "xtb", "tblite", "dxtb-cpu")
-CROSS_ENGINE_ENERGY_ATOL_HARTREE = 2.0e-3
-CROSS_ENGINE_FORCE_ATOL_HARTREE_PER_BOHR = 2.0e-3
+# This benchmark has a deliberately broader, owner-authorized compatibility
+# gate than gpuxtb's primary conformance suite.  It decides whether one timing
+# point may support the public cross-library performance figure; it is not a
+# scientific acceptance tolerance and must never replace the manifest gates.
+PUBLIC_BENCHMARK_ENERGY_ATOL_HARTREE = 2.0e-3
+PUBLIC_BENCHMARK_FORCE_ATOL_HARTREE_PER_BOHR = 2.0e-3
+CROSS_ENGINE_ENERGY_ATOL_HARTREE = PUBLIC_BENCHMARK_ENERGY_ATOL_HARTREE
+CROSS_ENGINE_FORCE_ATOL_HARTREE_PER_BOHR = PUBLIC_BENCHMARK_FORCE_ATOL_HARTREE_PER_BOHR
+
+# Record each library through its native public convergence controls. xTB and
+# tblite document an accuracy factor of 1.0 as their default; gpuxtb exposes
+# charge/energy thresholds directly, while dxtb exposes fixed-point/function
+# residual tolerances with different stopping semantics.
+PUBLIC_BENCHMARK_SCC_CHARGE_TOLERANCE = 1.0e-4
+PUBLIC_BENCHMARK_SCC_ENERGY_TOLERANCE = 1.0e-6
+REFERENCE_ACCURACY = 1.0
+DXTB_FIXED_POINT_TOLERANCE = 1.0e-4
+DXTB_MAX_NORM_TOLERANCE = 1.0e-5
+DXTB_FUNCTION_TOLERANCE = 1.0e-4
+DXTB_FORCE_CONVERGENCE = True
 REPEATABILITY_ENERGY_ATOL_HARTREE = 1.0e-10
 REPEATABILITY_FORCE_ATOL_HARTREE_PER_BOHR = 1.0e-8
 PERTURB_SIGMA_BOHR = 0.02
@@ -148,32 +182,28 @@ def sha256_file(path: Path | None) -> str | None:
 
 
 def git_state(path: Path) -> dict[str, Any]:
-    """Return clean/dirty and HEAD revision of a git checkout."""
-
-    def run(command: Sequence[str]) -> str | None:
-        try:
-            completed = subprocess.run(
-                command, capture_output=True, text=True, check=False
-            )
-        except OSError:
-            return None
-        return completed.stdout.strip() or None
-
-    revision = run(("git", "-C", str(path), "rev-parse", "HEAD"))
-    status = run(("git", "-C", str(path), "status", "--porcelain"))
+    """Return verified clean/dirty and HEAD revision of a Git checkout."""
+    revision = run_text(("git", "-C", str(path), "rev-parse", "HEAD"), required=True)
+    status = run_text(
+        ("git", "-C", str(path), "status", "--porcelain"),
+        required=True,
+        allow_empty=True,
+    )
     return {
         "head": revision,
         "dirty": bool(status),
     }
 
 
+@functools.cache
 def installed_distribution_identity(name: str) -> dict[str, Any] | None:
     """Return hash-pinned metadata for one installed Python distribution.
 
     Benchmark artifacts must remain reproducible when dxtb is consumed from
-    an installed wheel rather than a Git checkout. Hashing ``RECORD`` binds
-    the complete installed payload without copying a potentially
-    credential-bearing ``direct_url.json`` into public evidence.
+    an installed wheel rather than a Git checkout.  Verify every file listed
+    by ``RECORD`` against its recorded hash/size, then hash a canonical
+    inventory of the actual installed payload.  Only the digest of a
+    potentially credential-bearing ``direct_url.json`` is retained.
     """
     try:
         distribution = importlib.metadata.distribution(name)
@@ -181,6 +211,47 @@ def installed_distribution_identity(name: str) -> dict[str, Any] | None:
         return None
     record_text = distribution.read_text("RECORD")
     direct_url_text = distribution.read_text("direct_url.json")
+    errors: list[str] = []
+    payload: list[dict[str, Any]] = []
+    verified_hashes = 0
+    if record_text is None:
+        errors.append("distribution has no RECORD")
+    else:
+        for record_path, hash_spec, size_text, *_ in csv.reader(
+            record_text.splitlines()
+        ):
+            resolved = Path(distribution.locate_file(record_path)).resolve()
+            if not resolved.is_file():
+                errors.append(f"missing RECORD file: {record_path}")
+                continue
+            raw = resolved.read_bytes()
+            actual_sha256 = hashlib.sha256(raw).hexdigest()
+            actual_size = len(raw)
+            if size_text and int(size_text) != actual_size:
+                errors.append(f"size mismatch: {record_path}")
+            if hash_spec:
+                algorithm, encoded = hash_spec.split("=", maxsplit=1)
+                if algorithm != "sha256":
+                    errors.append(f"unsupported RECORD hash: {record_path}")
+                else:
+                    expected = base64.urlsafe_b64decode(
+                        encoded + "=" * (-len(encoded) % 4)
+                    ).hex()
+                    if expected != actual_sha256:
+                        errors.append(f"hash mismatch: {record_path}")
+                    else:
+                        verified_hashes += 1
+            payload.append(
+                {
+                    "path": record_path,
+                    "sha256": actual_sha256,
+                    "size": actual_size,
+                }
+            )
+    payload.sort(key=lambda item: item["path"])
+    payload_sha256 = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     return {
         "name": distribution.metadata.get("Name") or name,
         "version": distribution.version,
@@ -194,31 +265,215 @@ def installed_distribution_identity(name: str) -> dict[str, Any] | None:
             if direct_url_text is not None
             else None
         ),
+        "payload_verification": {
+            "status": "verified" if not errors else "failed",
+            "record_entries": len(payload),
+            "verified_hashes": verified_hashes,
+            "payload_sha256": payload_sha256,
+            "errors": errors,
+        },
     }
 
 
-def run_text(command: Sequence[str]) -> str | None:
-    """Run one diagnostic command and return stripped stdout or None."""
+def run_text(
+    command: Sequence[str], *, required: bool = False, allow_empty: bool = False
+) -> str | None:
+    """Run one diagnostic command without treating failed commands as evidence."""
     try:
         completed = subprocess.run(command, capture_output=True, text=True, check=False)
-    except OSError:
+    except OSError as exc:
+        if required:
+            raise BenchmarkError(f"cannot execute {command[0]!r}: {exc}") from exc
         return None
-    return completed.stdout.strip() or None
+    if completed.returncode != 0:
+        if required:
+            diagnostic = completed.stderr.strip() or completed.stdout.strip()
+            raise BenchmarkError(
+                f"command failed ({completed.returncode}): {' '.join(command)}"
+                + (f": {diagnostic}" if diagnostic else "")
+            )
+        return None
+    output = completed.stdout.strip()
+    return output if output or allow_empty else None
+
+
+@functools.cache
+def native_library_identity(path_text: str) -> dict[str, Any] | None:
+    """Capture one shared library and every dependency resolved by ``ldd``."""
+    path = Path(path_text).resolve()
+    if not path.is_file():
+        return None
+    dynamic = run_text(("readelf", "-d", str(path)), required=True)
+    ldd_output = run_text(("ldd", str(path)), required=True)
+    dependencies: list[dict[str, Any]] = []
+    unresolved: list[str] = []
+    for line in (ldd_output or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if "not found" in stripped:
+            unresolved.append(stripped)
+            continue
+        candidate: str | None = None
+        soname = stripped.split(maxsplit=1)[0]
+        if "=>" in stripped:
+            right = stripped.split("=>", maxsplit=1)[1].strip()
+            candidate = right.split(maxsplit=1)[0]
+        elif stripped.startswith("/"):
+            candidate = stripped.split(maxsplit=1)[0]
+        if candidate is None or not candidate.startswith("/"):
+            continue
+        resolved = Path(candidate).resolve()
+        if not resolved.is_file():
+            continue
+        dependencies.append(
+            {
+                "soname": soname,
+                "path": str(resolved),
+                "sha256": sha256_file(resolved),
+            }
+        )
+    dependencies.sort(key=lambda item: (item["soname"], item["path"]))
+    return {
+        "path": str(path),
+        "sha256": sha256_file(path),
+        "readelf_dynamic": dynamic,
+        "ldd": ldd_output,
+        "unresolved_dependencies": unresolved,
+        "resolved_dependencies": dependencies,
+    }
+
+
+@functools.cache
+def meson_build_identity(library: Path, source_root: Path) -> dict[str, Any] | None:
+    """Bind one native library to Meson source, options, and compiler bytes."""
+    resolved_library = library.resolve()
+    build_root = next(
+        (
+            directory
+            for directory in (resolved_library.parent, *resolved_library.parents[:5])
+            if (directory / "meson-info" / "meson-info.json").is_file()
+        ),
+        None,
+    )
+    if build_root is None:
+        return None
+    info_root = build_root / "meson-info"
+    try:
+        info = json.loads((info_root / "meson-info.json").read_text(encoding="utf-8"))
+        project = json.loads(
+            (info_root / "intro-projectinfo.json").read_text(encoding="utf-8")
+        )
+        targets = json.loads(
+            (info_root / "intro-targets.json").read_text(encoding="utf-8")
+        )
+        compilers = json.loads(
+            (info_root / "intro-compilers.json").read_text(encoding="utf-8")
+        )
+        build_options = json.loads(
+            (info_root / "intro-buildoptions.json").read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BenchmarkError(f"cannot read Meson build identity: {exc}") from exc
+    directories = info.get("directories") or {}
+    if Path(str(directories.get("source", ""))).resolve() != source_root.resolve():
+        return None
+    target = next(
+        (
+            item
+            for item in targets
+            if any(
+                Path(filename).resolve() == resolved_library
+                for filename in item.get("filename") or []
+            )
+        ),
+        None,
+    )
+    if target is None:
+        return None
+    compiler_identities: list[dict[str, Any]] = []
+    for machine, languages in compilers.items():
+        for language, compiler in languages.items():
+            executable = (compiler.get("exelist") or [None])[0]
+            executable_path = Path(executable) if executable else None
+            resolved_executable = (
+                executable_path.resolve()
+                if executable_path is not None
+                and executable_path.is_absolute()
+                and executable_path.is_file()
+                else None
+            )
+            compiler_identities.append(
+                {
+                    "machine": machine,
+                    "language": language,
+                    "id": compiler.get("id"),
+                    "version": compiler.get("version"),
+                    "full_version": compiler.get("full_version"),
+                    "executable": str(resolved_executable)
+                    if resolved_executable
+                    else None,
+                    "executable_sha256": sha256_file(resolved_executable),
+                    "unresolved_configure_time_entry": (
+                        executable
+                        if executable and resolved_executable is None
+                        else None
+                    ),
+                }
+            )
+    compiler_identities.sort(key=lambda item: (item["machine"], item["language"]))
+    introspection_hashes = {
+        path.name: sha256_file(path)
+        for path in sorted(info_root.glob("*.json"))
+        if path.is_file()
+    }
+    return {
+        "build_system": "meson",
+        "build_root": str(build_root.resolve()),
+        "meson_version": (info.get("meson_version") or {}).get("full"),
+        "project": project,
+        "source_state": git_state(source_root),
+        "target": {
+            "name": target.get("name"),
+            "id": target.get("id"),
+            "type": target.get("type"),
+            "filename": [str(Path(item).resolve()) for item in target["filename"]],
+        },
+        "build_options": {
+            str(item.get("name")): item.get("value") for item in build_options
+        },
+        "compilers": compiler_identities,
+        "introspection_sha256": introspection_hashes,
+    }
 
 
 def cmake_build_identity(library: Path) -> dict[str, Any] | None:
     """Capture the selected build cache and compiler/toolkit identity."""
-    cache = library.resolve().parent / "CMakeCache.txt"
-    if not cache.is_file():
+    resolved_library = library.resolve()
+    cache = next(
+        (
+            directory / "CMakeCache.txt"
+            for directory in (resolved_library.parent, *resolved_library.parents[:5])
+            if (directory / "CMakeCache.txt").is_file()
+        ),
+        None,
+    )
+    if cache is None:
         return None
     selected_names = {
         "CMAKE_BUILD_TYPE",
+        "CMAKE_HOME_DIRECTORY",
         "CMAKE_CXX_COMPILER",
+        "CMAKE_CXX_FLAGS",
         "CMAKE_CXX_FLAGS_RELEASE",
         "CMAKE_CUDA_ARCHITECTURES",
         "CMAKE_CUDA_COMPILER",
+        "CMAKE_CUDA_FLAGS",
+        "CMAKE_CUDA_FLAGS_RELEASE",
+        "CMAKE_SHARED_LINKER_FLAGS",
         "GPUXTB_ENABLE_CUDA",
         "GPUXTB_CPU_LINALG_LIBRARY",
+        "GPUXTB_CPU_LINALG_RUNTIME",
         "GPUXTB_MKL_RT_LIBRARY",
     }
     selected: dict[str, str] = {}
@@ -230,15 +485,38 @@ def cmake_build_identity(library: Path) -> dict[str, Any] | None:
         if key in selected_names:
             selected[key] = value
     cuda_compiler = selected.get("CMAKE_CUDA_COMPILER")
+    cxx_compiler = Path(selected.get("CMAKE_CXX_COMPILER", "c++")).resolve()
+    source_root_text = selected.get("CMAKE_HOME_DIRECTORY")
+    source_state = git_state(Path(source_root_text)) if source_root_text else None
+    provider_text = (
+        selected.get("GPUXTB_CPU_LINALG_LIBRARY")
+        or selected.get("GPUXTB_MKL_RT_LIBRARY")
+        or selected.get("GPUXTB_CPU_LINALG_RUNTIME")
+    )
+    provider = Path(provider_text).resolve() if provider_text else None
     return {
         "cache_path": str(cache),
         "cache_sha256": sha256_file(cache),
+        "library_size": resolved_library.stat().st_size,
+        "library_mtime_ns": resolved_library.stat().st_mtime_ns,
         "selected": selected,
-        "cxx_version": run_text(
-            (selected.get("CMAKE_CXX_COMPILER", "c++"), "--version")
+        "source_state": source_state,
+        "cxx_compiler": str(cxx_compiler),
+        "cxx_compiler_sha256": sha256_file(cxx_compiler),
+        "cxx_version": run_text((str(cxx_compiler), "--version"), required=True),
+        "cuda_compiler": str(Path(cuda_compiler).resolve()) if cuda_compiler else None,
+        "cuda_compiler_sha256": (
+            sha256_file(Path(cuda_compiler).resolve()) if cuda_compiler else None
         ),
         "cuda_compiler_version": (
-            run_text((cuda_compiler, "--version")) if cuda_compiler else None
+            run_text((cuda_compiler, "--version"), required=True)
+            if cuda_compiler
+            else None
+        ),
+        "cpu_linalg_provider": (
+            native_library_identity(str(provider))
+            if provider and provider.is_file()
+            else None
         ),
     }
 
@@ -252,6 +530,58 @@ def cpu_model() -> str | None:
     except OSError:
         return None
     return None
+
+
+def selected_cuda_device_identity(device_id: int) -> dict[str, Any] | None:
+    """Resolve one CUDA ordinal through CUDA_VISIBLE_DEVICES to GPU identity."""
+    inventory = run_text(
+        (
+            "nvidia-smi",
+            "--query-gpu=index,uuid,name,driver_version,memory.total",
+            "--format=csv,noheader,nounits",
+        )
+    )
+    if inventory is None:
+        return None
+    devices: list[dict[str, str]] = []
+    for line in inventory.splitlines():
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) != 5:
+            continue
+        devices.append(
+            dict(
+                zip(
+                    ("physical_index", "uuid", "name", "driver", "memory_mib"),
+                    fields,
+                    strict=True,
+                )
+            )
+        )
+    visible_text = os.environ.get("CUDA_VISIBLE_DEVICES")
+    visible = (
+        [item.strip() for item in visible_text.split(",") if item.strip()]
+        if visible_text
+        else []
+    )
+    token = (
+        visible[device_id] if visible and device_id < len(visible) else str(device_id)
+    )
+    selected = next(
+        (
+            item
+            for item in devices
+            if token in {item["physical_index"], item["uuid"]}
+            or item["uuid"].startswith(token)
+        ),
+        None,
+    )
+    return {
+        "cuda_ordinal": device_id,
+        "CUDA_VISIBLE_DEVICES": visible_text,
+        "resolved_visibility_token": token,
+        "device": selected,
+        "inventory": devices,
+    }
 
 
 def current_rss_bytes() -> int | None:
@@ -306,10 +636,11 @@ class Cell:
 
 @dataclass(frozen=True)
 class ReferenceArtifact:
-    """One clean xTB artifact used to qualify dependent engine rows."""
+    """One clean independent xTB/tblite artifact for output qualification."""
 
     path: Path
     sha256: str
+    engine: str
     metadata: dict[str, Any]
     rows: dict[tuple[int, int], dict[str, Any]]
 
@@ -409,16 +740,16 @@ def build_trajectory(
 
 def configure_gpuxtb_scc(
     options: Any,  # noqa: ANN401 - ctypes compute-options mirror
-    charge_tolerance: float = 1.0e-10,
-    energy_tolerance: float = 1.0e-12,
+    charge_tolerance: float = PUBLIC_BENCHMARK_SCC_CHARGE_TOLERANCE,
+    energy_tolerance: float = PUBLIC_BENCHMARK_SCC_ENERGY_TOLERANCE,
     max_iterations: int = 500,
 ) -> None:
     """Pin the SCC convergence controls on a gpuxtb options object.
 
-    Defaults match the conformance oracle.  A tolerance-matched benchmark
-    (e.g. ``--scc-charge-tolerance 1e-4 --scc-energy-tolerance 1e-4``) lets
-    gpuxtb stop at the same accuracy the reference engines use (their
-    ``accuracy=1e-4``), removing the strict-tolerance iteration gap.
+    Publication rows align gpuxtb's direct controls with the nominal public
+    defaults used by xTB/tblite. The resulting observables must still pass the
+    separately declared benchmark compatibility gate before their timings can
+    support a public comparison.
     """
     options.max_scc_iterations = max_iterations
     options.charge_tolerance = charge_tolerance
@@ -445,8 +776,8 @@ class GpuxtbRunner:
         backend: str,
         cpu_threads: int,
         device_id: int,
-        scc_charge_tolerance: float = 1.0e-10,
-        scc_energy_tolerance: float = 1.0e-12,
+        scc_charge_tolerance: float = PUBLIC_BENCHMARK_SCC_CHARGE_TOLERANCE,
+        scc_energy_tolerance: float = PUBLIC_BENCHMARK_SCC_ENERGY_TOLERANCE,
         scc_max_iterations: int = 500,
     ) -> None:
         self.library = public_api._configure_library(library_path)
@@ -591,6 +922,7 @@ class ReferenceRunner:
         cpu_threads: int,
         device_id: int,
         dxtb_source: Path | None,
+        max_iterations: int,
     ) -> None:
         if engine == "xtb":
             self.adapter = XtbAdapter(
@@ -598,8 +930,8 @@ class ReferenceRunner:
                 storage,
                 "force",
                 None,
-                accuracy=1.0e-4,
-                max_iterations=500,
+                accuracy=REFERENCE_ACCURACY,
+                max_iterations=max_iterations,
                 threads=cpu_threads,
             )
             self.engine = "xtb"
@@ -608,8 +940,8 @@ class ReferenceRunner:
                 library_path,
                 storage,
                 "force",
-                accuracy=1.0e-4,
-                max_iterations=500,
+                accuracy=REFERENCE_ACCURACY,
+                max_iterations=max_iterations,
                 collect_atomic_charges=False,
                 threads=cpu_threads,
             )
@@ -623,8 +955,11 @@ class ReferenceRunner:
                 device_id=device_id,
                 cpu_threads=cpu_threads,
                 source_root=dxtb_source,
-                accuracy=1.0e-4,
-                max_iterations=500,
+                accuracy=DXTB_FIXED_POINT_TOLERANCE,
+                max_norm_tolerance=DXTB_MAX_NORM_TOLERANCE,
+                function_tolerance=DXTB_FUNCTION_TOLERANCE,
+                force_convergence=DXTB_FORCE_CONVERGENCE,
+                max_iterations=max_iterations,
             )
             self.engine = "dxtb"
         else:
@@ -634,7 +969,6 @@ class ReferenceRunner:
         # measured invocation, so it has no public warm-continuation path
         # equivalent to gpuxtb/xTB/tblite.
         self.always_cold = self._dxtb_adapter is not None
-        self._published_output: dict[str, Any] | None = None
         states = getattr(self.adapter, "states", ())
         if self._dxtb_adapter is not None or not states:
             self._position_slices = []
@@ -677,11 +1011,10 @@ class ReferenceRunner:
         """Run through synchronous host-visible energy/force publication."""
         self.adapter.invoke()
         if self._dxtb_adapter is not None:
-            # dxtb otherwise keeps outputs on the selected Torch device and
-            # would move them to host only after the timer. Include that
-            # unavoidable public-result publication to match the host-output
-            # boundary used by the other engines in this figure.
-            self._published_output = self.adapter.results()
+            # Include CUDA-to-host tensor publication in the same timed
+            # boundary as caller-owned host buffers in the native adapters.
+            # Python list normalization remains outside timing for all engines.
+            self.adapter.publish_to_host()
         elif getattr(self.adapter, "backend", None) == "cuda":
             self.adapter.synchronize()
 
@@ -698,11 +1031,7 @@ class ReferenceRunner:
 
     def snapshot(self) -> dict[str, Any]:
         """Normalize persistent reference results."""
-        output = (
-            self._published_output
-            if self._published_output is not None
-            else self.adapter.results()
-        )
+        output = self.adapter.results()
         return {
             "energies_hartree": list(output["energies_hartree"]),
             "forces_hartree_per_bohr": (
@@ -805,10 +1134,10 @@ def measure_cell(
       requested warmup count is zero, then every warmup and measured sample
       continues from that state (gpuxtb strict WARM; xTB/tblite persistent
       warm state). dxtb has no equivalent continuation and remains cold.
-    - ``cold``: electronic state is cleared before every timed inference call
-      (gpuxtb FRESH; xTB/tblite calculator rebuild; dxtb reset). gpuxtb and
-      reference-C-API reset/rebuild work is outside the timer; dxtb's required
-      reset remains inside its measured public call.
+    - ``cold``: every measured call starts without reusable electronic state.
+      gpuxtb selects FRESH before timing, but its state initialization occurs
+      inside ``gpuxtb_compute``; xTB/tblite rebuild their calculator outside
+      timing; dxtb's required reset remains inside its measured public call.
     """
     warmups, repetitions = protocol
     gpuxtb_runner = hasattr(runner, "set_start_mode")
@@ -939,10 +1268,19 @@ def measure_cell(
             else (
                 "untimed_cold_seed_then_persistent"
                 if start_policy == "auto-warm"
-                else "untimed_reset_before_each_call"
+                else (
+                    "fresh_state_initialization_inside_timed_public_call"
+                    if gpuxtb_runner
+                    else "untimed_calculator_rebuild_before_each_call"
+                )
             )
         ),
         "raw_samples": raw_samples,
+        # Cross-engine qualification happens before publication and must cover
+        # every timed result, including evolving WARM samples.  Keep complete
+        # force samples transiently in memory; the JSON archive retains only
+        # the final compressed vector plus one digest per repetition.
+        "_force_samples_hartree_per_bohr": force_samples,
         "timing": timing_summary(latencies, cell.batch_size),
         "energies_hartree": raw_samples[-1]["energies_hartree"],
         "forces_hartree_per_bohr": force_samples[-1],
@@ -1021,7 +1359,7 @@ def error_row(cell: Cell, error: str) -> dict[str, Any]:
 def load_reference_artifact(
     path: Path, allow_dirty_evidence: bool = False
 ) -> ReferenceArtifact:
-    """Load and validate one xTB JSON artifact for dependent runs."""
+    """Load one clean panel-matched xTB/tblite output-reference artifact."""
     resolved = path.resolve()
     try:
         payload = resolved.read_bytes()
@@ -1037,18 +1375,50 @@ def load_reference_artifact(
     metadata = document.get("metadata")
     if not isinstance(metadata, dict):
         raise BenchmarkError("reference artifact has no metadata object")
+    designation = metadata.get("comparison_reference") or {}
+    reference_engine = designation.get("engine")
+    if designation.get(
+        "designation"
+    ) != "independent_baseline" or reference_engine not in {"xtb", "tblite"}:
+        raise BenchmarkError(
+            "reference artifact must designate one independent xTB/tblite baseline"
+        )
     commit = metadata.get("commit") or {}
     if not commit.get("head") or (
         commit.get("dirty") is not False and not allow_dirty_evidence
     ):
         raise BenchmarkError("reference artifact must come from a verified clean HEAD")
+    eligibility = metadata.get("evidence_eligibility") or {}
+    if not allow_dirty_evidence and (
+        eligibility.get("status") != "eligible_clean_head"
+        or eligibility.get("allow_dirty_evidence") is not False
+    ):
+        raise BenchmarkError("reference artifact used a diagnostic evidence override")
+    protocol = metadata.get("protocol") or {}
+    reference_start_policy = protocol.get("start_policy")
+    if reference_start_policy not in {"cold", "auto-warm"}:
+        raise BenchmarkError("reference artifact has an invalid start policy")
+    if (
+        protocol.get("scc_charge_tolerance") != PUBLIC_BENCHMARK_SCC_CHARGE_TOLERANCE
+        or protocol.get("scc_energy_tolerance") != PUBLIC_BENCHMARK_SCC_ENERGY_TOLERANCE
+    ):
+        raise BenchmarkError(
+            "reference artifact must record the aligned public benchmark SCC contract"
+        )
+    convergence_contract = protocol.get("convergence_contract") or {}
+    reference_contract = convergence_contract.get(reference_engine) or {}
+    if reference_contract.get("public_accuracy_factor") != REFERENCE_ACCURACY:
+        raise BenchmarkError(
+            "reference artifact does not record the documented public accuracy factor"
+        )
     rows: dict[tuple[int, int], dict[str, Any]] = {}
     for index, row in enumerate(document.get("rows") or []):
         if row.get("availability") != "available":
             continue
-        if row.get("engine") != "xtb":
+        if row.get("engine") != reference_engine:
             raise BenchmarkError(
-                f"reference row {index} uses {row.get('engine')!r}, expected 'xtb'"
+                f"reference row {index} uses {row.get('engine')!r}, expected "
+                f"{reference_engine!r}"
             )
         correctness = row.get("correctness") or {}
         cross_engine = correctness.get("cross_engine") or {}
@@ -1057,6 +1427,13 @@ def load_reference_artifact(
             or cross_engine.get("status") != "reference"
         ):
             raise BenchmarkError(f"reference row {index} is not qualified")
+        if (
+            row.get("start_policy") != reference_start_policy
+            or row.get("effective_start_policy") != reference_start_policy
+        ):
+            raise BenchmarkError(
+                f"reference row {index} does not match the artifact start policy"
+            )
         natoms = row.get("natoms")
         batch_size = row.get("batch_size")
         if type(natoms) is not int or type(batch_size) is not int:
@@ -1082,6 +1459,7 @@ def load_reference_artifact(
     return ReferenceArtifact(
         resolved,
         hashlib.sha256(payload).hexdigest(),
+        reference_engine,
         metadata,
         rows,
     )
@@ -1093,7 +1471,7 @@ def apply_cross_engine_reference(
     energy_atol_hartree: float,
     force_atol_hartree_per_bohr: float,
 ) -> bool:
-    """Compare one complete final result with the matching independent xTB row."""
+    """Compare every timed result with the matching independent baseline row."""
     if row.get("availability") != "available":
         return False
     correctness = row.get("correctness")
@@ -1103,7 +1481,7 @@ def apply_cross_engine_reference(
     expected = reference.rows.get(key)
     comparison: dict[str, Any] = {
         "status": "missing_reference",
-        "reference_engine": "xtb",
+        "reference_engine": reference.engine,
         "artifact": str(reference.path),
         "artifact_sha256": reference.sha256,
         "energy_atol_hartree": energy_atol_hartree,
@@ -1114,13 +1492,31 @@ def apply_cross_engine_reference(
     failed = expected is None
     if expected is not None:
         try:
-            energy_delta = _max_abs_delta(
-                row["energies_hartree"], expected["energies_hartree"]
+            raw_samples = row.get("raw_samples")
+            energy_samples = (
+                [sample["energies_hartree"] for sample in raw_samples]
+                if isinstance(raw_samples, list) and raw_samples
+                else [row["energies_hartree"]]
             )
-            force_delta = _max_abs_delta(
-                row["forces_hartree_per_bohr"],
-                expected["forces_hartree_per_bohr"],
-            )
+            force_samples = row.get("_force_samples_hartree_per_bohr")
+            if force_samples is None:
+                force_samples = [row["forces_hartree_per_bohr"]]
+            if not isinstance(force_samples, list) or len(force_samples) != len(
+                energy_samples
+            ):
+                raise BenchmarkError(
+                    "timed energy/force sample counts are inconsistent"
+                )
+            energy_deltas = [
+                _max_abs_delta(sample, expected["energies_hartree"])
+                for sample in energy_samples
+            ]
+            force_deltas = [
+                _max_abs_delta(sample, expected["forces_hartree_per_bohr"])
+                for sample in force_samples
+            ]
+            energy_delta = max(energy_deltas)
+            force_delta = max(force_deltas)
         except (BenchmarkError, KeyError, TypeError) as exc:
             comparison["status"] = "fail"
             comparison["error"] = str(exc)
@@ -1128,6 +1524,23 @@ def apply_cross_engine_reference(
         else:
             comparison["max_abs_energy_delta_hartree"] = energy_delta
             comparison["max_abs_force_delta_hartree_per_bohr"] = force_delta
+            comparison["timed_sample_count_checked"] = len(energy_samples)
+            comparison["timed_sample_deltas"] = [
+                {
+                    "sample_index": index,
+                    "max_abs_energy_delta_hartree": sample_energy_delta,
+                    "max_abs_force_delta_hartree_per_bohr": sample_force_delta,
+                    "status": (
+                        "pass"
+                        if sample_energy_delta <= energy_atol_hartree
+                        and sample_force_delta <= force_atol_hartree_per_bohr
+                        else "fail"
+                    ),
+                }
+                for index, (sample_energy_delta, sample_force_delta) in enumerate(
+                    zip(energy_deltas, force_deltas, strict=True)
+                )
+            ]
             failed = (
                 energy_delta > energy_atol_hartree
                 or force_delta > force_atol_hartree_per_bohr
@@ -1152,8 +1565,8 @@ def run_cell(
     repeatability_force_atol_hartree_per_bohr: float = (
         REPEATABILITY_FORCE_ATOL_HARTREE_PER_BOHR
     ),
-    scc_charge_tolerance: float = 1.0e-10,
-    scc_energy_tolerance: float = 1.0e-12,
+    scc_charge_tolerance: float = PUBLIC_BENCHMARK_SCC_CHARGE_TOLERANCE,
+    scc_energy_tolerance: float = PUBLIC_BENCHMARK_SCC_ENERGY_TOLERANCE,
     scc_max_iterations: int = 500,
 ) -> dict[str, Any]:
     """Measure one cell and return a complete row."""
@@ -1193,6 +1606,7 @@ def run_cell(
                 cell.cpu_threads,
                 cell.device_id,
                 dxtb_source,
+                scc_max_iterations,
             )
         elif cell.engine == "tblite":
             if tblite_library is None:
@@ -1206,6 +1620,7 @@ def run_cell(
                 cell.cpu_threads,
                 cell.device_id,
                 dxtb_source,
+                scc_max_iterations,
             )
         else:
             runner = ReferenceRunner(
@@ -1215,6 +1630,7 @@ def run_cell(
                 cell.cpu_threads,
                 cell.device_id,
                 dxtb_source,
+                scc_max_iterations,
             )
         fragment = measure_cell(
             runner,
@@ -1234,6 +1650,15 @@ def run_cell(
                 "torch_version": getattr(adapter, "torch_version", None),
                 "module_path": module_path_text,
                 "module_sha256": sha256_file(module_path),
+                "convergence_settings": {
+                    "public_accuracy_or_fixed_point_tolerance": getattr(
+                        adapter, "accuracy", None
+                    ),
+                    "max_norm_tolerance": getattr(adapter, "max_norm_tolerance", None),
+                    "function_tolerance": getattr(adapter, "function_tolerance", None),
+                    "force_convergence": getattr(adapter, "force_convergence", None),
+                    "max_iterations": getattr(adapter, "max_iterations", None),
+                },
                 "thread_control": getattr(adapter, "thread_control", None),
             }
         row = base_row(cell)
@@ -1269,8 +1694,8 @@ def run_trajectory(
     repetitions: int,
     energy_atol_hartree: float,
     force_atol_hartree_per_bohr: float,
-    scc_charge_tolerance: float = 1.0e-10,
-    scc_energy_tolerance: float = 1.0e-12,
+    scc_charge_tolerance: float = PUBLIC_BENCHMARK_SCC_CHARGE_TOLERANCE,
+    scc_energy_tolerance: float = PUBLIC_BENCHMARK_SCC_ENERGY_TOLERANCE,
     scc_max_iterations: int = 500,
 ) -> dict[str, Any]:
     """Measure per-frame latency over one nearly identical MD-style trajectory."""
@@ -1313,7 +1738,13 @@ def run_trajectory(
                     )
                     return row
                 runner = ReferenceRunner(
-                    engine, xtb_library, storage, cpu_threads, device_id, dxtb_source
+                    engine,
+                    xtb_library,
+                    storage,
+                    cpu_threads,
+                    device_id,
+                    dxtb_source,
+                    scc_max_iterations,
                 )
             elif engine == "tblite":
                 if tblite_library is None:
@@ -1326,11 +1757,23 @@ def run_trajectory(
                     )
                     return row
                 runner = ReferenceRunner(
-                    engine, tblite_library, storage, cpu_threads, device_id, dxtb_source
+                    engine,
+                    tblite_library,
+                    storage,
+                    cpu_threads,
+                    device_id,
+                    dxtb_source,
+                    scc_max_iterations,
                 )
             else:
                 runner = ReferenceRunner(
-                    engine, library, storage, cpu_threads, device_id, dxtb_source
+                    engine,
+                    library,
+                    storage,
+                    cpu_threads,
+                    device_id,
+                    dxtb_source,
+                    scc_max_iterations,
                 )
             is_gpuxtb = engine in ("gpuxtb-cpu", "gpuxtb-cuda")
             if is_gpuxtb:
@@ -1420,7 +1863,9 @@ def run_trajectory(
         return row
 
 
-def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
+def environment_metadata(
+    args: argparse.Namespace, reference: ReferenceArtifact | None = None
+) -> dict[str, Any]:
     """Capture the exact revisions, hardware, runtime, and thread environment."""
     repository_state = git_state(REPOSITORY_ROOT)
     dxtb_threads = args.dxtb_cpu_threads or args.cpu_threads
@@ -1431,26 +1876,65 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "commit": repository_state,
         "evidence_eligibility": {
             "status": (
-                "diagnostic_dirty"
-                if repository_state.get("dirty")
+                "diagnostic_override"
+                if args.allow_dirty_evidence
                 else "eligible_clean_head"
             ),
             "allow_dirty_evidence": bool(args.allow_dirty_evidence),
+        },
+        "comparison_reference": {
+            "designation": (
+                "independent_baseline" if args.make_reference else "dependent_run"
+            ),
+            "engine": (
+                args.engines[0]
+                if args.make_reference
+                else (reference.engine if reference is not None else None)
+            ),
+            "artifact": str(reference.path) if reference is not None else None,
+            "artifact_sha256": reference.sha256 if reference is not None else None,
         },
         "runner": {
             "python": sys.version,
             "platform": platform.platform(),
             "gpuxtb_library": str(args.library.resolve()),
             "gpuxtb_library_sha256": sha256_file(args.library),
+            "gpuxtb_native_identity": native_library_identity(
+                str(args.library.resolve())
+            ),
             "gpuxtb_build": cmake_build_identity(args.library),
             "xtb_library": str(args.xtb_library.resolve())
             if args.xtb_library
             else None,
             "xtb_library_sha256": sha256_file(args.xtb_library),
+            "xtb_source": git_state(args.xtb_source) if args.xtb_source else None,
+            "xtb_build": (
+                meson_build_identity(args.xtb_library, args.xtb_source)
+                if args.xtb_library and args.xtb_source
+                else None
+            ),
+            "xtb_native_identity": (
+                native_library_identity(str(args.xtb_library.resolve()))
+                if args.xtb_library
+                else None
+            ),
             "tblite_library": str(args.tblite_library.resolve())
             if args.tblite_library
             else None,
             "tblite_library_sha256": sha256_file(args.tblite_library),
+            "tblite_source": (
+                git_state(args.tblite_source) if args.tblite_source else None
+            ),
+            "tblite_build": (
+                meson_build_identity(args.tblite_library, args.tblite_source)
+                if args.tblite_library and args.tblite_source
+                else None
+            ),
+            "tblite_native_identity": (
+                native_library_identity(str(args.tblite_library.resolve()))
+                if args.tblite_library
+                else None
+            ),
             "dxtb_source": git_state(args.dxtb_source) if args.dxtb_source else None,
             "python_distributions": {
                 name: installed_distribution_identity(name)
@@ -1474,13 +1958,15 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
                 else None
             ),
             "nvidia_smi": run_text(("nvidia-smi", "-L")),
-            "gpu_memory_mib": run_text(
+            "nvidia_smi_runtime": run_text(
                 (
                     "nvidia-smi",
-                    "--query-gpu=name,memory.total",
+                    "--query-gpu=index,uuid,name,driver_version,memory.total,"
+                    "pstate,power.limit,clocks.current.sm,clocks.current.memory",
                     "--format=csv,noheader",
                 )
             ),
+            "selected_cuda_device": selected_cuda_device_identity(args.device_id),
         },
         "threads": {
             "cpu_threads": args.cpu_threads,
@@ -1505,6 +1991,23 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
             "start_policy": args.start_policy,
             "cross_engine_energy_atol_hartree": args.energy_atol,
             "cross_engine_force_atol_hartree_per_bohr": args.force_atol,
+            "cross_engine_tolerance_source": {
+                "scope": "owner_authorized_public_benchmark_output_compatibility",
+                "not_primary_conformance": True,
+                "selected_energy_atol_hartree": args.energy_atol,
+                "selected_force_atol_hartree_per_bohr": args.force_atol,
+                "maximum_authorized_energy_atol_hartree": (
+                    PUBLIC_BENCHMARK_ENERGY_ATOL_HARTREE
+                ),
+                "maximum_authorized_force_atol_hartree_per_bohr": (
+                    PUBLIC_BENCHMARK_FORCE_ATOL_HARTREE_PER_BOHR
+                ),
+                "strict_repository_gate_not_replaced": {
+                    **CROSS_ENGINE_TOLERANCE_SOURCE,
+                    "energy_atol_hartree": DEFAULT_CROSS_ENGINE_ENERGY_ATOL,
+                    "force_atol_hartree_per_bohr": DEFAULT_CROSS_ENGINE_FORCE_ATOL,
+                },
+            },
             "repeatability_energy_atol_hartree": args.repeatability_energy_atol,
             "repeatability_force_atol_hartree_per_bohr": (
                 args.repeatability_force_atol
@@ -1514,6 +2017,24 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
             "scc_max_iterations": args.scc_max_iterations,
             "scc_charge_tolerance": args.scc_charge_tolerance,
             "scc_energy_tolerance": args.scc_energy_tolerance,
+            "convergence_contract": {
+                "gpuxtb": {
+                    "charge_tolerance": args.scc_charge_tolerance,
+                    "energy_tolerance": args.scc_energy_tolerance,
+                },
+                "xtb": {
+                    "public_accuracy_factor": REFERENCE_ACCURACY,
+                },
+                "tblite": {
+                    "public_accuracy_factor": REFERENCE_ACCURACY,
+                },
+                "dxtb": {
+                    "x_atol": DXTB_FIXED_POINT_TOLERANCE,
+                    "x_atol_max": DXTB_MAX_NORM_TOLERANCE,
+                    "f_atol": DXTB_FUNCTION_TOLERANCE,
+                    "force_convergence": DXTB_FORCE_CONVERGENCE,
+                },
+            },
         },
     }
 
@@ -1649,12 +2170,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--xtb-library", type=Path)
+    parser.add_argument("--xtb-source", type=Path)
     parser.add_argument("--tblite-library", type=Path)
+    parser.add_argument("--tblite-source", type=Path)
     parser.add_argument("--dxtb-source", type=Path)
     parser.add_argument(
         "--reference-json",
         type=Path,
-        help="clean xTB artifact used for complete energy/force qualification",
+        help=(
+            "clean cold-start xTB/tblite artifact used to qualify every timed "
+            "energy and force sample against the public benchmark output gate"
+        ),
+    )
+    parser.add_argument(
+        "--make-reference",
+        action="store_true",
+        help=(
+            "designate this single-engine cold xTB/tblite run as the "
+            "independent output reference"
+        ),
     )
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-csv", type=Path, required=True)
@@ -1682,8 +2216,9 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "SCC restart policy for the batch matrices. auto-warm (default): "
             "one untimed cold seed, then WARM measured samples. cold: clear "
-            "electronic state before every timed inference call; reset/setup "
-            "itself is excluded. --cold-samples is an alias."
+            "electronic state before every timed inference call. gpuxtb FRESH "
+            "initialization and dxtb reset are timed; xTB/tblite rebuild is "
+            "excluded. --cold-samples is an alias."
         ),
     )
     parser.add_argument(
@@ -1705,12 +2240,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--trajectory-frames", type=int, default=20)
     parser.add_argument(
-        "--energy-atol", type=float, default=CROSS_ENGINE_ENERGY_ATOL_HARTREE
+        "--energy-atol",
+        type=float,
+        default=CROSS_ENGINE_ENERGY_ATOL_HARTREE,
+        help=(
+            "public benchmark output-compatibility gate in Hartree; this does "
+            "not replace gpuxtb conformance"
+        ),
     )
     parser.add_argument(
         "--force-atol",
         type=float,
         default=CROSS_ENGINE_FORCE_ATOL_HARTREE_PER_BOHR,
+        help=(
+            "public benchmark output-compatibility gate in Hartree/bohr; this "
+            "does not replace gpuxtb conformance"
+        ),
     )
     parser.add_argument(
         "--repeatability-energy-atol",
@@ -1740,14 +2285,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--scc-charge-tolerance",
         type=float,
-        default=1.0e-10,
-        help="gpuxtb SCC charge convergence tolerance",
+        default=PUBLIC_BENCHMARK_SCC_CHARGE_TOLERANCE,
+        help="gpuxtb SCC charge convergence tolerance (publication: 1e-4)",
     )
     parser.add_argument(
         "--scc-energy-tolerance",
         type=float,
-        default=1.0e-12,
-        help="gpuxtb SCC energy convergence tolerance",
+        default=PUBLIC_BENCHMARK_SCC_ENERGY_TOLERANCE,
+        help="gpuxtb SCC energy convergence tolerance (publication: 1e-6)",
     )
     parser.add_argument(
         "--scc-max-iterations",
@@ -1763,12 +2308,39 @@ def validate_arguments(args: argparse.Namespace) -> None:
     for engine in args.engines:
         if engine not in SUPPORTED_ENGINES:
             raise BenchmarkError(f"unsupported engine: {engine}")
+    if args.make_reference:
+        if args.reference_json is not None:
+            raise BenchmarkError("--make-reference cannot use --reference-json")
+        if len(args.engines) != 1 or args.engines[0] not in {"xtb", "tblite"}:
+            raise BenchmarkError(
+                "--make-reference requires exactly one xTB or tblite engine"
+            )
+    elif args.reference_json is None and not args.allow_dirty_evidence:
+        raise BenchmarkError(
+            "publication evidence requires --reference-json or --make-reference"
+        )
+    if not args.allow_dirty_evidence and (
+        args.scc_charge_tolerance != PUBLIC_BENCHMARK_SCC_CHARGE_TOLERANCE
+        or args.scc_energy_tolerance != PUBLIC_BENCHMARK_SCC_ENERGY_TOLERANCE
+    ):
+        raise BenchmarkError(
+            "publication evidence requires the aligned gpuxtb 1e-4 charge / "
+            "1e-6 energy convergence contract; custom settings are diagnostic only"
+        )
     if args.warmups < 0 or args.repetitions <= 0:
         raise BenchmarkError("warmups must be >= 0 and repetitions must be > 0")
     if args.cpu_threads <= 0 or (
         args.dxtb_cpu_threads is not None and args.dxtb_cpu_threads <= 0
     ):
         raise BenchmarkError("thread counts must be positive")
+    if (
+        not args.allow_dirty_evidence
+        and args.dxtb_cpu_threads is not None
+        and args.dxtb_cpu_threads != args.cpu_threads
+    ):
+        raise BenchmarkError(
+            "publication evidence requires one equal CPU thread budget for every engine"
+        )
     for name, value in (
         ("cross-engine energy tolerance", args.energy_atol),
         ("cross-engine force tolerance", args.force_atol),
@@ -1777,6 +2349,22 @@ def validate_arguments(args: argparse.Namespace) -> None:
     ):
         if not math.isfinite(value) or value < 0.0:
             raise BenchmarkError(f"{name} must be finite and nonnegative")
+    for name, value in (
+        ("gpuxtb SCC charge tolerance", args.scc_charge_tolerance),
+        ("gpuxtb SCC energy tolerance", args.scc_energy_tolerance),
+    ):
+        if not math.isfinite(value) or value <= 0.0:
+            raise BenchmarkError(f"{name} must be finite and positive")
+    if args.scc_max_iterations <= 0:
+        raise BenchmarkError("SCC max iterations must be positive")
+    if args.energy_atol > CROSS_ENGINE_ENERGY_ATOL_HARTREE:
+        raise BenchmarkError(
+            "--energy-atol cannot exceed the owner-authorized public benchmark gate"
+        )
+    if args.force_atol > CROSS_ENGINE_FORCE_ATOL_HARTREE_PER_BOHR:
+        raise BenchmarkError(
+            "--force-atol cannot exceed the owner-authorized public benchmark gate"
+        )
     if args.device_id < 0:
         raise BenchmarkError("device id must be nonnegative")
     if args.trajectory_frames <= 0:
@@ -1802,6 +2390,81 @@ def validate_arguments(args: argparse.Namespace) -> None:
             raise BenchmarkError(f"unsupported natoms {natoms}: {exc}") from exc
 
 
+def validate_publication_provenance(
+    args: argparse.Namespace, repository_state: dict[str, Any]
+) -> None:
+    """Reject final evidence whose source, build, or runtime bytes are unbound."""
+    build = cmake_build_identity(args.library)
+    if build is None:
+        raise BenchmarkError(
+            "publication evidence requires a gpuxtb library beside a CMakeCache.txt"
+        )
+    source_state = build.get("source_state") or {}
+    if (
+        source_state.get("head") != repository_state.get("head")
+        or source_state.get("dirty") is not False
+    ):
+        raise BenchmarkError(
+            "gpuxtb build source does not match the current clean benchmark HEAD"
+        )
+    if not build.get("cxx_compiler_sha256"):
+        raise BenchmarkError("gpuxtb build compiler bytes could not be identified")
+    if "gpuxtb-cpu" in args.engines and not build.get("cpu_linalg_provider"):
+        raise BenchmarkError(
+            "gpuxtb CPU evidence requires a hash-pinned LP64 provider identity"
+        )
+
+    native_inputs = [("gpuxtb", args.library)]
+    source_inputs: list[tuple[str, Path | None]] = []
+    external_builds: list[tuple[str, Path | None, Path | None]] = []
+    if "xtb" in args.engines:
+        native_inputs.append(("xTB", args.xtb_library))
+        source_inputs.append(("xTB", args.xtb_source))
+        external_builds.append(("xTB", args.xtb_library, args.xtb_source))
+    if "tblite" in args.engines:
+        native_inputs.append(("tblite", args.tblite_library))
+        source_inputs.append(("tblite", args.tblite_source))
+        external_builds.append(("tblite", args.tblite_library, args.tblite_source))
+    if any(engine.startswith("dxtb") for engine in args.engines):
+        source_inputs.append(("dxtb", args.dxtb_source))
+
+    for label, path in native_inputs:
+        if path is None or not path.is_file():
+            raise BenchmarkError(
+                f"{label} evidence requires an existing shared library"
+            )
+        identity = native_library_identity(str(path.resolve()))
+        if identity is None:
+            raise BenchmarkError(f"{label} shared-library identity is unavailable")
+        if identity.get("unresolved_dependencies"):
+            raise BenchmarkError(f"{label} shared library has unresolved dependencies")
+
+    for label, source in source_inputs:
+        if source is None:
+            raise BenchmarkError(f"{label} evidence requires its clean source checkout")
+        state = git_state(source)
+        if not state.get("head") or state.get("dirty") is not False:
+            raise BenchmarkError(
+                f"{label} source checkout is not a verified clean HEAD"
+            )
+
+    for label, library, source in external_builds:
+        if library is None or source is None:
+            raise BenchmarkError(f"{label} build identity is incomplete")
+        build_identity = meson_build_identity(library, source)
+        if build_identity is None:
+            raise BenchmarkError(
+                f"{label} evidence requires a Meson target bound to its clean source"
+            )
+        compilers = build_identity.get("compilers") or []
+        if not compilers or any(
+            not item.get("executable_sha256") for item in compilers
+        ):
+            raise BenchmarkError(
+                f"{label} build compiler bytes could not be identified"
+            )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the requested matrix and leave complete artifacts on any failure path."""
     arguments = list(sys.argv[1:] if argv is None else argv)
@@ -1818,6 +2481,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "publication evidence requires a clean repository; use "
                 "--allow-dirty-evidence only for diagnostics"
             )
+        if not args.allow_dirty_evidence:
+            validate_publication_provenance(args, repository_state)
         if args.dxtb_source is not None:
             dxtb_source_state = git_state(args.dxtb_source)
             if not dxtb_source_state.get("head"):
@@ -1826,6 +2491,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise BenchmarkError(
                     "publication evidence requires a clean dxtb source checkout"
                 )
+        if any(engine.startswith("dxtb") for engine in args.engines):
+            for distribution_name in ("dxtb", "torch", "tad-libcint"):
+                identity = installed_distribution_identity(distribution_name)
+                verification = (
+                    identity.get("payload_verification") if identity else None
+                )
+                if not identity or not isinstance(verification, dict):
+                    raise BenchmarkError(
+                        f"dxtb evidence requires installed {distribution_name} identity"
+                    )
+                if verification.get("status") != "verified":
+                    raise BenchmarkError(
+                        f"installed {distribution_name} payload failed RECORD "
+                        "verification"
+                    )
         reference = (
             load_reference_artifact(args.reference_json, args.allow_dirty_evidence)
             if args.reference_json is not None
@@ -1842,6 +2522,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ("warmups", args.warmups),
                 ("repetitions", args.repetitions),
                 ("start_policy", args.start_policy),
+                ("cross_engine_energy_atol_hartree", args.energy_atol),
+                ("cross_engine_force_atol_hartree_per_bohr", args.force_atol),
                 (
                     "repeatability_energy_atol_hartree",
                     args.repeatability_energy_atol,
@@ -1850,6 +2532,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "repeatability_force_atol_hartree_per_bohr",
                     args.repeatability_force_atol,
                 ),
+                ("scc_max_iterations", args.scc_max_iterations),
+                ("scc_charge_tolerance", args.scc_charge_tolerance),
+                ("scc_energy_tolerance", args.scc_energy_tolerance),
             ):
                 if reference_protocol.get(name) != expected:
                     raise BenchmarkError(
@@ -1910,10 +2595,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             if row.get("availability") == "available":
                 if (row.get("correctness") or {}).get("status") != "pass":
                     failed = True
-                if row.get("engine") == "xtb" and reference is None:
+                if args.make_reference:
                     row["correctness"]["cross_engine"] = {
                         "status": "reference",
-                        "role": "independent_xTB_baseline",
+                        "role": "independent_panel_matched_output_baseline",
+                        "engine": args.engines[0],
                     }
                 elif reference is not None:
                     failed = (
@@ -1925,6 +2611,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         )
                         or failed
                     )
+                # Complete per-repetition forces are required only while the
+                # cross-engine gate is evaluated.  Do not inflate archived
+                # JSON after each sample digest and the final vector are kept.
+                row.pop("_force_samples_hartree_per_bohr", None)
             elapsed_s = time.perf_counter() - log_start
             rows.append(row)
             if row["availability"] == "available":
@@ -1981,7 +2671,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         failed = True
         document = {
             "schema_version": SCHEMA_VERSION,
-            "metadata": environment_metadata(args),
+            "metadata": environment_metadata(args, reference),
             "rows": rows,
         }
         publish_artifacts(args.output_json, args.output_csv, document, rows)

@@ -122,6 +122,15 @@ class DxtbAdapter:
         Optional dxtb checkout.  Defaults to ``~/codes/dxtb`` when present;
         pass ``None`` to use an already-installed package without source
         discovery.
+    accuracy, max_norm_tolerance
+        dxtb's L2 and L-infinity fixed-point convergence tolerances.
+    function_tolerance
+        dxtb's equilibrium-function residual tolerance. This is not an energy
+        convergence threshold.
+    force_convergence
+        Raise when SCC reaches ``max_iterations`` instead of accepting dxtb's
+        warning-only default. The natoms publication harness enables it
+        explicitly; other consumers retain dxtb's native default.
 
     Notes
     -----
@@ -144,6 +153,9 @@ class DxtbAdapter:
         cpu_threads: int = 1,
         source_root: Path | None = DEFAULT_DXTB_SOURCE_ROOT,
         accuracy: float = 1.0e-4,
+        max_norm_tolerance: float = 1.0e-5,
+        function_tolerance: float = 1.0e-4,
+        force_convergence: bool = False,
         max_iterations: int = 500,
         *,
         _runtime: tuple[ModuleType, ModuleType] | None = None,
@@ -157,7 +169,13 @@ class DxtbAdapter:
         if type(cpu_threads) is not int or cpu_threads <= 0:
             raise DxtbError("dxtb cpu_threads must be a positive integer")
         if accuracy <= 0.0:
-            raise DxtbError("dxtb SCC accuracy must be positive")
+            raise DxtbError("dxtb SCC fixed-point tolerance must be positive")
+        if max_norm_tolerance <= 0.0:
+            raise DxtbError("dxtb SCC max-norm tolerance must be positive")
+        if function_tolerance <= 0.0:
+            raise DxtbError("dxtb SCC function tolerance must be positive")
+        if type(force_convergence) is not bool:
+            raise DxtbError("dxtb force_convergence must be boolean")
         if type(max_iterations) is not int or max_iterations <= 0:
             raise DxtbError("dxtb max_iterations must be a positive integer")
         if getattr(storage, "point_charge_values", None):
@@ -169,6 +187,9 @@ class DxtbAdapter:
         self.device_id = device_id
         self.cpu_threads = cpu_threads
         self.accuracy = float(accuracy)
+        self.max_norm_tolerance = float(max_norm_tolerance)
+        self.function_tolerance = float(function_tolerance)
+        self.force_convergence = force_convergence
         self.max_iterations = max_iterations
         self.torch, self.dxtb = (
             _runtime if _runtime is not None else _import_runtime(source_root)
@@ -176,6 +197,8 @@ class DxtbAdapter:
         self._closed = False
         self._energies: Any | None = None
         self._forces: Any | None = None
+        self._host_energies: Any | None = None
+        self._host_forces: Any | None = None
         # dxtb's calculator is a third-party dynamic object with no stable
         # protocol across releases; retain it as ``Any`` at this boundary.
         self._calculator: Any | None = None
@@ -282,11 +305,16 @@ class DxtbAdapter:
                 "verbosity": 0,
                 "batch_mode": self.batch_mode,
                 "maxiter": max_iterations,
-                # dxtb exposes the SCF fixed-point/function tolerances directly;
-                # using the same value for both is its closest in-process
-                # equivalent to the cross-library ``--acc 0.0001`` contract.
+                # dxtb's public defaults use both L2 and max-norm fixed-point
+                # gates.  Its function tolerance is a residual criterion, not
+                # an energy tolerance, so retain the native default semantics
+                # instead of claiming a one-to-one xTB energy mapping.
                 "x_atol": self.accuracy,
-                "f_atol": self.accuracy,
+                "x_atol_max": self.max_norm_tolerance,
+                "f_atol": self.function_tolerance,
+                # The library default only warns at maxiter. Publication rows
+                # must fail instead of timing unconverged output silently.
+                "force_convergence": self.force_convergence,
             }
             self._calculator = self.dxtb.Calculator(
                 self.numbers,
@@ -337,6 +365,8 @@ class DxtbAdapter:
         calculator = self.calculator
         self._energies = None
         self._forces = None
+        self._host_energies = None
+        self._host_forces = None
         try:
             calculator.reset()
             result = calculator.singlepoint(
@@ -373,19 +403,34 @@ class DxtbAdapter:
         if self.backend == "cuda":
             self.torch.cuda.synchronize(self.device)
 
+    def publish_to_host(self) -> None:
+        """Complete inference and copy result tensors to persistent CPU buffers.
+
+        This is the host-publication boundary used by the natoms benchmark.
+        Converting tensors into Python lists remains outside timing, matching
+        the ctypes adapters whose caller-owned buffers are normalized later.
+        """
+        if self._energies is None:
+            raise DxtbError("dxtb outputs requested before a successful invoke")
+        self.synchronize()
+        self._host_energies = self._energies.to(device="cpu").contiguous()
+        if self.property_name == "force":
+            if self._forces is None:
+                raise DxtbError("dxtb force inference did not publish forces")
+            self._host_forces = self._forces.to(device="cpu").contiguous()
+
     def results(self) -> dict[str, Any]:
         """Copy synchronized outputs to Python lists in public gpuxtb units."""
-        if self._energies is None:
-            raise DxtbError("dxtb results requested before a successful invoke")
-        self.synchronize()
-        energy_values = self._energies.to(device="cpu").reshape(-1).tolist()
+        if self._host_energies is None:
+            self.publish_to_host()
+        energy_values = self._host_energies.reshape(-1).tolist()
         output: dict[str, Any] = {
             "energies_hartree": [float(value) for value in energy_values]
         }
         if self.property_name == "force":
-            if self._forces is None:
+            if self._host_forces is None:
                 raise DxtbError("dxtb force inference did not publish forces")
-            padded = self._forces.to(device="cpu").reshape(-1)
+            padded = self._host_forces.reshape(-1)
             output["forces_hartree_per_bohr"] = [
                 float(padded[index].item()) for index in self._force_flat_indices
             ]
@@ -398,6 +443,8 @@ class DxtbAdapter:
         self._closed = True
         self._forces = None
         self._energies = None
+        self._host_forces = None
+        self._host_energies = None
         self._calculator = None
         for name in ("numbers", "positions", "charges", "spins"):
             if hasattr(self, name):

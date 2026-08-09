@@ -5,12 +5,12 @@ The script merges every ``--output-json`` artifact produced by
 ``natoms_cross_engine.py`` (CPU and CUDA runs, one file per engine set),
 keeps only correctness-qualified ``available`` rows, and draws:
 
-1. ``batch=1``: FRESH GFN2-xTB energy+force call latency vs molecule size
-   (electronic reset is untimed; gpuxtb lines highlighted);
+1. ``batch=1``: FRESH GFN2-xTB energy+force public-call latency vs molecule
+   size (engine-specific state preparation stays explicit in the evidence);
 2. ``batch=128``: WARM latency after an untimed cold seed for 128 *distinct*
    conformers (gpuxtb highlighted);
-3. ``batch=512``: FRESH call latency for 512 *distinct* conformers
-   (electronic reset is untimed; gpuxtb highlighted).
+3. ``batch=512``: FRESH public-call latency for 512 *distinct* conformers
+   (gpuxtb highlighted).
 
 The figure uses the archived median and min/max range from every eligible row.
 Reference engines without a matching point are omitted from that panel; no
@@ -22,6 +22,8 @@ README and journal-column widths.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import html
 import json
 import math
 import sys
@@ -53,8 +55,8 @@ def _engine_color(engine: str) -> str:
         "gpuxtb-cuda": "#ef8a62",
         "xtb": "#2166ac",
         "tblite": "#1b9e77",
-        "dxtb-cpu": "#7b6fd0",
-        "dxtb-cuda": "#56b4e9",
+        "dxtb-cpu": "#6a51a3",
+        "dxtb-cuda": "#b07aa1",
     }
     return colors.get(engine, "#555555")
 
@@ -77,6 +79,79 @@ def _engine_linestyle(engine: str) -> str:
     return "--" if engine.endswith("cuda") else "-"
 
 
+def _native_fingerprint(identity: dict[str, Any] | None) -> dict[str, Any]:
+    """Return path-independent native-library and dependency hashes."""
+    identity = identity or {}
+    return {
+        "sha256": identity.get("sha256"),
+        "dependencies": [
+            (item.get("soname"), item.get("sha256"))
+            for item in identity.get("resolved_dependencies") or []
+        ],
+        "unresolved_dependencies": identity.get("unresolved_dependencies") or [],
+    }
+
+
+def _engine_runtime_identity(metadata: dict[str, Any], engine: str) -> str:
+    """Build one stable runtime fingerprint for cross-artifact consistency."""
+    runner = metadata.get("runner") or {}
+    if engine.startswith("gpuxtb"):
+        build = runner.get("gpuxtb_build") or {}
+        source = build.get("source_state") or {}
+        identity = {
+            "library_sha256": runner.get("gpuxtb_library_sha256"),
+            "source_head": source.get("head"),
+            "source_dirty": source.get("dirty"),
+            "cmake_selected": build.get("selected"),
+            "native": _native_fingerprint(runner.get("gpuxtb_native_identity")),
+        }
+    elif engine in {"xtb", "tblite"}:
+        source = runner.get(f"{engine}_source") or {}
+        identity = {
+            "library_sha256": runner.get(f"{engine}_library_sha256"),
+            "source_head": source.get("head"),
+            "source_dirty": source.get("dirty"),
+            "native": _native_fingerprint(runner.get(f"{engine}_native_identity")),
+        }
+    elif engine.startswith("dxtb"):
+        source = runner.get("dxtb_source") or {}
+        distributions = runner.get("python_distributions") or {}
+        identity = {
+            "source_head": source.get("head"),
+            "source_dirty": source.get("dirty"),
+            "distributions": {
+                name: {
+                    "version": (distributions.get(name) or {}).get("version"),
+                    "payload": (
+                        (distributions.get(name) or {}).get("payload_verification")
+                        or {}
+                    ).get("payload_sha256"),
+                    "status": (
+                        (distributions.get(name) or {}).get("payload_verification")
+                        or {}
+                    ).get("status"),
+                }
+                for name in ("dxtb", "torch", "tad-libcint")
+            },
+        }
+    else:
+        raise PlotError(f"unsupported engine runtime identity: {engine}")
+    serialized = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    if not identity.get("source_head") or identity.get("source_dirty") is not False:
+        raise PlotError(f"artifact has incomplete clean source identity for {engine}")
+    if engine.startswith("dxtb"):
+        if any(
+            item.get("status") != "verified" or not item.get("payload")
+            for item in identity["distributions"].values()
+        ):
+            raise PlotError(
+                f"artifact has incomplete installed payload identity for {engine}"
+            )
+    elif not identity.get("library_sha256") or not identity["native"].get("sha256"):
+        raise PlotError(f"artifact has incomplete native identity for {engine}")
+    return serialized
+
+
 def load_rows(
     artifact_paths: list[Path],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -92,11 +167,15 @@ def load_rows(
     metadata: dict[str, Any] = {}
     common_identity: tuple[Any, ...] | None = None
     row_keys: set[tuple[Any, ...]] = set()
+    engine_identities: dict[str, str] = {}
+    independent_artifacts: set[tuple[str, str, str]] = set()
     for path in artifact_paths:
         try:
-            document = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            payload = path.read_bytes()
+            document = json.loads(payload.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise PlotError(f"cannot read artifact {path}: {exc}") from exc
+        artifact_sha256 = hashlib.sha256(payload).hexdigest()
         artifact_metadata = document.get("metadata")
         if document.get("schema_version") != 2 or not isinstance(
             artifact_metadata, dict
@@ -105,13 +184,28 @@ def load_rows(
         commit = artifact_metadata.get("commit") or {}
         if not commit.get("head") or commit.get("dirty") is not False:
             raise PlotError(f"artifact {path} is not clean-HEAD evidence")
+        eligibility = artifact_metadata.get("evidence_eligibility") or {}
+        if (
+            eligibility.get("status") != "eligible_clean_head"
+            or eligibility.get("allow_dirty_evidence") is not False
+        ):
+            raise PlotError(f"artifact {path} used a diagnostic evidence override")
         protocol = artifact_metadata.get("protocol") or {}
         hardware = artifact_metadata.get("hardware") or {}
         threads = artifact_metadata.get("threads") or {}
+        reference = artifact_metadata.get("comparison_reference") or {}
         identity = (
             commit.get("head"),
             hardware.get("hostname"),
             hardware.get("cpu_model"),
+            tuple(hardware.get("process_cpu_affinity") or ()),
+            hardware.get("nvidia_smi"),
+            hardware.get("nvidia_smi_runtime"),
+            json.dumps(
+                hardware.get("selected_cuda_device"),
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
             threads.get("cpu_threads"),
             threads.get("reference_threads"),
             threads.get("dxtb_cpu_threads"),
@@ -130,9 +224,17 @@ def load_rows(
         elif identity != common_identity:
             raise PlotError(f"artifact {path} uses incompatible run metadata")
         start_policy = protocol.get("start_policy")
+        if reference.get("designation") == "independent_baseline":
+            reference_engine = reference.get("engine")
+            if reference_engine not in {"xtb", "tblite"}:
+                raise PlotError(f"artifact {path} has an invalid independent baseline")
+            independent_artifacts.add(
+                (str(start_policy), str(reference_engine), artifact_sha256)
+            )
         for row in document.get("rows", []):
+            engine = str(row.get("engine"))
             key = (
-                row.get("engine"),
+                engine,
                 row.get("job"),
                 row.get("natoms"),
                 row.get("batch_size"),
@@ -142,18 +244,51 @@ def load_rows(
                 raise PlotError(f"artifact set duplicates row {key}")
             row_keys.add(key)
             row["_artifact_start_policy"] = start_policy
+            row["_artifact_sha256"] = artifact_sha256
+            row["_artifact_reference"] = reference
+            runtime_identity = _engine_runtime_identity(artifact_metadata, engine)
+            previous_identity = engine_identities.setdefault(engine, runtime_identity)
+            if previous_identity != runtime_identity:
+                raise PlotError(
+                    f"artifact set changes the runtime identity for engine {engine}"
+                )
             rows.append(row)
         if not metadata and "metadata" in document:
             metadata = artifact_metadata
     if not rows or not metadata:
         raise PlotError("artifact set contains no rows or metadata")
+    for row in rows:
+        correctness = row.get("correctness") or {}
+        comparison = correctness.get("cross_engine") or {}
+        status = comparison.get("status")
+        reference = row.get("_artifact_reference") or {}
+        if status == "reference":
+            if reference.get("designation") != "independent_baseline" or reference.get(
+                "engine"
+            ) != row.get("engine"):
+                raise PlotError("reference row is not carried by its baseline artifact")
+        elif status == "pass":
+            expected = (
+                str(row.get("_artifact_start_policy")),
+                str(comparison.get("reference_engine")),
+                str(comparison.get("artifact_sha256")),
+            )
+            if (
+                reference.get("designation") != "dependent_run"
+                or reference.get("engine") != comparison.get("reference_engine")
+                or reference.get("artifact_sha256") != comparison.get("artifact_sha256")
+                or expected not in independent_artifacts
+            ):
+                raise PlotError(
+                    "dependent row does not link to a supplied panel-matched reference"
+                )
     return rows, metadata
 
 
 def _median_ms(row: dict[str, Any]) -> float | None:
     timing = row.get("timing") or {}
     value = timing.get("median_ms")
-    return float(value) if isinstance(value, (int, float)) else None
+    return float(value) if isinstance(value, int | float) else None
 
 
 def _timing_range_ms(row: dict[str, Any]) -> tuple[float, float] | None:
@@ -171,7 +306,7 @@ def _timing_range_ms(row: dict[str, Any]) -> tuple[float, float] | None:
     finite = [
         float(value)
         for value in samples
-        if isinstance(value, (int, float))
+        if isinstance(value, int | float)
         and math.isfinite(float(value))
         and float(value) > 0.0
     ]
@@ -216,32 +351,40 @@ def _hardware_note(metadata: dict[str, Any]) -> str:
 
 
 def _scientific_notation(value: float) -> str:
-    """Format a positive power-of-ten tolerance with Unicode superscripts."""
+    """Format a positive tolerance with a compact Unicode power of ten."""
     if value <= 0.0 or not math.isfinite(value):
         raise PlotError("plot protocol tolerance must be finite and positive")
-    exponent = math.log10(value)
-    if not math.isclose(exponent, round(exponent), abs_tol=1.0e-10):
-        return f"{value:.1e}"
+    exponent = math.floor(math.log10(value))
+    coefficient = value / (10.0**exponent)
     superscripts = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
-    return "10" + str(round(exponent)).translate(superscripts)
+    power = "10" + str(exponent).translate(superscripts)
+    if math.isclose(coefficient, 1.0, abs_tol=1.0e-10):
+        return power
+    return f"{coefficient:g}\N{MULTIPLICATION SIGN}{power}"
 
 
 def _protocol_note(metadata: dict[str, Any]) -> str:
-    """Derive the figure protocol line from validated artifact metadata."""
+    """Derive two concise method lines from validated artifact metadata."""
     protocol = metadata.get("protocol") or {}
     threads = metadata.get("threads") or {}
     repetitions = protocol.get("repetitions")
     cpu_threads = threads.get("cpu_threads")
     charge_tolerance = protocol.get("scc_charge_tolerance")
     energy_tolerance = protocol.get("scc_energy_tolerance")
+    output_energy_atol = protocol.get("cross_engine_energy_atol_hartree")
+    output_force_atol = protocol.get("cross_engine_force_atol_hartree_per_bohr")
     if type(repetitions) is not int or repetitions <= 0:
         raise PlotError("plot artifacts have an invalid repetition count")
     if type(cpu_threads) is not int or cpu_threads <= 0:
         raise PlotError("plot artifacts have an invalid CPU thread count")
-    if not isinstance(charge_tolerance, (int, float)) or not isinstance(
-        energy_tolerance, (int, float)
+    if not isinstance(charge_tolerance, int | float) or not isinstance(
+        energy_tolerance, int | float
     ):
         raise PlotError("plot artifacts have incomplete SCC tolerances")
+    if not isinstance(output_energy_atol, int | float) or not isinstance(
+        output_force_atol, int | float
+    ):
+        raise PlotError("plot artifacts have incomplete output compatibility gates")
     if math.isclose(float(charge_tolerance), float(energy_tolerance)):
         tolerance_text = _scientific_notation(float(charge_tolerance))
     else:
@@ -249,10 +392,21 @@ def _protocol_note(metadata: dict[str, Any]) -> str:
             f"q {_scientific_notation(float(charge_tolerance))} / "
             f"E {_scientific_notation(float(energy_tolerance))}"
         )
+    contract = protocol.get("convergence_contract") or {}
+    reference_accuracy = (contract.get("tblite") or {}).get("public_accuracy_factor")
+    if not isinstance(reference_accuracy, int | float):
+        reference_accuracy_text = "?"
+    else:
+        reference_accuracy_text = f"{float(reference_accuracy):g}"
     return (
-        f"Matched nominal SCC tolerance {tolerance_text}  ·  "
-        f"{cpu_threads} CPU threads per engine  ·  distinct alkane conformers  ·  "
-        f"median of {repetitions} runs"
+        "Public APIs · energy + analytic forces · nominal native settings: "
+        f"gpuxtb {tolerance_text} · xTB/tblite accuracy {reference_accuracy_text}\n"
+        f"dxtb native fixed-point/function defaults · {cpu_threads} CPU threads · "
+        f"distinct alkane conformers · median n={repetitions}; min\N{EN DASH}max\n"
+        "Owner-authorized output gate: "
+        f"{_scientific_notation(float(output_energy_atol))} Eh / "
+        f"{_scientific_notation(float(output_force_atol))} Eh bohr⁻¹; "
+        "not primary conformance"
     )
 
 
@@ -307,49 +461,115 @@ def _scaling_panel(
     title: str,
     subtitle: str,
 ) -> None:
-    """Draw one publication-style scaling panel with gpuxtb highlighted."""
+    """Draw one publication-style panel without bridging failed coordinates."""
     from matplotlib import ticker
 
     x_ticks: set[int] = set()
     for engine in engines:
-        qualified = [
+        requested = [
             row
             for row in rows
-            if _is_eligible(row)
-            and row.get("engine") == engine
+            if row.get("engine") == engine
             and row.get("batch_size") == batch_size
             and _matches_panel_protocol(row, batch_size)
         ]
-        qualified.sort(key=lambda row: row["natoms"])
-        if not qualified:
+        requested.sort(key=lambda row: row["natoms"])
+        if not requested:
             continue
-        x_values = [float(row["natoms"]) for row in qualified]
-        y_values = [_median_ms(row) for row in qualified if _median_ms(row) is not None]
-        if len(x_values) != len(y_values):
-            continue
-        x_ticks.update(int(value) for value in x_values)
-        ranges = [_timing_range_ms(row) or (0.0, 0.0) for row in qualified]
-        lower = [value[0] for value in ranges]
-        upper = [value[1] for value in ranges]
+        x_ticks.update(int(row["natoms"]) for row in requested)
         highlight = engine.startswith("gpuxtb")
-        axes.errorbar(
-            x_values,
-            y_values,
-            yerr=[lower, upper],
-            marker=_engine_marker(engine),
-            markersize=(4.8 if highlight else 3.6),
-            markeredgewidth=(0.8 if highlight else 0.5),
-            markeredgecolor=("white" if highlight else _engine_color(engine)),
-            linewidth=(1.75 if highlight else 1.05),
-            linestyle=_engine_linestyle(engine),
-            color=_engine_color(engine),
-            alpha=(1.0 if highlight else 0.88),
-            elinewidth=(0.7 if highlight else 0.5),
-            capsize=1.5,
-            capthick=0.5,
-            zorder=(5 if highlight else 2),
-            label=_engine_label(engine),
-        )
+        segments: list[list[dict[str, Any]]] = []
+        current: list[dict[str, Any]] = []
+        for row in requested:
+            if _is_eligible(row):
+                current.append(row)
+            elif current:
+                segments.append(current)
+                current = []
+        if current:
+            segments.append(current)
+        labeled = False
+        for segment in segments:
+            x_values = [float(row["natoms"]) for row in segment]
+            y_values = [float(_median_ms(row)) for row in segment]
+            ranges = [_timing_range_ms(row) or (0.0, 0.0) for row in segment]
+            lower = [value[0] for value in ranges]
+            upper = [value[1] for value in ranges]
+            axes.errorbar(
+                x_values,
+                y_values,
+                yerr=[lower, upper],
+                marker=_engine_marker(engine),
+                markersize=(5.4 if highlight else 4.4),
+                markeredgewidth=(0.9 if highlight else 0.7),
+                markeredgecolor=("white" if highlight else _engine_color(engine)),
+                linewidth=(1.9 if highlight else 1.2),
+                linestyle=_engine_linestyle(engine),
+                color=_engine_color(engine),
+                alpha=(1.0 if highlight else 0.9),
+                elinewidth=(0.95 if highlight else 0.75),
+                capsize=2.2,
+                capthick=0.75,
+                zorder=(5 if highlight else 2),
+                label=_engine_label(engine) if not labeled else None,
+            )
+            labeled = True
+        for row in requested:
+            if _is_eligible(row):
+                continue
+            natoms = float(row["natoms"])
+            median = _median_ms(row)
+            if (
+                row.get("availability") == "available"
+                and median is not None
+                and math.isfinite(median)
+                and median > 0.0
+            ):
+                # The latency is real, but this row failed the declared output
+                # compatibility gate.  A hollow marker preserves the timing
+                # without allowing it to support a speed claim or bridge a line.
+                axes.plot(
+                    [natoms],
+                    [median],
+                    linestyle="none",
+                    marker=_engine_marker(engine),
+                    markersize=(5.4 if highlight else 4.4),
+                    markerfacecolor="white",
+                    markeredgecolor=_engine_color(engine),
+                    markeredgewidth=1.1,
+                    alpha=0.9,
+                    zorder=4,
+                    label=_engine_label(engine) if not labeled else None,
+                )
+            else:
+                axes.plot(
+                    [natoms],
+                    [0.035],
+                    transform=axes.get_xaxis_transform(),
+                    linestyle="none",
+                    marker="x",
+                    markersize=4.8,
+                    markeredgewidth=1.0,
+                    color=_engine_color(engine),
+                    clip_on=False,
+                    zorder=6,
+                    label=_engine_label(engine) if not labeled else None,
+                )
+                detail = str(row.get("error") or row.get("reason") or "unavailable")
+                label = "OOM" if "memory" in detail.casefold() else "unavailable"
+                axes.annotate(
+                    label,
+                    xy=(natoms, 0.035),
+                    xycoords=axes.get_xaxis_transform(),
+                    xytext=(0, 5),
+                    textcoords="offset points",
+                    ha="center",
+                    va="bottom",
+                    fontsize=6.8,
+                    color=_engine_color(engine),
+                    clip_on=False,
+                )
+            labeled = True
     axes.set_xscale("log")
     axes.set_yscale("log")
     ordered_ticks = sorted(x_ticks)
@@ -365,27 +585,37 @@ def _scaling_panel(
     axes.yaxis.set_major_formatter(ticker.FuncFormatter(_format_latency_tick))
     axes.yaxis.set_minor_formatter(ticker.NullFormatter())
     axes.set_xlabel("Atoms per system", labelpad=6)
-    axes.set_title(
-        f"{title}\n{subtitle}",
-        loc="left",
-        pad=9,
-        fontsize=8.0,
-        fontweight="semibold",
+    axes.text(
+        0.0,
+        1.13,
+        panel_label,
+        transform=axes.transAxes,
+        fontsize=10.5,
+        fontweight="bold",
+        va="bottom",
         color="#171a1f",
     )
     axes.text(
-        -0.11,
-        1.16,
-        panel_label,
+        0.105,
+        1.13,
+        title,
         transform=axes.transAxes,
-        fontsize=9.5,
+        fontsize=9.2,
         fontweight="bold",
-        va="top",
+        va="bottom",
         color="#171a1f",
+    )
+    axes.text(
+        0.0,
+        1.045,
+        subtitle,
+        transform=axes.transAxes,
+        fontsize=7.5,
+        va="bottom",
+        color="#626a73",
     )
     axes.set_axisbelow(True)
     axes.grid(True, axis="y", which="major", color="#d8dce2", linewidth=0.7)
-    axes.grid(True, axis="y", which="minor", color="#eef0f3", linewidth=0.45)
     axes.grid(True, axis="x", which="major", color="#eef0f3", linewidth=0.45)
     for side in ("top", "right"):
         axes.spines[side].set_visible(False)
@@ -398,7 +628,7 @@ def _scaling_panel(
         direction="out",
         colors="#30343b",
         width=0.7,
-        labelsize=6.8,
+        labelsize=7.6,
     )
 
 
@@ -420,8 +650,8 @@ def _speedup_range(
     rows: list[dict[str, Any]],
     batch_size: int,
     natoms: int,
-) -> tuple[float, float, float, float] | None:
-    """Return target latency, nearest reference, and xTB/tblite speedup range."""
+) -> tuple[float, float, float, float, str] | None:
+    """Return gpuxtb CPU latency and qualified baseline ratio range."""
     values: dict[str, float] = {}
     for row in rows:
         engine = row.get("engine")
@@ -435,12 +665,17 @@ def _speedup_range(
             median = _median_ms(row)
             if median is not None:
                 values[str(engine)] = median
-    if not {"gpuxtb-cpu", "xtb", "tblite"}.issubset(values):
+    if "gpuxtb-cpu" not in values:
         return None
     target = values["gpuxtb-cpu"]
-    references = [values["xtb"], values["tblite"]]
+    reference_names = [name for name in ("xtb", "tblite") if name in values]
+    if not reference_names:
+        return None
+    references = [values[name] for name in reference_names]
     ratios = [reference / target for reference in references]
-    return target, min(references), min(ratios), max(ratios)
+    labels = {"xtb": "xTB", "tblite": "tblite"}
+    comparison = " / ".join(labels[name] for name in reference_names)
+    return target, min(references), min(ratios), max(ratios), comparison
 
 
 def _annotate_speedup(
@@ -453,7 +688,7 @@ def _annotate_speedup(
     summary = _speedup_range(rows, batch_size, natoms)
     if summary is None:
         return
-    target, nearest_reference, minimum, maximum = summary
+    target, nearest_reference, minimum, maximum, comparison = summary
     axes.annotate(
         "",
         xy=(natoms, target),
@@ -467,22 +702,28 @@ def _annotate_speedup(
         },
         zorder=7,
     )
-    if maximum < 2.0:
-        speedup = f"{minimum:.1f}-{maximum:.1f}x"
+    if math.isclose(minimum, maximum, rel_tol=0.02):
+        speedup = (
+            f"{minimum:.1f}\N{MULTIPLICATION SIGN}"
+            if minimum < 2.0
+            else f"{minimum:.0f}\N{MULTIPLICATION SIGN}"
+        )
+    elif maximum < 2.0:
+        speedup = f"{minimum:.1f}\N{EN DASH}{maximum:.1f}\N{MULTIPLICATION SIGN}"
     else:
-        speedup = f"{minimum:.0f}-{maximum:.0f}x"
+        speedup = f"{minimum:.0f}\N{EN DASH}{maximum:.0f}\N{MULTIPLICATION SIGN}"
     axes.annotate(
-        f"{speedup} faster\nvs xTB / tblite",
+        f"{speedup} lower median\nvs {comparison}",
         xy=(natoms, math.sqrt(target * nearest_reference)),
         xytext=(8, 0),
         textcoords="offset points",
         ha="left",
         va="center",
-        fontsize=6.2,
-        fontweight="semibold",
+        fontsize=7.0,
+        fontweight="medium",
         color="#343a40",
         bbox={
-            "boxstyle": "round,pad=0.28",
+            "boxstyle": "square,pad=0.18",
             "facecolor": "white",
             "edgecolor": "#d8dce2",
             "linewidth": 0.65,
@@ -502,6 +743,25 @@ def _strip_svg_trailing_whitespace(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     path.write_text(
         "\n".join(line.rstrip() for line in text.splitlines()) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _add_svg_accessibility(path: Path, title: str, description: str) -> None:
+    """Insert deterministic SVG title/description elements for screen readers."""
+    text = path.read_text(encoding="utf-8")
+    svg_start = text.find("<svg")
+    if svg_start < 0:
+        raise PlotError("matplotlib output has no SVG root element")
+    opening_end = text.find(">", svg_start)
+    if opening_end < 0:
+        raise PlotError("matplotlib output has an incomplete SVG root element")
+    accessibility = (
+        f"\n <title>{html.escape(title)}</title>"
+        f"\n <desc>{html.escape(description)}</desc>"
+    )
+    path.write_text(
+        text[: opening_end + 1] + accessibility + text[opening_end + 1 :],
         encoding="utf-8",
     )
 
@@ -541,7 +801,6 @@ def main(argv: list[str] | None = None) -> int:
     except PlotError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         return 2
-    commit = (metadata.get("commit") or {}).get("head") or "unknown"
     try:
         import matplotlib
 
@@ -556,23 +815,29 @@ def main(argv: list[str] | None = None) -> int:
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
-            "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
-            "font.size": 7.2,
+            "font.sans-serif": [
+                "Liberation Sans",
+                "Arial",
+                "Helvetica",
+                "DejaVu Sans",
+            ],
+            "font.size": 8.0,
             "axes.labelcolor": "#30343b",
             "text.color": "#30343b",
             "svg.fonttype": "none",
+            "svg.hashsalt": "gpuxtb-natoms-cross-engine-v2",
         }
     )
-    fig, axes = plt.subplots(1, 3, figsize=(7.2, 3.6), squeeze=True)
-    fig.subplots_adjust(left=0.08, right=0.992, bottom=0.18, top=0.67, wspace=0.27)
+    fig, axes = plt.subplots(1, 3, figsize=(7.4, 4.65), squeeze=True, sharey=True)
+    fig.subplots_adjust(left=0.082, right=0.992, bottom=0.235, top=0.625, wspace=0.2)
     _scaling_panel(
         axes[0],
         rows,
         1,
         args.engines,
         "a",
-        "Single molecule",
-        "batch = 1  ·  FRESH (reset untimed)",
+        "Single-system latency",
+        "batch 1 · FRESH public call",
     )
     _scaling_panel(
         axes[1],
@@ -580,8 +845,8 @@ def main(argv: list[str] | None = None) -> int:
         128,
         args.engines,
         "b",
-        "Conformer throughput",
-        "batch = 128  ·  WARM after seed (dxtb cold)",
+        "128-system batch",
+        "distinct conformers · WARM after untimed seed; dxtb cold",
     )
     _scaling_panel(
         axes[2],
@@ -589,60 +854,103 @@ def main(argv: list[str] | None = None) -> int:
         512,
         args.engines,
         "c",
-        "Large-batch throughput",
-        "batch = 512  ·  FRESH (reset untimed)",
+        "512-system batch",
+        "distinct conformers · FRESH public call",
     )
     axes[0].set_ylabel("Latency per call (ms)", labelpad=7)
-    for axes_item, batch_size in zip(axes, (1, 128, 512), strict=True):
+    for axes_item, batch_size in zip(axes[1:], (128, 512), strict=True):
         _annotate_speedup(axes_item, rows, batch_size)
 
-    handles, labels = axes[0].get_legend_handles_labels()
-    if handles:
+    legend_items: dict[str, Any] = {}
+    for axes_item in axes:
+        handles, labels = axes_item.get_legend_handles_labels()
+        for handle, label in zip(handles, labels, strict=True):
+            legend_items.setdefault(label, handle)
+    if legend_items:
         fig.legend(
-            handles,
-            labels,
+            list(legend_items.values()),
+            list(legend_items),
             loc="upper left",
-            ncol=len(handles),
+            ncol=3,
             frameon=False,
-            bbox_to_anchor=(0.077, 0.814),
+            bbox_to_anchor=(0.078, 0.78),
             borderaxespad=0.0,
-            handlelength=2.1,
-            handletextpad=0.4,
-            columnspacing=0.9,
-            fontsize=6.7,
+            handlelength=2.3,
+            handletextpad=0.5,
+            columnspacing=1.25,
+            labelspacing=0.7,
+            fontsize=7.8,
         )
     fig.text(
         0.08,
-        0.955,
-        "GFN2-xTB energy + force latency",
+        0.975,
+        "GFN2-xTB energy + analytic-force latency",
         ha="left",
         va="top",
-        fontsize=11,
+        fontsize=11.5,
         fontweight="bold",
         color="#171a1f",
     )
     fig.text(
         0.08,
-        0.895,
+        0.925,
         protocol_note,
         ha="left",
         va="top",
-        fontsize=6.8,
+        fontsize=7.5,
         color="#59616b",
+        linespacing=1.35,
     )
     fig.text(
-        0.08,
-        0.035,
-        _hardware_note(metadata)
-        + f"  ·  runner {commit[:8]}  ·  whiskers: min-max  ·  lower is better"
-        + "  ·  † host descriptor  ·  ‡ device-resident input",
+        0.082,
+        0.095,
+        "Timing: gpuxtb FRESH initialization and dxtb reset + host tensor copy "
+        "inside; xTB/tblite calculator rebuild and all Python list conversion outside.",
         ha="left",
         va="bottom",
-        fontsize=5.8,
+        fontsize=6.5,
+        color="#69717b",
+    )
+    fig.text(
+        0.082,
+        0.057,
+        _hardware_note(metadata)
+        + " · runner "
+        + str((metadata.get("commit") or {}).get("head", "unknown"))[:8]
+        + " · hollow markers fail an eligibility gate; "
+        + "\N{MULTIPLICATION SIGN}: unavailable/error.",
+        ha="left",
+        va="bottom",
+        fontsize=6.5,
+        color="#69717b",
+    )
+    fig.text(
+        0.082,
+        0.025,
+        "CUDA protocols differ—† gpuxtb uses host descriptors; ‡ dxtb uses "
+        "persistent device inputs; no direct CUDA speedup comparison.",
+        ha="left",
+        va="bottom",
+        fontsize=6.5,
         color="#69717b",
     )
     if args.output.suffix == ".svg":
-        fig.savefig(args.output, format="svg", facecolor="white")
+        fig.savefig(
+            args.output,
+            format="svg",
+            facecolor="white",
+            metadata={
+                "Date": None,
+                "Creator": "gpuxtb plot_natoms_cross_engine.py",
+            },
+        )
+        _add_svg_accessibility(
+            args.output,
+            "Cross-engine GFN2-xTB energy and analytic-force latency",
+            "Three log-scale panels compare batch 1, 128, and 512 systems. "
+            "Filled points pass the declared output compatibility gate; hollow "
+            "points fail it, and x marks unavailable or errored coordinates.",
+        )
         _strip_svg_trailing_whitespace(args.output)
     else:
         fig.savefig(args.output, dpi=220, facecolor="white")

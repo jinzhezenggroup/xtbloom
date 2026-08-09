@@ -151,6 +151,27 @@ class DxtbAdapterTest(unittest.TestCase):
             self.assertTrue(runtime_dxtb.timer.cuda_sync)
             self.assertEqual(torch.get_num_threads(), original_threads)
 
+    def test_convergence_controls_preserve_dxtb_native_semantics(self) -> None:
+        """Record both fixed-point gates and reject unconverged publication."""
+        adapter = DxtbAdapter(
+            make_storage(1),
+            "energy",
+            "cpu",
+            cpu_threads=torch.get_num_threads(),
+            accuracy=1.0e-4,
+            max_norm_tolerance=1.0e-5,
+            function_tolerance=1.0e-4,
+            force_convergence=True,
+            _runtime=(torch, fake_dxtb()),
+        )
+        try:
+            self.assertEqual(adapter.calculator.opts["x_atol"], 1.0e-4)
+            self.assertEqual(adapter.calculator.opts["x_atol_max"], 1.0e-5)
+            self.assertEqual(adapter.calculator.opts["f_atol"], 1.0e-4)
+            self.assertIs(adapter.calculator.opts["force_convergence"], True)
+        finally:
+            adapter.close()
+
     def test_ragged_batch_uses_padding_but_filters_padded_forces(self) -> None:
         """Pad ragged dxtb inputs without publishing forces for padding atoms."""
         storage = SimpleNamespace(

@@ -12,13 +12,26 @@ from benchmarks import natoms_cross_engine as nce
 from benchmarks import plot_natoms_cross_engine as plotters
 
 
-def artifact_metadata(start_policy: str = "cold") -> dict[str, object]:
+def artifact_metadata(
+    start_policy: str = "cold",
+    *,
+    designation: str = "independent_baseline",
+    reference_sha256: str | None = None,
+) -> dict[str, object]:
     """Return one schema-v2 clean metadata block for plotter tests."""
     return {
         "hardware": {
             "hostname": "test-node",
             "cpu_model": "test-cpu",
             "nvidia_smi": "test-gpu",
+            "nvidia_smi_runtime": "test-gpu,test-uuid,test-driver,32768 MiB",
+            "process_cpu_affinity": [0, 1, 2, 3],
+            "selected_cuda_device": {
+                "cuda_ordinal": 0,
+                "CUDA_VISIBLE_DEVICES": "0",
+                "resolved_visibility_token": "0",
+                "device": {"physical_index": "0", "uuid": "test-uuid"},
+            },
         },
         "threads": {
             "cpu_threads": 4,
@@ -26,6 +39,41 @@ def artifact_metadata(start_policy: str = "cold") -> dict[str, object]:
             "dxtb_cpu_threads": 4,
         },
         "commit": {"head": "0123456789abcdef", "dirty": False},
+        "evidence_eligibility": {
+            "status": "eligible_clean_head",
+            "allow_dirty_evidence": False,
+        },
+        "comparison_reference": {
+            "designation": designation,
+            "engine": "xtb",
+            "artifact_sha256": reference_sha256,
+        },
+        "runner": {
+            "gpuxtb_library_sha256": "g" * 64,
+            "gpuxtb_build": {
+                "source_state": {"head": "gpuxtb-head", "dirty": False},
+                "selected": {"GPUXTB_ENABLE_CUDA": "ON"},
+            },
+            "gpuxtb_native_identity": {
+                "sha256": "g" * 64,
+                "resolved_dependencies": [],
+                "unresolved_dependencies": [],
+            },
+            "xtb_library_sha256": "x" * 64,
+            "xtb_source": {"head": "xtb-head", "dirty": False},
+            "xtb_native_identity": {
+                "sha256": "x" * 64,
+                "resolved_dependencies": [],
+                "unresolved_dependencies": [],
+            },
+            "tblite_library_sha256": "t" * 64,
+            "tblite_source": {"head": "tblite-head", "dirty": False},
+            "tblite_native_identity": {
+                "sha256": "t" * 64,
+                "resolved_dependencies": [],
+                "unresolved_dependencies": [],
+            },
+        },
         "protocol": {
             "warmups": 1,
             "repetitions": 3,
@@ -36,7 +84,11 @@ def artifact_metadata(start_policy: str = "cold") -> dict[str, object]:
             "repeatability_force_atol_hartree_per_bohr": 1.0e-8,
             "scc_max_iterations": 500,
             "scc_charge_tolerance": 1.0e-4,
-            "scc_energy_tolerance": 1.0e-4,
+            "scc_energy_tolerance": 1.0e-6,
+            "convergence_contract": {
+                "xtb": {"public_accuracy_factor": 1.0},
+                "tblite": {"public_accuracy_factor": 1.0},
+            },
         },
     }
 
@@ -184,29 +236,91 @@ class NatomsCrossEngineTest(unittest.TestCase):
             for batch_size in (1, 128, 512)
         ]
         with tempfile.TemporaryDirectory() as directory:
-            cold_artifact = Path(directory) / "cold.json"
-            cold_artifact.write_text(
+            directory_path = Path(directory)
+            cold_reference = directory_path / "cold-reference.json"
+            cold_reference.write_text(
                 json.dumps(
                     {
                         "schema_version": 2,
                         "metadata": artifact_metadata("cold"),
-                        "rows": [row for row in rows if row["batch_size"] != 128],
+                        "rows": [
+                            row
+                            for row in rows
+                            if row["engine"] == "xtb" and row["batch_size"] != 128
+                        ],
                     }
                 ),
                 encoding="utf-8",
             )
-            warm_artifact = Path(directory) / "warm.json"
-            warm_artifact.write_text(
+            cold_reference_sha256 = nce.sha256_file(cold_reference)
+            warm_reference = directory_path / "warm-reference.json"
+            warm_reference.write_text(
                 json.dumps(
                     {
                         "schema_version": 2,
                         "metadata": artifact_metadata("auto-warm"),
-                        "rows": [row for row in rows if row["batch_size"] == 128],
+                        "rows": [
+                            row
+                            for row in rows
+                            if row["engine"] == "xtb" and row["batch_size"] == 128
+                        ],
                     }
                 ),
                 encoding="utf-8",
             )
-            output = Path(directory) / "figure.png"
+            warm_reference_sha256 = nce.sha256_file(warm_reference)
+
+            cold_dependent_rows = [
+                row
+                for row in rows
+                if row["engine"] != "xtb" and row["batch_size"] != 128
+            ]
+            warm_dependent_rows = [
+                row
+                for row in rows
+                if row["engine"] != "xtb" and row["batch_size"] == 128
+            ]
+            for dependent_rows, reference_sha256 in (
+                (cold_dependent_rows, cold_reference_sha256),
+                (warm_dependent_rows, warm_reference_sha256),
+            ):
+                for row in dependent_rows:
+                    row["correctness"]["cross_engine"] = {
+                        "status": "pass",
+                        "reference_engine": "xtb",
+                        "artifact_sha256": reference_sha256,
+                    }
+            cold_artifact = directory_path / "cold-dependent.json"
+            cold_artifact.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "metadata": artifact_metadata(
+                            "cold",
+                            designation="dependent_run",
+                            reference_sha256=cold_reference_sha256,
+                        ),
+                        "rows": cold_dependent_rows,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            warm_artifact = directory_path / "warm-dependent.json"
+            warm_artifact.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "metadata": artifact_metadata(
+                            "auto-warm",
+                            designation="dependent_run",
+                            reference_sha256=warm_reference_sha256,
+                        ),
+                        "rows": warm_dependent_rows,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = directory_path / "figure.svg"
             import subprocess
 
             completed = subprocess.run(
@@ -214,6 +328,10 @@ class NatomsCrossEngineTest(unittest.TestCase):
                     "python3",
                     "-m",
                     "benchmarks.plot_natoms_cross_engine",
+                    "--artifact",
+                    str(cold_reference),
+                    "--artifact",
+                    str(warm_reference),
                     "--artifact",
                     str(cold_artifact),
                     "--artifact",
@@ -227,79 +345,56 @@ class NatomsCrossEngineTest(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, msg=completed.stderr)
             self.assertTrue(output.is_file() and output.stat().st_size > 0)
+            svg = output.read_text(encoding="utf-8")
+            self.assertIn("<title>", svg)
+            self.assertIn("<desc>", svg)
+            self.assertNotIn("<dc:date>", svg)
 
     def test_cold_panel_excludes_autowarm_trajectory_leak(self) -> None:
         """Batch=1 rows leaked by an auto-warm trajectory run must not enter.
 
         The trajectory invocation also measures a steady-state batch=1 cell
         without a ``job`` tag; only rows whose source artifact recorded a
-        ``cold`` start policy (or no policy at all, i.e. legacy artifacts) may
-        appear in the batch=1 cold-start panel.
+        ``cold`` start policy may appear in the batch=1 cold-start panel.
         """
         cold_row = {
             "engine": "gpuxtb-cpu",
             "natoms": 62,
             "batch_size": 1,
+            "start_policy": "cold",
+            "effective_start_policy": "cold",
+            "_artifact_start_policy": "cold",
             "availability": "available",
             "timing": {"median_ms": 76.0},
             "correctness": qualified_correctness(),
         }
         leak_row = dict(cold_row)  # same shape, warm auto-warm measurement
         leak_row["timing"] = {"median_ms": 21.4}
-        metadata = artifact_metadata()
-        with tempfile.TemporaryDirectory() as directory:
-            directory = Path(directory)
-            cold_artifact = directory / "cold.json"
-            cold_artifact.write_text(
-                json.dumps(
-                    {"schema_version": 2, "metadata": metadata, "rows": [cold_row]}
-                ),
-                encoding="utf-8",
+        leak_row["start_policy"] = "auto-warm"
+        leak_row["effective_start_policy"] = "auto-warm"
+        leak_row["_artifact_start_policy"] = "auto-warm"
+        rows = [cold_row, leak_row]
+        cold = [
+            row
+            for row in rows
+            if plotters._is_eligible(row)
+            and row.get("batch_size") == 1
+            and plotters._cold_batch1_row(row)
+        ]
+        self.assertEqual(
+            [(row["natoms"], row["timing"]["median_ms"]) for row in cold],
+            [(62, 76.0)],
+        )
+        self.assertTrue(plotters._cold_batch1_row(cold_row))
+        self.assertFalse(plotters._cold_batch1_row(leak_row))
+        self.assertFalse(
+            plotters._cold_batch1_row(
+                dict(leak_row, job="trajectory", timing={"median_ms": 0.5})
             )
-            auto_warm_metadata = artifact_metadata("auto-warm")
-            leak_artifact = directory / "traj.json"
-            leak_artifact.write_text(
-                json.dumps(
-                    {
-                        "schema_version": 2,
-                        "metadata": auto_warm_metadata,
-                        "rows": [leak_row],
-                    },
-                ),
-                encoding="utf-8",
-            )
-            rows, _ = plotters.load_rows([cold_artifact, leak_artifact])
-            cold = [
-                row
-                for row in rows
-                if plotters._is_eligible(row)
-                and row.get("batch_size") == 1
-                and plotters._cold_batch1_row(row)
-            ]
-            self.assertEqual(
-                [(row["natoms"], row["timing"]["median_ms"]) for row in cold],
-                [(62, 76.0)],
-            )
-            cold_loaded = next(
-                row for row in rows if row["timing"]["median_ms"] == 76.0
-            )
-            leak_loaded = next(
-                row for row in rows if row["timing"]["median_ms"] == 21.4
-            )
-            self.assertNotEqual(
-                cold_loaded.get("_artifact_start_policy"),
-                leak_loaded.get("_artifact_start_policy"),
-            )
-            self.assertTrue(plotters._cold_batch1_row(cold_loaded))
-            self.assertFalse(plotters._cold_batch1_row(leak_loaded))
-            self.assertFalse(
-                plotters._cold_batch1_row(
-                    dict(leak_loaded, job="trajectory", timing={"median_ms": 0.5})
-                )
-            )
-            legacy = dict(cold_loaded)
-            legacy.pop("_artifact_start_policy", None)
-            self.assertFalse(plotters._cold_batch1_row(legacy))
+        )
+        legacy = dict(cold_row)
+        legacy.pop("_artifact_start_policy", None)
+        self.assertFalse(plotters._cold_batch1_row(legacy))
 
     def test_measure_cell_retains_complete_force_evidence(self) -> None:
         """Every measured repetition hashes forces and retains the final vector."""
@@ -370,6 +465,36 @@ class NatomsCrossEngineTest(unittest.TestCase):
         self.assertEqual(runner.invocations, 2)
         self.assertEqual(runner.modes, ["fresh", "warm"])
         self.assertEqual(fragment["effective_start_policy"], "auto-warm")
+
+    def test_cold_gpuxtb_records_fresh_initialization_inside_public_call(self) -> None:
+        """Selecting FRESH is untimed, but gpuxtb initializes it during compute."""
+
+        class FakeGpuxtbRunner:
+            def set_start_mode(self, _mode: str) -> None:
+                return
+
+            def invoke(self) -> None:
+                return
+
+            def snapshot(self) -> dict[str, object]:
+                return {
+                    "energies_hartree": [-1.0],
+                    "forces_hartree_per_bohr": [0.0, 0.0, 0.0],
+                    "scc_iterations": [2],
+                    "scc_converged": [1],
+                    "per_system_status": [0],
+                }
+
+        fragment = nce.measure_cell(
+            FakeGpuxtbRunner(),
+            (0, 1),
+            nce.Cell("gpuxtb-cpu", 1, 1, 1, 0),
+            "cold",
+        )
+        self.assertEqual(
+            fragment["state_preparation_timing"],
+            "fresh_state_initialization_inside_timed_public_call",
+        )
 
     def test_auto_warm_records_drift_without_cold_repeatability_gate(self) -> None:
         """Warm-state refinement is diagnostic, not cold-call repeatability."""
@@ -463,6 +588,8 @@ class NatomsCrossEngineTest(unittest.TestCase):
             "natoms": 1,
             "batch_size": 1,
             "availability": "available",
+            "start_policy": "cold",
+            "effective_start_policy": "cold",
             "energies_hartree": [-1.0],
             "forces_hartree_per_bohr": [0.1, -0.2, 0.3],
             "correctness": qualified_correctness("xtb"),
@@ -482,11 +609,39 @@ class NatomsCrossEngineTest(unittest.TestCase):
             artifact.rows[(1, 1)]["forces_hartree_per_bohr"], [0.1, -0.2, 0.3]
         )
 
+    def test_tblite_can_be_designated_as_independent_reference(self) -> None:
+        """Reference qualification is not hard-coded to the known xTB force drift."""
+        metadata = artifact_metadata("auto-warm")
+        metadata["comparison_reference"] = {
+            "designation": "independent_baseline",
+            "engine": "tblite",
+        }
+        row = {
+            "engine": "tblite",
+            "natoms": 1,
+            "batch_size": 1,
+            "availability": "available",
+            "start_policy": "auto-warm",
+            "effective_start_policy": "auto-warm",
+            "energies_hartree": [-1.0],
+            "forces_hartree_per_bohr": [0.1, -0.2, 0.3],
+            "correctness": qualified_correctness("xtb"),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reference.json"
+            nce.write_json(
+                path,
+                {"schema_version": 2, "metadata": metadata, "rows": [row]},
+            )
+            artifact = nce.load_reference_artifact(path)
+        self.assertEqual(artifact.engine, "tblite")
+
     def test_cross_engine_gate_checks_energy_and_force_vectors(self) -> None:
         """Either observable exceeding its gate makes a timing row ineligible."""
         reference = nce.ReferenceArtifact(
             path=Path("reference.json"),
             sha256="a" * 64,
+            engine="xtb",
             metadata={},
             rows={
                 (1, 1): {
@@ -514,6 +669,48 @@ class NatomsCrossEngineTest(unittest.TestCase):
             self.assertEqual(row["correctness"]["status"], "fail")
             self.assertEqual(row["correctness"]["cross_engine"]["status"], "fail")
 
+    def test_cross_engine_gate_checks_every_timed_warm_sample(self) -> None:
+        """A final in-tolerance WARM result cannot hide an earlier bad sample."""
+        reference = nce.ReferenceArtifact(
+            path=Path("reference.json"),
+            sha256="a" * 64,
+            engine="xtb",
+            metadata={},
+            rows={
+                (1, 1): {
+                    "energies_hartree": [-1.0],
+                    "forces_hartree_per_bohr": [0.1, -0.2, 0.3],
+                }
+            },
+        )
+        row = {
+            "engine": "gpuxtb-cpu",
+            "natoms": 1,
+            "batch_size": 1,
+            "availability": "available",
+            "raw_samples": [
+                {"energies_hartree": [-0.99]},
+                {"energies_hartree": [-1.0]},
+            ],
+            "energies_hartree": [-1.0],
+            "forces_hartree_per_bohr": [0.1, -0.2, 0.3],
+            "_force_samples_hartree_per_bohr": [
+                [0.1, -0.2, 0.31],
+                [0.1, -0.2, 0.3],
+            ],
+            "correctness": {"status": "pass"},
+        }
+        self.assertTrue(
+            nce.apply_cross_engine_reference(row, reference, 2.0e-3, 2.0e-3)
+        )
+        comparison = row["correctness"]["cross_engine"]
+        self.assertEqual(comparison["status"], "fail")
+        self.assertEqual(comparison["timed_sample_count_checked"], 2)
+        self.assertEqual(
+            [item["status"] for item in comparison["timed_sample_deltas"]],
+            ["fail", "pass"],
+        )
+
     def test_panel_protocol_filter_rejects_mislabeled_artifacts(self) -> None:
         """Each panel accepts only its named requested/effective start policy."""
         base = {
@@ -540,7 +737,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
         """Figure header must not silently hard-code publication settings."""
         note = plotters._protocol_note(artifact_metadata())
         self.assertIn("4 CPU threads", note)
-        self.assertIn("median of 3 runs", note)
+        self.assertIn("median n=3", note)
         self.assertIn("10⁻⁴", note)
 
     def test_artifact_pair_refuses_overwrite(self) -> None:
@@ -608,7 +805,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
         ]
         self.assertEqual(
             plotters._speedup_range(rows, 128, 62),
-            (100.0, 900.0, 9.0, 12.0),
+            (100.0, 900.0, 9.0, 12.0, "xTB / tblite"),
         )
 
     def test_plotter_rejects_dirty_artifact(self) -> None:
@@ -631,6 +828,64 @@ class NatomsCrossEngineTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(plotters.PlotError, "clean-HEAD"):
                 plotters.load_rows([artifact])
+
+    def test_plotter_rejects_clean_diagnostic_override(self) -> None:
+        """A clean checkout cannot make --allow-dirty publication-eligible."""
+        metadata = artifact_metadata()
+        metadata["evidence_eligibility"] = {
+            "status": "diagnostic_override",
+            "allow_dirty_evidence": True,
+        }
+        row = {
+            "engine": "xtb",
+            "natoms": 14,
+            "batch_size": 1,
+            "availability": "available",
+            "timing": {"median_ms": 1.0},
+            "correctness": qualified_correctness("xtb"),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "diagnostic.json"
+            artifact.write_text(
+                json.dumps({"schema_version": 2, "metadata": metadata, "rows": [row]}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(plotters.PlotError, "diagnostic"):
+                plotters.load_rows([artifact])
+
+    def test_plotter_rejects_mismatched_process_affinity(self) -> None:
+        """Speed claims cannot merge runs from different CPU allocations."""
+        metadata_a = artifact_metadata()
+        metadata_b = artifact_metadata()
+        metadata_b["hardware"]["process_cpu_affinity"] = [4, 5, 6, 7]
+
+        def reference_row(natoms: int) -> dict[str, object]:
+            return {
+                "engine": "xtb",
+                "natoms": natoms,
+                "batch_size": 1,
+                "availability": "available",
+                "timing": {"median_ms": 1.0},
+                "correctness": qualified_correctness("xtb"),
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / "a.json", Path(directory) / "b.json"]
+            for path, metadata, natoms in zip(
+                paths, (metadata_a, metadata_b), (14, 32), strict=True
+            ):
+                path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 2,
+                            "metadata": metadata,
+                            "rows": [reference_row(natoms)],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            with self.assertRaisesRegex(plotters.PlotError, "incompatible run"):
+                plotters.load_rows(paths)
 
 
 if __name__ == "__main__":
