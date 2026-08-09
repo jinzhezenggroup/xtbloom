@@ -499,10 +499,11 @@ if(GPUXTB_HAS_CUDA)
   set(CMAKE_CUDA_RUNTIME_LIBRARY None)
   enable_language(C ASM)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
-  find_program(GPUXTB_READELF NAMES readelf REQUIRED)
 
   set(GPUXTB_CUDA_IMPLIB_GEN
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/implib/implib-gen.py")
+  set(GPUXTB_CUDA_STUBLIB_GEN
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/implib_stubgen.py")
   set(GPUXTB_CUDA_IMPLIB_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/cuda_implib")
   file(MAKE_DIRECTORY "${GPUXTB_CUDA_IMPLIB_DIR}")
 
@@ -644,68 +645,124 @@ if(GPUXTB_HAS_CUDA)
     set(${output_variable} "${CMAKE_MATCH_1}" PARENT_SCOPE)
   endfunction()
 
+  # The CUDA provider shared libraries are dlopen'd lazily at runtime and are
+  # never linked. When the build environment ships them (the usual toolkit
+  # layout), the vendored implib scanner derives each shim and SONAME from the
+  # real ELF so the artifacts adapt to the exact toolchain version. When they
+  # are absent, gpuxtb generates byte-identical shims from the curated symbol
+  # lists with pinned SONAMEs (overridable cache variables), so configuring
+  # and building the CUDA backend requires only nvcc plus the cudart headers;
+  # the runtime cohort preflight in cuda_dlopen.c enforces the deployed names
+  # and symbol set either way.
+  set(GPUXTB_CUDA_CUDART_SONAME "libcudart.so.12" CACHE STRING
+    "dlopen'd CUDA runtime SONAME used when the build toolkit ships no CUDA libraries")
+  set(GPUXTB_CUDA_CUBLAS_SONAME "libcublas.so.12" CACHE STRING
+    "dlopen'd cuBLAS SONAME used when the build toolkit ships no CUDA libraries")
+  set(GPUXTB_CUDA_CUSOLVER_SONAME "libcusolver.so.11" CACHE STRING
+    "dlopen'd cuSOLVER SONAME used when the build toolkit ships no CUDA libraries")
+  set(GPUXTB_CUDA_DRIVER_SONAME "libcuda.so.1" CACHE STRING
+    "dlopen'd CUDA driver SONAME used when the build toolkit ships no CUDA libraries")
+
+  set(_gpuxtb_cuda_providers_present ON)
   foreach(_gpuxtb_cuda_target IN ITEMS CUDA::cudart CUDA::cublas CUDA::cusolver)
-    get_target_property(_gpuxtb_cuda_location
-      "${_gpuxtb_cuda_target}" IMPORTED_LOCATION)
-    if(NOT _gpuxtb_cuda_location)
-      message(FATAL_ERROR
-        "cannot locate ${_gpuxtb_cuda_target} for dlopen shim generation")
+    if(NOT TARGET ${_gpuxtb_cuda_target})
+      set(_gpuxtb_cuda_providers_present OFF)
     endif()
-    list(APPEND _gpuxtb_cuda_implib_inputs "${_gpuxtb_cuda_location}")
   endforeach()
   if(NOT CUDA_cuda_driver_LIBRARY)
-    message(FATAL_ERROR "cannot locate CUDA::cuda_driver for dlopen shim generation")
+    set(_gpuxtb_cuda_providers_present OFF)
   endif()
-  list(APPEND _gpuxtb_cuda_implib_inputs "${CUDA_cuda_driver_LIBRARY}")
+
   set(_gpuxtb_cuda_implib_bases
     libcudart.so libcublas.so libcusolver.so libcuda.so)
+  set(_gpuxtb_cuda_implib_soname_vars
+    GPUXTB_CUDA_CUDART_SONAME
+    GPUXTB_CUDA_CUBLAS_SONAME
+    GPUXTB_CUDA_CUSOLVER_SONAME
+    GPUXTB_CUDA_DRIVER_SONAME)
   set(_gpuxtb_cuda_symbol_sets
     GPUXTB_CUDART_SYMBOLS
     GPUXTB_CUBLAS_SYMBOLS
     GPUXTB_CUSOLVER_SYMBOLS
     GPUXTB_CUDA_DRIVER_SYMBOLS)
 
+  set(_gpuxtb_cuda_implib_inputs "")
+  if(_gpuxtb_cuda_providers_present)
+    find_program(GPUXTB_READELF NAMES readelf REQUIRED)
+    foreach(_gpuxtb_cuda_target IN ITEMS CUDA::cudart CUDA::cublas CUDA::cusolver)
+      get_target_property(_gpuxtb_cuda_location
+        "${_gpuxtb_cuda_target}" IMPORTED_LOCATION)
+      if(NOT _gpuxtb_cuda_location)
+        message(FATAL_ERROR
+          "cannot locate ${_gpuxtb_cuda_target} for dlopen shim generation")
+      endif()
+      list(APPEND _gpuxtb_cuda_implib_inputs "${_gpuxtb_cuda_location}")
+    endforeach()
+    list(APPEND _gpuxtb_cuda_implib_inputs "${CUDA_cuda_driver_LIBRARY}")
+  endif()
+
   set(GPUXTB_CUDA_DYNLOADER_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/cuda_dlopen.c")
   set(_gpuxtb_cuda_sonames "")
-  foreach(_gpuxtb_cuda_input _gpuxtb_cuda_base _gpuxtb_cuda_symbol_set
+  set(_gpuxtb_cuda_index 0)
+  foreach(_gpuxtb_cuda_base _gpuxtb_cuda_soname_var _gpuxtb_cuda_symbol_set
       IN ZIP_LISTS
-        _gpuxtb_cuda_implib_inputs
         _gpuxtb_cuda_implib_bases
+        _gpuxtb_cuda_implib_soname_vars
         _gpuxtb_cuda_symbol_sets)
-    get_filename_component(_gpuxtb_cuda_input_base "${_gpuxtb_cuda_input}" NAME)
-    if(NOT _gpuxtb_cuda_input_base STREQUAL _gpuxtb_cuda_base)
-      message(FATAL_ERROR
-        "expected ${_gpuxtb_cuda_base} from FindCUDAToolkit, got "
-        "'${_gpuxtb_cuda_input_base}'")
-    endif()
     set(_gpuxtb_cuda_symbol_file
       "${GPUXTB_CUDA_IMPLIB_DIR}/${_gpuxtb_cuda_base}.symbols")
     gpuxtb_write_implib_symbol_file(
       "${_gpuxtb_cuda_symbol_file}" ${${_gpuxtb_cuda_symbol_set}})
-    if(_gpuxtb_cuda_base STREQUAL "libcuda.so")
-      set(_gpuxtb_cuda_soname "libcuda.so.1")
+    if(_gpuxtb_cuda_providers_present)
+      list(GET _gpuxtb_cuda_implib_inputs ${_gpuxtb_cuda_index} _gpuxtb_cuda_input)
+      get_filename_component(_gpuxtb_cuda_input_base "${_gpuxtb_cuda_input}" NAME)
+      if(NOT _gpuxtb_cuda_input_base STREQUAL _gpuxtb_cuda_base)
+        message(FATAL_ERROR
+          "expected ${_gpuxtb_cuda_base} from FindCUDAToolkit, got "
+          "'${_gpuxtb_cuda_input_base}'")
+      endif()
+      if(_gpuxtb_cuda_base STREQUAL "libcuda.so")
+        # The driver library may live outside the toolkit tree; its pinned
+        # default applies and the runtime preflight still verifies the name.
+        set(_gpuxtb_cuda_soname "${GPUXTB_CUDA_DRIVER_SONAME}")
+      else()
+        gpuxtb_read_elf_soname("${_gpuxtb_cuda_input}" _gpuxtb_cuda_soname)
+      endif()
+      execute_process(
+        COMMAND "${Python3_EXECUTABLE}" "${GPUXTB_CUDA_IMPLIB_GEN}"
+                "${_gpuxtb_cuda_input}"
+                --target "${GPUXTB_CUDA_IMPLIB_TARGET}"
+                --no-dlopen
+                --lazy-load
+                --library-load-name "${_gpuxtb_cuda_soname}"
+                --dlsym-callback gpu_xtb_cuda_dlsym
+                --symbol-list "${_gpuxtb_cuda_symbol_file}"
+                --outdir "${GPUXTB_CUDA_IMPLIB_DIR}"
+        RESULT_VARIABLE _gpuxtb_cuda_implib_result
+        OUTPUT_VARIABLE _gpuxtb_cuda_implib_output
+        ERROR_VARIABLE _gpuxtb_cuda_implib_error
+        COMMAND_ERROR_IS_FATAL ANY)
     else()
-      gpuxtb_read_elf_soname("${_gpuxtb_cuda_input}" _gpuxtb_cuda_soname)
+      set(_gpuxtb_cuda_soname "${${_gpuxtb_cuda_soname_var}}")
+      execute_process(
+        COMMAND "${Python3_EXECUTABLE}" "${GPUXTB_CUDA_STUBLIB_GEN}"
+                --base-name "${_gpuxtb_cuda_base}"
+                --symbol-list "${_gpuxtb_cuda_symbol_file}"
+                --load-name "${_gpuxtb_cuda_soname}"
+                --target "${GPUXTB_CUDA_IMPLIB_TARGET}"
+                --implib-root "${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/implib"
+                --outdir "${GPUXTB_CUDA_IMPLIB_DIR}"
+        RESULT_VARIABLE _gpuxtb_cuda_stublib_result
+        OUTPUT_VARIABLE _gpuxtb_cuda_stublib_output
+        ERROR_VARIABLE _gpuxtb_cuda_stublib_error
+        COMMAND_ERROR_IS_FATAL ANY)
     endif()
     list(APPEND _gpuxtb_cuda_sonames "${_gpuxtb_cuda_soname}")
-    execute_process(
-      COMMAND "${Python3_EXECUTABLE}" "${GPUXTB_CUDA_IMPLIB_GEN}"
-              "${_gpuxtb_cuda_input}"
-              --target "${GPUXTB_CUDA_IMPLIB_TARGET}"
-              --no-dlopen
-              --lazy-load
-              --library-load-name "${_gpuxtb_cuda_soname}"
-              --dlsym-callback gpu_xtb_cuda_dlsym
-              --symbol-list "${_gpuxtb_cuda_symbol_file}"
-              --outdir "${GPUXTB_CUDA_IMPLIB_DIR}"
-      RESULT_VARIABLE _gpuxtb_cuda_implib_result
-      OUTPUT_VARIABLE _gpuxtb_cuda_implib_output
-      ERROR_VARIABLE _gpuxtb_cuda_implib_error
-      COMMAND_ERROR_IS_FATAL ANY)
     list(APPEND GPUXTB_CUDA_DYNLOADER_SOURCES
       "${GPUXTB_CUDA_IMPLIB_DIR}/${_gpuxtb_cuda_base}.tramp.S"
       "${GPUXTB_CUDA_IMPLIB_DIR}/${_gpuxtb_cuda_base}.init.c")
+    math(EXPR _gpuxtb_cuda_index "${_gpuxtb_cuda_index} + 1")
   endforeach()
   list(GET _gpuxtb_cuda_sonames 0 GPUXTB_CUDART_SONAME)
   list(GET _gpuxtb_cuda_sonames 1 GPUXTB_CUBLAS_SONAME)
@@ -1007,7 +1064,11 @@ if(GPUXTB_BUILD_TESTS)
   target_compile_features(gpuxtb_plan_schema_test PRIVATE cxx_std_17)
   add_test(NAME gpuxtb.gfn2.plan_schema COMMAND gpuxtb_plan_schema_test)
 
-  if(GPUXTB_HAS_CUDA)
+  # CUDA runtime tests link CUDA::cudart and run on a real GPU. They are
+  # built only when the build environment actually provides the provider
+  # libraries; a stub-generation build (nvcc plus cudart headers only) still
+  # compiles and publishes the CUDA backend but cannot exercise it here.
+  if(GPUXTB_HAS_CUDA AND _gpuxtb_cuda_providers_present)
     add_executable(gpuxtb_cuda_descriptor_validation_test
       tests/cuda_descriptor_validation_test.cu
     )

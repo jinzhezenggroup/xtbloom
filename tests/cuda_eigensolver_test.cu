@@ -1,6 +1,4 @@
-#include <cublas_v2.h>
 #include <cuda_runtime_api.h>
-#include <cusolverDn.h>
 
 #include <algorithm>
 #include <charconv>
@@ -16,6 +14,7 @@
 #include <vector>
 
 #include "backends/cuda/gfn2_eigensolver.cuh"
+#include "runtime/nvidia_host_api.h"
 
 namespace {
 

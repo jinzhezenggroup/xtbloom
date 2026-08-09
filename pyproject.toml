@@ -144,9 +144,13 @@ build = ["cp311-*"]
 # for creating the test environments.
 build-frontend = "build[uv]"
 skip = ["*-win32", "*-manylinux_i686", "*-musllinux*"]
-# CUDA-enabled manylinux images provided by PyPA (quay.io/manylinux_cuda); they
-# ship nvcc/cublas/cudart but not cuSOLVER, so a Linux before-build installs
-# the missing libcusolver/libnvJitLink from PyPI into the toolkit lib dir.
+# CUDA-enabled manylinux images provided by PyPA (quay.io/manylinux_cuda). They
+# ship nvcc and the cudart headers the compile needs; the proprietary provider
+# libraries (cuBLAS/cuSOLVER/cuDRT/driver) are never required to build, because
+# gpuxtb self-declares the host C API surface (src/runtime/nvidia_host_api.h)
+# and generates lazy-dlopen trampolines from the curated symbol lists with
+# pinned SONAMEs. The dlopen'd libraries are supplied at run time by the system
+# or the PyPI-distributed nvidia-* packages.
 manylinux-x86_64-image = "quay.io/manylinux_cuda/manylinux_2_28_x86_64_cuda12_9@sha256:a35c3237c45cb761c99c0c52d2a26f9dffe89f0104f5daaa45284e9efe4bdf9d"
 manylinux-aarch64-image = "quay.io/manylinux_cuda/manylinux_2_28_aarch64_cuda12_9@sha256:0aa4ed0b679c8e73d422ca583dab8c41d0e8e0700dc8334be40cbd61e5a85b14"
 # Default test is an import smoke test (importing gpuxtb needs no runtime); the
@@ -155,9 +159,10 @@ test-command = "python -c 'import gpuxtb; print(gpuxtb.library.get_version())'"
 
 [tool.cibuildwheel.linux]
 # before-build runs inside the build container (once per container, idempotent
-# scripts). CUDA deps come first, then a CUDA-capable ccache (>= 4.1, needed
-# for nvcc; the manylinux_2_28 distro ccache 3.7 cannot cache CUDA).
-before-build = "bash {package}/python/ci/install-cuda-wheel-deps.sh && bash {package}/python/ci/install-ccache.sh"
+# scripts). The CUDA backend needs no toolkit libraries (see the stub-mode
+# comment above), so only the CUDA-capable ccache (>= 4.1, needed for nvcc; the
+# manylinux_2_28 distro ccache 3.7 cannot cache CUDA) is installed.
+before-build = "bash {package}/python/ci/install-ccache.sh"
 # CUDA host shared libraries (cublas/cusolver/cudart/...) are intentionally not
 # bundled: the trampolines resolve the system CUDA driver plus the
 # PyPI-distributed nvidia-* packages at runtime. libcuda.so.1 is the NVIDIA
