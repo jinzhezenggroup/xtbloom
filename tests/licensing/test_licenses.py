@@ -39,14 +39,14 @@ class LicenseArchiveTests(unittest.TestCase):
 
     def _valid_wheel_names(self) -> set[str]:
         return {
-            f"xtbloom-0.1.0.dist-info/licenses/{suffix}"
+            f"xtbloom-0.0.0.dist-info/licenses/{suffix}"
             for suffix in CHECKER.COMMON_ARCHIVE_SUFFIXES
         } | {f"xtbloom/{suffix}" for suffix in CHECKER.WHEEL_ARCHIVE_SUFFIXES}
 
     def test_project_license_cannot_be_satisfied_by_third_party_filename(self) -> None:
         """Require the project license at its exact archive location."""
         names = self._valid_wheel_names()
-        names.remove("xtbloom-0.1.0.dist-info/licenses/LICENSE")
+        names.remove("xtbloom-0.0.0.dist-info/licenses/LICENSE")
         names.add("xtbloom/share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE")
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
             wheel = Path(directory) / "xtbloom-test.whl"
@@ -79,7 +79,7 @@ class LicenseArchiveTests(unittest.TestCase):
     def test_wheel_must_retain_linking_exception(self) -> None:
         """Require the GPLv3 Section 7 exception in wheel archives."""
         names = self._valid_wheel_names()
-        missing = "xtbloom-0.1.0.dist-info/licenses/CUDA_MKL_LINKING_EXCEPTION"
+        missing = "xtbloom-0.0.0.dist-info/licenses/CUDA_MKL_LINKING_EXCEPTION"
         names.remove(missing)
         names.remove("xtbloom/share/licenses/xtbloom/CUDA_MKL_LINKING_EXCEPTION")
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
@@ -94,7 +94,7 @@ class LicenseArchiveTests(unittest.TestCase):
         """Keep the new runtime dependency's distinct MIT grant in wheels."""
         names = self._valid_wheel_names()
         suffix = "LICENSES/array-api-compat-MIT.txt"
-        names.remove(f"xtbloom-0.1.0.dist-info/licenses/{suffix}")
+        names.remove(f"xtbloom-0.0.0.dist-info/licenses/{suffix}")
         names.remove(
             "xtbloom/share/licenses/xtbloom/third-party/array-api-compat-MIT.txt"
         )
