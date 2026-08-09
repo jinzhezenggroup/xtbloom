@@ -297,14 +297,14 @@ def _require_dependency_policy(project: object) -> None:
         raise LicenseCheckError("Linux CPU installs must require scipy-openblas32")
     openblas = mandatory["scipy-openblas32"]
     for token in (
-        "scipy-openblas32>=0.3.34.0.0",
+        "scipy-openblas32==0.3.34.0.0",
         "sys_platform == 'linux'",
         "x86_64",
         "aarch64",
     ):
         if token not in openblas:
             raise LicenseCheckError(
-                "scipy-openblas32 must use the reviewed minimum and cover Linux "
+                "scipy-openblas32 must use the reviewed exact version and cover Linux "
                 "x86_64 and aarch64"
             )
     if "mkl" in mandatory:

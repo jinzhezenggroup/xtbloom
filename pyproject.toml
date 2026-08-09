@@ -38,8 +38,9 @@ dependencies = [
   # DLPack/Array API consumption path; see THIRD_PARTY_NOTICES.md.
   "array-api-compat>=1.15,<2",
   # One BSD-licensed LP64 LAPACKE+CBLAS runtime serves both Linux wheel
-  # architectures. Its scipy_-prefixed ABI avoids interposing on NumPy's BLAS.
-  "scipy-openblas32>=0.3.34.0.0; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
+  # architectures. Pin the reviewed ABI because later provider wheels may
+  # remove the local-thread-control symbol required for host isolation.
+  "scipy-openblas32==0.3.34.0.0; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
 ]
 
 [project.urls]
