@@ -40,7 +40,7 @@ const PRESETS = {
 
 const I18N = {
   zh: {
-    tagline: "浏览器内运行的原生 GFN2-xTB 单点能与几何优化 · C++17 WASM32 · CPU 后端",
+    tagline: "无需安装或上传，在浏览器中运行 GFN2-xTB 单点与几何优化",
     engine_loading: "引擎加载中…",
     panel_input: "输入",
     presets_label: "模板分子",
@@ -88,6 +88,7 @@ const I18N = {
     panel_output: "结果",
     stat_atoms: "原子",
     stat_iter: "SCC 迭代",
+    stat_opt_steps: "优化步数",
     stat_conv: "收敛",
     stat_ms: "耗时 ms",
     th_atom: "原子", th_q: "电荷 q",
@@ -95,7 +96,7 @@ const I18N = {
     copy_json: "复制 JSON",
     opt_apply: "把优化坐标填回输入框",
     copy_done: "已复制",
-    roadmap: "路线图",
+    roadmap: "浏览器中可以尝试",
     roadmap_smiles_title: "SMILES → 结构",
     roadmap_smiles_desc: "输入 SMILES，生成显式氢三维构象并进行 MMFF94 预优化。",
     roadmap_opt_title: "几何优化",
@@ -124,7 +125,7 @@ const I18N = {
     engine_call_fail: "引擎调用失败：",
     err_xyz_parse: "无法解析坐标：每行请提供「元素符号 x y z」，单位 Å",
     err_xyz_too_many: "原子数超过 512 上限",
-    err_ctx: "GPU 上下文创建失败：{{e}}",
+    err_ctx: "计算上下文创建失败：{{e}}",
     err_alloc: "内存分配失败",
     err_init: "内部初始化失败",
     err_compute: "计算失败：{{e}}",
@@ -152,7 +153,7 @@ const I18N = {
     err_unknown: "未知错误",
   },
   en: {
-    tagline: "Native GFN2-xTB single-point + geometry optimization in your browser · C++17 WASM32 · CPU backend",
+    tagline: "Run GFN2-xTB in your browser—no install or uploads",
     engine_loading: "engine loading…",
     panel_input: "Input",
     presets_label: "Preset molecules",
@@ -200,6 +201,7 @@ const I18N = {
     panel_output: "Results",
     stat_atoms: "atoms",
     stat_iter: "SCC iter.",
+    stat_opt_steps: "optimization steps",
     stat_conv: "conv.",
     stat_ms: "time ms",
     th_atom: "Atom", th_q: "charge q",
@@ -207,7 +209,7 @@ const I18N = {
     copy_json: "Copy JSON",
     opt_apply: "Load optimized coords back to input",
     copy_done: "copied",
-    roadmap: "Roadmap",
+    roadmap: "Try in the browser",
     roadmap_smiles_title: "SMILES → structure",
     roadmap_smiles_desc: "Generate an explicit-hydrogen 3D conformer from SMILES and pre-relax it with MMFF94.",
     roadmap_opt_title: "Geometry optimization",
@@ -289,7 +291,7 @@ function tf(key, vars) { return t(key, vars); }
 
 function applyI18n() {
   document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
-  document.title = lang === "zh" ? "xTBloom · GFN2-xTB 在线计算（WASM）" : "xTBloom · GFN2-xTB in-browser (WASM)";
+  document.title = lang === "zh" ? "xTBloom · 浏览器内运行 GFN2-xTB" : "xTBloom · Run GFN2-xTB in your browser";
   document.querySelectorAll("[data-i18n]").forEach((el) => {
     if (el.id === "engine-badge") return; /* state-managed separately */
     el.textContent = t(el.dataset.i18n);
@@ -671,6 +673,7 @@ function renderCompute(d) {
   $("energy-kcal").textContent = fmt(e.kcal, 4) + " kcal/mol";
   $("stat-atoms").textContent = d.charges.length;
   $("stat-iter").textContent = d.scc_iterations;
+  $("stat-iter-label").textContent = t("stat_iter");
   $("stat-conv").textContent = d.scc_converged ? t("stat_converged") : t("stat_not_conv");
 
   const tbody = $("atom-table").querySelector("tbody");
@@ -702,6 +705,9 @@ function renderOptimize(d) {
   $("energy-kcal").textContent = fmt(e1.kcal, 4) + " kcal/mol";
   $("stat-atoms").textContent = d.charges.length;
   $("stat-iter").textContent = d.iterations;
+  /* The optimizer reports L-BFGS steps here, not the final single point's SCC
+   * iteration count. Keep the visible label coupled to the result mode. */
+  $("stat-iter-label").textContent = t("stat_opt_steps");
   $("stat-conv").textContent = d.converged ? t("stat_converged") + " ✓" : t("stat_not_conv");
 
   const note = d.converged
