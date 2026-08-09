@@ -685,12 +685,11 @@ gpuxtb_status_t validate_iteration_bindings(
 gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data,
                                                    const SccDriverGeometryView& geometry,
                                                    const SccDriverWorkspace& workspace,
-                                                   std::string& error);
-gpuxtb_status_t prepare_system_potentials_and_hamiltonian(const SccDriverPlanData& data,
-                                                          const SccDriverGeometryView& geometry,
-                                                          std::size_t system,
-                                                          const SccDriverWorkspace& workspace,
-                                                          std::string& error);
+                                                   std::string& error,
+                                                   const SccParallelExecutor* parallel);
+gpuxtb_status_t prepare_system_potentials_and_hamiltonian(
+    const SccDriverPlanData& data, const SccDriverGeometryView& geometry, std::size_t system,
+    const SccDriverWorkspace& workspace, std::string& error, const SccParallelExecutor* parallel);
 void copy_raw_population_system(const WavefunctionLayout& layout, std::size_t system,
                                 const SccDriverWorkspace& workspace);
 gpuxtb_status_t rebuild_mixed_atomic_charges(const SccDriverPlanData& data, std::size_t system,
@@ -707,7 +706,8 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
     const SccDriverPlan& plan, const SccDriverGeometryView& geometry,
     const CpuLinearAlgebraBackend& backend, const EigensolverOverlapCache& overlap_cache,
     const WavefunctionView& wavefunction, const SccMixerState& mixer_state,
-    const SccDriverState& state, const SccDriverWorkspace& workspace, std::string& error) {
+    const SccDriverState& state, const SccDriverWorkspace& workspace, std::string& error,
+    const SccParallelExecutor* parallel) {
   gpuxtb_status_t status = validate_plan(plan, error);
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
@@ -735,7 +735,7 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
 
   /* Every operation up to the mixer barrier publishes only into workspace. */
   copy_wavefunction(data.wavefunction, wavefunction, workspace.staged_wavefunction);
-  status = prepare_potentials_and_hamiltonian(data, geometry, workspace, error);
+  status = prepare_potentials_and_hamiltonian(data, geometry, workspace, error, parallel);
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
   }
@@ -747,27 +747,29 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
   std::fill_n(workspace.thermodynamics.band_energies, batch, nan);
   std::fill_n(workspace.thermodynamics.free_energies, batch, nan);
 
-  for (std::size_t system = 0u; system < batch; ++system) {
-    if (workspace.active_systems[system] != 1u) {
-      continue;
-    }
-    const std::int64_t hamiltonian_base = data.wavefunction.density.system_offsets[system];
-    status = solve_eigensystem_cpu(
-        data.eigensolver, static_cast<std::int64_t>(system), overlap_cache,
-        geometry.geometry_generation, workspace.hamiltonian + hamiltonian_base,
-        data.electronic_temperature, backend, workspace.eigensolver_workspace,
-        workspace.staged_wavefunction, workspace.thermodynamics, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
-      /* Binding/backend contract failures are whole-call failures; all solved
-       * peers still live only in the staged wavefunction at this point. */
-      return status;
-    }
-    if (workspace.thermodynamics.system_statuses[system] != GPUXTB_STATUS_SUCCESS) {
-      workspace.active_systems[system] = 2u;
-      const std::int64_t density_begin = data.wavefunction.density.system_offsets[system];
-      const std::int64_t density_end = data.wavefunction.density.system_offsets[system + 1u];
-      std::fill_n(workspace.staged_wavefunction.density + density_begin,
-                  static_cast<std::size_t>(density_end - density_begin), 0.0);
+  {
+    for (std::size_t system = 0u; system < batch; ++system) {
+      if (workspace.active_systems[system] != 1u) {
+        continue;
+      }
+      const std::int64_t hamiltonian_base = data.wavefunction.density.system_offsets[system];
+      status = solve_eigensystem_cpu(
+          data.eigensolver, static_cast<std::int64_t>(system), overlap_cache,
+          geometry.geometry_generation, workspace.hamiltonian + hamiltonian_base,
+          data.electronic_temperature, backend, workspace.eigensolver_workspace,
+          workspace.staged_wavefunction, workspace.thermodynamics, error);
+      if (status != GPUXTB_STATUS_SUCCESS) {
+        /* Binding/backend contract failures are whole-call failures; all solved
+         * peers still live only in the staged wavefunction at this point. */
+        return status;
+      }
+      if (workspace.thermodynamics.system_statuses[system] != GPUXTB_STATUS_SUCCESS) {
+        workspace.active_systems[system] = 2u;
+        const std::int64_t density_begin = data.wavefunction.density.system_offsets[system];
+        const std::int64_t density_end = data.wavefunction.density.system_offsets[system + 1u];
+        std::fill_n(workspace.staged_wavefunction.density + density_begin,
+                    static_cast<std::size_t>(density_end - density_begin), 0.0);
+      }
     }
   }
 
@@ -775,27 +777,31 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
    * failed eigensolve (active=2) stay out of the population and energy stages,
    * so a peer's failure cannot trigger classical or Mulliken arithmetic for
    * the rest of the batch. */
-  for (std::size_t system = 0u; system < batch; ++system) {
-    if (workspace.active_systems[system] != 1u) {
-      continue;
-    }
-    const MullikenDensityView density{workspace.staged_wavefunction.density,
-                                      data.wavefunction.density.element_count,
-                                      data.mulliken.identity()};
-    const MullikenPopulationView population{
-        workspace.raw_qsh,         data.wavefunction.qsh.element_count,
-        workspace.raw_qat,         data.wavefunction.qat.element_count,
-        workspace.raw_dipoles,     data.wavefunction.dipole.element_count,
-        workspace.raw_quadrupoles, data.wavefunction.quadrupole.element_count,
-        data.mulliken.identity()};
-    status = evaluate_mulliken_population_system_cpu(data.mulliken, geometry.integrals, density,
-                                                     population, static_cast<std::int64_t>(system),
-                                                     workspace.mulliken_workspace, error);
-    if (status == GPUXTB_STATUS_INVALID_ARGUMENT || status == GPUXTB_STATUS_NOT_SUPPORTED) {
-      return status;
-    }
-    if (status != GPUXTB_STATUS_SUCCESS) {
-      workspace.active_systems[system] = 6u;
+  {  // A failed eigensolve (active=2) systems stay out of the population
+    // and energy stages, so a peer's failure cannot trigger classical or
+    // Mulliken arithmetic for the rest of the batch.
+    for (std::size_t system = 0u; system < batch; ++system) {
+      if (workspace.active_systems[system] != 1u) {
+        continue;
+      }
+      const MullikenDensityView density{workspace.staged_wavefunction.density,
+                                        data.wavefunction.density.element_count,
+                                        data.mulliken.identity()};
+      const MullikenPopulationView population{
+          workspace.raw_qsh,         data.wavefunction.qsh.element_count,
+          workspace.raw_qat,         data.wavefunction.qat.element_count,
+          workspace.raw_dipoles,     data.wavefunction.dipole.element_count,
+          workspace.raw_quadrupoles, data.wavefunction.quadrupole.element_count,
+          data.mulliken.identity()};
+      status = evaluate_mulliken_population_system_cpu(
+          data.mulliken, geometry.integrals, density, population, static_cast<std::int64_t>(system),
+          workspace.mulliken_workspace, error, parallel);
+      if (status == GPUXTB_STATUS_INVALID_ARGUMENT || status == GPUXTB_STATUS_NOT_SUPPORTED) {
+        return status;
+      }
+      if (status != GPUXTB_STATUS_SUCCESS) {
+        workspace.active_systems[system] = 6u;
+      }
     }
   }
 
@@ -2300,11 +2306,9 @@ gpuxtb_status_t gather_mixed_multipoles_system(const SccDriverPlanData& data, st
   return GPUXTB_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t prepare_system_potentials_and_hamiltonian(const SccDriverPlanData& data,
-                                                          const SccDriverGeometryView& geometry,
-                                                          std::size_t system,
-                                                          const SccDriverWorkspace& workspace,
-                                                          std::string& error) {
+gpuxtb_status_t prepare_system_potentials_and_hamiltonian(
+    const SccDriverPlanData& data, const SccDriverGeometryView& geometry, std::size_t system,
+    const SccDriverWorkspace& workspace, std::string& error, const SccParallelExecutor* parallel) {
   const WavefunctionLayout& layout = data.wavefunction;
   const double nan = std::numeric_limits<double>::quiet_NaN();
 
@@ -2521,7 +2525,7 @@ gpuxtb_status_t prepare_system_potentials_and_hamiltonian(const SccDriverPlanDat
                                             data.mulliken.identity()};
   status = add_mulliken_hamiltonian_system_cpu(data.mulliken, geometry.integrals, potential,
                                                hamiltonian, static_cast<std::int64_t>(system),
-                                               workspace.mulliken_workspace, error);
+                                               workspace.mulliken_workspace, error, parallel);
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
   }
@@ -2555,7 +2559,8 @@ gpuxtb_status_t prepare_system_potentials_and_hamiltonian(const SccDriverPlanDat
 gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data,
                                                    const SccDriverGeometryView& geometry,
                                                    const SccDriverWorkspace& workspace,
-                                                   std::string& error) {
+                                                   std::string& error,
+                                                   const SccParallelExecutor* parallel) {
   const WavefunctionLayout& layout = data.wavefunction;
   const std::size_t batch = static_cast<std::size_t>(layout.batch_size);
   const double nan = std::numeric_limits<double>::quiet_NaN();
@@ -2567,8 +2572,8 @@ gpuxtb_status_t prepare_potentials_and_hamiltonian(const SccDriverPlanData& data
     if (workspace.active_systems[system] != 1u) {
       continue;
     }
-    gpuxtb_status_t status =
-        prepare_system_potentials_and_hamiltonian(data, geometry, system, workspace, error);
+    gpuxtb_status_t status = prepare_system_potentials_and_hamiltonian(data, geometry, system,
+                                                                       workspace, error, parallel);
     if (status == GPUXTB_STATUS_INTERNAL_ERROR) {
       /* A target-system numerical failure during classical or Mulliken
        * preparation is data-level: keep every peer running and record the

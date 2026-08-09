@@ -1,0 +1,111 @@
+diff --git a/src/model/gfn2/scc_driver.cpp b/src/model/gfn2/scc_driver.cpp
+index fb4d6c8..76de1d8 100644
+--- a/src/model/gfn2/scc_driver.cpp
++++ b/src/model/gfn2/scc_driver.cpp
+@@ -3,9 +3,12 @@
+
+ #include <algorithm>
+ #include <array>
++#include <chrono>
+ #include <cmath>
+ #include <cstddef>
+ #include <cstdint>
++#include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ #include <limits>
+ #include <memory>
+@@ -733,12 +736,26 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
+     return GPUXTB_STATUS_SUCCESS;
+   }
+
++  /* Optional evidence-only timing. This environment-gated trace lives in a
++   * detached worktree and is never enabled by production callers; it keeps
++   * the phase attribution independent from the public benchmark timer. */
++  const bool phase_trace = std::getenv("GPUXTB_PHASE_TRACE") != nullptr;
++  const auto phase_now = []() noexcept {
++    return std::chrono::steady_clock::now();
++  };
++  std::int64_t prepare_ns = 0;
++  std::int64_t eigensolve_ns = 0;
++  std::int64_t mulliken_ns = 0;
++  std::int64_t energy_mixer_ns = 0;
++
+   /* Every operation up to the mixer barrier publishes only into workspace. */
+   copy_wavefunction(data.wavefunction, wavefunction, workspace.staged_wavefunction);
++  auto phase_start = phase_now();
+   status = prepare_potentials_and_hamiltonian(data, geometry, workspace, error, parallel);
+   if (status != GPUXTB_STATUS_SUCCESS) {
+     return status;
+   }
++  prepare_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(phase_now() - phase_start).count();
+
+   const double nan = std::numeric_limits<double>::quiet_NaN();
+   std::fill_n(workspace.thermodynamics.system_statuses, batch, GPUXTB_STATUS_INVALID_ARGUMENT);
+@@ -747,6 +764,7 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
+   std::fill_n(workspace.thermodynamics.band_energies, batch, nan);
+   std::fill_n(workspace.thermodynamics.free_energies, batch, nan);
+
++  phase_start = phase_now();
+   {
+     for (std::size_t system = 0u; system < batch; ++system) {
+       if (workspace.active_systems[system] != 1u) {
+@@ -772,11 +790,14 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
+       }
+     }
+   }
++  eigensolve_ns =
++      std::chrono::duration_cast<std::chrono::nanoseconds>(phase_now() - phase_start).count();
+
+   /* Compute the raw Mulliken population per solved system only. Systems that
+    * failed eigensolve (active=2) stay out of the population and energy stages,
+    * so a peer's failure cannot trigger classical or Mulliken arithmetic for
+    * the rest of the batch. */
++  phase_start = phase_now();
+   {  // A failed eigensolve (active=2) systems stay out of the population
+     // and energy stages, so a peer's failure cannot trigger classical or
+     // Mulliken arithmetic for the rest of the batch.
+@@ -804,7 +825,10 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
+       }
+     }
+   }
++  mulliken_ns =
++      std::chrono::duration_cast<std::chrono::nanoseconds>(phase_now() - phase_start).count();
+
++  phase_start = phase_now();
+   /* Assemble the variational SCC energy from the new density and raw
+    * Mulliken multipoles. The Hamiltonian was built from the previous mixed
+    * input, so neither its band trace nor pre-H D4/periodic diagnostics are a
+@@ -821,7 +845,6 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
+       workspace.active_systems[system] = 6u;
+     }
+   }
+-
+   /* Run every active mixer transition against a per-system staged copy. The
+    * prepare seam stages only the target system's history, so the public mixer
+    * history of converged and failed peers is never copied; commit publishes
+@@ -910,6 +933,8 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
+       return status;
+     }
+   }
++  energy_mixer_ns =
++      std::chrono::duration_cast<std::chrono::nanoseconds>(phase_now() - phase_start).count();
+
+   gpuxtb_status_t first_failure = GPUXTB_STATUS_SUCCESS;
+   bool first_failure_was_periodic = false;
+@@ -1014,6 +1039,15 @@ gpuxtb_status_t iterate_scc_driver_batch_cpu(
+     }
+     return first_failure;
+   }
++  if (phase_trace && batch == 1u) {
++    std::fprintf(stderr,
++                 "GPUXTB_PHASE_TRACE natoms=%lld iteration=%llu prepare_ns=%lld "
++                 "eigensolve_ns=%lld mulliken_ns=%lld energy_mixer_ns=%lld\n",
++                 static_cast<long long>(data.wavefunction.total_atoms),
++                 static_cast<unsigned long long>(state.iterations[0u]),
++                 static_cast<long long>(prepare_ns), static_cast<long long>(eigensolve_ns),
++                 static_cast<long long>(mulliken_ns), static_cast<long long>(energy_mixer_ns));
++  }
+   error.clear();
+   return GPUXTB_STATUS_SUCCESS;
+ }

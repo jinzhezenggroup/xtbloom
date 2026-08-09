@@ -294,6 +294,12 @@ int test_all_optional_four_system_upload() {
   CHECK(fixture.device_wavefunction.total_spin_shells == fixture.host.basis_plan().total_shells);
   CHECK(fixture.device_wavefunction.total_spin_atoms == fixture.host.total_atoms());
   CHECK(plan.d4_batch.atomic_number_hash != 0u);
+  std::int64_t minimum_atoms = std::numeric_limits<std::int64_t>::max();
+  for (std::size_t system = 0; system < fixture.host.atom_offsets().size() - 1u; ++system) {
+    minimum_atoms = std::min(minimum_atoms, fixture.host.atom_offsets()[system + 1u] -
+                                                fixture.host.atom_offsets()[system]);
+  }
+  CHECK(plan.d4_batch.minimum_atoms_per_system == minimum_atoms);
   CHECK(plan.explicit_point_charge_batch.total_point_charges == fixture.host.batch_size());
   CHECK(plan.periodic_batch.total_matrix_elements ==
         fixture.host.periodic_plan()->total_matrix_elements());
