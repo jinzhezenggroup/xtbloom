@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import io
+import os
 import shutil
+import subprocess
+import tarfile
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 REPOSITORY = Path(__file__).resolve().parents[2]
+WHEEL_DIST_INFO = "xtbloom-test.dist-info"
 CHECKER_PATH = REPOSITORY / "tools" / "licensing" / "check_licenses.py"
 SPEC = importlib.util.spec_from_file_location("xtbloom_check_licenses", CHECKER_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -23,6 +29,13 @@ WHEEL_SPEC = importlib.util.spec_from_file_location(
 assert WHEEL_SPEC is not None and WHEEL_SPEC.loader is not None
 WHEEL_INSPECTOR = importlib.util.module_from_spec(WHEEL_SPEC)
 WHEEL_SPEC.loader.exec_module(WHEEL_INSPECTOR)
+VERSION_PROVIDER_PATH = REPOSITORY / "python" / "ci" / "xtbloom_version_provider.py"
+VERSION_PROVIDER_SPEC = importlib.util.spec_from_file_location(
+    "xtbloom_version_provider", VERSION_PROVIDER_PATH
+)
+assert VERSION_PROVIDER_SPEC is not None and VERSION_PROVIDER_SPEC.loader is not None
+VERSION_PROVIDER = importlib.util.module_from_spec(VERSION_PROVIDER_SPEC)
+VERSION_PROVIDER_SPEC.loader.exec_module(VERSION_PROVIDER)
 
 
 class LicenseArchiveTests(unittest.TestCase):
@@ -33,20 +46,22 @@ class LicenseArchiveTests(unittest.TestCase):
             for name in sorted(names):
                 if name.endswith("/provenance/implib_manifest.json"):
                     payload = (REPOSITORY / CHECKER.IMPLIB_MANIFEST_PATH).read_bytes()
+                elif name.endswith("MPL-2.0.txt"):
+                    payload = (REPOSITORY / CHECKER.MPL_LICENSE).read_bytes()
                 else:
                     payload = b"test\n"
                 archive.writestr(name, payload)
 
     def _valid_wheel_names(self) -> set[str]:
         return {
-            f"xtbloom-0.0.0.dist-info/licenses/{suffix}"
+            f"{WHEEL_DIST_INFO}/licenses/{suffix}"
             for suffix in CHECKER.COMMON_ARCHIVE_SUFFIXES
         } | {f"xtbloom/{suffix}" for suffix in CHECKER.WHEEL_ARCHIVE_SUFFIXES}
 
     def test_project_license_cannot_be_satisfied_by_third_party_filename(self) -> None:
         """Require the project license at its exact archive location."""
         names = self._valid_wheel_names()
-        names.remove("xtbloom-0.0.0.dist-info/licenses/LICENSE")
+        names.remove(f"{WHEEL_DIST_INFO}/licenses/LICENSE")
         names.add("xtbloom/share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE")
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
             wheel = Path(directory) / "xtbloom-test.whl"
@@ -79,7 +94,7 @@ class LicenseArchiveTests(unittest.TestCase):
     def test_wheel_must_retain_linking_exception(self) -> None:
         """Require the GPLv3 Section 7 exception in wheel archives."""
         names = self._valid_wheel_names()
-        missing = "xtbloom-0.0.0.dist-info/licenses/CUDA_MKL_LINKING_EXCEPTION"
+        missing = f"{WHEEL_DIST_INFO}/licenses/CUDA_MKL_LINKING_EXCEPTION"
         names.remove(missing)
         names.remove("xtbloom/share/licenses/xtbloom/CUDA_MKL_LINKING_EXCEPTION")
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
@@ -94,7 +109,7 @@ class LicenseArchiveTests(unittest.TestCase):
         """Keep the new runtime dependency's distinct MIT grant in wheels."""
         names = self._valid_wheel_names()
         suffix = "LICENSES/array-api-compat-MIT.txt"
-        names.remove(f"xtbloom-0.0.0.dist-info/licenses/{suffix}")
+        names.remove(f"{WHEEL_DIST_INFO}/licenses/{suffix}")
         names.remove(
             "xtbloom/share/licenses/xtbloom/third-party/array-api-compat-MIT.txt"
         )
@@ -114,6 +129,20 @@ class LicenseArchiveTests(unittest.TestCase):
             wheel = Path(directory) / "xtbloom-test.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "libcudart"):
+                CHECKER.check_archive(wheel)
+
+    def test_wheel_must_retain_exact_mpl_text(self) -> None:
+        """Reject whitespace or other changes to the reviewed pathspec license."""
+        names = self._valid_wheel_names()
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test.whl"
+            self._write_wheel(wheel, names)
+            with zipfile.ZipFile(wheel, "a") as archive:
+                archive.writestr(
+                    f"{WHEEL_DIST_INFO}/licenses/{CHECKER.MPL_LICENSE}",
+                    b"modified\n",
+                )
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "modified MPL"):
                 CHECKER.check_archive(wheel)
 
 
@@ -275,6 +304,222 @@ class DependencyPolicyTests(unittest.TestCase):
         project["optional-dependencies"]["cuda12"].pop()
         with self.assertRaisesRegex(CHECKER.LicenseCheckError, "reviewed NVIDIA"):
             CHECKER._require_dependency_policy(project)
+
+
+class BuildDependencyPolicyTests(unittest.TestCase):
+    """Keep isolated build inputs exact, reviewed, and complete."""
+
+    def setUp(self) -> None:
+        """Load the build-system table used by each policy mutation."""
+        metadata = CHECKER.tomllib.loads(
+            (REPOSITORY / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        self.build_system = metadata["build-system"]
+
+    def test_current_build_dependency_policy_is_accepted(self) -> None:
+        """Accept the fully pinned reviewed PEP 517 build environment."""
+        CHECKER._require_build_dependency_policy(self.build_system)
+
+    def test_build_dependency_must_remain_exactly_pinned(self) -> None:
+        """Reject a range that lets versioning or build behavior drift."""
+        build_system = copy.deepcopy(self.build_system)
+        build_system["requires"] = [
+            requirement.replace("==1.0.3", ">=1.0.3")
+            if requirement.startswith("scikit-build-core")
+            else requirement
+            for requirement in build_system["requires"]
+        ]
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "reviewed exact"):
+            CHECKER._require_build_dependency_policy(build_system)
+
+    def test_build_dependency_set_must_remain_complete(self) -> None:
+        """Reject omission of a transitive package whose bytes enter builds."""
+        build_system = copy.deepcopy(self.build_system)
+        build_system["requires"] = [
+            requirement
+            for requirement in build_system["requires"]
+            if not requirement.startswith("vcs-versioning")
+        ]
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "reviewed exact"):
+            CHECKER._require_build_dependency_policy(build_system)
+
+
+class VersionMetadataPolicyTests(unittest.TestCase):
+    """Keep every product version dependent on strict Git-tag metadata."""
+
+    def setUp(self) -> None:
+        """Load the complete project metadata used by each policy mutation."""
+        self.metadata = CHECKER.tomllib.loads(
+            (REPOSITORY / "pyproject.toml").read_text(encoding="utf-8")
+        )
+
+    def test_current_version_metadata_policy_is_accepted(self) -> None:
+        """Accept the reviewed dynamic provider and strict tag grammar."""
+        CHECKER._require_version_metadata_policy(self.metadata)
+
+    def test_static_project_version_is_rejected(self) -> None:
+        """Reject reintroduction of a hand-maintained project version."""
+        metadata = copy.deepcopy(self.metadata)
+        metadata["project"]["version"] = "0.0.0"
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "exclusively dynamic"):
+            CHECKER._require_version_metadata_policy(metadata)
+
+    def test_usable_fallback_version_is_rejected(self) -> None:
+        """Reject silent version synthesis when Git/archive metadata is absent."""
+        metadata = copy.deepcopy(self.metadata)
+        metadata["tool"]["setuptools_scm"]["fallback_version"] = "0.0.0"
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "strict Git-tag"):
+            CHECKER._require_version_metadata_policy(metadata)
+
+    def test_loose_tag_regex_is_rejected(self) -> None:
+        """Reject tags outside the exact vMAJOR.MINOR.PATCH grammar."""
+        metadata = copy.deepcopy(self.metadata)
+        metadata["tool"]["setuptools_scm"]["tag"]["regex"] = r"^(?P<version>.+)$"
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "strict Git-tag"):
+            CHECKER._require_version_metadata_policy(metadata)
+
+    def test_describe_must_not_skip_malformed_v_tags(self) -> None:
+        """Reserve the full v* namespace so malformed newer tags fail."""
+        metadata = copy.deepcopy(self.metadata)
+        metadata["tool"]["setuptools_scm"]["scm"]["git"]["describe_command"][-1] = (
+            "v[0-9]*.[0-9]*.[0-9]*"
+        )
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "strict Git-tag"):
+            CHECKER._require_version_metadata_policy(metadata)
+
+    def test_external_provider_cannot_replace_local_preflight(self) -> None:
+        """Require the wrapper that rejects exact-tag shallow clones."""
+        metadata = copy.deepcopy(self.metadata)
+        metadata["tool"]["dynamic-metadata"] = [
+            {"provider": "scikit_build_core.metadata.setuptools_scm"}
+        ]
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed"):
+            CHECKER._require_version_metadata_policy(metadata)
+
+
+class VersionProviderTests(unittest.TestCase):
+    """Exercise strict Git and frozen-metadata boundaries of the provider."""
+
+    def _run_git(self, root: Path, *arguments: str) -> str:
+        """Run a deterministic local Git command for integration fixtures."""
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    def _make_malformed_tag_repository(self, root: Path) -> None:
+        """Create a valid release tag followed by a nearer malformed v tag."""
+        self._run_git(root, "init", "--quiet")
+        self._run_git(root, "config", "user.name", "xTBloom version test")
+        self._run_git(root, "config", "user.email", "version-test@example.invalid")
+        (root / "pyproject.toml").write_text("[project]\nname = 'fixture'\n")
+        (root / ".gitattributes").write_text(
+            ".git_archival.txt export-subst\n", encoding="utf-8"
+        )
+        (root / ".git_archival.txt").write_text(
+            "describe-name: $Format:%(describe:tags=true,abbrev=0,match=v*)$\n",
+            encoding="utf-8",
+        )
+        self._run_git(root, "add", ".")
+        self._run_git(root, "commit", "--quiet", "-m", "valid release")
+        self._run_git(root, "tag", "v0.0.0")
+        (root / "marker.txt").write_text("newer commit\n", encoding="utf-8")
+        self._run_git(root, "add", "marker.txt")
+        self._run_git(root, "commit", "--quiet", "-m", "malformed release tag")
+        self._run_git(root, "tag", "v1.2")
+
+    def test_exact_tag_shallow_clone_is_rejected(self) -> None:
+        """Reject shallow history before setuptools-scm's exact-tag shortcut."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
+            root = Path(directory).resolve()
+            with (
+                mock.patch.object(
+                    VERSION_PROVIDER,
+                    "_run_git",
+                    side_effect=[str(root), "true"],
+                ),
+                self.assertRaisesRegex(RuntimeError, "shallow clone rejected"),
+            ):
+                VERSION_PROVIDER._git_tag_version(root)
+
+    def test_dynamic_provider_rejects_nearer_malformed_v_tag(self) -> None:
+        """Fail the PEP 517 provider instead of falling back to an older tag."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
+            root = Path(directory).resolve()
+            self._make_malformed_tag_repository(root)
+            previous_directory = Path.cwd()
+            try:
+                os.chdir(root)
+                with self.assertRaisesRegex(RuntimeError, "strict vMAJOR.MINOR.PATCH"):
+                    VERSION_PROVIDER.dynamic_metadata({}, {})
+            finally:
+                os.chdir(previous_directory)
+
+    def test_git_archive_exposes_nearer_malformed_v_tag(self) -> None:
+        """Make export-subst preserve the malformed tag for strict rejection."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
+            root = Path(directory).resolve()
+            self._make_malformed_tag_repository(root)
+            archive_bytes = subprocess.run(
+                ["git", "archive", "--format=tar", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            ).stdout
+            with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as archive:
+                archival_member = archive.extractfile(".git_archival.txt")
+                assert archival_member is not None
+                archival_text = archival_member.read().decode("utf-8")
+            self.assertEqual(archival_text, "describe-name: v1.2\n")
+
+            extracted = root / "archive"
+            extracted.mkdir()
+            (extracted / ".git_archival.txt").write_text(
+                archival_text, encoding="utf-8"
+            )
+            with self.assertRaisesRegex(RuntimeError, "strict vMAJOR.MINOR.PATCH"):
+                VERSION_PROVIDER._frozen_tag_version(extracted)
+
+    def test_sdist_version_must_be_bare_tag_tuple(self) -> None:
+        """Accept a frozen tag version and reject derived local metadata."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
+            root = Path(directory)
+            (root / "PKG-INFO").write_text(
+                "Metadata-Version: 2.4\nVersion: 1.2.3\n", encoding="utf-8"
+            )
+            self.assertEqual(VERSION_PROVIDER._frozen_tag_version(root), "1.2.3")
+            (root / "PKG-INFO").write_text(
+                "Metadata-Version: 2.4\nVersion: 1.2.3.post1\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(RuntimeError, "non-tag version"):
+                VERSION_PROVIDER._frozen_tag_version(root)
+
+    def test_git_archive_reads_only_expanded_strict_tag(self) -> None:
+        """Require export-subst metadata to contain one strict release tag."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
+            root = Path(directory)
+            archival = root / ".git_archival.txt"
+            archival.write_text("describe-name: v9.8.7\n", encoding="utf-8")
+            self.assertEqual(VERSION_PROVIDER._frozen_tag_version(root), "9.8.7")
+            archival.write_text(
+                "describe-name: $Format:%(describe:tags=true)$\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(RuntimeError, "cannot resolve"):
+                VERSION_PROVIDER._frozen_tag_version(root)
+
+    def test_leading_zero_version_is_rejected(self) -> None:
+        """Prevent PEP 440 normalization from diverging from native strings."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
+            root = Path(directory)
+            (root / "PKG-INFO").write_text(
+                "Metadata-Version: 2.4\nVersion: 01.2.3\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(RuntimeError, "non-tag version"):
+                VERSION_PROVIDER._frozen_tag_version(root)
 
 
 class LinkingExceptionTests(unittest.TestCase):

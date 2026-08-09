@@ -21,12 +21,25 @@ from pathlib import Path
 import tomllib
 
 PROJECT_LICENSE = "GPL-3.0-or-later"
+REVIEWED_BUILD_REQUIREMENTS = {
+    "scikit-build-core==1.0.3",
+    "setuptools-scm==10.2.1",
+    "vcs-versioning==2.2.4",
+    "packaging==26.3",
+    "pathspec==1.1.1",
+    "setuptools==84.0.0",
+    "exceptiongroup==1.3.1; python_version < '3.11'",
+    "tomli==2.4.1; python_version < '3.11'",
+    "typing-extensions==4.16.0; python_version < '3.11'",
+}
 EXCEPTION_FILE = "CUDA_MKL_LINKING_EXCEPTION"
 IMPLIB_MANIFEST_PATH = "cmake/3rdparty/implib_manifest.json"
 IMPLIB_VENDOR_PATH = "cmake/3rdparty/implib"
 IMPLIB_REVISION = "6f4fc02ae058ef11848046af01a1a756f3229c29"
 IMPLIB_TREE = "5fbe7e9f2c4efe0c2be4d2eed409e81f35458ba4"
 ARRAY_API_COMPAT_LICENSE = "LICENSES/array-api-compat-MIT.txt"
+MPL_LICENSE = "LICENSES/MPL-2.0.txt"
+MPL_LICENSE_SHA256 = "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
 OPEN_CHEMLIB_LICENSE = "LICENSES/openchemlib-BSD-3-Clause.txt"
 OPEN_CHEMLIB_MANIFEST = "web/openchemlib_manifest.json"
 OPEN_CHEMLIB_VERSION = "9.21.0"
@@ -58,6 +71,7 @@ SOURCE_FILES = (
     "LICENSES/LGPL-3.0-or-later.txt",
     "LICENSES/Apache-2.0.txt",
     "LICENSES/MIT.txt",
+    MPL_LICENSE,
     ARRAY_API_COMPAT_LICENSE,
     *WEB_SOURCE_FILES,
     "data/parameters/d4.NOTICE",
@@ -80,6 +94,7 @@ COMMON_ARCHIVE_SUFFIXES = (
     "LICENSES/LGPL-3.0-or-later.txt",
     "LICENSES/Apache-2.0.txt",
     "LICENSES/MIT.txt",
+    MPL_LICENSE,
     ARRAY_API_COMPAT_LICENSE,
 )
 SDIST_ARCHIVE_SUFFIXES = (
@@ -107,6 +122,7 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/xtbloom/provenance/mctc_manifest.json",
     "share/licenses/xtbloom/provenance/implib_manifest.json",
     "share/licenses/xtbloom/third-party/MIT.txt",
+    "share/licenses/xtbloom/third-party/MPL-2.0.txt",
     "share/licenses/xtbloom/third-party/array-api-compat-MIT.txt",
     "share/licenses/xtbloom/third-party/d4/d4.NOTICE",
     "share/licenses/xtbloom/third-party/d4/dftd4-COPYING",
@@ -121,6 +137,7 @@ INSTALL_FILES = (
     "share/licenses/xtbloom/third-party/LGPL-3.0-or-later.txt",
     "share/licenses/xtbloom/third-party/Apache-2.0.txt",
     "share/licenses/xtbloom/third-party/MIT.txt",
+    "share/licenses/xtbloom/third-party/MPL-2.0.txt",
     "share/licenses/xtbloom/third-party/array-api-compat-MIT.txt",
     "share/licenses/xtbloom/provenance/manifest.json",
     "share/licenses/xtbloom/provenance/sto_manifest.json",
@@ -153,6 +170,30 @@ NOTICE_TOKENS = (
     "No LAMMPS source code",
     "scipy-openblas32",
     "array-api-compat",
+    "scikit-build-core 1.0.3",
+    "setuptools-scm 10.2.1",
+    "vcs-versioning 2.2.4",
+    "packaging 26.3",
+    "pathspec 1.1.1",
+    "setuptools 84.0.0",
+    "a4d7a05978ee37975c37743510c8991e2debce7ef83afb0a07c0c576fd4f16e8",
+    "ae95427b7d3c14a6cf8bbfd4d901f6138ab64c99e20cbe8ea7d75cd26093f085",
+    "4fa7dd82cf8c800df59c9a288c90299b1657ff1ecfc3f5cc00287c5dbf5e27a9",
+    "b7c82f4102d389ee57dc66ccdb4f9b4bca3c40ba83b43f1f63d68ccd72db2580",
+    "ed718fdee42170e128a8add6f23f53aa64dc7d9ab2de87d3083a691df881a809",
+    "48ffea8a6a175c37a718c7ee2e5f508d0e500c2cf3371791f7948bccb2b44628",
+    "94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79",
+    "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+    "17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a",
+    "a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189",
+    "f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73",
+    "51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670",
+    "8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219",
+    "a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598",
+    "7c7e1a961a0b2f2472c1ac5b69affa0ae1132c39adcb67aba98568702b9cc23f",
+    "0d85819802132122da43cb86656f8d1f8c6587d54ae7dcaf30e90533028b49fe",
+    "dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5",
+    "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
     "076218e4f5aa18578418c7d04fad9ab581a16bb8",
     "Copyright (c) 2022 Consortium for Python Data API Standards",
     "3dmol@2.5.5",
@@ -332,6 +373,72 @@ def _require_dependency_policy(project: object) -> None:
             )
 
 
+def _require_build_dependency_policy(build_system: object) -> None:
+    """Require one reproducible, provenance-reviewed PEP 517 environment."""
+    if not isinstance(build_system, dict):
+        raise LicenseCheckError("pyproject build-system metadata must be a table")
+    requirements = build_system.get("requires")
+    if (
+        not isinstance(requirements, list)
+        or set(requirements) != REVIEWED_BUILD_REQUIREMENTS
+    ):
+        raise LicenseCheckError(
+            "build-system.requires must equal the reviewed exact build dependency set"
+        )
+    if build_system.get("build-backend") != "scikit_build_core.build":
+        raise LicenseCheckError("pyproject uses an unreviewed build backend")
+
+
+def _require_version_metadata_policy(metadata: object) -> None:
+    """Require strict tag-derived metadata with no usable fallback version."""
+    if not isinstance(metadata, dict):
+        raise LicenseCheckError("pyproject metadata must be a table")
+    project = metadata.get("project")
+    tool = metadata.get("tool")
+    if not isinstance(project, dict) or not isinstance(tool, dict):
+        raise LicenseCheckError("pyproject project/tool metadata must be tables")
+    if project.get("dynamic") != ["version"] or "version" in project:
+        raise LicenseCheckError("project version must be exclusively dynamic")
+    if tool.get("dynamic-metadata") != [
+        {
+            "provider": {
+                "path": "python/ci",
+                "module": "xtbloom_version_provider",
+            }
+        }
+    ]:
+        raise LicenseCheckError("project uses an unreviewed dynamic version provider")
+    expected_setuptools_scm = {
+        "version_scheme": "only-version",
+        "local_scheme": "no-local-version",
+        "tag": {
+            "regex": (
+                r"^v(?P<version>(?:0|[1-9][0-9]*)\."
+                r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$"
+            ),
+        },
+        "scm": {
+            "git": {
+                "pre_parse": "fail_on_shallow",
+                "describe_command": [
+                    "git",
+                    "describe",
+                    "--dirty",
+                    "--tags",
+                    "--long",
+                    "--abbrev=40",
+                    "--match",
+                    "v*",
+                ],
+            }
+        },
+    }
+    if tool.get("setuptools_scm") != expected_setuptools_scm:
+        raise LicenseCheckError(
+            "setuptools-scm must use the reviewed strict Git-tag policy"
+        )
+
+
 def _find_bundled_vendor_libraries(names: set[str]) -> list[str]:
     """Return separately packaged CUDA/MKL library files in an artifact."""
     return sorted(name for name in names if FORBIDDEN_VENDOR_LIBRARY_RE.search(name))
@@ -488,6 +595,11 @@ def check_source(root: Path) -> None:
         or "Version 3" not in license_text
     ):
         raise LicenseCheckError("LICENSE is not the complete GNU GPL version 3 text")
+    observed_mpl_sha256 = hashlib.sha256((root / MPL_LICENSE).read_bytes()).hexdigest()
+    if observed_mpl_sha256 != MPL_LICENSE_SHA256:
+        raise LicenseCheckError(
+            f"{MPL_LICENSE} differs from the reviewed pathspec text"
+        )
 
     metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     project = metadata.get("project", {})
@@ -503,6 +615,8 @@ def check_source(root: Path) -> None:
         if required not in declared:
             raise LicenseCheckError(f"pyproject license-files omits {required}")
     _require_dependency_policy(project)
+    _require_build_dependency_policy(metadata.get("build-system"))
+    _require_version_metadata_policy(metadata)
     _require_exception_policy(root)
 
     cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -753,6 +867,9 @@ def check_source(root: Path) -> None:
 def check_install(prefix: Path) -> None:
     """Validate the legal payload installed by CMake."""
     _require_files(prefix, INSTALL_FILES, "install tree")
+    installed_mpl = prefix / "share/licenses/xtbloom/third-party/MPL-2.0.txt"
+    if hashlib.sha256(installed_mpl.read_bytes()).hexdigest() != MPL_LICENSE_SHA256:
+        raise LicenseCheckError("install tree contains modified MPL text")
     bundled = _find_bundled_vendor_libraries(
         {
             path.relative_to(prefix).as_posix()
@@ -913,6 +1030,15 @@ def check_archive(path: Path) -> None:
         raise LicenseCheckError(
             f"{path} bundles a CUDA/MKL provider library: {bundled[0]}"
         )
+    mpl_names = {
+        name
+        for name in names
+        if name.endswith(f"/{MPL_LICENSE}") or name.endswith("/third-party/MPL-2.0.txt")
+    }
+    mpl_payloads = _read_archive_members(path, mpl_names)
+    for name, payload in mpl_payloads.items():
+        if hashlib.sha256(payload).hexdigest() != MPL_LICENSE_SHA256:
+            raise LicenseCheckError(f"{path} contains modified MPL text at {name}")
     _check_archived_implib(path, names, wheel=path.suffix == ".whl")
     leaked = sorted(
         name

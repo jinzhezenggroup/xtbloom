@@ -1,2 +1,6 @@
 # Preserve the canonical tblite exporter byte stream, including its final blank line.
 data/parameters/gfn2.toml whitespace=-blank-at-eof
+# The reviewed pathspec license is retained byte-for-byte, including one
+# upstream trailing space covered by its pinned SHA-256.
+LICENSES/MPL-2.0.txt whitespace=-blank-at-eol
+.git_archival.txt export-subst

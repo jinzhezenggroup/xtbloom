@@ -38,8 +38,9 @@ jobs:
       # including custom web-adapter and side-module commands.
       EM_COMPILER_WRAPPER: ccache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Node for npm and dual-width smoke tests
@@ -105,14 +106,16 @@ jobs:
 
       - name: Run public C ABI layout and short-initializer checks
         run: |
-          emcc -m32 -std=c11 -Iinclude -c tests/c_api_test.c \
+          emcc -m32 -std=c11 -Ibuild/wasm32-web/generated/include -Iinclude \
+            -c tests/c_api_test.c \
             -o build/wasm32-c-api-test.o
           EMCC_FORCE_STDLIBS=1 em++ -m32 build/wasm32-c-api-test.o \
             build/wasm32-web/libxtbloom.a -o build/wasm32-c-api-test.js \
             -sMAIN_MODULE=2 -sALLOW_MEMORY_GROWTH
           node build/wasm32-c-api-test.js
 
-          emcc -m64 -std=c11 -Iinclude -c tests/c_api_test.c \
+          emcc -m64 -std=c11 -Ibuild/wasm64-web/generated/include -Iinclude \
+            -c tests/c_api_test.c \
             -o build/wasm64-c-api-test.o
           EMCC_FORCE_STDLIBS=1 em++ -m64 build/wasm64-c-api-test.o \
             build/wasm64-web/libxtbloom.a -o build/wasm64-c-api-test.js \

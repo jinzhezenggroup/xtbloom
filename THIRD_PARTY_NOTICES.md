@@ -7,6 +7,71 @@ retained under its own terms and is not relicensed by that permission.
 The manifests named below pin the source revisions and content digests used
 to produce the redistributed data.
 
+## Python build and Git-version tooling
+
+Build inputs are installed from PyPI into the isolated PEP 517 environment and
+are not vendored, linked into `libxtbloom`, or redistributed in xTBloom source
+archives, native installs, or wheels. `pyproject.toml` pins the complete
+reviewed environment. The PyPI release JSON for each version supplied these
+canonical source and universal-wheel artifact digests:
+
+- scikit-build-core 1.0.3
+  (<https://github.com/scikit-build/scikit-build-core>, `Apache-2.0`): sdist
+  `sha256:a4d7a05978ee37975c37743510c8991e2debce7ef83afb0a07c0c576fd4f16e8`;
+  wheel
+  `sha256:ae95427b7d3c14a6cf8bbfd4d901f6138ab64c99e20cbe8ea7d75cd26093f085`.
+- setuptools-scm 10.2.1
+  (<https://github.com/pypa/setuptools-scm>, `MIT`): sdist
+  `sha256:4fa7dd82cf8c800df59c9a288c90299b1657ff1ecfc3f5cc00287c5dbf5e27a9`;
+  wheel
+  `sha256:b7c82f4102d389ee57dc66ccdb4f9b4bca3c40ba83b43f1f63d68ccd72db2580`.
+- vcs-versioning 2.2.4
+  (<https://github.com/pypa/vcs-versioning>, `MIT`): sdist
+  `sha256:ed718fdee42170e128a8add6f23f53aa64dc7d9ab2de87d3083a691df881a809`;
+  wheel
+  `sha256:48ffea8a6a175c37a718c7ee2e5f508d0e500c2cf3371791f7948bccb2b44628`.
+- packaging 26.3 (<https://github.com/pypa/packaging>,
+  `Apache-2.0 OR BSD-2-Clause`): sdist
+  `sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79`;
+  wheel
+  `sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c`.
+- pathspec 1.1.1 (<https://github.com/cpburnz/python-pathspec>, `MPL-2.0`): sdist
+  `sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a`;
+  wheel
+  `sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189`.
+- setuptools 84.0.0 (<https://github.com/pypa/setuptools>, `MIT`): sdist
+  `sha256:f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73`;
+  wheel
+  `sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670`.
+- exceptiongroup 1.3.1 (<https://github.com/agronholm/exceptiongroup>, `MIT`):
+  sdist
+  `sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219`;
+  wheel
+  `sha256:a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598`.
+- tomli 2.4.1 (<https://github.com/hukkin/tomli>, `MIT`): sdist
+  `sha256:7c7e1a961a0b2f2472c1ac5b69affa0ae1132c39adcb67aba98568702b9cc23f`;
+  universal wheel
+  `sha256:0d85819802132122da43cb86656f8d1f8c6587d54ae7dcaf30e90533028b49fe`.
+- typing-extensions 4.16.0 (<https://github.com/python/typing_extensions>,
+  `PSF-2.0`): sdist
+  `sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5`;
+  wheel
+  `sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8`.
+
+scikit-build-core provides the build backend and dynamic-metadata bridge;
+setuptools-scm and vcs-versioning normalize and parse Git/archive versions.
+packaging, pathspec, and setuptools are unconditional transitive build inputs.
+exceptiongroup, tomli, and typing-extensions apply only to Python 3.10 builds.
+The local Apache, MIT, and MPL texts are `LICENSES/Apache-2.0.txt`,
+`LICENSES/MIT.txt`, and `LICENSES/MPL-2.0.txt`, respectively. The MPL text is
+copied verbatim from the reviewed pathspec 1.1.1 wheel
+(`sha256:fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85`).
+
+The license grants for dependencies without a separately named local license
+file are retained by their independently installed PyPI distributions. None of
+these tools or their transitive packages are part of xTBloom's runtime or
+distribution payload.
+
 ## array-api-compat
 
 Repository: <https://github.com/data-apis/array-api-compat>

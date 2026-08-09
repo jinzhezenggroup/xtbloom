@@ -8,6 +8,34 @@ xTBloom has three related distribution surfaces:
 
 Changing one surface does not prove the other two remain correct.
 
+## Authoritative product version
+
+Release tags use the strict form `vMAJOR.MINOR.PATCH`, with each component
+written canonically (`0` or a non-zero digit followed by digits). The latest
+tag reachable from `HEAD` is the product version until another release tag is created;
+setuptools-scm's `only-version` scheme deliberately ignores commit distance,
+object IDs, and worktree dirtiness. The tag without its leading `v` feeds
+Python metadata, Python `__version__`, `xtbloom_version_string()`, CMake
+`project(VERSION)`, target filenames, the installed CMake package version, and
+the generated public version macros.
+
+`XTBLOOM_API_VERSION`, the Linux symbol-version node, and the ELF `SOVERSION`
+are ABI contracts, not product versions. They change only after an explicit ABI
+decision; a product tag never changes them automatically.
+
+Native Git checkouts read the nearest reachable strict tag from complete tag
+history. Shallow clones and repositories without a reachable strict tag fail
+configuration. An sdist consumes the version frozen from that tag into
+`PKG-INFO`, while a Git archive consumes the nearest tag expanded into
+`.git_archival.txt`. The `v*` namespace is reserved for product versions, so a
+nearer malformed tag such as `v1.2` is rejected instead of being silently
+skipped. There is intentionally no fallback version.
+
+Release automation must check out complete history, require a clean exact tag,
+build one sdist first, and build every wheel from that sdist. Validate that the
+sdist/wheel metadata, generated public header, CMake package, C API string, and
+Python `__version__` agree before publishing artifacts.
+
 ## PyPI documentation
 
 The repository root [`README.md`](../../README.md) is the GitHub-facing overview
