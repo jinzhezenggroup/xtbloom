@@ -1527,6 +1527,251 @@ __global__ void atm_gradient_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceParamet
   }
 }
 
+/*
+ * Decode one flat ATM outer-pair index into its atom pair (j, i) with
+ * begin+1 <= j and begin+2 <= i. The pair space is exactly the triangular
+ * enumeration of energy_kernel over the atoms {begin+1, ..., end-1}, so the
+ * decode mirrors that kernel's proven inverse (a sqrt estimate plus two exact
+ * boundary corrections). Returns j (the smaller) and i (the larger).
+ */
+__device__ void atm_pair_from_flat(std::int64_t pair, std::int64_t begin, std::int64_t* j,
+                                   std::int64_t* i) {
+  std::int64_t second =
+      static_cast<std::int64_t>((1.0 + sqrt(1.0 + 8.0 * static_cast<double>(pair))) * 0.5);
+  while (second * (second - 1) / 2 > pair) {
+    --second;
+  }
+  while ((second + 1) * second / 2 <= pair) {
+    ++second;
+  }
+  const std::int64_t first = pair - second * (second - 1) / 2;
+  *j = begin + 1 + first;
+  *i = begin + 1 + second;
+}
+
+/*
+ * Multi-block D4 ATM energy variant. gridDim.x = blocks per system,
+ * gridDim.y = system. Each block owns a contiguous slice of that system's
+ * flat outer-pair space and emits one deterministic partial into
+ * workspace.atom_scratch[system * gridDim.x + blockIdx.x]; a separate
+ * reduction kernel sums the partials in fixed block order. Only used when the
+ * host-side split gate decides a single block per system would under-use the
+ * device; otherwise the single-block kernel above preserves the exact
+ * historical behavior.
+ */
+__global__ void atm_energy_split_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameters parameters,
+                                        Gfn2D4DeviceCache cache, Gfn2D4DeviceWorkspace workspace,
+                                        std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.y);
+  const std::int64_t slice = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t slices = static_cast<std::int64_t>(gridDim.x);
+  __shared__ double partial[kThreadsPerBlock];
+  __shared__ std::uint32_t shared_error;
+  if (!block_system_is_valid(workspace, system, device_error, shared_error)) {
+    return;
+  }
+  const std::int64_t begin = batch.atom_offsets[system];
+  const std::int64_t end = batch.atom_offsets[system + 1];
+  const std::int64_t atom_count = end - begin;
+  /* Flat outer-pair count over the atoms {begin+1, ..., end-1}. */
+  const std::int64_t pair_count = atom_count >= 3 ? (atom_count - 1) * (atom_count - 2) / 2 : 0;
+  const std::int64_t slice_start = pair_count * slice / slices;
+  const std::int64_t slice_end = pair_count * (slice + 1) / slices;
+  constexpr double exponent_third = kAtmExponent / 3.0;
+  double energy = 0.0;
+  for (std::int64_t pair = slice_start + threadIdx.x; pair < slice_end; pair += blockDim.x) {
+    std::int64_t j = 0;
+    std::int64_t i = 0;
+    atm_pair_from_flat(pair, begin, &j, &i);
+    const double* vij = cache.pair_data + pair_index(batch, system, j, i) * kGfn2D4PairDataElements;
+    const double r2ij = vij[0] * vij[0] + vij[1] * vij[1] + vij[2] * vij[2];
+    if (r2ij > kAtmCutoffSquared) {
+      continue;
+    }
+    const PairCoefficient c6ij = pair_coefficient(batch, parameters, workspace, i, j);
+    for (std::int64_t k = begin; k < j; ++k) {
+      const double* vik =
+          cache.pair_data + pair_index(batch, system, k, i) * kGfn2D4PairDataElements;
+      const double* vjk =
+          cache.pair_data + pair_index(batch, system, k, j) * kGfn2D4PairDataElements;
+      const double r2ik = vik[0] * vik[0] + vik[1] * vik[1] + vik[2] * vik[2];
+      const double r2jk = vjk[0] * vjk[0] + vjk[1] * vjk[1] + vjk[2] * vjk[2];
+      if (r2ik > kAtmCutoffSquared || r2jk > kAtmCutoffSquared) {
+        continue;
+      }
+      const PairCoefficient c6ik = pair_coefficient(batch, parameters, workspace, i, k);
+      const PairCoefficient c6jk = pair_coefficient(batch, parameters, workspace, j, k);
+      const double r0ij = pair_damping_radius(batch, parameters, j, i);
+      const double r0ik = pair_damping_radius(batch, parameters, k, i);
+      const double r0jk = pair_damping_radius(batch, parameters, k, j);
+      const double r2_product = r2ij * r2ik * r2jk;
+      const double r1_product = sqrt(r2_product);
+      const double r3_product = r2_product * r1_product;
+      const double r5_product = r3_product * r2_product;
+      const double damping =
+          1.0 / (1.0 + 6.0 * pow((r0ij * r0ik * r0jk) / r1_product, exponent_third));
+      const double angle =
+          0.375 * (r2ij + r2jk - r2ik) * (r2ij - r2jk + r2ik) * (-r2ij + r2jk + r2ik) / r5_product +
+          1.0 / r3_product;
+      const double c9 = -kDispersionS9 * sqrt(fabs(c6ij.c6 * c6ik.c6 * c6jk.c6));
+      energy -= angle * damping * c9;
+    }
+  }
+  if (!isfinite(energy)) {
+    record_system_error(workspace, system, Gfn2D4DeviceError::kNonfiniteArithmetic);
+    energy = 0.0;
+  }
+  partial[threadIdx.x] = energy;
+  __syncthreads();
+  for (int offset = blockDim.x / 2; offset > 0; offset /= 2) {
+    if (threadIdx.x < offset) {
+      partial[threadIdx.x] += partial[threadIdx.x + offset];
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    workspace.atom_scratch[system * slices + slice] = partial[0];
+  }
+}
+
+/*
+ * Deterministic cross-block finish for atm_energy_split_kernel: one block per
+ * system sums the per-slice partials in ascending slice order and commits via
+ * the shared reduction helper, preserving the single-block failure semantics.
+ */
+__global__ void atm_energy_split_reduce_kernel(Gfn2D4DeviceBatch batch,
+                                               Gfn2D4DeviceWorkspace workspace,
+                                               std::int32_t blocks_per_system,
+                                               std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  __shared__ double partial[kThreadsPerBlock];
+  __shared__ std::uint32_t shared_error;
+  if (!block_system_is_valid(workspace, system, device_error, shared_error)) {
+    return;
+  }
+  double energy = 0.0;
+  const double* const partials =
+      workspace.atom_scratch + system * static_cast<std::int64_t>(blocks_per_system);
+  for (std::int64_t index = threadIdx.x; index < blocks_per_system; index += blockDim.x) {
+    energy += partials[index];
+  }
+  if (!isfinite(energy)) {
+    record_system_error(workspace, system, Gfn2D4DeviceError::kNonfiniteArithmetic);
+    energy = 0.0;
+  }
+  partial[threadIdx.x] = energy;
+  __syncthreads();
+  for (int offset = blockDim.x / 2; offset > 0; offset /= 2) {
+    if (threadIdx.x < offset) {
+      partial[threadIdx.x] += partial[threadIdx.x + offset];
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    commit_energy_reduction(partial[0], workspace, system, device_error);
+  }
+}
+
+/*
+ * Multi-block D4 ATM gradient variant. gridDim.x = blocks per system,
+ * gridDim.y = system, so many blocks contribute atomically to the shared
+ * gradient and coordination-adjoint accumulators for one large system. The
+ * single-slice arithmetic is identical to atm_gradient_kernel; cross-block
+ * atomic accumulation matches the kernel's existing per-thread atomics.
+ */
+__global__ void atm_gradient_split_kernel(Gfn2D4DeviceBatch batch,
+                                          Gfn2D4DeviceParameters parameters,
+                                          Gfn2D4DeviceCache cache, Gfn2D4DeviceWorkspace workspace,
+                                          std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.y);
+  const std::int64_t slice = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t slices = static_cast<std::int64_t>(gridDim.x);
+  __shared__ std::uint32_t shared_error;
+  if (!block_system_is_valid(workspace, system, device_error, shared_error)) {
+    return;
+  }
+  const std::int64_t begin = batch.atom_offsets[system];
+  const std::int64_t end = batch.atom_offsets[system + 1];
+  const std::int64_t atom_count = end - begin;
+  const std::int64_t pair_count = atom_count >= 3 ? (atom_count - 1) * (atom_count - 2) / 2 : 0;
+  const std::int64_t slice_start = pair_count * slice / slices;
+  const std::int64_t slice_end = pair_count * (slice + 1) / slices;
+  constexpr double exponent_third = kAtmExponent / 3.0;
+  for (std::int64_t pair = slice_start + threadIdx.x; pair < slice_end; pair += blockDim.x) {
+    std::int64_t j = 0;
+    std::int64_t i = 0;
+    atm_pair_from_flat(pair, begin, &j, &i);
+    const double* vij = cache.pair_data + pair_index(batch, system, j, i) * kGfn2D4PairDataElements;
+    const double r2ij = vij[0] * vij[0] + vij[1] * vij[1] + vij[2] * vij[2];
+    if (r2ij > kAtmCutoffSquared) {
+      continue;
+    }
+    const PairCoefficient c6ij = pair_coefficient(batch, parameters, workspace, i, j);
+    for (std::int64_t k = begin; k < j; ++k) {
+      const double* vik =
+          cache.pair_data + pair_index(batch, system, k, i) * kGfn2D4PairDataElements;
+      const double* vjk =
+          cache.pair_data + pair_index(batch, system, k, j) * kGfn2D4PairDataElements;
+      const double r2ik = vik[0] * vik[0] + vik[1] * vik[1] + vik[2] * vik[2];
+      const double r2jk = vjk[0] * vjk[0] + vjk[1] * vjk[1] + vjk[2] * vjk[2];
+      if (r2ik > kAtmCutoffSquared || r2jk > kAtmCutoffSquared) {
+        continue;
+      }
+      const PairCoefficient c6ik = pair_coefficient(batch, parameters, workspace, i, k);
+      const PairCoefficient c6jk = pair_coefficient(batch, parameters, workspace, j, k);
+      if (!(c6ij.c6 > 0.0) || !(c6ik.c6 > 0.0) || !(c6jk.c6 > 0.0)) {
+        record_system_error(workspace, system, Gfn2D4DeviceError::kNonfiniteArithmetic);
+        return;
+      }
+      const double r0ij = pair_damping_radius(batch, parameters, j, i);
+      const double r0ik = pair_damping_radius(batch, parameters, k, i);
+      const double r0jk = pair_damping_radius(batch, parameters, k, j);
+      const double r2_product = r2ij * r2ik * r2jk;
+      const double r1_product = sqrt(r2_product);
+      const double r3_product = r2_product * r1_product;
+      const double r5_product = r3_product * r2_product;
+      const double ratio = (r0ij * r0ik * r0jk) / r1_product;
+      const double ratio_power = pow(ratio, exponent_third);
+      const double damping = 1.0 / (1.0 + 6.0 * ratio_power);
+      const double angle =
+          0.375 * (r2ij + r2jk - r2ik) * (r2ij - r2jk + r2ik) * (-r2ij + r2jk + r2ik) / r5_product +
+          1.0 / r3_product;
+      const double c9 = -kDispersionS9 * sqrt(c6ij.c6 * c6ik.c6 * c6jk.c6);
+      const double rr = angle * damping;
+      const double damping_derivative = -2.0 * kAtmExponent * ratio_power * damping * damping;
+      double dgij[3];
+      double dgik[3];
+      double dgjk[3];
+      atm_distance_gradient(r2ij, r2jk, r2ik, vij, r5_product, c9, angle, damping,
+                            damping_derivative, dgij);
+      atm_distance_gradient(r2ik, r2jk, r2ij, vik, r5_product, c9, angle, damping,
+                            damping_derivative, dgik);
+      atm_distance_gradient(r2jk, r2ik, r2ij, vjk, r5_product, c9, angle, damping,
+                            damping_derivative, dgjk);
+      const double i_adjoint = -0.5 * rr * c9 * (c6ij.first_cn / c6ij.c6 + c6ik.first_cn / c6ik.c6);
+      const double j_adjoint =
+          -0.5 * rr * c9 * (c6ij.second_cn / c6ij.c6 + c6jk.first_cn / c6jk.c6);
+      const double k_adjoint =
+          -0.5 * rr * c9 * (c6ik.second_cn / c6ik.c6 + c6jk.second_cn / c6jk.c6);
+      if (!isfinite(dgij[0]) || !isfinite(dgij[1]) || !isfinite(dgij[2]) || !isfinite(dgik[0]) ||
+          !isfinite(dgik[1]) || !isfinite(dgik[2]) || !isfinite(dgjk[0]) || !isfinite(dgjk[1]) ||
+          !isfinite(dgjk[2]) || !isfinite(i_adjoint) || !isfinite(j_adjoint) ||
+          !isfinite(k_adjoint)) {
+        record_system_error(workspace, system, Gfn2D4DeviceError::kNonfiniteArithmetic);
+        return;
+      }
+      for (int axis = 0; axis < 3; ++axis) {
+        atomic_add_fp64(workspace.gradient_scratch + i * 3 + axis, -dgij[axis] - dgik[axis]);
+        atomic_add_fp64(workspace.gradient_scratch + j * 3 + axis, dgij[axis] - dgjk[axis]);
+        atomic_add_fp64(workspace.gradient_scratch + k * 3 + axis, dgik[axis] + dgjk[axis]);
+      }
+      atomic_add_fp64(workspace.coordination_adjoints + i, i_adjoint);
+      atomic_add_fp64(workspace.coordination_adjoints + j, j_adjoint);
+      atomic_add_fp64(workspace.coordination_adjoints + k, k_adjoint);
+    }
+  }
+}
+
 __global__ void coordination_vjp_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameters parameters,
                                         Gfn2D4DeviceCache cache, Gfn2D4DeviceWorkspace workspace,
                                         std::uint32_t* device_error) {
@@ -2054,6 +2299,63 @@ cudaError_t launch_grid(std::int64_t count, unsigned int* blocks) {
 
 cudaError_t check_launch() { return cudaPeekAtLastError(); }
 
+/*
+ * Host-side gate for the D4 ATM multi-block split. The sub-kernels exist so a
+ * large single system is not limited to one 256-thread block (one SM) for its
+ * O(N^3) triple loop. The split is enabled only when it cannot regress the
+ * existing path: a single system (or one with far fewer peers than the block
+ * count we would launch) that is big enough to make the parallelism worth it.
+ *
+ * The returned value is blocks-per-system (>= 1). A value of 1 keeps the
+ * historical single-block kernels byte-for-byte, which is exactly what every
+ * existing high-batch-size workload observes. When blocks_per_system > 1 the
+ * launchers below use the deterministic partial/reduce and atomic split
+ * kernels instead. The partial buffer lives in workspace.atom_scratch, which
+ * is sized to total_atoms and is otherwise unused by the ATM energy path, so
+ * batch_size * blocks_per_system must never exceed atom_elements.
+ */
+std::int32_t atm_split_blocks_per_system(const Gfn2D4DeviceBatch& batch,
+                                         const Gfn2D4DeviceWorkspace& workspace) noexcept {
+  if (batch.batch_size < 1 || batch.total_atoms < 1 || workspace.atom_elements < 1 ||
+      batch.batch_size > 65535) {
+    return 1;
+  }
+  const std::int64_t atoms_per_system = batch.total_atoms / batch.batch_size;
+  /* A 62-atom alkane already makes the triple loop the dominant D4 kernel;
+   * this threshold keeps every existing small-system path unchanged. */
+  constexpr std::int64_t kMinimumAtomsPerSystem = 40;
+  /* Once blockIdx.y (system axis) is used, gridDim.y must remain in range;
+   * launching more than this many blocks per system adds overhead faster than
+   * it recovers parallelism for GFN2-sized molecules. */
+  constexpr std::int32_t kMaximumBlocksPerSystem = 64;
+  if (atoms_per_system < kMinimumAtomsPerSystem) {
+    return 1;
+  }
+  /* Cap so the per-system partials fit inside the caller-owned atom scratch
+   * (batch_size * blocks_per_system <= total_atoms) and the launch stays in
+   * the 2D grid limits. The estimate spreads ~8 atoms per extra block. */
+  constexpr std::int32_t kAtomsPerBlock = 8;
+  std::int32_t requested =
+      static_cast<std::int32_t>((atoms_per_system + kAtomsPerBlock - 1) / kAtomsPerBlock);
+  if (requested < 1) {
+    requested = 1;
+  }
+  if (requested > kMaximumBlocksPerSystem) {
+    requested = kMaximumBlocksPerSystem;
+  }
+  const std::int64_t capacity = workspace.atom_elements / batch.batch_size;
+  if (requested > capacity) {
+    requested = static_cast<std::int32_t>(capacity);
+  }
+  if (requested > std::numeric_limits<std::int32_t>::max() / batch.batch_size) {
+    requested = 1;
+  }
+  if (batch.batch_size * requested > std::numeric_limits<std::uint32_t>::max()) {
+    requested = 1;
+  }
+  return requested < 1 ? 1 : requested;
+}
+
 }  // namespace
 
 cudaError_t reset_gfn2_d4_device_errors_cuda(std::int64_t batch_size, std::uint32_t* system_errors,
@@ -2510,11 +2812,30 @@ cudaError_t evaluate_gfn2_d4_atm_cuda(const Gfn2D4DeviceBatch& batch,
   if (status != cudaSuccess) {
     return status;
   }
-  atm_energy_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0, stream>>>(
-      batch, parameters, cache, workspace, device_error);
-  status = check_launch();
-  if (status != cudaSuccess) {
-    return status;
+  const std::int32_t blocks_per_system = atm_split_blocks_per_system(batch, workspace);
+  if (blocks_per_system > 1) {
+    const dim3 grid(static_cast<unsigned int>(blocks_per_system),
+                    static_cast<unsigned int>(batch.batch_size));
+    atm_energy_split_kernel<<<grid, kThreadsPerBlock, 0, stream>>>(batch, parameters, cache,
+                                                                   workspace, device_error);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
+    atm_energy_split_reduce_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
+                                     0, stream>>>(batch, workspace, blocks_per_system,
+                                                  device_error);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
+  } else {
+    atm_energy_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0, stream>>>(
+        batch, parameters, cache, workspace, device_error);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
   }
   publish_batch_kernel<<<batch_blocks, kThreadsPerBlock, 0, stream>>>(
       batch.batch_size, workspace.batch_scratch, energies, workspace, device_error);
@@ -2584,11 +2905,23 @@ cudaError_t add_gfn2_d4_atm_gradient_cuda(const Gfn2D4DeviceBatch& batch,
   if (status != cudaSuccess) {
     return status;
   }
-  atm_gradient_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0, stream>>>(
-      batch, parameters, cache, workspace, device_error);
-  status = check_launch();
-  if (status != cudaSuccess) {
-    return status;
+  const std::int32_t blocks_per_system = atm_split_blocks_per_system(batch, workspace);
+  if (blocks_per_system > 1) {
+    const dim3 grid(static_cast<unsigned int>(blocks_per_system),
+                    static_cast<unsigned int>(batch.batch_size));
+    atm_gradient_split_kernel<<<grid, kThreadsPerBlock, 0, stream>>>(batch, parameters, cache,
+                                                                     workspace, device_error);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
+  } else {
+    atm_gradient_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                          stream>>>(batch, parameters, cache, workspace, device_error);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
   }
   coordination_vjp_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
                             stream>>>(batch, parameters, cache, workspace, device_error);

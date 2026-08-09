@@ -923,6 +923,116 @@ int test_complete_path_batch_sizes() {
   return 0;
 }
 
+/*
+ * Exercise the multi-block D4 ATM path: a single large system (>= 40 atoms)
+ * trips the host-side split gate, so the ATM energy and gradient evaluations
+ * must use the deterministic split kernels. Compare energy and gradient
+ * against the CPU reference, and confirm the ragged-homogeneous batch=1 shape
+ * still matches the non-split result within the same tolerance.
+ */
+int test_atm_split_path_large_single_system() {
+  constexpr std::size_t batch_count = 1u;
+  /* A carbon chain long enough that the ATM triple loop is the dominant cost
+   * and every flat pair slice contains real work. */
+  constexpr std::size_t atoms_per_system = 62u;
+  const std::size_t atom_count = batch_count * atoms_per_system;
+  std::vector<std::int64_t> atom_offsets(batch_count + 1u);
+  std::vector<std::int32_t> atomic_numbers(atom_count);
+  std::vector<double> positions(atom_count * 3u);
+  std::vector<double> charges(atom_count);
+  for (std::size_t atom = 0; atom < atom_count; ++atom) {
+    const std::size_t carbon = atom % 2u == 0u;
+    atomic_numbers[atom] = carbon ? 6 : 1;
+    positions[atom * 3u] = 1.5 * static_cast<double>(atom);
+    positions[atom * 3u + 1u] = 0.7 * static_cast<double>(atom % 5u);
+    positions[atom * 3u + 2u] = 1.1 * static_cast<double>((atom * 7u) % 9u);
+    charges[atom] = carbon ? -0.05 : 0.05;
+  }
+  atom_offsets[batch_count] = static_cast<std::int64_t>(atom_count);
+
+  gpuxtb::detail::gfn2::D4Plan plan;
+  std::string error;
+  CHECK(gpuxtb::detail::gfn2::make_d4_plan(
+            static_cast<std::int64_t>(batch_count), static_cast<std::int64_t>(atom_count),
+            atom_offsets.data(), atomic_numbers.data(), plan, error) == GPUXTB_STATUS_SUCCESS);
+  std::vector<std::byte> workspace_storage(plan.workspace_size_bytes() +
+                                           gpuxtb::detail::gfn2::kD4WorkspaceAlignment - 1u);
+  const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(workspace_storage.data());
+  const std::uintptr_t aligned = (address + gpuxtb::detail::gfn2::kD4WorkspaceAlignment - 1u) &
+                                 ~(gpuxtb::detail::gfn2::kD4WorkspaceAlignment - 1u);
+  gpuxtb::detail::gfn2::D4Workspace host_workspace;
+  CHECK(gpuxtb::detail::gfn2::bind_d4_workspace(plan, reinterpret_cast<void*>(aligned),
+                                                plan.workspace_size_bytes(), host_workspace,
+                                                error) == GPUXTB_STATUS_SUCCESS);
+  std::vector<double> pair_data(static_cast<std::size_t>(plan.total_pairs()) *
+                                gpuxtb::detail::gfn2::kD4PairDataElements);
+  std::vector<double> coordination(atom_count);
+  gpuxtb::detail::gfn2::D4GeometryCache host_cache;
+  CHECK(gpuxtb::detail::gfn2::update_d4_geometry_cache_cpu(
+            plan, positions.data(), 41u, pair_data.data(), pair_data.size(), coordination.data(),
+            coordination.size(), host_workspace, host_cache, error) == GPUXTB_STATUS_SUCCESS);
+  std::vector<double> expected_two_body(batch_count);
+  std::vector<double> expected_potentials(atom_count);
+  std::vector<double> expected_atm(batch_count);
+  std::vector<double> expected_gradients(atom_count * 3u);
+  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_cpu(
+            plan, host_cache, charges.data(), expected_two_body.data(), expected_potentials.data(),
+            host_workspace, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb::detail::gfn2::evaluate_d4_atm_cpu(plan, host_cache, expected_atm.data(),
+                                                  host_workspace, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb::detail::gfn2::add_d4_two_body_gradient_cpu(
+            plan, host_cache, charges.data(), expected_gradients.data(), host_workspace, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb::detail::gfn2::add_d4_atm_gradient_cpu(plan, host_cache, expected_gradients.data(),
+                                                      host_workspace,
+                                                      error) == GPUXTB_STATUS_SUCCESS);
+
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CHECK(device.initialize(plan, atom_offsets, atomic_numbers, pair_data, coordination, charges,
+                          stream));
+  CUDA_CHECK(device.reset(stream));
+  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_two_body_cuda(
+      device.batch, device.parameters, device.cache, device.charges.get(), device.energies.get(),
+      device.potentials.get(), device.workspace, device.error.get(), stream));
+  std::vector<double> actual_two_body(batch_count);
+  std::vector<double> actual_potentials(atom_count);
+  CUDA_CHECK(device.energies.copy_to(actual_two_body.data(), batch_count, stream));
+  CUDA_CHECK(device.potentials.copy_to(actual_potentials.data(), atom_count, stream));
+  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_atm_cuda(
+      device.batch, device.parameters, device.cache, device.energies.get(), device.workspace,
+      device.error.get(), stream));
+  std::vector<double> actual_atm(batch_count);
+  CUDA_CHECK(device.energies.copy_to(actual_atm.data(), batch_count, stream));
+  std::vector<double> zero_gradients(atom_count * 3u);
+  CUDA_CHECK(device.gradients.copy_from(zero_gradients.data(), zero_gradients.size(), stream));
+  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_d4_two_body_gradient_cuda(
+      device.batch, device.parameters, device.cache, device.charges.get(), device.gradients.get(),
+      device.workspace, device.error.get(), stream));
+  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_d4_atm_gradient_cuda(
+      device.batch, device.parameters, device.cache, device.gradients.get(), device.workspace,
+      device.error.get(), stream));
+  std::vector<double> actual_gradients(atom_count * 3u);
+  std::uint32_t semantic_error = 99u;
+  CUDA_CHECK(device.gradients.copy_to(actual_gradients.data(), actual_gradients.size(), stream));
+  CUDA_CHECK(device.error.copy_to(&semantic_error, 1, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(semantic_error == static_cast<std::uint32_t>(Gfn2D4DeviceError::kSuccess));
+  for (std::size_t system = 0; system < batch_count; ++system) {
+    CHECK(near(actual_two_body[system], expected_two_body[system], 2.0e-12, 2.0e-12));
+    CHECK(near(actual_atm[system], expected_atm[system], 2.0e-12, 2.0e-11));
+  }
+  for (std::size_t atom = 0; atom < atom_count; ++atom) {
+    CHECK(near(actual_potentials[atom], expected_potentials[atom], 2.0e-12, 2.0e-12));
+  }
+  for (std::size_t coordinate = 0; coordinate < actual_gradients.size(); ++coordinate) {
+    CHECK(near(actual_gradients[coordinate], expected_gradients[coordinate], 3.0e-11, 3.0e-10));
+  }
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 int test_empty_and_singleton_systems() {
   constexpr std::array<std::int64_t, 5> atom_offsets{0, 0, 1, 1, 2};
   constexpr std::array<std::int32_t, 2> atomic_numbers{1, 8};
@@ -1654,6 +1764,10 @@ int main() {
   }
   if (const int status = test_complete_path_batch_sizes(); status != 0) {
     std::cerr << "CUDA D4 complete batch path test failed at line " << status << '\n';
+    return status;
+  }
+  if (const int status = test_atm_split_path_large_single_system(); status != 0) {
+    std::cerr << "CUDA D4 ATM split-path large-system test failed at line " << status << '\n';
     return status;
   }
   if (const int status = test_empty_and_singleton_systems(); status != 0) {
