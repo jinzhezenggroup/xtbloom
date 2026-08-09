@@ -1,6 +1,4 @@
-#include <cublas_v2.h>
 #include <cuda_runtime_api.h>
-#include <cusolverDn.h>
 
 #include <algorithm>
 #include <array>
@@ -22,6 +20,7 @@
 #include "backends/cuda/gfn2_scc_setup_topology.hpp"
 #include "data/parameters/d4.hpp"
 #include "model/gfn2/coordination.hpp"
+#include "runtime/nvidia_host_api.h"
 #include "tests/support/gfn2_scc_test_case.hpp"
 
 #define CHECK(condition)                                                                          \
