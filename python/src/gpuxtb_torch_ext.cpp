@@ -13,8 +13,8 @@
 // instead keeps the same zero-copy data plane native: it takes torch tensors
 // directly, binds their data pointers to the public gpuxtb C ABI descriptors,
 // runs one synchronous gpuxtb_compute call, and writes the results into
-// caller-owned output tensors.  The Python layer only keeps the thin autograd
-// (Function.apply), the async worker, and the torch.compile graph-break shim.
+// caller-owned output tensors. The Python layer only keeps the thin autograd
+// Function and the torch.compile graph-break shim.
 //
 // Why the LibTorch Stable ABI instead of the libtorch C++ API: the extension
 // uses only the ABI-stable pieces (stable C shims, torch/csrc/stable,
@@ -362,7 +362,21 @@ std::tuple<Tensor, Tensor> gpuxtb_torch_forward(
       stream > 0 ? reinterpret_cast<void*>(static_cast<uintptr_t>(stream)) : nullptr;
 
   gpuxtb_context_t* context = nullptr;
-  check_status(api.context_create(&context_options, &context), "gpuxtb_context_create");
+  int32_t context_status = api.context_create(&context_options, &context);
+  if (context_status != GPUXTB_STATUS_SUCCESS && backend == GPUXTB_BACKEND_AUTO && !any_cuda &&
+      device_id < 0 && context_options.stream != nullptr) {
+    // AUTO with all-host tensors may legitimately resolve to CPU in a CPU-only
+    // gpuxtb build. Python cannot know that resolution before the context is
+    // created, so it supplies Torch's current CUDA stream as a candidate. Retry
+    // without that candidate to preserve AUTO's established CPU fallback.
+    if (context != nullptr) {
+      api.context_destroy(context);
+      context = nullptr;
+    }
+    context_options.stream = nullptr;
+    context_status = api.context_create(&context_options, &context);
+  }
+  check_status(context_status, "gpuxtb_context_create");
   ContextGuard context_guard(context);
 
   // Mirror the Python layer's device-consistency gate: CUDA inputs must match

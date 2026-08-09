@@ -90,6 +90,7 @@ gpuxtb = "gpuxtb.dpdata"
 [tool.scikit-build]
 minimum-version = "build-system.requires"
 sdist.include = [
+  "python/src/gpuxtb_torch_ext.cpp",
   "cmake/3rdparty/implib/**",
   "cmake/3rdparty/implib_manifest.json",
   "cmake/3rdparty/torch-stable/**",

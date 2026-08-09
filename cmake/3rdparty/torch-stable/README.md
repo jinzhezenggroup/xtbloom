@@ -1,6 +1,6 @@
 # Vendored LibTorch Stable ABI headers
 
-`python/gpuxtb/_torch_ext/` is compiled against the LibTorch Stable ABI. This
+`python/src/gpuxtb_torch_ext.cpp` is compiled against the LibTorch Stable ABI. This
 directory holds the exact `#include` closure of the stable-ABI headers the
 extension uses, vendored from the PyPI `torch` wheel, together with the
 `aoti_torch_*` / `torch_library_impl` / `torch_get_mutable_data_ptr` symbol
@@ -51,7 +51,7 @@ symbol list from the supported compiled objects:
 python3 tools/torch_stable_vendor.py generate \
   --torch-include <torch/include> --torch-version <x.y.z> \
   --out cmake/3rdparty/torch-stable
-# Compile python/gpuxtb/_torch_ext/gpuxtb_torch_ext.cpp in every supported
+# Compile python/src/gpuxtb_torch_ext.cpp in every supported
 # compiler/instrumentation mode, then pass each object to form their union:
 python3 tools/torch_stable_vendor.py symbols \
   --extension-object <release-ext.o> \

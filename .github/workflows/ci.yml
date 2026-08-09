@@ -212,6 +212,10 @@ jobs:
           enable-cache: true
       - name: Build source distribution
         run: uv build --sdist --out-dir dist-license
+      - name: Verify Torch source payload
+        run: >-
+          python python/ci/check-torch-distribution.py
+          --sdist dist-license/*.tar.gz
       - name: Verify source distribution licenses
         run: python tools/licensing/check_licenses.py --source-root . dist-license/*.tar.gz
 

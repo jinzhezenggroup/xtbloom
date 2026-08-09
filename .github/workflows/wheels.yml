@@ -104,6 +104,8 @@ jobs:
           extras: "uv"
       - name: Enforce PyPI wheel size limit
         run: python python/ci/check-wheel-size.py wheelhouse
+      - name: Verify Torch wheel payload
+        run: python python/ci/check-torch-distribution.py --wheel wheelhouse/*.whl
       - name: Verify wheel licenses
         run: python tools/licensing/check_licenses.py --source-root . wheelhouse/*.whl
       - name: Inspect CUDA host-library dependencies

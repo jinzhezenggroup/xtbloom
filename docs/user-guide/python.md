@@ -238,9 +238,13 @@ loss.backward()      # positions.grad == -forces
   imports torch or the compiled torch extension.
 - Non-contiguous or strided inputs are packed into a compact copy by the op;
   scalar types must still match the C ABI exactly.
-- CUDA calls run on `torch.cuda.current_stream()` by default. An explicit
-  native `stream=` first waits for Torch's current stream, preserving producer
-  ordering before the extension binds raw tensor pointers.
+- CUDA calls always follow `torch.cuda.current_stream()`. Select a custom
+  stream with the ordinary PyTorch context manager:
+
+  ```python
+  with torch.cuda.stream(stream):
+      energies, forces = gpuxtb_torch(...)
+  ```
 
 The op itself is a compiled extension, `libgpuxtb_torch_ext`, written against
 the LibTorch Stable ABI (torch >= 2.10). It binds tensor data pointers directly
@@ -264,49 +268,6 @@ compiler, so wrapping it in `torch.compile` inserts a clean graph
 break and runs it eagerly: correct results and no trace-time error, but no
 compilation speedup for the gpuxtb call itself (the surrounding graph is still
 compiled).
-
-### Experimental asynchronous execution (CUDA only, not part of the public API)
-
-The public `gpuxtb_torch` is always synchronous.  An experimental
-host-asynchronous CUDA variant lives at the internal entry
-`gpuxtb.torch._gpuxtb_torch_async` (same arguments; underscored because its
-contract is intrusive and it is not yet stable enough for the public API).  It
-runs the compute on a background worker so the call returns before the solve
-completes, which is useful for pipelining several geometries or overlapping
-the solve with other host work:
-
-```python
-from gpuxtb.torch import _gpuxtb_torch_async  # experimental, not public API
-
-energies, forces = _gpuxtb_torch_async(
-    positions, atomic_numbers, atom_offsets,
-    molecular_charges, unpaired_electrons, backend="cuda",
-)
-# ... more async submissions or other host work ...
-loss = energies.sum()
-loss.backward()      # backward awaits the worker: gradients are exact
-```
-
-Contract of the async path:
-
-- The returned tensors read as NaN until the worker finishes, never as stale
-  memory, so an eager read that overtakes the solver is detectable, not
-  silently wrong.
-- `backward` is the natural synchronization point: it waits for the worker and
-  its completion event and surfaces any deferred failure (gpuxtb errors raised
-  at `backward` or at the next async call).
-- A plain `torch.cuda.synchronize()` alone is not a sufficient barrier for
-  eager reads, because it cannot cover host work the worker thread has not yet
-  enqueued; eager reads need a host-side wait on the worker.
-- It requires CUDA `positions` and the CUDA backend; the `stream` argument is
-  refused because the op always runs on `torch.cuda.current_stream()`.
-- Submitted from inside `torch.compile`, an async request automatically
-  degrades to the synchronous path, because the deferred-result contract of
-  the async path cannot be expressed inside a fused graph.
-
-A native asynchronous public ABI (where `torch.cuda.synchronize()` alone would
-be a complete barrier) is not implemented; see the "Public compute is
-synchronous" note in the user guide index.
 
 ## Open-shell calculations
 

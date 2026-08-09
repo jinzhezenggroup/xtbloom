@@ -1,6 +1,7 @@
 """Tests for the PyTorch autograd op :func:`gpuxtb.gpuxtb_torch`.
 
-The op runs packed inference on PyTorch tensors through the DLPack bridge and
+The op runs packed inference on PyTorch tensors through the compiled stable-ABI
+extension and
 exposes a single analytic gradient, ``dE/dR = -F``.  These tests verify the
 host (CPU) path, the exact gradient identity against the returned forces, the
 ragged-batch gradient slicing, a finite-difference cross-check of the energy
@@ -12,6 +13,7 @@ CUDA coverage is gated on a real GPU plus a torch CUDA build, mirroring
 from __future__ import annotations
 
 import importlib
+import inspect
 import itertools
 import os
 import subprocess
@@ -24,6 +26,16 @@ from gpuxtb import Calculator, gpuxtb_torch
 from gpuxtb.exceptions import GPUxtbNotSupportedError, GPUxtbValueError
 
 _TORCH = importlib.util.find_spec("torch")
+
+
+def test_torch_public_signature_hides_execution_details() -> None:
+    """Users select Torch execution context without raw stream/async controls."""
+    import gpuxtb.torch as torch_module
+
+    parameters = inspect.signature(gpuxtb_torch).parameters
+    assert "stream" not in parameters
+    assert "async_exec" not in parameters
+    assert not hasattr(torch_module, "_gpuxtb_torch_async")
 
 
 class _DLPackOnly:
@@ -594,10 +606,10 @@ def test_positions_must_be_float64() -> None:
 def test_torch_compile_graph_breaks_for_sync_op() -> None:
     """torch.compile around the op graph-breaks and stays correct (no error).
 
-    gpuxtb_torch is eager-only: it drives the native library through
-    ctypes/DLPack, which Dynamo cannot trace, so the op is marked opaque and
-    ``torch.compile`` inserts a graph break.  There is no compilation speedup
-    for the gpuxtb call, but compilation must never fail at trace time.
+    gpuxtb_torch is eager-only: it drives the native library through a compiled
+    stable-ABI custom op, which Dynamo cannot trace, so the op is marked opaque
+    and ``torch.compile`` inserts a graph break. There is no compilation
+    speedup for the gpuxtb call, but compilation must never fail at trace time.
     """
     reason = _skip_reason()
     if reason:
@@ -630,6 +642,71 @@ def test_torch_compile_graph_breaks_for_sync_op() -> None:
     assert positions.grad is not None
     assert torch.allclose(positions.grad, eager_grad, atol=1.0e-12, rtol=1.0e-12)
     assert torch.allclose(compiled(positions), eager, atol=1.0e-12, rtol=1.0e-12)
+
+
+@pytest.mark.cuda
+def test_torch_auto_all_host_passes_current_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AUTO forwards the active Torch stream even when every tensor is host."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import gpuxtb.torch as torch_module
+    import torch
+
+    if not torch.cuda.is_available():
+        pytest.skip("torch has no usable CUDA device")
+
+    recorded: list[int] = []
+
+    def fake_native_forward(**kwargs: object) -> tuple[object, object]:
+        recorded.append(int(kwargs["stream"]))
+        return kwargs["out_energies"], kwargs["out_forces"]
+
+    monkeypatch.setattr(torch_module, "_native_forward", fake_native_forward)
+    host_arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
+    stream = torch.cuda.Stream()
+    with torch.cuda.stream(stream):
+        gpuxtb_torch(
+            torch.tensor(WATER_POSITIONS.tolist(), dtype=torch.float64),
+            host_arrays["atomic_numbers"],
+            host_arrays["atom_offsets"],
+            host_arrays["molecular_charges"],
+            host_arrays["unpaired_electrons"],
+            host_arrays["spin_channels"],
+            backend="auto",
+        )
+    assert recorded == [int(stream.cuda_stream)]
+
+
+@pytest.mark.cuda
+def test_torch_auto_all_host_keeps_cpu_only_fallback() -> None:
+    """A candidate Torch stream does not disable native AUTO-to-CPU fallback."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+
+    if not torch.cuda.is_available():
+        pytest.skip("torch has no usable CUDA device")
+    if _library_has_cuda():
+        pytest.skip("requires a CPU-only gpuxtb build")
+
+    host_arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
+    stream = torch.cuda.Stream()
+    with torch.cuda.stream(stream):
+        energies, forces = gpuxtb_torch(
+            torch.tensor(WATER_POSITIONS.tolist(), dtype=torch.float64),
+            host_arrays["atomic_numbers"],
+            host_arrays["atom_offsets"],
+            host_arrays["molecular_charges"],
+            host_arrays["unpaired_electrons"],
+            host_arrays["spin_channels"],
+            backend="auto",
+        )
+    assert torch.isfinite(energies).all()
+    assert torch.isfinite(forces).all()
 
 
 @pytest.mark.cuda
@@ -724,11 +801,8 @@ def test_torch_cuda_accepts_host_auxiliary_descriptors() -> None:
 
 
 @pytest.mark.cuda
-@pytest.mark.parametrize("explicit_stream", [False, True])
-def test_torch_cuda_orders_native_stream_after_current_stream(
-    explicit_stream: bool,
-) -> None:
-    """Raw tensor pointers remain ordered after work on Torch's current stream."""
+def test_torch_cuda_uses_current_stream() -> None:
+    """Raw tensor pointers remain ordered on Torch's active custom stream."""
     reason = _skip_reason() if _library_has_cuda() else "CUDA backend unavailable"
     if reason:
         pytest.skip(reason)
@@ -757,8 +831,6 @@ def test_torch_cuda_orders_native_stream_after_current_stream(
     )
     torch.cuda.synchronize()
     producer = torch.cuda.Stream()
-    consumer = torch.cuda.Stream()
-    native_stream = int(consumer.cuda_stream) if explicit_stream else None
     with torch.cuda.stream(producer):
         cuda_sleep(100_000_000)
         positions.copy_(
@@ -772,7 +844,6 @@ def test_torch_cuda_orders_native_stream_after_current_stream(
             host_arrays["unpaired_electrons"],
             host_arrays["spin_channels"],
             backend="cuda",
-            stream=native_stream,
         )
     producer.synchronize()
     assert torch.allclose(

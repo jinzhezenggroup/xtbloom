@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Vendor the LibTorch Stable ABI headers used by the compiled torch extension.
 
-The compiled gpuxtb PyTorch integration (`python/gpuxtb/_torch_ext/`) is built
+The compiled gpuxtb PyTorch integration (`python/src/gpuxtb_torch_ext.cpp`) is built
 against the LibTorch Stable ABI headers and a build-time-only stub
 `libtorch_cpu.so`. Vendoring just the header closure here means building the
 extension never requires downloading a torch wheel; the stub is linked instead

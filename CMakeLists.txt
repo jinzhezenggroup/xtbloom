@@ -22,7 +22,7 @@ option(GPUXTB_ENABLE_TORCH_EXT
 # ----------------------------------------------------------------------------#
 # PyTorch integration extension (LibTorch Stable ABI).
 #
-# python/gpuxtb/_torch_ext/gpuxtb_torch_ext.cpp binds torch tensors directly to
+# python/src/gpuxtb_torch_ext.cpp binds torch tensors directly to
 # the public gpuxtb C ABI.  It is compiled against the vendored stable-ABI
 # headers (cmake/3rdparty/torch-stable, see its README) and linked against a
 # build-time-only stub libtorch_cpu.so, so building the extension never
@@ -92,7 +92,7 @@ if(GPUXTB_ENABLE_TORCH_EXT)
       C_STANDARD 11
     )
     add_library(gpuxtb_torch_ext SHARED
-      "${CMAKE_CURRENT_SOURCE_DIR}/python/gpuxtb/_torch_ext/gpuxtb_torch_ext.cpp"
+      "${CMAKE_CURRENT_SOURCE_DIR}/python/src/gpuxtb_torch_ext.cpp"
     )
     set_target_properties(gpuxtb_torch_ext PROPERTIES
       OUTPUT_NAME gpuxtb_torch_ext
