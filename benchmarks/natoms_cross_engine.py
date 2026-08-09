@@ -181,8 +181,10 @@ def current_rss_bytes() -> int | None:
 
 def log(message: str) -> None:
     """Emit one flushable, timestamped progress line on stdout."""
-    stamp = datetime.now().strftime("%H:%M:%S")
-    print(f"[{stamp}] {message}", flush=True)
+    stamp = datetime.now(timezone.utc).astimezone().strftime("%H:%M:%S")
+    print(  # noqa: T201 - benchmark CLI progress output
+        f"[{stamp}] {message}", flush=True
+    )
 
 
 def percentile(values: Sequence[float], fraction: float) -> float:
@@ -311,14 +313,18 @@ def build_trajectory(
     return frames_out
 
 
-def configure_gpuxtb_scc(options: Any) -> None:
+def configure_gpuxtb_scc(
+    options: Any,  # noqa: ANN401 - ctypes compute-options mirror
+) -> None:
     """Pin the same SCC convergence controls as the conformance oracle."""
     options.max_scc_iterations = 500
     options.charge_tolerance = 1.0e-10
     options.energy_tolerance = 1.0e-12
 
 
-def cuda_synchronize(control: Any) -> None:
+def cuda_synchronize(
+    control: Any,  # noqa: ANN401 - ctypes CUDA runtime control mirror
+) -> None:
     """Complete all CUDA work at the documented timing boundary."""
     control.runtime.cudaDeviceSynchronize.argtypes = []
     control.runtime.cudaDeviceSynchronize.restype = ctypes.c_int
@@ -589,7 +595,7 @@ class ReferenceRunner:
 
 
 def measure_cell(
-    runner: Any,
+    runner: Any,  # noqa: ANN401 - gpuxtb/xtb/tblite/dxtb adapter union
     protocol: tuple[int, int],
     cell: Cell,
     energy_atol_hartree: float,
@@ -905,7 +911,8 @@ def run_trajectory(
                     frame_count += 1
                     if frame_count % 8 == 0:
                         log(
-                            f"trajectory {engine}: {frame_count}/{frames * repetitions} frames"
+                            f"trajectory {engine}: {frame_count}/"
+                            f"{frames * repetitions} frames"
                         )
             row = dict(base)
             row.update(
@@ -999,7 +1006,10 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def write_json(path: Path, document: Any) -> None:
+def write_json(
+    path: Path,
+    document: Any,  # noqa: ANN401 - JSON-serializable benchmark document
+) -> None:
     """Write one JSON artifact with a trailing newline."""
     with path.open("w", encoding="utf-8") as handle:
         json.dump(document, handle, indent=2, allow_nan=False)
@@ -1130,7 +1140,7 @@ def validate_arguments(args: argparse.Namespace) -> None:
     for natoms in args.trajectory_natoms:
         try:
             make_alkane(natoms)
-        except Exception as exc:
+        except Exception as exc:  # noqa: PERF203 - per-size validation before timing
             raise BenchmarkError(
                 f"unsupported trajectory natoms {natoms}: {exc}"
             ) from exc
@@ -1139,7 +1149,7 @@ def validate_arguments(args: argparse.Namespace) -> None:
     for natoms in args.natoms:
         try:
             make_alkane(natoms)
-        except Exception as exc:
+        except Exception as exc:  # noqa: PERF203 - per-size validation before timing
             raise BenchmarkError(f"unsupported natoms {natoms}: {exc}") from exc
 
 
@@ -1178,6 +1188,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.energy_atol,
                 start_policy=args.start_policy,
             )
+            # Record the SCC start policy on the cell row itself.  A
+            # trajectory-invoked matrix cell (for example a batch=1 sample
+            # measured with ``--start-policy auto-warm``) is then
+            # unambiguously distinguishable from a genuine cold-start row by
+            # downstream consumers such as the plotter.
+            row["start_policy"] = args.start_policy
             elapsed_s = time.perf_counter() - log_start
             rows.append(row)
             if row["availability"] == "available":

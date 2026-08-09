@@ -19,6 +19,7 @@ class StorageCheck:
         self.storage = storage
 
     def system_positions(self, index: int) -> list[float]:
+        """Return the flattened positions of one slot for a spot check."""
         item = self.storage.slices[index]
         return self.storage.positions[3 * item.atom_begin : 3 * item.atom_end]
 
@@ -198,6 +199,79 @@ class NatomsCrossEngineTest(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, msg=completed.stderr)
             self.assertTrue(output.is_file() and output.stat().st_size > 0)
+
+    def test_cold_panel_excludes_autowarm_trajectory_leak(self) -> None:
+        """Batch=1 rows leaked by an auto-warm trajectory run must not enter.
+
+        The trajectory invocation also measures a steady-state batch=1 cell
+        without a ``job`` tag; only rows whose source artifact recorded a
+        ``cold`` start policy (or no policy at all, i.e. legacy artifacts) may
+        appear in the batch=1 cold-start panel.
+        """
+        cold_row = {
+            "engine": "gpuxtb-cpu",
+            "natoms": 62,
+            "batch_size": 1,
+            "availability": "available",
+            "timing": {"median_ms": 76.0},
+            "correctness": {"status": "pass"},
+        }
+        leak_row = dict(cold_row)  # same shape, warm auto-warm measurement
+        leak_row["timing"] = {"median_ms": 21.4}
+        metadata = {
+            "hardware": {"cpu_model": "test-cpu"},
+            "threads": {"cpu_threads": 4},
+            "commit": {"head": "0123456789abcdef"},
+            "protocol": {"start_policy": "cold"},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            cold_artifact = directory / "cold.json"
+            cold_artifact.write_text(
+                json.dumps({"metadata": metadata, "rows": [cold_row]}),
+                encoding="utf-8",
+            )
+            auto_warm_metadata = dict(metadata)
+            auto_warm_metadata["protocol"] = {"start_policy": "auto-warm"}
+            leak_artifact = directory / "traj.json"
+            leak_artifact.write_text(
+                json.dumps(
+                    {"metadata": auto_warm_metadata, "rows": [leak_row]},
+                ),
+                encoding="utf-8",
+            )
+            rows, _ = plotters.load_rows([cold_artifact, leak_artifact])
+            cold = [
+                row
+                for row in rows
+                if plotters._is_eligible(row)
+                and row.get("batch_size") == 1
+                and plotters._cold_batch1_row(row)
+            ]
+            self.assertEqual(
+                [(row["natoms"], row["timing"]["median_ms"]) for row in cold],
+                [(62, 76.0)],
+            )
+            cold_loaded = next(
+                row for row in rows if row["timing"]["median_ms"] == 76.0
+            )
+            leak_loaded = next(
+                row for row in rows if row["timing"]["median_ms"] == 21.4
+            )
+            self.assertNotEqual(
+                cold_loaded.get("_artifact_start_policy"),
+                leak_loaded.get("_artifact_start_policy"),
+            )
+            self.assertTrue(plotters._cold_batch1_row(cold_loaded))
+            self.assertFalse(plotters._cold_batch1_row(leak_loaded))
+            self.assertFalse(
+                plotters._cold_batch1_row(
+                    dict(leak_loaded, job="trajectory", timing={"median_ms": 0.5})
+                )
+            )
+            legacy = dict(cold_loaded)
+            legacy.pop("_artifact_start_policy", None)
+            self.assertTrue(plotters._cold_batch1_row(legacy))
 
 
 if __name__ == "__main__":

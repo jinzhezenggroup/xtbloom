@@ -87,7 +87,8 @@ massively-parallel mode.
 ![Cross-engine GFN2-xTB scaling benchmark](docs/assets/natoms_cross_engine.png)
 
 Hardware: AMD EPYC 7K62 (48 cores; every engine uses the same 16-thread budget
-per call). gpuxtb runs the conformance-tight SCC (tolerance 1e-10 on charges /
+per call) and an NVIDIA RTX 5090 (32 GiB) for the CUDA rows. gpuxtb runs the
+conformance-tight SCC (tolerance 1e-10 on charges /
 1e-12 on energy, up to 500 iterations) while the reference engines use their
 default `--acc 1e-4`, so gpuxtb's timings include strictly *more* SCC work.
 Start semantics are explicit per panel: batch=1 rows are genuine cold-start
@@ -96,6 +97,8 @@ batch=128 rows cold-start on the first call and continue warm afterwards, like
 a repeated steady-state workflow; the trajectory panel is strictly `WARM`
 (nearly identical MD frames). Reference adapters run the same 16-thread budget
 as gpuxtb (OpenMP/OpenBLAS/MKL on xTB and tblite, Torch intra-op on dxtb).
+The CPU rows were measured from main-tree commit `81e3d67`; the CUDA rows were
+re-measured at the merged head (including the #252/#254/#257 CUDA fixes).
 Raw samples, hardware, and the exact commits are archived under
 [`benchmarks/evidence/issue-256/2026-08-09-node3/`](benchmarks/evidence/issue-256/2026-08-09-node3/).
 
@@ -120,6 +123,11 @@ The measured pattern is what ragged high-throughput inference is for:
   vs xTB 620 / tblite 684), again from per-iteration cost plus tighter SCC
   tolerance; gpuxtb's strict WARM continuation is the exact path an ASE MD run
   takes.
+- **gpuxtb CUDA:** at batch=1 the GPU rows carry a fixed per-call overhead
+  (27-192 ms at 14-62 atoms; 362 atoms is dominated by a slow force stage at
+  14 629 ms). At batch=128 the overhead amortizes and CUDA is in the same
+  range as CPU (@242 x 128 systems: CUDA 2852 ms vs CPU 3115 ms; @14: 28 ms
+  vs 15 ms), well ahead of the serial reference loops.
 
 Reproduce it with the committed runner, then regenerate the figure:
 

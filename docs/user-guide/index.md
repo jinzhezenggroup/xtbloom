@@ -32,8 +32,9 @@ buffers, explicit failure semantics, and reproducible reusable state.
 ![Cross-engine GFN2-xTB scaling benchmark](../assets/natoms_cross_engine.png)
 
 The figure compares GFN2-xTB energy + analytic forces from public interfaces
-only: gpuxtb CPU, xTB, tblite, and dxtb CPU, every engine with the same
-16-thread budget. Every batch of 128 uses 128 *distinct* thermal-like
+only: gpuxtb CPU (16 threads) and gpuxtb CUDA (RTX 5090) versus vanilla xTB,
+tblite, and dxtb CPU/CUDA, every engine with the same 16-thread budget. Every
+batch of 128 uses 128 *distinct* thermal-like
 conformers of an alkane (identical atomic numbers, different coordinates) so
 no engine can win by reusing one geometry. Start semantics are explicit:
 batch=1 rows are genuine cold start (xTB/tblite rebuild their calculator every
@@ -46,17 +47,21 @@ the trajectory panel streams nearly identical frames with gpuxtb using strict
   xTB 651 ms / tblite 708 ms). The gap is per-SCC-iteration cost plus gpuxtb's
   strictly tighter SCC tolerance; gpuxtb's batch-parallel worker pool is idle
   for a single system, tracked in issue 256. The reference sweeps stop at 362
-  atoms (xTB 6.7.1 segfaults on the 602-atom alkane).
+  atoms (xTB 6.7.1 segfaults on the 602-atom alkane). gpuxtb CUDA adds a fixed
+  per-call overhead here (27-192 ms at 14-62 atoms).
 - **batch = 128 (first call cold, then WARM)**: gpuxtb CPU is about 9-13x
   faster than xTB and tblite per call (62 atoms: 174 ms vs xTB 2113 ms /
   tblite 1635 ms), because gpuxtb solves the whole ragged batch in one call
   across its worker pool while the reference adapters loop systems serially.
+  gpuxtb CUDA lands in the same range once the fixed overhead amortizes
+  (@242 x 128 systems: CUDA 2852 ms vs CPU 3115 ms).
 - **MD trajectory (WARM)**: per-frame latency at 32-242 atoms. gpuxtb CPU is
   1.3-2.9x slower than xTB/tblite at the largest sizes (242: 1786 ms vs
   xTB 620 / tblite 684 ms), from the same per-iteration cost and tighter
   tolerance; dxtb CPU rows reset per call by design.
 
-Hardware: AMD EPYC 7K62 with every engine using 16 threads per call. gpuxtb
+Hardware: AMD EPYC 7K62 with every engine using 16 threads per call, plus an
+NVIDIA RTX 5090 for the CUDA rows. gpuxtb
 runs SCC to charge tolerance 1e-10 and energy tolerance 1e-12 while the
 reference engines use their default `--acc 1e-4`, so gpuxtb's timings include
 strictly more SCC work. Raw samples, revisions, and reproduction commands are
