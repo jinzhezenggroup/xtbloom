@@ -17,19 +17,37 @@ on:
     branches: [main]
     paths:
       - 'web/**'
+      - 'include/**'
+      - 'src/**'
+      - 'data/parameters/**'
+      - 'cmake/**'
       - '.github/workflows/pages.yml'
       - 'CMakeLists.txt'
+      - 'LICENSE'
+      - 'CUDA_MKL_LINKING_EXCEPTION'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'LICENSES/**'
+      - 'tools/licensing/**'
+      - 'tests/licensing/**'
   pull_request:
     paths:
       - 'web/**'
+      - 'include/**'
+      - 'src/**'
+      - 'data/parameters/**'
+      - 'cmake/**'
       - '.github/workflows/pages.yml'
       - 'CMakeLists.txt'
+      - 'LICENSE'
+      - 'CUDA_MKL_LINKING_EXCEPTION'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'LICENSES/**'
+      - 'tools/licensing/**'
+      - 'tests/licensing/**'
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages-${{ github.ref }}
@@ -38,11 +56,22 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      # Emscripten toolchain (pinned review target: mymindstorm/setup-emsdk).
-      - uses: mymindstorm/setup-emsdk@v14
+      - name: Set up Node for npm and wasm64 smoke tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Pin both the reviewed setup action and the release compiler version.
+      - uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021
+        with:
+          version: '6.0.6'
 
       - name: Configure wasm64 build (library + web demo site)
         run: |
@@ -57,43 +86,42 @@ jobs:
       - name: Build
         run: cmake --build build/wasm-web --parallel 2
 
-      - name: Smoke-test wasm in Node
-        # The wasm64 module requires WebAssembly memory64. That proposal first
-        # shipped in V8 13.3 (Chrome 133), so Node 22 (V8 12.x) cannot parse
-        # the module ("invalid table elements limits flags"); Node 24 is the
-        # first release line with memory64 enabled by default.
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - name: Run smoke test
-        working-directory: build/wasm-web/web/site
-        run: |
-          node --input-type=module -e '
-            import m from "./gpuxtb_web.js";
-            const Mod = await m();
-            const v = Mod.ccall("gpuxtb_web_version", "string", [], []);
-            const xyz = "O 0 0 0\nH 0 0 0.9572\nH 0 0.75718 -0.58552";
-            const out = Mod.ccall("gpuxtb_web_compute", "string",
-              ["string","number","number","number","number","number","number","number"],
-              [xyz, 0, 0, 0, 1e-8, 1e-5, 250, 1]);
-            const d = JSON.parse(out);
-            if (!d.ok || !isFinite(d.energy_Eh)) {
-              console.error("compute failed:", out);
-              process.exit(1);
-            }
-            console.log("smoke ok, version", v, "energy", d.energy_Eh);
-          '
+      - name: Test browser helpers
+        run: npm test --prefix web
 
-      - name: Configure Pages
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/configure-pages@v5
+      - name: Check deployed legal payload
+        run: >-
+          python3 tools/licensing/check_licenses.py --source-root .
+          --web-site build/wasm-web/web/site
 
-      - name: Upload Pages artifact
+      - name: Run wasm64 scientific smoke tests
+        # memory64 first shipped in V8 13.3 (Chrome 133); Node 24 is the first
+        # Node release line that enables it by default.
+        run: node web/tests/wasm_smoke.mjs build/wasm-web/web/site
+
+      - name: Upload trusted main site artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
           path: build/wasm-web/web/site
 
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # This job consumes the already-built Pages artifact and never checks out
+      # or executes repository-controlled code with deployment credentials.
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
       - name: Deploy to GitHub Pages
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: deployment
         uses: actions/deploy-pages@v4

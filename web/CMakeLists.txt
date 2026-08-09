@@ -11,7 +11,7 @@
 #   package.json / package-lock.json   (3dmol.js 2.5.5, BSD-3-Clause)
 #   wasm/linalg.c                      (minimal LP64 LAPACKE/CBLAS side module)
 #   gpuxtb_web.c                       (XYZ/JSON C adapter + L-BFGS optimizer)
-#   index.html / style.css / app.js / worker.js
+#   index.html / style.css / app.js / app_helpers.js / worker.js
 # See THIRD_PARTY_NOTICES.md for provenance. Outputs under <build> are build
 # artifacts and never committed.
 
@@ -112,6 +112,7 @@ set(_gpuxtb_web_copy_deps
     "${_gpuxtb_web_src}/index.html"
     "${_gpuxtb_web_src}/style.css"
     "${_gpuxtb_web_src}/app.js"
+    "${_gpuxtb_web_src}/app_helpers.js"
     "${_gpuxtb_web_src}/worker.js"
     "${_gpuxtb_web_3dmol}")
 
@@ -120,6 +121,7 @@ add_custom_command(
     "${_gpuxtb_web_site}/index.html"
     "${_gpuxtb_web_site}/style.css"
     "${_gpuxtb_web_site}/app.js"
+    "${_gpuxtb_web_site}/app_helpers.js"
     "${_gpuxtb_web_site}/worker.js"
     "${_gpuxtb_web_site}/vendor/3Dmol-min.js"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${_gpuxtb_web_site}"
@@ -130,12 +132,95 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${_gpuxtb_web_src}/app.js" "${_gpuxtb_web_site}/app.js"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_gpuxtb_web_src}/app_helpers.js" "${_gpuxtb_web_site}/app_helpers.js"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${_gpuxtb_web_src}/worker.js" "${_gpuxtb_web_site}/worker.js"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${_gpuxtb_web_site}/vendor"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${_gpuxtb_web_3dmol}" "${_gpuxtb_web_site}/vendor/3Dmol-min.js"
   DEPENDS ${_gpuxtb_web_copy_deps}
   COMMENT "Staging web static assets"
+  VERBATIM)
+
+# ---------------------------------------------------------------------------
+# 5) Legal and provenance payload. The site conveys the GPL-covered WASM
+#    engine, LGPL/Apache-derived parameter data, and a 3Dmol bundle containing
+#    npm transitive code, so recipients must receive every applicable notice.
+# ---------------------------------------------------------------------------
+set(_gpuxtb_web_legal_sources
+    "${CMAKE_SOURCE_DIR}/LICENSE"
+    "${CMAKE_SOURCE_DIR}/CUDA_MKL_LINKING_EXCEPTION"
+    "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+    "${CMAKE_SOURCE_DIR}/LICENSES/3Dmol.js-BSD-3-Clause.txt"
+    "${CMAKE_SOURCE_DIR}/LICENSES/Apache-2.0.txt"
+    "${CMAKE_SOURCE_DIR}/LICENSES/LGPL-3.0-or-later.txt"
+    "${CMAKE_SOURCE_DIR}/LICENSES/MIT.txt"
+    "${CMAKE_SOURCE_DIR}/LICENSES/array-api-compat-MIT.txt"
+    "${CMAKE_SOURCE_DIR}/LICENSES/iobuffer-MIT.txt"
+    "${CMAKE_SOURCE_DIR}/LICENSES/netcdfjs-MIT.txt"
+    "${CMAKE_SOURCE_DIR}/LICENSES/pako-MIT.txt"
+    "${CMAKE_SOURCE_DIR}/LICENSES/pako-Zlib.txt"
+    "${CMAKE_SOURCE_DIR}/LICENSES/upng-js-MIT.txt"
+    "${CMAKE_SOURCE_DIR}/data/parameters/d4.NOTICE"
+    "${CMAKE_SOURCE_DIR}/data/parameters/licenses/dftd4-COPYING"
+    "${CMAKE_SOURCE_DIR}/data/parameters/licenses/dftd4-COPYING.LESSER"
+    "${CMAKE_SOURCE_DIR}/data/parameters/licenses/mctc-lib-LICENSE"
+    "${CMAKE_SOURCE_DIR}/data/parameters/manifest.json"
+    "${CMAKE_SOURCE_DIR}/data/parameters/sto_manifest.json"
+    "${CMAKE_SOURCE_DIR}/data/parameters/spin_manifest.json"
+    "${CMAKE_SOURCE_DIR}/data/parameters/d4_manifest.json"
+    "${CMAKE_SOURCE_DIR}/data/parameters/mctc_manifest.json")
+
+set(_gpuxtb_web_legal_outputs
+    "${_gpuxtb_web_site}/LICENSE"
+    "${_gpuxtb_web_site}/CUDA_MKL_LINKING_EXCEPTION"
+    "${_gpuxtb_web_site}/THIRD_PARTY_NOTICES.md"
+    "${_gpuxtb_web_site}/LICENSES/3Dmol.js-BSD-3-Clause.txt"
+    "${_gpuxtb_web_site}/LICENSES/pako-MIT.txt"
+    "${_gpuxtb_web_site}/LICENSES/pako-Zlib.txt"
+    "${_gpuxtb_web_site}/LICENSES/iobuffer-MIT.txt"
+    "${_gpuxtb_web_site}/LICENSES/netcdfjs-MIT.txt"
+    "${_gpuxtb_web_site}/LICENSES/upng-js-MIT.txt"
+    "${_gpuxtb_web_site}/LICENSES/parameters/d4.NOTICE"
+    "${_gpuxtb_web_site}/LICENSES/parameters/dftd4-COPYING"
+    "${_gpuxtb_web_site}/LICENSES/parameters/dftd4-COPYING.LESSER"
+    "${_gpuxtb_web_site}/LICENSES/parameters/mctc-lib-LICENSE"
+    "${_gpuxtb_web_site}/provenance/parameters/manifest.json"
+    "${_gpuxtb_web_site}/provenance/parameters/sto_manifest.json"
+    "${_gpuxtb_web_site}/provenance/parameters/spin_manifest.json"
+    "${_gpuxtb_web_site}/provenance/parameters/d4_manifest.json"
+    "${_gpuxtb_web_site}/provenance/parameters/mctc_manifest.json")
+
+add_custom_command(
+  OUTPUT ${_gpuxtb_web_legal_outputs}
+  COMMAND ${CMAKE_COMMAND} -E make_directory
+          "${_gpuxtb_web_site}/LICENSES/parameters"
+          "${_gpuxtb_web_site}/provenance/parameters"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_SOURCE_DIR}/LICENSE" "${_gpuxtb_web_site}/LICENSE"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_SOURCE_DIR}/CUDA_MKL_LINKING_EXCEPTION"
+          "${_gpuxtb_web_site}/CUDA_MKL_LINKING_EXCEPTION"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+          "${_gpuxtb_web_site}/THIRD_PARTY_NOTICES.md"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_SOURCE_DIR}/LICENSES" "${_gpuxtb_web_site}/LICENSES"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_SOURCE_DIR}/data/parameters/licenses"
+          "${_gpuxtb_web_site}/LICENSES/parameters"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_SOURCE_DIR}/data/parameters/d4.NOTICE"
+          "${_gpuxtb_web_site}/LICENSES/parameters/d4.NOTICE"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_SOURCE_DIR}/data/parameters/manifest.json"
+          "${CMAKE_SOURCE_DIR}/data/parameters/sto_manifest.json"
+          "${CMAKE_SOURCE_DIR}/data/parameters/spin_manifest.json"
+          "${CMAKE_SOURCE_DIR}/data/parameters/d4_manifest.json"
+          "${CMAKE_SOURCE_DIR}/data/parameters/mctc_manifest.json"
+          "${_gpuxtb_web_site}/provenance/parameters"
+  DEPENDS ${_gpuxtb_web_legal_sources}
+  COMMENT "Staging web licenses, notices, and parameter provenance"
   VERBATIM)
 
 # ---------------------------------------------------------------------------
@@ -150,7 +235,9 @@ add_custom_target(
     "${_gpuxtb_web_site}/index.html"
     "${_gpuxtb_web_site}/style.css"
     "${_gpuxtb_web_site}/app.js"
+    "${_gpuxtb_web_site}/app_helpers.js"
     "${_gpuxtb_web_site}/worker.js"
-    "${_gpuxtb_web_site}/vendor/3Dmol-min.js")
+    "${_gpuxtb_web_site}/vendor/3Dmol-min.js"
+    ${_gpuxtb_web_legal_outputs})
 
 message(STATUS "gpuxtb web demo output: ${_gpuxtb_web_site}")

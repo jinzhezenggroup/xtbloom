@@ -4,6 +4,12 @@
  * the input/output panels. All user-facing strings come from the I18N
  * dictionary below; errors arrive from wasm as stable ASCII codes. */
 
+import {
+  angstromToBohr,
+  initializeWorker,
+  withTimeout,
+} from "./app_helpers.js";
+
 const EH2EV = 27.211386245988;
 const EH2KCAL = 627.509474063;
 const EHB2EVA = EH2EV / 0.529177210903;
@@ -77,7 +83,7 @@ const I18N = {
     tag_done: "已支持",
     roadmap_opt_desc: "内置 L-BFGS 优化器，使用解析力收敛到稳定结构。在左侧“优化”区配置后点击“几何优化”。",
     opt_go: "去优化",
-    footer: "由 gpuxtb 驱动 —— 同一套 C ABI 的 C++17 原生库编译为 wasm64（需要支持 WebAssembly memory64 的浏览器，如 Chrome 128+ / Firefox 128+ / Safari 18.4+）。BLAS/LAPACK 层为演示用最小实现，经 numpy 与原生 gpuxtb 逐位验证。仅供演示，非科学计算生产环境。",
+    footer: "由 gpuxtb 驱动 —— 同一套 C ABI 的 C++17 原生库编译为 wasm64（需要支持 WebAssembly memory64 的浏览器，如 Chrome 133+ / Firefox 128+ / Safari 18.4+）。BLAS/LAPACK 层为演示用最小实现，经 numpy 与原生 gpuxtb 逐位验证。仅供演示，非科学计算生产环境。",
     overlay_loading: "正在加载 WASM 引擎…",
     overlay_compute: "正在计算单点能…",
     overlay_opt: "正在几何优化（逐梯度迭代，可能需要几秒）…",
@@ -91,7 +97,7 @@ const I18N = {
     smiles_msg: "SMILES → 结构暂未实现，敬请期待。",
     engine_ok: "引擎就绪",
     engine_fail: "引擎加载失败",
-    load_fail: "无法加载 WASM 引擎。本演示需要支持 WebAssembly memory64 的浏览器，例如 Chrome 128+ / Firefox 128+ / Safari 18.4+。\n详情：",
+    load_fail: "无法加载 WASM 引擎。本演示需要支持 WebAssembly memory64 的浏览器，例如 Chrome 133+ / Firefox 128+ / Safari 18.4+。\n详情：",
     load_timeout: "加载超时——网络可能较慢，请重试。若持续失败请检查是否能正常访问本页面资源。",
     load_retry: "重试",
     load_downloading: "正在下载 WASM 引擎：{{pct}}%",
@@ -162,7 +168,7 @@ const I18N = {
     tag_done: "supported",
     roadmap_opt_desc: "Built-in L-BFGS optimizer using analytic forces. Configure it in the left panel, then click “Optimize geometry”.",
     opt_go: "Try it",
-    footer: "Powered by gpuxtb — the same native C ABI library compiled to wasm64 (requires a browser with WebAssembly memory64 support, e.g. Chrome 128+ / Firefox 128+ / Safari 18.4+). The BLAS/LAPACK layer is a minimal demo implementation, validated bit-for-bit against numpy and native gpuxtb. Demo only, not a production scientific environment.",
+    footer: "Powered by gpuxtb — the same native C ABI library compiled to wasm64 (requires a browser with WebAssembly memory64 support, e.g. Chrome 133+ / Firefox 128+ / Safari 18.4+). The BLAS/LAPACK layer is a minimal demo implementation, validated bit-for-bit against numpy and native gpuxtb. Demo only, not a production scientific environment.",
     overlay_loading: "Loading the WASM engine…",
     overlay_compute: "Computing single point…",
     overlay_opt: "Optimizing geometry (gradient steps, may take a few seconds)…",
@@ -176,7 +182,7 @@ const I18N = {
     smiles_msg: "SMILES → structure is not implemented yet.",
     engine_ok: "engine ready",
     engine_fail: "engine failed to load",
-    load_fail: "Could not load the WASM engine. This demo requires a browser with WebAssembly memory64 support, e.g. Chrome 128+ / Firefox 128+ / Safari 18.4+.\nDetails: ",
+    load_fail: "Could not load the WASM engine. This demo requires a browser with WebAssembly memory64 support, e.g. Chrome 133+ / Firefox 128+ / Safari 18.4+.\nDetails: ",
     load_timeout: "Load timed out — network may be slow. Please retry. If it keeps failing, check that the page and its assets can be reached.",
     load_retry: "Retry",
     load_downloading: "Downloading WASM engine: {{pct}}%",
@@ -265,44 +271,33 @@ function refreshBadge() {
     : t("engine_loading");
 }
 
-function initWorker(wasmBinary) {
-  worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
-  worker.onmessage = (event) => {
-    const m = event.data;
-    if (m.type === "ready") {
-      engineState = "ready";
-      refreshBadge();
-      $("ver-badge").textContent = "v" + m.version;
-      $("xyz").value = PRESETS.water.xyz;
-      updateXyzHint();
-      initMoleculeViewer();
-      updateMoleculeViewer(PRESETS.water.xyz);
-      hideOverlay();
-    } else if (m.type === "error") {
-      engineState = "error";
-      refreshBadge();
-      hideOverlay();
-      setError((t("load_fail") + String(m.error)).trim());
-      $("retry").hidden = false;
-    } else if (m.type === "step") {
-      handleStepMessage(m);
-    } else if (m.type === "result") {
-      const entry = pending.get(m.id);
-      if (!entry) return;
-      pending.delete(m.id);
-      if (m.ok) entry.resolve(m); else entry.reject(new Error(m.error || "worker error"));
-    }
-  };
-  worker.onerror = (e) => {
+function handleWorkerMessage(m) {
+  if (m.type === "error") {
     engineState = "error";
     refreshBadge();
     hideOverlay();
-    setError(t("load_fail") + String((e && e.message) || "worker error"));
+    setError((t("load_fail") + String(m.error)).trim());
     $("retry").hidden = false;
-  };
-  // Transfer the downloaded wasm bytes; the small .data payload is fetched
-  // by the glue inside the worker.
-  worker.postMessage({ type: "init", wasmBinary }, [wasmBinary.buffer]);
+  } else if (m.type === "step") {
+    handleStepMessage(m);
+  } else if (m.type === "result") {
+    const entry = pending.get(m.id);
+    if (!entry) return;
+    pending.delete(m.id);
+    if (m.ok) entry.resolve(m); else entry.reject(new Error(m.error || "worker error"));
+  }
+}
+
+async function initWorker(wasmBinary) {
+  worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+  const ready = await initializeWorker(worker, wasmBinary, handleWorkerMessage);
+  engineState = "ready";
+  refreshBadge();
+  $("ver-badge").textContent = "v" + ready.version;
+  $("xyz").value = PRESETS.water.xyz;
+  updateXyzHint();
+  initMoleculeViewer();
+  updateMoleculeViewer(PRESETS.water.xyz);
 }
 
 function callWorker(cmd, args, onStep) {
@@ -354,12 +349,14 @@ function countAtoms(xyz) {
 let __loadingPct = 0;
 function updateLoader(pct) {
   __loadingPct = pct;
+  $("load-bar-wrap").hidden = false;
   $("load-bar-fill").style.width = Math.min(100, Math.max(0, pct)) + "%";
   $("load-bar-text").textContent = Math.round(pct) + "%";
   $("overlay-text").textContent = tf("load_downloading", { pct: Math.round(pct) });
 }
-async function fetchProgress(url) {
-  const resp = await fetch(url);
+async function fetchProgress(url, options = {}) {
+  const resp = await fetch(url, options);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
   const total = Number(resp.headers.get("content-length")) || 0;
   const reader = resp.body.getReader();
   const chunks = [];
@@ -669,7 +666,7 @@ async function runOptimize() {
   const o = collectOptions();
   const optMax = parseInt($("opt-maxiter").value, 10) || 200;
   const gradTol = parseFloat($("opt-gradtol").value) || 4.5e-4;
-  const maxMove = parseFloat($("opt-maxmove").value) || 0.4;
+  const maxMoveAngstrom = parseFloat($("opt-maxmove").value) || 0.4;
   /* No blocking overlay: the engine runs in the worker, so the page stays
    * responsive and the 3Dmol viewer animates each accepted step. */
   const symbols = getElementSymbols(xyz);
@@ -684,7 +681,7 @@ async function runOptimize() {
   try {
     const t0 = performance.now();
     const m = await callWorker("optimize",
-      [xyz, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, optMax, gradTol, maxMove],
+      [xyz, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, optMax, gradTol, angstromToBohr(maxMoveAngstrom)],
       (step) => {
         $("mol-status").textContent = tf("opt_running", { n: step.iter, max: optMax, e: fmt(step.energy, 6) });
         const frame = { iter: step.iter, natoms: step.natoms, coords: step.coords, energy: step.energy, fmax: step.fmax, symbols };
@@ -773,22 +770,32 @@ $("smiles-alert").addEventListener("click", () => {
   engineState = "loading";
   refreshBadge();
   const LOAD_TIMEOUT_MS = 60000;
+  const abortController = new AbortController();
   try {
     showOverlay("overlay_loading");
-    // Download the main wasm on the UI thread with a real progress bar, then
-    // transfer the bytes to the engine worker (which owns the module).
-    const wasmUrl = new URL("gpuxtb_web.wasm", import.meta.url).href;
-    const wasmBinary = await Promise.race([
-      fetchProgress(wasmUrl),
-      new Promise((_, rej) => setTimeout(() => rej(new Error("TIME_OUT")), LOAD_TIMEOUT_MS)),
-    ]);
-    updateLoader(100);
-    $("overlay-text").textContent = "…";
-    $("load-bar-wrap").hidden = true;
-    initWorker(wasmBinary);
-    // initWorker resolves via the worker "ready" message: badge refresh,
-    // version banner, preset fill, and overlay hide all happen there.
+    updateLoader(0);
+    const initialize = (async () => {
+      // Download the main wasm on the UI thread with a real progress bar, then
+      // wait for .data loading, module instantiation, and side-module readiness
+      // inside the worker before considering the engine loaded.
+      const wasmUrl = new URL("gpuxtb_web.wasm", import.meta.url).href;
+      const wasmBinary = await fetchProgress(wasmUrl, { signal: abortController.signal });
+      updateLoader(100);
+      $("overlay-text").textContent = "…";
+      $("load-bar-wrap").hidden = true;
+      await initWorker(wasmBinary);
+    })();
+    await withTimeout(initialize, LOAD_TIMEOUT_MS, () => {
+      abortController.abort();
+      if (worker) worker.terminate();
+    });
+    hideOverlay();
   } catch (e) {
+    abortController.abort();
+    if (worker) {
+      worker.terminate();
+      worker = null;
+    }
     engineState = "error";
     refreshBadge();
     hideOverlay();

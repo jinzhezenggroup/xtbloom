@@ -901,6 +901,22 @@ if(GPUXTB_BUILD_TESTS)
   set_target_properties(gpuxtb_c_api_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
   add_test(NAME gpuxtb.c_api COMMAND gpuxtb_c_api_test)
 
+  # The browser adapter test supplies a fake public C ABI so failure
+  # publication and optimizer math remain testable without a WASM toolchain or
+  # an external BLAS/LAPACK runtime.
+  add_executable(gpuxtb_web_adapter_test tests/web_adapter_test.c)
+  target_include_directories(gpuxtb_web_adapter_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  if(NOT WIN32)
+    target_link_libraries(gpuxtb_web_adapter_test PRIVATE m)
+  endif()
+  set_target_properties(gpuxtb_web_adapter_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED YES
+  )
+  add_test(NAME gpuxtb.web.adapter COMMAND gpuxtb_web_adapter_test)
+
   add_executable(gpuxtb_result_owner_test tests/result_owner_test.cpp)
   target_link_libraries(gpuxtb_result_owner_test PRIVATE gpuxtb::gpuxtb)
   target_compile_features(gpuxtb_result_owner_test PRIVATE cxx_std_17)

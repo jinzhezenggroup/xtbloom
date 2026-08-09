@@ -78,6 +78,48 @@ static void sb_putd(StrBuf* b, double v) {
   sb_puts(b, tmp);
 }
 
+/* Append one JSON string, including quotes. Diagnostics can contain paths,
+ * quotes, or newlines, so escaping only quote/backslash is not sufficient. */
+static void sb_put_json_string(StrBuf* b, const char* value) {
+  static const char hex[] = "0123456789abcdef";
+  sb_putc(b, '"');
+  for (const unsigned char* p = (const unsigned char*)(value != NULL ? value : ""); *p; ++p) {
+    switch (*p) {
+      case '"':
+        sb_puts(b, "\\\"");
+        break;
+      case '\\':
+        sb_puts(b, "\\\\");
+        break;
+      case '\b':
+        sb_puts(b, "\\b");
+        break;
+      case '\f':
+        sb_puts(b, "\\f");
+        break;
+      case '\n':
+        sb_puts(b, "\\n");
+        break;
+      case '\r':
+        sb_puts(b, "\\r");
+        break;
+      case '\t':
+        sb_puts(b, "\\t");
+        break;
+      default:
+        if (*p < 0x20) {
+          sb_puts(b, "\\u00");
+          sb_putc(b, hex[*p >> 4]);
+          sb_putc(b, hex[*p & 0x0f]);
+        } else {
+          sb_putc(b, (char)*p);
+        }
+        break;
+    }
+  }
+  sb_putc(b, '"');
+}
+
 static char* sb_finish(StrBuf* b) {
   sb_grow(b, 1);
   b->data[b->len] = '\0';
@@ -231,19 +273,13 @@ static gpuxtb_context_t* g_context = NULL;
 /* Front-end-localizable error: stable ASCII code (+ optional raw diagnostic). */
 static const char* error_json(const char* code, const char* raw) {
   g_result.len = 0;
-  sb_puts(&g_result, "{\"ok\":0,\"error_code\":\"");
-  sb_puts(&g_result, code != NULL ? code : "err_unknown");
+  sb_puts(&g_result, "{\"ok\":0,\"error_code\":");
+  sb_put_json_string(&g_result, code != NULL ? code : "err_unknown");
   if (raw != NULL && *raw) {
-    sb_puts(&g_result, "\",\"error\":\"");
-    for (const char* p = raw; *p; ++p) {
-      if (*p == '"' || *p == '\\') {
-        sb_putc(&g_result, '\\');
-      }
-      sb_putc(&g_result, *p);
-    }
-    sb_puts(&g_result, "\"");
+    sb_puts(&g_result, ",\"error\":");
+    sb_put_json_string(&g_result, raw);
   }
-  sb_puts(&g_result, "\"}");
+  sb_putc(&g_result, '}');
   return sb_finish(&g_result);
 }
 
@@ -287,14 +323,15 @@ const char* gpuxtb_web_compute(const char* xyz, double charge, int unpaired,
   int32_t* unpaired_electrons = (int32_t*)malloc(1 * sizeof(int32_t));
   double* energies = (double*)malloc(1 * sizeof(double));
   double* atomic_charges = (double*)malloc((size_t)n_atoms * sizeof(double));
-  double* forces = (double*)malloc((size_t)n_atoms * 3 * sizeof(double));
+  double* forces =
+      compute_forces != 0 ? (double*)malloc((size_t)n_atoms * 3 * sizeof(double)) : NULL;
   int32_t* scc_iterations = (int32_t*)malloc(sizeof(int32_t));
   uint8_t* scc_converged = (uint8_t*)malloc(sizeof(uint8_t));
   int32_t* per_system_status = (int32_t*)malloc(sizeof(int32_t));
   if (atom_offsets == NULL || atomic_numbers == NULL || positions == NULL ||
       molecular_charges == NULL || unpaired_electrons == NULL || energies == NULL ||
-      atomic_charges == NULL || forces == NULL || scc_iterations == NULL || scc_converged == NULL ||
-      per_system_status == NULL) {
+      atomic_charges == NULL || (compute_forces != 0 && forces == NULL) || scc_iterations == NULL ||
+      scc_converged == NULL || per_system_status == NULL) {
     free(atom_offsets);
     free(atomic_numbers);
     free(positions);
@@ -366,13 +403,17 @@ const char* gpuxtb_web_compute(const char* xyz, double charge, int unpaired,
   }
   memset(energies, 0, sizeof(double));
   memset(atomic_charges, 0, (size_t)n_atoms * sizeof(double));
-  memset(forces, 0, (size_t)n_atoms * 3 * sizeof(double));
+  if (compute_forces != 0) {
+    memset(forces, 0, (size_t)n_atoms * 3 * sizeof(double));
+  }
   result.energies.data = energies;
   result.energies.size_bytes = sizeof(double);
   result.atomic_charges.data = atomic_charges;
   result.atomic_charges.size_bytes = (size_t)n_atoms * sizeof(double);
-  result.forces.data = forces;
-  result.forces.size_bytes = (size_t)n_atoms * 3 * sizeof(double);
+  if (compute_forces != 0) {
+    result.forces.data = forces;
+    result.forces.size_bytes = (size_t)n_atoms * 3 * sizeof(double);
+  }
   result.scc_iterations.data = scc_iterations;
   result.scc_iterations.size_bytes = sizeof(int32_t);
   result.scc_converged.data = scc_converged;
@@ -384,20 +425,10 @@ const char* gpuxtb_web_compute(const char* xyz, double charge, int unpaired,
 
   /* --- serialize --- */
   g_result.len = 0;
-  if (status != GPUXTB_STATUS_SUCCESS) {
-    const char* e = gpuxtb_get_last_error();
-    sb_puts(&g_result, "{\"ok\":0,\"error_code\":\"err_compute\"");
-    if (e != NULL && *e) {
-      sb_puts(&g_result, ",\"error\":\"");
-      for (const char* p = e; *p; ++p) {
-        if (*p == '"' || *p == '\\') {
-          sb_putc(&g_result, '\\');
-        }
-        sb_putc(&g_result, *p);
-      }
-      sb_puts(&g_result, "\"");
-    }
-    sb_puts(&g_result, "}");
+  if (status != GPUXTB_STATUS_SUCCESS || per_system_status[0] != GPUXTB_STATUS_SUCCESS) {
+    const char* e = status != GPUXTB_STATUS_SUCCESS ? gpuxtb_get_last_error()
+                                                    : gpuxtb_status_string(per_system_status[0]);
+    error_json("err_compute", e != NULL && *e ? e : NULL);
     free(atom_offsets);
     free(atomic_numbers);
     free(positions);
@@ -431,22 +462,26 @@ const char* gpuxtb_web_compute(const char* xyz, double charge, int unpaired,
     sb_putd(&g_result, atomic_charges[i]);
     sb_putc(&g_result, '}');
   }
-  sb_puts(&g_result, "],\"forces\":[");
-  for (int i = 0; i < n_atoms; ++i) {
-    if (i) {
-      sb_putc(&g_result, ',');
+  sb_putc(&g_result, ']');
+  if (compute_forces != 0) {
+    sb_puts(&g_result, ",\"forces\":[");
+    for (int i = 0; i < n_atoms; ++i) {
+      if (i) {
+        sb_putc(&g_result, ',');
+      }
+      sb_puts(&g_result, "{\"element\":");
+      sb_puti(&g_result, atoms[i].z);
+      sb_puts(&g_result, ",\"fx_eh_bohr\":");
+      sb_putd(&g_result, forces[i * 3 + 0]);
+      sb_puts(&g_result, ",\"fy_eh_bohr\":");
+      sb_putd(&g_result, forces[i * 3 + 1]);
+      sb_puts(&g_result, ",\"fz_eh_bohr\":");
+      sb_putd(&g_result, forces[i * 3 + 2]);
+      sb_putc(&g_result, '}');
     }
-    sb_puts(&g_result, "{\"element\":");
-    sb_puti(&g_result, atoms[i].z);
-    sb_puts(&g_result, ",\"fx_eh_bohr\":");
-    sb_putd(&g_result, forces[i * 3 + 0]);
-    sb_puts(&g_result, ",\"fy_eh_bohr\":");
-    sb_putd(&g_result, forces[i * 3 + 1]);
-    sb_puts(&g_result, ",\"fz_eh_bohr\":");
-    sb_putd(&g_result, forces[i * 3 + 2]);
-    sb_putc(&g_result, '}');
+    sb_putc(&g_result, ']');
   }
-  sb_puts(&g_result, "]}");
+  sb_putc(&g_result, '}');
 
   free(atom_offsets);
   free(atomic_numbers);
@@ -503,6 +538,23 @@ static void w_axpy(double* y, double a, const double* x, int n) {
   for (int i = 0; i < n; ++i) {
     y[i] += a * x[i];
   }
+}
+
+/* Restore the mathematical invariant required by Armijo: p must be a
+ * downhill direction. A rejected quasi-Newton direction falls back to -g. */
+static void w_ensure_descent(const double* g, double* p, int n) {
+  if (w_dot(g, p, n) >= 0.0) {
+    for (int i = 0; i < n; ++i) {
+      p[i] = -g[i];
+    }
+  }
+}
+
+/* L-BFGS two-loop coefficients use reciprocal curvature. A non-positive
+ * curvature pair is ignored instead of fabricating a positive coefficient. */
+static double w_reciprocal_curvature(const double* s, const double* y, int n) {
+  const double sy = w_dot(s, y, n);
+  return sy > 0.0 ? 1.0 / sy : 0.0;
 }
 
 /* Optional per-iteration callback that lets the front end animate the
@@ -672,27 +724,31 @@ const char* gpuxtb_web_optimize(const char* xyz, double charge, int unpaired,
   result.per_system_status.data = per_system_status;
   result.per_system_status.size_bytes = sizeof(int32_t);
 
+  double f = NAN;
+  int converged = 0;
+  int steps = 0;
+  const char* fail_code = NULL;
+  const char* fail_reason = NULL;
+
   /* initial point: compute energy + gradient */
   w_copy(positions, x, dim);
-  if (gpuxtb_compute(g_context, &batch, &options, &result) != GPUXTB_STATUS_SUCCESS ||
-      *per_system_status != 0) {
-    const char* e = gpuxtb_get_last_error();
-    error_json("err_initial_calc", e != NULL && *e ? e : NULL);
+  const gpuxtb_status_t initial_status = gpuxtb_compute(g_context, &batch, &options, &result);
+  if (initial_status != GPUXTB_STATUS_SUCCESS || *per_system_status != GPUXTB_STATUS_SUCCESS) {
+    fail_code = "err_initial_calc";
+    fail_reason = initial_status != GPUXTB_STATUS_SUCCESS
+                      ? gpuxtb_get_last_error()
+                      : gpuxtb_status_string(*per_system_status);
     goto done;
   }
-  double f = energy[0];
+  f = energy[0];
   for (int i = 0; i < dim; ++i) {
     g[i] = -forces[i]; /* gradient = -force, Eh/bohr */
   }
   if (!isfinite(f)) {
-    error_json("err_nan_initial", NULL);
+    fail_code = "err_nan_initial";
     goto done;
   }
   trajectory[0] = f;
-
-  int converged = 0;
-  int steps = 0;
-  const char* fail_reason = NULL;
 
   for (steps = 0; steps < opt_max_iterations; ++steps) {
     if (w_maxabs(g, dim) < grad_tol) {
@@ -734,9 +790,7 @@ const char* gpuxtb_web_optimize(const char* xyz, double charge, int unpaired,
     }
 
     /* safety: must descend; clamp per-step displacement */
-    if (w_dot(g, p, dim) >= 0.0) {
-      w_copy(p, g, dim); /* steepest descent fallback */
-    }
+    w_ensure_descent(g, p, dim);
     const double pmax = w_maxabs(p, dim);
     if (pmax > max_move) {
       const double scl = max_move / pmax;
@@ -755,9 +809,12 @@ const char* gpuxtb_web_optimize(const char* xyz, double charge, int unpaired,
         x2[j] = x[j] + step * p[j];
         positions[j] = x2[j];
       }
-      if (gpuxtb_compute(g_context, &batch, &options, &result) != GPUXTB_STATUS_SUCCESS ||
-          *per_system_status != 0) {
-        fail_reason = gpuxtb_get_last_error();
+      const gpuxtb_status_t step_status = gpuxtb_compute(g_context, &batch, &options, &result);
+      if (step_status != GPUXTB_STATUS_SUCCESS || *per_system_status != GPUXTB_STATUS_SUCCESS) {
+        fail_code = "err_step_sp";
+        fail_reason = step_status != GPUXTB_STATUS_SUCCESS
+                          ? gpuxtb_get_last_error()
+                          : gpuxtb_status_string(*per_system_status);
         if (fail_reason == NULL || *fail_reason == '\0') {
           fail_reason = "err_step_sp";
         }
@@ -774,7 +831,7 @@ const char* gpuxtb_web_optimize(const char* xyz, double charge, int unpaired,
       step *= 0.5;
     }
     if (!accepted) {
-      fail_reason = "err_linesearch";
+      fail_code = "err_linesearch";
       goto done;
     }
 
@@ -785,15 +842,13 @@ const char* gpuxtb_web_optimize(const char* xyz, double charge, int unpaired,
         s_hist[(size_t)k * dim + j] = x2[j] - x[j];
         y_hist[(size_t)k * dim + j] = g2[j] - g[j];
       }
-      const double sy = w_dot(s_hist + (size_t)k * dim, y_hist + (size_t)k * dim, dim);
-      const double yy = w_dot(y_hist + (size_t)k * dim, y_hist + (size_t)k * dim, dim);
-      rho[k] = yy > 0.0 ? sy / yy : 1.0;
+      rho[k] = w_reciprocal_curvature(s_hist + (size_t)k * dim, y_hist + (size_t)k * dim, dim);
     }
     w_copy(x, x2, dim);
     w_copy(g, g2, dim);
     f = energy[0];
     if (!isfinite(f)) {
-      fail_reason = "err_nan_step";
+      fail_code = "err_nan_step";
       goto done;
     }
     trajectory[steps + 1] = f;
@@ -810,17 +865,10 @@ const char* gpuxtb_web_optimize(const char* xyz, double charge, int unpaired,
 
 done:
   /* --- serialize --- */
-  g_result.len = 0;
-  if (fail_reason != NULL) {
-    sb_puts(&g_result, "{\"ok\":0,\"error_code\":\"err_opt\",\"error\":\"");
-    for (const char* qq = fail_reason; *qq; ++qq) {
-      if (*qq == '"' || *qq == '\\') {
-        sb_putc(&g_result, '\\');
-      }
-      sb_putc(&g_result, *qq);
-    }
-    sb_puts(&g_result, "\"}");
+  if (fail_code != NULL) {
+    error_json(fail_code, fail_reason != NULL && *fail_reason ? fail_reason : NULL);
   } else {
+    g_result.len = 0;
     sb_puts(&g_result, "{\"ok\":1,\"converged\":");
     sb_puti(&g_result, converged);
     sb_puts(&g_result, ",\"iterations\":");
