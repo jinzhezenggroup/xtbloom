@@ -180,6 +180,12 @@ def set_measured_observables(
 class NatomsScalingTest(unittest.TestCase):
     """Exercise parser, protocol ordering, provenance, and serialization."""
 
+    def test_storage_records_absent_uniform_electric_fields(self) -> None:
+        """Keep benchmark storage compatible with the public batch builder."""
+        molecule = natoms_scaling.make_alkane(14)
+        storage = natoms_scaling.make_storage(molecule, 3)
+        self.assertEqual(storage.efields, [None, None, None])
+
     def test_parser_requires_explicit_mode_and_output_paths(self) -> None:
         """Require explicit mode and artifact paths for reproducible runs."""
         parser = natoms_scaling.build_parser()

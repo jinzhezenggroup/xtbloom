@@ -31,6 +31,10 @@ once per molecule.
 
 - **Native ragged batches.** Molecules share one call without padding every
   system to the largest atom or orbital count.
+- **Measured high-throughput advantage.** In the public energy-plus-force
+  benchmark at 62 atoms, gpuxtb CPU is 7.6x-8.6x faster than xTB/tblite for
+  128 systems and 8.9x-10.7x faster for 512 systems, with every dependent
+  timed sample checked against the same output gate.
 - **CPU and CUDA parity.** Both backends implement restricted and unrestricted
   GFN2-xTB. The CUDA ABI accepts caller-owned host, device, or mixed buffers.
 - **Failure isolation.** SCC or eigensolver failure in one molecule publishes
@@ -91,6 +95,48 @@ leaving them to each calling application:
 The [user-guide comparison](docs/user-guide/index.md#where-gpuxtb-is-stronger)
 links each claim to its upstream issue, local regression test, or archived raw
 benchmark evidence.
+
+### Cross-engine scaling benchmark
+
+gpuxtb's target workload is many distinct systems in one ragged public-API
+call. The figure measures GFN2-xTB energy plus analytic-force latency for
+distinct conformers of one alkane family; batch 1 provides latency context,
+while batches 128 and 512 expose multi-system throughput.
+
+![Cross-engine GFN2-xTB scaling benchmark](docs/assets/natoms_cross_engine.svg)
+
+On an AMD EPYC 7K62 with the same 16-thread budget for every CPU engine:
+
+- **128 systems at 62 atoms:** gpuxtb CPU completes the call in 182 ms,
+  versus 1555 ms for xTB and 1384 ms for tblite: 8.6x and 7.6x faster.
+- **512 systems at 62 atoms:** gpuxtb CPU takes 1.28 s, versus 11.47 s for
+  xTB and 13.70 s for tblite: 8.9x and 10.7x faster.
+- **gpuxtb CUDA at batch 512:** 1.15 s at 62 atoms and 4.04 s at 122 atoms,
+  1.11x and 1.37x faster than gpuxtb CPU on the measured RTX 5090.
+
+The CPU speedup is the public ragged-batch design in action: gpuxtb solves the
+whole batch across its worker pool, while the xTB/tblite adapters must loop
+over per-structure public calls. Batch-1 results are retained in the figure as
+latency context and are not used to claim a universal single-system win.
+
+Each library retains its native public convergence controls: gpuxtb uses
+charge `1e-4` and energy `1e-6`; xTB and tblite use accuracy factor `1.0`;
+dxtb uses `x_atol=1e-4`, `x_atol_max=1e-5`, `f_atol=1e-4`, and
+`force_convergence=true`. The meanings are library-specific. `2e-3` is the
+uniform energy/force output gate applied to every timed dependent sample, not
+a tblite convergence default and not a replacement for gpuxtb's stricter
+scientific conformance.
+
+Batch 1 and 512 use cold electronic state. Batch 128 performs one untimed cold
+seed and times persistent continuation for gpuxtb, xTB, and tblite; dxtb
+resets every timed call. gpuxtb CUDA uses host descriptors, whereas dxtb CUDA
+retains device tensors, so no direct cross-library CUDA speedup is claimed.
+
+The evidence is limited to this alkane-conformer corpus, energy plus forces,
+three samples per coordinate, and the stated hardware. Raw samples, exact
+commands, binary hashes, failures, and limitations are archived in the
+[`issue-13 evidence bundle`](benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md).
+See the [benchmark harness](benchmarks/README.md) for the protocol.
 
 Choose xTB for its broad CLI workflows, optimizers, dynamics, solvation, and
 method coverage. Choose tblite for a mature reusable single-point library with

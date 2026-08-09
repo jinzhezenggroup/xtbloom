@@ -1,0 +1,1529 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "schema_version": 2,
+    "generated_at_utc": "2026-08-09T15:16:26.984218+00:00",
+    "command": [
+      "benchmarks/natoms_cross_engine.py",
+      "--library",
+      "/home/jzzeng/codes/gpuxtb4-pr231/build/pr231-evidence-c9c0a43-cpu/libgpuxtb.so.0.1.0",
+      "--engines",
+      "xtb",
+      "--natoms",
+      "14,32,62,122,242,362",
+      "--batch-sizes",
+      "1",
+      "--start-policy",
+      "cold",
+      "--warmups",
+      "1",
+      "--repetitions",
+      "3",
+      "--cpu-threads",
+      "16",
+      "--energy-atol",
+      "2e-3",
+      "--force-atol",
+      "2e-3",
+      "--repeatability-energy-atol",
+      "1e-10",
+      "--repeatability-force-atol",
+      "1e-8",
+      "--scc-charge-tolerance",
+      "1e-4",
+      "--scc-energy-tolerance",
+      "1e-6",
+      "--scc-max-iterations",
+      "500",
+      "--xtb-library",
+      "/tmp/pr231-1fc8698-xtb-final/libxtb.so.6.7.1",
+      "--xtb-source",
+      "/home/jzzeng/codes/xtb",
+      "--reference-json",
+      "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+      "--output-json",
+      "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/xtb-cold.json",
+      "--output-csv",
+      "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/xtb-cold.csv"
+    ],
+    "commit": {
+      "head": "c9c0a432947f122d25cb91d0a4624af0a3e761ad",
+      "dirty": false
+    },
+    "evidence_eligibility": {
+      "status": "eligible_clean_head",
+      "allow_dirty_evidence": false
+    },
+    "comparison_reference": {
+      "designation": "dependent_run",
+      "engine": "tblite",
+      "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+      "artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e"
+    },
+    "runner": {
+      "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0]",
+      "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.35",
+      "gpuxtb_library": "/home/jzzeng/codes/gpuxtb4-pr231/build/pr231-evidence-c9c0a43-cpu/libgpuxtb.so.0.1.0",
+      "gpuxtb_library_sha256": "eba5b40dd5cd9c156a3d4eb9a1fdb0da96e0d5beaa668bdeb51694ce67364ad2",
+      "gpuxtb_native_identity": {
+        "path": "/home/jzzeng/codes/gpuxtb4-pr231/build/pr231-evidence-c9c0a43-cpu/libgpuxtb.so.0.1.0",
+        "sha256": "eba5b40dd5cd9c156a3d4eb9a1fdb0da96e0d5beaa668bdeb51694ce67364ad2",
+        "readelf_dynamic": "Dynamic section at offset 0x12ed70 contains 31 entries:\n  Tag        Type                         Name/Value\n 0x0000000000000001 (NEEDED)             Shared library: [libstdc++.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]\n 0x000000000000000e (SONAME)             Library soname: [libgpuxtb.so.0]\n 0x000000000000000c (INIT)               0x3000\n 0x000000000000000d (FINI)               0x851dc\n 0x0000000000000019 (INIT_ARRAY)         0x12fa00\n 0x000000000000001b (INIT_ARRAYSZ)       48 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0x12fa30\n 0x000000000000001c (FINI_ARRAYSZ)       8 (bytes)\n 0x000000006ffffef5 (GNU_HASH)           0x328\n 0x0000000000000005 (STRTAB)             0xe38\n 0x0000000000000006 (SYMTAB)             0x400\n 0x000000000000000a (STRSZ)              2858 (bytes)\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000003 (PLTGOT)             0x130000\n 0x0000000000000002 (PLTRELSZ)           1656 (bytes)\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000017 (JMPREL)             0x2718\n 0x0000000000000007 (RELA)               0x1c38\n 0x0000000000000008 (RELASZ)             2784 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffffc (VERDEF)             0x1a40\n 0x000000006ffffffd (VERDEFNUM)          2\n 0x000000006ffffffe (VERNEED)            0x1a78\n 0x000000006fffffff (VERNEEDNUM)         5\n 0x000000006ffffff0 (VERSYM)             0x1962\n 0x000000006ffffff9 (RELACOUNT)          89\n 0x0000000000000000 (NULL)               0x0",
+        "ldd": "linux-vdso.so.1 (0x00007ffc80769000)\n\tlibstdc++.so.6 => /tmp/lammps-qmmm-xtb-env/lib/libstdc++.so.6 (0x00007df32ce00000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007df32cd19000)\n\tlibgcc_s.so.1 => /tmp/lammps-qmmm-xtb-env/lib/libgcc_s.so.1 (0x00007df32d156000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007df32ca00000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007df32d2c7000)\n\tlibdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x00007df32d151000)",
+        "unresolved_dependencies": [],
+        "resolved_dependencies": [
+          {
+            "soname": "/lib64/ld-linux-x86-64.so.2",
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "8d06f393f4a93bcf9b81145a259524d66a95522a646bf8d7e05b6ffdf2e63dcc"
+          },
+          {
+            "soname": "libc.so.6",
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "e01b1ce7be2987f3b8560e26d0df2623f9dd5cec17be923ae28a785bc0d32d50"
+          },
+          {
+            "soname": "libdl.so.2",
+            "path": "/usr/lib/x86_64-linux-gnu/libdl.so.2",
+            "sha256": "d255ba9c9e3a7c35115e578c898147edaba1a2bcf742cc3a76995ceed9d5ac4f"
+          },
+          {
+            "soname": "libgcc_s.so.1",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libgcc_s.so.1",
+            "sha256": "518553cb760166496a9844a8fdd8acaffed9229a581992a424e0ffd36098df52"
+          },
+          {
+            "soname": "libm.so.6",
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "df621c68dbfed7e843434ef2faedb9f4d4b0543ad161e9a55eaf4d4ce2443176"
+          },
+          {
+            "soname": "libstdc++.so.6",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libstdc++.so.6.0.35",
+            "sha256": "4db7db432420e28a0c42bed38f7b33cfe1a97aa3a5ce7c92ddd2f4e5afe16ceb"
+          }
+        ]
+      },
+      "gpuxtb_build": {
+        "cache_path": "/home/jzzeng/codes/gpuxtb4-pr231/build/pr231-evidence-c9c0a43-cpu/CMakeCache.txt",
+        "cache_sha256": "ca67d1c145dadd9f8c852b2abeb03691ae0a009dc9f42f1c393221ecd54e1ebb",
+        "library_size": 1342776,
+        "library_mtime_ns": 1786287966204590190,
+        "selected": {
+          "CMAKE_BUILD_TYPE": "Release",
+          "CMAKE_CXX_COMPILER": "/usr/bin/c++",
+          "CMAKE_CXX_FLAGS": "",
+          "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+          "CMAKE_SHARED_LINKER_FLAGS": "",
+          "GPUXTB_CPU_LINALG_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so",
+          "GPUXTB_ENABLE_CUDA": "OFF",
+          "GPUXTB_MKL_RT_LIBRARY": "",
+          "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/gpuxtb4-pr231"
+        },
+        "source_state": {
+          "head": "c9c0a432947f122d25cb91d0a4624af0a3e761ad",
+          "dirty": false
+        },
+        "cxx_compiler": "/usr/bin/x86_64-linux-gnu-g++-11",
+        "cxx_compiler_sha256": "2360901d864cf10bfd6296e261cb2c14053552a80377761ab07146ec9ec9a2c0",
+        "cxx_version": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0\nCopyright (C) 2021 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+        "cuda_compiler": null,
+        "cuda_compiler_sha256": null,
+        "cuda_compiler_version": null,
+        "cpu_linalg_provider": {
+          "path": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so.2",
+          "sha256": "221e89c09644d546cdc6505fc1fdecdf6490a4c57f7da6ca3b48a1c96c4860bd",
+          "readelf_dynamic": "Dynamic section at offset 0xfd6000 contains 26 entries:\n  Tag        Type                         Name/Value\n 0x000000000000000f (RPATH)              Library rpath: [$ORIGIN/.]\n 0x0000000000000001 (NEEDED)             Shared library: [libdl.so.2]\n 0x000000000000000e (SONAME)             Library soname: [libmkl_rt.so.2]\n 0x000000000000000c (INIT)               0x34d000\n 0x000000000000000d (FINI)               0x822718\n 0x0000000000000019 (INIT_ARRAY)         0xb16238\n 0x000000000000001b (INIT_ARRAYSZ)       16 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0xb16248\n 0x000000000000001c (FINI_ARRAYSZ)       8 (bytes)\n 0x000000006ffffef5 (GNU_HASH)           0xc7e918\n 0x0000000000000005 (STRTAB)             0xb541e0\n 0x0000000000000006 (SYMTAB)             0x71550\n 0x000000000000000a (STRSZ)              1222449 (bytes)\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000003 (PLTGOT)             0xb1c000\n 0x0000000000000002 (PLTRELSZ)           1224 (bytes)\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000017 (JMPREL)             0x34c5b8\n 0x0000000000000007 (RELA)               0x343a08\n 0x0000000000000008 (RELASZ)             35760 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffffe (VERNEED)            0x3439e8\n 0x000000006fffffff (VERNEEDNUM)         1\n 0x000000006ffffff0 (VERSYM)             0x323040\n 0x000000006ffffff9 (RELACOUNT)          1477\n 0x0000000000000000 (NULL)               0x0",
+          "ldd": "linux-vdso.so.1 (0x00007fff6d4dd000)\n\tlibdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x0000723dfcfe6000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x0000723dfbe00000)\n\t/lib64/ld-linux-x86-64.so.2 (0x0000723dfcffd000)",
+          "unresolved_dependencies": [],
+          "resolved_dependencies": [
+            {
+              "soname": "/lib64/ld-linux-x86-64.so.2",
+              "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+              "sha256": "8d06f393f4a93bcf9b81145a259524d66a95522a646bf8d7e05b6ffdf2e63dcc"
+            },
+            {
+              "soname": "libc.so.6",
+              "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+              "sha256": "e01b1ce7be2987f3b8560e26d0df2623f9dd5cec17be923ae28a785bc0d32d50"
+            },
+            {
+              "soname": "libdl.so.2",
+              "path": "/usr/lib/x86_64-linux-gnu/libdl.so.2",
+              "sha256": "d255ba9c9e3a7c35115e578c898147edaba1a2bcf742cc3a76995ceed9d5ac4f"
+            }
+          ]
+        }
+      },
+      "xtb_library": "/tmp/pr231-1fc8698-xtb-final/libxtb.so.6.7.1",
+      "xtb_library_sha256": "959ed711f85f3c84e5e9dffd15e1b49dfae1bd46783f544ce8756b5e148094dd",
+      "xtb_source": {
+        "head": "b31754bf3c7cccf8c242c469b03ae675e04bd608",
+        "dirty": false
+      },
+      "xtb_build": {
+        "build_system": "meson",
+        "build_root": "/tmp/pr231-1fc8698-xtb-final",
+        "meson_version": "1.11.2",
+        "project": {
+          "version": "6.7.1",
+          "descriptive_name": "xtb",
+          "license": [
+            "LGPL3-3.0-or-later"
+          ],
+          "license_files": [],
+          "subproject_dir": "subprojects",
+          "subprojects": [
+            {
+              "name": "test-drive",
+              "version": "0.5.0",
+              "descriptive_name": "test-drive"
+            }
+          ]
+        },
+        "source_state": {
+          "head": "b31754bf3c7cccf8c242c469b03ae675e04bd608",
+          "dirty": false
+        },
+        "target": {
+          "name": "xtb",
+          "id": "xtb@sha",
+          "type": "shared library",
+          "filename": [
+            "/tmp/pr231-1fc8698-xtb-final/libxtb.so.6.7.1"
+          ]
+        },
+        "source_target_sync": {
+          "command": [
+            "meson",
+            "compile",
+            "-C",
+            "/tmp/pr231-1fc8698-xtb-final",
+            "xtb:shared_library"
+          ],
+          "target_id": "xtb@sha",
+          "target_selector": "xtb:shared_library",
+          "status": "up_to_date_or_rebuilt",
+          "output": "ninja: Entering directory `/tmp/pr231-1fc8698-xtb-final'\nninja: no work to do.\nINFO: autodetecting backend as ninja\nINFO: calculating backend command to run: /tmp/lammps-qmmm-xtb-env/bin/ninja -C /tmp/pr231-1fc8698-xtb-final libxtb.so.6.7.1",
+          "library_path": "/tmp/pr231-1fc8698-xtb-final/libxtb.so.6.7.1",
+          "library_sha256": "959ed711f85f3c84e5e9dffd15e1b49dfae1bd46783f544ce8756b5e148094dd",
+          "library_mtime_ns": 1786281486916573165
+        },
+        "build_options": {
+          "auto_features": "auto",
+          "backend": "ninja",
+          "genvslite": "vs2022",
+          "buildtype": "release",
+          "debug": false,
+          "default_library": "shared",
+          "default_both_libraries": "shared",
+          "install_umask": 18,
+          "layout": "mirror",
+          "optimization": "3",
+          "prefer_static": false,
+          "strip": false,
+          "unity": "off",
+          "unity_size": 4,
+          "warning_level": "1",
+          "werror": false,
+          "wrap_mode": "default",
+          "force_fallback_for": [],
+          "vsenv": false,
+          "os2_emxomf": false,
+          "pkgconfig.relocatable": false,
+          "python.bytecompile": 0,
+          "python.install_env": "prefix",
+          "python.platlibdir": "",
+          "python.purelibdir": "",
+          "python.allow_limited_api": true,
+          "python.build_config": "",
+          "pkg_config_path": [],
+          "cmake_prefix_path": [],
+          "backend_max_links": 0,
+          "b_coverage": false,
+          "b_asneeded": true,
+          "b_lundef": true,
+          "b_thinlto_cache": false,
+          "b_pie": false,
+          "b_staticpic": true,
+          "b_sanitize": [],
+          "b_ndebug": "false",
+          "b_lto": false,
+          "b_lto_threads": 0,
+          "b_thinlto_cache_dir": "",
+          "b_pch": true,
+          "b_colorout": "always",
+          "b_pgo": "off",
+          "fortran_args": [],
+          "fortran_link_args": [],
+          "fortran_std": "none",
+          "c_args": [],
+          "c_link_args": [],
+          "c_std": "c11",
+          "prefix": "/usr/local",
+          "bindir": "bin",
+          "datadir": "share",
+          "includedir": "include",
+          "infodir": "share/info",
+          "libdir": "lib/x86_64-linux-gnu",
+          "licensedir": "",
+          "libexecdir": "libexec",
+          "localedir": "share/locale",
+          "localstatedir": "/var/local",
+          "mandir": "share/man",
+          "sbindir": "sbin",
+          "sharedstatedir": "/var/local/lib",
+          "sysconfdir": "etc",
+          "lapack": "openblas",
+          "custom_libraries": [],
+          "tblite": "disabled",
+          "cpcmx": "disabled",
+          "openmp": true,
+          "install_modules": false,
+          "build_name": "unknown",
+          "gpu": false,
+          "gpu_arch": "70",
+          "cusolver": false,
+          "nvtx": false,
+          "test-drive:openmp": false,
+          "test-drive:qp": "auto",
+          "test-drive:xdp": "auto",
+          "errorlogs": true,
+          "stdsplit": true
+        },
+        "compilers": [
+          {
+            "machine": "build",
+            "language": "c",
+            "id": "gcc",
+            "version": "13.4.0",
+            "full_version": "x86_64-conda-linux-gnu-gcc (conda-forge gcc 13.4.0-20) 13.4.0",
+            "exelist": [
+              "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gcc"
+            ],
+            "executable": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gcc",
+            "executable_sha256": "6420cb0972435d925a3248db3ccb0c1c4ff7f1a81e6aa8f37e1ae54da1538d98",
+            "executable_files": [
+              {
+                "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gcc",
+                "sha256": "6420cb0972435d925a3248db3ccb0c1c4ff7f1a81e6aa8f37e1ae54da1538d98",
+                "is_file": true
+              }
+            ],
+            "unresolved_configure_time_entries": []
+          },
+          {
+            "machine": "build",
+            "language": "fortran",
+            "id": "gcc",
+            "version": "13.4.0",
+            "full_version": "GNU Fortran (conda-forge gcc 13.4.0-20) 13.4.0",
+            "exelist": [
+              "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
+            ],
+            "executable": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran",
+            "executable_sha256": "de744570ad7763b884735bc75503fc79520f01eb8859d5b010ec377a2d4d8174",
+            "executable_files": [
+              {
+                "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran",
+                "sha256": "de744570ad7763b884735bc75503fc79520f01eb8859d5b010ec377a2d4d8174",
+                "is_file": true
+              }
+            ],
+            "unresolved_configure_time_entries": []
+          },
+          {
+            "machine": "host",
+            "language": "c",
+            "id": "gcc",
+            "version": "13.4.0",
+            "full_version": "x86_64-conda-linux-gnu-gcc (conda-forge gcc 13.4.0-20) 13.4.0",
+            "exelist": [
+              "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gcc"
+            ],
+            "executable": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gcc",
+            "executable_sha256": "6420cb0972435d925a3248db3ccb0c1c4ff7f1a81e6aa8f37e1ae54da1538d98",
+            "executable_files": [
+              {
+                "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gcc",
+                "sha256": "6420cb0972435d925a3248db3ccb0c1c4ff7f1a81e6aa8f37e1ae54da1538d98",
+                "is_file": true
+              }
+            ],
+            "unresolved_configure_time_entries": []
+          },
+          {
+            "machine": "host",
+            "language": "fortran",
+            "id": "gcc",
+            "version": "13.4.0",
+            "full_version": "GNU Fortran (conda-forge gcc 13.4.0-20) 13.4.0",
+            "exelist": [
+              "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran"
+            ],
+            "executable": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran",
+            "executable_sha256": "de744570ad7763b884735bc75503fc79520f01eb8859d5b010ec377a2d4d8174",
+            "executable_files": [
+              {
+                "path": "/tmp/lammps-qmmm-xtb-env/bin/x86_64-conda-linux-gnu-gfortran",
+                "sha256": "de744570ad7763b884735bc75503fc79520f01eb8859d5b010ec377a2d4d8174",
+                "is_file": true
+              }
+            ],
+            "unresolved_configure_time_entries": []
+          }
+        ],
+        "introspection_sha256": {
+          "intro-benchmarks.json": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "intro-buildoptions.json": "9a5090ac5cf0f3da215043ac277615fe79c5ed49681480723ae309abc7f631de",
+          "intro-buildsystem_files.json": "5b2a590be5212b9cc9fd3137da6af85a6f8f67ccdde9ab3d03150ce5eeef6140",
+          "intro-compilers.json": "5f8b4563adbef88ad491773cabe0b5abbb778e7ad71a90b72242667fe198ec95",
+          "intro-dependencies.json": "62c83b881c0852242136b0fb6b55e3912bc12bccdbd2406465e1057eb61b0ceb",
+          "intro-install_plan.json": "94905345dca3270a7b1de5f6b3092fe173008b99dac66f9a662a8f20b24249a2",
+          "intro-installed.json": "42d096abd2fbf56f0a534ee2fe7629d7412555a760b4db262275412705adc692",
+          "intro-machines.json": "8cd6f4e915de02683cbedf981d386d68de82ec8752ae75086dcbce0dc3a51685",
+          "intro-projectinfo.json": "e7150b0f48c392d2127942d68fa02c5a93d3f141e27ab4f280e8f8af78e3f3b2",
+          "intro-targets.json": "4e326cf91249c5a61b06df184be9c35c3e3bc11a036d415869720d71c2ff45c8",
+          "intro-tests.json": "a4eedc396b6e18f91047a447a89b3d7daf4873d1f835c5fb21ad9fa137cf7987",
+          "meson-info.json": "bb382328330fee2d17b07e8e8696f971e1a3d40dc396e171594f55b0f7f0b135"
+        }
+      },
+      "xtb_native_identity": {
+        "path": "/tmp/pr231-1fc8698-xtb-final/libxtb.so.6.7.1",
+        "sha256": "959ed711f85f3c84e5e9dffd15e1b49dfae1bd46783f544ce8756b5e148094dd",
+        "readelf_dynamic": "Dynamic section at offset 0x686190 contains 34 entries:\n  Tag        Type                         Name/Value\n 0x0000000000000001 (NEEDED)             Shared library: [libopenblas.so.0]\n 0x0000000000000001 (NEEDED)             Shared library: [libmctc-lib.so.0]\n 0x0000000000000001 (NEEDED)             Shared library: [libgfortran.so.5]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libmvec.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libgomp.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x000000000000000e (SONAME)             Library soname: [libxtb.so.6]\n 0x000000000000000f (RPATH)              Library rpath: [/tmp/lammps-qmmm-xtb-env/lib]\n 0x000000000000000c (INIT)               0x4a000\n 0x000000000000000d (FINI)               0x47809c\n 0x0000000000000019 (INIT_ARRAY)         0x67d030\n 0x000000000000001b (INIT_ARRAYSZ)       8 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0x67d038\n 0x000000000000001c (FINI_ARRAYSZ)       8 (bytes)\n 0x0000000000000004 (HASH)               0x200\n 0x000000006ffffef5 (GNU_HASH)           0x3da0\n 0x0000000000000005 (STRTAB)             0x184d8\n 0x0000000000000006 (SYMTAB)             0x7db0\n 0x000000000000000a (STRSZ)              99157 (bytes)\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000003 (PLTGOT)             0x686fe8\n 0x0000000000000002 (PLTRELSZ)           30264 (bytes)\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000017 (JMPREL)             0x42520\n 0x0000000000000007 (RELA)               0x31f60\n 0x0000000000000008 (RELASZ)             67008 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffffe (VERNEED)            0x31e20\n 0x000000006fffffff (VERNEEDNUM)         6\n 0x000000006ffffff0 (VERSYM)             0x3082e\n 0x000000006ffffff9 (RELACOUNT)          1663\n 0x0000000000000000 (NULL)               0x0",
+        "ldd": "linux-vdso.so.1 (0x00007fff7bded000)\n\tlibopenblas.so.0 => /tmp/lammps-qmmm-xtb-env/lib/libopenblas.so.0 (0x0000704bbcba0000)\n\tlibmctc-lib.so.0 => /tmp/lammps-qmmm-xtb-env/lib/libmctc-lib.so.0 (0x0000704bbcb27000)\n\tlibgfortran.so.5 => /tmp/lammps-qmmm-xtb-env/lib/libgfortran.so.5 (0x0000704bbc600000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x0000704bbca40000)\n\tlibmvec.so.1 => /lib/x86_64-linux-gnu/libmvec.so.1 (0x0000704bbc503000)\n\tlibgomp.so.1 => /tmp/lammps-qmmm-xtb-env/lib/libgomp.so.1 (0x0000704bbc9e5000)\n\tlibgcc_s.so.1 => /tmp/lammps-qmmm-xtb-env/lib/libgcc_s.so.1 (0x0000704bbc9b7000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x0000704bbc200000)\n\tlibpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x0000704bbfdcb000)\n\t/lib64/ld-linux-x86-64.so.2 (0x0000704bbfde4000)\n\tlibjonquil.so.0 => /tmp/lammps-qmmm-xtb-env/lib/./libjonquil.so.0 (0x0000704bbc9a9000)\n\tlibtoml-f.so.0 => /tmp/lammps-qmmm-xtb-env/lib/./libtoml-f.so.0 (0x0000704bbc4bc000)\n\tlibquadmath.so.0 => /tmp/lammps-qmmm-xtb-env/lib/./libquadmath.so.0 (0x0000704bbc473000)\n\tlibdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x0000704bbc9a4000)",
+        "unresolved_dependencies": [],
+        "resolved_dependencies": [
+          {
+            "soname": "/lib64/ld-linux-x86-64.so.2",
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "8d06f393f4a93bcf9b81145a259524d66a95522a646bf8d7e05b6ffdf2e63dcc"
+          },
+          {
+            "soname": "libc.so.6",
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "e01b1ce7be2987f3b8560e26d0df2623f9dd5cec17be923ae28a785bc0d32d50"
+          },
+          {
+            "soname": "libdl.so.2",
+            "path": "/usr/lib/x86_64-linux-gnu/libdl.so.2",
+            "sha256": "d255ba9c9e3a7c35115e578c898147edaba1a2bcf742cc3a76995ceed9d5ac4f"
+          },
+          {
+            "soname": "libgcc_s.so.1",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libgcc_s.so.1",
+            "sha256": "518553cb760166496a9844a8fdd8acaffed9229a581992a424e0ffd36098df52"
+          },
+          {
+            "soname": "libgfortran.so.5",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libgfortran.so.5.0.0",
+            "sha256": "59383967f5892b20ae2831d9dcc1b84ac4e34a14329793005e90e5ef541f68be"
+          },
+          {
+            "soname": "libgomp.so.1",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libgomp.so.1.0.0",
+            "sha256": "f30347f1b859a2992abea295d90dfc7a27e25cc6b99c43b7e93b50e4a1bb552b"
+          },
+          {
+            "soname": "libjonquil.so.0",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libjonquil.so.0.3.2",
+            "sha256": "ce2762627ed5c51ccdcf7c87b7a158a17b644163e78caaeb7cfa2a9fb1dc40a2"
+          },
+          {
+            "soname": "libm.so.6",
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "df621c68dbfed7e843434ef2faedb9f4d4b0543ad161e9a55eaf4d4ce2443176"
+          },
+          {
+            "soname": "libmctc-lib.so.0",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libmctc-lib.so.0.5.2",
+            "sha256": "114eb96417b0ce0409fe03920c19cecd412dbad8c8bf89c3cf3b686bd0052c38"
+          },
+          {
+            "soname": "libmvec.so.1",
+            "path": "/usr/lib/x86_64-linux-gnu/libmvec.so.1",
+            "sha256": "8229cc941666c9f8152440b708cd620e037939a1bd8d22f7fc0543edc956fc9f"
+          },
+          {
+            "soname": "libopenblas.so.0",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libopenblasp-r0.3.33.so",
+            "sha256": "60ddaebfbdae101e9325efa24360c3bd639abb77ef569b35becd6bbcbed6605e"
+          },
+          {
+            "soname": "libpthread.so.0",
+            "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+            "sha256": "fbed9505adacada2abb37c6b43be2df6de81e742712c6025694ba48de62c7e78"
+          },
+          {
+            "soname": "libquadmath.so.0",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libquadmath.so.0.0.0",
+            "sha256": "0fec3a68aff4c1b10c08559d88b830a1fac30abdfb31f390edee7a8a3473ab1a"
+          },
+          {
+            "soname": "libtoml-f.so.0",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libtoml-f.so.0.5.2",
+            "sha256": "00a8ef2feff63d7939d6717a7588a40d219e3c9c14c33105ebdd5bd449a5663b"
+          }
+        ]
+      },
+      "tblite_library": null,
+      "tblite_library_sha256": null,
+      "tblite_source": null,
+      "tblite_build": null,
+      "tblite_native_identity": null,
+      "dxtb_source": null,
+      "python_distributions": {
+        "dxtb": null,
+        "torch": {
+          "name": "torch",
+          "version": "2.12.1+cu129",
+          "record_sha256": "0bbe7c59709c4e528dfe509a42997943ce692938b3a4bd478d136ee818ec14f7",
+          "direct_url_sha256": null,
+          "direct_url_identity": null,
+          "payload_verification": {
+            "status": "verified",
+            "record_entries": 11961,
+            "verified_hashes": 11960,
+            "payload_sha256": "86c4b515b14d6767c46a5deb2c560f2e6c0631e396768438ce2b936339787ec4",
+            "errors": []
+          }
+        },
+        "tad-libcint": null
+      },
+      "reference_json": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+      "reference_json_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e"
+    },
+    "hardware": {
+      "hostname": "node3",
+      "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+      "logical_cpu_count": 48,
+      "process_rss_bytes": 131096576,
+      "peak_process_rss_bytes": 1616293888,
+      "process_cpu_affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "nvidia_smi": "GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8)",
+      "nvidia_smi_runtime": "0, GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8, NVIDIA GeForce RTX 5090, 580.95.05, 32607 MiB, P8, 575.00 W, 180 MHz, 405 MHz",
+      "selected_cuda_device": {
+        "cuda_ordinal": 0,
+        "CUDA_VISIBLE_DEVICES": "0",
+        "CUDA_DEVICE_ORDER": null,
+        "resolved_visibility_token": "0",
+        "runtime_uuid": "GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8",
+        "device": {
+          "physical_index": "0",
+          "uuid": "GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8",
+          "name": "NVIDIA GeForce RTX 5090",
+          "driver": "580.95.05",
+          "memory_mib": "32607"
+        },
+        "inventory": [
+          {
+            "physical_index": "0",
+            "uuid": "GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8",
+            "name": "NVIDIA GeForce RTX 5090",
+            "driver": "580.95.05",
+            "memory_mib": "32607"
+          }
+        ]
+      }
+    },
+    "threads": {
+      "cpu_threads": 16,
+      "dxtb_cpu_threads": 16,
+      "reference_threads": 16,
+      "OMP_NUM_THREADS": "16",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1"
+    },
+    "environment": {
+      "CUDA_VISIBLE_DEVICES": "0",
+      "LD_LIBRARY_PATH": "/tmp/lammps-qmmm-xtb-env/lib:/group/software/deepmd-kit-3.1.1/lib:/group/software/cuda-12.9.1/targets/x86_64-linux/lib:/group/software/cuda-12.9.1/lib64",
+      "MKL_INTERFACE_LAYER": "LP64",
+      "MKL_THREADING_LAYER": "SEQUENTIAL"
+    },
+    "protocol": {
+      "warmups": 1,
+      "repetitions": 3,
+      "start_policy": "cold",
+      "cross_engine_energy_atol_hartree": 0.002,
+      "cross_engine_force_atol_hartree_per_bohr": 0.002,
+      "cross_engine_tolerance_source": {
+        "scope": "owner_authorized_public_benchmark_output_compatibility",
+        "not_primary_conformance": true,
+        "selected_energy_atol_hartree": 0.002,
+        "selected_force_atol_hartree_per_bohr": 0.002,
+        "maximum_authorized_energy_atol_hartree": 0.002,
+        "maximum_authorized_force_atol_hartree_per_bohr": 0.002,
+        "strict_repository_gate_not_replaced": {
+          "path": "/home/jzzeng/codes/gpuxtb4-pr231/data/conformance/manifest.json",
+          "sha256": "b974de841726747eb6d7ff2c31b4ac0f823d4cb64e2e7d3d6269854f5ee98383",
+          "json_field": "cross_engine_tolerances",
+          "energy_atol_hartree": 5e-07,
+          "force_atol_hartree_per_bohr": 5e-06
+        }
+      },
+      "repeatability_energy_atol_hartree": 1e-10,
+      "repeatability_force_atol_hartree_per_bohr": 1e-08,
+      "perturb_sigma_bohr": 0.02,
+      "trajectory_step_sigma_bohr": 0.01,
+      "scc_max_iterations": 500,
+      "scc_charge_tolerance": 0.0001,
+      "scc_energy_tolerance": 1e-06,
+      "convergence_contract": {
+        "gpuxtb": {
+          "charge_tolerance": 0.0001,
+          "energy_tolerance": 1e-06
+        },
+        "xtb": {
+          "public_accuracy_factor": 1.0
+        },
+        "tblite": {
+          "public_accuracy_factor": 1.0
+        },
+        "dxtb": {
+          "x_atol": 0.0001,
+          "x_atol_max": 1e-05,
+          "f_atol": 0.0001,
+          "force_convergence": true
+        }
+      }
+    }
+  },
+  "rows": [
+    {
+      "engine": "xtb",
+      "natoms": 14,
+      "batch_size": 1,
+      "total_atoms_in_batch": 14,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "requested_properties": [
+        "energy",
+        "forces"
+      ],
+      "workload_seed": 14001,
+      "input_residency": "host",
+      "output_residency_at_timing_boundary": "host_visible",
+      "effective_start_policy": "cold",
+      "state_preparation_timing": "untimed_calculator_rebuild_before_each_call",
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 3.400032,
+          "energies_hartree": [
+            -13.6549784669853
+          ],
+          "force_count": 42,
+          "forces_sha256_binary64_le": "7979537dd9583938f5ac70f1db224ff524f573b4b111477ecae08d90d7905b66",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 3.622128,
+          "energies_hartree": [
+            -13.6549784669853
+          ],
+          "force_count": 42,
+          "forces_sha256_binary64_le": "3da50cc5885cf6dff76ca2bd71e5eaf786e5d5b1844b3010ae0c22498067c16c",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 3.0574459999999997,
+          "energies_hartree": [
+            -13.654978466985293
+          ],
+          "force_count": 42,
+          "forces_sha256_binary64_le": "c113e757b2581546e3ec1108a7a6276a781b32f2bac3a0341cecb6e78236e47a",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          3.400032,
+          3.622128,
+          3.0574459999999997
+        ],
+        "count": 3,
+        "min_ms": 3.0574459999999997,
+        "median_ms": 3.400032,
+        "mean_ms": 3.359868666666667,
+        "p95_ms": 3.622128,
+        "systems_per_second_at_median": 294.11487891878664
+      },
+      "energies_hartree": [
+        -13.654978466985293
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "force_value_count": 42,
+        "scc_converged_ok": null,
+        "scc_status_ok": null,
+        "repeatability": {
+          "gate_applied": true,
+          "gate_reason": "independent_cold_or_reset_calls",
+          "energy_atol_hartree": 1e-10,
+          "max_abs_energy_drift_hartree": 7.105427357601002e-15,
+          "force_atol_hartree_per_bohr": 1e-08,
+          "max_abs_force_drift_hartree_per_bohr": 5.887217796596289e-16
+        },
+        "cross_engine": {
+          "status": "pass",
+          "reference_engine": "tblite",
+          "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+          "artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e",
+          "energy_atol_hartree": 0.002,
+          "force_atol_hartree_per_bohr": 0.002,
+          "max_abs_energy_delta_hartree": 7.057808559807199e-09,
+          "max_abs_force_delta_hartree_per_bohr": 1.3270748124797477e-06,
+          "timed_sample_count_checked": 3,
+          "timed_sample_deltas": [
+            {
+              "sample_index": 0,
+              "max_abs_energy_delta_hartree": 7.057801454379842e-09,
+              "max_abs_force_delta_hartree_per_bohr": 1.3270748124797477e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 1,
+              "max_abs_energy_delta_hartree": 7.057801454379842e-09,
+              "max_abs_force_delta_hartree_per_bohr": 1.327074812306709e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 2,
+              "max_abs_energy_delta_hartree": 7.057808559807199e-09,
+              "max_abs_force_delta_hartree_per_bohr": 1.3270748122620399e-06,
+              "status": "pass"
+            }
+          ]
+        }
+      },
+      "runtime_identity": {
+        "api_version": 20000,
+        "version": null,
+        "torch_version": null,
+        "module_path": null,
+        "module_sha256": null,
+        "convergence_settings": {
+          "public_accuracy_or_fixed_point_tolerance": 1.0,
+          "max_norm_tolerance": null,
+          "function_tolerance": null,
+          "force_convergence": null,
+          "max_iterations": 500
+        },
+        "thread_control": {
+          "OMP_NUM_THREADS": "16",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "openmp_threads": 16,
+          "blas_threads": 1,
+          "omp_set_num_threads": false,
+          "openblas_set_num_threads": false
+        }
+      },
+      "availability": "available",
+      "start_policy": "cold",
+      "forces_binary64_le_zlib_base64": {
+        "encoding": "zlib+base64",
+        "count": 42,
+        "sha256_binary64_le": "c113e757b2581546e3ec1108a7a6276a781b32f2bac3a0341cecb6e78236e47a",
+        "data": "eNqT/pdh9K62aP/yC18D1dYn2jMAgcPX+XvCHu73FRWK2n9bQsWoa0Xu/uWp+WXuM3L334SKX4KKZ6eDxe2vBct9EXNIsP/Edvs+64dQ+7SDP7eu5ovZvxwq/gwqfvMQWNzeqmb7Z6D4fgZh2wdA8f0//uwBizdDxetEIeJLfoLF9zOu5TUGutP+gmOVP9Cd+0HuZDjAaFNSGeIDdI991esGQ6B77D+pnCwFuXMGVPwLVLxcFSxu77niwCw390D7Lc8Xfk/SrAT7d4Htwj0mjzS+SSa57ncRZ8+s3dkPNr/BvdzmbgDzb6C4/YeFrCBxSPhIrt3jr9k6D2jO/pMTOH4Azdlfn7jYjVtn9h4AkyaUZw=="
+      }
+    },
+    {
+      "engine": "xtb",
+      "natoms": 32,
+      "batch_size": 1,
+      "total_atoms_in_batch": 32,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "requested_properties": [
+        "energy",
+        "forces"
+      ],
+      "workload_seed": 32001,
+      "input_residency": "host",
+      "output_residency_at_timing_boundary": "host_visible",
+      "effective_start_policy": "cold",
+      "state_preparation_timing": "untimed_calculator_rebuild_before_each_call",
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 7.326613,
+          "energies_hartree": [
+            -32.63910140460036
+          ],
+          "force_count": 96,
+          "forces_sha256_binary64_le": "d3dbf5d4b822c7231dae552f08298a844c7cae74dfb93f92022a8cdbfcd71768",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 7.242261999999999,
+          "energies_hartree": [
+            -32.63910140460036
+          ],
+          "force_count": 96,
+          "forces_sha256_binary64_le": "08e97c68485c39d60f8711f6c3360f6a27372bd8dba1fdd16169cd59d740405b",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 7.230188,
+          "energies_hartree": [
+            -32.63910140460035
+          ],
+          "force_count": 96,
+          "forces_sha256_binary64_le": "265323344e734a43cbca1186ced5d644ea8d23fa84152e2879790b9dbee56a32",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          7.326613,
+          7.242261999999999,
+          7.230188
+        ],
+        "count": 3,
+        "min_ms": 7.230188,
+        "median_ms": 7.242261999999999,
+        "mean_ms": 7.266354333333333,
+        "p95_ms": 7.326613,
+        "systems_per_second_at_median": 138.07840699494164
+      },
+      "energies_hartree": [
+        -32.63910140460035
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "force_value_count": 96,
+        "scc_converged_ok": null,
+        "scc_status_ok": null,
+        "repeatability": {
+          "gate_applied": true,
+          "gate_reason": "independent_cold_or_reset_calls",
+          "energy_atol_hartree": 1e-10,
+          "max_abs_energy_drift_hartree": 7.105427357601002e-15,
+          "force_atol_hartree_per_bohr": 1e-08,
+          "max_abs_force_drift_hartree_per_bohr": 6.956241138666996e-16
+        },
+        "cross_engine": {
+          "status": "pass",
+          "reference_engine": "tblite",
+          "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+          "artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e",
+          "energy_atol_hartree": 0.002,
+          "force_atol_hartree_per_bohr": 0.002,
+          "max_abs_energy_delta_hartree": 1.794987980474616e-08,
+          "max_abs_force_delta_hartree_per_bohr": 1.0434647398872496e-06,
+          "timed_sample_count_checked": 3,
+          "timed_sample_deltas": [
+            {
+              "sample_index": 0,
+              "max_abs_energy_delta_hartree": 1.7949872699318803e-08,
+              "max_abs_force_delta_hartree_per_bohr": 1.0434647396860217e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 1,
+              "max_abs_energy_delta_hartree": 1.7949872699318803e-08,
+              "max_abs_force_delta_hartree_per_bohr": 1.043464739605357e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 2,
+              "max_abs_energy_delta_hartree": 1.794987980474616e-08,
+              "max_abs_force_delta_hartree_per_bohr": 1.0434647398872496e-06,
+              "status": "pass"
+            }
+          ]
+        }
+      },
+      "runtime_identity": {
+        "api_version": 20000,
+        "version": null,
+        "torch_version": null,
+        "module_path": null,
+        "module_sha256": null,
+        "convergence_settings": {
+          "public_accuracy_or_fixed_point_tolerance": 1.0,
+          "max_norm_tolerance": null,
+          "function_tolerance": null,
+          "force_convergence": null,
+          "max_iterations": 500
+        },
+        "thread_control": {
+          "OMP_NUM_THREADS": "16",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "openmp_threads": 16,
+          "blas_threads": 1,
+          "omp_set_num_threads": false,
+          "openblas_set_num_threads": false
+        }
+      },
+      "availability": "available",
+      "start_policy": "cold",
+      "forces_binary64_le_zlib_base64": {
+        "encoding": "zlib+base64",
+        "count": 96,
+        "sha256_binary64_le": "265323344e734a43cbca1186ced5d644ea8d23fa84152e2879790b9dbee56a32",
+        "data": "eNot0m1I00EcB/D/i9l0Gg0MA5Ma/i3LF9EoyurPbjbcliXtyacpuZDILC0EH1LUsUrswRoqxtD1sDQis0mSW+vfbmQb5ezN9I1gmC33t3AUZM2RRufd7uWHL/e7u+9ZvV7Jy85amBn5MO9pPA0otPrfmdjwXq72tUAPtVfjGwLWapjyVqVdmqqGdMwF14g/JA7WpGnNJbQBuLMyZD1zepBjEvU6OQP8G3PNbuJ84mB7W/RGxB51L/w8ZLHyFDBvUbjS2noMFJ4jzvwiPsxhhx3ZyqfGZQoWpyuVsjsqAIO9txKkGpihJn485ie/YgcHM2nDgp8CS578uYsVKljXwuQUzarBzC7ioTfE24zYoWWAyg35KfhiJnscOQimqZrWfdpK/EfMq7ZiB6ZBdV3fMgUaZPkmNBfef8bfKUBzAzeJjx4lLh7CDnXtr+xxI1EJm9r/6B5PAS78bla0oXux24jHpRCvX8EOXF7DYjFtgI6C9070bvDA9/OD6++2w0ecKyTOfsMOubICIeoRKCytY6hHuN7j58tdrNMxmekS6IHItakU9QVCmiPZYdSj0EmcH/MkNXawWft49rlYB+wGJuzwNeL/wKD/kJ7cFT07ngDq/ok0Imsn3t/DP8HStqy+VJscBFb8h5u4HpyvfFDPbvhUI1+aoIE5GJrfH+zG+aSP7exIooNnPhOQUFxpb9lUN86v7hliPPG82yWnAu7pjblXkON85fQAM1neLdvnp6E5T1WD9sF5qeUJ+6XAnSe0yWFF9XAimovzRkkLe2k1MnvdmwD/VOm3oHPiPDVxl10zJhfZxDpYzpo7xnyN5Pzto8x/FDlgOg=="
+      }
+    },
+    {
+      "engine": "xtb",
+      "natoms": 62,
+      "batch_size": 1,
+      "total_atoms_in_batch": 62,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "requested_properties": [
+        "energy",
+        "forces"
+      ],
+      "workload_seed": 62001,
+      "input_residency": "host",
+      "output_residency_at_timing_boundary": "host_visible",
+      "effective_start_policy": "cold",
+      "state_preparation_timing": "untimed_calculator_rebuild_before_each_call",
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 22.213838,
+          "energies_hartree": [
+            -64.27951766668767
+          ],
+          "force_count": 186,
+          "forces_sha256_binary64_le": "a4be04367414b7feb05a1fab19710a49790974efd1ee48d96661e12b24321c6a",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 21.784775999999997,
+          "energies_hartree": [
+            -64.2795176666877
+          ],
+          "force_count": 186,
+          "forces_sha256_binary64_le": "eab5765a745c541780e5837dc765d43e62cb1007db190cab886561e815de5eec",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 21.832076,
+          "energies_hartree": [
+            -64.2795176666877
+          ],
+          "force_count": 186,
+          "forces_sha256_binary64_le": "0f47fa2ca981f53d6cf12ef3b34cb67fb145fd4ebcb27859c813ccbf72756c46",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          22.213838,
+          21.784775999999997,
+          21.832076
+        ],
+        "count": 3,
+        "min_ms": 21.784775999999997,
+        "median_ms": 21.832076,
+        "mean_ms": 21.943563333333334,
+        "p95_ms": 22.213838,
+        "systems_per_second_at_median": 45.80416447799101
+      },
+      "energies_hartree": [
+        -64.2795176666877
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "force_value_count": 186,
+        "scc_converged_ok": null,
+        "scc_status_ok": null,
+        "repeatability": {
+          "gate_applied": true,
+          "gate_reason": "independent_cold_or_reset_calls",
+          "energy_atol_hartree": 1e-10,
+          "max_abs_energy_drift_hartree": 2.842170943040401e-14,
+          "force_atol_hartree_per_bohr": 1e-08,
+          "max_abs_force_drift_hartree_per_bohr": 2.7131075164277263e-15
+        },
+        "cross_engine": {
+          "status": "pass",
+          "reference_engine": "tblite",
+          "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+          "artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e",
+          "energy_atol_hartree": 0.002,
+          "force_atol_hartree_per_bohr": 0.002,
+          "max_abs_energy_delta_hartree": 1.0911491315823696e-05,
+          "max_abs_force_delta_hartree_per_bohr": 2.3702406626146394e-06,
+          "timed_sample_count_checked": 3,
+          "timed_sample_deltas": [
+            {
+              "sample_index": 0,
+              "max_abs_energy_delta_hartree": 1.0911491287401986e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.3702406613530617e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 1,
+              "max_abs_energy_delta_hartree": 1.0911491315823696e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.3702406626146394e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 2,
+              "max_abs_energy_delta_hartree": 1.0911491315823696e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.370240662164045e-06,
+              "status": "pass"
+            }
+          ]
+        }
+      },
+      "runtime_identity": {
+        "api_version": 20000,
+        "version": null,
+        "torch_version": null,
+        "module_path": null,
+        "module_sha256": null,
+        "convergence_settings": {
+          "public_accuracy_or_fixed_point_tolerance": 1.0,
+          "max_norm_tolerance": null,
+          "function_tolerance": null,
+          "force_convergence": null,
+          "max_iterations": 500
+        },
+        "thread_control": {
+          "OMP_NUM_THREADS": "16",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "openmp_threads": 16,
+          "blas_threads": 1,
+          "omp_set_num_threads": false,
+          "openblas_set_num_threads": false
+        }
+      },
+      "availability": "available",
+      "start_policy": "cold",
+      "forces_binary64_le_zlib_base64": {
+        "encoding": "zlib+base64",
+        "count": 186,
+        "sha256_binary64_le": "0f47fa2ca981f53d6cf12ef3b34cb67fb145fd4ebcb27859c813ccbf72756c46",
+        "data": "eNot031UU2UcwPFZHggZ5sGAo5INgRkkx1EZ6MZ9BhFIZlzWMB0YU9BIAsx4Machb4qnoA2GMhAWUwYYeiCDEC73GWRhIjACYfFiU0E5CiobgoZ0unue/fs533Of+7z81K2P4Z7vD0GJ/YcZ67/ZA1gsFucGcYIqVTTb/u4ggVTRvZS0ikR44+WOhCcDiTC6EPubSuyTLyEHqV3TvEmuFFz/IrimakwCFGat09sPpTDR6g/jsY9gB1HF2TuNpue0rDdOGWAbCoURW5Rlx8JAE4X9vtVHRcjh/v5rEcsCFmjP3UG753JJoNrvPjwnEUGNCfupGOwfxCEHZn39i9LaRYLN/9h2LJaEFYrbSy+PR4DSXuwSf+xXC5FDMdu/WCrS048ycl5MAxKcdIKXyKMiuPVX7M++xb4SO+geue28q2GY6FdsD0kKI6EpMLqYd0AE6jRG5KFy7H7vI4f6gw3mng4N7W/PtRtmvjM79aVvTrYIcsauIH/N6jPTyIGeWCjszW4lzD7d0owgEvrQHu0Pj4nA0bE55NEbsae0IIfCguZV5aEaek2M2lkYSILvKo+MTmcy69bRyEcl2M1a5IDVsmtDjVhDuG1su8k4/Gmg7rzFSwRi5CE87J3YYTyl8jHLWmldcnXJ8SASOJoiA6aYdWuSsbsmYK+YQw6Mec1njnZrCCqrdgezL8hums217Et+vR75xRzsEQ3IYVPGW86R9cN0mtdHDxLDSACdk65Yzu2OGHu3J/aLryMHzeN811SRnpC/966OuRcYnl4QHMHcC8cN+y8C7A1JyOHgIjtuX+0ivbfaLWI0lgTld9mVlntnyxyQR9Vir8IOeP+kLbgFLBDK9H09T3NJGPNv4LF55l0VbMPeJsNebUIOjQsuWaOm50TZlvAHzLsFke4OTyzv1vUydjYfeyAXOXic7X/1PlcKgwMvPGLmAhb8tsHGMhfeVr+6FXtsG3L46OzBXGZOwfJLnY7MnEJmTllG5/PUVPlQKjOPYHZtfjszj4D8vGbVDDOn5lzsOeuw96QhB5nLqiOlXDGQSe49O9t52DLvvFYfjUCt0PW3lNsB1Tl1kK86H30/pS6Jat8Vtfzc6RBQPENLDZNKS3+8LkMpKKvJL3X29gBA7rLSMFFk6YWZ3ipBZCX/qzOrDYTUuCN5fV+Rpde5ccoF8TOGJYL0JmK766U/2H+jnhU8dVIw3uG0Lf3TLsLD28bLdwD1LN5dPqXf1Dcx1NdI23cu9yu+ifs7uixKaFoRJzhRQs/nbX6svYl7mKWmhPzxhq+vq+nBNw75zeNev9a9nWKtfmEITFATmiKu57y1//OJVsDafHjpqdMlhGTkFb4W97qdqxop495XY0NuNRIdqvFopbX/ecllSqgJ4egSu+h3ikP/4g3g/7nl0UIJ5f6Zys+a6MGVjVpmX6i3Ce+geLdXTOe5GOjubeHrmHNAvZCjEExm7NRv8vaAZ/87EjY0gXv2HR01xQtoLDsdAuW9jmzmnFFf76alrhlX2/X8aAcvyFSlPHU+6o0ufZTMflH3CVcMc9fkHCjrPAzzvKqeGn4Yov4H9arM9Q=="
+      }
+    },
+    {
+      "engine": "xtb",
+      "natoms": 122,
+      "batch_size": 1,
+      "total_atoms_in_batch": 122,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "requested_properties": [
+        "energy",
+        "forces"
+      ],
+      "workload_seed": 122001,
+      "input_residency": "host",
+      "output_residency_at_timing_boundary": "host_visible",
+      "effective_start_policy": "cold",
+      "state_preparation_timing": "untimed_calculator_rebuild_before_each_call",
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 89.564179,
+          "energies_hartree": [
+            -127.56035533115573
+          ],
+          "force_count": 366,
+          "forces_sha256_binary64_le": "ae9805d0c10cd2073e49f0f0c462de22122b3dc50b032c8943148c98a9c6f855",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 87.33876599999999,
+          "energies_hartree": [
+            -127.5603553311557
+          ],
+          "force_count": 366,
+          "forces_sha256_binary64_le": "bef514b47cc249eafbb5f72d54a4d1a816699dee1075e67bb660ecbd1b7d16c2",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 86.84491899999999,
+          "energies_hartree": [
+            -127.56035533115565
+          ],
+          "force_count": 366,
+          "forces_sha256_binary64_le": "3441ef50c263c60148f5cbe22d5b549ce26c9007772aa53c67538e0a1d0561fd",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          89.564179,
+          87.33876599999999,
+          86.84491899999999
+        ],
+        "count": 3,
+        "min_ms": 86.84491899999999,
+        "median_ms": 87.33876599999999,
+        "mean_ms": 87.91595466666666,
+        "p95_ms": 89.564179,
+        "systems_per_second_at_median": 11.449669440028499
+      },
+      "energies_hartree": [
+        -127.56035533115565
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "force_value_count": 366,
+        "scc_converged_ok": null,
+        "scc_status_ok": null,
+        "repeatability": {
+          "gate_applied": true,
+          "gate_reason": "independent_cold_or_reset_calls",
+          "energy_atol_hartree": 1e-10,
+          "max_abs_energy_drift_hartree": 8.526512829121202e-14,
+          "force_atol_hartree_per_bohr": 1e-08,
+          "max_abs_force_drift_hartree_per_bohr": 1.4924910266000957e-14
+        },
+        "cross_engine": {
+          "status": "pass",
+          "reference_engine": "tblite",
+          "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+          "artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e",
+          "energy_atol_hartree": 0.002,
+          "force_atol_hartree_per_bohr": 0.002,
+          "max_abs_energy_delta_hartree": 3.611415951354502e-05,
+          "max_abs_force_delta_hartree_per_bohr": 2.363464426901468e-06,
+          "timed_sample_count_checked": 3,
+          "timed_sample_deltas": [
+            {
+              "sample_index": 0,
+              "max_abs_energy_delta_hartree": 3.611415951354502e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.363464421922812e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 1,
+              "max_abs_energy_delta_hartree": 3.611415948512331e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.363464426901468e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 2,
+              "max_abs_energy_delta_hartree": 3.611415942827989e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.3634644256455284e-06,
+              "status": "pass"
+            }
+          ]
+        }
+      },
+      "runtime_identity": {
+        "api_version": 20000,
+        "version": null,
+        "torch_version": null,
+        "module_path": null,
+        "module_sha256": null,
+        "convergence_settings": {
+          "public_accuracy_or_fixed_point_tolerance": 1.0,
+          "max_norm_tolerance": null,
+          "function_tolerance": null,
+          "force_convergence": null,
+          "max_iterations": 500
+        },
+        "thread_control": {
+          "OMP_NUM_THREADS": "16",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "openmp_threads": 16,
+          "blas_threads": 1,
+          "omp_set_num_threads": false,
+          "openblas_set_num_threads": false
+        }
+      },
+      "availability": "available",
+      "start_policy": "cold",
+      "forces_binary64_le_zlib_base64": {
+        "encoding": "zlib+base64",
+        "count": 366,
+        "sha256_binary64_le": "3441ef50c263c60148f5cbe22d5b549ce26c9007772aa53c67538e0a1d0561fd",
+        "data": "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"
+      }
+    },
+    {
+      "engine": "xtb",
+      "natoms": 242,
+      "batch_size": 1,
+      "total_atoms_in_batch": 242,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "requested_properties": [
+        "energy",
+        "forces"
+      ],
+      "workload_seed": 242001,
+      "input_residency": "host",
+      "output_residency_at_timing_boundary": "host_visible",
+      "effective_start_policy": "cold",
+      "state_preparation_timing": "untimed_calculator_rebuild_before_each_call",
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 448.22294,
+          "energies_hartree": [
+            -254.1220319931522
+          ],
+          "force_count": 726,
+          "forces_sha256_binary64_le": "9df5d0a902745cb0cab80ebb6a7faa6b0f0029edac8d799ba48f37d2c5c01b94",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 449.54386999999997,
+          "energies_hartree": [
+            -254.12203199315192
+          ],
+          "force_count": 726,
+          "forces_sha256_binary64_le": "b7670fbb31eada39c31c47edae49084f187797014b2220de9c78ecc8c38d8bb2",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 450.81780999999995,
+          "energies_hartree": [
+            -254.1220319931518
+          ],
+          "force_count": 726,
+          "forces_sha256_binary64_le": "146976a26fb7244e97b83890fd8f25ff0ac11a6ea066f1adb48e4324a0c6a935",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          448.22294,
+          449.54386999999997,
+          450.81780999999995
+        ],
+        "count": 3,
+        "min_ms": 448.22294,
+        "median_ms": 449.54386999999997,
+        "mean_ms": 449.5282066666666,
+        "p95_ms": 450.81780999999995,
+        "systems_per_second_at_median": 2.2244770015438093
+      },
+      "energies_hartree": [
+        -254.1220319931518
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "force_value_count": 726,
+        "scc_converged_ok": null,
+        "scc_status_ok": null,
+        "repeatability": {
+          "gate_applied": true,
+          "gate_reason": "independent_cold_or_reset_calls",
+          "energy_atol_hartree": 1e-10,
+          "max_abs_energy_drift_hartree": 3.979039320256561e-13,
+          "force_atol_hartree_per_bohr": 1e-08,
+          "max_abs_force_drift_hartree_per_bohr": 6.912526107072381e-14
+        },
+        "cross_engine": {
+          "status": "pass",
+          "reference_engine": "tblite",
+          "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+          "artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e",
+          "energy_atol_hartree": 0.002,
+          "force_atol_hartree_per_bohr": 0.002,
+          "max_abs_energy_delta_hartree": 8.684780365797451e-05,
+          "max_abs_force_delta_hartree_per_bohr": 2.4542125954191206e-06,
+          "timed_sample_count_checked": 3,
+          "timed_sample_deltas": [
+            {
+              "sample_index": 0,
+              "max_abs_energy_delta_hartree": 8.684780365797451e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.4542125954191206e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 1,
+              "max_abs_energy_delta_hartree": 8.684780337375742e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.4542125849655143e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 2,
+              "max_abs_energy_delta_hartree": 8.684780326007058e-05,
+              "max_abs_force_delta_hartree_per_bohr": 2.454212579887599e-06,
+              "status": "pass"
+            }
+          ]
+        }
+      },
+      "runtime_identity": {
+        "api_version": 20000,
+        "version": null,
+        "torch_version": null,
+        "module_path": null,
+        "module_sha256": null,
+        "convergence_settings": {
+          "public_accuracy_or_fixed_point_tolerance": 1.0,
+          "max_norm_tolerance": null,
+          "function_tolerance": null,
+          "force_convergence": null,
+          "max_iterations": 500
+        },
+        "thread_control": {
+          "OMP_NUM_THREADS": "16",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "openmp_threads": 16,
+          "blas_threads": 1,
+          "omp_set_num_threads": false,
+          "openblas_set_num_threads": false
+        }
+      },
+      "availability": "available",
+      "start_policy": "cold",
+      "forces_binary64_le_zlib_base64": {
+        "encoding": "zlib+base64",
+        "count": 726,
+        "sha256_binary64_le": "146976a26fb7244e97b83890fd8f25ff0ac11a6ea066f1adb48e4324a0c6a935",
+        "data": "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"
+      }
+    },
+    {
+      "engine": "xtb",
+      "natoms": 362,
+      "batch_size": 1,
+      "total_atoms_in_batch": 362,
+      "cpu_threads": 16,
+      "device_id": 0,
+      "requested_properties": [
+        "energy",
+        "forces"
+      ],
+      "workload_seed": 362001,
+      "input_residency": "host",
+      "output_residency_at_timing_boundary": "host_visible",
+      "effective_start_policy": "cold",
+      "state_preparation_timing": "untimed_calculator_rebuild_before_each_call",
+      "raw_samples": [
+        {
+          "sample_index": 0,
+          "latency_ms": 1248.526881,
+          "energies_hartree": [
+            -380.68370944872373
+          ],
+          "force_count": 1086,
+          "forces_sha256_binary64_le": "274a7b38d8cc5fe7b1ac2fa79559069f6729d31ef638670b9a974e0594721167",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 1,
+          "latency_ms": 1194.935321,
+          "energies_hartree": [
+            -380.68370944872396
+          ],
+          "force_count": 1086,
+          "forces_sha256_binary64_le": "2406fa45245d818896f53c22a7a86ba8ff55915ca4cb8c1fe75ae307667e9ac8",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        },
+        {
+          "sample_index": 2,
+          "latency_ms": 1191.627454,
+          "energies_hartree": [
+            -380.6837094487242
+          ],
+          "force_count": 1086,
+          "forces_sha256_binary64_le": "99daca15e675d25d54bb15f820b5bfe9b184253b589c00a78ed33ff015606efa",
+          "scc_iterations": null,
+          "scc_converged": null,
+          "per_system_status": null
+        }
+      ],
+      "timing": {
+        "samples_ms": [
+          1248.526881,
+          1194.935321,
+          1191.627454
+        ],
+        "count": 3,
+        "min_ms": 1191.627454,
+        "median_ms": 1194.935321,
+        "mean_ms": 1211.696552,
+        "p95_ms": 1248.526881,
+        "systems_per_second_at_median": 0.836865378758019
+      },
+      "energies_hartree": [
+        -380.6837094487242
+      ],
+      "iteration_summary": {
+        "min": null,
+        "max": null
+      },
+      "correctness": {
+        "status": "pass",
+        "finite_energies": true,
+        "finite_forces": true,
+        "force_value_count": 1086,
+        "scc_converged_ok": null,
+        "scc_status_ok": null,
+        "repeatability": {
+          "gate_applied": true,
+          "gate_reason": "independent_cold_or_reset_calls",
+          "energy_atol_hartree": 1e-10,
+          "max_abs_energy_drift_hartree": 4.547473508864641e-13,
+          "force_atol_hartree_per_bohr": 1e-08,
+          "max_abs_force_drift_hartree_per_bohr": 2.407969657003406e-13
+        },
+        "cross_engine": {
+          "status": "pass",
+          "reference_engine": "tblite",
+          "artifact": "/home/jzzeng/codes/gpuxtb4-pr231/build/benchmarks/issue-13-c9c0a43-final/ref-tblite-cold.json",
+          "artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e",
+          "energy_atol_hartree": 0.002,
+          "force_atol_hartree_per_bohr": 0.002,
+          "max_abs_energy_delta_hartree": 0.00013808375467760925,
+          "max_abs_force_delta_hartree_per_bohr": 2.7802393898020052e-06,
+          "timed_sample_count_checked": 3,
+          "timed_sample_deltas": [
+            {
+              "sample_index": 0,
+              "max_abs_energy_delta_hartree": 0.0001380837542228619,
+              "max_abs_force_delta_hartree_per_bohr": 2.7802392879534626e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 1,
+              "max_abs_energy_delta_hartree": 0.00013808375445023557,
+              "max_abs_force_delta_hartree_per_bohr": 2.7802393898020052e-06,
+              "status": "pass"
+            },
+            {
+              "sample_index": 2,
+              "max_abs_energy_delta_hartree": 0.00013808375467760925,
+              "max_abs_force_delta_hartree_per_bohr": 2.78023936743486e-06,
+              "status": "pass"
+            }
+          ]
+        }
+      },
+      "runtime_identity": {
+        "api_version": 20000,
+        "version": null,
+        "torch_version": null,
+        "module_path": null,
+        "module_sha256": null,
+        "convergence_settings": {
+          "public_accuracy_or_fixed_point_tolerance": 1.0,
+          "max_norm_tolerance": null,
+          "function_tolerance": null,
+          "force_convergence": null,
+          "max_iterations": 500
+        },
+        "thread_control": {
+          "OMP_NUM_THREADS": "16",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "openmp_threads": 16,
+          "blas_threads": 1,
+          "omp_set_num_threads": false,
+          "openblas_set_num_threads": false
+        }
+      },
+      "availability": "available",
+      "start_policy": "cold",
+      "forces_binary64_le_zlib_base64": {
+        "encoding": "zlib+base64",
+        "count": 1086,
+        "sha256_binary64_le": "99daca15e675d25d54bb15f820b5bfe9b184253b589c00a78ed33ff015606efa",
+        "data": "eNot13k4VF0ABvApSkWLpVAqRJYUZckyc+8oCVFDKFSGVKRkSYlkbBUia5YKFSpLUUSauXeSUJZUSEqGkBRaZYm+e875/Pl73uc9495zz/JY22W79gVfcpnlwSfnTrngNBonpkfbhdtgN7xNbIEjiYVPX7DPPEpOJU5YnG05StbvQu76v5ckQMczkkxbF6qw8Zgnm9qDOx1xy7AxS5cvbPJNInLt//1bKHT8x1X/poXt44RV7dTKqdlbSY3Ri1f0gs3xj+uRf6pDvngcOimvtHq+FW2SOGKbsf5RJAtX0GutznayIX8LIzexQb7VCDre/6Z/9r3GKczu0KnTSftZZKFJutiLXmv8RhXybk/kGkzoZOZ6r4IBkybimYPXkmCchS92Eb66NdiGdGB4I9+NXJkNHdeUaYt0PvUOa9L04Omas8gWv+expodt8JJXrdBltZEbeUEnV/i/EpE/HUSodt81N6d6igw0LIYibEj317eg6/UiD9CFjmeYltc2C/GxLaN5B45uYpECH9nhN9S4TduRF0wip3tAJ0vjnxJiMinY0ZfFigeZLNxgvImfRPU3Xy+H/qEF+c4f0PH9WTn7Ld4XYuOltVdCjVmk6vVnN1NCbfCv389BbyhG/vomdFJSwluk+0gilnpnD6eM6nFg8SesqX4/fz/o49eRCx2AjhucmHdmUCgLW7W9nb2B6jlo6GH3IcwG/zO0GLrZ/55uAJ3kV+hvbW2KxjZcZp97RvUwHnMC6VS/VDYdelcW8q1l0HHatvpGw0uJ2B/dg7PEqJ5DOlVh3uE2eKloDvTn65BP0KGTB0t1TEcNwjG53rEdDVRPs/gbD32qX3n/1Bbgtq+QJ6+FjhukNOfIzj+PrWC5dfxgskh3N40ggurXy+uA3roP+U4L6GSIJqmzz+Y0Jne8p56kelx+6RuYUf1nAw11gcv6I18xDB1fess8kRPDwfCo0EuvqJ7mjMaAmZSPW+2FbpSDvM4LOhnhtuftJk1/zNxGo+su1bO2/OvCPZT7vxJrB75oD3KHfOj4KlouqX33JCZCs7bgUj0haf5/NChXCvKDbvGbBd3pGnRSSSeIqaTujTV82vXoOtWjNZ5k4En59NVGHPimYeShw9Bxlkvbk44oH0zRSM68gOo5TyorWlA+vbsR+iU15Ox30MnigWsNnioeWGbH0OdUqmdH6ciMk5RnxmZC39uNPP0WdNxdhbzpUHoY295s2HUVPGdfYr4z5RWN+/OA8yqR742HTjYwtQRmXfuxaCu3V3FUT6H4YycO5XlHZLuAH//fmVLQcfv7bYqL6tywE1JsnSSqp5w9GOBFuZfx35XAh2nIyyKgk19/LjqQ8sMZqyAqVc9RPX8PXmk/R/nf4lfQGyOQP6mDjr/6cL74Thwbi//j5R1N9Rz7fX9dIOWnf9+9C/zQT+RXpqCT1WXSAS1LHTEXq42pHKpHLS3mayzltqbW/sDX6CNvJ6Djv/K8WqvqHbFGG/fvYVRPcJqnfTjl3OP6r4GrM5GnPoBOMq9XlL84b4dV6/h9DKR63DLNOxPBeyn5UQK8858v9MFf0PEWsnB2/pQd9udaxKXTVI+IW9m5aMr/Tm4TAf46B7mmF3SS1fz9BjlmjfF/Jrb7g+eTb/zjEuX8IMdrwP+9QV7aAR0feP719eWtNpjYanLeSaqnV9jJKp7y8xcHXwBftwR5jxJ0kt84jxZvvh1LKhPZ6UP1LL05c1cG5ZxebA7wYy3Ik92h4/Ga6xRHuNsxPdxO3pfqyWlSn06mvG6dnCzwMyzkrvnQybH4bSJFj8yxBYZPDY5SPXXlKmuvgvXZsHcecDsD5JHF0PFFQ+309gUWWFxbTBnl5BKrmtY0MD/3xOkCz5a+AN1i5ClwkkZ4/gyf3oJVepqc8qB6xLUWRmdRLu+/tBP4wRPIy1dDxxctEPE12GSKBZ33LaeclG7OnbhMeVqNjCvwUweRPxXKA07udv9GTh3fhOkVxpqDdV4uzu3gNcq9lYrqga9LRP4xDzrOyX0yt2sTA9thKXn7IFh/tjhtyAbfteTGGcDn30O+Ps8ROCl/coXtS/s11Hsx9D5A9QgrLg3IAf+X95Z5wJ3mI8+fDx2Xj5seDHbVwAzZqrsoJyVZRvuuU569apv3GcodbZFLOEAns3NPdVdFKWBc2URDV6rn8fIjR/NA/4tz+4GrHUX++ZYncJwzZn86Y1oOK9Cun3KhesYPulaBcWm0/ijgYQPPoS/ugU4yOxKDC5tXY7MctOIox1deNT57E8yfs/VNwKd9keseh47L72GqJ1RuwDbFZ1wCPeZFo8nA+dH7FwDvf4N87mboJKc6NfY8ponhVz4QzlRP1ALLJfmUs49YyAFXOIFc1w46zp85GBAypImJsBzsKCfDXoXNvA380bYY4OeI3dB14sOBk/zOw353+lWxhSf8Q/aC9eGknmQB+L8O+t4AntuAXGZUFzjOjLBZ8bREDbt6o+HbHqonKP45C45bLN5YTTnbF/kc0XrgJD88vdBWZBWmWDnKcqJ6Tsy2/AL6+a1Vz4BHrkKuM8cKOM4Zf2bc0b8K87meccOR6vEzjD0Gx/2sjgHfOIR8sO4CcJJzYd3mvwlLsSWdCUYOVI+eU3JqIXi/0mJuk5QHtyP33gYdp7UZhXMb5TDvq+4ndlM9ujoN+6DTywwfUe6AI09/D52kRSvUnSqYjeWxpnbsono8JGZLFQG/0xMA/Ninv9CFeqHjNHO3e3PS5mGmkxrH7ake5VlzmNANh3WBz5tCXjAkApxkvjq34ZCGATGwuj4ZPOeHPzonwLjMxlQcuI8u8sk26DjtlvfmF2xlwvxwqgt4zktuTC8E/fyRER/g84SR94v/A07yjU59H32jRtibSoazqZ5tLq5J4LnRxBTagH/nIP9Ig45zFup8Pji6hnh2bkO6G9Xz6lzwCfB+aZpzXgCP71gPfX/IGeBk84vLE9K6TOKYz6J/+6meTz7c92BefTN+D109CnnFFug4LVSjUG7GcsLW8MMlT6rHyr+WC5wj3h+xnPKFqZ3Q/6XUASc5OTVyqg7KxCaRzz8px4tW1AjBeavUVqZCudzZAeibZ9QCx5leovfYpAKx7l3BVdBTaKdTDsfNM9kNXKEI+VgNdJIZKNVUtkiNUKvw23CE6hHNeXjoFng+gW6ywP8KkDO2Qcc5K0YuvslRIVwmL5WBHpO6xMPw9x+/8xR4Smcq9F7LBOAkTc7O9YOjJlFaJIgEPcaVh7Lgdz2w06OL8qJg5In/oOO01KilJYrrCJ1Aq6+gp0Yr+wccd4aVDHCLBcijx6GT/EXBnMdW2sShsZVCYB9ZsehfFljf+EUPm4B70eShMyans+D6pvnnNqt4AyGImWlFjUtWx+aZg35+nkcycMwIuU43dJJ/MjohcN1GolSBdR30mGx0d8kF/1dkehtwAX0H9BBbD+A4P4w+MJGvSxy9I1kD9qnYlw/ywLj86cBs4BGlyLXeQCdpXMUAYYuNxL1dToXeVA9+9+15sG4zVwbuAZ6SiDx2DXScVl0wOfnegBBPUzxAOYlLWsbC9TnjjuNfyuPykMfMgU5yvGyb2YV0wlWsAfejeq6aHb4C9kf+yLU24LVi9dDvTnoCx2lNG/60LsOJ1iOXt1FOVhgPKoBx+ZcqRoFf/oX80aXPwEl5j9C5xxVMiBt0CQnqXIGr/9vQBvZNQaymCfBHz8Whhz3WBo5zhm9wOXWbCY+BGR3+oD89xhOMy+zZWg78qgty7RMXgJNMC96bYE0zIumM9NpTYJ68mVcF9n350KkzwLvWI789Bh0X0J5lGORtJcIuFNaCc45dYcoqcK6glSScBP7Pugj6t/hk4CRn12CrzCwr4qypQmMQ1XOzx4mWArzHzw+4+DlF6MeLHIDjfKHQlHgnSyJ2/sDyQHAOrMs8AM5FnB34NPAim0Hoi5ddBk7K97u6bIqwJgLXqU6doXoejF4/BM5dgr/0VOCXTyLvsIOOZ5tUM+WkrAm1ZWLfwTlw2ZS0TCrwhzVbgA/KIi8agU6yV8v0PdxuR8joZAiocylOOn2tAOdGQSZ7GrhQNvJizy/A8ezq4ladB7ZE2E3MmQPO/8lCS8G9lVax9AXw4SAcukvbDOAkhxva8FrbkdAXRN0G5/CciKBMeO61b/8MfK438sXqp4HjzJsho1d2ORBfPo5ER4D9BSPwOMrZu5+NAWdJfoc+L5YLnPymc/Ndzg42YZOrkxRL9WRdic4E5/ZF8j+6gHOStKGXGlwAjnM8xwo0dzoTL/OysqOonhED1R3ngav75wEfXoi8faEacPKb9v6W7ZluxH3hhD/JVE9/Qc0/cO9gtXx5B/yqXyL0t/urgeP8H5Mp7LT9xH3Fq90XqZ7aYOIHuNfER80oBl645Ar0QA0+cJImHmVWEnOY6HzqsDuT6kkRGbwN7k3M110M4J7eyJc6QsfZNPOMVd3uBNupOzsVnH/6kirAvUwQ1RcB/N5i5FGzk4GTbEZSw2CgD/E87cyRfKpH6m2cANz74vc+4APfJRwCfaYxdJx5cX/AjAXexDujpabXqJ5PmiPT4F7JHKwMBq42cxn0aedh4KSWZbJ+Q+5JwiyPa1JJ9VzXi3+6FjyfXwsYwEfLHkEPGUwAjmcvvDd3row/Eb9mdFsR1VNyYvQjuBdnH/m5ALjgCfJl/N/ASVUph5vmURxin83zyBdUT9lxZRshcD/yyigA/u0Q8vnIcdqyFV6/8dOEZXqvNrhHNxkGy5iD/n2qR4DHr+qDrjp4Gjh1vlLpqZt/nlC016sfpnqIk67OZDh17t3u1Q18j/BG6POlXIDjrI1NuLR2OKHss+95LdWT/2XxDgPw3mUWmwAvrnSGvuW6JHAy21uuyy4tkZBot1gqYkztX/uuePmA/n7dD8B/+JtD11DPBI7z68tkjN9FE7qVh89Wg312aPAZA7z3qcmVwBOkPKGfvAqdZE77XQxekEWYCdurrKV6Bqsu3+8Ko747eeULwOf02EGP3XsFOO5tJxIg7ptIuGTnFdylesT6dtrtpPqbc2f6AT98Khe6i6Q9cFIrbcvUjfeFRJjK0KYgqkdwq1k1NdSGHIj7Az1BaAR6RmIjcJyZr9HtMT+F2HTP6xh1LiIbwnNEwbon2KDWC/x0PPKAg7nAyfZc313GM/jE9C1zO/dN1Pq8rqzrbbANKeexejdwXR3kK1Y+AI7T9JM2niGDsPh4zoPNOHW+CutTHAHvndyhB3xZVQj0MqFPwElLg+7sfafeEedTnLZombPw3RK/m7cetiF/be2CXh/oCL0mdRQ4Hn9DtiffognrcJwo96V6WgYNprdR4zJNWruBF9AnoV9s1wdOJleFbI58NkWcry8ScPaz8IY1pxe09lqTE3gw9MujhdAHPYKB4wNOz3q+Ck9i7+TzCgsjWeT5qDPCN51s8AjXF9APYsifGkEn5XR3f5r1fhx7vkPl3e/ZW3GJDTWfDYPNSe+nbOhK71ZDl3WDjp801dgirMImPVYaZsd3OpJPDxWE7/vCxj/rIw/daQQ9fUU+cPLDpU8KGy/44iGlxRtCTrmQNOpvqVIr99GL4m/T8x3xCf0GW9vMozjJi3KLbDlKsteUQP9GR25/AjquxZj53lHJFp/uStijURtA3ff4c1/hWXQf5YAlCRVz8S2n2KuUsmKpfn79jnsZ9L3Pfu4dSjLFVwvr73w3kEzlaXw9e096UGpYdqakEi57X+tqS18SlWerjore4UZ3Kt1Ld2/DIqMd3iq8TKLyZoVPyVIuvUP7wOtj+di2fv8qsbcgnx1oMfMa/eHm3C8zLGuwiv0abxktIP+tsEKF4GZt1GQMeT8mVn3tMS9uBXl965dZlXSfKzxp+6pyYo2Iq1lnK8hbhlstreaa28vek83hEk74nXrrNpBPU3ZdyKMfTZtSXPe+lIh4fXhFZBvIt/9iOlTSzRo+7puuLCGOWDqsuQXznJXCyq3c1IKHpZcMCgi9i0Zzn8D8QEjZ2vvc9j+5TPVTeYSU3S3lJpjXL64ZaqYXHPPVqmy4Rki/j8bfw7wga76AR49z79D+IplJbKk/I9QF8zXsHQbvucz+7hZpWjpxO0BQ1QfzqpXc0nfcpUNZ2vM8kwnxG1qfemB+bDdr21N6jE9wkcz3eEKs9ks7yvc053cMcIs3Sor8O36BcGKuO/0R5lVzZ5xsoj+QNa6MkTlPDEV8PIjyzBF3ET4dW3XhdkBiBNFvWW2B8lpNq88+p5/R+zoz4X4oUZI4mtAL8zm2H8Xf03fb3i52LDtDLOy5XYt+j5ZQ3n0+Pc7b6HPyo0BCtT4q+yPMH6718eume73c3qrgeZKw922X/j8fnDVKcC/suP/AKvc48VjQWdwD8+wr1hn9dJrhFc1hQ1/C2CL9QDfML5fL+j7Bze9XCZ2t5U1oBnk0dqN8y5OHL+gyFxc6ZL05Qkica7ojgPm/4ddC+rmsgNnV7d0ehLfK5jEBzBNq/h8+0o+QRqe/qR8ijE/2zUL5NRLmv8a5+rpbwv99cSPKdpbqonwz4+6Mdrq7RN1K6TZX4q3aKjf0vhLPP9rxlVstqkncUXIhisUfh3bBvO9UVWkP3XtXfagldx9RZira8AHmR5riEr/TWdtFIw9b7iHaPOo7PsC8Y93ilZ+43hnpBsdCHIiL9QP6KJ8z4jT2kt48V8JgzGwX8VLGh4Hyw/tpSpNcTvrKwVQ1O6JLu6mwE+ZZ7SbTtfTmB7FKwcdsiIbPJjc6Yf4CTWL0C32OsnFd7BJrItusr+89zHsfdvZo5MrfqrIPHLMjuMJ7zND8ZG88cnI2jzZ+ZsuSeYqEtfYtN5SnJUcOddLjJz2i1p62IoS66F9Rnv9nlUo1l7au9PSX1ZaENp7uiPIt0RGXaQy+ZLnR+GVF7O2Mu+0oX4YdPUG5vJGY6icLYkbQr+Xo9/9l5S3upvPndnZdv8Ug3G6w41De7c/mA+Nc+dBnH88R+sRejcVzUb/c7nm1v7i0Ogu2Y/VGwlWSPfgO5pepm2bNYXCyX5+ih+oQsb0h197BvLqDAYvG4IxUDGWVrCfuPLIPRXltp8gnMxi00PvVRZkaRK5aBQ7znPvj7+ZK8GhXpPA3mAoRuUddDuVdc/e2THBpqnkjUofkiVlBlYIO9Hyehyak0Wnnfrl5pCwhaBN/Kzpg/sNs1y5RBicsoPaMsQJR92i1D8qfeYC9WsTjcO+LbLixDav5npmB8jQn0eHbXDN/nU9nF5/AIub3PEDzobly6xA1r/TeRDiO+xMx4aaD6Pmc7+R7jtFpNVb9W9ezMebF+ovo+RSrvRKZpFtubixUUD5BVGwpWYPyzMW4+3zGlbGaXW83ncDq2H9s0e+59WBc/hOdmaPWMFdrJybeN+KN5pv0eMosKQa/NrjC+K42dp30bEK/J6x53UpxHr+ru+vsGjpmrR1ejPLth16nz2TQJhqGRa/h2J8dbVUoz/wd5fybzhG6/pKtaoy9FTEoRXnZM2ShDI8mEbX3+fzNGLds9QuUn3Ontf0Plymq0iu4aYLNyq7joXxpaZDSAgZzTEDm15liCY8Y3ShP8zptWszlROvVTKaaYWq6dg0onzYepDJO5yRcFI95aIFpiASMoXy26d5wCR7zLLPCvNwGe3tKXQx9v7QHoefquQK6iW5vtw32qjwmCH3vY1HP42YzmN4WVzpj7DBZ5UBvlGfrj+m94so7s3gxjXbY6sVrnqK8xPQmLTkec7qXN3JxNza6K7ID5cdOlNrP5mU3+sb2l9pj4c23ndH6I7Pdfd9cHqegee+tjN1Yi3EAA60/xcXXXBcx+J95fXs7HbEjznvyUL54wmbtTy4n+fNLgehezDc3Oxjl3XOVZy/i8f1Ty+WfOWOKD8YnUL7jhp2UEkMeT1LnbHLBmIcf16H86Yn+Wet5TPUjr1ePumLR5gv2ofX22/HnX0UZ2alDthdK3bCjTckr0XrL9FBOaObScsXa4loPYm8mVr5Eef3yO08XMZgqz/ABaQ+seCcvFOV1KstweR5/k5Xk6/ee2DpzGXu0/mcfGyz8zRXMjhuWafXCqopnfUP54o4V5nI8jkXwvnwjH8xr4MXQ//tF/hn9FTyWTHvIHYYfxriYfwjtFxXONW4SDE6bdc/eEn8sTb4zDe1fv5ZLHVdgxAvvUQj3C8BEJ9r6UN5b8DJZjiHvfP+RQlsQJhHIsO2FeX7fpPUfLv+7dJ44LwS7sH77PrR/0SL82sq5LGcz4+WmYdibtNdSfTAvSH32UoRRXLWi33lVJFZy70sFymevoYcK87IXq6pI3zmPRZb4ESjPb8pol+cVZ/zzOC4ai41smPn4/34v6S/j3EVnXX45GSZg1nbZ8/vRfC5+N7uPK5ASGN+7l4zphVvN+T+fpnNznJvtf9DQxDIdS0q52YL6mfKzzeUY/D9ryNE9mVhK2nERNN8EwXNwZZ7WIVYl9/M17EDr5TVofeCznh+Q5fEdLBv/JedhaWNFQk2of4WRwjBXy2ViMV25AOPyo/9VofPPJyJ7EW9Or+K8/KkSTPeJx4FbaP0nbgcqM7I7I34UPi/F1r8IFIlEeeH2S6sYAv2cn3druZjMTqNMa9R/VW2pHINZ6+H35145NlNPjP8ent9oLqpPqfeefjN2Q9Jj7MsHBZO78PxGS+Z/k2cI+m97+arWEG+0X76lt8D8Eq+Zy3n8OQU1PJ98YmSm207RtzDfzv4syhOYsWbVnG4jDiuI7pZ/CfPtMiaSvH16vo8CZZRI+jdppxd9MM+/mCTMG5jpubIgyZSM+fUNezuQDM/P/PYvdPeW55H+XXNJwwaFRSpZsSDPWaajwpPZcmnpWiVbUnR7wVyF2gBy++uExyfPzWP8B68vETQ="
+      }
+    }
+  ]
+}

@@ -184,17 +184,34 @@ The locked Linux resolution also installs NVIDIA CUDA provider packages under
 their vendor terms; those test-environment packages are likewise not
 redistributed in gpuxtb artifacts.
 
+## Matplotlib publication tool
+
+Repository: <https://github.com/matplotlib/matplotlib>
+
+License: Matplotlib License (classified by the upstream distribution as the
+Python Software Foundation License and retained by the separately installed
+distribution).
+
+The benchmark figure renderer declares Matplotlib 3.10.9 through PEP 723
+inline script metadata. Its complete isolated PyPI resolution and artifact
+hashes are recorded in `benchmarks/plot_natoms_cross_engine.py.lock`.
+Matplotlib and its dependencies are publication tools only: they are not
+gpuxtb project dependencies and are not bundled in source distributions,
+native installs, or wheels.
+
 ## OpenBLAS runtime dependency
 
 Repository: <https://github.com/MacPython/openblas-libs>
 
 The separately installed `scipy-openblas32` distribution provides gpuxtb's
-default Linux LP64 LAPACKE+CBLAS runtime. Version 0.3.34.0.0 was reviewed for
-this policy: its own license payload records the MacPython wrapper under
-BSD-2-Clause, OpenBLAS and LAPACK under BSD-3-Clause terms, and its GCC runtime
-dependencies under GPL-3.0 with the GCC Runtime Library Exception. The runtime
-is not bundled in gpuxtb source archives, native installs, or wheels; its own
-Python distribution retains the complete notices and license texts.
+default Linux LP64 LAPACKE+CBLAS runtime. Version 0.3.34.0.0 is pinned exactly:
+it is the reviewed provider ABI with the local-thread-control symbol required
+by gpuxtb, while later provider releases may change that optional symbol. Its
+own license payload records the MacPython wrapper under BSD-2-Clause, OpenBLAS
+and LAPACK under BSD-3-Clause terms, and its GCC runtime dependencies under
+GPL-3.0 with the GCC Runtime Library Exception. The runtime is not bundled in
+gpuxtb source archives, native installs, or wheels; its own Python distribution
+retains the complete notices and license texts.
 
 ## CUDA and Intel MKL provider components
 

@@ -1,0 +1,5 @@
+engine,natoms,batch_size,total_atoms_in_batch,cpu_threads,device_id,job,availability,median_ms,mean_ms,p95_ms,min_ms,systems_per_second_at_median,correctness_status,cross_engine_status,max_abs_energy_delta_hartree,max_abs_force_delta_hartree_per_bohr
+tblite,14,512,7168,16,0,,available,1277.834454,1279.712261,1285.532094,1275.770235,400.67787998460085,pass,reference,,
+tblite,32,512,16384,16,0,,available,4648.710468,4647.889962333334,4648.85842,4646.100999,110.13807022924276,pass,reference,,
+tblite,62,512,31744,16,0,,available,13697.167734999999,13696.948920333334,13701.482199,13692.196827,37.3799905137834,pass,reference,,
+tblite,122,512,62464,16,0,,available,50513.27904,50513.03662066666,50558.397944,50467.432878,10.135948600655325,pass,reference,,

@@ -257,16 +257,16 @@ class DependencyPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(CHECKER.LicenseCheckError, "x86_64 and aarch64"):
             CHECKER._require_dependency_policy(project)
 
-    def test_openblas_must_use_reviewed_minimum(self) -> None:
-        """Require the minimum reviewed scipy-openblas32 version."""
+    def test_openblas_must_use_reviewed_exact_version(self) -> None:
+        """Require the exact scipy-openblas32 ABI reviewed for runtime loading."""
         project = copy.deepcopy(self.project)
         project["dependencies"] = [
-            requirement.replace(">=0.3.34.0.0", "")
+            requirement.replace("==0.3.34.0.0", ">=0.3.34.0.0")
             if requirement.startswith("scipy-openblas32")
             else requirement
             for requirement in project["dependencies"]
         ]
-        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "reviewed minimum"):
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "reviewed exact"):
             CHECKER._require_dependency_policy(project)
 
     def test_cuda_extra_must_be_complete(self) -> None:

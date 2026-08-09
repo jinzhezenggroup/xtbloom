@@ -135,6 +135,9 @@ jobs:
           GPUXTB_LIBRARY="${installed_library}" PYTHONPATH="${PWD}/python" \
             uv run --no-sync pytest python/tests -q --cov \
               --cov-report=xml:coverage-python.xml
+          uv run --no-sync python -m unittest -v \
+            benchmarks.test_run benchmarks.test_natoms_scaling \
+            benchmarks.test_natoms_cross_engine benchmarks.test_dxtb_adapter
       - name: Validate repository-relative Python coverage paths
         run: |
           uv run --no-sync python - <<'PY'
@@ -278,7 +281,10 @@ jobs:
           restore-keys: |
             ccache-public-
       - name: Install LP64 eigensolver runtime
-        run: uv pip install --system 'scipy-openblas32>=0.3.34.0.0'
+        # Keep CI on the reviewed provider ABI. Newer scipy-openblas32 wheels
+        # may change optional local-thread-control symbols independently of
+        # gpuxtb, which would turn this gate into an unreviewed moving target.
+        run: uv pip install --system 'scipy-openblas32==0.3.34.0.0'
       - name: Configure shared public inference build
         run: |
           openblas="$(python -c 'from pathlib import Path; import scipy_openblas32; print(Path(scipy_openblas32.get_lib_dir()) / scipy_openblas32.get_library(fullname=True))')"
